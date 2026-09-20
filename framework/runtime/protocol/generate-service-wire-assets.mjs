@@ -7,8 +7,13 @@ import process from "node:process";
 import { fileURLToPath } from "node:url";
 
 const root = path.dirname(fileURLToPath(import.meta.url));
-const schemaPath = path.join(root, "service-wire-v1.schema.json");
-const check = process.argv.includes("--check");
+const [modeArgument, schemaArgument, ...outputArguments] = process.argv.slice(2);
+if (!["--write", "--check"].includes(modeArgument) || !schemaArgument) {
+  console.error("usage: generate-service-wire-assets.mjs --write|--check <schema-path> <output-path>...");
+  process.exit(2);
+}
+const schemaPath = path.resolve(schemaArgument);
+const check = modeArgument === "--check";
 const schema = JSON.parse(fs.readFileSync(schemaPath, "utf8"));
 
 const snake = (value) => value.replace(/([a-z0-9])([A-Z])/g, "$1_$2").toUpperCase();
@@ -588,24 +593,25 @@ const nodeTypeScript = node.replace(
   return ServiceWireExactTerminalByFailureCode[failureCode as keyof typeof ServiceWireExactTerminalByFailureCode] === terminal;`,
 );
 
-const outputs = new Map([
-  [path.join(root, "generated/cpp/service_wire_constants.hpp"), cpp],
-  [path.join(root, "generated/dotnet/ServiceWireConstants.g.cs"), dotnet],
-  [path.join(root, "generated/jvm/ServiceWireConstants.java"), java],
-  [path.join(root, "generated/node/service_wire_constants.ts"), nodeTypeScript],
-  [path.join(root, "generated/node/service_wire_constants.js"), nodeJs],
-  [path.join(root, "generated/node/service_wire_constants.d.ts"), nodeDeclarations],
-  [path.join(
-    root,
-    "../../languages/node/packages/framework/src/runtime/foundation/service-wire-constants.generated.ts",
-  ), nodeTypeScript],
-  [path.join(root, "golden/service-decoder-fixtures-v1.json"), `${JSON.stringify(fixtures, null, 2)}\n`],
-  [path.join(root, "golden/bound-session-replaced-v1.json"), `${JSON.stringify(replacedFixture, null, 2)}\n`],
-  [path.join(root, "golden/user-spot-create-v1.json"), `${JSON.stringify(userSpotCreateFixture, null, 2)}\n`],
-  [path.join(root, "golden/user-spot-close-v1.json"), `${JSON.stringify(userSpotCloseFixture, null, 2)}\n`],
-  [path.join(root, "golden/actor-create-v1.json"), `${JSON.stringify(actorCreateFixture, null, 2)}\n`],
-  [path.join(root, "golden/zljr-v1.json"), `${JSON.stringify(zljrFixture, null, 2)}\n`],
-]);
+const contents = [
+  cpp,
+  dotnet,
+  java,
+  nodeTypeScript,
+  nodeJs,
+  nodeDeclarations,
+  nodeTypeScript,
+  `${JSON.stringify(fixtures, null, 2)}\n`,
+  `${JSON.stringify(replacedFixture, null, 2)}\n`,
+  `${JSON.stringify(userSpotCreateFixture, null, 2)}\n`,
+  `${JSON.stringify(userSpotCloseFixture, null, 2)}\n`,
+  `${JSON.stringify(actorCreateFixture, null, 2)}\n`,
+  `${JSON.stringify(zljrFixture, null, 2)}\n`,
+];
+if (outputArguments.length !== contents.length) {
+  throw new Error(`asset generator requires ${contents.length} manifest output paths`);
+}
+const outputs = new Map(outputArguments.map((output, index) => [path.resolve(output), contents[index]]));
 
 let failed = false;
 for (const [output, content] of outputs) {

@@ -16,8 +16,13 @@ function resolveOutput(relativePath) {
 }
 
 function executeTool(entry, mode, schemaPath) {
-  const argumentsList = [resolveOutput(entry.tool), mode];
-  if (entry.acceptsSchema !== false) argumentsList.push(schemaPath);
+  const outputs = entry.output === undefined ? entry.outputs : [entry.output];
+  const argumentsList = [
+    resolveOutput(entry.tool),
+    mode,
+    schemaPath,
+    ...outputs.map(resolveOutput),
+  ];
   const result = spawnSync(process.execPath, argumentsList, {
     cwd: protocolDirectory,
     encoding: "utf8",
@@ -58,6 +63,21 @@ function declaredGeneratedOutputs() {
       .split(path.sep)[0] !== ".."));
 }
 
+function assertManifestPathsUnique() {
+  const entries = [
+    ...manifest.languages.flatMap((language) => [language.output, ...language.runtimeOutputs]),
+    ...manifest.generators.flatMap((generator) => generator.outputs),
+  ];
+  const owners = new Map();
+  for (const entry of entries) {
+    const resolved = resolveOutput(entry);
+    if (owners.has(resolved)) {
+      throw new Error(`duplicate output manifest path: ${entry} (${owners.get(resolved)})`);
+    }
+    owners.set(resolved, entry);
+  }
+}
+
 function generatedFiles(directory = generatedDirectory) {
   if (!fs.existsSync(directory)) return [];
   const files = [];
@@ -85,13 +105,14 @@ function assertNoOrphanOutputs() {
 }
 
 function run(mode, schemaArgument) {
+  assertManifestPathsUnique();
   const schemaPath = path.resolve(schemaArgument ?? resolveOutput(manifest.schema));
   const schema = JSON.parse(fs.readFileSync(schemaPath, "utf8"));
   const ir = lowerSchema(schema);
   assertLoweringCoverage(schema, ir);
 
   for (const language of manifest.languages) {
-    executeTool({ ...language, acceptsSchema: true }, mode, schemaPath);
+    executeTool(language, mode, schemaPath);
   }
   synchronizeRuntimeOutputs(mode);
   for (const generator of manifest.generators) executeTool(generator, mode, schemaPath);

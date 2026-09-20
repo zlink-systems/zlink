@@ -10,13 +10,12 @@ import { buildNamedMap } from "./service-wire-schema-model.mjs";
 import { validateSchema } from "./validate-service-wire-schema.mjs";
 
 const root = path.dirname(fileURLToPath(import.meta.url));
-const [modeArgument, schemaArgument, ...extraArguments] = process.argv.slice(2);
-if ((modeArgument !== undefined && !["--write", "--check"].includes(modeArgument))
-    || extraArguments.length > 0) {
-  console.error("usage: generate-service-wire-pilot-codecs.mjs [--write|--check] [schema-path]");
+const [modeArgument, schemaArgument, ...outputArguments] = process.argv.slice(2);
+if (!["--write", "--check"].includes(modeArgument) || !schemaArgument) {
+  console.error("usage: generate-service-wire-pilot-codecs.mjs --write|--check <schema-path> <output-path>...");
   process.exit(2);
 }
-const schemaPath = path.resolve(schemaArgument ?? path.join(root, "service-wire-v1.schema.json"));
+const schemaPath = path.resolve(schemaArgument);
 const schemaText = fs.readFileSync(schemaPath, "utf8");
 const schema = JSON.parse(schemaText);
 validateSchema(schema);
@@ -828,16 +827,20 @@ const cppOut = cpp.replace(/\}\n$/, `${cppMechanical}${cppBatch2}${cppBatch3}${c
   .replace("if(!v.relocation_high&&!v.relocation_low||v.application_version<0)", "if(!v.relocation_high&&!v.relocation_low||v.application_version<0||v.application_states.empty())")
   .replace(`if(state_count>${boundValue("maintenanceAggregateParticipants")}u)`, `if(state_count==0||state_count>${boundValue("maintenanceAggregateParticipants")}u)`);
 
-const outputs = new Map([
-  ["generated/node/service_wire_pilot_codec.generated.ts", nodeOut],
-  ["../../languages/node/packages/framework/src/runtime/protocol/service_wire_pilot_codec.generated.ts", nodeOut],
-  ["generated/jvm/ServiceWirePilotCodec.java", javaOut],
-  ["generated/dotnet/ServiceWirePilotCodec.g.cs", dotnetOut],
-  ["generated/cpp/service_wire_pilot_codec.hpp", cppOut],
-  ["generated/fixtures/relocation-envelope-v1-pilot.json", `${JSON.stringify({ schema: "service-wire-v1", format: relocationFixture.format, input: relocationFixture.decoded, hex: relocationFixture.logicalHex }, null, 2)}\n`],
-  ["generated/fixtures/relocation-data-chunk-v1-pilot.json", `${JSON.stringify(relocationDataChunkFixture, null, 2)}\n`],
-  ["generated/fixtures/relocation-manifest-v1-pilot.json", `${JSON.stringify(relocationManifestFixture, null, 2)}\n`],
-  ["generated/fixtures/actor-join-28-pilot.json", `${JSON.stringify(actorJoinFixture, null, 2)}\n`],
-  ...batch4Fixtures.map((fixture) => ["generated/fixtures/" + fixture.format + "-pilot.json", `${JSON.stringify(fixture, null, 2)}\n`]),
-]);
-let stale=false; for(const [relative,content] of outputs){const target=path.join(root,relative);if(check){if(!fs.existsSync(target)||fs.readFileSync(target,"utf8")!==content){console.error(`stale: ${relative}`);stale=true;}}else{fs.mkdirSync(path.dirname(target),{recursive:true});fs.writeFileSync(target,content);}} if(stale)process.exit(1); console.log(`${check?"verified":"generated"} service-wire pilot codecs; schema=${hash}`);
+const contents = [
+  nodeOut,
+  nodeOut,
+  javaOut,
+  dotnetOut,
+  cppOut,
+  `${JSON.stringify({ schema: "service-wire-v1", format: relocationFixture.format, input: relocationFixture.decoded, hex: relocationFixture.logicalHex }, null, 2)}\n`,
+  `${JSON.stringify(relocationDataChunkFixture, null, 2)}\n`,
+  `${JSON.stringify(relocationManifestFixture, null, 2)}\n`,
+  `${JSON.stringify(actorJoinFixture, null, 2)}\n`,
+  ...batch4Fixtures.map((fixture) => `${JSON.stringify(fixture, null, 2)}\n`),
+];
+if (outputArguments.length !== contents.length) {
+  throw new Error(`pilot generator requires ${contents.length} manifest output paths`);
+}
+const outputs = new Map(outputArguments.map((output, index) => [path.resolve(output), contents[index]]));
+let stale=false; for(const [target,content] of outputs){if(check){if(!fs.existsSync(target)||fs.readFileSync(target,"utf8")!==content){console.error(`stale: ${path.relative(root,target)}`);stale=true;}}else{fs.mkdirSync(path.dirname(target),{recursive:true});fs.writeFileSync(target,content);}} if(stale)process.exit(1); console.log(`${check?"verified":"generated"} service-wire pilot codecs; schema=${hash}`);

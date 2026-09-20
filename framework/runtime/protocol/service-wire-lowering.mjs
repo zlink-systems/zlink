@@ -13,6 +13,7 @@ import {
   isObject,
   resolveInteger,
   resolveReference,
+  TYPE_KINDS,
 } from "./service-wire-schema-model.mjs";
 import { SchemaValidationError, validateSchema } from "./validate-service-wire-schema.mjs";
 
@@ -97,6 +98,34 @@ const CONDITIONAL_FALSE_BEHAVIOR = {
   encoder: "reject-present-value",
   decoder: "consume-no-bytes",
 };
+const INTEGER_WIDTHS = Object.freeze({ u8: 1, u16: 2, u32: 4, u64: 8, i64: 8 });
+const OPERATION_KINDS = Object.freeze([
+  "integer",
+  "enum",
+  "length-prefixed",
+  "text-validation",
+  "field",
+  "struct",
+  "vector",
+  "versioned-vector",
+  "bounded-reader",
+  "versioned-length-delimited",
+  "discriminator",
+  "conditional-union",
+  "tlv32",
+  "constraint",
+  "command-header",
+  "flags",
+  "flag-constraint",
+  "metadata-flag-frame",
+  "payload",
+  "durable-header",
+  "checksum",
+  "encoded-limit",
+  "logical-stream",
+  "runtime-predicate",
+]);
+const OPERATION_KIND_SET = new Set(OPERATION_KINDS);
 
 class LoweringCoverageError extends Error {
   constructor(errors) {
@@ -194,6 +223,56 @@ function lowerCondition(condition, model) {
   };
 }
 
+function constraintOperation(constraint) {
+  return { op: "constraint", ...constraint };
+}
+
+function fieldOperation(field, model) {
+  const operation = {
+    op: "field",
+    name: field.name,
+    type: lowerValue({ $ref: field.$ref }, model),
+  };
+  for (const key of ["constant", "minimum", "maximum", "required", "id", "otherwise"]) {
+    if (hasOwn(field, key)) {
+      operation[key] = lowerValue(field[key], model);
+    }
+  }
+  if (hasOwn(field, "when")) {
+    operation.when = lowerCondition(field.when, model);
+    operation.whenFalse = { ...CONDITIONAL_FALSE_BEHAVIOR };
+  }
+  if (hasOwn(field, "constraints")) {
+    operation.constraints = field.constraints.map((constraint) => constraintOperation(
+      lowerConstraint(constraint, { kind: "field" }, model),
+    ));
+  }
+  return operation;
+}
+
+function fieldOperations(fields, model) {
+  return fields.map((field) => fieldOperation(field, model));
+}
+
+function runtimePredicateOperation(predicate, targets) {
+  return {
+    op: "runtime-predicate",
+    reference: { asset: predicate.asset, name: predicate.name },
+    targets: targets.map(fieldPathOperand),
+  };
+}
+
+function ownerRuntimePredicates(name, runtimePredicates) {
+  return runtimePredicates
+    .map((predicate) => ({
+      ...predicate,
+      targets: predicate.targets.filter((target) => target === name
+        || target.startsWith(`${name}.`)),
+    }))
+    .filter((predicate) => predicate.targets.length > 0)
+    .map((predicate) => runtimePredicateOperation(predicate.reference, predicate.targets));
+}
+
 function lowerConstraint(constraint, owner, model) {
   const node = lowerValue(constraint, model);
   if (owner.kind === "struct") {
@@ -256,7 +335,148 @@ function lowerUnionOtherwise(otherwise, model) {
   return { kind: "fields", fields: lowerFields(otherwise.fields, model) };
 }
 
-function lowerType(type, model) {
+function typeOperations(type, node, model, runtimePredicates) {
+  const predicates = ownerRuntimePredicates(type.name, runtimePredicates);
+  if (type.kind === "integer") {
+    return [{
+      op: "integer",
+      encoding: node.encoding,
+      width: INTEGER_WIDTHS[node.encoding],
+      byteOrder: "big-endian",
+      minimum: node.minimum,
+      maximum: node.maximum,
+    }, ...predicates];
+  }
+  if (type.kind === "enum") {
+    return [{
+      op: "enum",
+      encoding: node.encoding,
+      width: INTEGER_WIDTHS[node.encoding],
+      byteOrder: "big-endian",
+      values: node.values,
+      unknown: "protocol-error",
+    }, ...predicates];
+  }
+  if (type.kind === "length-prefixed-bytes" || type.kind === "length-prefixed-text") {
+    const operations = [{
+      op: "length-prefixed",
+      lengthType: node.lengthType,
+      content: type.kind === "length-prefixed-text" ? "text" : "bytes",
+      minimumBytes: node.minimumBytes,
+      maximumBytes: node.maximumBytes,
+      ...(hasOwn(node, "runtimeMaximumBytes")
+        ? { runtimeMaximumBytes: node.runtimeMaximumBytes }
+        : {}),
+      ...(hasOwn(node, "zeroLengthMeaning")
+        ? { zeroLengthMeaning: node.zeroLengthMeaning }
+        : {}),
+    }];
+    if (type.kind === "length-prefixed-text") {
+      operations.push({
+        op: "text-validation",
+        encoding: node.encoding,
+        malformed: "protocol-error",
+        nul: node.nul,
+      });
+    }
+    return [...operations, ...predicates];
+  }
+  if (type.kind === "struct") {
+    return [{
+      op: "struct",
+      order: "sequential",
+      fields: fieldOperations(type.fields, model),
+      constraints: (node.constraints ?? []).map(constraintOperation),
+      trailingBytes: node.trailingBytes ?? "allowed",
+      ...(hasOwn(node, "maximumEncodedBytes")
+        ? { maximumEncodedBytes: node.maximumEncodedBytes }
+        : {}),
+    }, ...predicates];
+  }
+  if (type.kind === "vector") {
+    return [{
+      op: "vector",
+      countType: node.countType,
+      item: node.item,
+      constraints: (node.constraints ?? []).map(constraintOperation),
+      ...(hasOwn(node, "maximumItems") ? { maximumItems: node.maximumItems } : {}),
+    }, ...predicates];
+  }
+  if (type.kind === "versioned-vector") {
+    return [{
+      op: "versioned-vector",
+      order: "sequential",
+      layout: lowerValue(type.layout, model),
+      constraints: (node.constraints ?? []).map(constraintOperation),
+      maximumEncodedBytes: node.maximumEncodedBytes,
+      trailingBytes: node.trailingBytes,
+    }, ...predicates];
+  }
+  if (type.kind === "versioned-length-delimited") {
+    return [{
+      op: "versioned-length-delimited",
+      version: node.version,
+      length: node.length,
+      reader: {
+        op: "bounded-reader",
+        boundary: node.length.covers,
+        trailingBytes: node.trailingBytes,
+      },
+      fields: fieldOperations(type.body, model),
+      constraints: (node.constraints ?? []).map(constraintOperation),
+      ...(hasOwn(node, "maximumEncodedBytes")
+        ? { maximumEncodedBytes: node.maximumEncodedBytes }
+        : {}),
+      ...(hasOwn(node, "runtimeMaximumEncodedBytes")
+        ? { runtimeMaximumEncodedBytes: node.runtimeMaximumEncodedBytes }
+        : {}),
+    }, ...predicates];
+  }
+  if (type.kind === "conditional-union") {
+    return [{
+      op: "conditional-union",
+      discriminators: node.discriminators.map((discriminator) => ({
+        op: "discriminator",
+        name: discriminator.name,
+        source: discriminator.source,
+        type: { $ref: discriminator.$ref },
+      })),
+      bodyLengthType: node.bodyLengthType,
+      bodyLengthCovers: node.bodyLengthCovers,
+      reader: node.bodyLengthType === null ? null : {
+        op: "bounded-reader",
+        boundary: node.bodyLengthCovers,
+        trailingBytes: node.trailingBytes,
+      },
+      cases: Object.fromEntries(type.cases.map((entry) => [
+        conditionSignature(entry.when),
+        { fields: fieldOperations(entry.fields, model) },
+      ])),
+      otherwise: type.otherwise === "protocol-error"
+        ? { kind: "protocol-error" }
+        : { kind: "fields", fields: fieldOperations(type.otherwise.fields, model) },
+    }, ...predicates];
+  }
+  if (type.kind === "tlv32") {
+    return [{
+      op: "tlv32",
+      totalLengthType: node.totalLengthType,
+      fieldIdType: node.fieldIdType,
+      fieldLengthType: node.fieldLengthType,
+      reader: { op: "bounded-reader", boundary: "totalLength", trailingBytes: node.trailingBytes },
+      fields: fieldOperations(type.fields, model),
+      requiredFields: type.fields.filter((field) => field.required).map((field) => field.name),
+      presenceRules: node.presenceRules ?? [],
+      encodingOrder: node.encodingOrder,
+      duplicateField: node.duplicateField,
+      unknownField: node.unknownField,
+      maximumEncodedBytes: node.maximumEncodedBytes,
+    }, ...predicates];
+  }
+  throw new LoweringCoverageError([`type:${type.name}: no operation lowering for ${type.kind}`]);
+}
+
+function lowerType(type, model, runtimePredicates) {
   const keys = TYPE_KEYS.get(type.kind);
   const node = Object.fromEntries(
     keys.filter((key) => hasOwn(type, key)).map((key) => [key, lowerValue(type[key], model)]),
@@ -289,6 +509,7 @@ function lowerType(type, model) {
   if (hasOwn(type, "constraints")) {
     node.constraints = type.constraints.map((constraint) => lowerConstraint(constraint, type, model));
   }
+  node.operations = typeOperations(type, node, model, runtimePredicates);
   return node;
 }
 
@@ -303,7 +524,7 @@ function lowerFlagConstraint(constraint) {
   };
 }
 
-function lowerCommand(command, model) {
+function lowerCommand(command, model, runtimePredicates) {
   const node = Object.fromEntries(
     [...COMMAND_KEYS]
       .filter((key) => hasOwn(command, key))
@@ -320,15 +541,76 @@ function lowerCommand(command, model) {
     node.payload.type = lowerValue(command.payloadType, model);
     delete node.payloadType;
   }
+  const metadata = model.flags.get("metadata");
+  node.operations = [{
+    op: "command-header",
+    magic: [...model.protocol.magic],
+    wireMajor: model.protocol.wireMajor,
+    commandId: command.id,
+    byteOrder: model.protocol.byteOrder,
+  }, {
+    op: "flags",
+    allowed: node.allowedFlags,
+    required: node.requiredFlags,
+    unknown: "protocol-error",
+  }, ...(node.flagConstraints ?? []).map((constraint) => ({
+    op: "flag-constraint",
+    ...constraint,
+  })), ...(command.allowedFlags.includes("metadata") ? [{
+    op: "metadata-flag-frame",
+    flag: flagOperand("metadata"),
+    frame: lowerValue(metadata.frame, model),
+    whenSet: metadata.whenSet,
+    whenClear: metadata.whenClear,
+  }] : []), ...fieldOperations(command.body, model), {
+    op: "payload",
+    ...node.payload,
+  }, ...ownerRuntimePredicates(command.name, runtimePredicates)];
   return node;
 }
 
-function lowerDurableFormat(format, model) {
-  return lowerValue(format, model);
+function lowerDurableFormat(format, model, runtimePredicates) {
+  const node = lowerValue(format, model);
+  node.operations = [{
+    op: "durable-header",
+    magic: node.magic,
+    formatVersion: node.formatVersion,
+    flags: node.flags,
+    flagsType: node.flagsType,
+    byteOrder: node.byteOrder,
+    bodyLengthType: node.bodyLengthType,
+    body: node.body,
+    flagsComparison: "exact",
+  }, {
+    op: "bounded-reader",
+    boundary: "bodyLength",
+    trailingBytes: "checksum-only",
+  }, {
+    op: "checksum",
+    ...node.checksum,
+    mismatch: "protocol-error",
+  }, {
+    op: "encoded-limit",
+    maximumEncodedBytes: node.maximumEncodedBytes,
+  }, ...ownerRuntimePredicates(format.name, runtimePredicates)];
+  return node;
 }
 
-function lowerLogicalStreamFormat(format, model) {
-  return lowerValue(format, model);
+function lowerLogicalStreamFormat(format, model, runtimePredicates) {
+  const node = lowerValue(format, model);
+  node.operations = [{
+    op: "logical-stream",
+    encoding: node.encoding,
+    body: node.body,
+    maximumBytes: node.maximumBytes,
+    chunkSplit: node.chunkSplit,
+    replay: node.replay,
+    generatedObjectTree: node.generatedObjectTree,
+  }, {
+    op: "encoded-limit",
+    maximumEncodedBytes: node.maximumBytes,
+  }, ...ownerRuntimePredicates(format.name, runtimePredicates)];
+  return node;
 }
 
 function unknownKeys(value, allowed) {
@@ -485,13 +767,63 @@ function assertLoweringCoverage(schema, ir) {
     errors.push(`$.commands: lowered command inventory differs from the schema`);
   }
   const kinds = new Set(ir.types.map((type) => type.kind));
-  for (const kind of TYPE_KEYS.keys()) {
+  for (const kind of TYPE_KINDS) {
     if (!kinds.has(kind)) {
       errors.push(`$.types: kind ${kind} did not reach the IR`);
     }
   }
   if (ir.semanticConstraints.length !== schema.semanticConstraints.length) {
     errors.push(`$.semanticConstraints: lowered constraint inventory differs from the schema`);
+  }
+  for (const [index, source] of schema.semanticConstraints.entries()) {
+    const lowered = structuredClone(ir.semanticConstraints[index]);
+    delete lowered.runtimePredicate;
+    if (JSON.stringify(lowered) !== JSON.stringify(source)) {
+      errors.push(`$.semanticConstraints[${index}]: literal tuple did not reach the IR`);
+    }
+  }
+  if (JSON.stringify(ir.relocationStateMachine) !== JSON.stringify(schema.relocationStateMachine)) {
+    errors.push(`$.relocationStateMachine: declaration did not reach the IR`);
+  }
+  const operationOwners = [
+    ...ir.types.map((entry) => [`type:${entry.name}`, entry.operations]),
+    ...ir.commands.map((entry) => [`command:${entry.name}`, entry.operations]),
+    ...ir.durableFormats.map((entry) => [`durable:${entry.name}`, entry.operations]),
+    [`logical:${ir.relocationLogicalStreamFormat.name}`,
+      ir.relocationLogicalStreamFormat.operations],
+  ];
+  const seenOperations = new Set();
+  function inspectOperations(value, location) {
+    if (Array.isArray(value)) {
+      value.forEach((entry, index) => inspectOperations(entry, `${location}[${index}]`));
+      return;
+    }
+    if (!isObject(value)) return;
+    if (hasOwn(value, "op")) {
+      if (!OPERATION_KIND_SET.has(value.op)) {
+        errors.push(`${location}.op: unknown operation ${JSON.stringify(value.op)}`);
+      } else {
+        seenOperations.add(value.op);
+      }
+    }
+    for (const [key, entry] of Object.entries(value)) {
+      inspectOperations(entry, `${location}.${key}`);
+    }
+  }
+  for (const [owner, operations] of operationOwners) {
+    if (!Array.isArray(operations) || operations.length === 0) {
+      errors.push(`${owner}: operation sequence is missing`);
+    } else {
+      inspectOperations(operations, owner);
+    }
+  }
+  for (const operation of OPERATION_KINDS) {
+    if (!seenOperations.has(operation)) {
+      errors.push(`$.operationVocabulary: operation ${operation} has no schema coverage`);
+    }
+  }
+  if (JSON.stringify(ir.operationVocabulary) !== JSON.stringify(OPERATION_KINDS)) {
+    errors.push(`$.operationVocabulary: closed vocabulary differs from the lowering owner`);
   }
   const sourceUnions = schema.types.filter((type) => type.kind === "conditional-union");
   const loweredUnions = ir.types.filter((type) => type.kind === "conditional-union");
@@ -543,6 +875,7 @@ function assertLoweringCoverage(schema, ir) {
     conditionalUnions: loweredUnions.length,
     durableFormats: ir.durableFormats.length,
     logicalStreams: 1,
+    operations: seenOperations.size,
   };
 }
 
@@ -552,7 +885,15 @@ function lowerSchema(schemaPathOrObject) {
   const model = {
     bounds: namedMap(schema.bounds, "bounds"),
     types: namedMap(schema.types, "types"),
+    flags: namedMap(schema.flags, "flags"),
+    protocol: schema.protocol,
   };
+  const runtimePredicates = schema.semanticConstraints
+    .filter((constraint) => constraint.kind === "terminal-failure-integrity")
+    .map((constraint) => ({
+      reference: { asset: "service-wire-constants", name: "valid-terminal-failure" },
+      targets: [...constraint.fields],
+    }));
   const ir = {
     schemaDialect: schema.schemaDialect,
     schemaVersion: schema.schemaVersion,
@@ -566,22 +907,28 @@ function lowerSchema(schemaPathOrObject) {
       ...lowerValue(context, model),
       parameter: "decoder-context",
     })),
-    semanticConstraints: schema.semanticConstraints.map((constraint) => constraint.kind
-      === "terminal-failure-integrity"
-      ? {
-        kind: constraint.kind,
+    semanticConstraints: schema.semanticConstraints.map((constraint) => ({
+      ...structuredClone(constraint),
+      ...(constraint.kind === "terminal-failure-integrity" ? {
         runtimePredicate: {
           asset: "service-wire-constants",
           name: "valid-terminal-failure",
+          targets: constraint.fields.map(fieldPathOperand),
+          operation: runtimePredicateOperation(runtimePredicates[0].reference, constraint.fields),
         },
-      }
-      : { kind: constraint.kind }),
-    types: schema.types.map((type) => lowerType(type, model)),
-    commands: schema.commands.map((command) => lowerCommand(command, model)),
-    durableFormats: schema.durableFormats.map((format) => lowerDurableFormat(format, model)),
+      } : {}),
+    })),
+    relocationStateMachine: structuredClone(schema.relocationStateMachine),
+    operationVocabulary: [...OPERATION_KINDS],
+    types: schema.types.map((type) => lowerType(type, model, runtimePredicates)),
+    commands: schema.commands.map((command) => lowerCommand(command, model, runtimePredicates)),
+    durableFormats: schema.durableFormats.map(
+      (format) => lowerDurableFormat(format, model, runtimePredicates),
+    ),
     relocationLogicalStreamFormat: lowerLogicalStreamFormat(
       schema.relocationLogicalStreamFormat,
       model,
+      runtimePredicates,
     ),
   };
   assertLoweringCoverage(schema, ir);
@@ -818,7 +1165,8 @@ function runSelfTests(schemaPath) {
     "relocation-data-chunk-v1",
     "relocation-manifest-v1",
   ]);
-  assert.deepEqual(ir.durableFormats[0], {
+  const { operations: authorityOperations, ...authorityDeclaration } = ir.durableFormats[0];
+  assert.deepEqual(authorityDeclaration, {
     name: "authority-payload-v1",
     magic: [90, 76, 65, 85],
     formatVersion: 1,
@@ -837,9 +1185,13 @@ function runSelfTests(schemaPath) {
     goldenFixture: "golden/durable-authority-v1.json",
     providerInterpretation: "opaque-bytes",
   });
+  assert.deepEqual(authorityOperations.map((operation) => operation.op), [
+    "durable-header", "bounded-reader", "checksum", "encoded-limit",
+  ]);
   assert(ir.durableFormats.every((format) => format.checksum.algorithm === "crc32c-castagnoli"
     && format.checksum.position === "trailing"));
-  assert.deepEqual(ir.relocationLogicalStreamFormat, {
+  const { operations: logicalOperations, ...logicalDeclaration } = ir.relocationLogicalStreamFormat;
+  assert.deepEqual(logicalDeclaration, {
     name: "relocation-envelope-v1",
     encoding: "canonical-big-endian-field-stream-without-monolithic-provider-envelope",
     body: { $ref: "relocation-envelope-v1" },
@@ -855,6 +1207,9 @@ function runSelfTests(schemaPath) {
     replay: "bounded-incremental-decode-without-whole-stream-allocation",
     goldenFixture: "golden/relocation-envelope-v1.json",
   });
+  assert.deepEqual(logicalOperations.map((operation) => operation.op), [
+    "logical-stream", "encoded-limit",
+  ]);
   expectValidatorFailure(schema, (candidate) => {
     candidate.durableFormats[0].checksum.algorithm = "unknown-checksum";
   });
@@ -876,13 +1231,30 @@ function runSelfTests(schemaPath) {
     ir.semanticConstraints.find((constraint) => constraint.runtimePredicate).kind,
     "terminal-failure-integrity",
   );
+  const terminalConstraint = ir.semanticConstraints.find(
+    (constraint) => constraint.runtimePredicate,
+  );
+  assert.deepEqual(terminalConstraint.runtimePredicate.targets,
+    schema.semanticConstraints.find(
+      (constraint) => constraint.kind === "terminal-failure-integrity",
+    ).fields.map(fieldPathOperand));
   assert.deepEqual(
-    ir.semanticConstraints.find((constraint) => constraint.runtimePredicate).runtimePredicate,
+    terminalConstraint.runtimePredicate.operation.reference,
     { asset: "service-wire-constants", name: "valid-terminal-failure" },
   );
-  assert(ir.semanticConstraints
-    .filter((constraint) => constraint.kind !== "terminal-failure-integrity")
-    .every((constraint) => Object.keys(constraint).length === 1));
+  for (const [index, constraint] of schema.semanticConstraints.entries()) {
+    const lowered = structuredClone(ir.semanticConstraints[index]);
+    delete lowered.runtimePredicate;
+    assert.deepEqual(lowered, constraint);
+  }
+  assert.deepEqual(ir.relocationStateMachine, schema.relocationStateMachine);
+  const operationCoverage = assertLoweringCoverage(schema, ir);
+  assert.deepEqual(ir.operationVocabulary, OPERATION_KINDS);
+  assert.equal(operationCoverage.operations, OPERATION_KINDS.length);
+  assert(ir.types.every((type) => type.operations.length > 0));
+  assert(ir.commands.every((command) => command.operations.length > 0));
+  assert(ir.durableFormats.every((format) => format.operations.length > 0));
+  assert(ir.relocationLogicalStreamFormat.operations.length > 0);
   return {
     conditionForms: 4,
     validatorNegativeConditions: 4,
@@ -891,6 +1263,8 @@ function runSelfTests(schemaPath) {
     tlvPresenceRules: 1,
     durableFormats: ir.durableFormats.length,
     logicalStreams: 1,
+    semanticConstraints: ir.semanticConstraints.length,
+    operations: operationCoverage.operations,
   };
 }
 
@@ -926,7 +1300,9 @@ if (process.argv[1] && scriptPath === path.resolve(process.argv[1])) {
           + `${result.layoutConstraintKinds} layout constraint kinds, `
           + `${result.tlvPresenceRules} TLV presence rule, `
           + `${result.durableFormats} durable formats, `
-          + `${result.logicalStreams} logical stream, JSON round-trip`,
+          + `${result.logicalStreams} logical stream, `
+          + `${result.semanticConstraints} semantic constraints, `
+          + `${result.operations} operation kinds, JSON round-trip`,
       );
     } else {
       const schema = readSchema(schemaPath);
@@ -935,7 +1311,8 @@ if (process.argv[1] && scriptPath === path.resolve(process.argv[1])) {
       console.log(
         `service wire lowering valid: ${coverage.types} types, ${coverage.commands} commands, `
           + `${coverage.kinds} kinds, ${coverage.conditionalUnions} conditional unions, `
-          + `${coverage.durableFormats} durable formats, ${coverage.logicalStreams} logical stream`,
+          + `${coverage.durableFormats} durable formats, ${coverage.logicalStreams} logical stream, `
+          + `${coverage.operations} operation kinds`,
       );
     }
   } catch (error) {
@@ -946,6 +1323,7 @@ if (process.argv[1] && scriptPath === path.resolve(process.argv[1])) {
 
 export {
   LoweringCoverageError,
+  OPERATION_KINDS,
   assertLoweringCoverage,
   lowerSchema,
 };

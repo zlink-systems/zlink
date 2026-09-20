@@ -32,13 +32,11 @@ export const serviceWireOutputManifest = Object.freeze({
     Object.freeze({
       id: "fixtures",
       tool: "generate-service-wire-fixtures.mjs",
-      acceptsSchema: true,
       outputs: Object.freeze(["generated/fixtures/index.json"]),
     }),
     Object.freeze({
       id: "assets",
       tool: "generate-service-wire-assets.mjs",
-      acceptsSchema: false,
       outputs: Object.freeze([
         "generated/cpp/service_wire_constants.hpp",
         "generated/dotnet/ServiceWireConstants.g.cs",
@@ -58,7 +56,6 @@ export const serviceWireOutputManifest = Object.freeze({
     Object.freeze({
       id: "pilot",
       tool: "generate-service-wire-pilot-codecs.mjs",
-      acceptsSchema: true,
       legacy: Object.freeze({ removalStage: 4, reason: "runtime adapters consume this API" }),
       outputs: Object.freeze([
         "generated/node/service_wire_pilot_codec.generated.ts",

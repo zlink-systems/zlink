@@ -17,24 +17,13 @@ import {
   resolveReference,
   resolveReferencedMaximum,
   STRUCT_CONSTRAINT_KINDS,
+  TYPE_KINDS,
   toBigInt,
   VECTOR_CONSTRAINT_KINDS,
 } from "./service-wire-schema-model.mjs";
 
 const PAYLOAD_POLICIES = new Set(["forbidden", "optional", "required"]);
 const COMMAND_DOMAINS = new Set(["application", "infrastructure"]);
-const TYPE_KINDS = new Set([
-  "integer",
-  "enum",
-  "length-prefixed-bytes",
-  "length-prefixed-text",
-  "struct",
-  "versioned-vector",
-  "conditional-union",
-  "vector",
-  "tlv32",
-  "versioned-length-delimited",
-]);
 const INTEGER_ENCODINGS = new Map([
   ["u8", [0n, 255n]],
   ["u16", [0n, 65535n]],
@@ -8153,6 +8142,7 @@ export {
   SchemaValidationError,
   crc32c,
   encodeGoldenBody,
+  encodeGoldenEnvelope,
   validateServiceWireFixtureOracles,
   validateGoldenFixtures,
   validateSchema,

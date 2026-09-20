@@ -3,11 +3,8 @@
 import fs from "node:fs";
 import path from "node:path";
 import process from "node:process";
-import { fileURLToPath } from "node:url";
 import { lowerSchema } from "./service-wire-lowering.mjs";
 
-const directory = path.dirname(fileURLToPath(import.meta.url));
-const output = path.join(directory, "generated", "dotnet", "ServiceWireCodec.g.cs");
 
 function identifier(value) {
   const result = value.replace(/(^|[^A-Za-z0-9]+)([A-Za-z0-9])/g,
@@ -616,11 +613,13 @@ function runtimeSource() {
     private static IReadOnlyList<object?> Items(object? value) => value as IReadOnlyList<object?> ?? throw Error("vector value");`;
 }
 
-const [mode, schemaArgument, ...rest] = process.argv.slice(2);
-if (!(["--write", "--check"].includes(mode)) || schemaArgument === undefined || rest.length !== 0) {
-  console.error("usage: node render-service-wire-dotnet.mjs --write|--check <schema>");
+const [mode, schemaArgument, outputArgument, ...rest] = process.argv.slice(2);
+if (!(["--write", "--check"].includes(mode)) || schemaArgument === undefined
+    || outputArgument === undefined || rest.length !== 0) {
+  console.error("usage: node render-service-wire-dotnet.mjs --write|--check <schema> <output>");
   process.exit(2);
 }
+const output = path.resolve(outputArgument);
 const rendered = `${render(lowerSchema(path.resolve(schemaArgument)))}\n`;
 if (mode === "--write") {
   fs.mkdirSync(path.dirname(output), { recursive: true });

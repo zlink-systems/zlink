@@ -3,11 +3,8 @@
 import fs from "node:fs";
 import path from "node:path";
 import process from "node:process";
-import { fileURLToPath } from "node:url";
 import { lowerSchema } from "./service-wire-lowering.mjs";
 
-const directory = path.dirname(fileURLToPath(import.meta.url));
-const output = path.join(directory, "generated", "jvm", "ServiceWireCodec.java");
 const JAVA_KEYWORDS = new Set([
   "abstract", "assert", "boolean", "break", "byte", "case", "catch", "char", "class",
   "const", "continue", "default", "do", "double", "else", "enum", "extends", "final",
@@ -390,11 +387,12 @@ function runtimeHelpers() {
 `;
 }
 
-const [mode, schema, ...rest] = process.argv.slice(2);
-if (!schema || rest.length || !["--write", "--check"].includes(mode)) {
-  console.error("usage: node render-service-wire-java.mjs --write|--check <schema>");
+const [mode, schema, outputArgument, ...rest] = process.argv.slice(2);
+if (!schema || !outputArgument || rest.length || !["--write", "--check"].includes(mode)) {
+  console.error("usage: node render-service-wire-java.mjs --write|--check <schema> <output>");
   process.exit(2);
 }
+const output = path.resolve(outputArgument);
 try {
   const source = render(lowerSchema(path.resolve(schema)));
   if (mode === "--write") {

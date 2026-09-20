@@ -10,6 +10,18 @@ const VECTOR_CONSTRAINT_KINDS = new Set(["sorted", "unique"]);
 const STRUCT_CONSTRAINT_KINDS = new Set(["not-both-zero", "field-less-than-or-equal"]);
 const FIELD_CONSTRAINT_KINDS = new Set(["contains-protocol-required-capability"]);
 const FLAG_CONSTRAINT_KINDS = new Set(["all-or-none", "implies"]);
+const TYPE_KINDS = new Set([
+  "integer",
+  "enum",
+  "length-prefixed-bytes",
+  "length-prefixed-text",
+  "struct",
+  "vector",
+  "versioned-vector",
+  "versioned-length-delimited",
+  "conditional-union",
+  "tlv32",
+]);
 
 function isObject(value) {
   return value !== null && typeof value === "object" && !Array.isArray(value);
@@ -99,6 +111,7 @@ export {
   resolveReference,
   resolveReferencedMaximum,
   STRUCT_CONSTRAINT_KINDS,
+  TYPE_KINDS,
   toBigInt,
   VECTOR_CONSTRAINT_KINDS,
 };

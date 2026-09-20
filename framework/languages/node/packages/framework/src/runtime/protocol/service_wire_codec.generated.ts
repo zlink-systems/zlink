@@ -399,108 +399,1310 @@ const definitions: JsonObject = {
   ],
   "semanticConstraints": [
     {
-      "kind": "implies"
-    },
-    {
-      "kind": "authority-operation-state-integrity"
-    },
-    {
-      "kind": "spot-authority-aggregate-integrity"
-    },
-    {
-      "kind": "relocation-saved-work-integrity"
-    },
-    {
-      "kind": "location-relocation-storage-integrity"
-    },
-    {
-      "kind": "reply-relay-context-integrity"
-    },
-    {
-      "kind": "instance-placement-authority-fence"
-    },
-    {
-      "kind": "actor-route-authority-fence"
-    },
-    {
-      "kind": "instance-operation-timeout-ownership"
-    },
-    {
-      "kind": "user-spot-terminal-operation-integrity"
-    },
-    {
-      "kind": "actor-create-terminal-operation-integrity"
-    },
-    {
-      "kind": "relocation-authority-phase-boundaries"
-    },
-    {
-      "kind": "complete-message-bound-integrity"
-    },
-    {
-      "kind": "route-mesh-message-size-integrity"
-    },
-    {
-      "kind": "saved-work-order-domain"
-    },
-    {
-      "kind": "terminal-failure-integrity",
-      "runtimePredicate": {
-        "asset": "service-wire-constants",
-        "name": "valid-terminal-failure"
+      "kind": "implies",
+      "if": {
+        "contextEquals": {
+          "name": "applicationSnapshotPresent",
+          "value": true
+        }
+      },
+      "then": {
+        "contextEquals": {
+          "name": "durableRelocationPresent",
+          "value": true
+        }
       }
     },
     {
-      "kind": "actor-route-transition-integrity"
+      "kind": "authority-operation-state-integrity",
+      "authorityType": "authority-payload-v1",
+      "rules": [
+        {
+          "operationKind": "steady",
+          "objectKind": "actor",
+          "relocationState": "absent",
+          "activationRecoveryState": "absent"
+        },
+        {
+          "operationKind": "steady",
+          "objectKind": "spot",
+          "spotKinds": [
+            "entry",
+            "user"
+          ],
+          "relocationState": "absent",
+          "activationRecoveryState": "absent"
+        },
+        {
+          "operationKind": "steady",
+          "objectKind": "spot",
+          "spotKind": "instance",
+          "instanceAuthorityStates": [
+            "ready"
+          ],
+          "relocationState": "absent",
+          "activationRecoveryState": "optional-until-durable-first-handler-terminal"
+        },
+        {
+          "operationKind": "coldActivation",
+          "objectKind": "spot",
+          "spotKind": "instance",
+          "relocationState": "absent",
+          "authorityStates": [
+            "coldActivating"
+          ],
+          "activationRecoveryState": "absent"
+        },
+        {
+          "operationKind": "maintenanceRelocation",
+          "objectKinds": [
+            "actor",
+            "spot"
+          ],
+          "spotKinds": [
+            "user",
+            "instance"
+          ],
+          "relocationState": "present",
+          "relocationPhase": "non-none",
+          "userAuthorityStates": [
+            "relocating"
+          ],
+          "instanceAuthorityStates": [
+            "relocating"
+          ],
+          "instancePhaseStates": {
+            "relocating": [
+              "preparing",
+              "captured",
+              "prepared",
+              "committed",
+              "activating",
+              "activated",
+              "cleaning",
+              "completed",
+              "aborted"
+            ]
+          },
+          "activationRecoveryState": "absent"
+        },
+        {
+          "operationKind": "close",
+          "objectKind": "spot",
+          "spotKinds": [
+            "entry",
+            "user",
+            "instance"
+          ],
+          "relocationState": "absent",
+          "authorityStates": [
+            "closing"
+          ],
+          "activationRecoveryState": "absent"
+        }
+      ]
     },
     {
-      "kind": "relocation-handoff-integrity"
+      "kind": "spot-authority-aggregate-integrity",
+      "authorityObjectType": "authority-object-identity",
+      "canonicalKeyKind": "spot",
+      "canonicalKeyComponents": [
+        "spotId"
+      ],
+      "spotKinds": [
+        "entry",
+        "user",
+        "instance"
+      ],
+      "singleAuthoritativeRow": true,
+      "typedSpotLocation": "framework-decoded-projection-not-separate-authority",
+      "createTransitions": {
+        "entry": "new-object-cas",
+        "user": "new-object-cas",
+        "instance": "new-object-cas"
+      },
+      "sharedGeneration": "provider-object-generation-per-canonical-spot-key",
+      "kindTransition": "requires-prior-row-delete-then-new-object-cas-on-same-key",
+      "providerPayloadInterpretation": "forbidden"
     },
     {
-      "kind": "relocation-target-attempt-integrity"
+      "kind": "relocation-saved-work-integrity",
+      "relocationType": "relocation-envelope-v1",
+      "savedWorkField": "savedWork",
+      "participantField": "participantId",
+      "orderField": "order",
+      "ownership": "source-memory-payload-is-the-only-handoff-source-for-work-and-timers-accepted-before-capture",
+      "sourceRestore": "pre-cutover-abort-restores-the-same-payload-to-source-in-original-queue-order",
+      "targetRestore": "target-materializes-the-same-payload-once-before-relay-ready",
+      "relayExclusion": "relocationData-never-carries-saved-work-or-timers-which-travel-only-in-relocationState-chunks",
+      "queueOrder": "saved-work-and-pending-timer-ticks-share-one-strictly-increasing-order-per-participant",
+      "requestIdentity": "operation-id-source-fence-and-reply-route-remain-part-of-the-frozen-record",
+      "duplicateTransmission": "same-payload-may-be-accepted-twice-no-hidden-delivery-deduplication-or-ack-journal"
     },
     {
-      "kind": "relocation-coordinator-authorization-integrity"
+      "kind": "location-relocation-storage-integrity",
+      "locationAuthorityOwns": [
+        "descriptor-and-owner-lease",
+        "object-authority-and-normal-host-capacity-accounting",
+        "aggregate-generation-and-canonical-participant-mutations",
+        "inventory-digest-and-relocation-reference",
+        "relocation-phase-and-exact-target-attempt"
+      ],
+      "relocationRootRole": "immutable-payload-lookup-projection-never-authority",
+      "publicationOrder": [
+        "write-all-immutable-relocation-chunks",
+        "write-immutable-relocation-root-manifest",
+        "read-and-verify-complete-root-from-relocation-provider",
+        "one-location-expected-store-version-cas-publishes-reference-checksum-and-captured-phase"
+      ],
+      "aggregateAuthority": {
+        "format": "maintenance-aggregate-v1",
+        "participantOrder": "canonical-authority-key-bytes",
+        "atomicFields": [
+          "aggregateId",
+          "aggregateGeneration",
+          "participants-and-mutations",
+          "inventoryDigestSha256",
+          "relocationReference-and-checksum"
+        ],
+        "relocationManifestDigest": "must-equal-location-authority-inventory-digest",
+        "manifestAuthority": "forbidden"
+      },
+      "authoritySlotProjection": {
+        "format": "authority-relocation-state",
+        "aggregateIdField": "relocation",
+        "aggregateGenerationField": "aggregateGeneration",
+        "preRootPhase": "preparing",
+        "preRootValue": "zero-only",
+        "rootExistsPhases": [
+          "captured",
+          "prepared",
+          "committed",
+          "activating",
+          "activated",
+          "cleaning",
+          "completed",
+          "aborted"
+        ],
+        "issuedRange": {
+          "minimum": "1",
+          "maximum": "9223372036854775806",
+          "exhaustedSentinel": "9223372036854775807",
+          "sentinelIssued": "forbidden"
+        },
+        "rootAgreement": "must-equal-maintenance-aggregate-v1.aggregateGeneration-when-root-exists",
+        "participantAgreement": "all-authority-slots-in-one-aggregate-must-agree",
+        "coordinatorExpectedStoreVersion": {
+          "presence": "nonempty-iff-writing-coordinator-retains-session-relocation-coordinator-fence-otherwise-empty-and-empty-is-legal-in-every-phase",
+          "comparison": "opaque-token-exact-equality-only-never-ordered-or-derived"
+        }
+      },
+      "replacement": "write-and-verify-new-root-before-one-location-authority-cas-replaces-reference",
+      "orphanCleanup": "unpublished-or-replaced-root-is-not-authority-and-is-deleted-or-expires",
+      "deleteOrder": "release-or-replace-location-authority-reference-before-idempotent-relocation-root-delete",
+      "backend": "location-and-relocation-providers-may-use-different-backends-connections-and-failure-domains",
+      "clock": "retention-and-renewal-use-relocation-provider-storeNow-and-expiresAt-only",
+      "publishedRelocationDataLoss": {
+        "closedTerminalTriggers": [
+          "permanent-published-payload-missing",
+          "published-payload-checksum-mismatch",
+          "published-payload-inventory-digest-mismatch"
+        ],
+        "failureCode": "relocationDataLost",
+        "retriable": false,
+        "rollback": "forbidden",
+        "publication": "Ready-and-Completed-forbidden"
+      }
     },
     {
-      "kind": "bound-session-relocation-barrier-integrity"
+      "kind": "reply-relay-context-integrity",
+      "command": "replyRelay",
+      "coldActivation": {
+        "readyBarrierAuthorityState": "ready",
+        "readyBarrierOperationKind": "steady",
+        "activationFailureAuthorityState": "coldActivating",
+        "activationFailureOperationKind": "coldActivation",
+        "activationFailureForbidsTerminalResult": "ok"
+      },
+      "maintenanceRelocation": {
+        "requiresRelocationId": true,
+        "requiresTargetAttemptGenerationAsPeerFence": true,
+        "requiresOriginalOperationIdentity": true
+      },
+      "acknowledgement": {
+        "command": "replyRelayAck",
+        "scope": "maintenanceRelocation-only",
+        "identity": [
+          "stable-relocation-id",
+          "exact-request-source-fence",
+          "operation-id",
+          "reply-route-id"
+        ],
+        "requestSource": "authenticated-exact-source-owner-lease-node-rid-and-generation",
+        "statuses": [
+          "terminalReceived",
+          "alreadyTerminal"
+        ],
+        "targetPersistence": "relocation-root-cas-before-ack-effect",
+        "targetRetry": "retransmit-same-terminal-across-connection-replacement-until-ack-or-exact-request-source-owner-lease-expiry",
+        "sourceDuplicate": "reply-already-terminal-still-emits-alreadyTerminal-ack",
+        "physicalConnectionClose": "never-terminal-proof",
+        "retireWhileSourceLeaseValid": "forceStopped-and-retain-relocation-root-and-reply-bytes-for-retention-window"
+      },
+      "terminalOwnership": "stable-relocation-id-exact-request-source-fence-operation-id-and-reply-route-id-once-independent-of-target-attempt",
+      "replyRoute": "request-and-ack-echo-only"
     },
     {
-      "kind": "transport-admission-integrity"
+      "kind": "instance-placement-authority-fence",
+      "routeType": "instance-route-v1",
+      "requestBoundFields": [
+        "targetNodeRid",
+        "targetNodeGeneration",
+        "targetSpotId",
+        "ready.authority-or-coldActivation.stableType-and-targetDescriptorVersion",
+        "coldActivation.deadlineUnixMs"
+      ],
+      "targetComparison": "exact-current-authority-before-mailbox-admission",
+      "sourceOrder": "resolve-select-target-and-submit-complete-first-message-activation-envelope-without-owner-claim-or-reservation",
+      "newObjectGenerations": "nonzero-object-and-authority-owner-generations-allocated-by-provider-cas",
+      "targetClaim": "target-rechecks-current-authority-persists-complete-activation-recovery-root-and-cas-winner-reserves-before-factory",
+      "durableActivationIntent": "coldActivating-row-owned-by-exact-target-host-with-provider-issued-pending-creation-projection",
+      "targetRecovery": "serving-gate-initial-authority-scan-and-background-bounded-reconcile-resume-owned-coldActivating-with-exact-reservation-and-complete-first-message-envelope",
+      "readyOrdering": "durable-activation-inbox-first-record-before-ready-commit-handler-behind-barrier-ready-retains-recovery-root-and-cursor-queue-head-restore-before-barrier-open",
+      "recoveryRelease": "durable-first-handler-terminal-before-preserve-cas-release-never-queue-admission",
+      "orphanRule": "recovery-root-put-before-reserve-or-conflict-loser-is-unpublished-orphan-retention-or-idempotent-delete",
+      "activationRegistry": "object-key-object-generation-authority-owner-generation-and-owner-token-converge-late-submit-and-scan-to-one-local-barrier",
+      "staleTargetRecovery": "expected-store-version-newOwner-cas-preserves-object-generation-and-selects-eligible-owner",
+      "originalOperationAfterLostSubmit": "no-hidden-resubmit-caller-normal-timeout-or-failure",
+      "activationFailure": "seal-local-barrier-terminal-once-typed-request-failures-and-one-way-drop-events-then-exact-fenced-delete",
+      "failureDeleteFence": "same-store-version-object-generation-authority-owner-generation-owner-id-and-owner-lease-generation",
+      "failureDeleteAmbiguity": "exact-read-reconcile-registry-remains-failed-until-missing-confirmed",
+      "nextActivation": "only-next-caller-after-missing-may-newObject-claim-new-object-and-owner-generations",
+      "failureCrashRecovery": "owned-coldActivating-scan-may-retry-retry-safe-factory-before-delete-is-confirmed",
+      "deadline": "resolve-select-claim-and-outbound-admission-share-one-source-send-deadline",
+      "oneWay": "after-outbound-admission-does-not-wait-for-factory-or-ready",
+      "leaseDeadline": "store-time-to-local-monotonic-from-read-start",
+      "publicExposure": "forbidden"
     },
     {
-      "kind": "admission-reject-integrity"
+      "kind": "actor-route-authority-fence",
+      "routeType": "actor-route-fence",
+      "membershipSensitiveCommands": [
+        "actorSend",
+        "actorRequest",
+        "actorDestroy",
+        "actorJoin",
+        "boundSessionSend",
+        "boundSessionBind"
+      ],
+      "authoritySourceCommands": [
+        "boundSessionReplaced"
+      ],
+      "frozenRecordKinds": [
+        "actorSend",
+        "actorRequest"
+      ],
+      "messageFollowKey": [
+        "actorId",
+        "objectGeneration",
+        "sourceAuthorityOwnerGeneration",
+        "targetAuthorityOwnerGeneration",
+        "sourceOwnerLeaseGeneration",
+        "targetOwnerLeaseGeneration"
+      ],
+      "targetComparison": "exact-current-owner-authority-before-mailbox-admission",
+      "publicExposure": "forbidden"
     },
     {
-      "kind": "frozen-record-integrity"
+      "kind": "instance-operation-timeout-ownership",
+      "command": "instanceSpot",
+      "wireField": "forbidden",
+      "owner": "source-operation-table",
+      "deadline": "single-monotonic-deadline-before-resolve",
+      "replay": "does-not-restart-or-extend-deadline",
+      "send": "no-operation-timeout"
     },
     {
-      "kind": "durable-operation-identity-integrity"
+      "kind": "user-spot-terminal-operation-integrity",
+      "commands": {
+        "create": "userSpotCreate",
+        "close": "userSpotClose",
+        "terminal": "reply"
+      },
+      "scope": "route-mesh-object-client-or-server-to-exact-object-server-only",
+      "operationIdentity": "source-node-rid-source-node-generation-and-operation-id-terminal-once",
+      "deadline": "one-source-deadline-covering-resolve-reservation-remote-execution-and-terminal-reply-never-restarted",
+      "create": {
+        "authorityKey": "global-spot-id-user-kind-only",
+        "reservation": "provider-issued-reservation-id-exact-store-version-object-generation-authority-owner-generation-target-node-lifecycle-owner-lease-and-pending-capacity",
+        "content": "target-exact-reads-immutable-pending-creation-content-from-location-store-never-command-payload",
+        "admissionOrder": [
+          "authenticate-source-and-exact-target-lifecycle",
+          "exact-read-pending-user-spot-authority",
+          "compare-key-stable-type-reservation-store-version-owner-and-target-fences",
+          "factory-and-initialize",
+          "same-reservation-commit"
+        ],
+        "terminalStates": [
+          "existing",
+          "created",
+          "rejected"
+        ],
+        "terminalTail": "exact-spot-ref-for-all-three-states",
+        "applicationReply": "forbidden-for-existing-optional-for-created-or-rejected"
+      },
+      "close": {
+        "target": "exact-spot-ref-target-node-lifecycle-authority-owner-generation-and-store-version",
+        "admissionOrder": [
+          "authenticate-source-and-exact-target-lifecycle",
+          "exact-read-current-user-spot-authority",
+          "reject-object-generation-or-authority-owner-generation-or-store-version-mismatch",
+          "reject-relocation-or-closing-conflict",
+          "reject-nonempty-active-actor-membership",
+          "closing-cas-and-local-admission-seal"
+        ],
+        "terminalTail": "closed-bool-false-only-for-idempotent-missing-or-active-membership",
+        "retarget": "forbidden"
+      },
+      "polling": "location-row-polling-is-not-terminal-completion",
+      "applicationControlPacket": "forbidden"
     },
     {
-      "kind": "owner-lease-timing-integrity"
+      "kind": "actor-create-terminal-operation-integrity",
+      "commands": {
+        "create": "actorCreate",
+        "terminal": "reply"
+      },
+      "scope": "route-mesh-object-client-or-server-to-exact-object-server-only",
+      "operationIdentity": "source-node-rid-source-node-generation-and-operation-id-terminal-once",
+      "deadline": "one-source-deadline-covering-resolve-reservation-remote-execution-and-terminal-reply-never-restarted",
+      "creationInput": "immutable-content-reference-in-reserved-authority-command-carries-no-application-payload",
+      "concurrency": "one-callback-per-actor-reservation-distinct-operation-waits-then-ready-existing-or-rejected-cleanup-new-reservation",
+      "terminalResult": "same-operation-only-existing-created-or-rejected-with-optional-application-payload",
+      "terminalEnvelopeMaximumBytes": {
+        "$bound": "creationTerminalEnvelopeBytes"
+      },
+      "terminalRetention": "original-operation-deadline-plus-300000ms-provider-store-time",
+      "rejectedPublication": "no-ready-authority-no-active-capacity-exact-reserved-cleanup",
+      "applicationControlPacket": "forbidden"
     },
     {
-      "kind": "local-creation-publication-integrity"
+      "kind": "relocation-authority-phase-boundaries",
+      "authorityType": "authority-payload-v1",
+      "writes": "exact-store-version-cas-each-phase",
+      "rules": [
+        {
+          "phase": "preparing",
+          "after": [
+            "local-admission-seal",
+            "current-application-turn-finished"
+          ],
+          "relocation": "absent"
+        },
+        {
+          "phase": "captured",
+          "after": [
+            "local-capture-complete"
+          ],
+          "relocation": "present"
+        },
+        {
+          "phase": "prepared",
+          "after": [
+            "target-factory-restore-complete",
+            "temporary-queue-installed",
+            "saved-work-and-timer-staging-complete",
+            "relocation-ready-reply-sent"
+          ],
+          "relocation": "present"
+        }
+      ],
+      "closedOwnerTargetRules": {
+        "preparingAndCaptured": "main-owner-is-immutable-source-no-relocation-capacity-reservation",
+        "prepared": "main-owner-is-source-exact-nonzero-target-attempt-owner-lease-node-and-relocation-present",
+        "committedThroughCompleted": "main-owner-is-exact-current-target-and-same-attempt-relocation-present",
+        "aborted": "before-cutover-source-remains-owner-target-temporary-queue-is-discarded-and-source-payload-is-restored"
+      },
+      "preparedToCommitted": "target-only-one-newOwner-cas-after-cutover-or-1000ms-ready-fallback",
+      "sourceFence": "source-owner-id-lease-generation-node-rid-and-generation-immutable-through-terminal",
+      "replacementMutation": "target-attempt-target-owner-lease-and-node-only-same-target-process-retry-never-reenters-committed",
+      "readyProjection": "ready-derives-from-target-admission-open-retained-relocation-payload-or-maintenance-metadata-does-not-block"
     },
     {
-      "kind": "contract-amendment-limit-integrity"
+      "kind": "complete-message-bound-integrity",
+      "admissionType": "client-server-admission",
+      "topology": "clientServer",
+      "wireField": "normalizedEffectiveMaxMessageBytes",
+      "range": "1..4294967295",
+      "normalization": {
+        "publicZero": "binding-or-transport-effective-receive-maximum",
+        "unlimitedTransport": 4294967295,
+        "positiveAboveWireMaximum": "startup-configuration-error"
+      },
+      "senderLimit": "minimum-local-and-remote-normalized-bounds",
+      "receiverLimit": "own-admitted-normalized-bound",
+      "lifetimeStability": "startup-only-immutable-for-admitted-connection-lifetime",
+      "liveUpdate": "forbidden-weight-only-remains-live-updatable",
+      "enforcement": "immediately-after-complete-envelope-length-prefix-before-allocation",
+      "payloadLimit": "negotiated-complete-message-bound-minus-actual-envelope-overhead",
+      "mismatch": "oversize-protocol-error-and-connection-not-ready"
     },
     {
-      "kind": "actor-retire-membership-integrity"
+      "kind": "route-mesh-message-size-integrity",
+      "admissionType": "route-mesh-admission",
+      "topology": "routeMesh",
+      "frameworkMessageSizeSetting": "forbidden",
+      "frameworkMessageSizeLimit": "none",
+      "admissionMessageSizeField": "forbidden",
+      "remainingBounds": [
+        "schema-and-wire-representation",
+        "application-hwm",
+        "mailbox-byte-budget"
+      ]
     },
     {
-      "kind": "stateful-capability-integrity"
+      "kind": "saved-work-order-domain",
+      "orderFields": [
+        "saved-work-entry.order",
+        "relocation-pending-timer-tick.order"
+      ],
+      "relocationQueueOrdering": "saved-work-and-pending-timer-tick-share-one-strictly-increasing-participant-order",
+      "crossVectorDuplicate": "forbidden-between-saved-work-entry-and-relocation-pending-timer-tick",
+      "orderStart": 1,
+      "zeroMeaning": "no-saved-work",
+      "overflow": "capture-fails-before-publication",
+      "wrap": "forbidden"
     },
     {
-      "kind": "relocation-application-state-integrity"
+      "kind": "terminal-failure-integrity",
+      "failureCodeType": "framework-error-code",
+      "fields": [
+        "frozen-record-body.completion.failureCode",
+        "reply.failureCode",
+        "replyRelay.failureCode",
+        "relocation-control-data.failureCode"
+      ],
+      "success": {
+        "terminalResult": "ok",
+        "failureCode": "none",
+        "applicationPayload": "operation-contract-dependent"
+      },
+      "boundaryFailure": {
+        "terminalResults": [
+          "timedOut",
+          "terminated",
+          "busy",
+          "notConnected",
+          "invalidArgument",
+          "invalidState",
+          "notSupported",
+          "backpressured"
+        ],
+        "failureCode": "none",
+        "applicationPayload": "forbidden"
+      },
+      "typedFrameworkFailure": {
+        "terminalResults": [
+          "notFound",
+          "protocolError",
+          "internalError",
+          "rejected",
+          "conflict"
+        ],
+        "failureCode": "non-none",
+        "applicationPayload": "forbidden",
+        "exactResultByFailureCode": {
+          "actorRouteNotFound": "notFound",
+          "actorCreateFailed": "internalError",
+          "actorAlreadyExists": "conflict",
+          "actorTypeMismatch": "conflict",
+          "spotCreateFailed": "internalError",
+          "spotRouteNotFound": "notFound",
+          "spotTypeMismatch": "conflict",
+          "actorSessionNotBound": "notFound",
+          "handlerNotFound": "notFound",
+          "routeHandlerNotFound": "notFound",
+          "actorDispatchHandlerNotFound": "notFound",
+          "payloadDecodeFailed": "protocolError",
+          "routeNotConnected": "internalError",
+          "requestTargetNotFound": "notFound",
+          "requestRejected": "rejected",
+          "requestProtocolError": "protocolError",
+          "requestFailed": "internalError",
+          "workerQueueFull": "rejected",
+          "workerTimedOut": "internalError",
+          "workerFailed": "internalError",
+          "actorLocationStale": "conflict",
+          "actorCreateRejected": "rejected",
+          "spotGenerationStale": "conflict",
+          "spotMoving": "conflict",
+          "relocationDataLost": "internalError"
+        }
+      },
+      "unknownFailureCode": "protocol-error-before-application-dispatch",
+      "publicMapping": "wire-value-minus-one",
+      "reservedWireValues": {
+        "first": 23,
+        "last": 32,
+        "reason": "public-only-framework-errors-not-valid-on-service-wire"
+      },
+      "runtimePredicate": {
+        "asset": "service-wire-constants",
+        "name": "valid-terminal-failure",
+        "targets": [
+          {
+            "kind": "fieldPath",
+            "path": "frozen-record-body.completion.failureCode"
+          },
+          {
+            "kind": "fieldPath",
+            "path": "reply.failureCode"
+          },
+          {
+            "kind": "fieldPath",
+            "path": "replyRelay.failureCode"
+          },
+          {
+            "kind": "fieldPath",
+            "path": "relocation-control-data.failureCode"
+          }
+        ],
+        "operation": {
+          "op": "runtime-predicate",
+          "reference": {
+            "asset": "service-wire-constants",
+            "name": "valid-terminal-failure"
+          },
+          "targets": [
+            {
+              "kind": "fieldPath",
+              "path": "frozen-record-body.completion.failureCode"
+            },
+            {
+              "kind": "fieldPath",
+              "path": "reply.failureCode"
+            },
+            {
+              "kind": "fieldPath",
+              "path": "replyRelay.failureCode"
+            },
+            {
+              "kind": "fieldPath",
+              "path": "relocation-control-data.failureCode"
+            }
+          ]
+        }
+      }
     },
     {
-      "kind": "framework-json-v1-integrity"
+      "kind": "actor-route-transition-integrity",
+      "spotRefType": "spot-ref",
+      "optionalSpotRefType": "optional-spot-ref",
+      "membershipType": "spot-membership",
+      "optionalMembershipType": "optional-spot-membership",
+      "actorJoined": {
+        "previous": "optional",
+        "current": "required",
+        "currentAuthorityOwnerGeneration": "exact-current-authority",
+        "existingPreviousOwnerOrder": "current-greater-than-previous"
+      },
+      "actorLeft": {
+        "previous": "required",
+        "currentAuthorityOwnerGeneration": "exact-current-authority",
+        "authorityOwnerGenerationOrder": "current-greater-than-previous"
+      },
+      "frozenSpotControl": {
+        "created": "current-only",
+        "joined": "optional-previous-and-required-current",
+        "left": "previous-and-current",
+        "disconnected": "current-only",
+        "destroyed": "previous-only",
+        "sameActorAcrossTransition": "exact-actor-id-and-generation",
+        "joinedCommittedOwnerOrder": "current-greater-than-previous",
+        "leftAuthorityOwnerGenerationOrder": "current-greater-than-previous",
+        "authorityComparison": "exact-current-authority-before-replay-dispatch",
+        "failureDelivery": "terminal-completion-not-lifecycle-record"
+      },
+      "authorityOwnerGenerationOverflow": "terminal-authority-error-no-wire-emission"
     },
     {
-      "kind": "service-admission-update-integrity"
+      "kind": "relocation-handoff-integrity",
+      "identity": [
+        "stable-relocation-id",
+        "exact-target-attempt-generation",
+        "exact-object-identity",
+        "exact-source-and-target-owner-lease-fences"
+      ],
+      "sequence": [
+        "source-captures-existing-work-and-timers-into-source-memory-payload",
+        "source-relocationPrepare-request-with-payload-length-chunk-count-and-checksum",
+        "source-relocationState-chunks-on-the-same-ordered-connection",
+        "target-installs-temporary-queue-assembles-verifies-and-restores-payload-and-keeps-dispatch-closed",
+        "target-relocationReady-reply",
+        "target-relocationFailed-reply-after-partial-chunk-and-prepared-resource-cleanup",
+        "source-relocationData-for-post-capture-ingress-only",
+        "source-relocationCutover-one-way-with-boundary-record-count-and-checksum-after-current-relay-prefix",
+        "target-only-owner-membership-cas-after-cutover-or-1000ms-ready-fallback",
+        "target-merges-saved-work-pre-boundary-relay-and-remaining-temporary-work",
+        "target-switches-regular-route-finishes-lifecycle-and-opens-dispatch"
+      ],
+      "savedPrefixOwner": "source-memory-payload-only-never-relocationData",
+      "relocationState": "saved-work-chunk-only-exact-identity-conflicting-length-or-checksum-is-explicit-failure",
+      "relocationData": "post-capture-ingress-hold-record-only-same-ordered-connection-as-cutover-no-ack-no-numeric-high-water",
+      "cutover": "one-way-no-reply-late-or-duplicate-only-warning-and-no-state-change",
+      "capacity": "normal-host-admission-and-core-backpressure-only-no-relocation-message-byte-or-participant-reservation",
+      "duplicatePayload": "may-be-accepted-twice-no-hidden-delivery-deduplication"
+    },
+    {
+      "kind": "relocation-target-attempt-integrity",
+      "authorityType": "authority-payload-v1",
+      "fenceType": "relocation-coordinator-fence",
+      "prepare": "source-only-captured-phase-exact-relocation-root-target-fence-object-and-application-version",
+      "ready": "target-only-reply-after-factory-restore-temporary-queue-and-relay-reception-are-ready-with-dispatch-closed",
+      "oldTargetFence": "old-target-attempt-generation-or-authority-store-version-rejected",
+      "sameTargetRetry": "factory-and-restore-may-repeat-only-on-the-same-target-process-before-commit",
+      "targetCommitFence": "only-current-exact-target-owner-lease-and-attempt-may-perform-owner-cas-or-open-admission",
+      "callbackContract": "retry-safe-no-exactly-once-external-side-effect-guarantee-and-no-public-relocation-id",
+      "crossTargetReplay": "target-node-rid-generation-owner-id-and-lease-generation-must-match-admitted-peer",
+      "uncertainCas": "read-current-authority-and-retry-the-same-fence-until-the-existing-relocation-deadline"
+    },
+    {
+      "kind": "relocation-coordinator-authorization-integrity",
+      "authorityType": "authority-payload-v1",
+      "fenceType": "relocation-coordinator-fence",
+      "coordinatorRole": "wire-value-3-reserved-decodable-never-a-valid-sender-in-this-version",
+      "coordinatorSender": "protocol-error-no-mutation",
+      "coordinatorFence": "encoded-fence-fields-carry-initiating-source-owner-identity-and-are-validated-for-fencing-only-never-grant-sender-rights",
+      "aba": "global-lease-generation-prevents-owner-id-reuse-from-revalidating-old-control"
+    },
+    {
+      "kind": "bound-session-relocation-barrier-integrity",
+      "sequence": [
+        "source-sessionRelocationSeal",
+        "session-owner-reversible-ingress-seal",
+        "session-owner-holds-post-seal-ingress-with-payload-and-reply-context",
+        "session-owner-sessionRelocationSealed-exact-result-without-sequence-or-high-water",
+        "source-captured-relocation",
+        "target-restores-saved-session-work-once-and-receives-post-capture-ingress-relay",
+        "target-owner-membership-cas",
+        "target-merges-queues-switches-regular-route-finishes-lifecycle-and-opens-dispatch",
+        "target-sessionRelocationRoute-commit-one-way",
+        "session-owner-atomically-switches-route-submits-held-and-releases-seal"
+      ],
+      "asyncConvergence": [
+        "completed-authority-cas",
+        "maintenance-authority-normalized-to-steady",
+        "source-ingress-hold-origin-removal"
+      ],
+      "bindingIdentity": "session-owner-node-rid-generation-owner-id-lease-generation-session-rid-binding-generation",
+      "commitFence": "binding-generation-actor-object-generation-previous-and-target-owner-generation-session-owner-node-generation",
+      "sessionOwnerLeaseFence": "owner-id-and-lease-generation-exact-descriptor-and-current-host-lease-read",
+      "senderAdmissionDeadline": "local-monotonic-deadline-derived-from-last-successful-host-lease-read",
+      "staleSessionOwnerLease": "protocol-error-no-seal-or-route-switch",
+      "sourceIngressHold": "no-relocation-specific-record-or-byte-cap-normal-application-lane-transport-deadline-and-cancellation-rules-remain",
+      "targetTemporaryQueue": "no-relocation-specific-record-or-byte-cap-normal-application-lane-transport-deadline-and-cancellation-rules-remain",
+      "commitPhase": "after-target-cas-queue-merge-route-switch-lifecycle-and-dispatch-open",
+      "routeControl": "one-way-no-response-command-45-reserved-never-sent-or-accepted",
+      "sealTimeout": "3000ms-then-close-physical-session-and-clean-binding-held-messages-and-seal",
+      "abort": "before-cutover-source-sends-matching-sessionRelocationRoute-abort-one-way-session-owner-releases-only-exact-seal-and-resubmits-held-to-source-route-target-discards-temporary-queue-and-source-restores-store-payload",
+      "duplicate": "idempotent-if-identical-else-protocol-error",
+      "sessionOwnerRestart": "stale-node-generation-protocol-error-no-route-switch"
+    },
+    {
+      "kind": "transport-admission-integrity",
+      "admissionType": "service-admission",
+      "topologies": {
+        "routeMesh": {
+          "descriptor": "route-mesh-admission",
+          "meshName": "required"
+        },
+        "clientServer": {
+          "descriptor": "client-server-admission",
+          "meshName": "forbidden",
+          "helloRole": "client",
+          "admitAndUpdateRole": "server",
+          "direction": "clientToServer",
+          "clientToServerCommands": [
+            "livenessProbe",
+            "livenessAck"
+          ],
+          "serverToClientCommands": [
+            "livenessProbe",
+            "livenessAck",
+            "update",
+            "reject"
+          ],
+          "allOtherServiceCommands": "protocol-error"
+        }
+      },
+      "generation": "nonzero-opaque-lifecycle-equality-token-no-numeric-ordering-store-backed-fenced-by-exact-owner-lease-manual-generated-by-csprng-and-fenced-by-current-connection-handover",
+      "revision": "same-generation-strictly-increasing-update-only",
+      "securityIdentity": "exact-transport-authenticated-identity-match",
+      "connectionLifetime": "admission-bound-to-current-physical-connection-identity-no-cross-connection-replay",
+      "crossTopologyReplay": "protocol-error-before-application-dispatch",
+      "oversizeDescriptor": "reject-before-allocation"
+    },
+    {
+      "kind": "admission-reject-integrity",
+      "reasonType": "reject-reason",
+      "unknownReason": "protocol-error",
+      "localErrnoOnWire": "forbidden"
+    },
+    {
+      "kind": "frozen-record-integrity",
+      "recordType": "frozen-record",
+      "operationMatrix": {
+        "nodeSend": {
+          "operationKind": "none",
+          "operationId": "zero"
+        },
+        "nodeRequest": {
+          "operationKind": "nodeRequest",
+          "operationId": "nonzero"
+        },
+        "channelSend": {
+          "operationKind": "none",
+          "operationId": "zero"
+        },
+        "channelRequest": {
+          "operationKind": "channelRequest",
+          "operationId": "nonzero"
+        },
+        "spotSend": {
+          "operationKind": "none",
+          "operationId": "nonzero-for-message-follow-dedupe"
+        },
+        "spotRequest": {
+          "operationKind": "spotRequest",
+          "operationId": "nonzero"
+        },
+        "spotMulticast": {
+          "operationKind": "none",
+          "operationId": "zero"
+        },
+        "spotControl": {
+          "operationKinds": [
+            "none",
+            "actorJoin",
+            "actorLeave",
+            "actorDestroy"
+          ],
+          "operationId": "nonzero-iff-operation-kind-non-none"
+        },
+        "actorSend": {
+          "operationKind": "none",
+          "operationId": "nonzero-for-message-follow-dedupe"
+        },
+        "actorRequest": {
+          "operationKind": "actorRequest",
+          "operationId": "nonzero"
+        },
+        "completion": {
+          "operationKind": "non-none",
+          "operationId": "nonzero"
+        },
+        "sendReady": {
+          "operationKind": "none",
+          "operationId": "zero"
+        },
+        "relocationControl": {
+          "operationKind": "none",
+          "operationId": "zero"
+        },
+        "instanceSpotActivation": {
+          "innerSend": [
+            "none",
+            "zero"
+          ],
+          "innerRequest": [
+            "instanceSpotRequest",
+            "nonzero"
+          ]
+        }
+      },
+      "replyRoute": {
+        "requiredNonzeroOperationKinds": [
+          "nodeRequest",
+          "channelRequest",
+          "spotRequest",
+          "actorRequest",
+          "instanceSpotRequest"
+        ],
+        "allOtherOperationKinds": "forbidden",
+        "source": "exact-original-request-correlation",
+        "operationIdRole": "dedupe-only-not-route"
+      },
+      "metadata": {
+        "allowedRecordKinds": [
+          "nodeSend",
+          "nodeRequest",
+          "channelSend",
+          "channelRequest",
+          "spotSend",
+          "spotRequest",
+          "spotMulticast",
+          "actorSend",
+          "actorRequest",
+          "instanceSpotActivation"
+        ],
+        "allOtherRecordKinds": "forbidden"
+      },
+      "sourceIdentity": {
+        "applicationRecordKinds": "node-spot-actor-or-boundSession-closed-union-with-node-lifecycle-generation",
+        "infrastructureRecordKinds": "node-source-only-with-lifecycle-generation",
+        "boundSession": "actor-session-rid-and-nonzero-binding-generation-all-required",
+        "remoteUseFence": "source-node-generation-must-exactly-match-current-admitted-descriptor-and-connection-without-numeric-comparison",
+        "runtimeLifetimeUnion": "leaseBacked-owner-id-and-lease-generation-or-connectionBound-current-physical-connection-lifetime",
+        "durableRecord": "leaseBacked-only-all-frozen-sources-carry-exact-owner-id-and-lease-generation",
+        "preCapturedDrain": "all-connectionBound-accepted-work-must-reach-terminal-before-captured-cas-boundSession-requests-are-not-drained",
+        "boundSessionSavedWork": "requests-accepted-before-capture-are-stored-once-with-source-fence-operation-identity-and-reply-route-requests-accepted-after-capture-relay-from-ingress-hold",
+        "drainFailure": "pre-captured-abort-and-retire-blocked-deadlineExceeded-then-restore-admission",
+        "connectionBoundFrozenRecord": "forbidden"
+      },
+      "sourceIdentityMismatch": "protocol-error-before-replay-or-relocation-admission"
+    },
+    {
+      "kind": "durable-operation-identity-integrity",
+      "relocationId": "runtime-generated-nonzero-128-bit-csprng",
+      "relocationIdScope": "unique-across-active-and-retained-relocation-roots-collision-rejected-and-regenerated",
+      "operationId": "nonzero-unique-within-source-owner-lifecycle-for-terminal-dedupe",
+      "replyRouteId": "nonzero-unique-within-source-owner-lifecycle-for-correlation-only",
+      "counterWrapOrReuse": "forbidden-terminal-runtime-error",
+      "terminalIdentity": "stable-relocation-id-plus-exact-request-source-fence-plus-operation-id",
+      "publicExposure": "forbidden"
+    },
+    {
+      "kind": "owner-lease-timing-integrity",
+      "renewIntervalMs": 5000,
+      "ttlMs": 15000,
+      "renewTimeoutMs": 3000,
+      "fencingMarginMs": 5000,
+      "startupRelation": "renewInterval-plus-renewTimeout-strictly-less-than-ttl-minus-fencingMargin",
+      "scope": "all-location-store-hosts-independent-of-routing-allocation"
+    },
+    {
+      "kind": "local-creation-publication-integrity",
+      "objectKinds": [
+        "actor",
+        "userSpot"
+      ],
+      "newObjectCas": "allocates-final-object-and-authority-owner-generations-and-creating-row-before-factory",
+      "actorCreate": "typed-factory-initialize-and-initial-entry-membership-before-ready-cas",
+      "userSpotCreate": "factory-configure-and-initialize-before-ready-cas",
+      "readyCas": "same-store-version-object-generation-authority-owner-generation-and-exact-owner-lease",
+      "remoteVisibility": "resolver-and-remote-messaging-ready-only",
+      "failure": "failed-sealed-local-barrier-exact-fenced-delete-and-read-reconcile-next-caller-only-newObject",
+      "lateCallback": "stale-fence-no-mutation",
+      "entrySpot": "startup-initialization-complete-before-host-serving-and-publication"
+    },
+    {
+      "kind": "contract-amendment-limit-integrity",
+      "creationIntentBytesMaximum": {
+        "$bound": "creationIntentBytes"
+      },
+      "creationTerminalEnvelopeBytesMaximum": {
+        "$bound": "creationTerminalEnvelopeBytes"
+      },
+      "aggregateParticipantsMaximum": {
+        "$bound": "maintenanceAggregateParticipants"
+      },
+      "aggregateEncodedBytesMaximum": {
+        "$bound": "maintenanceAggregateBytes"
+      },
+      "aggregateId": "nonzero-128-bit",
+      "messageFollowHopCountMaximum": {
+        "$bound": "messageFollowHopCount"
+      },
+      "routingIdEntropyBits": 128,
+      "routingIdCollisionAttemptsMaximum": {
+        "$bound": "routingIdCollisionAttempts"
+      },
+      "nodeActiveCapacityDefault": {
+        "$bound": "nodeActiveCapacityDefault"
+      },
+      "nodePendingCapacityDefault": {
+        "$bound": "nodePendingCapacityDefault"
+      },
+      "objectTypeCapacityMaximum": {
+        "$bound": "objectTypeCapacityMaximum"
+      }
+    },
+    {
+      "kind": "actor-retire-membership-integrity",
+      "relocatable": "source-entry-spot-current-member-only",
+      "userSpotMember": "preflight-blocked-relocationDisabled-state-and-admission-unchanged",
+      "targetOffer": "compatible-initialized-target-entry-spot-id-object-generation-and-kind",
+      "commit": "newOwner-cas-atomically-updates-owner-authority-owner-generation-and-current-target-entry-spot",
+      "callbackOrder": "factory-restore-and-temporary-staging-then-target-only-owner-entry-membership-cas-then-saved-pre-boundary-relay-and-remaining-temporary-queue-merge-then-regular-route-switch-then-target-entry-onActorRelocated-then-dispatch-open-source-entry-onLeaveActor-and-old-entry-membership-cleanup-converge-asynchronously",
+      "targetCallback": "target-entry-onActorRelocated-after-commit-never-onJoinedActor",
+      "sourceCleanup": "source-entry-onLeaveActor-and-old-entry-membership-removal-durable-after-replay-as-async-convergence-or-source-crash-durable-cleanup-terminal-substitutes",
+      "userSpotAggregateCallbacks": "onActorJoin-onJoinedActor-onActorRelocated-onLeaveActor-all-forbidden",
+      "targetAdmission": "sealed-until-owner-membership-cas-saved-relay-temporary-queue-merge-regular-route-switch-and-target-lifecycle-callback-then-open-session-route-and-steady-normalization-converge-async",
+      "callbacks": "retry-safe-at-least-once-failure-never-rolls-back-committed-authority"
+    },
+    {
+      "kind": "stateful-capability-integrity",
+      "entryType": "stateful-capability-entry",
+      "key": [
+        "objectKind",
+        "type"
+      ],
+      "disabled": {
+        "hasSnapshotAdapter": false
+      },
+      "recreate": {
+        "hasSnapshotAdapter": false
+      },
+      "snapshot": {
+        "hasSnapshotAdapter": true
+      },
+      "eligibility": "same-entry-exact-object-kind-type-policy-snapshot-adapter-availability-and-positive-available",
+      "flat-set-cross-product": "forbidden",
+      "startupValidation": "derive-complete-descriptor-then-validate-before-host-start",
+      "bounds": {
+        "encodedDescriptorBytesMaximum": 1048576,
+        "typeCapabilityEntriesMaximum": 1024
+      },
+      "overflow": "atomic-configuration-failure-never-truncate-split-or-publish-partial"
+    },
+    {
+      "kind": "relocation-application-state-integrity",
+      "stateType": "relocation-application-state",
+      "recreate": "hasState-false-no-payload",
+      "snapshot": "hasState-true-opaque-payload-empty-valid",
+      "participantMapping": "exactly-one-sorted-application-state-entry-per-objectMailbox-participant-id-and-no-boundSession-entry",
+      "participantPayloadMaximumBytes": {
+        "$bound": "relocationChunkBytes"
+      },
+      "relocationPresence": "every-relocation-including-empty-recreate-writes-one-deterministic-envelope",
+      "storage": "canonical-logical-stream-split-into-immutable-chunks-and-one-root-manifest",
+      "chunking": "ordered-byte-stream-may-split-within-a-frozen-record",
+      "applicationInterpretation": "forbidden-framework-validates-byte-count-and-relocation-checksum-only"
+    },
+    {
+      "kind": "framework-json-v1-integrity",
+      "profile": "frameworkJsonV1Profile",
+      "applicationPayloadBytes": "opaque-after-profile-validation-no-byte-canonicalization",
+      "goldenFixture": "golden/framework-json-v1.json"
+    },
+    {
+      "kind": "service-admission-update-integrity",
+      "command": "update",
+      "connection": "current-admitted-physical-connection-only",
+      "immutableExact": [
+        "topologyKind",
+        "meshName-or-channelName",
+        "securityIdentity",
+        "endpoint-connection-identity",
+        "rid",
+        "lifecycleGeneration",
+        "clientServer.normalizedEffectiveMaxMessageBytes",
+        "channelMembershipKeys",
+        "protocolCapabilities",
+        "spotTypes",
+        "statefulCapabilities",
+        "applicationVersion"
+      ],
+      "revision": "strictly-increasing-same-revision-identical-bytes-idempotent-lower-stale-same-revision-different-protocol-error",
+      "mutableOnly": [
+        "existingChannelWeights",
+        "runtimeState",
+        "placementCapacity",
+        "maintenanceWave"
+      ],
+      "failure": "immutable-or-capability-mutation-makes-connection-not-ready-and-is-protocol-error"
     }
+  ],
+  "relocationStateMachine": {
+    "phaseType": {
+      "$ref": "relocation-phase"
+    },
+    "authorityCommitOrder": [
+      {
+        "phase": "preparing",
+        "after": [
+          "local-admission-seal",
+          "current-application-turn-finished"
+        ],
+        "relocation": "absent"
+      },
+      {
+        "phase": "captured",
+        "after": [
+          "local-capture-complete"
+        ],
+        "relocation": "present"
+      },
+      {
+        "phase": "prepared",
+        "after": [
+          "target-factory-restore-complete",
+          "temporary-queue-installed",
+          "saved-work-and-timer-staging-complete",
+          "relocation-ready-reply-sent"
+        ],
+        "relocation": "present"
+      }
+    ],
+    "transitions": [
+      {
+        "from": "none",
+        "to": "preparing"
+      },
+      {
+        "from": "preparing",
+        "to": "captured"
+      },
+      {
+        "from": "captured",
+        "to": "prepared"
+      },
+      {
+        "from": "prepared",
+        "to": "committed"
+      },
+      {
+        "from": "committed",
+        "to": "activating"
+      },
+      {
+        "from": "activating",
+        "to": "activated"
+      },
+      {
+        "from": "activated",
+        "to": "cleaning"
+      },
+      {
+        "from": "cleaning",
+        "to": "completed"
+      },
+      {
+        "from": "preparing",
+        "to": "aborted"
+      },
+      {
+        "from": "captured",
+        "to": "aborted"
+      },
+      {
+        "from": "prepared",
+        "to": "aborted"
+      }
+    ],
+    "commandRules": [
+      {
+        "command": "sessionRelocationSeal",
+        "senderRoles": [
+          "source"
+        ],
+        "phases": [
+          "preparing"
+        ],
+        "duplicate": "idempotent-if-identical-else-protocol-error",
+        "reorder": "hold-until-preparing-authority",
+        "loss": "retransmit-until-sealed-or-deadline"
+      },
+      {
+        "command": "sessionRelocationSealed",
+        "senderKind": "sessionOwner",
+        "phases": [
+          "preparing"
+        ],
+        "duplicate": "idempotent-if-identical-else-protocol-error",
+        "reorder": "hold-until-matching-sessionRelocationSeal",
+        "loss": "retransmit-until-captured-or-abort"
+      },
+      {
+        "command": "sessionRelocationRoute",
+        "senderRoles": [
+          "source",
+          "target"
+        ],
+        "phases": [
+          "aborted",
+          "completed"
+        ],
+        "actionRules": {
+          "commit": {
+            "senderRoles": [
+              "target"
+            ],
+            "phases": [
+              "completed"
+            ]
+          },
+          "abort": {
+            "senderRoles": [
+              "source"
+            ],
+            "phases": [
+              "aborted"
+            ]
+          }
+        },
+        "duplicate": "idempotent-if-identical-else-protocol-error",
+        "reorder": "commit-after-target-dispatch-open-abort-before-cutover-only",
+        "loss": "no-reply-session-seal-timeout-closes-session"
+      },
+      {
+        "command": "relocationPrepare",
+        "senderRoles": [
+          "source"
+        ],
+        "phases": [
+          "captured",
+          "prepared"
+        ],
+        "duplicate": "idempotent-if-identical-else-protocol-error",
+        "reorder": "hold-until-captured-authority",
+        "loss": "retransmit-until-matching-ready-or-phase-advance-or-deadline"
+      },
+      {
+        "command": "relocationState",
+        "senderRoles": [
+          "source"
+        ],
+        "phases": [
+          "captured",
+          "prepared"
+        ],
+        "duplicate": "identical-chunk-reassembly-idempotent-different-length-or-checksum-conflict-failure",
+        "reorder": "same-ordered-connection-after-matching-relocationPrepare-in-chunk-ordinal-order",
+        "loss": "no-per-chunk-ack-restore-deadline-fails-the-relocation"
+      },
+      {
+        "command": "relocationReady",
+        "senderRoles": [
+          "target"
+        ],
+        "phases": [
+          "prepared"
+        ],
+        "duplicate": "idempotent-if-identical-else-protocol-error",
+        "reorder": "reply-only-to-matching-relocationPrepare",
+        "loss": "request-reply-transport-semantics-until-deadline"
+      },
+      {
+        "command": "relocationFailed",
+        "senderRoles": [
+          "target"
+        ],
+        "phases": [
+          "captured",
+          "prepared"
+        ],
+        "duplicate": "idempotent-if-identical-else-protocol-error",
+        "reorder": "reply-only-to-matching-relocationPrepare-after-target-cleanup",
+        "loss": "request-reply-transport-semantics-until-deadline"
+      },
+      {
+        "command": "relocationData",
+        "senderRoles": [
+          "source"
+        ],
+        "phases": [
+          "prepared",
+          "committed",
+          "activating"
+        ],
+        "duplicate": "same-payload-may-be-accepted-twice-no-hidden-delivery-deduplication",
+        "reorder": "append-to-pre-boundary-or-post-boundary-temporary-span-in-arrival-order",
+        "loss": "normal-ordered-transport-only-no-per-record-ack"
+      },
+      {
+        "command": "relocationCutover",
+        "senderRoles": [
+          "source"
+        ],
+        "phases": [
+          "prepared",
+          "committed",
+          "activating"
+        ],
+        "duplicate": "late-or-duplicate-warning-no-state-change",
+        "reorder": "same-connection-after-current-relocationData-prefix",
+        "loss": "no-reply-target-proceeds-1000ms-after-ready-reply"
+      },
+      {
+        "command": "replyRelay",
+        "contextRules": [
+          {
+            "context": "coldActivation",
+            "senderRoles": [
+              "target"
+            ],
+            "authorityStateCompletionPairs": [
+              {
+                "authorityState": "ready",
+                "completionKind": "readyBarrier"
+              },
+              {
+                "authorityState": "coldActivating",
+                "completionKind": "activationFailure"
+              }
+            ],
+            "duplicate": "terminal-once-by-operation-id",
+            "reorder": "hold-until-operation-known",
+            "loss": "source-operation-deadline-only-no-replay-restart"
+          },
+          {
+            "context": "maintenanceRelocation",
+            "senderRoles": [
+              "target"
+            ],
+            "phases": [
+              "committed",
+              "activating",
+              "activated",
+              "cleaning"
+            ],
+            "duplicate": "terminal-once-by-stable-relocation-id-exact-request-source-fence-and-operation-id-target-attempt-is-peer-fence-only",
+            "reorder": "hold-until-operation-known",
+            "loss": "source-operation-deadline-only-no-relocation-replay-restart"
+          }
+        ]
+      },
+      {
+        "command": "replyRelayAck",
+        "senderKind": "requestSource",
+        "phases": [
+          "committed",
+          "activating",
+          "activated",
+          "cleaning"
+        ],
+        "duplicate": "idempotent-by-stable-relocation-id-exact-request-source-fence-operation-id-reply-route-id-and-status",
+        "reorder": "hold-until-matching-live-reply-relay-or-source-operation-timeout",
+        "loss": "target-retransmits-terminal-until-ack-or-exact-request-source-owner-lease-expiry"
+      }
+    ]
+  },
+  "operationVocabulary": [
+    "integer",
+    "enum",
+    "length-prefixed",
+    "text-validation",
+    "field",
+    "struct",
+    "vector",
+    "versioned-vector",
+    "bounded-reader",
+    "versioned-length-delimited",
+    "discriminator",
+    "conditional-union",
+    "tlv32",
+    "constraint",
+    "command-header",
+    "flags",
+    "flag-constraint",
+    "metadata-flag-frame",
+    "payload",
+    "durable-header",
+    "checksum",
+    "encoded-limit",
+    "logical-stream",
+    "runtime-predicate"
   ],
   "types": [
     {
@@ -508,70 +1710,170 @@ const definitions: JsonObject = {
       "kind": "integer",
       "encoding": "u8",
       "minimum": 0,
-      "maximum": 255
+      "maximum": 255,
+      "operations": [
+        {
+          "op": "integer",
+          "encoding": "u8",
+          "width": 1,
+          "byteOrder": "big-endian",
+          "minimum": 0,
+          "maximum": 255
+        }
+      ]
     },
     {
       "name": "u16",
       "kind": "integer",
       "encoding": "u16",
       "minimum": 0,
-      "maximum": 65535
+      "maximum": 65535,
+      "operations": [
+        {
+          "op": "integer",
+          "encoding": "u16",
+          "width": 2,
+          "byteOrder": "big-endian",
+          "minimum": 0,
+          "maximum": 65535
+        }
+      ]
     },
     {
       "name": "u32",
       "kind": "integer",
       "encoding": "u32",
       "minimum": 0,
-      "maximum": 4294967295
+      "maximum": 4294967295,
+      "operations": [
+        {
+          "op": "integer",
+          "encoding": "u32",
+          "width": 4,
+          "byteOrder": "big-endian",
+          "minimum": 0,
+          "maximum": 4294967295
+        }
+      ]
     },
     {
       "name": "nonzero-u32",
       "kind": "integer",
       "encoding": "u32",
       "minimum": 1,
-      "maximum": 4294967295
+      "maximum": 4294967295,
+      "operations": [
+        {
+          "op": "integer",
+          "encoding": "u32",
+          "width": 4,
+          "byteOrder": "big-endian",
+          "minimum": 1,
+          "maximum": 4294967295
+        }
+      ]
     },
     {
       "name": "u64",
       "kind": "integer",
       "encoding": "u64",
       "minimum": 0,
-      "maximum": "18446744073709551615"
+      "maximum": "18446744073709551615",
+      "operations": [
+        {
+          "op": "integer",
+          "encoding": "u64",
+          "width": 8,
+          "byteOrder": "big-endian",
+          "minimum": 0,
+          "maximum": "18446744073709551615"
+        }
+      ]
     },
     {
       "name": "nonzero-u64",
       "kind": "integer",
       "encoding": "u64",
       "minimum": 1,
-      "maximum": "9223372036854775807"
+      "maximum": "9223372036854775807",
+      "operations": [
+        {
+          "op": "integer",
+          "encoding": "u64",
+          "width": 8,
+          "byteOrder": "big-endian",
+          "minimum": 1,
+          "maximum": "9223372036854775807"
+        }
+      ]
     },
     {
       "name": "ordinal-or-zero",
       "kind": "integer",
       "encoding": "u64",
       "minimum": 0,
-      "maximum": "9223372036854775807"
+      "maximum": "9223372036854775807",
+      "operations": [
+        {
+          "op": "integer",
+          "encoding": "u64",
+          "width": 8,
+          "byteOrder": "big-endian",
+          "minimum": 0,
+          "maximum": "9223372036854775807"
+        }
+      ]
     },
     {
       "name": "relocation-logical-length",
       "kind": "integer",
       "encoding": "u64",
       "minimum": 0,
-      "maximum": 274877906944
+      "maximum": 274877906944,
+      "operations": [
+        {
+          "op": "integer",
+          "encoding": "u64",
+          "width": 8,
+          "byteOrder": "big-endian",
+          "minimum": 0,
+          "maximum": 274877906944
+        }
+      ]
     },
     {
       "name": "relocation-chunk-count",
       "kind": "integer",
       "encoding": "u32",
       "minimum": 0,
-      "maximum": 4096
+      "maximum": 4096,
+      "operations": [
+        {
+          "op": "integer",
+          "encoding": "u32",
+          "width": 4,
+          "byteOrder": "big-endian",
+          "minimum": 0,
+          "maximum": 4096
+        }
+      ]
     },
     {
       "name": "application-version",
       "kind": "integer",
       "encoding": "i64",
       "minimum": 0,
-      "maximum": "9223372036854775807"
+      "maximum": "9223372036854775807",
+      "operations": [
+        {
+          "op": "integer",
+          "encoding": "i64",
+          "width": 8,
+          "byteOrder": "big-endian",
+          "minimum": 0,
+          "maximum": "9223372036854775807"
+        }
+      ]
     },
     {
       "name": "bool8",
@@ -586,6 +1888,25 @@ const definitions: JsonObject = {
           "name": "true",
           "value": 1
         }
+      ],
+      "operations": [
+        {
+          "op": "enum",
+          "encoding": "u8",
+          "width": 1,
+          "byteOrder": "big-endian",
+          "values": [
+            {
+              "name": "false",
+              "value": 0
+            },
+            {
+              "name": "true",
+              "value": 1
+            }
+          ],
+          "unknown": "protocol-error"
+        }
       ]
     },
     {
@@ -595,7 +1916,18 @@ const definitions: JsonObject = {
         "$ref": "u8"
       },
       "minimumBytes": 1,
-      "maximumBytes": 255
+      "maximumBytes": 255,
+      "operations": [
+        {
+          "op": "length-prefixed",
+          "lengthType": {
+            "$ref": "u8"
+          },
+          "content": "bytes",
+          "minimumBytes": 1,
+          "maximumBytes": 255
+        }
+      ]
     },
     {
       "name": "optional-rid",
@@ -605,7 +1937,19 @@ const definitions: JsonObject = {
       },
       "minimumBytes": 0,
       "maximumBytes": 255,
-      "zeroLengthMeaning": "absent"
+      "zeroLengthMeaning": "absent",
+      "operations": [
+        {
+          "op": "length-prefixed",
+          "lengthType": {
+            "$ref": "u8"
+          },
+          "content": "bytes",
+          "minimumBytes": 0,
+          "maximumBytes": 255,
+          "zeroLengthMeaning": "absent"
+        }
+      ]
     },
     {
       "name": "text8",
@@ -616,7 +1960,24 @@ const definitions: JsonObject = {
       "minimumBytes": 1,
       "maximumBytes": 255,
       "encoding": "utf-8",
-      "nul": "forbidden"
+      "nul": "forbidden",
+      "operations": [
+        {
+          "op": "length-prefixed",
+          "lengthType": {
+            "$ref": "u8"
+          },
+          "content": "text",
+          "minimumBytes": 1,
+          "maximumBytes": 255
+        },
+        {
+          "op": "text-validation",
+          "encoding": "utf-8",
+          "malformed": "protocol-error",
+          "nul": "forbidden"
+        }
+      ]
     },
     {
       "name": "optional-text8",
@@ -628,7 +1989,25 @@ const definitions: JsonObject = {
       "maximumBytes": 255,
       "zeroLengthMeaning": "absent",
       "encoding": "utf-8",
-      "nul": "forbidden"
+      "nul": "forbidden",
+      "operations": [
+        {
+          "op": "length-prefixed",
+          "lengthType": {
+            "$ref": "u8"
+          },
+          "content": "text",
+          "minimumBytes": 0,
+          "maximumBytes": 255,
+          "zeroLengthMeaning": "absent"
+        },
+        {
+          "op": "text-validation",
+          "encoding": "utf-8",
+          "malformed": "protocol-error",
+          "nul": "forbidden"
+        }
+      ]
     },
     {
       "name": "sha256-bytes",
@@ -637,14 +2016,35 @@ const definitions: JsonObject = {
         "$ref": "u8"
       },
       "minimumBytes": 32,
-      "maximumBytes": 32
+      "maximumBytes": 32,
+      "operations": [
+        {
+          "op": "length-prefixed",
+          "lengthType": {
+            "$ref": "u8"
+          },
+          "content": "bytes",
+          "minimumBytes": 32,
+          "maximumBytes": 32
+        }
+      ]
     },
     {
       "name": "creation-request-size",
       "kind": "integer",
       "encoding": "u32",
       "minimum": 0,
-      "maximum": 1048576
+      "maximum": 1048576,
+      "operations": [
+        {
+          "op": "integer",
+          "encoding": "u32",
+          "width": 4,
+          "byteOrder": "big-endian",
+          "minimum": 0,
+          "maximum": 1048576
+        }
+      ]
     },
     {
       "name": "text16",
@@ -655,7 +2055,24 @@ const definitions: JsonObject = {
       "minimumBytes": 0,
       "maximumBytes": 65535,
       "encoding": "utf-8",
-      "nul": "forbidden"
+      "nul": "forbidden",
+      "operations": [
+        {
+          "op": "length-prefixed",
+          "lengthType": {
+            "$ref": "u16"
+          },
+          "content": "text",
+          "minimumBytes": 0,
+          "maximumBytes": 65535
+        },
+        {
+          "op": "text-validation",
+          "encoding": "utf-8",
+          "malformed": "protocol-error",
+          "nul": "forbidden"
+        }
+      ]
     },
     {
       "name": "nonempty-text16",
@@ -666,7 +2083,24 @@ const definitions: JsonObject = {
       "minimumBytes": 1,
       "maximumBytes": 65535,
       "encoding": "utf-8",
-      "nul": "forbidden"
+      "nul": "forbidden",
+      "operations": [
+        {
+          "op": "length-prefixed",
+          "lengthType": {
+            "$ref": "u16"
+          },
+          "content": "text",
+          "minimumBytes": 1,
+          "maximumBytes": 65535
+        },
+        {
+          "op": "text-validation",
+          "encoding": "utf-8",
+          "malformed": "protocol-error",
+          "nul": "forbidden"
+        }
+      ]
     },
     {
       "name": "endpoint",
@@ -677,7 +2111,24 @@ const definitions: JsonObject = {
       "minimumBytes": 1,
       "maximumBytes": 4096,
       "encoding": "utf-8",
-      "nul": "forbidden"
+      "nul": "forbidden",
+      "operations": [
+        {
+          "op": "length-prefixed",
+          "lengthType": {
+            "$ref": "u16"
+          },
+          "content": "text",
+          "minimumBytes": 1,
+          "maximumBytes": 4096
+        },
+        {
+          "op": "text-validation",
+          "encoding": "utf-8",
+          "malformed": "protocol-error",
+          "nul": "forbidden"
+        }
+      ]
     },
     {
       "name": "blob16",
@@ -686,7 +2137,18 @@ const definitions: JsonObject = {
         "$ref": "u16"
       },
       "minimumBytes": 0,
-      "maximumBytes": 65535
+      "maximumBytes": 65535,
+      "operations": [
+        {
+          "op": "length-prefixed",
+          "lengthType": {
+            "$ref": "u16"
+          },
+          "content": "bytes",
+          "minimumBytes": 0,
+          "maximumBytes": 65535
+        }
+      ]
     },
     {
       "name": "nonempty-blob16",
@@ -695,7 +2157,18 @@ const definitions: JsonObject = {
         "$ref": "u16"
       },
       "minimumBytes": 1,
-      "maximumBytes": 65535
+      "maximumBytes": 65535,
+      "operations": [
+        {
+          "op": "length-prefixed",
+          "lengthType": {
+            "$ref": "u16"
+          },
+          "content": "bytes",
+          "minimumBytes": 1,
+          "maximumBytes": 65535
+        }
+      ]
     },
     {
       "name": "packet-name",
@@ -706,7 +2179,24 @@ const definitions: JsonObject = {
       "minimumBytes": 1,
       "maximumBytes": 255,
       "encoding": "utf-8",
-      "nul": "forbidden"
+      "nul": "forbidden",
+      "operations": [
+        {
+          "op": "length-prefixed",
+          "lengthType": {
+            "$ref": "u8"
+          },
+          "content": "text",
+          "minimumBytes": 1,
+          "maximumBytes": 255
+        },
+        {
+          "op": "text-validation",
+          "encoding": "utf-8",
+          "malformed": "protocol-error",
+          "nul": "forbidden"
+        }
+      ]
     },
     {
       "name": "content-type",
@@ -717,7 +2207,24 @@ const definitions: JsonObject = {
       "minimumBytes": 1,
       "maximumBytes": 255,
       "encoding": "utf-8",
-      "nul": "forbidden"
+      "nul": "forbidden",
+      "operations": [
+        {
+          "op": "length-prefixed",
+          "lengthType": {
+            "$ref": "u8"
+          },
+          "content": "text",
+          "minimumBytes": 1,
+          "maximumBytes": 255
+        },
+        {
+          "op": "text-validation",
+          "encoding": "utf-8",
+          "malformed": "protocol-error",
+          "nul": "forbidden"
+        }
+      ]
     },
     {
       "name": "application-payload-bytes",
@@ -736,7 +2243,28 @@ const definitions: JsonObject = {
           "$negotiatedBound": "effectiveCompleteMessageBytesMinusActualEnvelopeOverhead",
           "absoluteMaximum": 4294966774
         }
-      }
+      },
+      "operations": [
+        {
+          "op": "length-prefixed",
+          "lengthType": {
+            "$ref": "u32"
+          },
+          "content": "bytes",
+          "minimumBytes": 0,
+          "maximumBytes": 4294966774,
+          "runtimeMaximumBytes": {
+            "routeMesh": {
+              "frameworkMessageSizeLimit": "none",
+              "absoluteMaximum": 4294966774
+            },
+            "clientServer": {
+              "$negotiatedBound": "effectiveCompleteMessageBytesMinusActualEnvelopeOverhead",
+              "absoluteMaximum": 4294966774
+            }
+          }
+        }
+      ]
     },
     {
       "name": "application-payload-envelope-v1",
@@ -774,7 +2302,60 @@ const definitions: JsonObject = {
           "absoluteMaximum": 4294967295
         }
       },
-      "trailingBytes": "forbidden"
+      "trailingBytes": "forbidden",
+      "operations": [
+        {
+          "op": "versioned-length-delimited",
+          "version": {
+            "$ref": "u8",
+            "constant": 1
+          },
+          "length": {
+            "$ref": "u32",
+            "covers": "body"
+          },
+          "reader": {
+            "op": "bounded-reader",
+            "boundary": "body",
+            "trailingBytes": "forbidden"
+          },
+          "fields": [
+            {
+              "op": "field",
+              "name": "packetName",
+              "type": {
+                "$ref": "packet-name"
+              }
+            },
+            {
+              "op": "field",
+              "name": "contentType",
+              "type": {
+                "$ref": "content-type"
+              }
+            },
+            {
+              "op": "field",
+              "name": "payload",
+              "type": {
+                "$ref": "application-payload-bytes"
+              }
+            }
+          ],
+          "constraints": [],
+          "maximumEncodedBytes": 4294967295,
+          "runtimeMaximumEncodedBytes": {
+            "routeMesh": {
+              "frameworkMessageSizeLimit": "none",
+              "absoluteMaximum": 4294967295
+            },
+            "clientServer": {
+              "$negotiatedBound": "effectiveCompleteMessageBytes",
+              "absoluteMaximum": 4294967295
+            }
+          }
+        }
+      ]
     },
     {
       "name": "metadata-value",
@@ -785,7 +2366,24 @@ const definitions: JsonObject = {
       "minimumBytes": 0,
       "maximumBytes": 1024,
       "encoding": "utf-8",
-      "nul": "forbidden"
+      "nul": "forbidden",
+      "operations": [
+        {
+          "op": "length-prefixed",
+          "lengthType": {
+            "$ref": "u16"
+          },
+          "content": "text",
+          "minimumBytes": 0,
+          "maximumBytes": 1024
+        },
+        {
+          "op": "text-validation",
+          "encoding": "utf-8",
+          "malformed": "protocol-error",
+          "nul": "forbidden"
+        }
+      ]
     },
     {
       "name": "metadata-entry",
@@ -798,6 +2396,30 @@ const definitions: JsonObject = {
         {
           "name": "value",
           "$ref": "metadata-value"
+        }
+      ],
+      "operations": [
+        {
+          "op": "struct",
+          "order": "sequential",
+          "fields": [
+            {
+              "op": "field",
+              "name": "key",
+              "type": {
+                "$ref": "text8"
+              }
+            },
+            {
+              "op": "field",
+              "name": "value",
+              "type": {
+                "$ref": "metadata-value"
+              }
+            }
+          ],
+          "constraints": [],
+          "trailingBytes": "allowed"
         }
       ]
     },
@@ -835,7 +2457,46 @@ const definitions: JsonObject = {
         }
       ],
       "maximumEncodedBytes": 1024,
-      "trailingBytes": "forbidden"
+      "trailingBytes": "forbidden",
+      "operations": [
+        {
+          "op": "versioned-vector",
+          "order": "sequential",
+          "layout": [
+            {
+              "name": "version",
+              "$ref": "u8",
+              "constant": 1
+            },
+            {
+              "name": "count",
+              "$ref": "u8",
+              "counts": "entries"
+            },
+            {
+              "name": "entries",
+              "kind": "repeat",
+              "countFrom": "count",
+              "item": {
+                "$ref": "metadata-entry"
+              }
+            }
+          ],
+          "constraints": [
+            {
+              "op": "constraint",
+              "kind": "unique",
+              "field": {
+                "kind": "fieldPath",
+                "path": "key"
+              },
+              "comparison": "utf-8-bytes"
+            }
+          ],
+          "maximumEncodedBytes": 1024,
+          "trailingBytes": "forbidden"
+        }
+      ]
     },
     {
       "name": "runtime-state",
@@ -862,6 +2523,37 @@ const definitions: JsonObject = {
           "name": "error",
           "value": 4
         }
+      ],
+      "operations": [
+        {
+          "op": "enum",
+          "encoding": "u8",
+          "width": 1,
+          "byteOrder": "big-endian",
+          "values": [
+            {
+              "name": "preparing",
+              "value": 0
+            },
+            {
+              "name": "serving",
+              "value": 1
+            },
+            {
+              "name": "draining",
+              "value": 2
+            },
+            {
+              "name": "stopped",
+              "value": 3
+            },
+            {
+              "name": "error",
+              "value": 4
+            }
+          ],
+          "unknown": "protocol-error"
+        }
       ]
     },
     {
@@ -880,6 +2572,29 @@ const definitions: JsonObject = {
         {
           "name": "instanceSpot",
           "value": 3
+        }
+      ],
+      "operations": [
+        {
+          "op": "enum",
+          "encoding": "u8",
+          "width": 1,
+          "byteOrder": "big-endian",
+          "values": [
+            {
+              "name": "actor",
+              "value": 1
+            },
+            {
+              "name": "userSpot",
+              "value": 2
+            },
+            {
+              "name": "instanceSpot",
+              "value": 3
+            }
+          ],
+          "unknown": "protocol-error"
         }
       ]
     },
@@ -900,6 +2615,29 @@ const definitions: JsonObject = {
           "name": "server",
           "value": 2
         }
+      ],
+      "operations": [
+        {
+          "op": "enum",
+          "encoding": "u8",
+          "width": 1,
+          "byteOrder": "big-endian",
+          "values": [
+            {
+              "name": "none",
+              "value": 0
+            },
+            {
+              "name": "client",
+              "value": 1
+            },
+            {
+              "name": "server",
+              "value": 2
+            }
+          ],
+          "unknown": "protocol-error"
+        }
       ]
     },
     {
@@ -907,14 +2645,34 @@ const definitions: JsonObject = {
       "kind": "integer",
       "encoding": "u32",
       "minimum": 1,
-      "maximum": 2147483647
+      "maximum": 2147483647,
+      "operations": [
+        {
+          "op": "integer",
+          "encoding": "u32",
+          "width": 4,
+          "byteOrder": "big-endian",
+          "minimum": 1,
+          "maximum": 2147483647
+        }
+      ]
     },
     {
       "name": "object-pending-capacity-limit",
       "kind": "integer",
       "encoding": "u32",
       "minimum": 0,
-      "maximum": 2147483647
+      "maximum": 2147483647,
+      "operations": [
+        {
+          "op": "integer",
+          "encoding": "u32",
+          "width": 4,
+          "byteOrder": "big-endian",
+          "minimum": 0,
+          "maximum": 2147483647
+        }
+      ]
     },
     {
       "name": "authority-object-kind",
@@ -928,6 +2686,25 @@ const definitions: JsonObject = {
         {
           "name": "spot",
           "value": 2
+        }
+      ],
+      "operations": [
+        {
+          "op": "enum",
+          "encoding": "u8",
+          "width": 1,
+          "byteOrder": "big-endian",
+          "values": [
+            {
+              "name": "actor",
+              "value": 1
+            },
+            {
+              "name": "spot",
+              "value": 2
+            }
+          ],
+          "unknown": "protocol-error"
         }
       ]
     },
@@ -947,6 +2724,29 @@ const definitions: JsonObject = {
         {
           "name": "instance",
           "value": 3
+        }
+      ],
+      "operations": [
+        {
+          "op": "enum",
+          "encoding": "u8",
+          "width": 1,
+          "byteOrder": "big-endian",
+          "values": [
+            {
+              "name": "entry",
+              "value": 1
+            },
+            {
+              "name": "user",
+              "value": 2
+            },
+            {
+              "name": "instance",
+              "value": 3
+            }
+          ],
+          "unknown": "protocol-error"
         }
       ]
     },
@@ -971,6 +2771,33 @@ const definitions: JsonObject = {
           "name": "relocating",
           "value": 3
         }
+      ],
+      "operations": [
+        {
+          "op": "enum",
+          "encoding": "u8",
+          "width": 1,
+          "byteOrder": "big-endian",
+          "values": [
+            {
+              "name": "creating",
+              "value": 0
+            },
+            {
+              "name": "ready",
+              "value": 1
+            },
+            {
+              "name": "closing",
+              "value": 2
+            },
+            {
+              "name": "relocating",
+              "value": 3
+            }
+          ],
+          "unknown": "protocol-error"
+        }
       ]
     },
     {
@@ -985,6 +2812,25 @@ const definitions: JsonObject = {
         {
           "name": "ready",
           "value": 1
+        }
+      ],
+      "operations": [
+        {
+          "op": "enum",
+          "encoding": "u8",
+          "width": 1,
+          "byteOrder": "big-endian",
+          "values": [
+            {
+              "name": "creating",
+              "value": 0
+            },
+            {
+              "name": "ready",
+              "value": 1
+            }
+          ],
+          "unknown": "protocol-error"
         }
       ]
     },
@@ -1005,6 +2851,29 @@ const definitions: JsonObject = {
           "name": "snapshot",
           "value": 2
         }
+      ],
+      "operations": [
+        {
+          "op": "enum",
+          "encoding": "u8",
+          "width": 1,
+          "byteOrder": "big-endian",
+          "values": [
+            {
+              "name": "disabled",
+              "value": 0
+            },
+            {
+              "name": "recreate",
+              "value": 1
+            },
+            {
+              "name": "snapshot",
+              "value": 2
+            }
+          ],
+          "unknown": "protocol-error"
+        }
       ]
     },
     {
@@ -1024,6 +2893,29 @@ const definitions: JsonObject = {
           "name": "delayNextTick",
           "value": 3
         }
+      ],
+      "operations": [
+        {
+          "op": "enum",
+          "encoding": "u8",
+          "width": 1,
+          "byteOrder": "big-endian",
+          "values": [
+            {
+              "name": "skipLateTicks",
+              "value": 1
+            },
+            {
+              "name": "catchUpBounded",
+              "value": 2
+            },
+            {
+              "name": "delayNextTick",
+              "value": 3
+            }
+          ],
+          "unknown": "protocol-error"
+        }
       ]
     },
     {
@@ -1038,6 +2930,25 @@ const definitions: JsonObject = {
         {
           "name": "user",
           "value": 2
+        }
+      ],
+      "operations": [
+        {
+          "op": "enum",
+          "encoding": "u8",
+          "width": 1,
+          "byteOrder": "big-endian",
+          "values": [
+            {
+              "name": "entry",
+              "value": 1
+            },
+            {
+              "name": "user",
+              "value": 2
+            }
+          ],
+          "unknown": "protocol-error"
         }
       ]
     },
@@ -1058,6 +2969,29 @@ const definitions: JsonObject = {
           "name": "coordinator",
           "value": 3
         }
+      ],
+      "operations": [
+        {
+          "op": "enum",
+          "encoding": "u8",
+          "width": 1,
+          "byteOrder": "big-endian",
+          "values": [
+            {
+              "name": "source",
+              "value": 1
+            },
+            {
+              "name": "target",
+              "value": 2
+            },
+            {
+              "name": "coordinator",
+              "value": 3
+            }
+          ],
+          "unknown": "protocol-error"
+        }
       ]
     },
     {
@@ -1072,6 +3006,25 @@ const definitions: JsonObject = {
         {
           "name": "rejected",
           "value": 1
+        }
+      ],
+      "operations": [
+        {
+          "op": "enum",
+          "encoding": "u32",
+          "width": 4,
+          "byteOrder": "big-endian",
+          "values": [
+            {
+              "name": "accepted",
+              "value": 0
+            },
+            {
+              "name": "rejected",
+              "value": 1
+            }
+          ],
+          "unknown": "protocol-error"
         }
       ]
     },
@@ -1120,7 +3073,74 @@ const definitions: JsonObject = {
       "otherwise": {
         "kind": "protocol-error"
       },
-      "trailingBytes": "forbidden"
+      "trailingBytes": "forbidden",
+      "operations": [
+        {
+          "op": "conditional-union",
+          "discriminators": [
+            {
+              "op": "discriminator",
+              "name": "joinResult",
+              "source": {
+                "kind": "wire"
+              },
+              "type": {
+                "$ref": "actor-join-result"
+              }
+            }
+          ],
+          "bodyLengthType": {
+            "$ref": "u16"
+          },
+          "bodyLengthCovers": "selected-case",
+          "reader": {
+            "op": "bounded-reader",
+            "boundary": "selected-case",
+            "trailingBytes": "forbidden"
+          },
+          "cases": {
+            "{\"joinResult\":\"accepted\"}": {
+              "fields": [
+                {
+                  "op": "field",
+                  "name": "spot",
+                  "type": {
+                    "$ref": "spot-ref"
+                  }
+                },
+                {
+                  "op": "field",
+                  "name": "membershipEpoch",
+                  "type": {
+                    "$ref": "nonzero-u64"
+                  }
+                },
+                {
+                  "op": "field",
+                  "name": "receiveChunkLimitBytes",
+                  "type": {
+                    "$ref": "u32"
+                  }
+                }
+              ]
+            },
+            "{\"joinResult\":\"rejected\"}": {
+              "fields": [
+                {
+                  "op": "field",
+                  "name": "spot",
+                  "type": {
+                    "$ref": "optional-spot-ref"
+                  }
+                }
+              ]
+            }
+          },
+          "otherwise": {
+            "kind": "protocol-error"
+          }
+        }
+      ]
     },
     {
       "name": "mesh-record-kind",
@@ -1183,6 +3203,73 @@ const definitions: JsonObject = {
           "name": "instanceSpotActivation",
           "value": 14
         }
+      ],
+      "operations": [
+        {
+          "op": "enum",
+          "encoding": "u8",
+          "width": 1,
+          "byteOrder": "big-endian",
+          "values": [
+            {
+              "name": "nodeSend",
+              "value": 1
+            },
+            {
+              "name": "nodeRequest",
+              "value": 2
+            },
+            {
+              "name": "channelSend",
+              "value": 3
+            },
+            {
+              "name": "channelRequest",
+              "value": 4
+            },
+            {
+              "name": "spotSend",
+              "value": 5
+            },
+            {
+              "name": "spotRequest",
+              "value": 6
+            },
+            {
+              "name": "spotMulticast",
+              "value": 7
+            },
+            {
+              "name": "spotControl",
+              "value": 8
+            },
+            {
+              "name": "actorSend",
+              "value": 9
+            },
+            {
+              "name": "actorRequest",
+              "value": 10
+            },
+            {
+              "name": "completion",
+              "value": 11
+            },
+            {
+              "name": "sendReady",
+              "value": 12
+            },
+            {
+              "name": "relocationControl",
+              "value": 13
+            },
+            {
+              "name": "instanceSpotActivation",
+              "value": 14
+            }
+          ],
+          "unknown": "protocol-error"
+        }
       ]
     },
     {
@@ -1205,6 +3292,33 @@ const definitions: JsonObject = {
         {
           "name": "boundSession",
           "value": 4
+        }
+      ],
+      "operations": [
+        {
+          "op": "enum",
+          "encoding": "u8",
+          "width": 1,
+          "byteOrder": "big-endian",
+          "values": [
+            {
+              "name": "node",
+              "value": 1
+            },
+            {
+              "name": "spot",
+              "value": 2
+            },
+            {
+              "name": "actor",
+              "value": 3
+            },
+            {
+              "name": "boundSession",
+              "value": 4
+            }
+          ],
+          "unknown": "protocol-error"
         }
       ]
     },
@@ -1233,6 +3347,37 @@ const definitions: JsonObject = {
           "name": "boundSession",
           "value": 5
         }
+      ],
+      "operations": [
+        {
+          "op": "enum",
+          "encoding": "u8",
+          "width": 1,
+          "byteOrder": "big-endian",
+          "values": [
+            {
+              "name": "node",
+              "value": 1
+            },
+            {
+              "name": "channel",
+              "value": 2
+            },
+            {
+              "name": "spot",
+              "value": 3
+            },
+            {
+              "name": "actor",
+              "value": 4
+            },
+            {
+              "name": "boundSession",
+              "value": 5
+            }
+          ],
+          "unknown": "protocol-error"
+        }
       ]
     },
     {
@@ -1247,6 +3392,25 @@ const definitions: JsonObject = {
         {
           "name": "clientServer",
           "value": 2
+        }
+      ],
+      "operations": [
+        {
+          "op": "enum",
+          "encoding": "u8",
+          "width": 1,
+          "byteOrder": "big-endian",
+          "values": [
+            {
+              "name": "routeMesh",
+              "value": 1
+            },
+            {
+              "name": "clientServer",
+              "value": 2
+            }
+          ],
+          "unknown": "protocol-error"
         }
       ]
     },
@@ -1263,6 +3427,25 @@ const definitions: JsonObject = {
           "name": "server",
           "value": 2
         }
+      ],
+      "operations": [
+        {
+          "op": "enum",
+          "encoding": "u8",
+          "width": 1,
+          "byteOrder": "big-endian",
+          "values": [
+            {
+              "name": "client",
+              "value": 1
+            },
+            {
+              "name": "server",
+              "value": 2
+            }
+          ],
+          "unknown": "protocol-error"
+        }
       ]
     },
     {
@@ -1273,6 +3456,21 @@ const definitions: JsonObject = {
         {
           "name": "clientToServer",
           "value": 1
+        }
+      ],
+      "operations": [
+        {
+          "op": "enum",
+          "encoding": "u8",
+          "width": 1,
+          "byteOrder": "big-endian",
+          "values": [
+            {
+              "name": "clientToServer",
+              "value": 1
+            }
+          ],
+          "unknown": "protocol-error"
         }
       ]
     },
@@ -1301,6 +3499,37 @@ const definitions: JsonObject = {
           "name": "destroyed",
           "value": 5
         }
+      ],
+      "operations": [
+        {
+          "op": "enum",
+          "encoding": "u8",
+          "width": 1,
+          "byteOrder": "big-endian",
+          "values": [
+            {
+              "name": "created",
+              "value": 1
+            },
+            {
+              "name": "joined",
+              "value": 2
+            },
+            {
+              "name": "left",
+              "value": 3
+            },
+            {
+              "name": "disconnected",
+              "value": 4
+            },
+            {
+              "name": "destroyed",
+              "value": 5
+            }
+          ],
+          "unknown": "protocol-error"
+        }
       ]
     },
     {
@@ -1316,6 +3545,25 @@ const definitions: JsonObject = {
           "name": "tombstone",
           "value": 2
         }
+      ],
+      "operations": [
+        {
+          "op": "enum",
+          "encoding": "u8",
+          "width": 1,
+          "byteOrder": "big-endian",
+          "values": [
+            {
+              "name": "active",
+              "value": 1
+            },
+            {
+              "name": "tombstone",
+              "value": 2
+            }
+          ],
+          "unknown": "protocol-error"
+        }
       ]
     },
     {
@@ -1330,6 +3578,25 @@ const definitions: JsonObject = {
         {
           "name": "abort",
           "value": 2
+        }
+      ],
+      "operations": [
+        {
+          "op": "enum",
+          "encoding": "u8",
+          "width": 1,
+          "byteOrder": "big-endian",
+          "values": [
+            {
+              "name": "commit",
+              "value": 1
+            },
+            {
+              "name": "abort",
+              "value": 2
+            }
+          ],
+          "unknown": "protocol-error"
         }
       ]
     },
@@ -1378,6 +3645,57 @@ const definitions: JsonObject = {
           "name": "aborted",
           "value": 9
         }
+      ],
+      "operations": [
+        {
+          "op": "enum",
+          "encoding": "u8",
+          "width": 1,
+          "byteOrder": "big-endian",
+          "values": [
+            {
+              "name": "none",
+              "value": 0
+            },
+            {
+              "name": "preparing",
+              "value": 1
+            },
+            {
+              "name": "captured",
+              "value": 2
+            },
+            {
+              "name": "prepared",
+              "value": 3
+            },
+            {
+              "name": "committed",
+              "value": 4
+            },
+            {
+              "name": "activating",
+              "value": 5
+            },
+            {
+              "name": "activated",
+              "value": 6
+            },
+            {
+              "name": "cleaning",
+              "value": 7
+            },
+            {
+              "name": "completed",
+              "value": 8
+            },
+            {
+              "name": "aborted",
+              "value": 9
+            }
+          ],
+          "unknown": "protocol-error"
+        }
       ]
     },
     {
@@ -1397,6 +3715,29 @@ const definitions: JsonObject = {
           "name": "sourceLeaseExpired",
           "value": 2
         }
+      ],
+      "operations": [
+        {
+          "op": "enum",
+          "encoding": "u8",
+          "width": 1,
+          "byteOrder": "big-endian",
+          "values": [
+            {
+              "name": "pending",
+              "value": 0
+            },
+            {
+              "name": "completed",
+              "value": 1
+            },
+            {
+              "name": "sourceLeaseExpired",
+              "value": 2
+            }
+          ],
+          "unknown": "protocol-error"
+        }
       ]
     },
     {
@@ -1411,6 +3752,25 @@ const definitions: JsonObject = {
         {
           "name": "alreadyTerminal",
           "value": 2
+        }
+      ],
+      "operations": [
+        {
+          "op": "enum",
+          "encoding": "u8",
+          "width": 1,
+          "byteOrder": "big-endian",
+          "values": [
+            {
+              "name": "terminalReceived",
+              "value": 1
+            },
+            {
+              "name": "alreadyTerminal",
+              "value": 2
+            }
+          ],
+          "unknown": "protocol-error"
         }
       ]
     },
@@ -1434,6 +3794,33 @@ const definitions: JsonObject = {
         {
           "name": "close",
           "value": 3
+        }
+      ],
+      "operations": [
+        {
+          "op": "enum",
+          "encoding": "u8",
+          "width": 1,
+          "byteOrder": "big-endian",
+          "values": [
+            {
+              "name": "steady",
+              "value": 0
+            },
+            {
+              "name": "coldActivation",
+              "value": 1
+            },
+            {
+              "name": "maintenanceRelocation",
+              "value": 2
+            },
+            {
+              "name": "close",
+              "value": 3
+            }
+          ],
+          "unknown": "protocol-error"
         }
       ]
     },
@@ -1506,6 +3893,81 @@ const definitions: JsonObject = {
           "name": "actorCreate",
           "value": 15
         }
+      ],
+      "operations": [
+        {
+          "op": "enum",
+          "encoding": "u32",
+          "width": 4,
+          "byteOrder": "big-endian",
+          "values": [
+            {
+              "name": "none",
+              "value": 0
+            },
+            {
+              "name": "nodeRequest",
+              "value": 1
+            },
+            {
+              "name": "channelRequest",
+              "value": 2
+            },
+            {
+              "name": "spotRequest",
+              "value": 3
+            },
+            {
+              "name": "actorRequest",
+              "value": 4
+            },
+            {
+              "name": "actorLookup",
+              "value": 5
+            },
+            {
+              "name": "actorDestroy",
+              "value": 6
+            },
+            {
+              "name": "actorJoin",
+              "value": 7
+            },
+            {
+              "name": "actorLeave",
+              "value": 8
+            },
+            {
+              "name": "streamBind",
+              "value": 9
+            },
+            {
+              "name": "streamUnbind",
+              "value": 10
+            },
+            {
+              "name": "streamClose",
+              "value": 11
+            },
+            {
+              "name": "instanceSpotRequest",
+              "value": 12
+            },
+            {
+              "name": "userSpotCreate",
+              "value": 13
+            },
+            {
+              "name": "userSpotClose",
+              "value": 14
+            },
+            {
+              "name": "actorCreate",
+              "value": 15
+            }
+          ],
+          "unknown": "protocol-error"
+        }
       ]
     },
     {
@@ -1568,6 +4030,73 @@ const definitions: JsonObject = {
         {
           "name": "backpressured",
           "value": 113
+        }
+      ],
+      "operations": [
+        {
+          "op": "enum",
+          "encoding": "u32",
+          "width": 4,
+          "byteOrder": "big-endian",
+          "values": [
+            {
+              "name": "ok",
+              "value": 0
+            },
+            {
+              "name": "timedOut",
+              "value": 101
+            },
+            {
+              "name": "notFound",
+              "value": 102
+            },
+            {
+              "name": "terminated",
+              "value": 103
+            },
+            {
+              "name": "protocolError",
+              "value": 104
+            },
+            {
+              "name": "internalError",
+              "value": 105
+            },
+            {
+              "name": "rejected",
+              "value": 106
+            },
+            {
+              "name": "conflict",
+              "value": 107
+            },
+            {
+              "name": "busy",
+              "value": 108
+            },
+            {
+              "name": "notConnected",
+              "value": 109
+            },
+            {
+              "name": "invalidArgument",
+              "value": 110
+            },
+            {
+              "name": "invalidState",
+              "value": 111
+            },
+            {
+              "name": "notSupported",
+              "value": 112
+            },
+            {
+              "name": "backpressured",
+              "value": 113
+            }
+          ],
+          "unknown": "protocol-error"
         }
       ]
     },
@@ -1680,6 +4209,121 @@ const definitions: JsonObject = {
           "name": "relocationDataLost",
           "value": 35
         }
+      ],
+      "operations": [
+        {
+          "op": "enum",
+          "encoding": "u32",
+          "width": 4,
+          "byteOrder": "big-endian",
+          "values": [
+            {
+              "name": "none",
+              "value": 0
+            },
+            {
+              "name": "actorRouteNotFound",
+              "value": 1
+            },
+            {
+              "name": "actorCreateFailed",
+              "value": 2
+            },
+            {
+              "name": "actorAlreadyExists",
+              "value": 3
+            },
+            {
+              "name": "actorTypeMismatch",
+              "value": 4
+            },
+            {
+              "name": "spotCreateFailed",
+              "value": 5
+            },
+            {
+              "name": "spotRouteNotFound",
+              "value": 6
+            },
+            {
+              "name": "spotTypeMismatch",
+              "value": 7
+            },
+            {
+              "name": "actorSessionNotBound",
+              "value": 8
+            },
+            {
+              "name": "handlerNotFound",
+              "value": 9
+            },
+            {
+              "name": "routeHandlerNotFound",
+              "value": 10
+            },
+            {
+              "name": "actorDispatchHandlerNotFound",
+              "value": 11
+            },
+            {
+              "name": "payloadDecodeFailed",
+              "value": 12
+            },
+            {
+              "name": "routeNotConnected",
+              "value": 13
+            },
+            {
+              "name": "requestTargetNotFound",
+              "value": 14
+            },
+            {
+              "name": "requestRejected",
+              "value": 15
+            },
+            {
+              "name": "requestProtocolError",
+              "value": 16
+            },
+            {
+              "name": "requestFailed",
+              "value": 17
+            },
+            {
+              "name": "workerQueueFull",
+              "value": 18
+            },
+            {
+              "name": "workerTimedOut",
+              "value": 19
+            },
+            {
+              "name": "workerFailed",
+              "value": 20
+            },
+            {
+              "name": "actorLocationStale",
+              "value": 21
+            },
+            {
+              "name": "actorCreateRejected",
+              "value": 22
+            },
+            {
+              "name": "spotGenerationStale",
+              "value": 33
+            },
+            {
+              "name": "spotMoving",
+              "value": 34
+            },
+            {
+              "name": "relocationDataLost",
+              "value": 35
+            }
+          ],
+          "unknown": "protocol-error"
+        }
       ]
     },
     {
@@ -1695,6 +4339,25 @@ const definitions: JsonObject = {
           "name": "request",
           "value": 2
         }
+      ],
+      "operations": [
+        {
+          "op": "enum",
+          "encoding": "u8",
+          "width": 1,
+          "byteOrder": "big-endian",
+          "values": [
+            {
+              "name": "send",
+              "value": 1
+            },
+            {
+              "name": "request",
+              "value": 2
+            }
+          ],
+          "unknown": "protocol-error"
+        }
       ]
     },
     {
@@ -1709,6 +4372,25 @@ const definitions: JsonObject = {
         {
           "name": "coldActivation",
           "value": 2
+        }
+      ],
+      "operations": [
+        {
+          "op": "enum",
+          "encoding": "u8",
+          "width": 1,
+          "byteOrder": "big-endian",
+          "values": [
+            {
+              "name": "ready",
+              "value": 1
+            },
+            {
+              "name": "coldActivation",
+              "value": 2
+            }
+          ],
+          "unknown": "protocol-error"
         }
       ]
     },
@@ -1729,6 +4411,29 @@ const definitions: JsonObject = {
           "name": "rejected",
           "value": 3
         }
+      ],
+      "operations": [
+        {
+          "op": "enum",
+          "encoding": "u8",
+          "width": 1,
+          "byteOrder": "big-endian",
+          "values": [
+            {
+              "name": "existing",
+              "value": 1
+            },
+            {
+              "name": "created",
+              "value": 2
+            },
+            {
+              "name": "rejected",
+              "value": 3
+            }
+          ],
+          "unknown": "protocol-error"
+        }
       ]
     },
     {
@@ -1747,6 +4452,29 @@ const definitions: JsonObject = {
         {
           "name": "rejected",
           "value": 3
+        }
+      ],
+      "operations": [
+        {
+          "op": "enum",
+          "encoding": "u8",
+          "width": 1,
+          "byteOrder": "big-endian",
+          "values": [
+            {
+              "name": "existing",
+              "value": 1
+            },
+            {
+              "name": "created",
+              "value": 2
+            },
+            {
+              "name": "rejected",
+              "value": 3
+            }
+          ],
+          "unknown": "protocol-error"
         }
       ]
     },
@@ -1771,6 +4499,33 @@ const definitions: JsonObject = {
           "name": "relocating",
           "value": 4
         }
+      ],
+      "operations": [
+        {
+          "op": "enum",
+          "encoding": "u8",
+          "width": 1,
+          "byteOrder": "big-endian",
+          "values": [
+            {
+              "name": "coldActivating",
+              "value": 1
+            },
+            {
+              "name": "ready",
+              "value": 2
+            },
+            {
+              "name": "closing",
+              "value": 3
+            },
+            {
+              "name": "relocating",
+              "value": 4
+            }
+          ],
+          "unknown": "protocol-error"
+        }
       ]
     },
     {
@@ -1786,6 +4541,25 @@ const definitions: JsonObject = {
           "name": "maintenanceRelocation",
           "value": 2
         }
+      ],
+      "operations": [
+        {
+          "op": "enum",
+          "encoding": "u8",
+          "width": 1,
+          "byteOrder": "big-endian",
+          "values": [
+            {
+              "name": "coldActivation",
+              "value": 1
+            },
+            {
+              "name": "maintenanceRelocation",
+              "value": 2
+            }
+          ],
+          "unknown": "protocol-error"
+        }
       ]
     },
     {
@@ -1800,6 +4574,25 @@ const definitions: JsonObject = {
         {
           "name": "activationFailure",
           "value": 2
+        }
+      ],
+      "operations": [
+        {
+          "op": "enum",
+          "encoding": "u8",
+          "width": 1,
+          "byteOrder": "big-endian",
+          "values": [
+            {
+              "name": "readyBarrier",
+              "value": 1
+            },
+            {
+              "name": "activationFailure",
+              "value": 2
+            }
+          ],
+          "unknown": "protocol-error"
         }
       ]
     },
@@ -1856,6 +4649,65 @@ const definitions: JsonObject = {
           "name": "resourceLimit",
           "value": 12
         }
+      ],
+      "operations": [
+        {
+          "op": "enum",
+          "encoding": "u32",
+          "width": 4,
+          "byteOrder": "big-endian",
+          "values": [
+            {
+              "name": "protocolVersionUnsupported",
+              "value": 1
+            },
+            {
+              "name": "topologyMismatch",
+              "value": 2
+            },
+            {
+              "name": "identityMismatch",
+              "value": 3
+            },
+            {
+              "name": "securityIdentityMismatch",
+              "value": 4
+            },
+            {
+              "name": "channelMismatch",
+              "value": 5
+            },
+            {
+              "name": "lifecycleGenerationStale",
+              "value": 6
+            },
+            {
+              "name": "descriptorRevisionStale",
+              "value": 7
+            },
+            {
+              "name": "capabilityMismatch",
+              "value": 8
+            },
+            {
+              "name": "runtimeNotServing",
+              "value": 9
+            },
+            {
+              "name": "duplicateConnection",
+              "value": 10
+            },
+            {
+              "name": "invalidDescriptor",
+              "value": 11
+            },
+            {
+              "name": "resourceLimit",
+              "value": 12
+            }
+          ],
+          "unknown": "protocol-error"
+        }
       ]
     },
     {
@@ -1870,6 +4722,30 @@ const definitions: JsonObject = {
           "name": "objectGeneration",
           "$ref": "nonzero-u64"
         }
+      ],
+      "operations": [
+        {
+          "op": "struct",
+          "order": "sequential",
+          "fields": [
+            {
+              "op": "field",
+              "name": "actorId",
+              "type": {
+                "$ref": "text8"
+              }
+            },
+            {
+              "op": "field",
+              "name": "objectGeneration",
+              "type": {
+                "$ref": "nonzero-u64"
+              }
+            }
+          ],
+          "constraints": [],
+          "trailingBytes": "allowed"
+        }
       ]
     },
     {
@@ -1883,6 +4759,30 @@ const definitions: JsonObject = {
         {
           "name": "objectGeneration",
           "$ref": "nonzero-u64"
+        }
+      ],
+      "operations": [
+        {
+          "op": "struct",
+          "order": "sequential",
+          "fields": [
+            {
+              "op": "field",
+              "name": "spotId",
+              "type": {
+                "$ref": "text8"
+              }
+            },
+            {
+              "op": "field",
+              "name": "objectGeneration",
+              "type": {
+                "$ref": "nonzero-u64"
+              }
+            }
+          ],
+          "constraints": [],
+          "trailingBytes": "allowed"
         }
       ]
     },
@@ -1926,7 +4826,63 @@ const definitions: JsonObject = {
       "otherwise": {
         "kind": "protocol-error"
       },
-      "trailingBytes": "forbidden"
+      "trailingBytes": "forbidden",
+      "operations": [
+        {
+          "op": "conditional-union",
+          "discriminators": [
+            {
+              "op": "discriminator",
+              "name": "createResult",
+              "source": {
+                "kind": "wire"
+              },
+              "type": {
+                "$ref": "actor-create-result"
+              }
+            }
+          ],
+          "bodyLengthType": {
+            "$ref": "u16"
+          },
+          "bodyLengthCovers": "selected-case",
+          "reader": {
+            "op": "bounded-reader",
+            "boundary": "selected-case",
+            "trailingBytes": "forbidden"
+          },
+          "cases": {
+            "{\"createResult\":\"existing\"}": {
+              "fields": [
+                {
+                  "op": "field",
+                  "name": "actor",
+                  "type": {
+                    "$ref": "actor-ref"
+                  }
+                }
+              ]
+            },
+            "{\"createResult\":\"created\"}": {
+              "fields": [
+                {
+                  "op": "field",
+                  "name": "actor",
+                  "type": {
+                    "$ref": "actor-ref"
+                  }
+                }
+              ]
+            },
+            "{\"createResult\":\"rejected\"}": {
+              "fields": []
+            }
+          },
+          "otherwise": {
+            "kind": "protocol-error"
+          }
+        }
+      ]
     },
     {
       "name": "creation-operation-terminal-v1",
@@ -2032,7 +4988,138 @@ const definitions: JsonObject = {
           }
         }
       ],
-      "correlationFields": "forbidden"
+      "correlationFields": "forbidden",
+      "operations": [
+        {
+          "op": "versioned-length-delimited",
+          "version": {
+            "$ref": "u8",
+            "constant": 1
+          },
+          "length": {
+            "$ref": "u32",
+            "covers": "body"
+          },
+          "reader": {
+            "op": "bounded-reader",
+            "boundary": "body",
+            "trailingBytes": "forbidden"
+          },
+          "fields": [
+            {
+              "op": "field",
+              "name": "terminalResult",
+              "type": {
+                "$ref": "request-terminal-result"
+              }
+            },
+            {
+              "op": "field",
+              "name": "failureCode",
+              "type": {
+                "$ref": "framework-error-code"
+              }
+            },
+            {
+              "op": "field",
+              "name": "hasCreation",
+              "type": {
+                "$ref": "bool8"
+              }
+            },
+            {
+              "op": "field",
+              "name": "creation",
+              "type": {
+                "$ref": "actor-create-terminal"
+              },
+              "otherwise": "forbidden",
+              "when": {
+                "all": [
+                  {
+                    "kind": "fieldEquals",
+                    "operand": {
+                      "kind": "field",
+                      "name": "hasCreation"
+                    },
+                    "value": "true"
+                  }
+                ]
+              },
+              "whenFalse": {
+                "encoder": "reject-present-value",
+                "decoder": "consume-no-bytes"
+              }
+            },
+            {
+              "op": "field",
+              "name": "hasApplicationPayload",
+              "type": {
+                "$ref": "bool8"
+              }
+            },
+            {
+              "op": "field",
+              "name": "applicationPayload",
+              "type": {
+                "$ref": "application-payload-envelope-v1"
+              },
+              "otherwise": "forbidden",
+              "when": {
+                "all": [
+                  {
+                    "kind": "fieldEquals",
+                    "operand": {
+                      "kind": "field",
+                      "name": "hasApplicationPayload"
+                    },
+                    "value": "true"
+                  }
+                ]
+              },
+              "whenFalse": {
+                "encoder": "reject-present-value",
+                "decoder": "consume-no-bytes"
+              }
+            }
+          ],
+          "constraints": [
+            {
+              "op": "constraint",
+              "kind": "terminal-success-shape",
+              "when": {
+                "terminalResult": "ok"
+              },
+              "requires": {
+                "failureCode": "none",
+                "hasCreation": "true"
+              }
+            },
+            {
+              "op": "constraint",
+              "kind": "terminal-failure-shape",
+              "when": {
+                "terminalResultNot": "ok"
+              },
+              "requires": {
+                "hasCreation": "false",
+                "hasApplicationPayload": "false"
+              }
+            },
+            {
+              "op": "constraint",
+              "kind": "existing-has-no-application-payload",
+              "when": {
+                "creation.createResult": "existing"
+              },
+              "requires": {
+                "hasApplicationPayload": "false"
+              }
+            }
+          ],
+          "maximumEncodedBytes": 1048576
+        }
+      ]
     },
     {
       "name": "optional-spot-ref",
@@ -2066,7 +5153,52 @@ const definitions: JsonObject = {
       "otherwise": {
         "kind": "protocol-error"
       },
-      "trailingBytes": "forbidden"
+      "trailingBytes": "forbidden",
+      "operations": [
+        {
+          "op": "conditional-union",
+          "discriminators": [
+            {
+              "op": "discriminator",
+              "name": "hasSpot",
+              "source": {
+                "kind": "wire"
+              },
+              "type": {
+                "$ref": "bool8"
+              }
+            }
+          ],
+          "bodyLengthType": {
+            "$ref": "u16"
+          },
+          "bodyLengthCovers": "selected-case",
+          "reader": {
+            "op": "bounded-reader",
+            "boundary": "selected-case",
+            "trailingBytes": "forbidden"
+          },
+          "cases": {
+            "{\"hasSpot\":\"false\"}": {
+              "fields": []
+            },
+            "{\"hasSpot\":\"true\"}": {
+              "fields": [
+                {
+                  "op": "field",
+                  "name": "spot",
+                  "type": {
+                    "$ref": "spot-ref"
+                  }
+                }
+              ]
+            }
+          },
+          "otherwise": {
+            "kind": "protocol-error"
+          }
+        }
+      ]
     },
     {
       "name": "spot-membership",
@@ -2075,6 +5207,23 @@ const definitions: JsonObject = {
         {
           "name": "spot",
           "$ref": "spot-ref"
+        }
+      ],
+      "operations": [
+        {
+          "op": "struct",
+          "order": "sequential",
+          "fields": [
+            {
+              "op": "field",
+              "name": "spot",
+              "type": {
+                "$ref": "spot-ref"
+              }
+            }
+          ],
+          "constraints": [],
+          "trailingBytes": "allowed"
         }
       ]
     },
@@ -2110,7 +5259,52 @@ const definitions: JsonObject = {
       "otherwise": {
         "kind": "protocol-error"
       },
-      "trailingBytes": "forbidden"
+      "trailingBytes": "forbidden",
+      "operations": [
+        {
+          "op": "conditional-union",
+          "discriminators": [
+            {
+              "op": "discriminator",
+              "name": "hasMembership",
+              "source": {
+                "kind": "wire"
+              },
+              "type": {
+                "$ref": "bool8"
+              }
+            }
+          ],
+          "bodyLengthType": {
+            "$ref": "u16"
+          },
+          "bodyLengthCovers": "selected-case",
+          "reader": {
+            "op": "bounded-reader",
+            "boundary": "selected-case",
+            "trailingBytes": "forbidden"
+          },
+          "cases": {
+            "{\"hasMembership\":\"false\"}": {
+              "fields": []
+            },
+            "{\"hasMembership\":\"true\"}": {
+              "fields": [
+                {
+                  "op": "field",
+                  "name": "membership",
+                  "type": {
+                    "$ref": "spot-membership"
+                  }
+                }
+              ]
+            }
+          },
+          "otherwise": {
+            "kind": "protocol-error"
+          }
+        }
+      ]
     },
     {
       "name": "bound-session-binding-transition",
@@ -2149,7 +5343,60 @@ const definitions: JsonObject = {
       "otherwise": {
         "kind": "protocol-error"
       },
-      "trailingBytes": "forbidden"
+      "trailingBytes": "forbidden",
+      "operations": [
+        {
+          "op": "conditional-union",
+          "discriminators": [
+            {
+              "op": "discriminator",
+              "name": "bindingState",
+              "source": {
+                "kind": "wire"
+              },
+              "type": {
+                "$ref": "bound-session-binding-state"
+              }
+            }
+          ],
+          "bodyLengthType": {
+            "$ref": "u16"
+          },
+          "bodyLengthCovers": "selected-case",
+          "reader": {
+            "op": "bounded-reader",
+            "boundary": "selected-case",
+            "trailingBytes": "forbidden"
+          },
+          "cases": {
+            "{\"bindingState\":\"active\"}": {
+              "fields": [
+                {
+                  "op": "field",
+                  "name": "bindingGeneration",
+                  "type": {
+                    "$ref": "nonzero-u64"
+                  }
+                }
+              ]
+            },
+            "{\"bindingState\":\"tombstone\"}": {
+              "fields": [
+                {
+                  "op": "field",
+                  "name": "retiredBindingGeneration",
+                  "type": {
+                    "$ref": "nonzero-u64"
+                  }
+                }
+              ]
+            }
+          },
+          "otherwise": {
+            "kind": "protocol-error"
+          }
+        }
+      ]
     },
     {
       "name": "retired-bound-session-route-fence",
@@ -2180,7 +5427,59 @@ const definitions: JsonObject = {
           "$ref": "nonzero-u64"
         }
       ],
-      "trailingBytes": "forbidden"
+      "trailingBytes": "forbidden",
+      "operations": [
+        {
+          "op": "struct",
+          "order": "sequential",
+          "fields": [
+            {
+              "op": "field",
+              "name": "sessionOwnerNodeRid",
+              "type": {
+                "$ref": "rid"
+              }
+            },
+            {
+              "op": "field",
+              "name": "sessionOwnerNodeGeneration",
+              "type": {
+                "$ref": "nonzero-u64"
+              }
+            },
+            {
+              "op": "field",
+              "name": "sessionOwnerId",
+              "type": {
+                "$ref": "text8"
+              }
+            },
+            {
+              "op": "field",
+              "name": "sessionOwnerLeaseGeneration",
+              "type": {
+                "$ref": "nonzero-u64"
+              }
+            },
+            {
+              "op": "field",
+              "name": "sessionRid",
+              "type": {
+                "$ref": "rid"
+              }
+            },
+            {
+              "op": "field",
+              "name": "retiredBindingGeneration",
+              "type": {
+                "$ref": "nonzero-u64"
+              }
+            }
+          ],
+          "constraints": [],
+          "trailingBytes": "forbidden"
+        }
+      ]
     },
     {
       "name": "session-relocation-route-update",
@@ -2231,7 +5530,81 @@ const definitions: JsonObject = {
       "otherwise": {
         "kind": "protocol-error"
       },
-      "trailingBytes": "forbidden"
+      "trailingBytes": "forbidden",
+      "operations": [
+        {
+          "op": "conditional-union",
+          "discriminators": [
+            {
+              "op": "discriminator",
+              "name": "action",
+              "source": {
+                "kind": "wire"
+              },
+              "type": {
+                "$ref": "session-relocation-route-action"
+              }
+            }
+          ],
+          "bodyLengthType": {
+            "$ref": "u16"
+          },
+          "bodyLengthCovers": "selected-case",
+          "reader": {
+            "op": "bounded-reader",
+            "boundary": "selected-case",
+            "trailingBytes": "forbidden"
+          },
+          "cases": {
+            "{\"action\":\"commit\"}": {
+              "fields": [
+                {
+                  "op": "field",
+                  "name": "previousAuthorityOwnerGeneration",
+                  "type": {
+                    "$ref": "nonzero-u64"
+                  }
+                },
+                {
+                  "op": "field",
+                  "name": "targetAuthorityOwnerGeneration",
+                  "type": {
+                    "$ref": "nonzero-u64"
+                  }
+                },
+                {
+                  "op": "field",
+                  "name": "targetNodeRid",
+                  "type": {
+                    "$ref": "rid"
+                  }
+                },
+                {
+                  "op": "field",
+                  "name": "targetNodeGeneration",
+                  "type": {
+                    "$ref": "nonzero-u64"
+                  }
+                }
+              ]
+            },
+            "{\"action\":\"abort\"}": {
+              "fields": [
+                {
+                  "op": "field",
+                  "name": "currentAuthorityOwnerGeneration",
+                  "type": {
+                    "$ref": "nonzero-u64"
+                  }
+                }
+              ]
+            }
+          },
+          "otherwise": {
+            "kind": "protocol-error"
+          }
+        }
+      ]
     },
     {
       "name": "object-creation-key",
@@ -2278,7 +5651,71 @@ const definitions: JsonObject = {
       "otherwise": {
         "kind": "protocol-error"
       },
-      "trailingBytes": "forbidden"
+      "trailingBytes": "forbidden",
+      "operations": [
+        {
+          "op": "conditional-union",
+          "discriminators": [
+            {
+              "op": "discriminator",
+              "name": "objectKind",
+              "source": {
+                "kind": "wire"
+              },
+              "type": {
+                "$ref": "stateful-object-kind"
+              }
+            }
+          ],
+          "bodyLengthType": {
+            "$ref": "u16"
+          },
+          "bodyLengthCovers": "selected-case",
+          "reader": {
+            "op": "bounded-reader",
+            "boundary": "selected-case",
+            "trailingBytes": "forbidden"
+          },
+          "cases": {
+            "{\"objectKind\":\"actor\"}": {
+              "fields": [
+                {
+                  "op": "field",
+                  "name": "actorId",
+                  "type": {
+                    "$ref": "text8"
+                  }
+                }
+              ]
+            },
+            "{\"objectKind\":\"userSpot\"}": {
+              "fields": [
+                {
+                  "op": "field",
+                  "name": "spotId",
+                  "type": {
+                    "$ref": "text8"
+                  }
+                }
+              ]
+            },
+            "{\"objectKind\":\"instanceSpot\"}": {
+              "fields": [
+                {
+                  "op": "field",
+                  "name": "spotId",
+                  "type": {
+                    "$ref": "text8"
+                  }
+                }
+              ]
+            }
+          },
+          "otherwise": {
+            "kind": "protocol-error"
+          }
+        }
+      ]
     },
     {
       "name": "object-creation-intent-v1",
@@ -2318,7 +5755,71 @@ const definitions: JsonObject = {
         }
       ],
       "maximumEncodedBytes": 1048576,
-      "trailingBytes": "forbidden"
+      "trailingBytes": "forbidden",
+      "operations": [
+        {
+          "op": "versioned-length-delimited",
+          "version": {
+            "$ref": "u8",
+            "constant": 1
+          },
+          "length": {
+            "$ref": "u32",
+            "covers": "body"
+          },
+          "reader": {
+            "op": "bounded-reader",
+            "boundary": "body",
+            "trailingBytes": "forbidden"
+          },
+          "fields": [
+            {
+              "op": "field",
+              "name": "key",
+              "type": {
+                "$ref": "object-creation-key"
+              }
+            },
+            {
+              "op": "field",
+              "name": "stableType",
+              "type": {
+                "$ref": "text8"
+              }
+            },
+            {
+              "op": "field",
+              "name": "initialMeshName",
+              "type": {
+                "$ref": "text8"
+              }
+            },
+            {
+              "op": "field",
+              "name": "requestContentReference",
+              "type": {
+                "$ref": "creation-content-reference"
+              }
+            },
+            {
+              "op": "field",
+              "name": "requestSha256",
+              "type": {
+                "$ref": "sha256-bytes"
+              }
+            },
+            {
+              "op": "field",
+              "name": "requestEncodedSize",
+              "type": {
+                "$ref": "creation-request-size"
+              }
+            }
+          ],
+          "constraints": [],
+          "maximumEncodedBytes": 1048576
+        }
+      ]
     },
     {
       "name": "pending-object-creation-v1",
@@ -2343,7 +5844,45 @@ const definitions: JsonObject = {
       ],
       "trailingBytes": "forbidden",
       "presence": "required-only-when-allocation-state-is-pending-forbidden-when-active",
-      "storage": "current-authority-row-not-process-local-index"
+      "storage": "current-authority-row-not-process-local-index",
+      "operations": [
+        {
+          "op": "struct",
+          "order": "sequential",
+          "fields": [
+            {
+              "op": "field",
+              "name": "reservationId",
+              "type": {
+                "$ref": "text8"
+              }
+            },
+            {
+              "op": "field",
+              "name": "requestContentReference",
+              "type": {
+                "$ref": "creation-content-reference"
+              }
+            },
+            {
+              "op": "field",
+              "name": "requestSha256",
+              "type": {
+                "$ref": "sha256-bytes"
+              }
+            },
+            {
+              "op": "field",
+              "name": "requestEncodedSize",
+              "type": {
+                "$ref": "creation-request-size"
+              }
+            }
+          ],
+          "constraints": [],
+          "trailingBytes": "forbidden"
+        }
+      ]
     },
     {
       "name": "object-creation-target-v1",
@@ -2370,7 +5909,52 @@ const definitions: JsonObject = {
           "$ref": "nonzero-u64"
         }
       ],
-      "trailingBytes": "forbidden"
+      "trailingBytes": "forbidden",
+      "operations": [
+        {
+          "op": "struct",
+          "order": "sequential",
+          "fields": [
+            {
+              "op": "field",
+              "name": "meshName",
+              "type": {
+                "$ref": "text8"
+              }
+            },
+            {
+              "op": "field",
+              "name": "nodeRid",
+              "type": {
+                "$ref": "rid"
+              }
+            },
+            {
+              "op": "field",
+              "name": "nodeLifecycleGeneration",
+              "type": {
+                "$ref": "nonzero-u64"
+              }
+            },
+            {
+              "op": "field",
+              "name": "ownerId",
+              "type": {
+                "$ref": "text8"
+              }
+            },
+            {
+              "op": "field",
+              "name": "ownerLeaseGeneration",
+              "type": {
+                "$ref": "nonzero-u64"
+              }
+            }
+          ],
+          "constraints": [],
+          "trailingBytes": "forbidden"
+        }
+      ]
     },
     {
       "name": "instance-activation-recovery-v1",
@@ -2483,7 +6067,171 @@ const definitions: JsonObject = {
       "trailingBytes": "forbidden",
       "scope": "target-owned-instance-spot-cold-activation-only",
       "metadataMeaning": "exact-command-39-metadata-flag-presence-and-immutable-frame-bytes",
-      "queueMeaning": "durable-activation-inbox-first-record-handler-blocked-until-ready-and-local-queue-head-restore"
+      "queueMeaning": "durable-activation-inbox-first-record-handler-blocked-until-ready-and-local-queue-head-restore",
+      "operations": [
+        {
+          "op": "struct",
+          "order": "sequential",
+          "fields": [
+            {
+              "op": "field",
+              "name": "targetSpotId",
+              "type": {
+                "$ref": "text8"
+              }
+            },
+            {
+              "op": "field",
+              "name": "stableType",
+              "type": {
+                "$ref": "text8"
+              }
+            },
+            {
+              "op": "field",
+              "name": "targetMeshName",
+              "type": {
+                "$ref": "text8"
+              }
+            },
+            {
+              "op": "field",
+              "name": "targetNodeRid",
+              "type": {
+                "$ref": "rid"
+              }
+            },
+            {
+              "op": "field",
+              "name": "targetNodeGeneration",
+              "type": {
+                "$ref": "nonzero-u64"
+              }
+            },
+            {
+              "op": "field",
+              "name": "targetDescriptorVersion",
+              "type": {
+                "$ref": "text8"
+              }
+            },
+            {
+              "op": "field",
+              "name": "sourceNodeRid",
+              "type": {
+                "$ref": "rid"
+              }
+            },
+            {
+              "op": "field",
+              "name": "sourceNodeGeneration",
+              "type": {
+                "$ref": "nonzero-u64"
+              }
+            },
+            {
+              "op": "field",
+              "name": "hasSourceSpotId",
+              "type": {
+                "$ref": "bool8"
+              }
+            },
+            {
+              "op": "field",
+              "name": "sourceSpotId",
+              "type": {
+                "$ref": "text8"
+              },
+              "otherwise": "forbidden",
+              "when": {
+                "all": [
+                  {
+                    "kind": "fieldEquals",
+                    "operand": {
+                      "kind": "field",
+                      "name": "hasSourceSpotId"
+                    },
+                    "value": "true"
+                  }
+                ]
+              },
+              "whenFalse": {
+                "encoder": "reject-present-value",
+                "decoder": "consume-no-bytes"
+              }
+            },
+            {
+              "op": "field",
+              "name": "operationKind",
+              "type": {
+                "$ref": "instance-operation-kind"
+              }
+            },
+            {
+              "op": "field",
+              "name": "operation",
+              "type": {
+                "$ref": "operation-id"
+              }
+            },
+            {
+              "op": "field",
+              "name": "replyRoute",
+              "type": {
+                "$ref": "instance-reply-route"
+              }
+            },
+            {
+              "op": "field",
+              "name": "deadlineUnixMs",
+              "type": {
+                "$ref": "nonzero-u64"
+              }
+            },
+            {
+              "op": "field",
+              "name": "hasMetadata",
+              "type": {
+                "$ref": "bool8"
+              }
+            },
+            {
+              "op": "field",
+              "name": "metadata",
+              "type": {
+                "$ref": "metadata-frame"
+              },
+              "otherwise": "forbidden",
+              "when": {
+                "all": [
+                  {
+                    "kind": "fieldEquals",
+                    "operand": {
+                      "kind": "field",
+                      "name": "hasMetadata"
+                    },
+                    "value": "true"
+                  }
+                ]
+              },
+              "whenFalse": {
+                "encoder": "reject-present-value",
+                "decoder": "consume-no-bytes"
+              }
+            },
+            {
+              "op": "field",
+              "name": "applicationPayload",
+              "type": {
+                "$ref": "application-payload-envelope-v1"
+              }
+            }
+          ],
+          "constraints": [],
+          "trailingBytes": "forbidden",
+          "maximumEncodedBytes": 1048576
+        }
+      ]
     },
     {
       "name": "object-reservation-fence",
@@ -2526,7 +6274,80 @@ const definitions: JsonObject = {
           "$ref": "nonzero-u32"
         }
       ],
-      "trailingBytes": "forbidden"
+      "trailingBytes": "forbidden",
+      "operations": [
+        {
+          "op": "struct",
+          "order": "sequential",
+          "fields": [
+            {
+              "op": "field",
+              "name": "reservationId",
+              "type": {
+                "$ref": "text8"
+              }
+            },
+            {
+              "op": "field",
+              "name": "expectedStoreVersion",
+              "type": {
+                "$ref": "authority-store-version"
+              }
+            },
+            {
+              "op": "field",
+              "name": "objectGeneration",
+              "type": {
+                "$ref": "nonzero-u64"
+              }
+            },
+            {
+              "op": "field",
+              "name": "authorityOwnerGeneration",
+              "type": {
+                "$ref": "nonzero-u64"
+              }
+            },
+            {
+              "op": "field",
+              "name": "targetNodeRid",
+              "type": {
+                "$ref": "rid"
+              }
+            },
+            {
+              "op": "field",
+              "name": "targetNodeGeneration",
+              "type": {
+                "$ref": "nonzero-u64"
+              }
+            },
+            {
+              "op": "field",
+              "name": "targetOwnerId",
+              "type": {
+                "$ref": "text8"
+              }
+            },
+            {
+              "op": "field",
+              "name": "targetOwnerLeaseGeneration",
+              "type": {
+                "$ref": "nonzero-u64"
+              }
+            },
+            {
+              "op": "field",
+              "name": "pendingCapacityDelta",
+              "type": {
+                "$ref": "nonzero-u32"
+              }
+            }
+          ],
+          "constraints": [],
+          "trailingBytes": "forbidden"
+        }
+      ]
     },
     {
       "name": "generic-reservation-operation-kind",
@@ -2544,6 +6365,29 @@ const definitions: JsonObject = {
         {
           "name": "abort",
           "value": 3
+        }
+      ],
+      "operations": [
+        {
+          "op": "enum",
+          "encoding": "u8",
+          "width": 1,
+          "byteOrder": "big-endian",
+          "values": [
+            {
+              "name": "reserve",
+              "value": 1
+            },
+            {
+              "name": "commit",
+              "value": 2
+            },
+            {
+              "name": "abort",
+              "value": 3
+            }
+          ],
+          "unknown": "protocol-error"
         }
       ]
     },
@@ -2613,7 +6457,106 @@ const definitions: JsonObject = {
         "kind": "protocol-error"
       },
       "maximumEncodedBytes": 1048576,
-      "trailingBytes": "forbidden"
+      "trailingBytes": "forbidden",
+      "operations": [
+        {
+          "op": "conditional-union",
+          "discriminators": [
+            {
+              "op": "discriminator",
+              "name": "operationKind",
+              "source": {
+                "kind": "wire"
+              },
+              "type": {
+                "$ref": "generic-reservation-operation-kind"
+              }
+            }
+          ],
+          "bodyLengthType": {
+            "$ref": "u32"
+          },
+          "bodyLengthCovers": "selected-case",
+          "reader": {
+            "op": "bounded-reader",
+            "boundary": "selected-case",
+            "trailingBytes": "forbidden"
+          },
+          "cases": {
+            "{\"operationKind\":\"reserve\"}": {
+              "fields": [
+                {
+                  "op": "field",
+                  "name": "intent",
+                  "type": {
+                    "$ref": "object-creation-intent-v1"
+                  }
+                },
+                {
+                  "op": "field",
+                  "name": "target",
+                  "type": {
+                    "$ref": "object-creation-target-v1"
+                  }
+                },
+                {
+                  "op": "field",
+                  "name": "creatingPayload",
+                  "type": {
+                    "$ref": "durable-blob"
+                  }
+                },
+                {
+                  "op": "field",
+                  "name": "pendingCapacityDelta",
+                  "type": {
+                    "$ref": "nonzero-u32"
+                  }
+                }
+              ]
+            },
+            "{\"operationKind\":\"commit\"}": {
+              "fields": [
+                {
+                  "op": "field",
+                  "name": "key",
+                  "type": {
+                    "$ref": "object-creation-key"
+                  }
+                },
+                {
+                  "op": "field",
+                  "name": "fence",
+                  "type": {
+                    "$ref": "object-reservation-fence"
+                  }
+                }
+              ]
+            },
+            "{\"operationKind\":\"abort\"}": {
+              "fields": [
+                {
+                  "op": "field",
+                  "name": "key",
+                  "type": {
+                    "$ref": "object-creation-key"
+                  }
+                },
+                {
+                  "op": "field",
+                  "name": "fence",
+                  "type": {
+                    "$ref": "object-reservation-fence"
+                  }
+                }
+              ]
+            }
+          },
+          "otherwise": {
+            "kind": "protocol-error"
+          }
+        }
+      ]
     },
     {
       "name": "aggregate-id",
@@ -2642,6 +6585,45 @@ const definitions: JsonObject = {
             }
           ]
         }
+      ],
+      "operations": [
+        {
+          "op": "struct",
+          "order": "sequential",
+          "fields": [
+            {
+              "op": "field",
+              "name": "high",
+              "type": {
+                "$ref": "u64"
+              }
+            },
+            {
+              "op": "field",
+              "name": "low",
+              "type": {
+                "$ref": "u64"
+              }
+            }
+          ],
+          "constraints": [
+            {
+              "op": "constraint",
+              "kind": "not-both-zero",
+              "fields": [
+                {
+                  "kind": "field",
+                  "name": "high"
+                },
+                {
+                  "kind": "field",
+                  "name": "low"
+                }
+              ]
+            }
+          ],
+          "trailingBytes": "allowed"
+        }
       ]
     },
     {
@@ -2651,7 +6633,18 @@ const definitions: JsonObject = {
         "$ref": "u32"
       },
       "minimumBytes": 1,
-      "maximumBytes": 1048576
+      "maximumBytes": 1048576,
+      "operations": [
+        {
+          "op": "length-prefixed",
+          "lengthType": {
+            "$ref": "u32"
+          },
+          "content": "bytes",
+          "minimumBytes": 1,
+          "maximumBytes": 1048576
+        }
+      ]
     },
     {
       "name": "maintenance-aggregate-participant-v1",
@@ -2670,7 +6663,38 @@ const definitions: JsonObject = {
           "$ref": "aggregate-participant-mutation-bytes"
         }
       ],
-      "trailingBytes": "forbidden"
+      "trailingBytes": "forbidden",
+      "operations": [
+        {
+          "op": "struct",
+          "order": "sequential",
+          "fields": [
+            {
+              "op": "field",
+              "name": "object",
+              "type": {
+                "$ref": "relocation-object-identity"
+              }
+            },
+            {
+              "op": "field",
+              "name": "expectedStoreVersion",
+              "type": {
+                "$ref": "authority-store-version"
+              }
+            },
+            {
+              "op": "field",
+              "name": "mutation",
+              "type": {
+                "$ref": "aggregate-participant-mutation-bytes"
+              }
+            }
+          ],
+          "constraints": [],
+          "trailingBytes": "forbidden"
+        }
+      ]
     },
     {
       "name": "aggregate-participant-vector",
@@ -2697,6 +6721,37 @@ const definitions: JsonObject = {
             "kind": "fieldPath",
             "path": "object"
           }
+        }
+      ],
+      "operations": [
+        {
+          "op": "vector",
+          "countType": {
+            "$ref": "u16"
+          },
+          "item": {
+            "$ref": "maintenance-aggregate-participant-v1"
+          },
+          "constraints": [
+            {
+              "op": "constraint",
+              "kind": "sorted",
+              "field": {
+                "kind": "fieldPath",
+                "path": "object"
+              },
+              "comparison": "canonical-authority-key-bytes"
+            },
+            {
+              "op": "constraint",
+              "kind": "unique",
+              "field": {
+                "kind": "fieldPath",
+                "path": "object"
+              }
+            }
+          ],
+          "maximumItems": 1024
         }
       ]
     },
@@ -2734,7 +6789,64 @@ const definitions: JsonObject = {
         }
       ],
       "maximumEncodedBytes": 1048576,
-      "trailingBytes": "forbidden"
+      "trailingBytes": "forbidden",
+      "operations": [
+        {
+          "op": "versioned-length-delimited",
+          "version": {
+            "$ref": "u8",
+            "constant": 1
+          },
+          "length": {
+            "$ref": "u32",
+            "covers": "body"
+          },
+          "reader": {
+            "op": "bounded-reader",
+            "boundary": "body",
+            "trailingBytes": "forbidden"
+          },
+          "fields": [
+            {
+              "op": "field",
+              "name": "aggregateId",
+              "type": {
+                "$ref": "aggregate-id"
+              }
+            },
+            {
+              "op": "field",
+              "name": "aggregateGeneration",
+              "type": {
+                "$ref": "nonzero-u64"
+              }
+            },
+            {
+              "op": "field",
+              "name": "ownerSpot",
+              "type": {
+                "$ref": "spot-ref"
+              }
+            },
+            {
+              "op": "field",
+              "name": "participants",
+              "type": {
+                "$ref": "aggregate-participant-vector"
+              }
+            },
+            {
+              "op": "field",
+              "name": "inventoryDigestSha256",
+              "type": {
+                "$ref": "sha256-bytes"
+              }
+            }
+          ],
+          "constraints": [],
+          "maximumEncodedBytes": 1048576
+        }
+      ]
     },
     {
       "name": "actor-route-fence",
@@ -2761,7 +6873,52 @@ const definitions: JsonObject = {
           "$ref": "nonzero-u64"
         }
       ],
-      "trailingBytes": "forbidden"
+      "trailingBytes": "forbidden",
+      "operations": [
+        {
+          "op": "struct",
+          "order": "sequential",
+          "fields": [
+            {
+              "op": "field",
+              "name": "actor",
+              "type": {
+                "$ref": "actor-ref"
+              }
+            },
+            {
+              "op": "field",
+              "name": "targetNodeRid",
+              "type": {
+                "$ref": "rid"
+              }
+            },
+            {
+              "op": "field",
+              "name": "targetNodeGeneration",
+              "type": {
+                "$ref": "nonzero-u64"
+              }
+            },
+            {
+              "op": "field",
+              "name": "expectedAuthorityOwnerGeneration",
+              "type": {
+                "$ref": "nonzero-u64"
+              }
+            },
+            {
+              "op": "field",
+              "name": "expectedOwnerLeaseGeneration",
+              "type": {
+                "$ref": "nonzero-u64"
+              }
+            }
+          ],
+          "constraints": [],
+          "trailingBytes": "forbidden"
+        }
+      ]
     },
     {
       "name": "spot-route-fence",
@@ -2788,7 +6945,52 @@ const definitions: JsonObject = {
           "$ref": "nonzero-u64"
         }
       ],
-      "trailingBytes": "forbidden"
+      "trailingBytes": "forbidden",
+      "operations": [
+        {
+          "op": "struct",
+          "order": "sequential",
+          "fields": [
+            {
+              "op": "field",
+              "name": "spot",
+              "type": {
+                "$ref": "spot-ref"
+              }
+            },
+            {
+              "op": "field",
+              "name": "targetNodeRid",
+              "type": {
+                "$ref": "rid"
+              }
+            },
+            {
+              "op": "field",
+              "name": "targetNodeGeneration",
+              "type": {
+                "$ref": "nonzero-u64"
+              }
+            },
+            {
+              "op": "field",
+              "name": "expectedAuthorityOwnerGeneration",
+              "type": {
+                "$ref": "nonzero-u64"
+              }
+            },
+            {
+              "op": "field",
+              "name": "expectedOwnerLeaseGeneration",
+              "type": {
+                "$ref": "nonzero-u64"
+              }
+            }
+          ],
+          "constraints": [],
+          "trailingBytes": "forbidden"
+        }
+      ]
     },
     {
       "name": "user-spot-close-fence-v1",
@@ -2823,7 +7025,63 @@ const definitions: JsonObject = {
           "$ref": "authority-store-version"
         }
       ],
-      "trailingBytes": "forbidden"
+      "trailingBytes": "forbidden",
+      "operations": [
+        {
+          "op": "versioned-length-delimited",
+          "version": {
+            "$ref": "u8",
+            "constant": 1
+          },
+          "length": {
+            "$ref": "u16",
+            "covers": "body"
+          },
+          "reader": {
+            "op": "bounded-reader",
+            "boundary": "body",
+            "trailingBytes": "forbidden"
+          },
+          "fields": [
+            {
+              "op": "field",
+              "name": "spot",
+              "type": {
+                "$ref": "spot-ref"
+              }
+            },
+            {
+              "op": "field",
+              "name": "targetNodeRid",
+              "type": {
+                "$ref": "rid"
+              }
+            },
+            {
+              "op": "field",
+              "name": "targetNodeGeneration",
+              "type": {
+                "$ref": "nonzero-u64"
+              }
+            },
+            {
+              "op": "field",
+              "name": "expectedAuthorityOwnerGeneration",
+              "type": {
+                "$ref": "nonzero-u64"
+              }
+            },
+            {
+              "op": "field",
+              "name": "expectedStoreVersion",
+              "type": {
+                "$ref": "authority-store-version"
+              }
+            }
+          ],
+          "constraints": []
+        }
+      ]
     },
     {
       "name": "message-follow-route",
@@ -2862,7 +7120,60 @@ const definitions: JsonObject = {
       "otherwise": {
         "kind": "protocol-error"
       },
-      "trailingBytes": "forbidden"
+      "trailingBytes": "forbidden",
+      "operations": [
+        {
+          "op": "conditional-union",
+          "discriminators": [
+            {
+              "op": "discriminator",
+              "name": "objectKind",
+              "source": {
+                "kind": "wire"
+              },
+              "type": {
+                "$ref": "authority-object-kind"
+              }
+            }
+          ],
+          "bodyLengthType": {
+            "$ref": "u16"
+          },
+          "bodyLengthCovers": "selected-case",
+          "reader": {
+            "op": "bounded-reader",
+            "boundary": "selected-case",
+            "trailingBytes": "forbidden"
+          },
+          "cases": {
+            "{\"objectKind\":\"actor\"}": {
+              "fields": [
+                {
+                  "op": "field",
+                  "name": "actor",
+                  "type": {
+                    "$ref": "actor-route-fence"
+                  }
+                }
+              ]
+            },
+            "{\"objectKind\":\"spot\"}": {
+              "fields": [
+                {
+                  "op": "field",
+                  "name": "spot",
+                  "type": {
+                    "$ref": "spot-route-fence"
+                  }
+                }
+              ]
+            }
+          },
+          "otherwise": {
+            "kind": "protocol-error"
+          }
+        }
+      ]
     },
     {
       "name": "message-follow-route-v1",
@@ -2914,7 +7225,82 @@ const definitions: JsonObject = {
       ],
       "maximumEncodedBytes": 16777216,
       "trailingBytes": "forbidden",
-      "description": "Infrastructure-only route notice. Queue counters are saturating diagnostics and never gate Message Follow payload admission."
+      "description": "Infrastructure-only route notice. Queue counters are saturating diagnostics and never gate Message Follow payload admission.",
+      "operations": [
+        {
+          "op": "versioned-length-delimited",
+          "version": {
+            "$ref": "u8",
+            "constant": 1
+          },
+          "length": {
+            "$ref": "u32",
+            "covers": "body"
+          },
+          "reader": {
+            "op": "bounded-reader",
+            "boundary": "body",
+            "trailingBytes": "forbidden"
+          },
+          "fields": [
+            {
+              "op": "field",
+              "name": "source",
+              "type": {
+                "$ref": "message-follow-route"
+              }
+            },
+            {
+              "op": "field",
+              "name": "target",
+              "type": {
+                "$ref": "message-follow-route"
+              }
+            },
+            {
+              "op": "field",
+              "name": "hopCount",
+              "type": {
+                "$ref": "u8"
+              },
+              "minimum": 1,
+              "maximum": 8
+            },
+            {
+              "op": "field",
+              "name": "queuedMessages",
+              "type": {
+                "$ref": "u32"
+              },
+              "minimum": 0
+            },
+            {
+              "op": "field",
+              "name": "queuedBytes",
+              "type": {
+                "$ref": "u32"
+              },
+              "minimum": 0
+            },
+            {
+              "op": "field",
+              "name": "originalOperation",
+              "type": {
+                "$ref": "operation-id"
+              }
+            },
+            {
+              "op": "field",
+              "name": "originalReplyRouteId",
+              "type": {
+                "$ref": "u64"
+              }
+            }
+          ],
+          "constraints": [],
+          "maximumEncodedBytes": 16777216
+        }
+      ]
     },
     {
       "name": "relocation-object-identity",
@@ -2977,7 +7363,99 @@ const definitions: JsonObject = {
       "otherwise": {
         "kind": "protocol-error"
       },
-      "trailingBytes": "forbidden"
+      "trailingBytes": "forbidden",
+      "operations": [
+        {
+          "op": "conditional-union",
+          "discriminators": [
+            {
+              "op": "discriminator",
+              "name": "objectKind",
+              "source": {
+                "kind": "wire"
+              },
+              "type": {
+                "$ref": "stateful-object-kind"
+              }
+            }
+          ],
+          "bodyLengthType": {
+            "$ref": "u16"
+          },
+          "bodyLengthCovers": "selected-case",
+          "reader": {
+            "op": "bounded-reader",
+            "boundary": "selected-case",
+            "trailingBytes": "forbidden"
+          },
+          "cases": {
+            "{\"objectKind\":\"actor\"}": {
+              "fields": [
+                {
+                  "op": "field",
+                  "name": "actor",
+                  "type": {
+                    "$ref": "actor-ref"
+                  }
+                },
+                {
+                  "op": "field",
+                  "name": "expectedAuthorityOwnerGeneration",
+                  "type": {
+                    "$ref": "nonzero-u64"
+                  }
+                }
+              ]
+            },
+            "{\"objectKind\":\"userSpot\"}": {
+              "fields": [
+                {
+                  "op": "field",
+                  "name": "spot",
+                  "type": {
+                    "$ref": "spot-ref"
+                  }
+                },
+                {
+                  "op": "field",
+                  "name": "expectedAuthorityOwnerGeneration",
+                  "type": {
+                    "$ref": "nonzero-u64"
+                  }
+                }
+              ]
+            },
+            "{\"objectKind\":\"instanceSpot\"}": {
+              "fields": [
+                {
+                  "op": "field",
+                  "name": "instanceType",
+                  "type": {
+                    "$ref": "text8"
+                  }
+                },
+                {
+                  "op": "field",
+                  "name": "spotId",
+                  "type": {
+                    "$ref": "text8"
+                  }
+                },
+                {
+                  "op": "field",
+                  "name": "objectGeneration",
+                  "type": {
+                    "$ref": "nonzero-u64"
+                  }
+                }
+              ]
+            }
+          },
+          "otherwise": {
+            "kind": "protocol-error"
+          }
+        }
+      ]
     },
     {
       "name": "actor-authority-identity",
@@ -3002,6 +7480,51 @@ const definitions: JsonObject = {
         {
           "name": "currentSpotKind",
           "$ref": "actor-spot-kind"
+        }
+      ],
+      "operations": [
+        {
+          "op": "struct",
+          "order": "sequential",
+          "fields": [
+            {
+              "op": "field",
+              "name": "actorType",
+              "type": {
+                "$ref": "text8"
+              }
+            },
+            {
+              "op": "field",
+              "name": "actorId",
+              "type": {
+                "$ref": "text8"
+              }
+            },
+            {
+              "op": "field",
+              "name": "state",
+              "type": {
+                "$ref": "actor-authority-state"
+              }
+            },
+            {
+              "op": "field",
+              "name": "currentSpot",
+              "type": {
+                "$ref": "spot-ref"
+              }
+            },
+            {
+              "op": "field",
+              "name": "currentSpotKind",
+              "type": {
+                "$ref": "actor-spot-kind"
+              }
+            }
+          ],
+          "constraints": [],
+          "trailingBytes": "allowed"
         }
       ]
     },
@@ -3074,7 +7597,110 @@ const definitions: JsonObject = {
       "otherwise": {
         "kind": "protocol-error"
       },
-      "trailingBytes": "forbidden"
+      "trailingBytes": "forbidden",
+      "operations": [
+        {
+          "op": "conditional-union",
+          "discriminators": [
+            {
+              "op": "discriminator",
+              "name": "authorityState",
+              "source": {
+                "kind": "wire"
+              },
+              "type": {
+                "$ref": "instance-authority-state"
+              }
+            }
+          ],
+          "bodyLengthType": {
+            "$ref": "u16"
+          },
+          "bodyLengthCovers": "selected-case",
+          "reader": {
+            "op": "bounded-reader",
+            "boundary": "selected-case",
+            "trailingBytes": "forbidden"
+          },
+          "cases": {
+            "{\"authorityState\":\"coldActivating\"}": {
+              "fields": [
+                {
+                  "op": "field",
+                  "name": "instanceType",
+                  "type": {
+                    "$ref": "text8"
+                  }
+                },
+                {
+                  "op": "field",
+                  "name": "spotId",
+                  "type": {
+                    "$ref": "text8"
+                  }
+                }
+              ]
+            },
+            "{\"authorityState\":\"ready\"}": {
+              "fields": [
+                {
+                  "op": "field",
+                  "name": "instanceType",
+                  "type": {
+                    "$ref": "text8"
+                  }
+                },
+                {
+                  "op": "field",
+                  "name": "spotId",
+                  "type": {
+                    "$ref": "text8"
+                  }
+                }
+              ]
+            },
+            "{\"authorityState\":\"closing\"}": {
+              "fields": [
+                {
+                  "op": "field",
+                  "name": "instanceType",
+                  "type": {
+                    "$ref": "text8"
+                  }
+                },
+                {
+                  "op": "field",
+                  "name": "spotId",
+                  "type": {
+                    "$ref": "text8"
+                  }
+                }
+              ]
+            },
+            "{\"authorityState\":\"relocating\"}": {
+              "fields": [
+                {
+                  "op": "field",
+                  "name": "instanceType",
+                  "type": {
+                    "$ref": "text8"
+                  }
+                },
+                {
+                  "op": "field",
+                  "name": "spotId",
+                  "type": {
+                    "$ref": "text8"
+                  }
+                }
+              ]
+            }
+          },
+          "otherwise": {
+            "kind": "protocol-error"
+          }
+        }
+      ]
     },
     {
       "name": "spot-authority-identity",
@@ -3137,7 +7763,99 @@ const definitions: JsonObject = {
       "otherwise": {
         "kind": "protocol-error"
       },
-      "trailingBytes": "forbidden"
+      "trailingBytes": "forbidden",
+      "operations": [
+        {
+          "op": "conditional-union",
+          "discriminators": [
+            {
+              "op": "discriminator",
+              "name": "spotKind",
+              "source": {
+                "kind": "wire"
+              },
+              "type": {
+                "$ref": "spot-kind"
+              }
+            }
+          ],
+          "bodyLengthType": {
+            "$ref": "u16"
+          },
+          "bodyLengthCovers": "selected-case",
+          "reader": {
+            "op": "bounded-reader",
+            "boundary": "selected-case",
+            "trailingBytes": "forbidden"
+          },
+          "cases": {
+            "{\"spotKind\":\"entry\"}": {
+              "fields": [
+                {
+                  "op": "field",
+                  "name": "spotId",
+                  "type": {
+                    "$ref": "text8"
+                  }
+                },
+                {
+                  "op": "field",
+                  "name": "spotType",
+                  "type": {
+                    "$ref": "text8"
+                  }
+                },
+                {
+                  "op": "field",
+                  "name": "state",
+                  "type": {
+                    "$ref": "entry-user-spot-authority-state"
+                  }
+                }
+              ]
+            },
+            "{\"spotKind\":\"user\"}": {
+              "fields": [
+                {
+                  "op": "field",
+                  "name": "spotId",
+                  "type": {
+                    "$ref": "text8"
+                  }
+                },
+                {
+                  "op": "field",
+                  "name": "spotType",
+                  "type": {
+                    "$ref": "text8"
+                  }
+                },
+                {
+                  "op": "field",
+                  "name": "state",
+                  "type": {
+                    "$ref": "entry-user-spot-authority-state"
+                  }
+                }
+              ]
+            },
+            "{\"spotKind\":\"instance\"}": {
+              "fields": [
+                {
+                  "op": "field",
+                  "name": "instance",
+                  "type": {
+                    "$ref": "instance-authority-identity"
+                  }
+                }
+              ]
+            }
+          },
+          "otherwise": {
+            "kind": "protocol-error"
+          }
+        }
+      ]
     },
     {
       "name": "authority-object-identity",
@@ -3176,7 +7894,60 @@ const definitions: JsonObject = {
       "otherwise": {
         "kind": "protocol-error"
       },
-      "trailingBytes": "forbidden"
+      "trailingBytes": "forbidden",
+      "operations": [
+        {
+          "op": "conditional-union",
+          "discriminators": [
+            {
+              "op": "discriminator",
+              "name": "objectKind",
+              "source": {
+                "kind": "wire"
+              },
+              "type": {
+                "$ref": "authority-object-kind"
+              }
+            }
+          ],
+          "bodyLengthType": {
+            "$ref": "u16"
+          },
+          "bodyLengthCovers": "selected-case",
+          "reader": {
+            "op": "bounded-reader",
+            "boundary": "selected-case",
+            "trailingBytes": "forbidden"
+          },
+          "cases": {
+            "{\"objectKind\":\"actor\"}": {
+              "fields": [
+                {
+                  "op": "field",
+                  "name": "actor",
+                  "type": {
+                    "$ref": "actor-authority-identity"
+                  }
+                }
+              ]
+            },
+            "{\"objectKind\":\"spot\"}": {
+              "fields": [
+                {
+                  "op": "field",
+                  "name": "spot",
+                  "type": {
+                    "$ref": "spot-authority-identity"
+                  }
+                }
+              ]
+            }
+          },
+          "otherwise": {
+            "kind": "protocol-error"
+          }
+        }
+      ]
     },
     {
       "name": "operation-id",
@@ -3205,6 +7976,45 @@ const definitions: JsonObject = {
             }
           ]
         }
+      ],
+      "operations": [
+        {
+          "op": "struct",
+          "order": "sequential",
+          "fields": [
+            {
+              "op": "field",
+              "name": "high",
+              "type": {
+                "$ref": "u64"
+              }
+            },
+            {
+              "op": "field",
+              "name": "low",
+              "type": {
+                "$ref": "u64"
+              }
+            }
+          ],
+          "constraints": [
+            {
+              "op": "constraint",
+              "kind": "not-both-zero",
+              "fields": [
+                {
+                  "kind": "field",
+                  "name": "high"
+                },
+                {
+                  "kind": "field",
+                  "name": "low"
+                }
+              ]
+            }
+          ],
+          "trailingBytes": "allowed"
+        }
       ]
     },
     {
@@ -3219,6 +8029,30 @@ const definitions: JsonObject = {
           "name": "low",
           "$ref": "u64"
         }
+      ],
+      "operations": [
+        {
+          "op": "struct",
+          "order": "sequential",
+          "fields": [
+            {
+              "op": "field",
+              "name": "high",
+              "type": {
+                "$ref": "u64"
+              }
+            },
+            {
+              "op": "field",
+              "name": "low",
+              "type": {
+                "$ref": "u64"
+              }
+            }
+          ],
+          "constraints": [],
+          "trailingBytes": "allowed"
+        }
       ]
     },
     {
@@ -3230,7 +8064,24 @@ const definitions: JsonObject = {
       "minimumBytes": 1,
       "maximumBytes": 4096,
       "encoding": "utf-8",
-      "nul": "forbidden"
+      "nul": "forbidden",
+      "operations": [
+        {
+          "op": "length-prefixed",
+          "lengthType": {
+            "$ref": "u16"
+          },
+          "content": "text",
+          "minimumBytes": 1,
+          "maximumBytes": 4096
+        },
+        {
+          "op": "text-validation",
+          "encoding": "utf-8",
+          "malformed": "protocol-error",
+          "nul": "forbidden"
+        }
+      ]
     },
     {
       "name": "relocation-reference",
@@ -3241,7 +8092,24 @@ const definitions: JsonObject = {
       "minimumBytes": 1,
       "maximumBytes": 4096,
       "encoding": "utf-8",
-      "nul": "forbidden"
+      "nul": "forbidden",
+      "operations": [
+        {
+          "op": "length-prefixed",
+          "lengthType": {
+            "$ref": "u16"
+          },
+          "content": "text",
+          "minimumBytes": 1,
+          "maximumBytes": 4096
+        },
+        {
+          "op": "text-validation",
+          "encoding": "utf-8",
+          "malformed": "protocol-error",
+          "nul": "forbidden"
+        }
+      ]
     },
     {
       "name": "authority-store-version",
@@ -3252,7 +8120,24 @@ const definitions: JsonObject = {
       "minimumBytes": 1,
       "maximumBytes": 4096,
       "encoding": "utf-8",
-      "nul": "forbidden"
+      "nul": "forbidden",
+      "operations": [
+        {
+          "op": "length-prefixed",
+          "lengthType": {
+            "$ref": "u16"
+          },
+          "content": "text",
+          "minimumBytes": 1,
+          "maximumBytes": 4096
+        },
+        {
+          "op": "text-validation",
+          "encoding": "utf-8",
+          "malformed": "protocol-error",
+          "nul": "forbidden"
+        }
+      ]
     },
     {
       "name": "authority-generation-fence",
@@ -3277,6 +8162,51 @@ const definitions: JsonObject = {
         {
           "name": "storeVersion",
           "$ref": "authority-store-version"
+        }
+      ],
+      "operations": [
+        {
+          "op": "struct",
+          "order": "sequential",
+          "fields": [
+            {
+              "op": "field",
+              "name": "objectGeneration",
+              "type": {
+                "$ref": "nonzero-u64"
+              }
+            },
+            {
+              "op": "field",
+              "name": "ownerId",
+              "type": {
+                "$ref": "text8"
+              }
+            },
+            {
+              "op": "field",
+              "name": "authorityOwnerGeneration",
+              "type": {
+                "$ref": "nonzero-u64"
+              }
+            },
+            {
+              "op": "field",
+              "name": "leaseGeneration",
+              "type": {
+                "$ref": "nonzero-u64"
+              }
+            },
+            {
+              "op": "field",
+              "name": "storeVersion",
+              "type": {
+                "$ref": "authority-store-version"
+              }
+            }
+          ],
+          "constraints": [],
+          "trailingBytes": "allowed"
         }
       ]
     },
@@ -3305,7 +8235,52 @@ const definitions: JsonObject = {
           "$ref": "authority-store-version"
         }
       ],
-      "trailingBytes": "forbidden"
+      "trailingBytes": "forbidden",
+      "operations": [
+        {
+          "op": "struct",
+          "order": "sequential",
+          "fields": [
+            {
+              "op": "field",
+              "name": "coordinatorOwnerId",
+              "type": {
+                "$ref": "text8"
+              }
+            },
+            {
+              "op": "field",
+              "name": "coordinatorLeaseGeneration",
+              "type": {
+                "$ref": "nonzero-u64"
+              }
+            },
+            {
+              "op": "field",
+              "name": "coordinatorNodeRid",
+              "type": {
+                "$ref": "rid"
+              }
+            },
+            {
+              "op": "field",
+              "name": "coordinatorNodeGeneration",
+              "type": {
+                "$ref": "nonzero-u64"
+              }
+            },
+            {
+              "op": "field",
+              "name": "expectedAuthorityStoreVersion",
+              "type": {
+                "$ref": "authority-store-version"
+              }
+            }
+          ],
+          "constraints": [],
+          "trailingBytes": "forbidden"
+        }
+      ]
     },
     {
       "name": "relocation-target-fence",
@@ -3328,7 +8303,45 @@ const definitions: JsonObject = {
           "$ref": "nonzero-u64"
         }
       ],
-      "trailingBytes": "forbidden"
+      "trailingBytes": "forbidden",
+      "operations": [
+        {
+          "op": "struct",
+          "order": "sequential",
+          "fields": [
+            {
+              "op": "field",
+              "name": "targetNodeRid",
+              "type": {
+                "$ref": "rid"
+              }
+            },
+            {
+              "op": "field",
+              "name": "targetNodeGeneration",
+              "type": {
+                "$ref": "nonzero-u64"
+              }
+            },
+            {
+              "op": "field",
+              "name": "targetOwnerId",
+              "type": {
+                "$ref": "text8"
+              }
+            },
+            {
+              "op": "field",
+              "name": "targetOwnerLeaseGeneration",
+              "type": {
+                "$ref": "nonzero-u64"
+              }
+            }
+          ],
+          "constraints": [],
+          "trailingBytes": "forbidden"
+        }
+      ]
     },
     {
       "name": "request-source-fence",
@@ -3351,7 +8364,45 @@ const definitions: JsonObject = {
           "$ref": "nonzero-u64"
         }
       ],
-      "trailingBytes": "forbidden"
+      "trailingBytes": "forbidden",
+      "operations": [
+        {
+          "op": "struct",
+          "order": "sequential",
+          "fields": [
+            {
+              "op": "field",
+              "name": "sourceOwnerId",
+              "type": {
+                "$ref": "text8"
+              }
+            },
+            {
+              "op": "field",
+              "name": "sourceOwnerLeaseGeneration",
+              "type": {
+                "$ref": "nonzero-u64"
+              }
+            },
+            {
+              "op": "field",
+              "name": "sourceNodeRid",
+              "type": {
+                "$ref": "rid"
+              }
+            },
+            {
+              "op": "field",
+              "name": "sourceNodeGeneration",
+              "type": {
+                "$ref": "nonzero-u64"
+              }
+            }
+          ],
+          "constraints": [],
+          "trailingBytes": "forbidden"
+        }
+      ]
     },
     {
       "name": "relocation-id",
@@ -3379,6 +8430,45 @@ const definitions: JsonObject = {
               "name": "low"
             }
           ]
+        }
+      ],
+      "operations": [
+        {
+          "op": "struct",
+          "order": "sequential",
+          "fields": [
+            {
+              "op": "field",
+              "name": "high",
+              "type": {
+                "$ref": "u64"
+              }
+            },
+            {
+              "op": "field",
+              "name": "low",
+              "type": {
+                "$ref": "u64"
+              }
+            }
+          ],
+          "constraints": [
+            {
+              "op": "constraint",
+              "kind": "not-both-zero",
+              "fields": [
+                {
+                  "kind": "field",
+                  "name": "high"
+                },
+                {
+                  "kind": "field",
+                  "name": "low"
+                }
+              ]
+            }
+          ],
+          "trailingBytes": "allowed"
         }
       ]
     },
@@ -3411,7 +8501,47 @@ const definitions: JsonObject = {
           }
         }
       ],
-      "trailingBytes": "forbidden"
+      "trailingBytes": "forbidden",
+      "operations": [
+        {
+          "op": "struct",
+          "order": "sequential",
+          "fields": [
+            {
+              "op": "field",
+              "name": "actorId",
+              "type": {
+                "$ref": "optional-text8"
+              }
+            },
+            {
+              "op": "field",
+              "name": "generation",
+              "type": {
+                "$ref": "nonzero-u64"
+              },
+              "otherwise": "forbidden",
+              "when": {
+                "all": [
+                  {
+                    "kind": "fieldPresent",
+                    "operand": {
+                      "kind": "field",
+                      "name": "actorId"
+                    }
+                  }
+                ]
+              },
+              "whenFalse": {
+                "encoder": "reject-present-value",
+                "decoder": "consume-no-bytes"
+              }
+            }
+          ],
+          "constraints": [],
+          "trailingBytes": "forbidden"
+        }
+      ]
     },
     {
       "name": "optional-bound-session-tail",
@@ -3430,7 +8560,38 @@ const definitions: JsonObject = {
           "$ref": "nonzero-u64"
         }
       ],
-      "presence": "command-flag-conditioned"
+      "presence": "command-flag-conditioned",
+      "operations": [
+        {
+          "op": "struct",
+          "order": "sequential",
+          "fields": [
+            {
+              "op": "field",
+              "name": "sourceSessionRid",
+              "type": {
+                "$ref": "rid"
+              }
+            },
+            {
+              "op": "field",
+              "name": "sourceBindingGeneration",
+              "type": {
+                "$ref": "nonzero-u64"
+              }
+            },
+            {
+              "op": "field",
+              "name": "sourceSessionSequence",
+              "type": {
+                "$ref": "nonzero-u64"
+              }
+            }
+          ],
+          "constraints": [],
+          "trailingBytes": "allowed"
+        }
+      ]
     },
     {
       "name": "channel-entry",
@@ -3445,6 +8606,32 @@ const definitions: JsonObject = {
           "$ref": "u32",
           "minimum": 0,
           "maximum": 100
+        }
+      ],
+      "operations": [
+        {
+          "op": "struct",
+          "order": "sequential",
+          "fields": [
+            {
+              "op": "field",
+              "name": "channelName",
+              "type": {
+                "$ref": "text8"
+              }
+            },
+            {
+              "op": "field",
+              "name": "weight",
+              "type": {
+                "$ref": "u32"
+              },
+              "minimum": 0,
+              "maximum": 100
+            }
+          ],
+          "constraints": [],
+          "trailingBytes": "allowed"
         }
       ]
     },
@@ -3474,6 +8661,37 @@ const definitions: JsonObject = {
           },
           "comparison": "utf-8-bytes"
         }
+      ],
+      "operations": [
+        {
+          "op": "vector",
+          "countType": {
+            "$ref": "u16"
+          },
+          "item": {
+            "$ref": "channel-entry"
+          },
+          "constraints": [
+            {
+              "op": "constraint",
+              "kind": "sorted",
+              "field": {
+                "kind": "fieldPath",
+                "path": "channelName"
+              },
+              "comparison": "utf-8-bytes"
+            },
+            {
+              "op": "constraint",
+              "kind": "unique",
+              "field": {
+                "kind": "fieldPath",
+                "path": "channelName"
+              },
+              "comparison": "utf-8-bytes"
+            }
+          ]
+        }
       ]
     },
     {
@@ -3494,6 +8712,30 @@ const definitions: JsonObject = {
         {
           "kind": "unique",
           "comparison": "utf-8-bytes"
+        }
+      ],
+      "operations": [
+        {
+          "op": "vector",
+          "countType": {
+            "$ref": "u16"
+          },
+          "item": {
+            "$ref": "text8"
+          },
+          "constraints": [
+            {
+              "op": "constraint",
+              "kind": "sorted",
+              "comparison": "utf-8-bytes"
+            },
+            {
+              "op": "constraint",
+              "kind": "unique",
+              "comparison": "utf-8-bytes"
+            }
+          ],
+          "maximumItems": 1024
         }
       ]
     },
@@ -3528,6 +8770,65 @@ const definitions: JsonObject = {
         {
           "name": "available",
           "$ref": "ordinal-or-zero"
+        }
+      ],
+      "operations": [
+        {
+          "op": "struct",
+          "order": "sequential",
+          "fields": [
+            {
+              "op": "field",
+              "name": "objectKind",
+              "type": {
+                "$ref": "stateful-object-kind"
+              }
+            },
+            {
+              "op": "field",
+              "name": "type",
+              "type": {
+                "$ref": "text8"
+              }
+            },
+            {
+              "op": "field",
+              "name": "relocationPolicy",
+              "type": {
+                "$ref": "relocation-policy-kind"
+              }
+            },
+            {
+              "op": "field",
+              "name": "activeCapacityLimit",
+              "type": {
+                "$ref": "object-capacity-limit"
+              }
+            },
+            {
+              "op": "field",
+              "name": "pendingCapacityLimit",
+              "type": {
+                "$ref": "object-pending-capacity-limit"
+              }
+            },
+            {
+              "op": "field",
+              "name": "hasSnapshotAdapter",
+              "type": {
+                "$ref": "bool8"
+              }
+            },
+            {
+              "op": "field",
+              "name": "available",
+              "type": {
+                "$ref": "ordinal-or-zero"
+              }
+            }
+          ],
+          "constraints": [],
+          "trailingBytes": "allowed"
         }
       ]
     },
@@ -3568,6 +8869,49 @@ const definitions: JsonObject = {
               "path": "type"
             }
           ]
+        }
+      ],
+      "operations": [
+        {
+          "op": "vector",
+          "countType": {
+            "$ref": "u16"
+          },
+          "item": {
+            "$ref": "stateful-capability-entry"
+          },
+          "constraints": [
+            {
+              "op": "constraint",
+              "kind": "sorted",
+              "fields": [
+                {
+                  "kind": "fieldPath",
+                  "path": "objectKind"
+                },
+                {
+                  "kind": "fieldPath",
+                  "path": "type"
+                }
+              ],
+              "comparison": "wire-value-then-utf-8-bytes"
+            },
+            {
+              "op": "constraint",
+              "kind": "unique",
+              "fields": [
+                {
+                  "kind": "fieldPath",
+                  "path": "objectKind"
+                },
+                {
+                  "kind": "fieldPath",
+                  "path": "type"
+                }
+              ]
+            }
+          ],
+          "maximumItems": 1024
         }
       ]
     },
@@ -3672,7 +9016,164 @@ const definitions: JsonObject = {
       "duplicateField": "protocol-error",
       "unknownField": "skip-after-length-validation",
       "maximumEncodedBytes": 1048576,
-      "trailingBytes": "forbidden"
+      "trailingBytes": "forbidden",
+      "operations": [
+        {
+          "op": "tlv32",
+          "totalLengthType": {
+            "$ref": "u32"
+          },
+          "fieldIdType": {
+            "$ref": "u8"
+          },
+          "fieldLengthType": {
+            "$ref": "u32"
+          },
+          "reader": {
+            "op": "bounded-reader",
+            "boundary": "totalLength",
+            "trailingBytes": "forbidden"
+          },
+          "fields": [
+            {
+              "op": "field",
+              "name": "runtimeState",
+              "type": {
+                "$ref": "runtime-state"
+              },
+              "required": true,
+              "id": 1
+            },
+            {
+              "op": "field",
+              "name": "applicationVersion",
+              "type": {
+                "$ref": "application-version"
+              },
+              "required": true,
+              "id": 2
+            },
+            {
+              "op": "field",
+              "name": "spotTypes",
+              "type": {
+                "$ref": "sorted-text8-vector"
+              },
+              "required": false,
+              "id": 3
+            },
+            {
+              "op": "field",
+              "name": "statefulCapabilities",
+              "type": {
+                "$ref": "stateful-capability-vector"
+              },
+              "required": false,
+              "id": 4
+            },
+            {
+              "op": "field",
+              "name": "maintenanceWave",
+              "type": {
+                "$ref": "optional-text8"
+              },
+              "required": false,
+              "id": 5
+            },
+            {
+              "op": "field",
+              "name": "protocolCapabilities",
+              "type": {
+                "$ref": "sorted-text8-vector"
+              },
+              "required": true,
+              "id": 6,
+              "constraints": [
+                {
+                  "op": "constraint",
+                  "kind": "contains-protocol-required-capability",
+                  "requiredCapability": {
+                    "kind": "protocol",
+                    "name": "requiredCapability"
+                  }
+                }
+              ]
+            },
+            {
+              "op": "field",
+              "name": "objectRole",
+              "type": {
+                "$ref": "object-role"
+              },
+              "required": true,
+              "id": 7
+            },
+            {
+              "op": "field",
+              "name": "placementWeight",
+              "type": {
+                "$ref": "u32"
+              },
+              "minimum": 0,
+              "maximum": 100,
+              "required": true,
+              "id": 8
+            },
+            {
+              "op": "field",
+              "name": "activeCapacityLimit",
+              "type": {
+                "$ref": "object-capacity-limit"
+              },
+              "required": true,
+              "id": 9
+            },
+            {
+              "op": "field",
+              "name": "pendingCapacityLimit",
+              "type": {
+                "$ref": "object-pending-capacity-limit"
+              },
+              "required": true,
+              "id": 10
+            },
+            {
+              "op": "field",
+              "name": "activeCapacityUsed",
+              "type": {
+                "$ref": "u32"
+              },
+              "required": true,
+              "id": 11
+            },
+            {
+              "op": "field",
+              "name": "pendingCapacityUsed",
+              "type": {
+                "$ref": "u32"
+              },
+              "required": true,
+              "id": 12
+            }
+          ],
+          "requiredFields": [
+            "runtimeState",
+            "applicationVersion",
+            "protocolCapabilities",
+            "objectRole",
+            "placementWeight",
+            "activeCapacityLimit",
+            "pendingCapacityLimit",
+            "activeCapacityUsed",
+            "pendingCapacityUsed"
+          ],
+          "presenceRules": [],
+          "encodingOrder": "ascending-field-id",
+          "duplicateField": "protocol-error",
+          "unknownField": "skip-after-length-validation",
+          "maximumEncodedBytes": 1048576
+        }
+      ]
     },
     {
       "name": "route-mesh-admission",
@@ -3707,7 +9208,66 @@ const definitions: JsonObject = {
           "$ref": "descriptor-extension"
         }
       ],
-      "trailingBytes": "forbidden"
+      "trailingBytes": "forbidden",
+      "operations": [
+        {
+          "op": "struct",
+          "order": "sequential",
+          "fields": [
+            {
+              "op": "field",
+              "name": "meshName",
+              "type": {
+                "$ref": "text8"
+              }
+            },
+            {
+              "op": "field",
+              "name": "securityIdentity",
+              "type": {
+                "$ref": "text8"
+              }
+            },
+            {
+              "op": "field",
+              "name": "lifecycleGeneration",
+              "type": {
+                "$ref": "nonzero-u64"
+              }
+            },
+            {
+              "op": "field",
+              "name": "descriptorRevision",
+              "type": {
+                "$ref": "nonzero-u64"
+              }
+            },
+            {
+              "op": "field",
+              "name": "advertisedEndpoint",
+              "type": {
+                "$ref": "endpoint"
+              }
+            },
+            {
+              "op": "field",
+              "name": "channels",
+              "type": {
+                "$ref": "channel-vector"
+              }
+            },
+            {
+              "op": "field",
+              "name": "extension",
+              "type": {
+                "$ref": "descriptor-extension"
+              }
+            }
+          ],
+          "constraints": [],
+          "trailingBytes": "forbidden"
+        }
+      ]
     },
     {
       "name": "client-server-admission",
@@ -3798,7 +9358,148 @@ const definitions: JsonObject = {
       "otherwise": {
         "kind": "protocol-error"
       },
-      "trailingBytes": "forbidden"
+      "trailingBytes": "forbidden",
+      "operations": [
+        {
+          "op": "conditional-union",
+          "discriminators": [
+            {
+              "op": "discriminator",
+              "name": "role",
+              "source": {
+                "kind": "wire"
+              },
+              "type": {
+                "$ref": "client-server-role"
+              }
+            }
+          ],
+          "bodyLengthType": {
+            "$ref": "u16"
+          },
+          "bodyLengthCovers": "selected-case",
+          "reader": {
+            "op": "bounded-reader",
+            "boundary": "selected-case",
+            "trailingBytes": "forbidden"
+          },
+          "cases": {
+            "{\"role\":\"client\"}": {
+              "fields": [
+                {
+                  "op": "field",
+                  "name": "channelName",
+                  "type": {
+                    "$ref": "text8"
+                  }
+                },
+                {
+                  "op": "field",
+                  "name": "direction",
+                  "type": {
+                    "$ref": "client-server-direction"
+                  },
+                  "constant": "clientToServer"
+                },
+                {
+                  "op": "field",
+                  "name": "securityIdentity",
+                  "type": {
+                    "$ref": "text8"
+                  }
+                },
+                {
+                  "op": "field",
+                  "name": "normalizedEffectiveMaxMessageBytes",
+                  "type": {
+                    "$ref": "nonzero-u32"
+                  }
+                }
+              ]
+            },
+            "{\"role\":\"server\"}": {
+              "fields": [
+                {
+                  "op": "field",
+                  "name": "channelName",
+                  "type": {
+                    "$ref": "text8"
+                  }
+                },
+                {
+                  "op": "field",
+                  "name": "direction",
+                  "type": {
+                    "$ref": "client-server-direction"
+                  },
+                  "constant": "clientToServer"
+                },
+                {
+                  "op": "field",
+                  "name": "serverRid",
+                  "type": {
+                    "$ref": "rid"
+                  }
+                },
+                {
+                  "op": "field",
+                  "name": "lifecycleGeneration",
+                  "type": {
+                    "$ref": "nonzero-u64"
+                  }
+                },
+                {
+                  "op": "field",
+                  "name": "descriptorRevision",
+                  "type": {
+                    "$ref": "nonzero-u64"
+                  }
+                },
+                {
+                  "op": "field",
+                  "name": "weight",
+                  "type": {
+                    "$ref": "u32"
+                  },
+                  "minimum": 0,
+                  "maximum": 100
+                },
+                {
+                  "op": "field",
+                  "name": "runtimeState",
+                  "type": {
+                    "$ref": "runtime-state"
+                  }
+                },
+                {
+                  "op": "field",
+                  "name": "securityIdentity",
+                  "type": {
+                    "$ref": "text8"
+                  }
+                },
+                {
+                  "op": "field",
+                  "name": "normalizedEffectiveMaxMessageBytes",
+                  "type": {
+                    "$ref": "nonzero-u32"
+                  }
+                },
+                {
+                  "op": "field",
+                  "name": "advertisedEndpoint",
+                  "type": {
+                    "$ref": "endpoint"
+                  }
+                }
+              ]
+            }
+          },
+          "otherwise": {
+            "kind": "protocol-error"
+          }
+        }
+      ]
     },
     {
       "name": "service-admission",
@@ -3838,7 +9539,60 @@ const definitions: JsonObject = {
         "kind": "protocol-error"
       },
       "maximumEncodedBytes": 1048576,
-      "trailingBytes": "forbidden"
+      "trailingBytes": "forbidden",
+      "operations": [
+        {
+          "op": "conditional-union",
+          "discriminators": [
+            {
+              "op": "discriminator",
+              "name": "topologyKind",
+              "source": {
+                "kind": "wire"
+              },
+              "type": {
+                "$ref": "service-topology-kind"
+              }
+            }
+          ],
+          "bodyLengthType": {
+            "$ref": "u32"
+          },
+          "bodyLengthCovers": "selected-case",
+          "reader": {
+            "op": "bounded-reader",
+            "boundary": "selected-case",
+            "trailingBytes": "forbidden"
+          },
+          "cases": {
+            "{\"topologyKind\":\"routeMesh\"}": {
+              "fields": [
+                {
+                  "op": "field",
+                  "name": "routeMesh",
+                  "type": {
+                    "$ref": "route-mesh-admission"
+                  }
+                }
+              ]
+            },
+            "{\"topologyKind\":\"clientServer\"}": {
+              "fields": [
+                {
+                  "op": "field",
+                  "name": "clientServer",
+                  "type": {
+                    "$ref": "client-server-admission"
+                  }
+                }
+              ]
+            }
+          },
+          "otherwise": {
+            "kind": "protocol-error"
+          }
+        }
+      ]
     },
     {
       "name": "instance-reply-route",
@@ -3871,7 +9625,47 @@ const definitions: JsonObject = {
       },
       "trailingBytes": "forbidden",
       "bodyLengthType": null,
-      "bodyLengthCovers": null
+      "bodyLengthCovers": null,
+      "operations": [
+        {
+          "op": "conditional-union",
+          "discriminators": [
+            {
+              "op": "discriminator",
+              "name": "operationKind",
+              "source": {
+                "kind": "enclosingField",
+                "name": "operationKind"
+              },
+              "type": {
+                "$ref": "instance-operation-kind"
+              }
+            }
+          ],
+          "bodyLengthType": null,
+          "bodyLengthCovers": null,
+          "reader": null,
+          "cases": {
+            "{\"operationKind\":\"send\"}": {
+              "fields": []
+            },
+            "{\"operationKind\":\"request\"}": {
+              "fields": [
+                {
+                  "op": "field",
+                  "name": "replyRouteId",
+                  "type": {
+                    "$ref": "nonzero-u64"
+                  }
+                }
+              ]
+            }
+          },
+          "otherwise": {
+            "kind": "protocol-error"
+          }
+        }
+      ]
     },
     {
       "name": "cold-activation-reply-context",
@@ -3910,7 +9704,60 @@ const definitions: JsonObject = {
       "otherwise": {
         "kind": "protocol-error"
       },
-      "trailingBytes": "forbidden"
+      "trailingBytes": "forbidden",
+      "operations": [
+        {
+          "op": "conditional-union",
+          "discriminators": [
+            {
+              "op": "discriminator",
+              "name": "completionKind",
+              "source": {
+                "kind": "wire"
+              },
+              "type": {
+                "$ref": "cold-activation-completion-kind"
+              }
+            }
+          ],
+          "bodyLengthType": {
+            "$ref": "u16"
+          },
+          "bodyLengthCovers": "selected-case",
+          "reader": {
+            "op": "bounded-reader",
+            "boundary": "selected-case",
+            "trailingBytes": "forbidden"
+          },
+          "cases": {
+            "{\"completionKind\":\"readyBarrier\"}": {
+              "fields": [
+                {
+                  "op": "field",
+                  "name": "authority",
+                  "type": {
+                    "$ref": "authority-generation-fence"
+                  }
+                }
+              ]
+            },
+            "{\"completionKind\":\"activationFailure\"}": {
+              "fields": [
+                {
+                  "op": "field",
+                  "name": "authority",
+                  "type": {
+                    "$ref": "authority-generation-fence"
+                  }
+                }
+              ]
+            }
+          },
+          "otherwise": {
+            "kind": "protocol-error"
+          }
+        }
+      ]
     },
     {
       "name": "reply-relay-context",
@@ -3965,7 +9812,88 @@ const definitions: JsonObject = {
       "otherwise": {
         "kind": "protocol-error"
       },
-      "trailingBytes": "forbidden"
+      "trailingBytes": "forbidden",
+      "operations": [
+        {
+          "op": "conditional-union",
+          "discriminators": [
+            {
+              "op": "discriminator",
+              "name": "contextKind",
+              "source": {
+                "kind": "wire"
+              },
+              "type": {
+                "$ref": "reply-relay-context-kind"
+              }
+            }
+          ],
+          "bodyLengthType": {
+            "$ref": "u16"
+          },
+          "bodyLengthCovers": "selected-case",
+          "reader": {
+            "op": "bounded-reader",
+            "boundary": "selected-case",
+            "trailingBytes": "forbidden"
+          },
+          "cases": {
+            "{\"contextKind\":\"coldActivation\"}": {
+              "fields": [
+                {
+                  "op": "field",
+                  "name": "coldActivation",
+                  "type": {
+                    "$ref": "cold-activation-reply-context"
+                  }
+                }
+              ]
+            },
+            "{\"contextKind\":\"maintenanceRelocation\"}": {
+              "fields": [
+                {
+                  "op": "field",
+                  "name": "relocation",
+                  "type": {
+                    "$ref": "relocation-id"
+                  }
+                },
+                {
+                  "op": "field",
+                  "name": "targetAttemptGeneration",
+                  "type": {
+                    "$ref": "nonzero-u64"
+                  }
+                },
+                {
+                  "op": "field",
+                  "name": "coordinator",
+                  "type": {
+                    "$ref": "relocation-coordinator-fence"
+                  }
+                },
+                {
+                  "op": "field",
+                  "name": "participantId",
+                  "type": {
+                    "$ref": "nonzero-u64"
+                  }
+                },
+                {
+                  "op": "field",
+                  "name": "sequence",
+                  "type": {
+                    "$ref": "nonzero-u64"
+                  }
+                }
+              ]
+            }
+          },
+          "otherwise": {
+            "kind": "protocol-error"
+          }
+        }
+      ]
     },
     {
       "name": "send-ready-destination",
@@ -4032,7 +9960,100 @@ const definitions: JsonObject = {
       "otherwise": {
         "kind": "protocol-error"
       },
-      "trailingBytes": "forbidden"
+      "trailingBytes": "forbidden",
+      "operations": [
+        {
+          "op": "conditional-union",
+          "discriminators": [
+            {
+              "op": "discriminator",
+              "name": "destinationKind",
+              "source": {
+                "kind": "wire"
+              },
+              "type": {
+                "$ref": "mesh-destination-kind"
+              }
+            }
+          ],
+          "bodyLengthType": {
+            "$ref": "u16"
+          },
+          "bodyLengthCovers": "selected-case",
+          "reader": {
+            "op": "bounded-reader",
+            "boundary": "selected-case",
+            "trailingBytes": "forbidden"
+          },
+          "cases": {
+            "{\"destinationKind\":\"node\"}": {
+              "fields": [
+                {
+                  "op": "field",
+                  "name": "targetNodeRid",
+                  "type": {
+                    "$ref": "rid"
+                  }
+                }
+              ]
+            },
+            "{\"destinationKind\":\"channel\"}": {
+              "fields": [
+                {
+                  "op": "field",
+                  "name": "channelName",
+                  "type": {
+                    "$ref": "text8"
+                  }
+                }
+              ]
+            },
+            "{\"destinationKind\":\"spot\"}": {
+              "fields": [
+                {
+                  "op": "field",
+                  "name": "targetSpot",
+                  "type": {
+                    "$ref": "spot-route-fence"
+                  }
+                }
+              ]
+            },
+            "{\"destinationKind\":\"actor\"}": {
+              "fields": [
+                {
+                  "op": "field",
+                  "name": "targetActor",
+                  "type": {
+                    "$ref": "actor-route-fence"
+                  }
+                }
+              ]
+            },
+            "{\"destinationKind\":\"boundSession\"}": {
+              "fields": [
+                {
+                  "op": "field",
+                  "name": "targetActor",
+                  "type": {
+                    "$ref": "actor-route-fence"
+                  }
+                },
+                {
+                  "op": "field",
+                  "name": "bindingGeneration",
+                  "type": {
+                    "$ref": "nonzero-u64"
+                  }
+                }
+              ]
+            }
+          },
+          "otherwise": {
+            "kind": "protocol-error"
+          }
+        }
+      ]
     },
     {
       "name": "actor-membership-snapshot",
@@ -4045,6 +10066,30 @@ const definitions: JsonObject = {
         {
           "name": "membership",
           "$ref": "spot-membership"
+        }
+      ],
+      "operations": [
+        {
+          "op": "struct",
+          "order": "sequential",
+          "fields": [
+            {
+              "op": "field",
+              "name": "actor",
+              "type": {
+                "$ref": "actor-ref"
+              }
+            },
+            {
+              "op": "field",
+              "name": "membership",
+              "type": {
+                "$ref": "spot-membership"
+              }
+            }
+          ],
+          "constraints": [],
+          "trailingBytes": "allowed"
         }
       ]
     },
@@ -4080,7 +10125,52 @@ const definitions: JsonObject = {
       "otherwise": {
         "kind": "protocol-error"
       },
-      "trailingBytes": "forbidden"
+      "trailingBytes": "forbidden",
+      "operations": [
+        {
+          "op": "conditional-union",
+          "discriminators": [
+            {
+              "op": "discriminator",
+              "name": "hasSnapshot",
+              "source": {
+                "kind": "wire"
+              },
+              "type": {
+                "$ref": "bool8"
+              }
+            }
+          ],
+          "bodyLengthType": {
+            "$ref": "u16"
+          },
+          "bodyLengthCovers": "selected-case",
+          "reader": {
+            "op": "bounded-reader",
+            "boundary": "selected-case",
+            "trailingBytes": "forbidden"
+          },
+          "cases": {
+            "{\"hasSnapshot\":\"false\"}": {
+              "fields": []
+            },
+            "{\"hasSnapshot\":\"true\"}": {
+              "fields": [
+                {
+                  "op": "field",
+                  "name": "snapshot",
+                  "type": {
+                    "$ref": "actor-membership-snapshot"
+                  }
+                }
+              ]
+            }
+          },
+          "otherwise": {
+            "kind": "protocol-error"
+          }
+        }
+      ]
     },
     {
       "name": "actor-control-data",
@@ -4151,7 +10241,107 @@ const definitions: JsonObject = {
       "otherwise": {
         "kind": "protocol-error"
       },
-      "trailingBytes": "forbidden"
+      "trailingBytes": "forbidden",
+      "operations": [
+        {
+          "op": "conditional-union",
+          "discriminators": [
+            {
+              "op": "discriminator",
+              "name": "lifecycleKind",
+              "source": {
+                "kind": "wire"
+              },
+              "type": {
+                "$ref": "actor-lifecycle-kind"
+              }
+            }
+          ],
+          "bodyLengthType": {
+            "$ref": "u16"
+          },
+          "bodyLengthCovers": "selected-case",
+          "reader": {
+            "op": "bounded-reader",
+            "boundary": "selected-case",
+            "trailingBytes": "forbidden"
+          },
+          "cases": {
+            "{\"lifecycleKind\":\"created\"}": {
+              "fields": [
+                {
+                  "op": "field",
+                  "name": "current",
+                  "type": {
+                    "$ref": "actor-membership-snapshot"
+                  }
+                }
+              ]
+            },
+            "{\"lifecycleKind\":\"joined\"}": {
+              "fields": [
+                {
+                  "op": "field",
+                  "name": "previous",
+                  "type": {
+                    "$ref": "optional-actor-membership-snapshot"
+                  }
+                },
+                {
+                  "op": "field",
+                  "name": "current",
+                  "type": {
+                    "$ref": "actor-membership-snapshot"
+                  }
+                }
+              ]
+            },
+            "{\"lifecycleKind\":\"left\"}": {
+              "fields": [
+                {
+                  "op": "field",
+                  "name": "previous",
+                  "type": {
+                    "$ref": "actor-membership-snapshot"
+                  }
+                },
+                {
+                  "op": "field",
+                  "name": "current",
+                  "type": {
+                    "$ref": "actor-membership-snapshot"
+                  }
+                }
+              ]
+            },
+            "{\"lifecycleKind\":\"disconnected\"}": {
+              "fields": [
+                {
+                  "op": "field",
+                  "name": "current",
+                  "type": {
+                    "$ref": "actor-membership-snapshot"
+                  }
+                }
+              ]
+            },
+            "{\"lifecycleKind\":\"destroyed\"}": {
+              "fields": [
+                {
+                  "op": "field",
+                  "name": "previous",
+                  "type": {
+                    "$ref": "actor-membership-snapshot"
+                  }
+                }
+              ]
+            }
+          },
+          "otherwise": {
+            "kind": "protocol-error"
+          }
+        }
+      ]
     },
     {
       "name": "relocation-control-data",
@@ -4182,7 +10372,72 @@ const definitions: JsonObject = {
           "$ref": "framework-error-code"
         }
       ],
-      "trailingBytes": "forbidden"
+      "trailingBytes": "forbidden",
+      "operations": [
+        {
+          "op": "struct",
+          "order": "sequential",
+          "fields": [
+            {
+              "op": "field",
+              "name": "phase",
+              "type": {
+                "$ref": "relocation-phase"
+              }
+            },
+            {
+              "op": "field",
+              "name": "role",
+              "type": {
+                "$ref": "relocation-role"
+              }
+            },
+            {
+              "op": "field",
+              "name": "relocation",
+              "type": {
+                "$ref": "relocation-id"
+              }
+            },
+            {
+              "op": "field",
+              "name": "object",
+              "type": {
+                "$ref": "relocation-object-identity"
+              }
+            },
+            {
+              "op": "field",
+              "name": "terminalResult",
+              "type": {
+                "$ref": "request-terminal-result"
+              }
+            },
+            {
+              "op": "field",
+              "name": "failureCode",
+              "type": {
+                "$ref": "framework-error-code"
+              }
+            }
+          ],
+          "constraints": [],
+          "trailingBytes": "forbidden"
+        },
+        {
+          "op": "runtime-predicate",
+          "reference": {
+            "asset": "service-wire-constants",
+            "name": "valid-terminal-failure"
+          },
+          "targets": [
+            {
+              "kind": "fieldPath",
+              "path": "relocation-control-data.failureCode"
+            }
+          ]
+        }
+      ]
     },
     {
       "name": "request-specific-tail",
@@ -4285,7 +10540,153 @@ const definitions: JsonObject = {
       },
       "trailingBytes": "forbidden",
       "bodyLengthType": null,
-      "bodyLengthCovers": null
+      "bodyLengthCovers": null,
+      "operations": [
+        {
+          "op": "conditional-union",
+          "discriminators": [
+            {
+              "op": "discriminator",
+              "name": "originalOperationKind",
+              "source": {
+                "kind": "context",
+                "name": "originalOperationKind"
+              },
+              "type": {
+                "$ref": "mesh-operation-kind"
+              }
+            },
+            {
+              "op": "discriminator",
+              "name": "terminalResult",
+              "source": {
+                "kind": "enclosingField",
+                "name": "terminalResult"
+              },
+              "type": {
+                "$ref": "request-terminal-result"
+              }
+            }
+          ],
+          "bodyLengthType": null,
+          "bodyLengthCovers": null,
+          "reader": null,
+          "cases": {
+            "{\"originalOperationKind\":\"actorLookup\",\"terminalResult\":\"ok\"}": {
+              "fields": [
+                {
+                  "op": "field",
+                  "name": "actor",
+                  "type": {
+                    "$ref": "actor-ref"
+                  }
+                },
+                {
+                  "op": "field",
+                  "name": "spotId",
+                  "type": {
+                    "$ref": "text8"
+                  }
+                },
+                {
+                  "op": "field",
+                  "name": "spotGeneration",
+                  "type": {
+                    "$ref": "nonzero-u64"
+                  }
+                },
+                {
+                  "op": "field",
+                  "name": "membershipEpoch",
+                  "type": {
+                    "$ref": "nonzero-u64"
+                  }
+                },
+                {
+                  "op": "field",
+                  "name": "authorityOwnerGeneration",
+                  "type": {
+                    "$ref": "nonzero-u64"
+                  }
+                }
+              ]
+            },
+            "{\"originalOperationKind\":\"actorJoin\",\"terminalResult\":\"ok\"}": {
+              "fields": [
+                {
+                  "op": "field",
+                  "name": "join",
+                  "type": {
+                    "$ref": "actor-join-reply-tail"
+                  }
+                }
+              ]
+            },
+            "{\"originalOperationKind\":\"streamBind\",\"terminalResult\":\"ok\"}": {
+              "fields": [
+                {
+                  "op": "field",
+                  "name": "bindingGeneration",
+                  "type": {
+                    "$ref": "nonzero-u64"
+                  }
+                },
+                {
+                  "op": "field",
+                  "name": "authorityOwnerGeneration",
+                  "type": {
+                    "$ref": "nonzero-u64"
+                  }
+                }
+              ]
+            },
+            "{\"originalOperationKind\":\"userSpotCreate\",\"terminalResult\":\"ok\"}": {
+              "fields": [
+                {
+                  "op": "field",
+                  "name": "createResult",
+                  "type": {
+                    "$ref": "user-spot-create-result"
+                  }
+                },
+                {
+                  "op": "field",
+                  "name": "spot",
+                  "type": {
+                    "$ref": "spot-ref"
+                  }
+                }
+              ]
+            },
+            "{\"originalOperationKind\":\"userSpotClose\",\"terminalResult\":\"ok\"}": {
+              "fields": [
+                {
+                  "op": "field",
+                  "name": "closed",
+                  "type": {
+                    "$ref": "bool8"
+                  }
+                }
+              ]
+            },
+            "{\"originalOperationKind\":\"actorCreate\",\"terminalResult\":\"ok\"}": {
+              "fields": [
+                {
+                  "op": "field",
+                  "name": "creation",
+                  "type": {
+                    "$ref": "actor-create-terminal"
+                  }
+                }
+              ]
+            }
+          },
+          "otherwise": {
+            "kind": "fields",
+            "fields": []
+          }
+        }
+      ]
     },
     {
       "name": "frozen-record-body",
@@ -4492,7 +10893,315 @@ const definitions: JsonObject = {
       },
       "trailingBytes": "forbidden",
       "bodyLengthType": null,
-      "bodyLengthCovers": null
+      "bodyLengthCovers": null,
+      "operations": [
+        {
+          "op": "conditional-union",
+          "discriminators": [
+            {
+              "op": "discriminator",
+              "name": "recordKind",
+              "source": {
+                "kind": "enclosingField",
+                "name": "recordKind"
+              },
+              "type": {
+                "$ref": "mesh-record-kind"
+              }
+            }
+          ],
+          "bodyLengthType": null,
+          "bodyLengthCovers": null,
+          "reader": null,
+          "cases": {
+            "{\"recordKind\":\"nodeSend\"}": {
+              "fields": [
+                {
+                  "op": "field",
+                  "name": "payload",
+                  "type": {
+                    "$ref": "application-payload-envelope-v1"
+                  }
+                }
+              ]
+            },
+            "{\"recordKind\":\"nodeRequest\"}": {
+              "fields": [
+                {
+                  "op": "field",
+                  "name": "payload",
+                  "type": {
+                    "$ref": "application-payload-envelope-v1"
+                  }
+                }
+              ]
+            },
+            "{\"recordKind\":\"channelSend\"}": {
+              "fields": [
+                {
+                  "op": "field",
+                  "name": "channelName",
+                  "type": {
+                    "$ref": "text8"
+                  }
+                },
+                {
+                  "op": "field",
+                  "name": "payload",
+                  "type": {
+                    "$ref": "application-payload-envelope-v1"
+                  }
+                }
+              ]
+            },
+            "{\"recordKind\":\"channelRequest\"}": {
+              "fields": [
+                {
+                  "op": "field",
+                  "name": "channelName",
+                  "type": {
+                    "$ref": "text8"
+                  }
+                },
+                {
+                  "op": "field",
+                  "name": "payload",
+                  "type": {
+                    "$ref": "application-payload-envelope-v1"
+                  }
+                }
+              ]
+            },
+            "{\"recordKind\":\"spotSend\"}": {
+              "fields": [
+                {
+                  "op": "field",
+                  "name": "targetSpot",
+                  "type": {
+                    "$ref": "spot-route-fence"
+                  }
+                },
+                {
+                  "op": "field",
+                  "name": "payload",
+                  "type": {
+                    "$ref": "application-payload-envelope-v1"
+                  }
+                }
+              ]
+            },
+            "{\"recordKind\":\"spotRequest\"}": {
+              "fields": [
+                {
+                  "op": "field",
+                  "name": "targetSpot",
+                  "type": {
+                    "$ref": "spot-route-fence"
+                  }
+                },
+                {
+                  "op": "field",
+                  "name": "payload",
+                  "type": {
+                    "$ref": "application-payload-envelope-v1"
+                  }
+                }
+              ]
+            },
+            "{\"recordKind\":\"spotMulticast\"}": {
+              "fields": [
+                {
+                  "op": "field",
+                  "name": "channelName",
+                  "type": {
+                    "$ref": "text8"
+                  }
+                },
+                {
+                  "op": "field",
+                  "name": "topic",
+                  "type": {
+                    "$ref": "text8"
+                  }
+                },
+                {
+                  "op": "field",
+                  "name": "payload",
+                  "type": {
+                    "$ref": "application-payload-envelope-v1"
+                  }
+                }
+              ]
+            },
+            "{\"recordKind\":\"spotControl\"}": {
+              "fields": [
+                {
+                  "op": "field",
+                  "name": "control",
+                  "type": {
+                    "$ref": "actor-control-data"
+                  }
+                }
+              ]
+            },
+            "{\"recordKind\":\"actorSend\"}": {
+              "fields": [
+                {
+                  "op": "field",
+                  "name": "targetActor",
+                  "type": {
+                    "$ref": "actor-route-fence"
+                  }
+                },
+                {
+                  "op": "field",
+                  "name": "payload",
+                  "type": {
+                    "$ref": "application-payload-envelope-v1"
+                  }
+                }
+              ]
+            },
+            "{\"recordKind\":\"actorRequest\"}": {
+              "fields": [
+                {
+                  "op": "field",
+                  "name": "targetActor",
+                  "type": {
+                    "$ref": "actor-route-fence"
+                  }
+                },
+                {
+                  "op": "field",
+                  "name": "payload",
+                  "type": {
+                    "$ref": "application-payload-envelope-v1"
+                  }
+                }
+              ]
+            },
+            "{\"recordKind\":\"completion\"}": {
+              "fields": [
+                {
+                  "op": "field",
+                  "name": "terminalResult",
+                  "type": {
+                    "$ref": "request-terminal-result"
+                  }
+                },
+                {
+                  "op": "field",
+                  "name": "failureCode",
+                  "type": {
+                    "$ref": "framework-error-code"
+                  }
+                },
+                {
+                  "op": "field",
+                  "name": "hasPayload",
+                  "type": {
+                    "$ref": "bool8"
+                  }
+                },
+                {
+                  "op": "field",
+                  "name": "payload",
+                  "type": {
+                    "$ref": "application-payload-envelope-v1"
+                  },
+                  "otherwise": "forbidden",
+                  "when": {
+                    "all": [
+                      {
+                        "kind": "fieldEquals",
+                        "operand": {
+                          "kind": "field",
+                          "name": "hasPayload"
+                        },
+                        "value": "true"
+                      }
+                    ]
+                  },
+                  "whenFalse": {
+                    "encoder": "reject-present-value",
+                    "decoder": "consume-no-bytes"
+                  }
+                }
+              ]
+            },
+            "{\"recordKind\":\"sendReady\"}": {
+              "fields": [
+                {
+                  "op": "field",
+                  "name": "destination",
+                  "type": {
+                    "$ref": "send-ready-destination"
+                  }
+                }
+              ]
+            },
+            "{\"recordKind\":\"relocationControl\"}": {
+              "fields": [
+                {
+                  "op": "field",
+                  "name": "control",
+                  "type": {
+                    "$ref": "relocation-control-data"
+                  }
+                }
+              ]
+            },
+            "{\"recordKind\":\"instanceSpotActivation\"}": {
+              "fields": [
+                {
+                  "op": "field",
+                  "name": "route",
+                  "type": {
+                    "$ref": "instance-route-v1"
+                  }
+                },
+                {
+                  "op": "field",
+                  "name": "sourceNodeGeneration",
+                  "type": {
+                    "$ref": "nonzero-u64"
+                  }
+                },
+                {
+                  "op": "field",
+                  "name": "operationKind",
+                  "type": {
+                    "$ref": "instance-operation-kind"
+                  }
+                },
+                {
+                  "op": "field",
+                  "name": "payload",
+                  "type": {
+                    "$ref": "application-payload-envelope-v1"
+                  }
+                }
+              ]
+            }
+          },
+          "otherwise": {
+            "kind": "protocol-error"
+          }
+        },
+        {
+          "op": "runtime-predicate",
+          "reference": {
+            "asset": "service-wire-constants",
+            "name": "valid-terminal-failure"
+          },
+          "targets": [
+            {
+              "kind": "fieldPath",
+              "path": "frozen-record-body.completion.failureCode"
+            }
+          ]
+        }
+      ]
     },
     {
       "name": "frozen-source-identity",
@@ -4619,7 +11328,208 @@ const definitions: JsonObject = {
       "otherwise": {
         "kind": "protocol-error"
       },
-      "trailingBytes": "forbidden"
+      "trailingBytes": "forbidden",
+      "operations": [
+        {
+          "op": "conditional-union",
+          "discriminators": [
+            {
+              "op": "discriminator",
+              "name": "sourceKind",
+              "source": {
+                "kind": "wire"
+              },
+              "type": {
+                "$ref": "frozen-source-kind"
+              }
+            }
+          ],
+          "bodyLengthType": {
+            "$ref": "u16"
+          },
+          "bodyLengthCovers": "selected-case",
+          "reader": {
+            "op": "bounded-reader",
+            "boundary": "selected-case",
+            "trailingBytes": "forbidden"
+          },
+          "cases": {
+            "{\"sourceKind\":\"node\"}": {
+              "fields": [
+                {
+                  "op": "field",
+                  "name": "sourceNodeRid",
+                  "type": {
+                    "$ref": "rid"
+                  }
+                },
+                {
+                  "op": "field",
+                  "name": "sourceNodeGeneration",
+                  "type": {
+                    "$ref": "nonzero-u64"
+                  }
+                },
+                {
+                  "op": "field",
+                  "name": "sourceOwnerId",
+                  "type": {
+                    "$ref": "text8"
+                  }
+                },
+                {
+                  "op": "field",
+                  "name": "sourceOwnerLeaseGeneration",
+                  "type": {
+                    "$ref": "nonzero-u64"
+                  }
+                }
+              ]
+            },
+            "{\"sourceKind\":\"spot\"}": {
+              "fields": [
+                {
+                  "op": "field",
+                  "name": "sourceNodeRid",
+                  "type": {
+                    "$ref": "rid"
+                  }
+                },
+                {
+                  "op": "field",
+                  "name": "sourceNodeGeneration",
+                  "type": {
+                    "$ref": "nonzero-u64"
+                  }
+                },
+                {
+                  "op": "field",
+                  "name": "sourceOwnerId",
+                  "type": {
+                    "$ref": "text8"
+                  }
+                },
+                {
+                  "op": "field",
+                  "name": "sourceOwnerLeaseGeneration",
+                  "type": {
+                    "$ref": "nonzero-u64"
+                  }
+                },
+                {
+                  "op": "field",
+                  "name": "sourceSpotId",
+                  "type": {
+                    "$ref": "text8"
+                  }
+                }
+              ]
+            },
+            "{\"sourceKind\":\"actor\"}": {
+              "fields": [
+                {
+                  "op": "field",
+                  "name": "sourceNodeRid",
+                  "type": {
+                    "$ref": "rid"
+                  }
+                },
+                {
+                  "op": "field",
+                  "name": "sourceNodeGeneration",
+                  "type": {
+                    "$ref": "nonzero-u64"
+                  }
+                },
+                {
+                  "op": "field",
+                  "name": "sourceOwnerId",
+                  "type": {
+                    "$ref": "text8"
+                  }
+                },
+                {
+                  "op": "field",
+                  "name": "sourceOwnerLeaseGeneration",
+                  "type": {
+                    "$ref": "nonzero-u64"
+                  }
+                },
+                {
+                  "op": "field",
+                  "name": "sourceActor",
+                  "type": {
+                    "$ref": "actor-ref"
+                  }
+                }
+              ]
+            },
+            "{\"sourceKind\":\"boundSession\"}": {
+              "fields": [
+                {
+                  "op": "field",
+                  "name": "sourceNodeRid",
+                  "type": {
+                    "$ref": "rid"
+                  }
+                },
+                {
+                  "op": "field",
+                  "name": "sourceNodeGeneration",
+                  "type": {
+                    "$ref": "nonzero-u64"
+                  }
+                },
+                {
+                  "op": "field",
+                  "name": "sourceOwnerId",
+                  "type": {
+                    "$ref": "text8"
+                  }
+                },
+                {
+                  "op": "field",
+                  "name": "sourceOwnerLeaseGeneration",
+                  "type": {
+                    "$ref": "nonzero-u64"
+                  }
+                },
+                {
+                  "op": "field",
+                  "name": "sourceActor",
+                  "type": {
+                    "$ref": "actor-ref"
+                  }
+                },
+                {
+                  "op": "field",
+                  "name": "sourceSessionRid",
+                  "type": {
+                    "$ref": "rid"
+                  }
+                },
+                {
+                  "op": "field",
+                  "name": "sourceBindingGeneration",
+                  "type": {
+                    "$ref": "nonzero-u64"
+                  }
+                },
+                {
+                  "op": "field",
+                  "name": "sourceSessionSequence",
+                  "type": {
+                    "$ref": "nonzero-u64"
+                  }
+                }
+              ]
+            }
+          },
+          "otherwise": {
+            "kind": "protocol-error"
+          }
+        }
+      ]
     },
     {
       "name": "frozen-reply-route",
@@ -4684,7 +11594,95 @@ const definitions: JsonObject = {
         "kind": "fields",
         "fields": []
       },
-      "trailingBytes": "forbidden"
+      "trailingBytes": "forbidden",
+      "operations": [
+        {
+          "op": "conditional-union",
+          "discriminators": [
+            {
+              "op": "discriminator",
+              "name": "originalOperationKind",
+              "source": {
+                "kind": "enclosingField",
+                "name": "operationKind"
+              },
+              "type": {
+                "$ref": "mesh-operation-kind"
+              }
+            }
+          ],
+          "bodyLengthType": {
+            "$ref": "u16"
+          },
+          "bodyLengthCovers": "selected-case",
+          "reader": {
+            "op": "bounded-reader",
+            "boundary": "selected-case",
+            "trailingBytes": "forbidden"
+          },
+          "cases": {
+            "{\"originalOperationKind\":\"nodeRequest\"}": {
+              "fields": [
+                {
+                  "op": "field",
+                  "name": "replyRouteId",
+                  "type": {
+                    "$ref": "nonzero-u64"
+                  }
+                }
+              ]
+            },
+            "{\"originalOperationKind\":\"channelRequest\"}": {
+              "fields": [
+                {
+                  "op": "field",
+                  "name": "replyRouteId",
+                  "type": {
+                    "$ref": "nonzero-u64"
+                  }
+                }
+              ]
+            },
+            "{\"originalOperationKind\":\"spotRequest\"}": {
+              "fields": [
+                {
+                  "op": "field",
+                  "name": "replyRouteId",
+                  "type": {
+                    "$ref": "nonzero-u64"
+                  }
+                }
+              ]
+            },
+            "{\"originalOperationKind\":\"actorRequest\"}": {
+              "fields": [
+                {
+                  "op": "field",
+                  "name": "replyRouteId",
+                  "type": {
+                    "$ref": "nonzero-u64"
+                  }
+                }
+              ]
+            },
+            "{\"originalOperationKind\":\"instanceSpotRequest\"}": {
+              "fields": [
+                {
+                  "op": "field",
+                  "name": "replyRouteId",
+                  "type": {
+                    "$ref": "nonzero-u64"
+                  }
+                }
+              ]
+            }
+          },
+          "otherwise": {
+            "kind": "fields",
+            "fields": []
+          }
+        }
+      ]
     },
     {
       "name": "frozen-record",
@@ -4740,7 +11738,90 @@ const definitions: JsonObject = {
           "$ref": "frozen-record-body"
         }
       ],
-      "trailingBytes": "forbidden"
+      "trailingBytes": "forbidden",
+      "operations": [
+        {
+          "op": "struct",
+          "order": "sequential",
+          "fields": [
+            {
+              "op": "field",
+              "name": "recordKind",
+              "type": {
+                "$ref": "mesh-record-kind"
+              }
+            },
+            {
+              "op": "field",
+              "name": "source",
+              "type": {
+                "$ref": "frozen-source-identity"
+              }
+            },
+            {
+              "op": "field",
+              "name": "hasMetadata",
+              "type": {
+                "$ref": "bool8"
+              }
+            },
+            {
+              "op": "field",
+              "name": "metadata",
+              "type": {
+                "$ref": "metadata-frame"
+              },
+              "otherwise": "forbidden",
+              "when": {
+                "all": [
+                  {
+                    "kind": "fieldEquals",
+                    "operand": {
+                      "kind": "field",
+                      "name": "hasMetadata"
+                    },
+                    "value": "true"
+                  }
+                ]
+              },
+              "whenFalse": {
+                "encoder": "reject-present-value",
+                "decoder": "consume-no-bytes"
+              }
+            },
+            {
+              "op": "field",
+              "name": "operationId",
+              "type": {
+                "$ref": "operation-id-or-zero"
+              }
+            },
+            {
+              "op": "field",
+              "name": "operationKind",
+              "type": {
+                "$ref": "mesh-operation-kind"
+              }
+            },
+            {
+              "op": "field",
+              "name": "replyRoute",
+              "type": {
+                "$ref": "frozen-reply-route"
+              }
+            },
+            {
+              "op": "field",
+              "name": "body",
+              "type": {
+                "$ref": "frozen-record-body"
+              }
+            }
+          ],
+          "constraints": [],
+          "trailingBytes": "forbidden"
+        }
+      ]
     },
     {
       "name": "instance-route-v1",
@@ -4815,7 +11896,123 @@ const definitions: JsonObject = {
       "otherwise": {
         "kind": "protocol-error"
       },
-      "trailingBytes": "forbidden"
+      "trailingBytes": "forbidden",
+      "operations": [
+        {
+          "op": "conditional-union",
+          "discriminators": [
+            {
+              "op": "discriminator",
+              "name": "routeKind",
+              "source": {
+                "kind": "wire"
+              },
+              "type": {
+                "$ref": "instance-route-kind"
+              }
+            }
+          ],
+          "bodyLengthType": {
+            "$ref": "u16"
+          },
+          "bodyLengthCovers": "selected-case",
+          "reader": {
+            "op": "bounded-reader",
+            "boundary": "selected-case",
+            "trailingBytes": "forbidden"
+          },
+          "cases": {
+            "{\"routeKind\":\"ready\"}": {
+              "fields": [
+                {
+                  "op": "field",
+                  "name": "targetNodeRid",
+                  "type": {
+                    "$ref": "rid"
+                  }
+                },
+                {
+                  "op": "field",
+                  "name": "targetNodeGeneration",
+                  "type": {
+                    "$ref": "nonzero-u64"
+                  }
+                },
+                {
+                  "op": "field",
+                  "name": "targetSpotId",
+                  "type": {
+                    "$ref": "text8"
+                  }
+                },
+                {
+                  "op": "field",
+                  "name": "authority",
+                  "type": {
+                    "$ref": "authority-generation-fence"
+                  }
+                }
+              ]
+            },
+            "{\"routeKind\":\"coldActivation\"}": {
+              "fields": [
+                {
+                  "op": "field",
+                  "name": "targetNodeRid",
+                  "type": {
+                    "$ref": "rid"
+                  }
+                },
+                {
+                  "op": "field",
+                  "name": "targetNodeGeneration",
+                  "type": {
+                    "$ref": "nonzero-u64"
+                  }
+                },
+                {
+                  "op": "field",
+                  "name": "targetSpotId",
+                  "type": {
+                    "$ref": "text8"
+                  }
+                },
+                {
+                  "op": "field",
+                  "name": "targetMeshName",
+                  "type": {
+                    "$ref": "text8"
+                  }
+                },
+                {
+                  "op": "field",
+                  "name": "stableType",
+                  "type": {
+                    "$ref": "text8"
+                  }
+                },
+                {
+                  "op": "field",
+                  "name": "targetDescriptorVersion",
+                  "type": {
+                    "$ref": "text8"
+                  }
+                },
+                {
+                  "op": "field",
+                  "name": "deadlineUnixMs",
+                  "type": {
+                    "$ref": "nonzero-u64"
+                  }
+                }
+              ]
+            }
+          },
+          "otherwise": {
+            "kind": "protocol-error"
+          }
+        }
+      ]
     },
     {
       "name": "relocation-root-pointer",
@@ -4853,7 +12050,59 @@ const definitions: JsonObject = {
       "otherwise": {
         "kind": "protocol-error"
       },
-      "trailingBytes": "forbidden"
+      "trailingBytes": "forbidden",
+      "operations": [
+        {
+          "op": "conditional-union",
+          "discriminators": [
+            {
+              "op": "discriminator",
+              "name": "hasRelocation",
+              "source": {
+                "kind": "wire"
+              },
+              "type": {
+                "$ref": "bool8"
+              }
+            }
+          ],
+          "bodyLengthType": {
+            "$ref": "u16"
+          },
+          "bodyLengthCovers": "selected-case",
+          "reader": {
+            "op": "bounded-reader",
+            "boundary": "selected-case",
+            "trailingBytes": "forbidden"
+          },
+          "cases": {
+            "{\"hasRelocation\":\"false\"}": {
+              "fields": []
+            },
+            "{\"hasRelocation\":\"true\"}": {
+              "fields": [
+                {
+                  "op": "field",
+                  "name": "reference",
+                  "type": {
+                    "$ref": "relocation-reference"
+                  }
+                },
+                {
+                  "op": "field",
+                  "name": "checksumCrc32c",
+                  "type": {
+                    "$ref": "u32"
+                  }
+                }
+              ]
+            }
+          },
+          "otherwise": {
+            "kind": "protocol-error"
+          }
+        }
+      ]
     },
     {
       "name": "authority-relocation-state",
@@ -4969,7 +12218,193 @@ const definitions: JsonObject = {
         "kind": "protocol-error"
       },
       "maximumEncodedBytes": 1048576,
-      "trailingBytes": "forbidden"
+      "trailingBytes": "forbidden",
+      "operations": [
+        {
+          "op": "conditional-union",
+          "discriminators": [
+            {
+              "op": "discriminator",
+              "name": "hasRelocation",
+              "source": {
+                "kind": "wire"
+              },
+              "type": {
+                "$ref": "bool8"
+              }
+            }
+          ],
+          "bodyLengthType": {
+            "$ref": "u32"
+          },
+          "bodyLengthCovers": "selected-case",
+          "reader": {
+            "op": "bounded-reader",
+            "boundary": "selected-case",
+            "trailingBytes": "forbidden"
+          },
+          "cases": {
+            "{\"hasRelocation\":\"false\"}": {
+              "fields": []
+            },
+            "{\"hasRelocation\":\"true\"}": {
+              "fields": [
+                {
+                  "op": "field",
+                  "name": "relocation",
+                  "type": {
+                    "$ref": "relocation-id"
+                  }
+                },
+                {
+                  "op": "field",
+                  "name": "aggregateGeneration",
+                  "type": {
+                    "$ref": "ordinal-or-zero"
+                  },
+                  "maximum": "9223372036854775806"
+                },
+                {
+                  "op": "field",
+                  "name": "targetAttemptGeneration",
+                  "type": {
+                    "$ref": "ordinal-or-zero"
+                  }
+                },
+                {
+                  "op": "field",
+                  "name": "relocationReference",
+                  "type": {
+                    "$ref": "relocation-reference"
+                  }
+                },
+                {
+                  "op": "field",
+                  "name": "relocationChecksumCrc32c",
+                  "type": {
+                    "$ref": "u32"
+                  }
+                },
+                {
+                  "op": "field",
+                  "name": "sourceNodeRid",
+                  "type": {
+                    "$ref": "rid"
+                  }
+                },
+                {
+                  "op": "field",
+                  "name": "sourceNodeGeneration",
+                  "type": {
+                    "$ref": "nonzero-u64"
+                  }
+                },
+                {
+                  "op": "field",
+                  "name": "sourceOwnerId",
+                  "type": {
+                    "$ref": "text8"
+                  }
+                },
+                {
+                  "op": "field",
+                  "name": "sourceOwnerLeaseGeneration",
+                  "type": {
+                    "$ref": "nonzero-u64"
+                  }
+                },
+                {
+                  "op": "field",
+                  "name": "targetNodeRid",
+                  "type": {
+                    "$ref": "optional-rid"
+                  }
+                },
+                {
+                  "op": "field",
+                  "name": "targetNodeGeneration",
+                  "type": {
+                    "$ref": "ordinal-or-zero"
+                  }
+                },
+                {
+                  "op": "field",
+                  "name": "targetOwnerId",
+                  "type": {
+                    "$ref": "optional-text8"
+                  }
+                },
+                {
+                  "op": "field",
+                  "name": "targetOwnerLeaseGeneration",
+                  "type": {
+                    "$ref": "ordinal-or-zero"
+                  }
+                },
+                {
+                  "op": "field",
+                  "name": "coordinatorOwnerId",
+                  "type": {
+                    "$ref": "text8"
+                  }
+                },
+                {
+                  "op": "field",
+                  "name": "coordinatorLeaseGeneration",
+                  "type": {
+                    "$ref": "nonzero-u64"
+                  }
+                },
+                {
+                  "op": "field",
+                  "name": "coordinatorNodeRid",
+                  "type": {
+                    "$ref": "rid"
+                  }
+                },
+                {
+                  "op": "field",
+                  "name": "coordinatorNodeGeneration",
+                  "type": {
+                    "$ref": "nonzero-u64"
+                  }
+                },
+                {
+                  "op": "field",
+                  "name": "coordinatorExpectedStoreVersion",
+                  "type": {
+                    "$ref": "optional-text8"
+                  }
+                },
+                {
+                  "op": "field",
+                  "name": "phase",
+                  "type": {
+                    "$ref": "relocation-phase"
+                  }
+                },
+                {
+                  "op": "field",
+                  "name": "applicationVersion",
+                  "type": {
+                    "$ref": "application-version"
+                  }
+                },
+                {
+                  "op": "field",
+                  "name": "sourceCleanupState",
+                  "type": {
+                    "$ref": "source-cleanup-state"
+                  }
+                }
+              ]
+            }
+          },
+          "otherwise": {
+            "kind": "protocol-error"
+          }
+        }
+      ]
     },
     {
       "name": "authority-activation-recovery-state",
@@ -5017,7 +12452,73 @@ const definitions: JsonObject = {
       },
       "trailingBytes": "forbidden",
       "presence": "ready-instance-spot-cold-activation-only-and-forbidden-for-actor-entry-user-closing-relocating-or-coldActivating-authority",
-      "release": "expected-store-version-preserve-cas-only-after-durable-first-handler-terminal-before-relocation-store-delete"
+      "release": "expected-store-version-preserve-cas-only-after-durable-first-handler-terminal-before-relocation-store-delete",
+      "operations": [
+        {
+          "op": "conditional-union",
+          "discriminators": [
+            {
+              "op": "discriminator",
+              "name": "hasActivationRecovery",
+              "source": {
+                "kind": "wire"
+              },
+              "type": {
+                "$ref": "bool8"
+              }
+            }
+          ],
+          "bodyLengthType": {
+            "$ref": "u32"
+          },
+          "bodyLengthCovers": "selected-case",
+          "reader": {
+            "op": "bounded-reader",
+            "boundary": "selected-case",
+            "trailingBytes": "forbidden"
+          },
+          "cases": {
+            "{\"hasActivationRecovery\":\"false\"}": {
+              "fields": []
+            },
+            "{\"hasActivationRecovery\":\"true\"}": {
+              "fields": [
+                {
+                  "op": "field",
+                  "name": "reference",
+                  "type": {
+                    "$ref": "creation-content-reference"
+                  }
+                },
+                {
+                  "op": "field",
+                  "name": "sha256",
+                  "type": {
+                    "$ref": "sha256-bytes"
+                  }
+                },
+                {
+                  "op": "field",
+                  "name": "encodedSize",
+                  "type": {
+                    "$ref": "creation-request-size"
+                  }
+                },
+                {
+                  "op": "field",
+                  "name": "inboxSequence",
+                  "type": {
+                    "$ref": "nonzero-u64"
+                  }
+                }
+              ]
+            }
+          },
+          "otherwise": {
+            "kind": "protocol-error"
+          }
+        }
+      ]
     },
     {
       "name": "authority-payload-v1",
@@ -5060,7 +12561,80 @@ const definitions: JsonObject = {
           "$ref": "authority-activation-recovery-state"
         }
       ],
-      "trailingBytes": "forbidden"
+      "trailingBytes": "forbidden",
+      "operations": [
+        {
+          "op": "struct",
+          "order": "sequential",
+          "fields": [
+            {
+              "op": "field",
+              "name": "operationKind",
+              "type": {
+                "$ref": "authority-operation-kind"
+              }
+            },
+            {
+              "op": "field",
+              "name": "object",
+              "type": {
+                "$ref": "authority-object-identity"
+              }
+            },
+            {
+              "op": "field",
+              "name": "ownerId",
+              "type": {
+                "$ref": "text8"
+              }
+            },
+            {
+              "op": "field",
+              "name": "ownerLeaseGeneration",
+              "type": {
+                "$ref": "nonzero-u64"
+              }
+            },
+            {
+              "op": "field",
+              "name": "ownerMeshName",
+              "type": {
+                "$ref": "text8"
+              }
+            },
+            {
+              "op": "field",
+              "name": "ownerNodeRid",
+              "type": {
+                "$ref": "rid"
+              }
+            },
+            {
+              "op": "field",
+              "name": "ownerNodeGeneration",
+              "type": {
+                "$ref": "nonzero-u64"
+              }
+            },
+            {
+              "op": "field",
+              "name": "relocationState",
+              "type": {
+                "$ref": "authority-relocation-state"
+              }
+            },
+            {
+              "op": "field",
+              "name": "activationRecoveryState",
+              "type": {
+                "$ref": "authority-activation-recovery-state"
+              }
+            }
+          ],
+          "constraints": [],
+          "trailingBytes": "forbidden"
+        }
+      ]
     },
     {
       "name": "saved-work-entry",
@@ -5079,7 +12653,38 @@ const definitions: JsonObject = {
           "$ref": "frozen-record"
         }
       ],
-      "trailingBytes": "forbidden"
+      "trailingBytes": "forbidden",
+      "operations": [
+        {
+          "op": "struct",
+          "order": "sequential",
+          "fields": [
+            {
+              "op": "field",
+              "name": "participantId",
+              "type": {
+                "$ref": "nonzero-u64"
+              }
+            },
+            {
+              "op": "field",
+              "name": "order",
+              "type": {
+                "$ref": "nonzero-u64"
+              }
+            },
+            {
+              "op": "field",
+              "name": "record",
+              "type": {
+                "$ref": "frozen-record"
+              }
+            }
+          ],
+          "constraints": [],
+          "trailingBytes": "forbidden"
+        }
+      ]
     },
     {
       "name": "saved-work-vector",
@@ -5125,7 +12730,49 @@ const definitions: JsonObject = {
         "authorityKeyEncoding": "utf-8",
         "indexBase": 0,
         "participantIdFormula": "index-plus-one"
-      }
+      },
+      "operations": [
+        {
+          "op": "vector",
+          "countType": {
+            "$ref": "u32"
+          },
+          "item": {
+            "$ref": "saved-work-entry"
+          },
+          "constraints": [
+            {
+              "op": "constraint",
+              "kind": "sorted",
+              "fields": [
+                {
+                  "kind": "fieldPath",
+                  "path": "participantId"
+                },
+                {
+                  "kind": "fieldPath",
+                  "path": "order"
+                }
+              ],
+              "comparison": "unsigned-wire-value"
+            },
+            {
+              "op": "constraint",
+              "kind": "unique",
+              "fields": [
+                {
+                  "kind": "fieldPath",
+                  "path": "participantId"
+                },
+                {
+                  "kind": "fieldPath",
+                  "path": "order"
+                }
+              ]
+            }
+          ]
+        }
+      ]
     },
     {
       "name": "durable-blob",
@@ -5134,7 +12781,18 @@ const definitions: JsonObject = {
         "$ref": "u32"
       },
       "minimumBytes": 0,
-      "maximumBytes": 67108864
+      "maximumBytes": 67108864,
+      "operations": [
+        {
+          "op": "length-prefixed",
+          "lengthType": {
+            "$ref": "u32"
+          },
+          "content": "bytes",
+          "minimumBytes": 0,
+          "maximumBytes": 67108864
+        }
+      ]
     },
     {
       "name": "durable-state-blob",
@@ -5143,7 +12801,18 @@ const definitions: JsonObject = {
         "$ref": "u64"
       },
       "minimumBytes": 0,
-      "maximumBytes": 67108864
+      "maximumBytes": 67108864,
+      "operations": [
+        {
+          "op": "length-prefixed",
+          "lengthType": {
+            "$ref": "u64"
+          },
+          "content": "bytes",
+          "minimumBytes": 0,
+          "maximumBytes": 67108864
+        }
+      ]
     },
     {
       "name": "relocation-chunk-entry-v1",
@@ -5166,7 +12835,45 @@ const definitions: JsonObject = {
           "$ref": "u32"
         }
       ],
-      "trailingBytes": "forbidden"
+      "trailingBytes": "forbidden",
+      "operations": [
+        {
+          "op": "struct",
+          "order": "sequential",
+          "fields": [
+            {
+              "op": "field",
+              "name": "order",
+              "type": {
+                "$ref": "u32"
+              }
+            },
+            {
+              "op": "field",
+              "name": "reference",
+              "type": {
+                "$ref": "relocation-reference"
+              }
+            },
+            {
+              "op": "field",
+              "name": "length",
+              "type": {
+                "$ref": "nonzero-u64"
+              }
+            },
+            {
+              "op": "field",
+              "name": "checksumCrc32c",
+              "type": {
+                "$ref": "u32"
+              }
+            }
+          ],
+          "constraints": [],
+          "trailingBytes": "forbidden"
+        }
+      ]
     },
     {
       "name": "relocation-chunk-vector-v1",
@@ -5193,6 +12900,37 @@ const definitions: JsonObject = {
             "kind": "fieldPath",
             "path": "order"
           }
+        }
+      ],
+      "operations": [
+        {
+          "op": "vector",
+          "countType": {
+            "$ref": "u32"
+          },
+          "item": {
+            "$ref": "relocation-chunk-entry-v1"
+          },
+          "constraints": [
+            {
+              "op": "constraint",
+              "kind": "sorted",
+              "field": {
+                "kind": "fieldPath",
+                "path": "order"
+              },
+              "comparison": "unsigned-wire-value"
+            },
+            {
+              "op": "constraint",
+              "kind": "unique",
+              "field": {
+                "kind": "fieldPath",
+                "path": "order"
+              }
+            }
+          ],
+          "maximumItems": 4096
         }
       ]
     },
@@ -5222,7 +12960,53 @@ const definitions: JsonObject = {
           "$ref": "relocation-chunk-vector-v1"
         }
       ],
-      "trailingBytes": "forbidden"
+      "trailingBytes": "forbidden",
+      "operations": [
+        {
+          "op": "struct",
+          "order": "sequential",
+          "fields": [
+            {
+              "op": "field",
+              "name": "logicalFormatVersion",
+              "type": {
+                "$ref": "u8"
+              },
+              "constant": 1
+            },
+            {
+              "op": "field",
+              "name": "totalLength",
+              "type": {
+                "$ref": "relocation-logical-length"
+              }
+            },
+            {
+              "op": "field",
+              "name": "totalChecksumCrc32c",
+              "type": {
+                "$ref": "u32"
+              }
+            },
+            {
+              "op": "field",
+              "name": "inventoryDigestSha256",
+              "type": {
+                "$ref": "sha256-bytes"
+              }
+            },
+            {
+              "op": "field",
+              "name": "chunks",
+              "type": {
+                "$ref": "relocation-chunk-vector-v1"
+              }
+            }
+          ],
+          "constraints": [],
+          "trailingBytes": "forbidden"
+        }
+      ]
     },
     {
       "name": "relocation-data-chunk-v1",
@@ -5237,7 +13021,31 @@ const definitions: JsonObject = {
           "$ref": "durable-blob"
         }
       ],
-      "trailingBytes": "forbidden"
+      "trailingBytes": "forbidden",
+      "operations": [
+        {
+          "op": "struct",
+          "order": "sequential",
+          "fields": [
+            {
+              "op": "field",
+              "name": "order",
+              "type": {
+                "$ref": "u32"
+              }
+            },
+            {
+              "op": "field",
+              "name": "data",
+              "type": {
+                "$ref": "durable-blob"
+              }
+            }
+          ],
+          "constraints": [],
+          "trailingBytes": "forbidden"
+        }
+      ]
     },
     {
       "name": "relocation-application-state",
@@ -5272,7 +13080,52 @@ const definitions: JsonObject = {
         "kind": "protocol-error"
       },
       "maximumEncodedBytes": 274877906944,
-      "trailingBytes": "forbidden"
+      "trailingBytes": "forbidden",
+      "operations": [
+        {
+          "op": "conditional-union",
+          "discriminators": [
+            {
+              "op": "discriminator",
+              "name": "hasState",
+              "source": {
+                "kind": "wire"
+              },
+              "type": {
+                "$ref": "bool8"
+              }
+            }
+          ],
+          "bodyLengthType": {
+            "$ref": "u64"
+          },
+          "bodyLengthCovers": "selected-case",
+          "reader": {
+            "op": "bounded-reader",
+            "boundary": "selected-case",
+            "trailingBytes": "forbidden"
+          },
+          "cases": {
+            "{\"hasState\":\"false\"}": {
+              "fields": []
+            },
+            "{\"hasState\":\"true\"}": {
+              "fields": [
+                {
+                  "op": "field",
+                  "name": "payload",
+                  "type": {
+                    "$ref": "durable-state-blob"
+                  }
+                }
+              ]
+            }
+          },
+          "otherwise": {
+            "kind": "protocol-error"
+          }
+        }
+      ]
     },
     {
       "name": "relocation-participant-application-state",
@@ -5285,6 +13138,30 @@ const definitions: JsonObject = {
         {
           "name": "applicationState",
           "$ref": "relocation-application-state"
+        }
+      ],
+      "operations": [
+        {
+          "op": "struct",
+          "order": "sequential",
+          "fields": [
+            {
+              "op": "field",
+              "name": "participantId",
+              "type": {
+                "$ref": "nonzero-u64"
+              }
+            },
+            {
+              "op": "field",
+              "name": "applicationState",
+              "type": {
+                "$ref": "relocation-application-state"
+              }
+            }
+          ],
+          "constraints": [],
+          "trailingBytes": "allowed"
         }
       ]
     },
@@ -5321,7 +13198,38 @@ const definitions: JsonObject = {
         "authorityKeyEncoding": "utf-8",
         "indexBase": 0,
         "participantIdFormula": "index-plus-one"
-      }
+      },
+      "operations": [
+        {
+          "op": "vector",
+          "countType": {
+            "$ref": "u32"
+          },
+          "item": {
+            "$ref": "relocation-participant-application-state"
+          },
+          "constraints": [
+            {
+              "op": "constraint",
+              "kind": "sorted",
+              "field": {
+                "kind": "fieldPath",
+                "path": "participantId"
+              },
+              "comparison": "unsigned-wire-value"
+            },
+            {
+              "op": "constraint",
+              "kind": "unique",
+              "field": {
+                "kind": "fieldPath",
+                "path": "participantId"
+              }
+            }
+          ],
+          "maximumItems": 1024
+        }
+      ]
     },
     {
       "name": "relocation-timer-registration",
@@ -5366,6 +13274,86 @@ const definitions: JsonObject = {
         {
           "name": "nextScheduledAtUnixMilliseconds",
           "$ref": "u64"
+        }
+      ],
+      "operations": [
+        {
+          "op": "struct",
+          "order": "sequential",
+          "fields": [
+            {
+              "op": "field",
+              "name": "participantId",
+              "type": {
+                "$ref": "nonzero-u64"
+              }
+            },
+            {
+              "op": "field",
+              "name": "name",
+              "type": {
+                "$ref": "text8"
+              }
+            },
+            {
+              "op": "field",
+              "name": "handlerType",
+              "type": {
+                "$ref": "text8"
+              }
+            },
+            {
+              "op": "field",
+              "name": "periodMilliseconds",
+              "type": {
+                "$ref": "nonzero-u64"
+              }
+            },
+            {
+              "op": "field",
+              "name": "overrunPolicy",
+              "type": {
+                "$ref": "timer-overrun-policy-kind"
+              }
+            },
+            {
+              "op": "field",
+              "name": "maxCatchUpTicks",
+              "type": {
+                "$ref": "nonzero-u64"
+              }
+            },
+            {
+              "op": "field",
+              "name": "stopOnUnhandledException",
+              "type": {
+                "$ref": "bool8"
+              }
+            },
+            {
+              "op": "field",
+              "name": "lastCompletedDeliveryIndex",
+              "type": {
+                "$ref": "ordinal-or-zero"
+              }
+            },
+            {
+              "op": "field",
+              "name": "lastCompletedScheduledIndex",
+              "type": {
+                "$ref": "ordinal-or-zero"
+              }
+            },
+            {
+              "op": "field",
+              "name": "nextScheduledAtUnixMilliseconds",
+              "type": {
+                "$ref": "u64"
+              }
+            }
+          ],
+          "constraints": [],
+          "trailingBytes": "allowed"
         }
       ]
     },
@@ -5413,7 +13401,49 @@ const definitions: JsonObject = {
         "authorityKeyEncoding": "utf-8",
         "indexBase": 0,
         "participantIdFormula": "index-plus-one"
-      }
+      },
+      "operations": [
+        {
+          "op": "vector",
+          "countType": {
+            "$ref": "u32"
+          },
+          "item": {
+            "$ref": "relocation-timer-registration"
+          },
+          "constraints": [
+            {
+              "op": "constraint",
+              "kind": "sorted",
+              "fields": [
+                {
+                  "kind": "fieldPath",
+                  "path": "participantId"
+                },
+                {
+                  "kind": "fieldPath",
+                  "path": "name"
+                }
+              ],
+              "comparison": "wire-value-then-utf-8-bytes"
+            },
+            {
+              "op": "constraint",
+              "kind": "unique",
+              "fields": [
+                {
+                  "kind": "fieldPath",
+                  "path": "participantId"
+                },
+                {
+                  "kind": "fieldPath",
+                  "path": "name"
+                }
+              ]
+            }
+          ]
+        }
+      ]
     },
     {
       "name": "relocation-pending-timer-tick",
@@ -5446,6 +13476,65 @@ const definitions: JsonObject = {
         {
           "name": "skippedTicks",
           "$ref": "ordinal-or-zero"
+        }
+      ],
+      "operations": [
+        {
+          "op": "struct",
+          "order": "sequential",
+          "fields": [
+            {
+              "op": "field",
+              "name": "participantId",
+              "type": {
+                "$ref": "nonzero-u64"
+              }
+            },
+            {
+              "op": "field",
+              "name": "order",
+              "type": {
+                "$ref": "nonzero-u64"
+              }
+            },
+            {
+              "op": "field",
+              "name": "timerName",
+              "type": {
+                "$ref": "text8"
+              }
+            },
+            {
+              "op": "field",
+              "name": "deliveryIndex",
+              "type": {
+                "$ref": "nonzero-u64"
+              }
+            },
+            {
+              "op": "field",
+              "name": "scheduledIndex",
+              "type": {
+                "$ref": "nonzero-u64"
+              }
+            },
+            {
+              "op": "field",
+              "name": "scheduledAtUnixMilliseconds",
+              "type": {
+                "$ref": "u64"
+              }
+            },
+            {
+              "op": "field",
+              "name": "skippedTicks",
+              "type": {
+                "$ref": "ordinal-or-zero"
+              }
+            }
+          ],
+          "constraints": [],
+          "trailingBytes": "allowed"
         }
       ]
     },
@@ -5493,7 +13582,49 @@ const definitions: JsonObject = {
         "authorityKeyEncoding": "utf-8",
         "indexBase": 0,
         "participantIdFormula": "index-plus-one"
-      }
+      },
+      "operations": [
+        {
+          "op": "vector",
+          "countType": {
+            "$ref": "u32"
+          },
+          "item": {
+            "$ref": "relocation-pending-timer-tick"
+          },
+          "constraints": [
+            {
+              "op": "constraint",
+              "kind": "sorted",
+              "fields": [
+                {
+                  "kind": "fieldPath",
+                  "path": "participantId"
+                },
+                {
+                  "kind": "fieldPath",
+                  "path": "order"
+                }
+              ],
+              "comparison": "unsigned-wire-value"
+            },
+            {
+              "op": "constraint",
+              "kind": "unique",
+              "fields": [
+                {
+                  "kind": "fieldPath",
+                  "path": "participantId"
+                },
+                {
+                  "kind": "fieldPath",
+                  "path": "order"
+                }
+              ]
+            }
+          ]
+        }
+      ]
     },
     {
       "name": "relocation-envelope-v1",
@@ -5528,7 +13659,66 @@ const definitions: JsonObject = {
           "$ref": "relocation-pending-timer-tick-vector"
         }
       ],
-      "trailingBytes": "forbidden"
+      "trailingBytes": "forbidden",
+      "operations": [
+        {
+          "op": "struct",
+          "order": "sequential",
+          "fields": [
+            {
+              "op": "field",
+              "name": "relocation",
+              "type": {
+                "$ref": "relocation-id"
+              }
+            },
+            {
+              "op": "field",
+              "name": "object",
+              "type": {
+                "$ref": "relocation-object-identity"
+              }
+            },
+            {
+              "op": "field",
+              "name": "applicationVersion",
+              "type": {
+                "$ref": "application-version"
+              }
+            },
+            {
+              "op": "field",
+              "name": "applicationStates",
+              "type": {
+                "$ref": "relocation-participant-application-state-vector"
+              }
+            },
+            {
+              "op": "field",
+              "name": "savedWork",
+              "type": {
+                "$ref": "saved-work-vector"
+              }
+            },
+            {
+              "op": "field",
+              "name": "timerRegistrations",
+              "type": {
+                "$ref": "relocation-timer-registration-vector"
+              }
+            },
+            {
+              "op": "field",
+              "name": "pendingTimerTicks",
+              "type": {
+                "$ref": "relocation-pending-timer-tick-vector"
+              }
+            }
+          ],
+          "constraints": [],
+          "trailingBytes": "forbidden"
+        }
+      ]
     }
   ],
   "commands": [
@@ -5546,7 +13736,36 @@ const definitions: JsonObject = {
       ],
       "payload": {
         "policy": "forbidden"
-      }
+      },
+      "operations": [
+        {
+          "op": "command-header",
+          "magic": [
+            90,
+            77
+          ],
+          "wireMajor": 1,
+          "commandId": 1,
+          "byteOrder": "big-endian"
+        },
+        {
+          "op": "flags",
+          "allowed": [],
+          "required": [],
+          "unknown": "protocol-error"
+        },
+        {
+          "op": "field",
+          "name": "admission",
+          "type": {
+            "$ref": "service-admission"
+          }
+        },
+        {
+          "op": "payload",
+          "policy": "forbidden"
+        }
+      ]
     },
     {
       "id": 2,
@@ -5562,7 +13781,36 @@ const definitions: JsonObject = {
       ],
       "payload": {
         "policy": "forbidden"
-      }
+      },
+      "operations": [
+        {
+          "op": "command-header",
+          "magic": [
+            90,
+            77
+          ],
+          "wireMajor": 1,
+          "commandId": 2,
+          "byteOrder": "big-endian"
+        },
+        {
+          "op": "flags",
+          "allowed": [],
+          "required": [],
+          "unknown": "protocol-error"
+        },
+        {
+          "op": "field",
+          "name": "admission",
+          "type": {
+            "$ref": "service-admission"
+          }
+        },
+        {
+          "op": "payload",
+          "policy": "forbidden"
+        }
+      ]
     },
     {
       "id": 3,
@@ -5578,7 +13826,36 @@ const definitions: JsonObject = {
       ],
       "payload": {
         "policy": "forbidden"
-      }
+      },
+      "operations": [
+        {
+          "op": "command-header",
+          "magic": [
+            90,
+            77
+          ],
+          "wireMajor": 1,
+          "commandId": 3,
+          "byteOrder": "big-endian"
+        },
+        {
+          "op": "flags",
+          "allowed": [],
+          "required": [],
+          "unknown": "protocol-error"
+        },
+        {
+          "op": "field",
+          "name": "reason",
+          "type": {
+            "$ref": "reject-reason"
+          }
+        },
+        {
+          "op": "payload",
+          "policy": "forbidden"
+        }
+      ]
     },
     {
       "id": 4,
@@ -5594,7 +13871,36 @@ const definitions: JsonObject = {
       ],
       "payload": {
         "policy": "forbidden"
-      }
+      },
+      "operations": [
+        {
+          "op": "command-header",
+          "magic": [
+            90,
+            77
+          ],
+          "wireMajor": 1,
+          "commandId": 4,
+          "byteOrder": "big-endian"
+        },
+        {
+          "op": "flags",
+          "allowed": [],
+          "required": [],
+          "unknown": "protocol-error"
+        },
+        {
+          "op": "field",
+          "name": "admission",
+          "type": {
+            "$ref": "service-admission"
+          }
+        },
+        {
+          "op": "payload",
+          "policy": "forbidden"
+        }
+      ]
     },
     {
       "id": 5,
@@ -5610,7 +13916,36 @@ const definitions: JsonObject = {
       ],
       "payload": {
         "policy": "forbidden"
-      }
+      },
+      "operations": [
+        {
+          "op": "command-header",
+          "magic": [
+            90,
+            77
+          ],
+          "wireMajor": 1,
+          "commandId": 5,
+          "byteOrder": "big-endian"
+        },
+        {
+          "op": "flags",
+          "allowed": [],
+          "required": [],
+          "unknown": "protocol-error"
+        },
+        {
+          "op": "field",
+          "name": "probeId",
+          "type": {
+            "$ref": "nonzero-u64"
+          }
+        },
+        {
+          "op": "payload",
+          "policy": "forbidden"
+        }
+      ]
     },
     {
       "id": 6,
@@ -5626,7 +13961,36 @@ const definitions: JsonObject = {
       ],
       "payload": {
         "policy": "forbidden"
-      }
+      },
+      "operations": [
+        {
+          "op": "command-header",
+          "magic": [
+            90,
+            77
+          ],
+          "wireMajor": 1,
+          "commandId": 6,
+          "byteOrder": "big-endian"
+        },
+        {
+          "op": "flags",
+          "allowed": [],
+          "required": [],
+          "unknown": "protocol-error"
+        },
+        {
+          "op": "field",
+          "name": "probeId",
+          "type": {
+            "$ref": "nonzero-u64"
+          }
+        },
+        {
+          "op": "payload",
+          "policy": "forbidden"
+        }
+      ]
     },
     {
       "id": 16,
@@ -5645,7 +14009,49 @@ const definitions: JsonObject = {
         "type": {
           "$ref": "application-payload-envelope-v1"
         }
-      }
+      },
+      "operations": [
+        {
+          "op": "command-header",
+          "magic": [
+            90,
+            77
+          ],
+          "wireMajor": 1,
+          "commandId": 16,
+          "byteOrder": "big-endian"
+        },
+        {
+          "op": "flags",
+          "allowed": [
+            {
+              "kind": "flag",
+              "name": "metadata"
+            }
+          ],
+          "required": [],
+          "unknown": "protocol-error"
+        },
+        {
+          "op": "metadata-flag-frame",
+          "flag": {
+            "kind": "flag",
+            "name": "metadata"
+          },
+          "frame": {
+            "$ref": "metadata-frame"
+          },
+          "whenSet": "frame-required",
+          "whenClear": "frame-forbidden"
+        },
+        {
+          "op": "payload",
+          "policy": "required",
+          "type": {
+            "$ref": "application-payload-envelope-v1"
+          }
+        }
+      ]
     },
     {
       "id": 17,
@@ -5669,7 +14075,56 @@ const definitions: JsonObject = {
         "type": {
           "$ref": "application-payload-envelope-v1"
         }
-      }
+      },
+      "operations": [
+        {
+          "op": "command-header",
+          "magic": [
+            90,
+            77
+          ],
+          "wireMajor": 1,
+          "commandId": 17,
+          "byteOrder": "big-endian"
+        },
+        {
+          "op": "flags",
+          "allowed": [
+            {
+              "kind": "flag",
+              "name": "metadata"
+            }
+          ],
+          "required": [],
+          "unknown": "protocol-error"
+        },
+        {
+          "op": "metadata-flag-frame",
+          "flag": {
+            "kind": "flag",
+            "name": "metadata"
+          },
+          "frame": {
+            "$ref": "metadata-frame"
+          },
+          "whenSet": "frame-required",
+          "whenClear": "frame-forbidden"
+        },
+        {
+          "op": "field",
+          "name": "correlation",
+          "type": {
+            "$ref": "nonzero-u64"
+          }
+        },
+        {
+          "op": "payload",
+          "policy": "required",
+          "type": {
+            "$ref": "application-payload-envelope-v1"
+          }
+        }
+      ]
     },
     {
       "id": 18,
@@ -5693,7 +14148,56 @@ const definitions: JsonObject = {
         "type": {
           "$ref": "application-payload-envelope-v1"
         }
-      }
+      },
+      "operations": [
+        {
+          "op": "command-header",
+          "magic": [
+            90,
+            77
+          ],
+          "wireMajor": 1,
+          "commandId": 18,
+          "byteOrder": "big-endian"
+        },
+        {
+          "op": "flags",
+          "allowed": [
+            {
+              "kind": "flag",
+              "name": "metadata"
+            }
+          ],
+          "required": [],
+          "unknown": "protocol-error"
+        },
+        {
+          "op": "metadata-flag-frame",
+          "flag": {
+            "kind": "flag",
+            "name": "metadata"
+          },
+          "frame": {
+            "$ref": "metadata-frame"
+          },
+          "whenSet": "frame-required",
+          "whenClear": "frame-forbidden"
+        },
+        {
+          "op": "field",
+          "name": "channelName",
+          "type": {
+            "$ref": "text8"
+          }
+        },
+        {
+          "op": "payload",
+          "policy": "required",
+          "type": {
+            "$ref": "application-payload-envelope-v1"
+          }
+        }
+      ]
     },
     {
       "id": 19,
@@ -5721,7 +14225,63 @@ const definitions: JsonObject = {
         "type": {
           "$ref": "application-payload-envelope-v1"
         }
-      }
+      },
+      "operations": [
+        {
+          "op": "command-header",
+          "magic": [
+            90,
+            77
+          ],
+          "wireMajor": 1,
+          "commandId": 19,
+          "byteOrder": "big-endian"
+        },
+        {
+          "op": "flags",
+          "allowed": [
+            {
+              "kind": "flag",
+              "name": "metadata"
+            }
+          ],
+          "required": [],
+          "unknown": "protocol-error"
+        },
+        {
+          "op": "metadata-flag-frame",
+          "flag": {
+            "kind": "flag",
+            "name": "metadata"
+          },
+          "frame": {
+            "$ref": "metadata-frame"
+          },
+          "whenSet": "frame-required",
+          "whenClear": "frame-forbidden"
+        },
+        {
+          "op": "field",
+          "name": "correlation",
+          "type": {
+            "$ref": "nonzero-u64"
+          }
+        },
+        {
+          "op": "field",
+          "name": "channelName",
+          "type": {
+            "$ref": "text8"
+          }
+        },
+        {
+          "op": "payload",
+          "policy": "required",
+          "type": {
+            "$ref": "application-payload-envelope-v1"
+          }
+        }
+      ]
     },
     {
       "id": 20,
@@ -5752,7 +14312,73 @@ const definitions: JsonObject = {
         "type": {
           "$ref": "application-payload-envelope-v1"
         }
-      }
+      },
+      "operations": [
+        {
+          "op": "command-header",
+          "magic": [
+            90,
+            77
+          ],
+          "wireMajor": 1,
+          "commandId": 20,
+          "byteOrder": "big-endian"
+        },
+        {
+          "op": "flags",
+          "allowed": [],
+          "required": [],
+          "unknown": "protocol-error"
+        },
+        {
+          "op": "field",
+          "name": "correlation",
+          "type": {
+            "$ref": "nonzero-u64"
+          }
+        },
+        {
+          "op": "field",
+          "name": "terminalResult",
+          "type": {
+            "$ref": "request-terminal-result"
+          }
+        },
+        {
+          "op": "field",
+          "name": "failureCode",
+          "type": {
+            "$ref": "framework-error-code"
+          }
+        },
+        {
+          "op": "field",
+          "name": "tail",
+          "type": {
+            "$ref": "request-specific-tail"
+          }
+        },
+        {
+          "op": "payload",
+          "policy": "optional",
+          "type": {
+            "$ref": "application-payload-envelope-v1"
+          }
+        },
+        {
+          "op": "runtime-predicate",
+          "reference": {
+            "asset": "service-wire-constants",
+            "name": "valid-terminal-failure"
+          },
+          "targets": [
+            {
+              "kind": "fieldPath",
+              "path": "reply.failureCode"
+            }
+          ]
+        }
+      ]
     },
     {
       "id": 21,
@@ -5790,7 +14416,79 @@ const definitions: JsonObject = {
         "type": {
           "$ref": "application-payload-envelope-v1"
         }
-      }
+      },
+      "operations": [
+        {
+          "op": "command-header",
+          "magic": [
+            90,
+            77
+          ],
+          "wireMajor": 1,
+          "commandId": 21,
+          "byteOrder": "big-endian"
+        },
+        {
+          "op": "flags",
+          "allowed": [
+            {
+              "kind": "flag",
+              "name": "metadata"
+            }
+          ],
+          "required": [],
+          "unknown": "protocol-error"
+        },
+        {
+          "op": "metadata-flag-frame",
+          "flag": {
+            "kind": "flag",
+            "name": "metadata"
+          },
+          "frame": {
+            "$ref": "metadata-frame"
+          },
+          "whenSet": "frame-required",
+          "whenClear": "frame-forbidden"
+        },
+        {
+          "op": "field",
+          "name": "operation",
+          "type": {
+            "$ref": "operation-id"
+          }
+        },
+        {
+          "op": "field",
+          "name": "messageFollowHopCount",
+          "type": {
+            "$ref": "u8"
+          },
+          "minimum": 0,
+          "maximum": 8
+        },
+        {
+          "op": "field",
+          "name": "sourceSpotId",
+          "type": {
+            "$ref": "text8"
+          }
+        },
+        {
+          "op": "field",
+          "name": "targetSpot",
+          "type": {
+            "$ref": "spot-route-fence"
+          }
+        },
+        {
+          "op": "payload",
+          "policy": "required",
+          "type": {
+            "$ref": "application-payload-envelope-v1"
+          }
+        }
+      ]
     },
     {
       "id": 22,
@@ -5832,7 +14530,86 @@ const definitions: JsonObject = {
         "type": {
           "$ref": "application-payload-envelope-v1"
         }
-      }
+      },
+      "operations": [
+        {
+          "op": "command-header",
+          "magic": [
+            90,
+            77
+          ],
+          "wireMajor": 1,
+          "commandId": 22,
+          "byteOrder": "big-endian"
+        },
+        {
+          "op": "flags",
+          "allowed": [
+            {
+              "kind": "flag",
+              "name": "metadata"
+            }
+          ],
+          "required": [],
+          "unknown": "protocol-error"
+        },
+        {
+          "op": "metadata-flag-frame",
+          "flag": {
+            "kind": "flag",
+            "name": "metadata"
+          },
+          "frame": {
+            "$ref": "metadata-frame"
+          },
+          "whenSet": "frame-required",
+          "whenClear": "frame-forbidden"
+        },
+        {
+          "op": "field",
+          "name": "correlation",
+          "type": {
+            "$ref": "nonzero-u64"
+          }
+        },
+        {
+          "op": "field",
+          "name": "operation",
+          "type": {
+            "$ref": "operation-id"
+          }
+        },
+        {
+          "op": "field",
+          "name": "messageFollowHopCount",
+          "type": {
+            "$ref": "u8"
+          },
+          "minimum": 0,
+          "maximum": 8
+        },
+        {
+          "op": "field",
+          "name": "sourceSpotId",
+          "type": {
+            "$ref": "text8"
+          }
+        },
+        {
+          "op": "field",
+          "name": "targetSpot",
+          "type": {
+            "$ref": "spot-route-fence"
+          }
+        },
+        {
+          "op": "payload",
+          "policy": "required",
+          "type": {
+            "$ref": "application-payload-envelope-v1"
+          }
+        }
+      ]
     },
     {
       "id": 23,
@@ -5864,7 +14641,70 @@ const definitions: JsonObject = {
         "type": {
           "$ref": "application-payload-envelope-v1"
         }
-      }
+      },
+      "operations": [
+        {
+          "op": "command-header",
+          "magic": [
+            90,
+            77
+          ],
+          "wireMajor": 1,
+          "commandId": 23,
+          "byteOrder": "big-endian"
+        },
+        {
+          "op": "flags",
+          "allowed": [
+            {
+              "kind": "flag",
+              "name": "metadata"
+            }
+          ],
+          "required": [],
+          "unknown": "protocol-error"
+        },
+        {
+          "op": "metadata-flag-frame",
+          "flag": {
+            "kind": "flag",
+            "name": "metadata"
+          },
+          "frame": {
+            "$ref": "metadata-frame"
+          },
+          "whenSet": "frame-required",
+          "whenClear": "frame-forbidden"
+        },
+        {
+          "op": "field",
+          "name": "channelName",
+          "type": {
+            "$ref": "text8"
+          }
+        },
+        {
+          "op": "field",
+          "name": "topic",
+          "type": {
+            "$ref": "text8"
+          }
+        },
+        {
+          "op": "field",
+          "name": "sourceSpotId",
+          "type": {
+            "$ref": "text8"
+          }
+        },
+        {
+          "op": "payload",
+          "policy": "required",
+          "type": {
+            "$ref": "application-payload-envelope-v1"
+          }
+        }
+      ]
     },
     {
       "id": 24,
@@ -5951,7 +14791,130 @@ const definitions: JsonObject = {
         "type": {
           "$ref": "application-payload-envelope-v1"
         }
-      }
+      },
+      "operations": [
+        {
+          "op": "command-header",
+          "magic": [
+            90,
+            77
+          ],
+          "wireMajor": 1,
+          "commandId": 24,
+          "byteOrder": "big-endian"
+        },
+        {
+          "op": "flags",
+          "allowed": [
+            {
+              "kind": "flag",
+              "name": "metadata"
+            },
+            {
+              "kind": "flag",
+              "name": "boundSession"
+            },
+            {
+              "kind": "flag",
+              "name": "sourceSpotId"
+            }
+          ],
+          "required": [],
+          "unknown": "protocol-error"
+        },
+        {
+          "op": "flag-constraint",
+          "kind": "all-or-none",
+          "flags": [
+            {
+              "kind": "flag",
+              "name": "boundSession"
+            },
+            {
+              "kind": "flag",
+              "name": "sourceSpotId"
+            }
+          ]
+        },
+        {
+          "op": "metadata-flag-frame",
+          "flag": {
+            "kind": "flag",
+            "name": "metadata"
+          },
+          "frame": {
+            "$ref": "metadata-frame"
+          },
+          "whenSet": "frame-required",
+          "whenClear": "frame-forbidden"
+        },
+        {
+          "op": "field",
+          "name": "operation",
+          "type": {
+            "$ref": "operation-id"
+          }
+        },
+        {
+          "op": "field",
+          "name": "messageFollowHopCount",
+          "type": {
+            "$ref": "u8"
+          },
+          "minimum": 0,
+          "maximum": 8
+        },
+        {
+          "op": "field",
+          "name": "sourceActor",
+          "type": {
+            "$ref": "optional-actor-ref"
+          }
+        },
+        {
+          "op": "field",
+          "name": "targetActor",
+          "type": {
+            "$ref": "actor-route-fence"
+          }
+        },
+        {
+          "op": "field",
+          "name": "boundSessionTail",
+          "type": {
+            "$ref": "optional-bound-session-tail"
+          },
+          "otherwise": "forbidden",
+          "when": {
+            "all": [
+              {
+                "kind": "allFlagsSet",
+                "operands": [
+                  {
+                    "kind": "flag",
+                    "name": "boundSession"
+                  },
+                  {
+                    "kind": "flag",
+                    "name": "sourceSpotId"
+                  }
+                ]
+              }
+            ]
+          },
+          "whenFalse": {
+            "encoder": "reject-present-value",
+            "decoder": "consume-no-bytes"
+          }
+        },
+        {
+          "op": "payload",
+          "policy": "required",
+          "type": {
+            "$ref": "application-payload-envelope-v1"
+          }
+        }
+      ]
     },
     {
       "id": 25,
@@ -6042,7 +15005,137 @@ const definitions: JsonObject = {
         "type": {
           "$ref": "application-payload-envelope-v1"
         }
-      }
+      },
+      "operations": [
+        {
+          "op": "command-header",
+          "magic": [
+            90,
+            77
+          ],
+          "wireMajor": 1,
+          "commandId": 25,
+          "byteOrder": "big-endian"
+        },
+        {
+          "op": "flags",
+          "allowed": [
+            {
+              "kind": "flag",
+              "name": "metadata"
+            },
+            {
+              "kind": "flag",
+              "name": "boundSession"
+            },
+            {
+              "kind": "flag",
+              "name": "sourceSpotId"
+            }
+          ],
+          "required": [],
+          "unknown": "protocol-error"
+        },
+        {
+          "op": "flag-constraint",
+          "kind": "all-or-none",
+          "flags": [
+            {
+              "kind": "flag",
+              "name": "boundSession"
+            },
+            {
+              "kind": "flag",
+              "name": "sourceSpotId"
+            }
+          ]
+        },
+        {
+          "op": "metadata-flag-frame",
+          "flag": {
+            "kind": "flag",
+            "name": "metadata"
+          },
+          "frame": {
+            "$ref": "metadata-frame"
+          },
+          "whenSet": "frame-required",
+          "whenClear": "frame-forbidden"
+        },
+        {
+          "op": "field",
+          "name": "correlation",
+          "type": {
+            "$ref": "nonzero-u64"
+          }
+        },
+        {
+          "op": "field",
+          "name": "operation",
+          "type": {
+            "$ref": "operation-id"
+          }
+        },
+        {
+          "op": "field",
+          "name": "messageFollowHopCount",
+          "type": {
+            "$ref": "u8"
+          },
+          "minimum": 0,
+          "maximum": 8
+        },
+        {
+          "op": "field",
+          "name": "sourceActor",
+          "type": {
+            "$ref": "optional-actor-ref"
+          }
+        },
+        {
+          "op": "field",
+          "name": "targetActor",
+          "type": {
+            "$ref": "actor-route-fence"
+          }
+        },
+        {
+          "op": "field",
+          "name": "boundSessionTail",
+          "type": {
+            "$ref": "optional-bound-session-tail"
+          },
+          "otherwise": "forbidden",
+          "when": {
+            "all": [
+              {
+                "kind": "allFlagsSet",
+                "operands": [
+                  {
+                    "kind": "flag",
+                    "name": "boundSession"
+                  },
+                  {
+                    "kind": "flag",
+                    "name": "sourceSpotId"
+                  }
+                ]
+              }
+            ]
+          },
+          "whenFalse": {
+            "encoder": "reject-present-value",
+            "decoder": "consume-no-bytes"
+          }
+        },
+        {
+          "op": "payload",
+          "policy": "required",
+          "type": {
+            "$ref": "application-payload-envelope-v1"
+          }
+        }
+      ]
     },
     {
       "id": 26,
@@ -6062,7 +15155,43 @@ const definitions: JsonObject = {
       ],
       "payload": {
         "policy": "forbidden"
-      }
+      },
+      "operations": [
+        {
+          "op": "command-header",
+          "magic": [
+            90,
+            77
+          ],
+          "wireMajor": 1,
+          "commandId": 26,
+          "byteOrder": "big-endian"
+        },
+        {
+          "op": "flags",
+          "allowed": [],
+          "required": [],
+          "unknown": "protocol-error"
+        },
+        {
+          "op": "field",
+          "name": "correlation",
+          "type": {
+            "$ref": "nonzero-u64"
+          }
+        },
+        {
+          "op": "field",
+          "name": "actorId",
+          "type": {
+            "$ref": "text8"
+          }
+        },
+        {
+          "op": "payload",
+          "policy": "forbidden"
+        }
+      ]
     },
     {
       "id": 27,
@@ -6082,7 +15211,43 @@ const definitions: JsonObject = {
       ],
       "payload": {
         "policy": "forbidden"
-      }
+      },
+      "operations": [
+        {
+          "op": "command-header",
+          "magic": [
+            90,
+            77
+          ],
+          "wireMajor": 1,
+          "commandId": 27,
+          "byteOrder": "big-endian"
+        },
+        {
+          "op": "flags",
+          "allowed": [],
+          "required": [],
+          "unknown": "protocol-error"
+        },
+        {
+          "op": "field",
+          "name": "correlation",
+          "type": {
+            "$ref": "nonzero-u64"
+          }
+        },
+        {
+          "op": "field",
+          "name": "actor",
+          "type": {
+            "$ref": "actor-route-fence"
+          }
+        },
+        {
+          "op": "payload",
+          "policy": "forbidden"
+        }
+      ]
     },
     {
       "id": 28,
@@ -6113,7 +15278,60 @@ const definitions: JsonObject = {
         "type": {
           "$ref": "application-payload-envelope-v1"
         }
-      }
+      },
+      "operations": [
+        {
+          "op": "command-header",
+          "magic": [
+            90,
+            77
+          ],
+          "wireMajor": 1,
+          "commandId": 28,
+          "byteOrder": "big-endian"
+        },
+        {
+          "op": "flags",
+          "allowed": [],
+          "required": [],
+          "unknown": "protocol-error"
+        },
+        {
+          "op": "field",
+          "name": "correlation",
+          "type": {
+            "$ref": "nonzero-u64"
+          }
+        },
+        {
+          "op": "field",
+          "name": "actor",
+          "type": {
+            "$ref": "actor-route-fence"
+          }
+        },
+        {
+          "op": "field",
+          "name": "entry",
+          "type": {
+            "$ref": "bool8"
+          }
+        },
+        {
+          "op": "field",
+          "name": "targetSpot",
+          "type": {
+            "$ref": "spot-route-fence"
+          }
+        },
+        {
+          "op": "payload",
+          "policy": "optional",
+          "type": {
+            "$ref": "application-payload-envelope-v1"
+          }
+        }
+      ]
     },
     {
       "id": 29,
@@ -6137,7 +15355,50 @@ const definitions: JsonObject = {
       ],
       "payload": {
         "policy": "forbidden"
-      }
+      },
+      "operations": [
+        {
+          "op": "command-header",
+          "magic": [
+            90,
+            77
+          ],
+          "wireMajor": 1,
+          "commandId": 29,
+          "byteOrder": "big-endian"
+        },
+        {
+          "op": "flags",
+          "allowed": [],
+          "required": [],
+          "unknown": "protocol-error"
+        },
+        {
+          "op": "field",
+          "name": "actor",
+          "type": {
+            "$ref": "actor-ref"
+          }
+        },
+        {
+          "op": "field",
+          "name": "previousMembership",
+          "type": {
+            "$ref": "spot-membership"
+          }
+        },
+        {
+          "op": "field",
+          "name": "currentAuthorityOwnerGeneration",
+          "type": {
+            "$ref": "nonzero-u64"
+          }
+        },
+        {
+          "op": "payload",
+          "policy": "forbidden"
+        }
+      ]
     },
     {
       "id": 30,
@@ -6173,7 +15434,71 @@ const definitions: JsonObject = {
       ],
       "payload": {
         "policy": "forbidden"
-      }
+      },
+      "operations": [
+        {
+          "op": "command-header",
+          "magic": [
+            90,
+            77
+          ],
+          "wireMajor": 1,
+          "commandId": 30,
+          "byteOrder": "big-endian"
+        },
+        {
+          "op": "flags",
+          "allowed": [],
+          "required": [],
+          "unknown": "protocol-error"
+        },
+        {
+          "op": "field",
+          "name": "relocation",
+          "type": {
+            "$ref": "relocation-id"
+          }
+        },
+        {
+          "op": "field",
+          "name": "targetAttemptGeneration",
+          "type": {
+            "$ref": "nonzero-u64"
+          }
+        },
+        {
+          "op": "field",
+          "name": "coordinator",
+          "type": {
+            "$ref": "relocation-coordinator-fence"
+          }
+        },
+        {
+          "op": "field",
+          "name": "target",
+          "type": {
+            "$ref": "relocation-target-fence"
+          }
+        },
+        {
+          "op": "field",
+          "name": "object",
+          "type": {
+            "$ref": "relocation-object-identity"
+          }
+        },
+        {
+          "op": "field",
+          "name": "senderRole",
+          "type": {
+            "$ref": "relocation-role"
+          }
+        },
+        {
+          "op": "payload",
+          "policy": "forbidden"
+        }
+      ]
     },
     {
       "id": 31,
@@ -6209,7 +15534,71 @@ const definitions: JsonObject = {
       ],
       "payload": {
         "policy": "forbidden"
-      }
+      },
+      "operations": [
+        {
+          "op": "command-header",
+          "magic": [
+            90,
+            77
+          ],
+          "wireMajor": 1,
+          "commandId": 31,
+          "byteOrder": "big-endian"
+        },
+        {
+          "op": "flags",
+          "allowed": [],
+          "required": [],
+          "unknown": "protocol-error"
+        },
+        {
+          "op": "field",
+          "name": "relocation",
+          "type": {
+            "$ref": "relocation-id"
+          }
+        },
+        {
+          "op": "field",
+          "name": "targetAttemptGeneration",
+          "type": {
+            "$ref": "nonzero-u64"
+          }
+        },
+        {
+          "op": "field",
+          "name": "coordinator",
+          "type": {
+            "$ref": "relocation-coordinator-fence"
+          }
+        },
+        {
+          "op": "field",
+          "name": "senderRole",
+          "type": {
+            "$ref": "relocation-role"
+          }
+        },
+        {
+          "op": "field",
+          "name": "object",
+          "type": {
+            "$ref": "relocation-object-identity"
+          }
+        },
+        {
+          "op": "field",
+          "name": "record",
+          "type": {
+            "$ref": "frozen-record"
+          }
+        },
+        {
+          "op": "payload",
+          "policy": "forbidden"
+        }
+      ]
     },
     {
       "id": 33,
@@ -6244,7 +15633,80 @@ const definitions: JsonObject = {
         "type": {
           "$ref": "application-payload-envelope-v1"
         }
-      }
+      },
+      "operations": [
+        {
+          "op": "command-header",
+          "magic": [
+            90,
+            77
+          ],
+          "wireMajor": 1,
+          "commandId": 33,
+          "byteOrder": "big-endian"
+        },
+        {
+          "op": "flags",
+          "allowed": [],
+          "required": [],
+          "unknown": "protocol-error"
+        },
+        {
+          "op": "field",
+          "name": "operation",
+          "type": {
+            "$ref": "operation-id"
+          }
+        },
+        {
+          "op": "field",
+          "name": "replyRouteId",
+          "type": {
+            "$ref": "nonzero-u64"
+          }
+        },
+        {
+          "op": "field",
+          "name": "context",
+          "type": {
+            "$ref": "reply-relay-context"
+          }
+        },
+        {
+          "op": "field",
+          "name": "terminalResult",
+          "type": {
+            "$ref": "request-terminal-result"
+          }
+        },
+        {
+          "op": "field",
+          "name": "failureCode",
+          "type": {
+            "$ref": "framework-error-code"
+          }
+        },
+        {
+          "op": "payload",
+          "policy": "optional",
+          "type": {
+            "$ref": "application-payload-envelope-v1"
+          }
+        },
+        {
+          "op": "runtime-predicate",
+          "reference": {
+            "asset": "service-wire-constants",
+            "name": "valid-terminal-failure"
+          },
+          "targets": [
+            {
+              "kind": "fieldPath",
+              "path": "replyRelay.failureCode"
+            }
+          ]
+        }
+      ]
     },
     {
       "id": 34,
@@ -6284,7 +15746,78 @@ const definitions: JsonObject = {
       ],
       "payload": {
         "policy": "forbidden"
-      }
+      },
+      "operations": [
+        {
+          "op": "command-header",
+          "magic": [
+            90,
+            77
+          ],
+          "wireMajor": 1,
+          "commandId": 34,
+          "byteOrder": "big-endian"
+        },
+        {
+          "op": "flags",
+          "allowed": [],
+          "required": [],
+          "unknown": "protocol-error"
+        },
+        {
+          "op": "field",
+          "name": "relocation",
+          "type": {
+            "$ref": "relocation-id"
+          }
+        },
+        {
+          "op": "field",
+          "name": "targetAttemptGeneration",
+          "type": {
+            "$ref": "nonzero-u64"
+          }
+        },
+        {
+          "op": "field",
+          "name": "coordinator",
+          "type": {
+            "$ref": "relocation-coordinator-fence"
+          }
+        },
+        {
+          "op": "field",
+          "name": "senderRole",
+          "type": {
+            "$ref": "relocation-role"
+          }
+        },
+        {
+          "op": "field",
+          "name": "object",
+          "type": {
+            "$ref": "relocation-object-identity"
+          }
+        },
+        {
+          "op": "field",
+          "name": "boundaryRecordCount",
+          "type": {
+            "$ref": "ordinal-or-zero"
+          }
+        },
+        {
+          "op": "field",
+          "name": "boundaryChecksumCrc32c",
+          "type": {
+            "$ref": "u32"
+          }
+        },
+        {
+          "op": "payload",
+          "policy": "forbidden"
+        }
+      ]
     },
     {
       "id": 36,
@@ -6307,7 +15840,46 @@ const definitions: JsonObject = {
         "type": {
           "$ref": "application-payload-envelope-v1"
         }
-      }
+      },
+      "operations": [
+        {
+          "op": "command-header",
+          "magic": [
+            90,
+            77
+          ],
+          "wireMajor": 1,
+          "commandId": 36,
+          "byteOrder": "big-endian"
+        },
+        {
+          "op": "flags",
+          "allowed": [],
+          "required": [],
+          "unknown": "protocol-error"
+        },
+        {
+          "op": "field",
+          "name": "actor",
+          "type": {
+            "$ref": "actor-route-fence"
+          }
+        },
+        {
+          "op": "field",
+          "name": "expectedBindingGeneration",
+          "type": {
+            "$ref": "nonzero-u64"
+          }
+        },
+        {
+          "op": "payload",
+          "policy": "required",
+          "type": {
+            "$ref": "application-payload-envelope-v1"
+          }
+        }
+      ]
     },
     {
       "id": 37,
@@ -6335,7 +15907,57 @@ const definitions: JsonObject = {
       ],
       "payload": {
         "policy": "forbidden"
-      }
+      },
+      "operations": [
+        {
+          "op": "command-header",
+          "magic": [
+            90,
+            77
+          ],
+          "wireMajor": 1,
+          "commandId": 37,
+          "byteOrder": "big-endian"
+        },
+        {
+          "op": "flags",
+          "allowed": [],
+          "required": [],
+          "unknown": "protocol-error"
+        },
+        {
+          "op": "field",
+          "name": "actor",
+          "type": {
+            "$ref": "actor-ref"
+          }
+        },
+        {
+          "op": "field",
+          "name": "previousMembership",
+          "type": {
+            "$ref": "optional-spot-membership"
+          }
+        },
+        {
+          "op": "field",
+          "name": "currentMembership",
+          "type": {
+            "$ref": "spot-membership"
+          }
+        },
+        {
+          "op": "field",
+          "name": "currentAuthorityOwnerGeneration",
+          "type": {
+            "$ref": "nonzero-u64"
+          }
+        },
+        {
+          "op": "payload",
+          "policy": "forbidden"
+        }
+      ]
     },
     {
       "id": 38,
@@ -6363,7 +15985,57 @@ const definitions: JsonObject = {
       ],
       "payload": {
         "policy": "forbidden"
-      }
+      },
+      "operations": [
+        {
+          "op": "command-header",
+          "magic": [
+            90,
+            77
+          ],
+          "wireMajor": 1,
+          "commandId": 38,
+          "byteOrder": "big-endian"
+        },
+        {
+          "op": "flags",
+          "allowed": [],
+          "required": [],
+          "unknown": "protocol-error"
+        },
+        {
+          "op": "field",
+          "name": "correlation",
+          "type": {
+            "$ref": "nonzero-u64"
+          }
+        },
+        {
+          "op": "field",
+          "name": "actor",
+          "type": {
+            "$ref": "actor-route-fence"
+          }
+        },
+        {
+          "op": "field",
+          "name": "sessionRid",
+          "type": {
+            "$ref": "rid"
+          }
+        },
+        {
+          "op": "field",
+          "name": "binding",
+          "type": {
+            "$ref": "bound-session-binding-transition"
+          }
+        },
+        {
+          "op": "payload",
+          "policy": "forbidden"
+        }
+      ]
     },
     {
       "id": 39,
@@ -6417,6 +16089,97 @@ const definitions: JsonObject = {
         "ready-request-operation-id-nonzero",
         "cold-activation-operation-id-nonzero-for-send-and-request",
         "cold-activation-target-does-not-contain-authority-generation-fence"
+      ],
+      "operations": [
+        {
+          "op": "command-header",
+          "magic": [
+            90,
+            77
+          ],
+          "wireMajor": 1,
+          "commandId": 39,
+          "byteOrder": "big-endian"
+        },
+        {
+          "op": "flags",
+          "allowed": [
+            {
+              "kind": "flag",
+              "name": "metadata"
+            }
+          ],
+          "required": [],
+          "unknown": "protocol-error"
+        },
+        {
+          "op": "metadata-flag-frame",
+          "flag": {
+            "kind": "flag",
+            "name": "metadata"
+          },
+          "frame": {
+            "$ref": "metadata-frame"
+          },
+          "whenSet": "frame-required",
+          "whenClear": "frame-forbidden"
+        },
+        {
+          "op": "field",
+          "name": "route",
+          "type": {
+            "$ref": "instance-route-v1"
+          }
+        },
+        {
+          "op": "field",
+          "name": "sourceNodeGeneration",
+          "type": {
+            "$ref": "nonzero-u64"
+          }
+        },
+        {
+          "op": "field",
+          "name": "sourceNodeRid",
+          "type": {
+            "$ref": "rid"
+          }
+        },
+        {
+          "op": "field",
+          "name": "sourceSpotId",
+          "type": {
+            "$ref": "optional-text8"
+          }
+        },
+        {
+          "op": "field",
+          "name": "operationKind",
+          "type": {
+            "$ref": "instance-operation-kind"
+          }
+        },
+        {
+          "op": "field",
+          "name": "operation",
+          "type": {
+            "$ref": "operation-id-or-zero"
+          }
+        },
+        {
+          "op": "field",
+          "name": "replyRoute",
+          "type": {
+            "$ref": "instance-reply-route"
+          }
+        },
+        {
+          "op": "payload",
+          "policy": "required",
+          "type": {
+            "$ref": "application-payload-envelope-v1"
+          }
+        }
       ]
     },
     {
@@ -6477,7 +16240,113 @@ const definitions: JsonObject = {
       ],
       "payload": {
         "policy": "forbidden"
-      }
+      },
+      "operations": [
+        {
+          "op": "command-header",
+          "magic": [
+            90,
+            77
+          ],
+          "wireMajor": 1,
+          "commandId": 40,
+          "byteOrder": "big-endian"
+        },
+        {
+          "op": "flags",
+          "allowed": [],
+          "required": [],
+          "unknown": "protocol-error"
+        },
+        {
+          "op": "field",
+          "name": "relocation",
+          "type": {
+            "$ref": "relocation-id"
+          }
+        },
+        {
+          "op": "field",
+          "name": "targetAttemptGeneration",
+          "type": {
+            "$ref": "nonzero-u64"
+          }
+        },
+        {
+          "op": "field",
+          "name": "coordinator",
+          "type": {
+            "$ref": "relocation-coordinator-fence"
+          }
+        },
+        {
+          "op": "field",
+          "name": "target",
+          "type": {
+            "$ref": "relocation-target-fence"
+          }
+        },
+        {
+          "op": "field",
+          "name": "initiatorRole",
+          "type": {
+            "$ref": "relocation-role"
+          }
+        },
+        {
+          "op": "field",
+          "name": "object",
+          "type": {
+            "$ref": "relocation-object-identity"
+          }
+        },
+        {
+          "op": "field",
+          "name": "sourceNodeRid",
+          "type": {
+            "$ref": "rid"
+          }
+        },
+        {
+          "op": "field",
+          "name": "sourceNodeGeneration",
+          "type": {
+            "$ref": "nonzero-u64"
+          }
+        },
+        {
+          "op": "field",
+          "name": "payloadTotalLength",
+          "type": {
+            "$ref": "relocation-logical-length"
+          }
+        },
+        {
+          "op": "field",
+          "name": "payloadChunkCount",
+          "type": {
+            "$ref": "relocation-chunk-count"
+          }
+        },
+        {
+          "op": "field",
+          "name": "payloadChecksumCrc32c",
+          "type": {
+            "$ref": "u32"
+          }
+        },
+        {
+          "op": "field",
+          "name": "applicationVersion",
+          "type": {
+            "$ref": "application-version"
+          }
+        },
+        {
+          "op": "payload",
+          "policy": "forbidden"
+        }
+      ]
     },
     {
       "id": 42,
@@ -6529,7 +16398,99 @@ const definitions: JsonObject = {
       ],
       "payload": {
         "policy": "forbidden"
-      }
+      },
+      "operations": [
+        {
+          "op": "command-header",
+          "magic": [
+            90,
+            77
+          ],
+          "wireMajor": 1,
+          "commandId": 42,
+          "byteOrder": "big-endian"
+        },
+        {
+          "op": "flags",
+          "allowed": [],
+          "required": [],
+          "unknown": "protocol-error"
+        },
+        {
+          "op": "field",
+          "name": "relocation",
+          "type": {
+            "$ref": "relocation-id"
+          }
+        },
+        {
+          "op": "field",
+          "name": "coordinator",
+          "type": {
+            "$ref": "relocation-coordinator-fence"
+          }
+        },
+        {
+          "op": "field",
+          "name": "senderRole",
+          "type": {
+            "$ref": "relocation-role"
+          }
+        },
+        {
+          "op": "field",
+          "name": "actor",
+          "type": {
+            "$ref": "actor-route-fence"
+          }
+        },
+        {
+          "op": "field",
+          "name": "sessionOwnerNodeRid",
+          "type": {
+            "$ref": "rid"
+          }
+        },
+        {
+          "op": "field",
+          "name": "sessionOwnerNodeGeneration",
+          "type": {
+            "$ref": "nonzero-u64"
+          }
+        },
+        {
+          "op": "field",
+          "name": "sessionOwnerId",
+          "type": {
+            "$ref": "text8"
+          }
+        },
+        {
+          "op": "field",
+          "name": "sessionOwnerLeaseGeneration",
+          "type": {
+            "$ref": "nonzero-u64"
+          }
+        },
+        {
+          "op": "field",
+          "name": "sessionRid",
+          "type": {
+            "$ref": "rid"
+          }
+        },
+        {
+          "op": "field",
+          "name": "bindingGeneration",
+          "type": {
+            "$ref": "nonzero-u64"
+          }
+        },
+        {
+          "op": "payload",
+          "policy": "forbidden"
+        }
+      ]
     },
     {
       "id": 43,
@@ -6577,7 +16538,92 @@ const definitions: JsonObject = {
       ],
       "payload": {
         "policy": "forbidden"
-      }
+      },
+      "operations": [
+        {
+          "op": "command-header",
+          "magic": [
+            90,
+            77
+          ],
+          "wireMajor": 1,
+          "commandId": 43,
+          "byteOrder": "big-endian"
+        },
+        {
+          "op": "flags",
+          "allowed": [],
+          "required": [],
+          "unknown": "protocol-error"
+        },
+        {
+          "op": "field",
+          "name": "relocation",
+          "type": {
+            "$ref": "relocation-id"
+          }
+        },
+        {
+          "op": "field",
+          "name": "coordinator",
+          "type": {
+            "$ref": "relocation-coordinator-fence"
+          }
+        },
+        {
+          "op": "field",
+          "name": "actor",
+          "type": {
+            "$ref": "actor-route-fence"
+          }
+        },
+        {
+          "op": "field",
+          "name": "sessionOwnerNodeRid",
+          "type": {
+            "$ref": "rid"
+          }
+        },
+        {
+          "op": "field",
+          "name": "sessionOwnerNodeGeneration",
+          "type": {
+            "$ref": "nonzero-u64"
+          }
+        },
+        {
+          "op": "field",
+          "name": "sessionOwnerId",
+          "type": {
+            "$ref": "text8"
+          }
+        },
+        {
+          "op": "field",
+          "name": "sessionOwnerLeaseGeneration",
+          "type": {
+            "$ref": "nonzero-u64"
+          }
+        },
+        {
+          "op": "field",
+          "name": "sessionRid",
+          "type": {
+            "$ref": "rid"
+          }
+        },
+        {
+          "op": "field",
+          "name": "bindingGeneration",
+          "type": {
+            "$ref": "nonzero-u64"
+          }
+        },
+        {
+          "op": "payload",
+          "policy": "forbidden"
+        }
+      ]
     },
     {
       "id": 44,
@@ -6633,7 +16679,106 @@ const definitions: JsonObject = {
       ],
       "payload": {
         "policy": "forbidden"
-      }
+      },
+      "operations": [
+        {
+          "op": "command-header",
+          "magic": [
+            90,
+            77
+          ],
+          "wireMajor": 1,
+          "commandId": 44,
+          "byteOrder": "big-endian"
+        },
+        {
+          "op": "flags",
+          "allowed": [],
+          "required": [],
+          "unknown": "protocol-error"
+        },
+        {
+          "op": "field",
+          "name": "relocation",
+          "type": {
+            "$ref": "relocation-id"
+          }
+        },
+        {
+          "op": "field",
+          "name": "coordinator",
+          "type": {
+            "$ref": "relocation-coordinator-fence"
+          }
+        },
+        {
+          "op": "field",
+          "name": "senderRole",
+          "type": {
+            "$ref": "relocation-role"
+          }
+        },
+        {
+          "op": "field",
+          "name": "actor",
+          "type": {
+            "$ref": "actor-ref"
+          }
+        },
+        {
+          "op": "field",
+          "name": "sessionOwnerNodeRid",
+          "type": {
+            "$ref": "rid"
+          }
+        },
+        {
+          "op": "field",
+          "name": "sessionOwnerNodeGeneration",
+          "type": {
+            "$ref": "nonzero-u64"
+          }
+        },
+        {
+          "op": "field",
+          "name": "sessionOwnerId",
+          "type": {
+            "$ref": "text8"
+          }
+        },
+        {
+          "op": "field",
+          "name": "sessionOwnerLeaseGeneration",
+          "type": {
+            "$ref": "nonzero-u64"
+          }
+        },
+        {
+          "op": "field",
+          "name": "sessionRid",
+          "type": {
+            "$ref": "rid"
+          }
+        },
+        {
+          "op": "field",
+          "name": "bindingGeneration",
+          "type": {
+            "$ref": "nonzero-u64"
+          }
+        },
+        {
+          "op": "field",
+          "name": "route",
+          "type": {
+            "$ref": "session-relocation-route-update"
+          }
+        },
+        {
+          "op": "payload",
+          "policy": "forbidden"
+        }
+      ]
     },
     {
       "id": 46,
@@ -6669,7 +16814,71 @@ const definitions: JsonObject = {
       ],
       "payload": {
         "policy": "forbidden"
-      }
+      },
+      "operations": [
+        {
+          "op": "command-header",
+          "magic": [
+            90,
+            77
+          ],
+          "wireMajor": 1,
+          "commandId": 46,
+          "byteOrder": "big-endian"
+        },
+        {
+          "op": "flags",
+          "allowed": [],
+          "required": [],
+          "unknown": "protocol-error"
+        },
+        {
+          "op": "field",
+          "name": "relocation",
+          "type": {
+            "$ref": "relocation-id"
+          }
+        },
+        {
+          "op": "field",
+          "name": "coordinator",
+          "type": {
+            "$ref": "relocation-coordinator-fence"
+          }
+        },
+        {
+          "op": "field",
+          "name": "operation",
+          "type": {
+            "$ref": "operation-id"
+          }
+        },
+        {
+          "op": "field",
+          "name": "replyRouteId",
+          "type": {
+            "$ref": "nonzero-u64"
+          }
+        },
+        {
+          "op": "field",
+          "name": "requestSource",
+          "type": {
+            "$ref": "request-source-fence"
+          }
+        },
+        {
+          "op": "field",
+          "name": "status",
+          "type": {
+            "$ref": "reply-relay-ack-status"
+          }
+        },
+        {
+          "op": "payload",
+          "policy": "forbidden"
+        }
+      ]
     },
     {
       "id": 47,
@@ -6713,7 +16922,85 @@ const definitions: JsonObject = {
       ],
       "payload": {
         "policy": "forbidden"
-      }
+      },
+      "operations": [
+        {
+          "op": "command-header",
+          "magic": [
+            90,
+            77
+          ],
+          "wireMajor": 1,
+          "commandId": 47,
+          "byteOrder": "big-endian"
+        },
+        {
+          "op": "flags",
+          "allowed": [],
+          "required": [],
+          "unknown": "protocol-error"
+        },
+        {
+          "op": "field",
+          "name": "correlation",
+          "type": {
+            "$ref": "nonzero-u64"
+          }
+        },
+        {
+          "op": "field",
+          "name": "operation",
+          "type": {
+            "$ref": "operation-id"
+          }
+        },
+        {
+          "op": "field",
+          "name": "sourceNodeRid",
+          "type": {
+            "$ref": "rid"
+          }
+        },
+        {
+          "op": "field",
+          "name": "sourceNodeGeneration",
+          "type": {
+            "$ref": "nonzero-u64"
+          }
+        },
+        {
+          "op": "field",
+          "name": "spotId",
+          "type": {
+            "$ref": "text8"
+          }
+        },
+        {
+          "op": "field",
+          "name": "stableType",
+          "type": {
+            "$ref": "text8"
+          }
+        },
+        {
+          "op": "field",
+          "name": "reservation",
+          "type": {
+            "$ref": "object-reservation-fence"
+          }
+        },
+        {
+          "op": "field",
+          "name": "deadlineUnixMs",
+          "type": {
+            "$ref": "nonzero-u64"
+          }
+        },
+        {
+          "op": "payload",
+          "policy": "forbidden"
+        }
+      ]
     },
     {
       "id": 48,
@@ -6749,7 +17036,71 @@ const definitions: JsonObject = {
       ],
       "payload": {
         "policy": "forbidden"
-      }
+      },
+      "operations": [
+        {
+          "op": "command-header",
+          "magic": [
+            90,
+            77
+          ],
+          "wireMajor": 1,
+          "commandId": 48,
+          "byteOrder": "big-endian"
+        },
+        {
+          "op": "flags",
+          "allowed": [],
+          "required": [],
+          "unknown": "protocol-error"
+        },
+        {
+          "op": "field",
+          "name": "correlation",
+          "type": {
+            "$ref": "nonzero-u64"
+          }
+        },
+        {
+          "op": "field",
+          "name": "operation",
+          "type": {
+            "$ref": "operation-id"
+          }
+        },
+        {
+          "op": "field",
+          "name": "sourceNodeRid",
+          "type": {
+            "$ref": "rid"
+          }
+        },
+        {
+          "op": "field",
+          "name": "sourceNodeGeneration",
+          "type": {
+            "$ref": "nonzero-u64"
+          }
+        },
+        {
+          "op": "field",
+          "name": "target",
+          "type": {
+            "$ref": "user-spot-close-fence-v1"
+          }
+        },
+        {
+          "op": "field",
+          "name": "deadlineUnixMs",
+          "type": {
+            "$ref": "nonzero-u64"
+          }
+        },
+        {
+          "op": "payload",
+          "policy": "forbidden"
+        }
+      ]
     },
     {
       "id": 49,
@@ -6793,7 +17144,85 @@ const definitions: JsonObject = {
       ],
       "payload": {
         "policy": "forbidden"
-      }
+      },
+      "operations": [
+        {
+          "op": "command-header",
+          "magic": [
+            90,
+            77
+          ],
+          "wireMajor": 1,
+          "commandId": 49,
+          "byteOrder": "big-endian"
+        },
+        {
+          "op": "flags",
+          "allowed": [],
+          "required": [],
+          "unknown": "protocol-error"
+        },
+        {
+          "op": "field",
+          "name": "correlation",
+          "type": {
+            "$ref": "nonzero-u64"
+          }
+        },
+        {
+          "op": "field",
+          "name": "operation",
+          "type": {
+            "$ref": "operation-id"
+          }
+        },
+        {
+          "op": "field",
+          "name": "sourceNodeRid",
+          "type": {
+            "$ref": "rid"
+          }
+        },
+        {
+          "op": "field",
+          "name": "sourceNodeGeneration",
+          "type": {
+            "$ref": "nonzero-u64"
+          }
+        },
+        {
+          "op": "field",
+          "name": "actorId",
+          "type": {
+            "$ref": "text8"
+          }
+        },
+        {
+          "op": "field",
+          "name": "stableType",
+          "type": {
+            "$ref": "text8"
+          }
+        },
+        {
+          "op": "field",
+          "name": "reservation",
+          "type": {
+            "$ref": "object-reservation-fence"
+          }
+        },
+        {
+          "op": "field",
+          "name": "deadlineUnixMs",
+          "type": {
+            "$ref": "nonzero-u64"
+          }
+        },
+        {
+          "op": "payload",
+          "policy": "forbidden"
+        }
+      ]
     },
     {
       "id": 50,
@@ -6809,7 +17238,36 @@ const definitions: JsonObject = {
       ],
       "payload": {
         "policy": "forbidden"
-      }
+      },
+      "operations": [
+        {
+          "op": "command-header",
+          "magic": [
+            90,
+            77
+          ],
+          "wireMajor": 1,
+          "commandId": 50,
+          "byteOrder": "big-endian"
+        },
+        {
+          "op": "flags",
+          "allowed": [],
+          "required": [],
+          "unknown": "protocol-error"
+        },
+        {
+          "op": "field",
+          "name": "route",
+          "type": {
+            "$ref": "message-follow-route-v1"
+          }
+        },
+        {
+          "op": "payload",
+          "policy": "forbidden"
+        }
+      ]
     },
     {
       "id": 51,
@@ -6843,6 +17301,42 @@ const definitions: JsonObject = {
         "failed-send-admission-retries-asynchronously-by-exact-retired-identity",
         "physical-close-cleans-other-bindings-without-removing-replacement",
         "callback-notification-or-close-failure-does-not-rollback-replacement"
+      ],
+      "operations": [
+        {
+          "op": "command-header",
+          "magic": [
+            90,
+            77
+          ],
+          "wireMajor": 1,
+          "commandId": 51,
+          "byteOrder": "big-endian"
+        },
+        {
+          "op": "flags",
+          "allowed": [],
+          "required": [],
+          "unknown": "protocol-error"
+        },
+        {
+          "op": "field",
+          "name": "actorAuthority",
+          "type": {
+            "$ref": "actor-route-fence"
+          }
+        },
+        {
+          "op": "field",
+          "name": "retiredSession",
+          "type": {
+            "$ref": "retired-bound-session-route-fence"
+          }
+        },
+        {
+          "op": "payload",
+          "policy": "forbidden"
+        }
       ]
     },
     {
@@ -6883,7 +17377,78 @@ const definitions: JsonObject = {
       ],
       "payload": {
         "policy": "forbidden"
-      }
+      },
+      "operations": [
+        {
+          "op": "command-header",
+          "magic": [
+            90,
+            77
+          ],
+          "wireMajor": 1,
+          "commandId": 52,
+          "byteOrder": "big-endian"
+        },
+        {
+          "op": "flags",
+          "allowed": [],
+          "required": [],
+          "unknown": "protocol-error"
+        },
+        {
+          "op": "field",
+          "name": "relocation",
+          "type": {
+            "$ref": "relocation-id"
+          }
+        },
+        {
+          "op": "field",
+          "name": "targetAttemptGeneration",
+          "type": {
+            "$ref": "nonzero-u64"
+          }
+        },
+        {
+          "op": "field",
+          "name": "coordinator",
+          "type": {
+            "$ref": "relocation-coordinator-fence"
+          }
+        },
+        {
+          "op": "field",
+          "name": "senderRole",
+          "type": {
+            "$ref": "relocation-role"
+          }
+        },
+        {
+          "op": "field",
+          "name": "object",
+          "type": {
+            "$ref": "relocation-object-identity"
+          }
+        },
+        {
+          "op": "field",
+          "name": "chunkOrdinal",
+          "type": {
+            "$ref": "u32"
+          }
+        },
+        {
+          "op": "field",
+          "name": "chunkData",
+          "type": {
+            "$ref": "durable-blob"
+          }
+        },
+        {
+          "op": "payload",
+          "policy": "forbidden"
+        }
+      ]
     },
     {
       "id": 53,
@@ -6929,6 +17494,77 @@ const definitions: JsonObject = {
         "failureCode-must-be-nonzero",
         "target-cleans-partial-chunks-and-prepared-resources-before-send",
         "source-restores-captured-payload-and-finishes-operation-failure"
+      ],
+      "operations": [
+        {
+          "op": "command-header",
+          "magic": [
+            90,
+            77
+          ],
+          "wireMajor": 1,
+          "commandId": 53,
+          "byteOrder": "big-endian"
+        },
+        {
+          "op": "flags",
+          "allowed": [],
+          "required": [],
+          "unknown": "protocol-error"
+        },
+        {
+          "op": "field",
+          "name": "relocation",
+          "type": {
+            "$ref": "relocation-id"
+          }
+        },
+        {
+          "op": "field",
+          "name": "targetAttemptGeneration",
+          "type": {
+            "$ref": "nonzero-u64"
+          }
+        },
+        {
+          "op": "field",
+          "name": "coordinator",
+          "type": {
+            "$ref": "relocation-coordinator-fence"
+          }
+        },
+        {
+          "op": "field",
+          "name": "target",
+          "type": {
+            "$ref": "relocation-target-fence"
+          }
+        },
+        {
+          "op": "field",
+          "name": "object",
+          "type": {
+            "$ref": "relocation-object-identity"
+          }
+        },
+        {
+          "op": "field",
+          "name": "senderRole",
+          "type": {
+            "$ref": "relocation-role"
+          }
+        },
+        {
+          "op": "field",
+          "name": "failureCode",
+          "type": {
+            "$ref": "framework-error-code"
+          }
+        },
+        {
+          "op": "payload",
+          "policy": "forbidden"
+        }
       ]
     }
   ],
@@ -6961,7 +17597,48 @@ const definitions: JsonObject = {
         "position": "trailing"
       },
       "goldenFixture": "golden/durable-authority-v1.json",
-      "providerInterpretation": "opaque-bytes"
+      "providerInterpretation": "opaque-bytes",
+      "operations": [
+        {
+          "op": "durable-header",
+          "magic": [
+            90,
+            76,
+            65,
+            85
+          ],
+          "formatVersion": 1,
+          "flags": 0,
+          "flagsType": {
+            "$ref": "u16"
+          },
+          "byteOrder": "big-endian",
+          "bodyLengthType": {
+            "$ref": "u32"
+          },
+          "body": {
+            "$ref": "authority-payload-v1"
+          },
+          "flagsComparison": "exact"
+        },
+        {
+          "op": "bounded-reader",
+          "boundary": "bodyLength",
+          "trailingBytes": "checksum-only"
+        },
+        {
+          "op": "checksum",
+          "algorithm": "crc32c-castagnoli",
+          "encoding": "u32-big-endian",
+          "coverage": "magic-through-body",
+          "position": "trailing",
+          "mismatch": "protocol-error"
+        },
+        {
+          "op": "encoded-limit",
+          "maximumEncodedBytes": 1048576
+        }
+      ]
     },
     {
       "name": "instance-activation-recovery-v1",
@@ -6991,7 +17668,48 @@ const definitions: JsonObject = {
         "position": "trailing"
       },
       "goldenFixture": "golden/instance-activation-recovery-v1.json",
-      "providerInterpretation": "opaque-bytes"
+      "providerInterpretation": "opaque-bytes",
+      "operations": [
+        {
+          "op": "durable-header",
+          "magic": [
+            90,
+            76,
+            73,
+            65
+          ],
+          "formatVersion": 1,
+          "flags": 0,
+          "flagsType": {
+            "$ref": "u16"
+          },
+          "byteOrder": "big-endian",
+          "bodyLengthType": {
+            "$ref": "u32"
+          },
+          "body": {
+            "$ref": "instance-activation-recovery-v1"
+          },
+          "flagsComparison": "exact"
+        },
+        {
+          "op": "bounded-reader",
+          "boundary": "bodyLength",
+          "trailingBytes": "checksum-only"
+        },
+        {
+          "op": "checksum",
+          "algorithm": "crc32c-castagnoli",
+          "encoding": "u32-big-endian",
+          "coverage": "magic-through-body",
+          "position": "trailing",
+          "mismatch": "protocol-error"
+        },
+        {
+          "op": "encoded-limit",
+          "maximumEncodedBytes": 1048576
+        }
+      ]
     },
     {
       "name": "relocation-data-chunk-v1",
@@ -7021,7 +17739,48 @@ const definitions: JsonObject = {
         "position": "trailing"
       },
       "goldenFixture": "golden/relocation-data-chunk-v1.json",
-      "providerInterpretation": "opaque-bytes"
+      "providerInterpretation": "opaque-bytes",
+      "operations": [
+        {
+          "op": "durable-header",
+          "magic": [
+            90,
+            76,
+            84,
+            67
+          ],
+          "formatVersion": 1,
+          "flags": 0,
+          "flagsType": {
+            "$ref": "u16"
+          },
+          "byteOrder": "big-endian",
+          "bodyLengthType": {
+            "$ref": "u32"
+          },
+          "body": {
+            "$ref": "relocation-data-chunk-v1"
+          },
+          "flagsComparison": "exact"
+        },
+        {
+          "op": "bounded-reader",
+          "boundary": "bodyLength",
+          "trailingBytes": "checksum-only"
+        },
+        {
+          "op": "checksum",
+          "algorithm": "crc32c-castagnoli",
+          "encoding": "u32-big-endian",
+          "coverage": "magic-through-body",
+          "position": "trailing",
+          "mismatch": "protocol-error"
+        },
+        {
+          "op": "encoded-limit",
+          "maximumEncodedBytes": 67108886
+        }
+      ]
     },
     {
       "name": "relocation-manifest-v1",
@@ -7051,7 +17810,48 @@ const definitions: JsonObject = {
         "position": "trailing"
       },
       "goldenFixture": "golden/relocation-manifest-v1.json",
-      "providerInterpretation": "opaque-bytes"
+      "providerInterpretation": "opaque-bytes",
+      "operations": [
+        {
+          "op": "durable-header",
+          "magic": [
+            90,
+            76,
+            84,
+            77
+          ],
+          "formatVersion": 1,
+          "flags": 0,
+          "flagsType": {
+            "$ref": "u16"
+          },
+          "byteOrder": "big-endian",
+          "bodyLengthType": {
+            "$ref": "u32"
+          },
+          "body": {
+            "$ref": "relocation-manifest-v1"
+          },
+          "flagsComparison": "exact"
+        },
+        {
+          "op": "bounded-reader",
+          "boundary": "bodyLength",
+          "trailingBytes": "checksum-only"
+        },
+        {
+          "op": "checksum",
+          "algorithm": "crc32c-castagnoli",
+          "encoding": "u32-big-endian",
+          "coverage": "magic-through-body",
+          "position": "trailing",
+          "mismatch": "protocol-error"
+        },
+        {
+          "op": "encoded-limit",
+          "maximumEncodedBytes": 33554432
+        }
+      ]
     }
   ],
   "relocationLogicalStreamFormat": {
@@ -7080,7 +17880,40 @@ const definitions: JsonObject = {
     "maximumBytes": 274877906944,
     "chunkSplit": "any-byte-boundary-including-within-frozen-record",
     "replay": "bounded-incremental-decode-without-whole-stream-allocation",
-    "goldenFixture": "golden/relocation-envelope-v1.json"
+    "goldenFixture": "golden/relocation-envelope-v1.json",
+    "operations": [
+      {
+        "op": "logical-stream",
+        "encoding": "canonical-big-endian-field-stream-without-monolithic-provider-envelope",
+        "body": {
+          "$ref": "relocation-envelope-v1"
+        },
+        "maximumBytes": 274877906944,
+        "chunkSplit": "any-byte-boundary-including-within-frozen-record",
+        "replay": "bounded-incremental-decode-without-whole-stream-allocation",
+        "generatedObjectTree": {
+          "root": {
+            "$ref": "relocation-envelope-v1"
+          },
+          "applicationStates": {
+            "$ref": "relocation-participant-application-state-vector"
+          },
+          "savedWork": {
+            "$ref": "saved-work-vector"
+          },
+          "timerRegistrations": {
+            "$ref": "relocation-timer-registration-vector"
+          },
+          "pendingTimerTicks": {
+            "$ref": "relocation-pending-timer-tick-vector"
+          }
+        }
+      },
+      {
+        "op": "encoded-limit",
+        "maximumEncodedBytes": 274877906944
+      }
+    ]
   }
 };
 const typeByName = new Map<string, JsonObject>(definitions.types.map((type: JsonObject) => [type.name, type]));

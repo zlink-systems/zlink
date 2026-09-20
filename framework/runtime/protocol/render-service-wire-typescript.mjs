@@ -8,7 +8,6 @@ import { lowerSchema } from "./service-wire-lowering.mjs";
 
 const scriptPath = fileURLToPath(import.meta.url);
 const root = path.dirname(scriptPath);
-const outputPath = path.join(root, "generated/node/service_wire_codec.generated.ts");
 
 function identifier(name) {
   return name.split(/[^A-Za-z0-9]+/).filter(Boolean)
@@ -273,12 +272,14 @@ function render(ir) {
 }
 
 function main() {
-  const [mode, schemaArgument] = process.argv.slice(2);
-  if ((mode !== "--write" && mode !== "--check") || process.argv.length > 4) {
-    console.error("usage: render-service-wire-typescript.mjs --write|--check [schema-path]");
+  const [mode, schemaArgument, outputArgument, ...extraArguments] = process.argv.slice(2);
+  if ((mode !== "--write" && mode !== "--check") || !schemaArgument || !outputArgument
+      || extraArguments.length > 0) {
+    console.error("usage: render-service-wire-typescript.mjs --write|--check <schema-path> <output-path>");
     process.exit(2);
   }
-  const schemaPath = path.resolve(schemaArgument ?? path.join(root, "service-wire-v1.schema.json"));
+  const schemaPath = path.resolve(schemaArgument);
+  const outputPath = path.resolve(outputArgument);
   const output = render(lowerSchema(schemaPath));
   if (mode === "--write") {
     fs.mkdirSync(path.dirname(outputPath), { recursive: true });

@@ -16,11 +16,12 @@ Application 공개 API나 공통 native runtime을 제공하지 않는다.
   legacy pilot 산출물의 단일 output manifest
 - `generate-service-wire-codecs.mjs`: lowering부터 네 renderer, fixture index, 상수 asset과 legacy pilot을
   순서대로 생성하고 전체 drift·orphan을 확인하는 통합 진입점
-- `render-service-wire-{typescript,dotnet,java,cpp}.mjs`: 언어 중립 IR에서 각 runtime의 최종 정적 codec을
-  생성하는 renderer
+- `render-service-wire-{typescript,dotnet,java,cpp}.mjs`: 언어 중립 IR을 언어별 source로 변환하는 renderer.
+  operation IR을 직접 정적 함수로 변환하는 작업은 후속 renderer 재작성 단계가 담당한다.
 - `generate-service-wire-pilot-codecs.mjs`: 기존 runtime adapter가 소비하며 4단계 adapter 교체 뒤 제거하는
   legacy codec generator
-- `generate-service-wire-fixtures.mjs`: schema가 가리키는 durable·logical·command golden fixture catalog를 생성하고 drift를 확인하는 도구
+- `generate-service-wire-fixtures.mjs`: schema가 가리키는 durable·logical·command golden과 operation별
+  정상·거부 벡터 catalog를 생성하고 drift를 확인하는 도구
 - `golden/durable-authority-v1.json`: 네 runtime이 Ready Instance cold activation recovery pointer를
   읽고 쓰는 golden fixture
 - `golden/instance-activation-recovery-v1.json`: target-owned cold activation의 source·target lifecycle,
@@ -55,6 +56,23 @@ Application 공개 API나 공통 native runtime을 제공하지 않는다.
   profile 상수와 공통 decoder fixture를 생성하고 `--check`로 drift를 차단하는 도구
 - `generated/`: C++·.NET·JVM·Node.js runtime이 사용하는 정규 codec·상수, fixture index와 legacy pilot 산출물
 - `traces/`: schema 승인 뒤 생성하는 normalized behavior trace
+
+## Operation IR 어휘
+
+Operation IR은 검증·직렬화 의미의 단일 소유자다. Renderer는 다음 닫힌 어휘를 언어별 문법으로만
+변환하며 새로운 wire 규칙을 추가하지 않는다.
+
+- scalar와 text: `integer`, `enum`, `length-prefixed`, `text-validation`
+- aggregate와 field: `field`, `struct`, `vector`, `versioned-vector`, `bounded-reader`,
+  `versioned-length-delimited`
+- 선택 layout과 TLV: `discriminator`, `conditional-union`, `tlv32`, `constraint`
+- command frame: `command-header`, `flags`, `flag-constraint`, `metadata-flag-frame`, `payload`
+- durable·logical: `durable-header`, `checksum`, `encoded-limit`, `logical-stream`
+- runtime 연계: `runtime-predicate`
+
+각 type·command·durable format·logical stream은 비어 있지 않은 `operations` 배열을 가진다. Lowering
+self-test는 위 24개 이름 외의 operation을 거부하고, schema의 모든 type과 command가 operation에 도달했는지
+검사한다. Field condition은 `when`과 encoder·decoder의 `whenFalse` 동작을 함께 보존한다.
 
 Codec table이나 fixture를 생성하기 전에 다음 명령이 성공해야 한다. 현재 gate는 40개 command, 156개 type,
 4개 flag, 33개 bound, durable fixture 4개와 logical·JSON·multipart·authority key fixture를 확인한다. `--self-test`는

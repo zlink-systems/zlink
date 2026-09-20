@@ -5,11 +5,8 @@ import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import process from "node:process";
-import { fileURLToPath } from "node:url";
 import { lowerSchema } from "./service-wire-lowering.mjs";
 
-const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
-const output = path.join(root, "protocol/generated/cpp/service_wire_codec.hpp");
 const identifier = (name) => name.replaceAll(/[^A-Za-z0-9_]/g, "_");
 const literal = (value) => {
   if (typeof value === "string" && /^-?\d+$/.test(value)) return `${value}${value.startsWith("-") ? "" : "ull"}`;
@@ -193,8 +190,12 @@ ${durable}
 }
 
 let typeMapCache = new Map();
-const [mode, schema] = process.argv.slice(2);
-if ((mode !== "--write" && mode !== "--check") || !schema) throw new Error("usage: node render-service-wire-cpp.mjs --write|--check <schema>");
+const [mode, schema, outputArgument, ...extraArguments] = process.argv.slice(2);
+if ((mode !== "--write" && mode !== "--check") || !schema || !outputArgument
+    || extraArguments.length > 0) {
+  throw new Error("usage: node render-service-wire-cpp.mjs --write|--check <schema> <output>");
+}
+const output = path.resolve(outputArgument);
 const content = render(lowerSchema(path.resolve(schema)));
 if (mode === "--check") { if (!fs.existsSync(output) || fs.readFileSync(output, "utf8") !== content) process.exitCode = 1; }
 else { fs.mkdirSync(path.dirname(output), { recursive: true }); fs.writeFileSync(output, content); }
