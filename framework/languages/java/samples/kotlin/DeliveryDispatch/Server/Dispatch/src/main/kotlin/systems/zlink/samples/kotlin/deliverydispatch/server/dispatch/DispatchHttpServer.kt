@@ -14,7 +14,6 @@ import systems.zlink.samples.kotlin.deliverydispatch.server.configuration.Sample
 import systems.zlink.samples.kotlin.deliverydispatch.shared.contracts.AssignDeliveryMsg
 import systems.zlink.samples.kotlin.deliverydispatch.shared.contracts.CreateDeliveryReq
 import systems.zlink.samples.kotlin.deliverydispatch.shared.contracts.CreateDeliveryRes
-import systems.zlink.samples.kotlin.deliverydispatch.shared.contracts.DeliveryStatus
 import systems.zlink.samples.kotlin.deliverydispatch.shared.contracts.ServerAssertionReq
 
 class DispatchHttpServer(
@@ -39,18 +38,17 @@ class DispatchHttpServer(
             return
         }
         val request = json.readValue(exchange.requestBody, CreateDeliveryReq::class.java)
-        val assign = AssignDeliveryMsg(
-            deliveryId = request.deliveryId,
-            customerId = request.customerId,
-            pickupAddress = request.pickupAddress,
-            dropoffAddress = request.dropoffAddress,
-        )
+        val assign =
+            AssignDeliveryMsg(
+                deliveryId = request.deliveryId,
+                customerId = request.customerId,
+                pickupAddress = request.pickupAddress,
+                dropoffAddress = request.dropoffAddress,
+            )
         runBlocking { channels.sendToChannel(SampleNames.DispatchChannel, assign).submit().await() }
-        exchange.writeJson(
-            200,
-            json.writeValueAsString(CreateDeliveryRes(request.deliveryId)),
-        )
+        exchange.writeJson(200, json.writeValueAsString(CreateDeliveryRes(request.deliveryId)))
     }
+
     // --8<-- [end:doc-dd-http-create]
 
     private fun handleServerAssertion(exchange: HttpExchange) {

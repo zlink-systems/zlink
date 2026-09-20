@@ -1,14 +1,16 @@
-using Zlink.Framework.Contracts.Handlers;
 using DeliveryDispatch.Shared.Contracts;
 using Microsoft.Extensions.Logging;
+using Zlink.Framework.Contracts.Handlers;
 using Zlink.Framework.Contracts.Spots;
 
 namespace DeliveryDispatch.Server.CustomerGateway.Spots.EntrySpot.Handlers;
 
-using CustomerStatusPacketHandler = IZLinkSpotPacketHandler<CustomerEntrySpot, DeliveryStatusUpdatedMsg>;
+using CustomerStatusPacketHandler = IZLinkSpotPacketHandler<
+    CustomerEntrySpot,
+    DeliveryStatusUpdatedMsg
+>;
 
-internal sealed class DeliveryStatusUpdatedHandler(
-    ILogger<DeliveryStatusUpdatedHandler> logger)
+internal sealed class DeliveryStatusUpdatedHandler(ILogger<DeliveryStatusUpdatedHandler> logger)
     : IZLinkEntrySpotActorSendHandler<CustomerEntrySpot, CustomerActor, DeliveryStatusUpdatedMsg>
 {
     // --8<-- [start:doc-dd-customer-push]
@@ -17,19 +19,22 @@ internal sealed class DeliveryStatusUpdatedHandler(
         CustomerActor actor,
         IZLinkMessageContext context,
         DeliveryStatusUpdatedMsg message,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken
+    )
     {
         logger.LogInformation(
             "deliverydispatch customer-entry: status delivery={DeliveryId} customer={CustomerId} actor={ActorId} status={Status}",
             message.DeliveryId,
             message.CustomerId,
             actor.ActorId,
-            message.Status);
+            message.Status
+        );
         await actor.PushStatusAsync(message, cancellationToken);
         logger.LogInformation(
             "deliverydispatch-customer pushed status={Status} delivery={DeliveryId}",
             message.Status,
-            message.DeliveryId);
+            message.DeliveryId
+        );
     }
     // --8<-- [end:doc-dd-customer-push]
 }

@@ -24,7 +24,8 @@ internal sealed class QuestStore : IQuestStore, IAsyncDisposable
     public async ValueTask<QuestDomainEvent[]> ReadQuestStreamAsync(
         string playerId,
         string questId,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken
+    )
     {
         var events = await ReadDomainEventsAsync(cancellationToken);
         return events
@@ -35,14 +36,15 @@ internal sealed class QuestStore : IQuestStore, IAsyncDisposable
 
     public async ValueTask<QuestProgressState[]> ReadProjectionAsync(
         string playerId,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken
+    )
     {
         var all = await ReadAsync<List<QuestProgress>>(
             Key("quest-projection"),
             [],
-            cancellationToken);
-        return all
-            .Where(progress => progress.PlayerId == playerId)
+            cancellationToken
+        );
+        return all.Where(progress => progress.PlayerId == playerId)
             .OrderBy(progress => progress.QuestId, StringComparer.Ordinal)
             .Select(QuestContractMapper.ToDomain)
             .ToArray();
@@ -51,7 +53,8 @@ internal sealed class QuestStore : IQuestStore, IAsyncDisposable
     public async ValueTask<bool> AppendAndProjectAsync(
         QuestProgressState progress,
         IReadOnlyList<QuestDomainEvent> events,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken
+    )
     {
         var contracts = events.Select(QuestContractMapper.ToContract).ToArray();
         var appended = false;
@@ -60,48 +63,67 @@ internal sealed class QuestStore : IQuestStore, IAsyncDisposable
             new List<StoredQuestEvent>(),
             stored =>
             {
-                if (stored.Any(existing =>
+                if (
+                    stored.Any(existing =>
                         existing.PlayerId == progress.PlayerId
                         && existing.QuestId == progress.QuestId
-                        && existing.SourceEventId == progress.LastSourceEventId))
+                        && existing.SourceEventId == progress.LastSourceEventId
+                    )
+                )
                     return;
 
-                var nextVersion = stored
-                    .Where(existing => existing.PlayerId == progress.PlayerId && existing.QuestId == progress.QuestId)
-                    .Select(existing => existing.Version)
-                    .DefaultIfEmpty(0)
-                    .Max() + 1;
-                if (contracts.Length == 0
+                var nextVersion =
+                    stored
+                        .Where(existing =>
+                            existing.PlayerId == progress.PlayerId
+                            && existing.QuestId == progress.QuestId
+                        )
+                        .Select(existing => existing.Version)
+                        .DefaultIfEmpty(0)
+                        .Max() + 1;
+                if (
+                    contracts.Length == 0
                     || contracts[0].Version != nextVersion
                     || contracts.Where((item, index) => item.Version != nextVersion + index).Any()
-                    || contracts.Any(item => stored.Any(existing => existing.EventId == item.EventId)))
+                    || contracts.Any(item =>
+                        stored.Any(existing => existing.EventId == item.EventId)
+                    )
+                )
                     return;
 
                 stored.AddRange(contracts);
                 appended = true;
             },
-            cancellationToken);
+            cancellationToken
+        );
 
-        if (!appended) return false;
+        if (!appended)
+            return false;
 
         await UpdateAsync(
             Key("quest-projection"),
             new List<QuestProgress>(),
             projection =>
             {
-                projection.RemoveAll(p => p.PlayerId == progress.PlayerId && p.QuestId == progress.QuestId);
+                projection.RemoveAll(p =>
+                    p.PlayerId == progress.PlayerId && p.QuestId == progress.QuestId
+                );
                 projection.Add(QuestContractMapper.ToContract(progress));
             },
-            cancellationToken);
+            cancellationToken
+        );
         return true;
     }
 
-    public async ValueTask<StoredQuestEvent[]> ReadStoredEventsAsync(CancellationToken cancellationToken)
+    public async ValueTask<StoredQuestEvent[]> ReadStoredEventsAsync(
+        CancellationToken cancellationToken
+    )
     {
         var events = await ReadAsync<List<StoredQuestEvent>>(
             Key("quest-events"),
             [],
-            cancellationToken);
+            cancellationToken
+        );
         return events
             .OrderBy(e => e.PlayerId, StringComparer.Ordinal)
             .ThenBy(e => e.QuestId, StringComparer.Ordinal)
@@ -109,7 +131,9 @@ internal sealed class QuestStore : IQuestStore, IAsyncDisposable
             .ToArray();
     }
 
-    private async ValueTask<QuestDomainEvent[]> ReadDomainEventsAsync(CancellationToken cancellationToken)
+    private async ValueTask<QuestDomainEvent[]> ReadDomainEventsAsync(
+        CancellationToken cancellationToken
+    )
     {
         return (await ReadStoredEventsAsync(cancellationToken))
             .Select(QuestContractMapper.ToDomain)
@@ -118,7 +142,8 @@ internal sealed class QuestStore : IQuestStore, IAsyncDisposable
 
     public async ValueTask<int> RecordOwnerRehydratedAsync(
         string playerId,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken
+    )
     {
         var generation = 0;
         await UpdateAsync(
@@ -128,23 +153,28 @@ internal sealed class QuestStore : IQuestStore, IAsyncDisposable
             {
                 generation = evidence[playerId] = evidence.GetValueOrDefault(playerId) + 1;
             },
-            cancellationToken);
+            cancellationToken
+        );
         return generation;
     }
 
-    public async ValueTask<Dictionary<string, int>> ReadOwnerRehydrateCountsAsync(CancellationToken cancellationToken)
+    public async ValueTask<Dictionary<string, int>> ReadOwnerRehydrateCountsAsync(
+        CancellationToken cancellationToken
+    )
     {
         return await ReadAsync(
             Key("owner-rehydrates"),
             new Dictionary<string, int>(StringComparer.Ordinal),
-            cancellationToken);
+            cancellationToken
+        );
     }
 
     private async ValueTask UpdateAsync<T>(
         string key,
         T fallback,
         Action<T> update,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken
+    )
     {
         await _redis.UpdateAsync(key, fallback, update, cancellationToken).ConfigureAwait(false);
     }

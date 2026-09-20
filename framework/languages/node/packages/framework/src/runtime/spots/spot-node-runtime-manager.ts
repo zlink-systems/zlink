@@ -267,6 +267,7 @@ export class ZLinkSpotNodeRuntimeManager {
       const node = meshAdapter.createMeshNode(this.options.context, {
         meshName: spotNodeName,
         routingId,
+        receiveTimeoutMs: spotNode.router?.receiveTimeoutMs,
         applicationJobQueue: this.applicationJobQueue,
         applicationJobReceiveFlowFailureSink:
           this.options.applicationJobReceiveFlowFailureSink,
@@ -573,8 +574,7 @@ export class ZLinkSpotNodeRuntimeManager {
     meshName: string,
     registration: ZLinkSpotNodeOptions
   ): string | undefined {
-    if (effectiveObjectRole(registration) !== ZLinkObjectRole.Server
-      || registration.entrySpotType === undefined) {
+    if (effectiveObjectRole(registration) !== ZLinkObjectRole.Server) {
       return undefined;
     }
     let entrySpotId = this.entrySpotIds.get(meshName);

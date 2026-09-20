@@ -1,35 +1,30 @@
 package systems.zlink.samples.kotlin.tictactoe.server.play
 
-import java.nio.file.Path
 import com.fasterxml.jackson.databind.MapperFeature
 import com.fasterxml.jackson.databind.ObjectMapper
 import com.fasterxml.jackson.databind.json.JsonMapper
+import java.nio.file.Path
 import org.springframework.boot.WebApplicationType
 import org.springframework.boot.autoconfigure.SpringBootApplication
 import org.springframework.boot.builder.SpringApplicationBuilder
 import org.springframework.boot.context.properties.EnableConfigurationProperties
-import org.springframework.core.env.StandardEnvironment
 import org.springframework.context.ConfigurableApplicationContext
 import org.springframework.context.annotation.Bean
+import org.springframework.core.env.StandardEnvironment
 import systems.zlink.framework.locations.redis.ZLinkRedisLocationStore
 import systems.zlink.framework.locations.redis.ZLinkRedisRelocationOptions
 import systems.zlink.framework.locations.redis.ZLinkRedisRelocationStore
+import systems.zlink.framework.monitoring.ZLinkRouteMeshRuntime
 import systems.zlink.framework.spring.EnableZLinkFramework
 import systems.zlink.framework.spring.ZLinkFrameworkConfigurer
 import systems.zlink.samples.kotlin.tictactoe.server.configuration.SampleLocationStore
 import systems.zlink.samples.kotlin.tictactoe.server.configuration.SampleSettings
 import systems.zlink.samples.kotlin.tictactoe.server.configuration.TicTacToeReadinessReporter
-import systems.zlink.framework.monitoring.ZLinkRouteMeshRuntime
 import systems.zlink.samples.kotlin.tictactoe.server.play.infrastructure.zlink.spots.tictactoegamespot.handlers.TicTacToeGameCreatedHandler
-
-
 
 @EnableZLinkFramework
 @EnableConfigurationProperties(SampleSettings::class)
-@SpringBootApplication(
-    proxyBeanMethods = false,
-    scanBasePackageClasses = [PlayServer::class],
-)
+@SpringBootApplication(proxyBeanMethods = false, scanBasePackageClasses = [PlayServer::class])
 class PlayServerApplication {
     @Bean
     fun playFramework(settings: SampleSettings): ZLinkFrameworkConfigurer {
@@ -41,16 +36,15 @@ class PlayServerApplication {
                 ZLinkRedisRelocationStore(
                     ZLinkRedisRelocationOptions()
                         .setConnectionString(settings.redisEndpoint)
-                        .setKeyPrefix(settings.redisKeyPrefix + "relocation:"),
-                ),
+                        .setKeyPrefix(settings.redisKeyPrefix + "relocation:")
+                )
             )
             server.configure(options)
         }
     }
 
     @Bean
-    fun ticTacToeGameCreatedHandler(): TicTacToeGameCreatedHandler =
-        TicTacToeGameCreatedHandler()
+    fun ticTacToeGameCreatedHandler(): TicTacToeGameCreatedHandler = TicTacToeGameCreatedHandler()
 
     @Bean(destroyMethod = "close")
     fun locationStore(settings: SampleSettings): ZLinkRedisLocationStore =
@@ -60,11 +54,12 @@ class PlayServerApplication {
     fun ticTacToeReadinessReporter(
         settings: SampleSettings,
         meshes: ZLinkRouteMeshRuntime,
-    ): TicTacToeReadinessReporter = TicTacToeReadinessReporter.play(
-        settings.nodeId,
-        if (settings.nodeId == "play-a") "play-b" else "play-a",
-        meshes,
-    )
+    ): TicTacToeReadinessReporter =
+        TicTacToeReadinessReporter.play(
+            settings.nodeId,
+            if (settings.nodeId == "play-a") "play-b" else "play-a",
+            meshes,
+        )
 
     @Bean
     fun ticTacToeJsonMapper(): ObjectMapper =
@@ -76,16 +71,22 @@ class PlayServerApplication {
 
     companion object {
         fun run(configPath: String): ConfigurableApplicationContext {
-            val environment = StandardEnvironment().apply {
-                propertySources.remove(StandardEnvironment.SYSTEM_ENVIRONMENT_PROPERTY_SOURCE_NAME)
-                propertySources.remove(StandardEnvironment.SYSTEM_PROPERTIES_PROPERTY_SOURCE_NAME)
-            }
-            return SpringApplicationBuilder(PlayServerApplication::class.java).also { builder ->
-                builder.application().setKeepAlive(true)
-            }
+            val environment =
+                StandardEnvironment().apply {
+                    propertySources.remove(
+                        StandardEnvironment.SYSTEM_ENVIRONMENT_PROPERTY_SOURCE_NAME
+                    )
+                    propertySources.remove(
+                        StandardEnvironment.SYSTEM_PROPERTIES_PROPERTY_SOURCE_NAME
+                    )
+                }
+            return SpringApplicationBuilder(PlayServerApplication::class.java)
+                .also { builder -> builder.application().setKeepAlive(true) }
                 .environment(environment)
                 .web(WebApplicationType.NONE)
-                .properties("spring.config.location=${Path.of(configPath).toAbsolutePath().toUri()}")
+                .properties(
+                    "spring.config.location=${Path.of(configPath).toAbsolutePath().toUri()}"
+                )
                 .run()
         }
     }

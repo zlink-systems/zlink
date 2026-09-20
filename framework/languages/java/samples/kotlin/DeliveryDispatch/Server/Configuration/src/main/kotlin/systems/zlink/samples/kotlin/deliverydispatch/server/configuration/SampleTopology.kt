@@ -49,23 +49,37 @@ data class SampleTopology(
             require(args.size == 2 && args[0] == "--config" && args[1].isNotBlank()) {
                 "Usage: <role> --config <path>"
             }
-            val properties = Properties().also { values ->
-                Files.newBufferedReader(Path.of(args[1])).use(values::load)
-            }
+            val properties =
+                Properties().also { values ->
+                    Files.newBufferedReader(Path.of(args[1])).use(values::load)
+                }
             RegistryPubEndpoint = value(properties, "registryPubEndpoint", "tcp://127.0.0.1:49101")
-            RegistryRouterEndpoint = value(properties, "registryRouterEndpoint", "tcp://127.0.0.1:49102")
-            TrackingChannelEndpoint = value(properties, "trackingChannelEndpoint", "tcp://127.0.0.1:49103")
-            TrackingSpotEndpoint = value(properties, "trackingSpotEndpoint", "tcp://127.0.0.1:49118")
-            CustomerStreamEndpoint = value(properties, "customerStreamEndpoint", "tcp://127.0.0.1:49104")
-            CourierStreamEndpoint = value(properties, "courierStreamEndpoint", "tcp://127.0.0.1:49105")
-            DispatchHttpEndpoint = value(properties, "dispatchHttpEndpoint", "http://127.0.0.1:49107")
-            DispatchSpotEndpoint = value(properties, "dispatchSpotEndpoint", "tcp://127.0.0.1:49108")
-            DispatchChannelEndpoint = value(properties, "dispatchChannelEndpoint", "tcp://127.0.0.1:49121")
-            CustomerSpotEndpoint = value(properties, "customerSpotEndpoint", "tcp://127.0.0.1:49109")
-            CustomerSpotRouterEndpoint = value(properties, "customerSpotRouterEndpoint", "tcp://127.0.0.1:49110")
-            CourierActorNode1SpotEndpoint = value(properties, "courierActorNode1SpotEndpoint", "tcp://127.0.0.1:49113")
-            CourierActorNode2SpotEndpoint = value(properties, "courierActorNode2SpotEndpoint", "tcp://127.0.0.1:49114")
-            CourierSessionSpotEndpoint = value(properties, "courierSessionSpotEndpoint", "tcp://127.0.0.1:49119")
+            RegistryRouterEndpoint =
+                value(properties, "registryRouterEndpoint", "tcp://127.0.0.1:49102")
+            TrackingChannelEndpoint =
+                value(properties, "trackingChannelEndpoint", "tcp://127.0.0.1:49103")
+            TrackingSpotEndpoint =
+                value(properties, "trackingSpotEndpoint", "tcp://127.0.0.1:49118")
+            CustomerStreamEndpoint =
+                value(properties, "customerStreamEndpoint", "tcp://127.0.0.1:49104")
+            CourierStreamEndpoint =
+                value(properties, "courierStreamEndpoint", "tcp://127.0.0.1:49105")
+            DispatchHttpEndpoint =
+                value(properties, "dispatchHttpEndpoint", "http://127.0.0.1:49107")
+            DispatchSpotEndpoint =
+                value(properties, "dispatchSpotEndpoint", "tcp://127.0.0.1:49108")
+            DispatchChannelEndpoint =
+                value(properties, "dispatchChannelEndpoint", "tcp://127.0.0.1:49121")
+            CustomerSpotEndpoint =
+                value(properties, "customerSpotEndpoint", "tcp://127.0.0.1:49109")
+            CustomerSpotRouterEndpoint =
+                value(properties, "customerSpotRouterEndpoint", "tcp://127.0.0.1:49110")
+            CourierActorNode1SpotEndpoint =
+                value(properties, "courierActorNode1SpotEndpoint", "tcp://127.0.0.1:49113")
+            CourierActorNode2SpotEndpoint =
+                value(properties, "courierActorNode2SpotEndpoint", "tcp://127.0.0.1:49114")
+            CourierSessionSpotEndpoint =
+                value(properties, "courierSessionSpotEndpoint", "tcp://127.0.0.1:49119")
             RedisEndpoint = required(properties, "redisEndpoint")
             RedisKeyPrefix = value(properties, "redisKeyPrefix", "deliverydispatch:kotlin:")
             CourierNode = value(properties, "courierNode", "node1")
@@ -80,6 +94,5 @@ data class SampleTopology(
             requireNotNull(properties.getProperty(name)?.takeIf(String::isNotBlank)) {
                 "Missing DeliveryDispatch sample config: $name"
             }
-
     }
 }

@@ -3,7 +3,7 @@ import type {
   NodeAlertNotify,
   NodeStatusNotify,
   NodeView,
-  WatchNodesRes,
+  WatchNodesRes
 } from '../../shared/api/contracts';
 
 export class NodeModel {

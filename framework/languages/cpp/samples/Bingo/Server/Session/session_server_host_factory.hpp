@@ -32,12 +32,10 @@ class session_server_host_factory_t
         app.logging ().use_console ().set_min_level (log_level_t::info);
         app.logging ().use_file (
           flow_log_path (topology.log_dir, "session-" + topology.session_node));
-        observe_runtime_metrics (app, topology.log_dir, "session-" + topology.session_node);
         auto &options = app.add_zlink_framework ();
         options.configure_dispatch ().message_flow (message_flow_log_mode_t::normal);
         options.codecs ().use (zlink::framework_codecs::protobuf ());
-        options.services ().add_scoped<authenticate_session_handler_t,
-                                        channel_client_t> ();
+        options.services ().add_scoped<authenticate_session_handler_t, channel_client_t> ();
         options.add_location_store<redis::redis_location_store_t> ()
           .set_connection_string (topology.redis_endpoint)
           .set_key_prefix (topology.redis_key_prefix + "location:");
@@ -47,8 +45,7 @@ class session_server_host_factory_t
         // --8<-- [start:doc-bingo-session-register]
         options.add_client_server_channel (sample_names_t::api_channel).client ();
         auto room_mesh = options.add_route_mesh (sample_names_t::room_spot_mesh);
-        room_mesh
-          .set_automatic_routing_id_prefix ("bingo-session")
+        room_mesh.set_automatic_routing_id_prefix ("bingo-session")
           .listen (topology.selected_session_route_endpoint ());
         room_mesh.objects ().client ();
         room_mesh.channel (sample_names_t::room_spot_mesh).client ();
@@ -57,7 +54,9 @@ class session_server_host_factory_t
           .register_session<bingo_session_t> ();
         // --8<-- [end:doc-bingo-session-register]
         app.add_hosted_service (std::make_unique<route_mesh_readiness_service_t> (
-          "session-" + topology.session_node, sample_names_t::room_spot_mesh, "room",
+          "session-" + topology.session_node,
+          sample_names_t::room_spot_mesh,
+          "room",
           std::vector<std::string>{sample_names_t::play_a_rid, sample_names_t::play_b_rid}));
         return app;
     }

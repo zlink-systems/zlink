@@ -20,7 +20,6 @@ using framework::message_t;
 class play_session_t final : public packet_stream_session_t
 {
   public:
-
     play_session_t (session_actor_manager_t &actors,
                     authenticate_play_session_handler_t &authenticate) :
         _actors (actors), _authenticate (authenticate)
@@ -64,9 +63,9 @@ class play_session_t final : public packet_stream_session_t
             co_return;
         }
         if (dispatch.can_reply) {
-            auto reply =
-              co_await actor.value ().relay_request (std::string (dispatch.packet_name), payload)
-                .async ();
+            auto reply = co_await actor.value ()
+                           .relay_request (std::string (dispatch.packet_name), payload)
+                           .async ();
             stream.reply_packet (reply).async ();
             co_return;
         }
@@ -84,9 +83,9 @@ class play_session_t final : public packet_stream_session_t
         }
         auto actor = _actors.find (*_bound_actor_id);
         if (!actor) {
-            return result_t<session_actor_t>::failure (
-              framework_error_kind_t::not_found,
-              "Exactly one actor must be bound before " + action + ".");
+            return result_t<session_actor_t>::failure (framework_error_kind_t::not_found,
+                                                       "Exactly one actor must be bound before "
+                                                         + action + ".");
         }
         return result_t<session_actor_t>::success (std::move (*actor));
     }

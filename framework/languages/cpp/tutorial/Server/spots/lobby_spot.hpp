@@ -40,8 +40,7 @@ class lobby_spot_t : public fw::entry_spot_t<player_t>
         // on an HTTP path with no bound connection, where push ends with InvalidOperation.
         // Rename is already complete, so only that failure is discarded.
         try {
-            co_await player
-              .context ()
+            co_await player.context ()
               .bound_session ()
               .send (nickname_changed_t{player.nickname})
               .async ();
@@ -57,12 +56,7 @@ class lobby_spot_t : public fw::entry_spot_t<player_t>
     // --8<-- [start:actor-request-handler]
     player_info_t get_player (const player_t &player, fw::message_context_t &, const get_player_t &)
     {
-        return player_info_t{
-          std::string (player
-                         .context ()
-                         .actor_id ()
-                         .value ()),
-          player.nickname};
+        return player_info_t{std::string (player.context ().actor_id ().value ()), player.nickname};
     }
     // --8<-- [end:actor-request-handler]
     // --8<-- [end:actor-handlers]

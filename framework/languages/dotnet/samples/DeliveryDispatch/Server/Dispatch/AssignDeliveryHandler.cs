@@ -8,18 +8,20 @@ namespace DeliveryDispatch.Server.Dispatch;
 [ZLinkHandlerGroup(SampleNames.DispatchChannel)]
 internal sealed class AssignDeliveryHandler(
     DispatchWorkQueue queue,
-    ILogger<AssignDeliveryHandler> logger)
-    : IZLinkSendHandler<AssignDeliveryMsg>
+    ILogger<AssignDeliveryHandler> logger
+) : IZLinkSendHandler<AssignDeliveryMsg>
 {
     public async ValueTask HandleAsync(
         AssignDeliveryMsg message,
         IZLinkMessageContext context,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken
+    )
     {
         await queue.EnqueueAsync(message, cancellationToken);
         logger.LogInformation(
             "deliverydispatch dispatch-channel: enqueued delivery={DeliveryId} customer={CustomerId}",
             message.DeliveryId,
-            message.CustomerId);
+            message.CustomerId
+        );
     }
 }

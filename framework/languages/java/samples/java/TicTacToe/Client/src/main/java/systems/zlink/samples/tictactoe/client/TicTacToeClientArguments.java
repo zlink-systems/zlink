@@ -1,24 +1,21 @@
 package systems.zlink.samples.tictactoe.client;
 
 public final class TicTacToeClientArguments {
-    private TicTacToeClientArguments() {
-    }
+    private TicTacToeClientArguments() {}
 
     public static TicTacToeClientOptions parse(String[] args) {
         TicTacToeClientOptions defaults = TicTacToeClientOptions.createDefault();
         return new TicTacToeClientOptions(
-            readOption(args, "--api-url", defaults.apiUrl()),
-            readOption(args, "--game-name", defaults.gameName()),
-            readOption(args, "--x-actor-id", defaults.xActorId()),
-            readOption(args, "--o-actor-id", defaults.oActorId()),
-            readOption(args, "--observer-actor-id", defaults.observerActorId()),
-            readOption(args, "--lifecycle-completion-file", defaults.lifecycleCompletionFile()));
+                readOption(args, "--api-url", defaults.apiUrl()),
+                readOption(args, "--game-name", defaults.gameName()),
+                readOption(args, "--x-actor-id", defaults.xActorId()),
+                readOption(args, "--o-actor-id", defaults.oActorId()),
+                readOption(args, "--observer-actor-id", defaults.observerActorId()),
+                readOption(
+                        args, "--lifecycle-completion-file", defaults.lifecycleCompletionFile()));
     }
 
-    private static String readOption(
-        String[] args,
-        String name,
-        String defaultValue) {
+    private static String readOption(String[] args, String name, String defaultValue) {
         for (int index = 0; index < args.length; index++) {
             if (!args[index].equals(name)) {
                 continue;

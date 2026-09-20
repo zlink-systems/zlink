@@ -5,8 +5,12 @@ import { ShoppingMallClientScenario } from './shoppingmall-client-scenario';
 
 async function main(): Promise<void> {
   const config = loadSampleConfig();
-  const apiA = ZLinkHttpClient.create(config.apiAHttpUrl).timeout(SampleNames.clientTimeout).build();
-  const apiB = ZLinkHttpClient.create(config.apiBHttpUrl).timeout(SampleNames.clientTimeout).build();
+  const apiA = ZLinkHttpClient.create(config.apiAHttpUrl)
+    .timeout(SampleNames.clientTimeout)
+    .build();
+  const apiB = ZLinkHttpClient.create(config.apiBHttpUrl)
+    .timeout(SampleNames.clientTimeout)
+    .build();
   try {
     await new ShoppingMallClientScenario().run(
       apiA,
@@ -15,10 +19,7 @@ async function main(): Promise<void> {
       AbortSignal.timeout(SampleNames.clientTimeout)
     );
   } finally {
-    await Promise.allSettled([
-      apiA.close(),
-      apiB.close()
-    ]);
+    await Promise.allSettled([apiA.close(), apiB.close()]);
   }
   console.log('shoppingmall=completed');
 }

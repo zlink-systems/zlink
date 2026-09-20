@@ -2657,28 +2657,54 @@ public final class ZLinkSpotRuntime
                 .orElseThrow(() -> new IllegalStateException(
                     "invalid Instance Spot authority"));
             var allocation = snapshot.allocation();
+            boolean matchesRoute = authority.instance().isPresent()
+                && factory.stableType().equals(authority.stableType())
+                && meshName.equals(authority.meshName())
+                && route.targetSpotId().equals(authority.spotId())
+                && route.targetNodeRid().equals(authority.nodeRid())
+                && route.targetNodeGeneration() == authority.nodeGeneration()
+                && route.objectGeneration() == snapshot.objectGeneration()
+                && route.authorityOwnerGeneration()
+                    == snapshot.authorityOwnerGeneration()
+                && route.leaseGeneration() == snapshot.ownerLeaseGeneration()
+                && route.ownerId().equals(snapshot.ownerId())
+                && route.storeVersion().equals(snapshot.storeVersion())
+                && allocation.objectKind()
+                    == systems.zlink.framework.locations
+                        .ZLinkPlacementObjectKind.INSTANCE_SPOT
+                && allocation.stableType().equals(factory.stableType());
+            if (matchesRoute
+                && authority.state()
+                    == systems.zlink.framework.runtime.locations
+                        .ZLinkServiceAuthorityPayloadCodec.State.READY
+                && allocation.state()
+                    == systems.zlink.framework.runtime.internal.locations
+                        .ZLinkPlacementAllocationState.ACTIVE) {
+                return activationFactory.activateInstance(
+                        meshName, factory.spotType(), backendSpot)
+                    .thenAccept(activation -> {
+                        activation.setAuthorityFence(
+                            route.ownerId(),
+                            route.leaseGeneration(),
+                            route.authorityOwnerGeneration(),
+                            route.targetNodeGeneration());
+                        instanceSpotActivations.put(
+                            route.targetSpotId(), activation);
+                        activation.startIdleEviction(
+                            instanceSpotIdleTimeouts.getOrDefault(
+                                meshName, Duration.ZERO));
+                    });
+            }
             var pending = snapshot.pendingCreation().orElseThrow(
                 () -> new IllegalStateException(
                     "Instance Spot creation projection is missing"));
-            if (authority.instance().isEmpty()
+            if (!matchesRoute
                 || authority.state()
                     != systems.zlink.framework.runtime.locations
                         .ZLinkServiceAuthorityPayloadCodec.State.CREATING
-                || !factory.stableType().equals(authority.stableType())
-                || !meshName.equals(authority.meshName())
-                || !route.targetSpotId().equals(authority.spotId())
-                || !route.targetNodeRid().equals(authority.nodeRid())
-                || route.targetNodeGeneration() != authority.nodeGeneration()
-                || route.objectGeneration() != snapshot.objectGeneration()
-                || route.authorityOwnerGeneration()
-                    != snapshot.authorityOwnerGeneration()
-                || route.leaseGeneration() != snapshot.ownerLeaseGeneration()
-                || !route.ownerId().equals(snapshot.ownerId())
-                || !route.storeVersion().equals(snapshot.storeVersion())
-                || allocation.objectKind()
-                    != systems.zlink.framework.locations
-                        .ZLinkPlacementObjectKind.INSTANCE_SPOT
-                || !allocation.stableType().equals(factory.stableType())) {
+                || allocation.state()
+                    != systems.zlink.framework.runtime.internal.locations
+                        .ZLinkPlacementAllocationState.PENDING) {
                 return CompletableFuture.failedFuture(
                     new IllegalStateException(
                         "Instance Spot reservation fence is stale"));

@@ -59,11 +59,7 @@ data class BingoRoomSettings(
         const val GamePurpose: String = "Game"
         const val ObserverPurpose: String = "Observer"
 
-        fun create(
-            mode: String,
-            roomSeq: Int,
-            drawPeriodMillis: Long,
-        ): BingoRoomSettings {
+        fun create(mode: String, roomSeq: Int, drawPeriodMillis: Long): BingoRoomSettings {
             check(mode == "two-player") { "Unsupported bingo mode. mode=$mode" }
             return BingoRoomSettings(
                 roomName = "Bingo Room %03d".format(roomSeq),

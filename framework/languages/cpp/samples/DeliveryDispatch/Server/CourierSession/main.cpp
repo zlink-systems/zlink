@@ -41,13 +41,14 @@ class courier_session_t final : public packet_stream_session_t
             const auto request = payload.parse_json<bind_courier_session_req_t> ();
             /* Global ActorId로 current owner를 찾거나 eligible node에 생성한다. Application은
              * courier id에서 physical NodeRid를 계산하지 않는다. */
-            auto located =
-              actors.get_or_create (sample_names_t::courier_actor_type, request.courier_id,
-                                    ensure_courier_actor_req_t{request.courier_id});
+            auto located = actors.get_or_create (sample_names_t::courier_actor_type,
+                                                 request.courier_id,
+                                                 ensure_courier_actor_req_t{request.courier_id});
             if (!located) {
-                throw framework_exception_t (
-                  located.error_kind (), located.error () ? located.error ()->what ()
-                                                          : "courier actor could not be located");
+                throw framework_exception_t (located.error_kind (),
+                                             located.error ()
+                                               ? located.error ()->what ()
+                                               : "courier actor could not be located");
             }
             /* Ready 결과의 exact ActorRef는 Framework session bind에만 사용한다. Application
              * message나 client reply에는 ActorRef와 physical route를 넣지 않는다. */
@@ -60,8 +61,7 @@ class courier_session_t final : public packet_stream_session_t
                                              bind_courier_session_req_t{request.courier_id}))
                            .async ();
             stream.reply_packet (reply).async ();
-            std::cerr << "deliverydispatch-courier bound courier=" << request.courier_id
-                      << "\n";
+            std::cerr << "deliverydispatch-courier bound courier=" << request.courier_id << "\n";
             // --8<-- [end:doc-dd-session-bind]
             co_return;
         }
@@ -118,7 +118,8 @@ int main (int argc, char **argv)
       .bind (topology.courier_stream_endpoint)
       .register_session<courier_session_t> ();
     app.add_hosted_service (std::make_unique<route_readiness_service_t> (
-      sample_names_t::courier_session_node, sample_names_t::courier_actor_discovery,
+      sample_names_t::courier_session_node,
+      sample_names_t::courier_actor_discovery,
       std::vector<std::string>{sample_names_t::courier_actor_instance_1,
                                sample_names_t::courier_actor_instance_2}));
     return app.run (argc, argv);

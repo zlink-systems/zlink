@@ -2,8 +2,7 @@ package systems.zlink.samples.zoneworld.server.zone;
 
 import org.springframework.boot.ApplicationArguments;
 import org.springframework.boot.ApplicationRunner;
-import java.util.concurrent.CompletableFuture;
-import java.util.concurrent.TimeUnit;
+
 import systems.zlink.framework.actors.ZLinkActorClient;
 import systems.zlink.framework.actors.ZLinkActorCreateResult;
 import systems.zlink.framework.actors.ZLinkActorManager;
@@ -17,6 +16,10 @@ import systems.zlink.samples.zoneworld.server.configuration.SampleTopology;
 import systems.zlink.samples.zoneworld.shared.Messages;
 import systems.zlink.samples.zoneworld.shared.ZoneWorldNames;
 import systems.zlink.samples.zoneworld.shared.ZoneWorldSpec;
+
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.TimeUnit;
+
 public final class ZoneBootstrap implements ApplicationRunner {
     private final SampleTopology topology;
     private final ZLinkSpotManager spots;
@@ -28,14 +31,14 @@ public final class ZoneBootstrap implements ApplicationRunner {
     private final ZoneStatusReporter reporter;
 
     public ZoneBootstrap(
-        SampleTopology topology,
-        ZLinkSpotManager spots,
-        ZLinkActorManager actors,
-        ZLinkActorClient actorClient,
-        NodeMaintenanceState maintenance,
-        MaintenanceStore store,
-        NodeCensus census,
-        ZoneStatusReporter reporter) {
+            SampleTopology topology,
+            ZLinkSpotManager spots,
+            ZLinkActorManager actors,
+            ZLinkActorClient actorClient,
+            NodeMaintenanceState maintenance,
+            MaintenanceStore store,
+            NodeCensus census,
+            ZoneStatusReporter reporter) {
         this.topology = topology;
         this.spots = spots;
         this.actors = actors;
@@ -52,8 +55,11 @@ public final class ZoneBootstrap implements ApplicationRunner {
     // the maintenance-change report are the only other senders.
     private void ready() {
         reporter.reportNow().exceptionally(error -> null).toCompletableFuture().join();
-        System.out.println("topology=ready node=" + topology.nodeId()
-            + " zones=" + String.join(",", census.zoneIds()));
+        System.out.println(
+                "topology=ready node="
+                        + topology.nodeId()
+                        + " zones="
+                        + String.join(",", census.zoneIds()));
     }
 
     @Override
@@ -66,8 +72,8 @@ public final class ZoneBootstrap implements ApplicationRunner {
         // the store, so a restart cannot quietly reopen a node the operator closed.
         boolean restored = store.get(topology.nodeId());
         maintenance.apply(topology.nodeId(), restored);
-        System.out.println("maintenance restored node=" + topology.nodeId()
-            + " enabled=" + restored);
+        System.out.println(
+                "maintenance restored node=" + topology.nodeId() + " enabled=" + restored);
         for (String nodeId : java.util.List.of("zone-node-1", "zone-node-2")) {
             maintenance.apply(nodeId, store.get(nodeId));
         }
@@ -89,9 +95,13 @@ public final class ZoneBootstrap implements ApplicationRunner {
                     }
                 }
             }
-            java.util.List<String> fallbackOrder = ZoneWorldSpec.zones().stream()
-                .filter(zone -> !claimed.contains(zone) && !adjacentOrder.contains(zone))
-                .toList();
+            java.util.List<String> fallbackOrder =
+                    ZoneWorldSpec.zones().stream()
+                            .filter(
+                                    zone ->
+                                            !claimed.contains(zone)
+                                                    && !adjacentOrder.contains(zone))
+                            .toList();
             boolean claimedChanged = false;
             boolean adjacentSettling = false;
             for (String zone : adjacentOrder) {
@@ -100,8 +110,12 @@ public final class ZoneBootstrap implements ApplicationRunner {
                     break;
                 }
                 try {
-                    var result = spots.getOrCreate(zone, ZoneWorldNames.ZONE_SPOT_TYPE)
-                        .inMesh(ZoneWorldNames.MESH).submit().toCompletableFuture().join();
+                    var result =
+                            spots.getOrCreate(zone, ZoneWorldNames.ZONE_SPOT_TYPE)
+                                    .inMesh(ZoneWorldNames.MESH)
+                                    .submit()
+                                    .toCompletableFuture()
+                                    .join();
                     if (census.zoneIds().equals(claimed)
                             && result.state() == ZLinkSpotCreateState.CREATED) {
                         adjacentSettling = true;
@@ -120,46 +134,70 @@ public final class ZoneBootstrap implements ApplicationRunner {
                     if (!census.zoneIds().equals(claimed)) break;
                     try {
                         spots.getOrCreate(zone, ZoneWorldNames.ZONE_SPOT_TYPE)
-                            .inMesh(ZoneWorldNames.MESH).submit().toCompletableFuture().join();
+                                .inMesh(ZoneWorldNames.MESH)
+                                .submit()
+                                .toCompletableFuture()
+                                .join();
                     } catch (RuntimeException ignored) {
                         // The other eligible process may still be entering the mesh.
                     }
                     if (!census.zoneIds().equals(claimed)) break;
                 }
             }
-            if (attempt >= 119) throw new IllegalStateException(
-                "Zone Spot capacity did not settle. node=" + topology.nodeId()
-                    + " zones=" + census.zoneIds());
-            CompletableFuture.runAsync(() -> {},
-                CompletableFuture.delayedExecutor(250, TimeUnit.MILLISECONDS)).join();
+            if (attempt >= 119)
+                throw new IllegalStateException(
+                        "Zone Spot capacity did not settle. node="
+                                + topology.nodeId()
+                                + " zones="
+                                + census.zoneIds());
+            CompletableFuture.runAsync(
+                            () -> {}, CompletableFuture.delayedExecutor(250, TimeUnit.MILLISECONDS))
+                    .join();
         }
         if (!topology.botsDisabled()) {
-            for (ZoneWorldSpec.BotFixture bot : ZoneWorldSpec.bots().stream()
-                    .filter(value -> census.zoneIds().contains(
-                        ZoneWorldSpec.zoneOf(value.x(), value.y())))
-                    .toList()) {
-                ZLinkActorCreateResult result = actors.getOrCreate(
-                        bot.id(), ZoneWorldNames.PLAYER_ACTOR_TYPE)
-                    .inMesh(ZoneWorldNames.MESH)
-                    .request(ZLinkMessage.empty())
-                    .submit()
-                    .toCompletableFuture()
-                    .join();
+            for (ZoneWorldSpec.BotFixture bot :
+                    ZoneWorldSpec.bots().stream()
+                            .filter(
+                                    value ->
+                                            census.zoneIds()
+                                                    .contains(
+                                                            ZoneWorldSpec.zoneOf(
+                                                                    value.x(), value.y())))
+                            .toList()) {
+                ZLinkActorCreateResult result =
+                        actors.getOrCreate(bot.id(), ZoneWorldNames.PLAYER_ACTOR_TYPE)
+                                .inMesh(ZoneWorldNames.MESH)
+                                .request(ZLinkMessage.empty())
+                                .submit()
+                                .toCompletableFuture()
+                                .join();
                 if (result instanceof ZLinkActorCreateResult.Created created) {
-                    actorClient.requestToActor(created.actor().actorId(),
-                            new Messages.EnterWorldReq(
-                                bot.x(), bot.y(), true, bot.dirX(), bot.dirY()))
-                        .submit(Messages.EnterWorldRes.class)
-                        .toCompletableFuture()
-                        .join();
+                    actorClient
+                            .requestToActor(
+                                    created.actor().actorId(),
+                                    new Messages.EnterWorldReq(
+                                            bot.x(), bot.y(), true, bot.dirX(), bot.dirY()))
+                            .submit(Messages.EnterWorldRes.class)
+                            .toCompletableFuture()
+                            .join();
                 }
-                System.out.println("bot spawned. bot=" + bot.id()
-                    + ", zone=" + ZoneWorldSpec.zoneOf(bot.x(), bot.y())
-                    + ", start=(" + bot.x() + "," + bot.y() + ")"
-                    + ", dir=(" + bot.dirX() + "," + bot.dirY() + ")");
+                System.out.println(
+                        "bot spawned. bot="
+                                + bot.id()
+                                + ", zone="
+                                + ZoneWorldSpec.zoneOf(bot.x(), bot.y())
+                                + ", start=("
+                                + bot.x()
+                                + ","
+                                + bot.y()
+                                + ")"
+                                + ", dir=("
+                                + bot.dirX()
+                                + ","
+                                + bot.dirY()
+                                + ")");
             }
         }
         ready();
     }
-
 }

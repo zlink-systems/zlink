@@ -1,8 +1,5 @@
 import { Inject } from '@nestjs/common';
-import {
-  ZLINK_CHANNEL_CLIENT,
-  zlinkEntrySpotActorRequestHandler
-} from '@zlink-systems/nestjs';
+import { ZLINK_CHANNEL_CLIENT, zlinkEntrySpotActorRequestHandler } from '@zlink-systems/nestjs';
 import { BingoEntrySpot } from '../bingo-entry-spot';
 import { PlayerActor } from '../../../Actors/player-actor';
 import { BingoRoomStatus, PacketNames } from '../../../../../../../Shared/Contracts/messages';
@@ -29,11 +26,13 @@ import type {
   entrySpot: () => BingoEntrySpot,
   packetName: PacketNames.matchBingoReq
 })
-class MatchBingoActorHandler
-  implements ZLinkEntrySpotActorRequestHandler<BingoEntrySpot, PlayerActorType, MatchBingoReq, MatchBingoRes> {
-  constructor(
-    @Inject(ZLINK_CHANNEL_CLIENT) private readonly channels: ZLinkChannelClient
-  ) {}
+class MatchBingoActorHandler implements ZLinkEntrySpotActorRequestHandler<
+  BingoEntrySpot,
+  PlayerActorType,
+  MatchBingoReq,
+  MatchBingoRes
+> {
+  constructor(@Inject(ZLINK_CHANNEL_CLIENT) private readonly channels: ZLinkChannelClient) {}
 
   async handle(
     _spot: BingoEntrySpot,
@@ -55,12 +54,15 @@ class MatchBingoActorHandler
       .timeout(SampleTimings.requestTimeout)
       .submit<MatchBingoApiRes>();
     actor.context
-      .joinSpot(matched.roomId, new BingoRoomJoinReq({
-        roomId: matched.roomId,
-        actorId: actor.actorId,
-        displayName: actor.displayName,
-        observeOnly: false
-      }))
+      .joinSpot(
+        matched.roomId,
+        new BingoRoomJoinReq({
+          roomId: matched.roomId,
+          actorId: actor.actorId,
+          displayName: actor.displayName,
+          observeOnly: false
+        })
+      )
       .timeout(SampleTimings.requestTimeout)
       .defer();
     // --8<-- [end:doc-bingo-match-actor]

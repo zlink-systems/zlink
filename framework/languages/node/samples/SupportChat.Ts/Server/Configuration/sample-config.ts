@@ -22,19 +22,24 @@ function createSupportChatConfigurationModule(
   const configPath = readConfigPath(process.argv.slice(2));
   return {
     module: SupportChatConfigurationModule,
-    imports: [ConfigModule.forRoot({
-      cache: true,
-      ignoreEnvFile: true,
-      isGlobal: false,
-      load: [() => ({ sample: readSampleConfig(configPath) })],
-      skipProcessEnv: true,
-      validatePredefined: false
-    })],
-    providers: [{
-      provide: SUPPORT_CHAT_CONFIG,
-      inject: [ConfigService],
-      useFactory: (config: ConfigService) => validateSampleConfig(config.get('sample'), requiredKeys)
-    }],
+    imports: [
+      ConfigModule.forRoot({
+        cache: true,
+        ignoreEnvFile: true,
+        isGlobal: false,
+        load: [() => ({ sample: readSampleConfig(configPath) })],
+        skipProcessEnv: true,
+        validatePredefined: false
+      })
+    ],
+    providers: [
+      {
+        provide: SUPPORT_CHAT_CONFIG,
+        inject: [ConfigService],
+        useFactory: (config: ConfigService) =>
+          validateSampleConfig(config.get('sample'), requiredKeys)
+      }
+    ],
     exports: [SUPPORT_CHAT_CONFIG]
   };
 }

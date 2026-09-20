@@ -1,13 +1,22 @@
 import { ZLinkModule, zlinkFramework, zlinkModule } from '@zlink-systems/nestjs';
 import { SampleNames } from '../Configuration/sample-names';
-import { createSupportChatLocationStore, supportChatLocationOptions } from '../Configuration/location-store';
-import { SUPPORT_CHAT_CONFIG, createSupportChatConfigurationModule } from '../Configuration/sample-config';
+import {
+  createSupportChatLocationStore,
+  supportChatLocationOptions
+} from '../Configuration/location-store';
+import {
+  SUPPORT_CHAT_CONFIG,
+  createSupportChatConfigurationModule
+} from '../Configuration/sample-config';
 import type { SupportChatServerConfig } from '../Configuration/sample-config';
 
 function createSupportChatApiModule() {
   class SupportChatApiModule {}
   const configuration = createSupportChatConfigurationModule([
-    'apiChannelEndpoint', 'redisEndpoint', 'redisKeyPrefix', 'logDir'
+    'apiChannelEndpoint',
+    'redisEndpoint',
+    'redisKeyPrefix',
+    'logDir'
   ]);
 
   zlinkModule(__dirname, {
@@ -18,15 +27,16 @@ function createSupportChatApiModule() {
         inject: [SUPPORT_CHAT_CONFIG],
         useFactory: (config: SupportChatServerConfig) => {
           const builder = zlinkFramework();
-          builder.configureDispatch()
-            .messageFlow('normal');
+          builder.configureDispatch().messageFlow('normal');
           builder.addLocationStore(createSupportChatLocationStore(config));
           supportChatLocationOptions(builder.configureLocations());
-          const mesh = builder.addRouteMesh(SampleNames.conversationSpotMesh)
+          const mesh = builder
+            .addRouteMesh(SampleNames.conversationSpotMesh)
             .listen(config.apiChannelEndpoint)
             .setRoutingIdPrefix('support-api');
           mesh.objects().client();
-          builder.addClientServerChannel(SampleNames.apiChannel)
+          builder
+            .addClientServerChannel(SampleNames.apiChannel)
             .server()
             .listen()
             .addHandlerGroup('api');

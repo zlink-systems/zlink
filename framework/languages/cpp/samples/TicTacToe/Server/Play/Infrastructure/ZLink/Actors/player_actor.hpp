@@ -28,16 +28,18 @@ struct player_actor_t : framework::actor_t
     mutable bool disconnected = false;
     mutable player_info_t player;
     mutable std::deque<std::string> pending_join_rooms;
-    mutable std::set<std::pair<std::uint64_t, std::uint64_t>>
-      processed_join_operations;
+    mutable std::set<std::pair<std::uint64_t, std::uint64_t>> processed_join_operations;
     mutable std::unique_ptr<actor_context_t> actor_context;
 
     player_actor_t () = default;
     explicit player_actor_t (std::string value) : actor_id (std::move (value)) {}
     player_actor_t (const player_actor_t &other) :
-        actor_id (other.actor_id), node_rid (other.node_rid), generation (other.generation),
+        actor_id (other.actor_id),
+        node_rid (other.node_rid),
+        generation (other.generation),
         destroy_after_entry_spot_join (other.destroy_after_entry_spot_join),
-        disconnected (other.disconnected), player (other.player),
+        disconnected (other.disconnected),
+        player (other.player),
         pending_join_rooms (other.pending_join_rooms),
         processed_join_operations (other.processed_join_operations)
     {
@@ -68,8 +70,7 @@ struct player_actor_t : framework::actor_t
 
     void set_actor_context (actor_context_t actor_context) const
     {
-        this->actor_context =
-          std::make_unique<actor_context_t> (std::move (actor_context));
+        this->actor_context = std::make_unique<actor_context_t> (std::move (actor_context));
     }
 
     actor_context_t &context () noexcept override { return *actor_context; }
@@ -86,13 +87,11 @@ struct player_actor_t : framework::actor_t
         pending_join_rooms.push_back (std::move (room_id));
     }
 
-    task_t<void>
-    on_join_completed (const actor_join_completion_t &completion) override
+    task_t<void> on_join_completed (const actor_join_completion_t &completion) override
     {
         const auto operation = std::visit (
           [] (const auto &value) {
-              return std::pair{value.operation_id_high,
-                               value.operation_id_low};
+              return std::pair{value.operation_id_high, value.operation_id_low};
           },
           completion);
         if (processed_join_operations.contains (operation))
@@ -100,14 +99,10 @@ struct player_actor_t : framework::actor_t
 
         const auto room_id =
           pending_join_rooms.empty () ? std::string{} : pending_join_rooms.front ();
-        if (const auto *accepted =
-              std::get_if<actor_join_accepted_t> (&completion);
+        if (const auto *accepted = std::get_if<actor_join_accepted_t> (&completion);
             accepted != nullptr && accepted->reply) {
-            const auto joined =
-              accepted->reply->decode<tictactoe_game_join_res_t> ();
-            actor_context->bound_session ()
-              .send (join_game_notify_t{joined.state})
-              .async ();
+            const auto joined = accepted->reply->decode<tictactoe_game_join_res_t> ();
+            actor_context->bound_session ().send (join_game_notify_t{joined.state}).async ();
         } else if (std::holds_alternative<actor_join_rejected_t> (completion)) {
             actor_context->bound_session ()
               .send (join_game_failed_notify_t{room_id, "room admission rejected"})
@@ -159,17 +154,15 @@ inline void from_json (const nlohmann::json &json, player_actor_t &value)
     value.player = json.value ("player", player_info_t{});
 }
 
-struct player_actor_factory_t final
-    : framework::actor_factory_t<player_actor_t>
+struct player_actor_factory_t final : framework::actor_factory_t<player_actor_t>
 {
     player_actor_t create (std::string actor_id) const
     {
         return player_actor_t (std::move (actor_id));
     }
 
-    framework::task_t<std::shared_ptr<player_actor_t>>
-    create (actor_context_t context,
-            std::stop_token) override
+    framework::task_t<std::shared_ptr<player_actor_t>> create (actor_context_t context,
+                                                               std::stop_token) override
     {
         auto actor = std::make_shared<player_actor_t> (
           std::string (context.actor_ref ().actor_id ().value ()));

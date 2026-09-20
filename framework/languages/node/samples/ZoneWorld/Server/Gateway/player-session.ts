@@ -18,7 +18,8 @@ class PlayerSession implements ZLinkSession {
   async onDispatch(dispatch: ZLinkSessionDispatchContext, payload: ZLinkMessage): Promise<void> {
     if (await this.context.handlers.tryHandle(dispatch, payload)) return;
     const actor = this.context.actors.bound.length === 1 ? this.context.actors.bound[0] : undefined;
-    if (actor === undefined) throw new Error(`Client must join before sending '${dispatch.packetName}'.`);
+    if (actor === undefined)
+      throw new Error(`Client must join before sending '${dispatch.packetName}'.`);
     await actor.relay(payload);
   }
 
@@ -47,7 +48,8 @@ class JoinWorldSessionHandler {
       .request(new PlayerActorCreateReq(request.playerId))
       .timeout(5_000)
       .submit();
-    if (ensured.status === 'rejected') throw new Error(`Player actor '${request.playerId}' creation was rejected.`);
+    if (ensured.status === 'rejected')
+      throw new Error(`Player actor '${request.playerId}' creation was rejected.`);
     const actor = await context.actors.bindOrGet(ensured.actor);
     // --8<-- [end:doc-zw-session-bind]
     await actor.relay(payload);

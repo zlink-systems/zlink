@@ -1,10 +1,10 @@
 package systems.zlink.tutorial.server.spots
 
 import systems.zlink.framework.actors.ZLinkActor
-import systems.zlink.framework.kotlin.addHandler
 import systems.zlink.framework.kotlin.ZLinkSuspendingSpot
 import systems.zlink.framework.kotlin.ZLinkSuspendingSpotPacketHandler
 import systems.zlink.framework.kotlin.ZLinkSuspendingSpotRequestHandler
+import systems.zlink.framework.kotlin.addHandler
 import systems.zlink.framework.messaging.ZLinkMessage
 import systems.zlink.framework.spots.ZLinkSpotActorJoinResult
 import systems.zlink.framework.spots.ZLinkSpotContext
@@ -22,9 +22,7 @@ import systems.zlink.tutorial.shared.RoomState
 // callback into a suspending one. Its type argument is the actor type the room
 // can admit; this room admits none, so it names the base type and rejects every
 // join. Actors are a later chapter.
-class GameRoom(
-    override val context: ZLinkSpotContext,
-) : ZLinkSuspendingSpot<ZLinkActor>() {
+class GameRoom(override val context: ZLinkSpotContext) : ZLinkSuspendingSpot<ZLinkActor>() {
 
     private val chat = mutableListOf<String>()
     private var title = "untitled"
@@ -34,20 +32,15 @@ class GameRoom(
         // Handler classes are named here rather than scanned, the same way the
         // channel registrations name their group. Each takes the target room as
         // its first argument.
-        context.handlers()
-            .addHandler<PostChatHandler>()
-        context.handlers()
-            .addHandler<GetRoomStateHandler>()
+        context.handlers().addHandler<PostChatHandler>()
+        context.handlers().addHandler<GetRoomStateHandler>()
         // --8<-- [end:spot-handlers]
     }
 
     // Runs before the room accepts any message. Rejecting here means the create
     // call fails and no room exists. Omit this method to accept every request.
-    override suspend fun onCreateSuspending(
-        request: ZLinkMessage,
-    ): ZLinkSpotCreateResponse {
-        val body =
-            request.decode(OpenRoom::class.java)
+    override suspend fun onCreateSuspending(request: ZLinkMessage): ZLinkSpotCreateResponse {
+        val body = request.decode(OpenRoom::class.java)
         title = body.title
         return ZLinkSpotCreateResponse.accept()
     }
@@ -61,17 +54,9 @@ class GameRoom(
         return ZLinkSpotActorJoinResult.reject()
     }
 
-    override suspend fun
-    onJoinedActorSuspending(
-        actor: ZLinkActor,
-    ) {
-    }
+    override suspend fun onJoinedActorSuspending(actor: ZLinkActor) {}
 
-    override suspend fun
-    onLeaveActorSuspending(
-        actor: ZLinkActor,
-    ) {
-    }
+    override suspend fun onLeaveActorSuspending(actor: ZLinkActor) {}
 
     fun append(line: String) {
         chat.add(line)
@@ -81,6 +66,7 @@ class GameRoom(
         return RoomState(title, chat.toList())
     }
 }
+
 // --8<-- [end:spot-class]
 
 // --8<-- [start:spot-handler-classes]

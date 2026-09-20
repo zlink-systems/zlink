@@ -6,9 +6,7 @@ import org.springframework.web.bind.annotation.RequestParam
 import org.springframework.web.bind.annotation.RestController
 import systems.zlink.framework.channels.ZLinkRouteMeshRuntimeOptions
 
-/**
- * The only HTTP this node serves. Everything else it does arrives over the mesh.
- */
+/** The only HTTP this node serves. Everything else it does arrives over the mesh. */
 @RestController
 class AdminEndpoints(private val mesh: ZLinkRouteMeshRuntimeOptions) {
 
@@ -21,10 +19,7 @@ class AdminEndpoints(private val mesh: ZLinkRouteMeshRuntimeOptions) {
     // is no Kotlin projection of it, and weight() is a plain method pair rather
     // than a getter/setter, so it is read and written by call and not by property.
     @PostMapping("/admin/channels/{channel}/weight")
-    fun setWeight(
-        @PathVariable channel: String,
-        @RequestParam value: Int,
-    ): WeightChanged {
+    fun setWeight(@PathVariable channel: String, @RequestParam value: Int): WeightChanged {
         mesh.channel(channel).weight(value)
         return WeightChanged(channel, value)
     }

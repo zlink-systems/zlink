@@ -19,7 +19,10 @@ type BingoRoomSettings = {
   observedRoomId: string | null;
 };
 
-function createRoomSettings(roomSeqOrMode: number | BingoMode = 0, mode: BingoMode = 'two-player'): BingoRoomSettings {
+function createRoomSettings(
+  roomSeqOrMode: number | BingoMode = 0,
+  mode: BingoMode = 'two-player'
+): BingoRoomSettings {
   const roomSeq = typeof roomSeqOrMode === 'number' ? roomSeqOrMode : 0;
   const resolvedMode = typeof roomSeqOrMode === 'number' ? mode : roomSeqOrMode;
   const maxDrawNumber = 15;
@@ -34,7 +37,10 @@ function createRoomSettings(roomSeqOrMode: number | BingoMode = 0, mode: BingoMo
   };
 }
 
-function createObserverRoomSettings(observedRoomId: string, observerActorId: string): BingoRoomSettings {
+function createObserverRoomSettings(
+  observedRoomId: string,
+  observerActorId: string
+): BingoRoomSettings {
   const maxDrawNumber = 15;
   return {
     mode: 'two-player',

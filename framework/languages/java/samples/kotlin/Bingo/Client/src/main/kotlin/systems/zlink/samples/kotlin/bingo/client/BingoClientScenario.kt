@@ -4,16 +4,15 @@ import java.time.Duration
 import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.async
 import kotlinx.coroutines.coroutineScope
+import systems.zlink.framework.kotlin.ZLinkKotlinStreamConnector
 import systems.zlink.framework.kotlin.await
 import systems.zlink.framework.kotlin.awaitReply
-import systems.zlink.framework.kotlin.ZLinkKotlinStreamConnector
 import systems.zlink.samples.kotlin.bingo.client.configuration.SampleNames
 import systems.zlink.samples.kotlin.bingo.shared.contracts.AuthenticateReq
 import systems.zlink.samples.kotlin.bingo.shared.contracts.AuthenticateRes
 import systems.zlink.samples.kotlin.bingo.shared.contracts.BingoGameEndedNotify
 import systems.zlink.samples.kotlin.bingo.shared.contracts.BingoGameStartedNotify
 import systems.zlink.samples.kotlin.bingo.shared.contracts.BingoNumberDrawnNotify
-import systems.zlink.samples.kotlin.bingo.shared.contracts.BingoPlayerState
 import systems.zlink.samples.kotlin.bingo.shared.contracts.BingoRewardAnnouncedNotify
 import systems.zlink.samples.kotlin.bingo.shared.contracts.MatchBingoReq
 import systems.zlink.samples.kotlin.bingo.shared.contracts.MatchBingoRes
@@ -42,46 +41,58 @@ class BingoClientScenario {
         val client1Auth = client1.request(AuthenticateReq("player-1")).awaitReply<AuthenticateRes>()
         ensure(client1Auth.actorId == "player-1")
 
-        val client1NoSelfJoin = async(start = CoroutineStart.UNDISPATCHED) {
-            client1.expectNone<PlayerJoinedNotify>(SampleNames.PlayerJoinedPacket)
-                .within(Duration.ofMillis(400))
-                .await()
-        }
+        val client1NoSelfJoin =
+            async(start = CoroutineStart.UNDISPATCHED) {
+                client1
+                    .expectNone<PlayerJoinedNotify>(SampleNames.PlayerJoinedPacket)
+                    .within(Duration.ofMillis(400))
+                    .await()
+            }
         val client1Match = client1.request(MatchBingoReq("two-player")).awaitReply<MatchBingoRes>()
         ensure(client1Match.state.status == "WaitingForPlayers")
         ensure(client1Match.state.hostActorId == client1Auth.actorId)
         client1NoSelfJoin.await()
 
-        val observerAuth = observer.request(AuthenticateReq("observer")).awaitReply<AuthenticateRes>()
+        val observerAuth =
+            observer.request(AuthenticateReq("observer")).awaitReply<AuthenticateRes>()
         ensure(observerAuth.actorId == "observer")
-        val observed = observer
-            .request(ObserveBingoEventsReq(client1Match.roomId))
-            .awaitReply<ObserveBingoEventsRes>()
+        val observed =
+            observer
+                .request(ObserveBingoEventsReq(client1Match.roomId))
+                .awaitReply<ObserveBingoEventsRes>()
         ensure(observed.subscribed)
         // Register the observer wait before the second player can start the draw loop.
-        val rewardAnnounced = observer.waitFor<BingoRewardAnnouncedNotify>()
-            .where { message -> message.payload().roomId == client1Match.roomId }
-            .let { wait -> async(start = CoroutineStart.UNDISPATCHED) { wait.await() } }
+        val rewardAnnounced =
+            observer
+                .waitFor<BingoRewardAnnouncedNotify>()
+                .where { message -> message.payload().roomId == client1Match.roomId }
+                .let { wait -> async(start = CoroutineStart.UNDISPATCHED) { wait.await() } }
 
-        val client1SawClient2Join = client1.waitFor<PlayerJoinedNotify>()
-            .where { message -> message.payload().actorId == "player-2" }
-            .let { wait -> async(start = CoroutineStart.UNDISPATCHED) { wait.await() } }
-        val client1Started = async(start = CoroutineStart.UNDISPATCHED) {
-            client1.waitFor<BingoGameStartedNotify>().await()
-        }
-        val client2Started = async(start = CoroutineStart.UNDISPATCHED) {
-            client2.waitFor<BingoGameStartedNotify>().await()
-        }
+        val client1SawClient2Join =
+            client1
+                .waitFor<PlayerJoinedNotify>()
+                .where { message -> message.payload().actorId == "player-2" }
+                .let { wait -> async(start = CoroutineStart.UNDISPATCHED) { wait.await() } }
+        val client1Started =
+            async(start = CoroutineStart.UNDISPATCHED) {
+                client1.waitFor<BingoGameStartedNotify>().await()
+            }
+        val client2Started =
+            async(start = CoroutineStart.UNDISPATCHED) {
+                client2.waitFor<BingoGameStartedNotify>().await()
+            }
 
         val client2Auth = client2.request(AuthenticateReq("player-2")).awaitReply<AuthenticateRes>()
         ensure(client2Auth.actorId == "player-2")
         ensure(client2Auth.actorId != client1Auth.actorId)
 
-        val client2NoSelfJoin = async(start = CoroutineStart.UNDISPATCHED) {
-            client2.expectNone<PlayerJoinedNotify>(SampleNames.PlayerJoinedPacket)
-                .within(Duration.ofMillis(400))
-                .await()
-        }
+        val client2NoSelfJoin =
+            async(start = CoroutineStart.UNDISPATCHED) {
+                client2
+                    .expectNone<PlayerJoinedNotify>(SampleNames.PlayerJoinedPacket)
+                    .within(Duration.ofMillis(400))
+                    .await()
+            }
         val client2Match = client2.request(MatchBingoReq("two-player")).awaitReply<MatchBingoRes>()
         ensure(client2Match.roomId == client1Match.roomId)
         ensure(client2Match.state.status == "WaitingForPlayers")
@@ -89,42 +100,59 @@ class BingoClientScenario {
         val join = client1SawClient2Join.await().payload()
         ensure(join.actorId == client2Auth.actorId)
         ensure(join.roomId == client1Match.roomId)
-        ensure(join.state.players.map { player -> player.actorId }.toSet() ==
-            setOf(client1Auth.actorId, client2Auth.actorId))
+        ensure(
+            join.state.players.map { player -> player.actorId }.toSet() ==
+                setOf(client1Auth.actorId, client2Auth.actorId)
+        )
         println("stream-handler sample=Bingo client=player1 message=PlayerJoinedNotify")
         client2NoSelfJoin.await()
         ensure(client1Started.await().payload().state.status == "Running")
         ensure(client2Started.await().payload().state.status == "Running")
 
-        val client2Card = client2.request(SubmitBingoCardReq(client2Match.roomId, BingoClientCards.Player2)).awaitReply<SubmitBingoCardRes>()
+        val client2Card =
+            client2
+                .request(SubmitBingoCardReq(client2Match.roomId, BingoClientCards.Player2))
+                .awaitReply<SubmitBingoCardRes>()
         ensure(client2Card.state.status == "Running")
-        ensure(client2Card.state.players
-            .single { player -> player.actorId == client2Auth.actorId }
-            .card.size == 9)
+        ensure(
+            client2Card.state.players
+                .single { player -> player.actorId == client2Auth.actorId }
+                .card
+                .size == 9
+        )
 
-        val client1Ended = async(start = CoroutineStart.UNDISPATCHED) {
-            client1.waitFor<BingoGameEndedNotify>().await()
-        }
-        val client2Ended = async(start = CoroutineStart.UNDISPATCHED) {
-            client2.waitFor<BingoGameEndedNotify>().await()
-        }
-
-        val client1Draws = (1..15).map { expectedDrawSeq ->
+        val client1Ended =
             async(start = CoroutineStart.UNDISPATCHED) {
-                client1.waitFor<BingoNumberDrawnNotify>()
-                    .where { message -> message.payload().drawSeq == expectedDrawSeq }
-                    .await()
+                client1.waitFor<BingoGameEndedNotify>().await()
             }
-        }
-        val client2Draws = (1..15).map { expectedDrawSeq ->
+        val client2Ended =
             async(start = CoroutineStart.UNDISPATCHED) {
-                client2.waitFor<BingoNumberDrawnNotify>()
-                    .where { message -> message.payload().drawSeq == expectedDrawSeq }
-                    .await()
+                client2.waitFor<BingoGameEndedNotify>().await()
             }
-        }
 
-        val client1Card = client1.request(SubmitBingoCardReq(client1Match.roomId, BingoClientCards.Player1)).awaitReply<SubmitBingoCardRes>()
+        val client1Draws =
+            (1..15).map { expectedDrawSeq ->
+                async(start = CoroutineStart.UNDISPATCHED) {
+                    client1
+                        .waitFor<BingoNumberDrawnNotify>()
+                        .where { message -> message.payload().drawSeq == expectedDrawSeq }
+                        .await()
+                }
+            }
+        val client2Draws =
+            (1..15).map { expectedDrawSeq ->
+                async(start = CoroutineStart.UNDISPATCHED) {
+                    client2
+                        .waitFor<BingoNumberDrawnNotify>()
+                        .where { message -> message.payload().drawSeq == expectedDrawSeq }
+                        .await()
+                }
+            }
+
+        val client1Card =
+            client1
+                .request(SubmitBingoCardReq(client1Match.roomId, BingoClientCards.Player1))
+                .awaitReply<SubmitBingoCardRes>()
         ensure(client1Card.state.status == "Running")
         ensure(client1Card.state.players.size == 2)
         ensure(client1Card.state.players.all { player -> player.card.size == 9 })
@@ -154,8 +182,10 @@ class BingoClientScenario {
         ensure(client2Result.status == "Finished")
         ensure(client2Result.drawnNumbers == client1Result.drawnNumbers)
         ensure(client2Result.winners == client1Result.winners)
-        ensure(client2Result.players.map { player -> player.actorId } ==
-            client1Result.players.map { player -> player.actorId })
+        ensure(
+            client2Result.players.map { player -> player.actorId } ==
+                client1Result.players.map { player -> player.actorId }
+        )
         ensure(client1Result.drawnNumbers == drawnNumbers.map { notify -> notify.number })
         ensure(client1Result.winners == listOf(client1Auth.actorId))
         ensure(client1Result.players.all { player -> player.card.size == 9 })
@@ -169,9 +199,10 @@ class BingoClientScenario {
         ensure(reward.itemName == "Golden Dauber")
         ensure(reward.rarity == "Legendary")
 
-        val stopped = observer
-            .request(StopObservingBingoEventsReq(client1Match.roomId))
-            .awaitReply<StopObservingBingoEventsRes>()
+        val stopped =
+            observer
+                .request(StopObservingBingoEventsReq(client1Match.roomId))
+                .awaitReply<StopObservingBingoEventsRes>()
         ensure(stopped.stopped)
         println("bingo=completed")
     }

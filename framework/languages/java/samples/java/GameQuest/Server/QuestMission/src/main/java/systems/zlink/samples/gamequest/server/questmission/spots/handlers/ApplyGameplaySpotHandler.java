@@ -1,15 +1,15 @@
 package systems.zlink.samples.gamequest.server.questmission.spots.handlers;
 
-import java.util.concurrent.CompletionStage;
 import systems.zlink.framework.actors.ZLinkActorClient;
 import systems.zlink.framework.spots.ZLinkSpotPacketHandler;
-import systems.zlink.samples.gamequest.server.configuration.SampleNames;
 import systems.zlink.samples.gamequest.server.questmission.spots.PlayerQuestSpot;
 import systems.zlink.samples.gamequest.shared.contracts.Messages;
 
+import java.util.concurrent.CompletionStage;
+
 // --8<-- [start:doc-gq-apply-handler]
 public final class ApplyGameplaySpotHandler
-    implements ZLinkSpotPacketHandler<PlayerQuestSpot, Messages.GameplayMsg> {
+        implements ZLinkSpotPacketHandler<PlayerQuestSpot, Messages.GameplayMsg> {
     private final ZLinkActorClient actors;
 
     public ApplyGameplaySpotHandler(ZLinkActorClient actors) {
@@ -17,16 +17,15 @@ public final class ApplyGameplaySpotHandler
     }
 
     @Override
-    public CompletionStage<Void> handle(
-        PlayerQuestSpot spot,
-        Messages.GameplayMsg request) {
+    public CompletionStage<Void> handle(PlayerQuestSpot spot, Messages.GameplayMsg request) {
         // --8<-- [start:doc-gq-notify-actor]
         Messages.QuestProcessingMsg result = spot.apply(request);
         if (!result.duplicate()) {
             String questId = questIdFor(request);
             if (questId != null) {
-                System.out.printf("gamequest-mission processed player=%s quest=%s%n",
-                    request.playerId(), questId);
+                System.out.printf(
+                        "gamequest-mission processed player=%s quest=%s%n",
+                        request.playerId(), questId);
             }
         }
         return actors.sendToActor(request.playerId(), result).submit();

@@ -1,12 +1,17 @@
 import { Injectable } from '@nestjs/common';
-import type { ZLinkPublishMessageContext, ZLinkSpotSubscriptionHandler } from '@zlink-systems/framework';
+import type {
+  ZLinkPublishMessageContext,
+  ZLinkSpotSubscriptionHandler
+} from '@zlink-systems/framework';
 import type { PlayerWinMilestoneEvent } from '../../../../../../../Shared/Contracts/messages';
 import { PlayEntrySpot } from '../play-entry-spot';
 
 // --8<-- [start:doc-ttt-milestone-handler]
 @Injectable()
-class PlayerWinMilestoneEventHandler
-  implements ZLinkSpotSubscriptionHandler<PlayEntrySpot, PlayerWinMilestoneEvent> {
+class PlayerWinMilestoneEventHandler implements ZLinkSpotSubscriptionHandler<
+  PlayEntrySpot,
+  PlayerWinMilestoneEvent
+> {
   async handle(
     entrySpot: PlayEntrySpot,
     event: PlayerWinMilestoneEvent,

@@ -9,11 +9,12 @@ import systems.zlink.samples.kotlin.supportchat.server.support.infrastructure.zl
 import systems.zlink.samples.kotlin.supportchat.shared.contracts.JoinConversationReq
 import systems.zlink.samples.kotlin.supportchat.shared.contracts.JoinConversationRes
 
-class JoinConversationActorHandler : ZLinkSuspendingEntrySpotActorRequestHandler<
-    SupportEntrySpot,
-    SupportUserActor,
-    JoinConversationReq,
-    JoinConversationRes,
+class JoinConversationActorHandler :
+    ZLinkSuspendingEntrySpotActorRequestHandler<
+        SupportEntrySpot,
+        SupportUserActor,
+        JoinConversationReq,
+        JoinConversationRes,
     > {
     override suspend fun handle(
         entrySpot: SupportEntrySpot,
@@ -23,23 +24,18 @@ class JoinConversationActorHandler : ZLinkSuspendingEntrySpotActorRequestHandler
     ): JoinConversationRes {
         if (actor.role != SupportChatRoles.Agent) {
             throw IllegalStateException(
-                "Only agent conversation actors can join through the Entry Spot",
+                "Only agent conversation actors can join through the Entry Spot"
             )
         }
-        val conversationId = context.metadata()[
-            SampleNames.ConversationIdMetadataKey
-        ]?.takeIf(String::isNotBlank)
-            ?: throw IllegalStateException(
-                "Conversation Join is missing the conversation ID metadata",
-            )
+        val conversationId =
+            context.metadata()[SampleNames.ConversationIdMetadataKey]?.takeIf(String::isNotBlank)
+                ?: throw IllegalStateException(
+                    "Conversation Join is missing the conversation ID metadata"
+                )
         return actor.scheduleConversationJoin(
             conversationId,
             "",
-            JoinConversationReq(
-                actor.participantId,
-                actor.role,
-                actor.displayName,
-            ),
+            JoinConversationReq(actor.participantId, actor.role, actor.displayName),
         )
     }
 }

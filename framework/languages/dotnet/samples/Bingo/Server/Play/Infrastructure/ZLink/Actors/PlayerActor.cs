@@ -10,7 +10,8 @@ namespace Bingo.Server.Play.Infrastructure.ZLink.Actors;
 internal sealed class PlayerActor(
     string actorId,
     IZLinkActorContext context,
-    ILogger<PlayerActor> logger) : IZLinkActor
+    ILogger<PlayerActor> logger
+) : IZLinkActor
 {
     private readonly Queue<(string RoomId, bool ObserveOnly)> _pendingJoins = new();
 
@@ -61,8 +62,7 @@ internal sealed class PlayerActor(
         return _pendingJoins.ToArray();
     }
 
-    public void RestorePendingJoins(
-        IEnumerable<(string RoomId, bool ObserveOnly)> pendingJoins)
+    public void RestorePendingJoins(IEnumerable<(string RoomId, bool ObserveOnly)> pendingJoins)
     {
         _pendingJoins.Clear();
         foreach (var pending in pendingJoins)
@@ -71,7 +71,8 @@ internal sealed class PlayerActor(
 
     public ValueTask OnJoinCompletedAsync(
         ZLinkActorJoinCompletion completion,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken
+    )
     {
         cancellationToken.ThrowIfCancellationRequested();
         var operationId = completion switch
@@ -79,32 +80,33 @@ internal sealed class PlayerActor(
             ZLinkActorJoinCompletion.Accepted value => value.OperationId,
             ZLinkActorJoinCompletion.Rejected value => value.OperationId,
             ZLinkActorJoinCompletion.Failed value => value.OperationId,
-            _ => throw new InvalidOperationException("Unknown Actor Join completion.")
+            _ => throw new InvalidOperationException("Unknown Actor Join completion."),
         };
         if (LastCompletedJoinOperationId == operationId)
         {
             logger.LogInformation(
                 "actor join duplicate ignored. actor={ActorId}, operation={OperationId}",
                 ActorId,
-                operationId);
+                operationId
+            );
             return ValueTask.CompletedTask;
         }
         logger.LogInformation(
             "actor join completed. actor={ActorId}, outcome={Outcome}",
             ActorId,
-            completion.GetType().Name);
-        var pending = _pendingJoins.Count > 0
-            ? _pendingJoins.Peek()
-            : ResolveRecoveredJoin(completion);
+            completion.GetType().Name
+        );
+        var pending =
+            _pendingJoins.Count > 0 ? _pendingJoins.Peek() : ResolveRecoveredJoin(completion);
 
         switch (completion)
         {
-            case ZLinkActorJoinCompletion.Accepted accepted
-                when accepted.Reply is { } reply:
+            case ZLinkActorJoinCompletion.Accepted accepted when accepted.Reply is { } reply:
                 CurrentRef = accepted.Actor;
                 JoinRoom(pending.RoomId);
                 _ = reply.Decode<BingoRoomJoinRes>();
-                if (_pendingJoins.Count > 0) _pendingJoins.Dequeue();
+                if (_pendingJoins.Count > 0)
+                    _pendingJoins.Dequeue();
                 RememberJoinCompletion(operationId, "Accepted");
                 return ValueTask.CompletedTask;
 
@@ -112,8 +114,10 @@ internal sealed class PlayerActor(
                 logger.LogWarning(
                     "actor join rejected. actor={ActorId}, room={RoomId}",
                     ActorId,
-                    pending.RoomId);
-                if (_pendingJoins.Count > 0) _pendingJoins.Dequeue();
+                    pending.RoomId
+                );
+                if (_pendingJoins.Count > 0)
+                    _pendingJoins.Dequeue();
                 RememberJoinCompletion(operationId, "Rejected");
                 return ValueTask.CompletedTask;
 
@@ -122,8 +126,10 @@ internal sealed class PlayerActor(
                     "actor join failed. actor={ActorId}, room={RoomId}, kind={Kind}",
                     ActorId,
                     pending.RoomId,
-                    failed.Kind);
-                if (_pendingJoins.Count > 0) _pendingJoins.Dequeue();
+                    failed.Kind
+                );
+                if (_pendingJoins.Count > 0)
+                    _pendingJoins.Dequeue();
                 RememberJoinCompletion(operationId, failed.Kind.ToString());
                 return ValueTask.CompletedTask;
         }
@@ -131,33 +137,30 @@ internal sealed class PlayerActor(
         return ValueTask.CompletedTask;
     }
 
-    public void RestoreJoinCompletion(
-        ZLinkActorJoinOperationId? operationId,
-        string outcome)
+    public void RestoreJoinCompletion(ZLinkActorJoinOperationId? operationId, string outcome)
     {
         LastCompletedJoinOperationId = operationId;
         LastCompletedJoinOutcome = outcome;
     }
 
-    private void RememberJoinCompletion(
-        ZLinkActorJoinOperationId operationId,
-        string outcome)
+    private void RememberJoinCompletion(ZLinkActorJoinOperationId operationId, string outcome)
     {
         LastCompletedJoinOperationId = operationId;
         LastCompletedJoinOutcome = outcome;
     }
 
     private static (string RoomId, bool ObserveOnly) ResolveRecoveredJoin(
-        ZLinkActorJoinCompletion completion)
+        ZLinkActorJoinCompletion completion
+    )
     {
         var reply = completion switch
         {
             ZLinkActorJoinCompletion.Accepted { Reply: { } value } => value,
             _ => throw new InvalidOperationException(
-                "Recovered Bingo Actor Join completion has no accepted reply.")
+                "Recovered Bingo Actor Join completion has no accepted reply."
+            ),
         };
         var state = reply.Decode<BingoRoomJoinRes>().State;
         return (state.RoomId, false);
     }
-
 }

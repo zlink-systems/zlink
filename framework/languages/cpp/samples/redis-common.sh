@@ -1,5 +1,109 @@
 #!/usr/bin/env bash
 
+declare -ag ZLINK_CPP_SAMPLE_FORCED_TEARDOWN_ROLES=()
+declare -ag ZLINK_CPP_SAMPLE_TEARDOWN_FAILURES=()
+
+zlink_cpp_sample_role_name_for_pid() {
+  local pid="$1"
+  local stdout_path=""
+  stdout_path="$(readlink "/proc/${pid}/fd/1" 2>/dev/null || true)"
+  if [[ -n "${stdout_path}" ]]; then
+    basename "${stdout_path}" .log
+    return 0
+  fi
+
+  local argument=""
+  while IFS= read -r -d '' argument; do
+    if [[ "${argument}" == *.exe ]]; then
+      basename "${argument}" .exe
+      return 0
+    fi
+  done <"/proc/${pid}/cmdline" 2>/dev/null
+  printf 'pid-%s\n' "${pid}"
+}
+
+# A role that has to be SIGKILLed to stop is a sample failure, not a teardown
+# detail. This is the only place where C++ sample runners escalate a role from
+# SIGTERM to SIGKILL, so it records the role and the common EXIT trap turns that
+# fact into the run's verdict.
+zlink_cpp_sample_stop_processes() {
+  local pids=("$@")
+  local -A roles=()
+  local -A forced=()
+  local pid status any_alive role
+  local wait_attempts="${ZLINK_CPP_SAMPLE_CLEANUP_WAIT_ATTEMPTS:-300}"
+
+  for pid in "${pids[@]}"; do
+    [[ "${pid}" =~ ^[0-9]+$ ]] || continue
+    roles["${pid}"]="$(zlink_cpp_sample_role_name_for_pid "${pid}")"
+  done
+  for ((i=${#pids[@]}-1; i>=0; i--)); do
+    pid="${pids[$i]}"
+    [[ "${pid}" =~ ^[0-9]+$ ]] || continue
+    if kill -0 "${pid}" >/dev/null 2>&1; then
+      kill -TERM "${pid}" >/dev/null 2>&1 || true
+    fi
+  done
+  for ((i=0; i<wait_attempts; i++)); do
+    any_alive=0
+    for pid in "${pids[@]}"; do
+      if kill -0 "${pid}" >/dev/null 2>&1; then
+        any_alive=1
+        break
+      fi
+    done
+    [[ "${any_alive}" == "0" ]] && break
+    sleep 0.1
+  done
+  for ((i=${#pids[@]}-1; i>=0; i--)); do
+    pid="${pids[$i]}"
+    if kill -0 "${pid}" >/dev/null 2>&1; then
+      role="${roles[${pid}]:-pid-${pid}}"
+      if kill -KILL "${pid}" >/dev/null 2>&1; then
+        forced["${pid}"]=1
+        ZLINK_CPP_SAMPLE_FORCED_TEARDOWN_ROLES+=(
+          "Sample role ${role} (pid ${pid}) required SIGKILL during cleanup.")
+      fi
+    fi
+  done
+  for pid in "${pids[@]}"; do
+    [[ "${pid}" =~ ^[0-9]+$ ]] || continue
+    status=0
+    wait "${pid}" >/dev/null 2>&1 || status=$?
+    if [[ -n "${forced[${pid}]:-}" ]]; then
+      continue
+    fi
+    if [[ "${status}" != "0" && "${status}" != "127" &&
+          "${status}" != "130" && "${status}" != "143" ]]; then
+      ZLINK_CPP_SAMPLE_TEARDOWN_FAILURES+=(
+        "Sample process ${roles[${pid}]:-pid-${pid}} (pid ${pid}) exited during cleanup with status ${status}.")
+    fi
+  done
+}
+
+zlink_cpp_sample_assert_graceful_teardown() {
+  local failure=""
+  if (( ${#ZLINK_CPP_SAMPLE_FORCED_TEARDOWN_ROLES[@]} == 0 &&
+        ${#ZLINK_CPP_SAMPLE_TEARDOWN_FAILURES[@]} == 0 )); then
+    return 0
+  fi
+  for failure in "${ZLINK_CPP_SAMPLE_FORCED_TEARDOWN_ROLES[@]}" \
+                 "${ZLINK_CPP_SAMPLE_TEARDOWN_FAILURES[@]}"; do
+    printf '%s\n' "${failure}" >&2
+  done
+  if (( ${#ZLINK_CPP_SAMPLE_FORCED_TEARDOWN_ROLES[@]} > 0 )); then
+    exit 137
+  fi
+  exit 1
+}
+
+zlink_cpp_sample_exit_trap() {
+  local status=$?
+  cleanup
+  zlink_cpp_sample_assert_graceful_teardown
+  exit "${status}"
+}
+
 ZLINK_CPP_SAMPLE_REDIS_PORT_MIN=20000
 ZLINK_CPP_SAMPLE_REDIS_PORT_MAX=20099
 ZLINK_CPP_SAMPLE_APP_PORT_MIN=20100
@@ -93,6 +197,10 @@ zlink_sample_close_run_dir() {
   local label="$3"
 
   [[ -n "${run_dir}" && -d "${run_dir}" ]] || return 0
+  if (( ${#ZLINK_CPP_SAMPLE_FORCED_TEARDOWN_ROLES[@]} > 0 ||
+        ${#ZLINK_CPP_SAMPLE_TEARDOWN_FAILURES[@]} > 0 )); then
+    status=1
+  fi
   if [[ "${status}" -ne 0 ]]; then
     printf '%s run directory preserved: %s\n' "${label}" "${run_dir}" >&2
     return 0

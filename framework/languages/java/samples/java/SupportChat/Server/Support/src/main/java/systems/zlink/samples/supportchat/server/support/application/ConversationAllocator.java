@@ -12,12 +12,11 @@ public final class ConversationAllocator {
     }
 
     public CompletionStage<String> allocate(
-        String customerActorId,
-        String customerDisplayName,
-        String subject) {
+            String customerActorId, String customerDisplayName, String subject) {
         String conversationId = "supportchat-conversation-" + sequence.incrementAndGet();
-        ConversationSpotFactory.StartRequest request = new ConversationSpotFactory.StartRequest(
-            customerActorId, customerDisplayName, subject, System.currentTimeMillis());
+        ConversationSpotFactory.StartRequest request =
+                new ConversationSpotFactory.StartRequest(
+                        customerActorId, customerDisplayName, subject, System.currentTimeMillis());
         return spots.start(conversationId, request).thenApply(ignored -> conversationId);
     }
 }

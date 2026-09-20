@@ -2,12 +2,11 @@ package systems.zlink.samples.kotlin.tictactoe.server.play.infrastructure.zlink.
 
 import kotlinx.coroutines.future.await
 import org.slf4j.LoggerFactory
-import systems.zlink.framework.kotlin.addHandler
 import systems.zlink.framework.kotlin.ZLinkSuspendingEntrySpot
+import systems.zlink.framework.kotlin.addHandler
 import systems.zlink.framework.messaging.ZLinkMessage
-import systems.zlink.framework.spots.ZLinkEntrySpotContext
 import systems.zlink.framework.spots.ZLinkActorCreateResponse
-import systems.zlink.samples.kotlin.tictactoe.server.configuration.SampleNames
+import systems.zlink.framework.spots.ZLinkEntrySpotContext
 import systems.zlink.samples.kotlin.tictactoe.server.configuration.SampleSettings
 import systems.zlink.samples.kotlin.tictactoe.server.play.infrastructure.zlink.actors.PlayActor
 import systems.zlink.samples.kotlin.tictactoe.server.play.infrastructure.zlink.spots.entryspot.handlers.PlayActorJoinGameHandler
@@ -53,6 +52,7 @@ class PlayEntrySpot(
             logger.info("tictactoe-lifecycle actor-destroy-complete actor={}", actor.actorId)
         }
     }
+
     // --8<-- [end:doc-ttt-entry-destroy]
 
     override suspend fun onLeaveActorSuspending(actor: PlayActor) {
@@ -71,18 +71,18 @@ class PlayEntrySpot(
 
     // --8<-- [start:doc-ttt-milestone-notify]
     fun notifyMilestone(event: PlayerWinMilestoneEvent) {
-        val payload = WinMilestoneNotify(
-            roomId = event.roomId,
-            actorId = event.actorId,
-            displayName = event.displayName,
-            wins = event.wins,
-        )
+        val payload =
+            WinMilestoneNotify(
+                roomId = event.roomId,
+                actorId = event.actorId,
+                displayName = event.displayName,
+                wins = event.wins,
+            )
         milestoneObservers.toList().forEach { observer ->
-            observer.context().boundSession()
-                .send(payload)
-                .submit()
+            observer.context().boundSession().send(payload).submit()
         }
     }
+
     // --8<-- [end:doc-ttt-milestone-notify]
 
     private fun rememberObserver(actor: PlayActor) {

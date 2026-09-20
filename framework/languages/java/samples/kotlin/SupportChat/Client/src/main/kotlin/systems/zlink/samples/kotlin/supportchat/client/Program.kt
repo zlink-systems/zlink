@@ -15,19 +15,18 @@ fun main(args: Array<String>) = runBlocking {
     val options = ClientOptions.parse(args)
     val clients = List(6) { createClient(options) }
     try {
-        SupportChatClientScenario().run(
-            agent = clients[0],
-            customer1 = clients[1],
-            customer2 = clients[2],
-            reconnectingAgent = clients[3],
-            reconnectingCustomer = clients[4],
-            waitingCustomer = clients[5],
-        )
+        SupportChatClientScenario()
+            .run(
+                agent = clients[0],
+                customer1 = clients[1],
+                customer2 = clients[2],
+                reconnectingAgent = clients[3],
+                reconnectingCustomer = clients[4],
+                waitingCustomer = clients[5],
+            )
         println(SampleNames.ClientMarker)
     } finally {
-        clients.forEach { client ->
-            runCatching { client.close().submit().await() }
-        }
+        clients.forEach { client -> runCatching { client.close().submit().await() } }
     }
 }
 
@@ -47,7 +46,7 @@ private fun createClient(options: ClientOptions): ZLinkStreamConnector =
             Duration.ofMillis(250),
             Duration.ofSeconds(5),
             2.0,
-        ),
+        )
     )
 
 private data class ClientOptions(val streamEndpoint: URI) {
@@ -57,7 +56,11 @@ private data class ClientOptions(val streamEndpoint: URI) {
                 "Usage: Client --stream-endpoint <tcp://host:port>"
             }
             val endpoint = URI.create(args[1])
-            require(endpoint.scheme == "tcp" && !endpoint.host.isNullOrBlank() && endpoint.port in 1..65535) {
+            require(
+                endpoint.scheme == "tcp" &&
+                    !endpoint.host.isNullOrBlank() &&
+                    endpoint.port in 1..65535
+            ) {
                 "--stream-endpoint must be a valid tcp endpoint"
             }
             return ClientOptions(endpoint)

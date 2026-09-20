@@ -1,25 +1,25 @@
-using Zlink.Framework.Contracts.Handlers;
 using Zlink.Framework.Contracts.Channels;
-using ZoneWorld.Server.Configuration;
+using Zlink.Framework.Contracts.Handlers;
 using Zlink.Framework.Contracts.Spots;
 using Zlink.Framework.Contracts.Timers;
-using ZoneWorld.Shared.Contracts;
+using ZoneWorld.Server.Configuration;
 using ZoneWorld.Server.ZoneNode.Infrastructure.ZLink.Actors;
 using ZoneWorld.Server.ZoneNode.Ports;
+using ZoneWorld.Shared.Contracts;
 
 namespace ZoneWorld.Server.ZoneNode.Infrastructure.ZLink.Spots.Handlers;
 
 /// <summary>The 100ms world tick (§2.5).</summary>
-internal sealed class ZoneTickHandler(
-    ZoneNodeSettings settings,
-    IOpsReportPort ops) : IZLinkSpotTimerHandler<ZoneSpot>
+internal sealed class ZoneTickHandler(ZoneNodeSettings settings, IOpsReportPort ops)
+    : IZLinkSpotTimerHandler<ZoneSpot>
 {
     private static int _faultsInjected;
 
     public async ValueTask HandleAsync(
         ZoneSpot spot,
         ZLinkTimerTick tick,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken
+    )
     {
         try
         {
@@ -29,7 +29,8 @@ internal sealed class ZoneTickHandler(
             var faultZone = settings.FaultTickZone;
             if (faultZone == spot.ZoneId && Interlocked.Exchange(ref _faultsInjected, 1) == 0)
                 throw new InvalidOperationException(
-                    $"injected tick failure for ZW-C4. zone={spot.ZoneId}");
+                    $"injected tick failure for ZW-C4. zone={spot.ZoneId}"
+                );
 
             await spot.TickAsync(cancellationToken);
         }
@@ -40,14 +41,16 @@ internal sealed class ZoneTickHandler(
                 await ops.ReportSpotEventAsync(
                     NodeAlertKinds.TimerHandlerFailed,
                     $"spot={spot.ZoneId}; timer=zone-tick-{spot.ZoneId}; detail={error.Message}",
-                    cancellationToken);
+                    cancellationToken
+                );
             }
             catch (Exception reportError)
             {
                 // The Framework still owns timer failure logging. A report transport failure
                 // must not replace the original handler exception or change timer policy.
                 Console.Error.WriteLine(
-                    $"zone spot event report failed. zone={spot.ZoneId} error={reportError.Message}");
+                    $"zone spot event report failed. zone={spot.ZoneId} error={reportError.Message}"
+                );
             }
 
             throw;
@@ -59,8 +62,11 @@ internal sealed class ZoneTickHandler(
 /// their own cadence.</summary>
 internal sealed class BotTickHandler : IZLinkSpotTimerHandler<ZoneSpot>
 {
-    public ValueTask HandleAsync(ZoneSpot spot, ZLinkTimerTick tick, CancellationToken cancellationToken) =>
-        spot.BotTickAsync(cancellationToken);
+    public ValueTask HandleAsync(
+        ZoneSpot spot,
+        ZLinkTimerTick tick,
+        CancellationToken cancellationToken
+    ) => spot.BotTickAsync(cancellationToken);
 }
 
 /// <summary>
@@ -75,8 +81,8 @@ internal sealed class DeliverAnnounceHandler : IZLinkSpotPacketHandler<ZoneSpot,
     public ValueTask HandleAsync(
         ZoneSpot spot,
         DeliverAnnounceMsg message,
-        CancellationToken cancellationToken) =>
-        spot.DeliverAnnounceAsync(message, cancellationToken);
+        CancellationToken cancellationToken
+    ) => spot.DeliverAnnounceAsync(message, cancellationToken);
 }
 
 /// <summary>
@@ -90,7 +96,8 @@ internal sealed class UpdatePositionHandler : IZLinkSpotPacketHandler<ZoneSpot, 
     public ValueTask HandleAsync(
         ZoneSpot spot,
         UpdatePositionMsg message,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken
+    )
     {
         spot.ApplyPositionUpdate(message);
         return ValueTask.CompletedTask;
@@ -102,13 +109,15 @@ internal sealed class UpdatePositionHandler : IZLinkSpotPacketHandler<ZoneSpot, 
 /// for the two topics whose destination is that spot, so another local zone cannot consume
 /// and discard its snapshot.
 /// </summary>
-internal sealed class ZoneBorderSubscriptionHandler : IZLinkSpotSubscriptionHandler<ZoneSpot, ZoneBorderEvent>
+internal sealed class ZoneBorderSubscriptionHandler
+    : IZLinkSpotSubscriptionHandler<ZoneSpot, ZoneBorderEvent>
 {
     public ValueTask HandleAsync(
         ZoneSpot spot,
         ZoneBorderEvent message,
         ZLinkPublishMessageContext context,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken
+    )
     {
         if (string.Equals(message.ToZoneId, spot.ZoneId, StringComparison.Ordinal))
             spot.ApplyBorderSnapshot(message);
@@ -122,16 +131,14 @@ internal sealed class ZoneBorderSubscriptionHandler : IZLinkSpotSubscriptionHand
 /// the spawn zone.
 /// </summary>
 [ZLinkSpotActorSendHandler(nameof(JoinWorldReq))]
-internal sealed class RejoinWorldHandler :
-    IZLinkSpotActorSendHandler<ZoneSpot, PlayerActor, JoinWorldReq>
+internal sealed class RejoinWorldHandler
+    : IZLinkSpotActorSendHandler<ZoneSpot, PlayerActor, JoinWorldReq>
 {
     public async ValueTask HandleAsync(
         ZoneSpot spot,
         PlayerActor actor,
         IZLinkMessageContext context,
         JoinWorldReq message,
-        CancellationToken cancellationToken) =>
-        await actor.Context.BoundSession
-            .Send(spot.Rejoin(actor))
-            .Async(cancellationToken);
+        CancellationToken cancellationToken
+    ) => await actor.Context.BoundSession.Send(spot.Rejoin(actor)).Async(cancellationToken);
 }

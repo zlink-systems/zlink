@@ -1,9 +1,6 @@
 import { PlayerActor } from './player-actor';
 import type { PlayerActor as PlayerActorType } from './player-actor';
-import type {
-  ZLinkActorContext,
-  ZLinkActorFactory
-} from '@zlink-systems/framework';
+import type { ZLinkActorContext, ZLinkActorFactory } from '@zlink-systems/framework';
 
 class PlayerActorFactory implements ZLinkActorFactory {
   async create(context: ZLinkActorContext): Promise<PlayerActorType> {

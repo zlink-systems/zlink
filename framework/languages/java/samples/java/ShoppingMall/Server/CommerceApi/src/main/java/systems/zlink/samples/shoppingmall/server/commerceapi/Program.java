@@ -3,6 +3,27 @@ package systems.zlink.samples.shoppingmall.server.commerceapi;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.sun.net.httpserver.HttpExchange;
 import com.sun.net.httpserver.HttpServer;
+
+import org.springframework.boot.WebApplicationType;
+import org.springframework.boot.autoconfigure.SpringBootApplication;
+import org.springframework.boot.builder.SpringApplicationBuilder;
+import org.springframework.boot.context.properties.EnableConfigurationProperties;
+import org.springframework.context.ConfigurableApplicationContext;
+import org.springframework.context.annotation.Bean;
+import org.springframework.core.env.StandardEnvironment;
+
+import systems.zlink.contracts.core.RoutingId;
+import systems.zlink.framework.channels.ZLinkRouteClient;
+import systems.zlink.framework.configuration.ZLinkMessageFlowLogMode;
+import systems.zlink.framework.monitoring.ZLinkRouteMeshRuntime;
+import systems.zlink.framework.spring.EnableZLinkFramework;
+import systems.zlink.framework.spring.ZLinkFrameworkConfigurer;
+import systems.zlink.samples.shoppingmall.server.configuration.SampleLocationStore;
+import systems.zlink.samples.shoppingmall.server.configuration.SampleNames;
+import systems.zlink.samples.shoppingmall.server.configuration.SampleTopology;
+import systems.zlink.samples.shoppingmall.server.shared.store.RedisCommerceStore;
+import systems.zlink.samples.shoppingmall.shared.contracts.Messages;
+
 import java.io.IOException;
 import java.net.InetSocketAddress;
 import java.net.URI;
@@ -14,55 +35,44 @@ import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
-import org.springframework.boot.WebApplicationType;
-import org.springframework.boot.autoconfigure.SpringBootApplication;
-import org.springframework.boot.builder.SpringApplicationBuilder;
-import org.springframework.boot.context.properties.EnableConfigurationProperties;
-import org.springframework.context.ConfigurableApplicationContext;
-import org.springframework.context.annotation.Bean;
-import org.springframework.core.env.StandardEnvironment;
-import systems.zlink.contracts.core.RoutingId;
-import systems.zlink.framework.channels.ZLinkRouteClient;
-import systems.zlink.framework.configuration.ZLinkMessageFlowLogMode;
-import systems.zlink.framework.locations.redis.ZLinkRedisLocationStore;
-import systems.zlink.framework.monitoring.ZLinkRouteMeshRuntime;
-import systems.zlink.framework.spring.EnableZLinkFramework;
-import systems.zlink.framework.spring.ZLinkFrameworkConfigurer;
-import systems.zlink.samples.shoppingmall.server.configuration.SampleLocationStore;
-import systems.zlink.samples.shoppingmall.server.configuration.SampleNames;
-import systems.zlink.samples.shoppingmall.server.configuration.SampleTopology;
-import systems.zlink.samples.shoppingmall.server.shared.store.RedisCommerceStore;
-import systems.zlink.samples.shoppingmall.shared.contracts.Messages;
 
 @EnableZLinkFramework
 @EnableConfigurationProperties(SampleTopology.class)
-@SpringBootApplication(
-    proxyBeanMethods = false,
-    scanBasePackageClasses = Program.class)
+@SpringBootApplication(proxyBeanMethods = false, scanBasePackageClasses = Program.class)
 public final class Program {
-    private Program() {
-    }
+    private Program() {}
 
     public static void main(String[] args) throws Exception {
         ConfigurableApplicationContext app = run(SampleTopology.configPath(args));
-        HttpServer http = startHttp(
-            app.getBean(CommerceApiService.class),
-            app.getBean(SampleTopology.class),
-            app.getBean(ZLinkRouteMeshRuntime.class));
-        Runtime.getRuntime().addShutdownHook(new Thread(() -> {
-            http.stop(0);
-            app.close();
-        }));
+        HttpServer http =
+                startHttp(
+                        app.getBean(CommerceApiService.class),
+                        app.getBean(SampleTopology.class),
+                        app.getBean(ZLinkRouteMeshRuntime.class));
+        Runtime.getRuntime()
+                .addShutdownHook(
+                        new Thread(
+                                () -> {
+                                    http.stop(0);
+                                    app.close();
+                                }));
     }
 
     public static ConfigurableApplicationContext run(String configPath) {
         StandardEnvironment environment = new StandardEnvironment();
-        environment.getPropertySources().remove(StandardEnvironment.SYSTEM_ENVIRONMENT_PROPERTY_SOURCE_NAME);
-        environment.getPropertySources().remove(StandardEnvironment.SYSTEM_PROPERTIES_PROPERTY_SOURCE_NAME);
-        SpringApplicationBuilder builder = new SpringApplicationBuilder(Program.class)
-            .environment(environment)
-            .properties("spring.config.location=" + Path.of(configPath).toAbsolutePath().toUri())
-            .web(WebApplicationType.NONE);
+        environment
+                .getPropertySources()
+                .remove(StandardEnvironment.SYSTEM_ENVIRONMENT_PROPERTY_SOURCE_NAME);
+        environment
+                .getPropertySources()
+                .remove(StandardEnvironment.SYSTEM_PROPERTIES_PROPERTY_SOURCE_NAME);
+        SpringApplicationBuilder builder =
+                new SpringApplicationBuilder(Program.class)
+                        .environment(environment)
+                        .properties(
+                                "spring.config.location="
+                                        + Path.of(configPath).toAbsolutePath().toUri())
+                        .web(WebApplicationType.NONE);
         builder.application().setKeepAlive(true);
         return builder.run();
     }
@@ -73,13 +83,13 @@ public final class Program {
         return options -> {
             options.configureLocations();
             options.addLocationStore(SampleLocationStore.create(topology));
-            options.configureDispatch()
-                .messageFlow(ZLinkMessageFlowLogMode.NORMAL);
+            options.configureDispatch().messageFlow(ZLinkMessageFlowLogMode.NORMAL);
             // --8<-- [start:doc-sm-api-register]
             options.addRouteMesh(SampleNames.OrderSpotDiscovery)
-                .setRoutingId(RoutingId.from(api.instanceName()))
-                .listen()
-                .objects().client();
+                    .setRoutingId(RoutingId.from(api.instanceName()))
+                    .listen()
+                    .objects()
+                    .client();
             // --8<-- [end:doc-sm-api-register]
         };
     }
@@ -93,20 +103,19 @@ public final class Program {
 
     @Bean
     CommerceApiService commerceApiService(
-        RedisCommerceStore store,
-        ZLinkRouteClient routes,
-        SampleTopology topology) {
+            RedisCommerceStore store, ZLinkRouteClient routes, SampleTopology topology) {
         return new CommerceApiService(store, routes, topology);
     }
 
     private static HttpServer startHttp(
-        CommerceApiService api,
-        SampleTopology topology,
-        ZLinkRouteMeshRuntime routeRuntime) throws IOException {
+            CommerceApiService api, SampleTopology topology, ZLinkRouteMeshRuntime routeRuntime)
+            throws IOException {
         ObjectMapper json = new ObjectMapper().findAndRegisterModules();
         URI uri = URI.create(topology.api().httpUrl());
-        HttpServer server = HttpServer.create(new InetSocketAddress(uri.getHost(), uri.getPort()), 0);
-        server.createContext("/health", exchange -> writeJson(exchange, json, 200, new Health("ok")));
+        HttpServer server =
+                HttpServer.create(new InetSocketAddress(uri.getHost(), uri.getPort()), 0);
+        server.createContext(
+                "/health", exchange -> writeJson(exchange, json, 200, new Health("ok")));
         server.createContext("/", exchange -> route(exchange, json, api));
         server.start();
         System.out.println("shoppingmall-ready kind=http node=" + topology.api().instanceName());
@@ -115,42 +124,58 @@ public final class Program {
     }
 
     private static void startObjectRouteReadinessSignal(
-        String nodeId,
-        ZLinkRouteMeshRuntime routeRuntime) {
-        ScheduledExecutorService readiness = Executors.newSingleThreadScheduledExecutor(task -> {
-            Thread thread = new Thread(task, "shoppingmall-object-route-readiness-" + nodeId);
-            thread.setDaemon(true);
-            return thread;
-        });
+            String nodeId, ZLinkRouteMeshRuntime routeRuntime) {
+        ScheduledExecutorService readiness =
+                Executors.newSingleThreadScheduledExecutor(
+                        task -> {
+                            Thread thread =
+                                    new Thread(
+                                            task, "shoppingmall-object-route-readiness-" + nodeId);
+                            thread.setDaemon(true);
+                            return thread;
+                        });
         AtomicInteger attempts = new AtomicInteger();
-        readiness.scheduleWithFixedDelay(() -> {
-            int attempt = attempts.incrementAndGet();
-            try {
-                var mesh = routeRuntime.snapshot(SampleNames.OrderSpotDiscovery);
-                boolean ready = mesh.isReady() && mesh.peers().stream()
-                    .filter(peer -> peer.state().name().equals("READY"))
-                    .count() >= 2;
-                if (ready) {
-                    System.out.println("shoppingmall-ready kind=object-route node=" + nodeId
-                        + " target=workflow-a");
-                    System.out.println("shoppingmall-ready kind=object-route node=" + nodeId
-                        + " target=workflow-b");
-                    readiness.shutdown();
-                }
-            } catch (RuntimeException ignored) {
-                // The framework is still starting; the next passive snapshot retries it.
-            } finally {
-                if (attempt >= 300) {
-                    readiness.shutdown();
-                }
-            }
-        }, 0, 100, TimeUnit.MILLISECONDS);
+        readiness.scheduleWithFixedDelay(
+                () -> {
+                    int attempt = attempts.incrementAndGet();
+                    try {
+                        var mesh = routeRuntime.snapshot(SampleNames.OrderSpotDiscovery);
+                        boolean ready =
+                                mesh.isReady()
+                                        && mesh.peers().stream()
+                                                        .filter(
+                                                                peer ->
+                                                                        peer.state()
+                                                                                .name()
+                                                                                .equals("READY"))
+                                                        .count()
+                                                >= 2;
+                        if (ready) {
+                            System.out.println(
+                                    "shoppingmall-ready kind=object-route node="
+                                            + nodeId
+                                            + " target=workflow-a");
+                            System.out.println(
+                                    "shoppingmall-ready kind=object-route node="
+                                            + nodeId
+                                            + " target=workflow-b");
+                            readiness.shutdown();
+                        }
+                    } catch (RuntimeException ignored) {
+                        // The framework is still starting; the next passive snapshot retries it.
+                    } finally {
+                        if (attempt >= 300) {
+                            readiness.shutdown();
+                        }
+                    }
+                },
+                0,
+                100,
+                TimeUnit.MILLISECONDS);
     }
 
-    private static void route(
-        HttpExchange exchange,
-        ObjectMapper json,
-        CommerceApiService api) throws IOException {
+    private static void route(HttpExchange exchange, ObjectMapper json, CommerceApiService api)
+            throws IOException {
         try {
             String method = exchange.getRequestMethod();
             String path = exchange.getRequestURI().getPath();
@@ -163,14 +188,16 @@ public final class Program {
                 writeJson(exchange, json, api.getOrder(last(path)));
                 return;
             }
-            if ("POST".equals(method) && path.startsWith("/self-check/projection/")
-                && path.endsWith("/delete")) {
+            if ("POST".equals(method)
+                    && path.startsWith("/self-check/projection/")
+                    && path.endsWith("/delete")) {
                 api.deleteProjection(segment(path, 3));
                 writeJson(exchange, json, 200, new Ok(true));
                 return;
             }
-            if ("POST".equals(method) && path.startsWith("/self-check/projection/")
-                && path.endsWith("/rebuild")) {
+            if ("POST".equals(method)
+                    && path.startsWith("/self-check/projection/")
+                    && path.endsWith("/rebuild")) {
                 writeJson(exchange, json, api.rebuildProjection(segment(path, 3)));
                 return;
             }
@@ -184,13 +211,15 @@ public final class Program {
                 writeJson(exchange, json, api.prepareInventoryReserved(request));
                 return;
             }
-            if ("POST".equals(method) && path.startsWith("/self-check/workflow/")
-                && path.endsWith("/continue")) {
+            if ("POST".equals(method)
+                    && path.startsWith("/self-check/workflow/")
+                    && path.endsWith("/continue")) {
                 writeJson(exchange, json, api.continueOrder(segment(path, 3)));
                 return;
             }
             if ("POST".equals(method) && "/self-check/assert".equals(path)) {
-                Messages.ServerAssertionReq request = read(exchange, json, Messages.ServerAssertionReq.class);
+                Messages.ServerAssertionReq request =
+                        read(exchange, json, Messages.ServerAssertionReq.class);
                 writeJson(exchange, json, 200, api.assertEvidence(request));
                 return;
             }
@@ -201,39 +230,34 @@ public final class Program {
     }
 
     private static void writeJson(
-        HttpExchange exchange,
-        ObjectMapper json,
-        CompletionStage<?> response) {
-        response.whenComplete((body, failure) -> {
-            try {
-                if (failure == null) {
-                    writeJson(exchange, json, 200, body);
-                    return;
-                }
-                Throwable cause = failure instanceof CompletionException && failure.getCause() != null
-                    ? failure.getCause()
-                    : failure;
-                writeJson(exchange, json, 500, new ErrorBody(cause.getMessage()));
-            } catch (IOException writeFailure) {
-                exchange.close();
-            }
-        });
+            HttpExchange exchange, ObjectMapper json, CompletionStage<?> response) {
+        response.whenComplete(
+                (body, failure) -> {
+                    try {
+                        if (failure == null) {
+                            writeJson(exchange, json, 200, body);
+                            return;
+                        }
+                        Throwable cause =
+                                failure instanceof CompletionException && failure.getCause() != null
+                                        ? failure.getCause()
+                                        : failure;
+                        writeJson(exchange, json, 500, new ErrorBody(cause.getMessage()));
+                    } catch (IOException writeFailure) {
+                        exchange.close();
+                    }
+                });
     }
 
-    private static <T> T read(
-        HttpExchange exchange,
-        ObjectMapper json,
-        Class<T> type) throws IOException {
+    private static <T> T read(HttpExchange exchange, ObjectMapper json, Class<T> type)
+            throws IOException {
         try (var body = exchange.getRequestBody()) {
             return json.readValue(body, type);
         }
     }
 
-    private static void writeJson(
-        HttpExchange exchange,
-        ObjectMapper json,
-        int status,
-        Object body) throws IOException {
+    private static void writeJson(HttpExchange exchange, ObjectMapper json, int status, Object body)
+            throws IOException {
         byte[] bytes = json.writeValueAsString(body).getBytes(StandardCharsets.UTF_8);
         exchange.getResponseHeaders().add("content-type", "application/json");
         exchange.sendResponseHeaders(status, bytes.length);
@@ -251,12 +275,9 @@ public final class Program {
         return parts[index];
     }
 
-    private record Health(String status) {
-    }
+    private record Health(String status) {}
 
-    private record Ok(boolean ok) {
-    }
+    private record Ok(boolean ok) {}
 
-    private record ErrorBody(String error) {
-    }
+    private record ErrorBody(String error) {}
 }

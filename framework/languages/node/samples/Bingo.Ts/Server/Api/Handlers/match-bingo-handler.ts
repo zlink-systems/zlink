@@ -1,5 +1,9 @@
 import { Inject } from '@nestjs/common';
-import { ZLINK_SPOT_MANAGER, ZLINK_SPOT_OUTBOUND, zlinkRequestHandler } from '@zlink-systems/nestjs';
+import {
+  ZLINK_SPOT_MANAGER,
+  ZLINK_SPOT_OUTBOUND,
+  zlinkRequestHandler
+} from '@zlink-systems/nestjs';
 import { PacketNames } from '../../../Shared/Contracts/messages';
 import {
   BingoRoomCreateReq,
@@ -12,10 +16,7 @@ import type {
   ZLinkSpotOutbound,
   ZLinkRequestHandler
 } from '@zlink-systems/framework';
-import type {
-  ReserveBingoRoomRes,
-  MatchBingoApiReq
-} from '../../../Shared/Contracts/messages';
+import type { ReserveBingoRoomRes, MatchBingoApiReq } from '../../../Shared/Contracts/messages';
 
 @zlinkRequestHandler('api', PacketNames.matchBingoApiReq)
 class MatchBingoHandler implements ZLinkRequestHandler<MatchBingoApiReq, MatchBingoApiRes> {
@@ -28,11 +29,14 @@ class MatchBingoHandler implements ZLinkRequestHandler<MatchBingoApiReq, MatchBi
     // --8<-- [start:doc-bingo-api-match]
     const levelBucket = '1-10';
     const allocated = await this.outbound
-      .requestToSpot(`match:${levelBucket}`, new ReserveBingoRoomReq({
-        mode: request.mode,
-        actorId: request.actorId,
-        levelBucket
-      }))
+      .requestToSpot(
+        `match:${levelBucket}`,
+        new ReserveBingoRoomReq({
+          mode: request.mode,
+          actorId: request.actorId,
+          levelBucket
+        })
+      )
       .instanceSpot(SampleNames.matchmakerSpotType)
       .inMesh(SampleNames.matchmakingMeshName)
       .submit<ReserveBingoRoomRes>();

@@ -8,11 +8,7 @@ async function loadSampleConfig(): Promise<DeliveryDispatchClientConfig> {
   return await loadBrowserConfig<DeliveryDispatchClientConfig>();
 }
 
-export {
-  loadSampleConfig
-};
+export { loadSampleConfig };
 
-export type {
-  DeliveryDispatchClientConfig
-};
+export type { DeliveryDispatchClientConfig };
 import { loadBrowserConfig } from '../browser-client-runtime';

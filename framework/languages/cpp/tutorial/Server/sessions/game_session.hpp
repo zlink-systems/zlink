@@ -63,8 +63,8 @@ class game_session_t final : public fw::packet_stream_session_t
 
             // A returning client finds its existing player rather than a new one.
             auto &actors = stream.actors ();
-            auto located = actors.get_or_create ("player", request.player_id,
-                                                 create_player_t{request.player_id});
+            auto located = actors.get_or_create (
+              "player", request.player_id, create_player_t{request.player_id});
             if (!located)
                 throw fw::framework_exception_t (located.error_kind (),
                                                  "Player creation was rejected.");

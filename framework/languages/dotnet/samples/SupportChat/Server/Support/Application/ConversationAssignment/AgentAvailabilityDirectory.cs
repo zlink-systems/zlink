@@ -8,7 +8,12 @@ internal sealed class AgentAvailabilityDirectory(int capacity)
     private readonly Dictionary<string, AgentSlot> _agents = new(StringComparer.Ordinal);
     private readonly List<string> _order = [];
 
-    public void SetAvailable(string rosterActorId, string displayName, bool isAvailable, int activeConversations)
+    public void SetAvailable(
+        string rosterActorId,
+        string displayName,
+        bool isAvailable,
+        int activeConversations
+    )
     {
         if (!isAvailable)
         {
@@ -43,7 +48,8 @@ internal sealed class AgentAvailabilityDirectory(int capacity)
             }
         }
 
-        if (picked is null) return null;
+        if (picked is null)
+            return null;
 
         var slot = _agents[picked];
         slot.Active += 1;
@@ -55,7 +61,8 @@ internal sealed class AgentAvailabilityDirectory(int capacity)
     // Frees one slot when a conversation the agent handled closes.
     public void Release(string rosterActorId)
     {
-        if (_agents.TryGetValue(rosterActorId, out var slot) && slot.Active > 0) slot.Active -= 1;
+        if (_agents.TryGetValue(rosterActorId, out var slot) && slot.Active > 0)
+            slot.Active -= 1;
     }
 
     private sealed class AgentSlot(string rosterActorId)
@@ -66,6 +73,4 @@ internal sealed class AgentAvailabilityDirectory(int capacity)
     }
 }
 
-internal sealed record AvailableAgent(
-    string RosterActorId,
-    string DisplayName);
+internal sealed record AvailableAgent(string RosterActorId, string DisplayName);

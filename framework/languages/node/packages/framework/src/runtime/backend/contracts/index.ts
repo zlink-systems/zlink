@@ -503,6 +503,7 @@ export interface ZLinkBackendDealerSocket extends ZLinkBackendConnectableSocket 
   peerWeight: number;
   sendHighWaterMark: number;
   receiveHighWaterMark: number;
+  receiveTimeoutMs: number;
   sendTimeoutMs: number;
   maxMessageSize: number;
   send(message: Message | readonly Message[]): Promise<void>;
@@ -536,6 +537,7 @@ export interface ZLinkBackendRouterSocket extends ZLinkBackendConnectableSocket 
   peerWeight: number;
   sendHighWaterMark: number;
   receiveHighWaterMark: number;
+  receiveTimeoutMs: number;
   sendTimeoutMs: number;
   maxMessageSize: number;
   setRoutingId(routingId: RoutingId): void;
@@ -740,6 +742,7 @@ export interface ZLinkMeshBackendAdapter {
     options: {
       readonly meshName: string;
       readonly routingId?: RoutingId;
+      readonly receiveTimeoutMs?: number;
       readonly trustProfile?: string;
       readonly applicationJobQueue: import('../../application-jobs/contracts').ApplicationJobQueuePort;
       readonly applicationJobReceiveFlowFailureSink?: (error: unknown) => void;

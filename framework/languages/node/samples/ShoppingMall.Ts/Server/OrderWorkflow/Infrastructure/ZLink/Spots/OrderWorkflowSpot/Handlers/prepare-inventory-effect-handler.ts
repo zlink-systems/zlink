@@ -9,13 +9,20 @@ import { SHOPPINGMALL_ROLE } from '../../../../../order-workflow-tokens';
 
 @Injectable()
 @zlinkSpotPacketHandler({ spot: () => OrderWorkflowSpot, packetName: 'PrepareInventoryEffectReq' })
-class PrepareInventoryEffectHandler implements ZLinkSpotRequestHandler<OrderWorkflowSpot, PrepareInventoryEffectReq, StartOrderWorkflowRes> {
+class PrepareInventoryEffectHandler implements ZLinkSpotRequestHandler<
+  OrderWorkflowSpot,
+  PrepareInventoryEffectReq,
+  StartOrderWorkflowRes
+> {
   constructor(
     private readonly workflow: OrderWorkflowService,
     @Inject(SHOPPINGMALL_ROLE) private readonly role: string
   ) {}
 
-  handle(spot: OrderWorkflowSpot, request: PrepareInventoryEffectReq): Promise<StartOrderWorkflowRes> {
+  handle(
+    spot: OrderWorkflowSpot,
+    request: PrepareInventoryEffectReq
+  ): Promise<StartOrderWorkflowRes> {
     void spot;
     return Promise.resolve(this.workflow.prepareInventoryEffect(request, this.role));
   }

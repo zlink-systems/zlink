@@ -1,39 +1,37 @@
 package systems.zlink.samples.tictactoe.server.api;
-import java.net.URI;
 
 import systems.zlink.framework.configuration.ZLinkMeshNodeBuilder;
 import systems.zlink.framework.configuration.ZLinkMessageFlowLogMode;
 import systems.zlink.framework.spring.ZLinkFrameworkConfigurer;
 import systems.zlink.samples.tictactoe.server.api.handlers.AuthenticatePlayerHandler;
+import systems.zlink.samples.tictactoe.server.configuration.ApiSettings;
 import systems.zlink.samples.tictactoe.server.configuration.SampleLogging;
 import systems.zlink.samples.tictactoe.server.configuration.SampleNames;
-import systems.zlink.samples.tictactoe.server.configuration.ApiSettings;
 import systems.zlink.samples.tictactoe.shared.contracts.AuthenticatePlayerReq;
 import systems.zlink.samples.tictactoe.shared.contracts.AuthenticatePlayerRes;
 
+import java.net.URI;
+
 public final class ApiServer {
-    private ApiServer() {
-    }
+    private ApiServer() {}
 
     public static ZLinkFrameworkConfigurer configure(ApiSettings settings) {
         return options -> {
             SampleLogging.configure(settings, "api");
-            options.configureDispatch()
-                .messageFlow(ZLinkMessageFlowLogMode.NORMAL);
+            options.configureDispatch().messageFlow(ZLinkMessageFlowLogMode.NORMAL);
             options.configureLocations();
             URI apiEndpoint = URI.create(settings.apiChannelEndpoint());
             options.addClientServerChannel(SampleNames.ApiChannel)
-                .server()
-                .setBindHost(apiEndpoint.getHost())
-                .listen(apiEndpoint.getPort())
-                // request: AuthenticatePlayerReq에 AuthenticatePlayerRes로 응답한다.
-                .addRequestHandler(
-                    AuthenticatePlayerHandler.class,
-                    AuthenticatePlayerReq.class,
-                    AuthenticatePlayerRes.class);
+                    .server()
+                    .setBindHost(apiEndpoint.getHost())
+                    .listen(apiEndpoint.getPort())
+                    // request: AuthenticatePlayerReq에 AuthenticatePlayerRes로 응답한다.
+                    .addRequestHandler(
+                            AuthenticatePlayerHandler.class,
+                            AuthenticatePlayerReq.class,
+                            AuthenticatePlayerRes.class);
             ZLinkMeshNodeBuilder mesh = options.addRouteMesh(SampleNames.SpotMesh);
-            mesh.listen(settings.routeEndpoint())
-                .setRoutingIdPrefix("tictactoe-api");
+            mesh.listen(settings.routeEndpoint()).setRoutingIdPrefix("tictactoe-api");
             mesh.objects().client();
             // --8<-- [start:doc-manual-peer-connect]
             for (String endpoint : settings.spotEndpoints()) {

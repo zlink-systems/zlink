@@ -9,12 +9,12 @@ import systems.zlink.framework.errors.ZLinkConfigurationException
 import systems.zlink.framework.monitoring.ZLinkPeerState
 import systems.zlink.framework.monitoring.ZLinkRouteMeshRuntime
 
-class TicTacToeReadinessReporter private constructor(
-    private val checks: List<ReadinessCheck>,
-) : ApplicationRunner, AutoCloseable {
-    private val reporter = Executors.newSingleThreadScheduledExecutor { runnable ->
-        Thread(runnable, "tictactoe-readiness").apply { isDaemon = true }
-    }
+class TicTacToeReadinessReporter private constructor(private val checks: List<ReadinessCheck>) :
+    ApplicationRunner, AutoCloseable {
+    private val reporter =
+        Executors.newSingleThreadScheduledExecutor { runnable ->
+            Thread(runnable, "tictactoe-readiness").apply { isDaemon = true }
+        }
 
     override fun run(args: ApplicationArguments) {
         reporter.scheduleWithFixedDelay(::report, 0, 100, TimeUnit.MILLISECONDS)
@@ -31,10 +31,7 @@ class TicTacToeReadinessReporter private constructor(
         reporter.shutdownNow()
     }
 
-    private class ReadinessCheck(
-        private val evidence: String,
-        private val ready: () -> Boolean,
-    ) {
+    private class ReadinessCheck(private val evidence: String, private val ready: () -> Boolean) {
         var reported: Boolean = false
             private set
 
@@ -56,16 +53,16 @@ class TicTacToeReadinessReporter private constructor(
     companion object {
         private val logger = LoggerFactory.getLogger(TicTacToeReadinessReporter::class.java)
 
-        fun api(
-            nodeId: String,
-            meshes: ZLinkRouteMeshRuntime,
-        ): TicTacToeReadinessReporter = TicTacToeReadinessReporter(
-            listOf(
-                ReadinessCheck(
-                    "tictactoe-ready kind=spot-route node=$nodeId mesh=${SampleNames.SpotMesh}",
-                ) { meshes.snapshot(SampleNames.SpotMesh).isReady },
-            ),
-        )
+        fun api(nodeId: String, meshes: ZLinkRouteMeshRuntime): TicTacToeReadinessReporter =
+            TicTacToeReadinessReporter(
+                listOf(
+                    ReadinessCheck(
+                        "tictactoe-ready kind=spot-route node=$nodeId mesh=${SampleNames.SpotMesh}"
+                    ) {
+                        meshes.snapshot(SampleNames.SpotMesh).isReady
+                    }
+                )
+            )
 
         fun play(
             nodeId: String,
@@ -76,14 +73,14 @@ class TicTacToeReadinessReporter private constructor(
             return TicTacToeReadinessReporter(
                 listOf(
                     ReadinessCheck(
-                        "tictactoe-ready kind=peer-route node=$nodeId peer=$peerNodeId",
+                        "tictactoe-ready kind=peer-route node=$nodeId peer=$peerNodeId"
                     ) {
                         meshes.snapshot(SampleNames.SpotMesh).peers().any { peer ->
                             peer.nodeRid().toString() == peerRoutingId &&
                                 peer.state() == ZLinkPeerState.READY
                         }
-                    },
-                ),
+                    }
+                )
             )
         }
     }

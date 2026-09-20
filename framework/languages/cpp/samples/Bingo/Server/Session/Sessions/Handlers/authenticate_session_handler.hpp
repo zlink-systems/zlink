@@ -19,7 +19,6 @@ using framework::message_t;
 class authenticate_session_handler_t
 {
   public:
-
     explicit authenticate_session_handler_t (channel_client_t &client) : _client (client) {}
 
     bool can_handle (const session_message_context_t &dispatch) const
@@ -50,8 +49,8 @@ class authenticate_session_handler_t
         ensure_player_actor_req_t create_request;
         create_request.set_actor_id (authenticated.actor_id ());
         create_request.set_display_name (authenticated.display_name ());
-        auto located = actors.get_or_create (sample_names_t::player_actor_type,
-                                             authenticated.actor_id (), create_request);
+        auto located = actors.get_or_create (
+          sample_names_t::player_actor_type, authenticated.actor_id (), create_request);
         if (!located) {
             co_return result_t<session_actor_t>::failure (
               located.error_kind (),

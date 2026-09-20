@@ -1,5 +1,8 @@
 import { ZLinkModule, zlinkFramework, zlinkModule } from '@zlink-systems/nestjs';
-import { ZLinkSpotRelocationCoordinationMode, ZLinkUserSpotExecutionMode } from '@zlink-systems/framework';
+import {
+  ZLinkSpotRelocationCoordinationMode,
+  ZLinkUserSpotExecutionMode
+} from '@zlink-systems/framework';
 import { bingoFrameworkProtobuf } from '../../Shared/Contracts/protobuf-framework-codec';
 import { PlayerActorFactory } from './Infrastructure/ZLink/Actors/player-actor-factory';
 import { PlayerActorRelocationAdapter } from './Infrastructure/ZLink/Actors/player-actor-relocation-adapter';
@@ -7,7 +10,10 @@ import { BingoEntrySpot } from './Infrastructure/ZLink/Spots/EntrySpot/bingo-ent
 import { BingoRoomSpot } from './Infrastructure/ZLink/Spots/BingoRoomSpot/bingo-room-spot';
 import { BingoRoomRelocationAdapter } from './Infrastructure/ZLink/Spots/BingoRoomSpot/bingo-room-relocation-adapter';
 import { SampleNames } from '../Configuration/sample-names';
-import { BINGO_SAMPLE_CONFIG, createBingoConfigurationModule } from '../Configuration/sample-config';
+import {
+  BINGO_SAMPLE_CONFIG,
+  createBingoConfigurationModule
+} from '../Configuration/sample-config';
 import type { BingoSampleConfig } from '../Configuration/sample-config';
 import { bingoLocationOptions, createBingoLocationStore } from '../Configuration/location-store';
 import { createBingoRelocationStore } from '../Configuration/relocation-store';
@@ -34,17 +40,17 @@ function createBingoPlayModule() {
         useFactory: (config: BingoSampleConfig) => {
           const builder = zlinkFramework();
           builder.options({
-            metrics: { meterProvider: bingoMeterProvider },
+            metrics: { meterProvider: bingoMeterProvider }
           });
           builder.setApplicationVersion(1n);
-          builder.configureDispatch()
-            .messageFlow('normal');
+          builder.configureDispatch().messageFlow('normal');
           builder.addLocationStore(createBingoLocationStore(config));
           builder.addRelocationStore(createBingoRelocationStore(config));
           bingoLocationOptions(builder.configureLocations());
           builder.codecs().use(bingoFrameworkProtobuf);
           // --8<-- [start:doc-bingo-play-register]
-          const mesh = builder.addRouteMesh(SampleNames.roomSpotNode)
+          const mesh = builder
+            .addRouteMesh(SampleNames.roomSpotNode)
             .setRoutingIdPrefix('play')
             .listen(config.playSpotEndpoint);
           const objectServer = mesh.objects().server();
@@ -52,19 +58,15 @@ function createBingoPlayModule() {
           // --8<-- [start:doc-execution-mode]
           // SpotWide is the default. Naming it here keeps the choice visible:
           // every callback of this room runs through one gate.
-          objectServer.addSpotFactory(
-            SampleNames.roomSpotType,
-            BingoRoomSpot,
-            (factory) => factory
+          objectServer.addSpotFactory(SampleNames.roomSpotType, BingoRoomSpot, (factory) =>
+            factory
               .executionMode(ZLinkUserSpotExecutionMode.SpotWide)
               .relocationCoordinationMode(ZLinkSpotRelocationCoordinationMode.ApplicationSignaled)
               .preserveStateWith(BingoRoomRelocationAdapter)
           );
           // --8<-- [end:doc-execution-mode]
-          objectServer.addActorFactory(
-            SampleNames.playerActorType,
-            PlayerActorFactory,
-            (factory) => factory.preserveStateWith(PlayerActorRelocationAdapter)
+          objectServer.addActorFactory(SampleNames.playerActorType, PlayerActorFactory, (factory) =>
+            factory.preserveStateWith(PlayerActorRelocationAdapter)
           );
           builder.addClientServerChannel(SampleNames.apiChannel).client();
           mesh.channel(SampleNames.roomRouteChannel).server();

@@ -1423,10 +1423,12 @@ TEST (CppFrameworkSampleParity, TicTacToeClientGateChecksCommonContractFields)
           "same_state (client1_saw_first_o_move.payload.state, client2_first_move.state)",
           "client1_second_move.state.board == \"XX.O.....\"",
           "client1_second_move.state.next_turn == tictactoe_marks_t::o",
-          "same_state (client2_saw_second_x_move.payload.state, client1_second_move.state)",
+          "same_state (client2_saw_second_x_move.payload.state,\n"
+          "              client1_second_move.state)",
           "client2_second_move.state.board == \"XX.OO....\"",
           "client2_second_move.state.next_turn == tictactoe_marks_t::x",
-          "same_state (client1_saw_second_o_move.payload.state, client2_second_move.state)"}) {
+          "same_state (client1_saw_second_o_move.payload.state,\n"
+          "              client2_second_move.state)"}) {
         EXPECT_NE (client.find (required), std::string::npos) << required;
     }
 }
@@ -1492,11 +1494,11 @@ TEST (CppFrameworkSampleParity, DeliveryDispatchClientGateChecksStatusArrivalOrd
                  / "samples/DeliveryDispatch/Client/delivery_dispatch_client_scenario.hpp");
 
     EXPECT_NE (client.find ("wait_for_sequence<delivery_status_notify_t>"), std::string::npos);
-    EXPECT_NE (client.find ("message.status == delivery_status_t::assigned"), std::string::npos);
-    EXPECT_NE (client.find ("message.status == delivery_status_t::reassigned"), std::string::npos);
-    EXPECT_NE (client.find ("message.status == delivery_status_t::accepted"), std::string::npos);
-    EXPECT_NE (client.find ("message.status == delivery_status_t::picked_up"), std::string::npos);
-    EXPECT_NE (client.find ("message.status == delivery_status_t::delivered"), std::string::npos);
+    EXPECT_NE (client.find ("payload.status == delivery_status_t::assigned"), std::string::npos);
+    EXPECT_NE (client.find ("payload.status == delivery_status_t::reassigned"), std::string::npos);
+    EXPECT_NE (client.find ("payload.status == delivery_status_t::accepted"), std::string::npos);
+    EXPECT_NE (client.find ("payload.status == delivery_status_t::picked_up"), std::string::npos);
+    EXPECT_NE (client.find ("payload.status == delivery_status_t::delivered"), std::string::npos);
     EXPECT_EQ (client.find ("wait_status_sequence"), std::string::npos);
     EXPECT_EQ (client.find ("sleep_for"), std::string::npos);
     EXPECT_EQ (client.find ("wait_status ("), std::string::npos);

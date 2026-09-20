@@ -73,10 +73,10 @@ const ZoneWorldErrors = {
   deadlineExceeded: 'DeadlineExceeded'
 } as const;
 
-type ZoneId = typeof ZoneIds[keyof typeof ZoneIds];
-type NodeId = typeof NodeIds[keyof typeof NodeIds];
-type MoveRejectReason = typeof MoveRejectReasons[keyof typeof MoveRejectReasons];
-type NodeAlertKind = typeof NodeAlertKinds[keyof typeof NodeAlertKinds];
+type ZoneId = (typeof ZoneIds)[keyof typeof ZoneIds];
+type NodeId = (typeof NodeIds)[keyof typeof NodeIds];
+type MoveRejectReason = (typeof MoveRejectReasons)[keyof typeof MoveRejectReasons];
+type NodeAlertKind = (typeof NodeAlertKinds)[keyof typeof NodeAlertKinds];
 
 function zoneOf(x: number, y: number): ZoneId {
   if (x < ZoneWorldSpec.zoneSplit) {

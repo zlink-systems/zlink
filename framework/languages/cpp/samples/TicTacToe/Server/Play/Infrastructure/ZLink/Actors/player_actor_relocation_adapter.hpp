@@ -31,36 +31,29 @@ inline void from_json (const nlohmann::json &json, player_actor_state_t &value)
     value.actor_id = json.value ("actorId", std::string{});
     value.node_rid = json.value ("nodeRid", std::string{});
     value.generation = json.value ("generation", 1ull);
-    value.destroy_after_entry_spot_join =
-      json.value ("destroyAfterEntrySpotJoin", false);
+    value.destroy_after_entry_spot_join = json.value ("destroyAfterEntrySpotJoin", false);
     value.disconnected = json.value ("disconnected", false);
     value.player = json.value ("player", player_info_t{});
 }
 
 // --8<-- [start:doc-relocation-adapter]
-class player_actor_relocation_adapter_t final
-    : public actor_relocation_adapter_t<player_actor_t>
+class player_actor_relocation_adapter_t final : public actor_relocation_adapter_t<player_actor_t>
 {
   public:
     // --8<-- [start:doc-ttt-actor-capture]
-    task_t<std::vector<std::byte>>
-    capture (player_actor_t &actor, std::stop_token) override
+    task_t<std::vector<std::byte>> capture (player_actor_t &actor, std::stop_token) override
     {
         const auto message = zlink::message_t::from_json (player_actor_state_t{
-          {}, {}, 1, actor.destroy_after_entry_spot_join,
-          actor.disconnected, actor.player});
-        co_return std::vector<std::byte> (
-          message.bytes ().begin (), message.bytes ().end ());
+          {}, {}, 1, actor.destroy_after_entry_spot_join, actor.disconnected, actor.player});
+        co_return std::vector<std::byte> (message.bytes ().begin (), message.bytes ().end ());
     }
     // --8<-- [end:doc-ttt-actor-capture]
 
     task_t<void>
-    restore (player_actor_t &actor,
-             std::vector<std::byte> payload,
-             std::stop_token) override
+    restore (player_actor_t &actor, std::vector<std::byte> payload, std::stop_token) override
     {
-        const auto message = zlink::message_t::from (
-          std::span<const std::byte> (payload.data (), payload.size ()));
+        const auto message =
+          zlink::message_t::from (std::span<const std::byte> (payload.data (), payload.size ()));
         auto restored = message.parse_json<player_actor_state_t> ();
         actor.destroy_after_entry_spot_join = restored.destroy_after_entry_spot_join;
         actor.disconnected = restored.disconnected;

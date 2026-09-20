@@ -552,7 +552,7 @@ if (!schema || !outputArgument || rest.length || !["--write", "--check"].include
 }
 const output = path.resolve(outputArgument);
 try {
-  const source = render(lowerSchema(path.resolve(schema)));
+  const source = render(lowerSchema(path.resolve(schema))).replace(/[ \t]+$/gm, "");
   if (mode === "--write") {
     fs.mkdirSync(path.dirname(output), { recursive: true });
     fs.writeFileSync(output, source);

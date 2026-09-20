@@ -15,43 +15,52 @@ internal sealed class GetQuestProgressHandler(GameQuestStore store)
         GameQuestEntrySpot,
         PlayerSessionActor,
         GetQuestProgressReq,
-        GetQuestProgressRes>
+        GetQuestProgressRes
+    >
 {
     public async ValueTask<GetQuestProgressRes> HandleAsync(
         GameQuestEntrySpot entrySpot,
         PlayerSessionActor actor,
         IZLinkMessageContext context,
         GetQuestProgressReq request,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken
+    )
     {
         actor.EnsurePlayer(request.PlayerId);
         return new GetQuestProgressRes(
-            await store.ReadProjectionAsync(actor.ActorId, cancellationToken));
+            await store.ReadProjectionAsync(actor.ActorId, cancellationToken)
+        );
     }
 }
 
 internal sealed class JoinSessionHandler(
     JoinQuestSessionUseCase joinSessions,
-    IZLinkActorManager actors)
-    : IZLinkSessionPacketHandler<IZLinkSessionContext, JoinSessionReq>
+    IZLinkActorManager actors
+) : IZLinkSessionPacketHandler<IZLinkSessionContext, JoinSessionReq>
 {
     public async ValueTask HandleAsync(
         IZLinkSessionContext context,
         ZLinkSessionDispatchContext dispatch,
         JoinSessionReq request,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken
+    )
     {
         // --8<-- [start:doc-gq-join-bind]
-        var actor = (await actors.GetOrCreate(request.PlayerId, SampleNames.SessionActorType)
-            .Request(request).Async(cancellationToken)) switch
+        var actor = (
+            await actors
+                .GetOrCreate(request.PlayerId, SampleNames.SessionActorType)
+                .Request(request)
+                .Async(cancellationToken)
+        ) switch
         {
             ZLinkActorCreateResult.Existing value => value.Actor,
             ZLinkActorCreateResult.Created value => value.Actor,
-            _ => throw new InvalidOperationException("Session Actor creation was rejected.")
+            _ => throw new InvalidOperationException("Session Actor creation was rejected."),
         };
         _ = await context.Actors.BindOrGetAsync(actor, cancellationToken);
         // --8<-- [end:doc-gq-join-bind]
-        await context.Client.Reply(await joinSessions.ExecuteAsync(request.PlayerId, cancellationToken))
+        await context
+            .Client.Reply(await joinSessions.ExecuteAsync(request.PlayerId, cancellationToken))
             .Async(cancellationToken);
     }
 }
@@ -59,24 +68,34 @@ internal sealed class JoinSessionHandler(
 // --8<-- [start:doc-gq-action-handler]
 [ZLinkSpotActorRequestHandler(nameof(KillMonsterReq))]
 internal sealed class KillMonsterHandler(GameplayActionService actions)
-    : IZLinkEntrySpotActorRequestHandler<GameQuestEntrySpot, PlayerSessionActor, KillMonsterReq, KillMonsterRes>
+    : IZLinkEntrySpotActorRequestHandler<
+        GameQuestEntrySpot,
+        PlayerSessionActor,
+        KillMonsterReq,
+        KillMonsterRes
+    >
 {
     public async ValueTask<KillMonsterRes> HandleAsync(
         GameQuestEntrySpot entrySpot,
         PlayerSessionActor actor,
         IZLinkMessageContext context,
         KillMonsterReq request,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken
+    )
     {
         actor.EnsurePlayer(request.PlayerId);
-        return new KillMonsterRes(await actions.KillMonsterAsync(
-            request.PlayerId,
-            request.MonsterId,
-            request.AreaId,
-            request.IdempotencyKey,
-            cancellationToken));
+        return new KillMonsterRes(
+            await actions.KillMonsterAsync(
+                request.PlayerId,
+                request.MonsterId,
+                request.AreaId,
+                request.IdempotencyKey,
+                cancellationToken
+            )
+        );
     }
 }
+
 // --8<-- [end:doc-gq-action-handler]
 
 [ZLinkSpotActorSendHandler(nameof(CollectItemMsg))]
@@ -88,7 +107,8 @@ internal sealed class CollectItemHandler(GameplayActionService actions)
         PlayerSessionActor actor,
         IZLinkMessageContext context,
         CollectItemMsg message,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken
+    )
     {
         actor.EnsurePlayer(message.PlayerId);
         await actions.CollectItemAsync(
@@ -96,7 +116,8 @@ internal sealed class CollectItemHandler(GameplayActionService actions)
             message.ItemId,
             message.Count,
             message.IdempotencyKey,
-            cancellationToken);
+            cancellationToken
+        );
     }
 }
 
@@ -109,14 +130,16 @@ internal sealed class EnterAreaHandler(GameplayActionService actions)
         PlayerSessionActor actor,
         IZLinkMessageContext context,
         EnterAreaMsg message,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken
+    )
     {
         actor.EnsurePlayer(message.PlayerId);
         await actions.EnterAreaAsync(
             message.PlayerId,
             message.AreaId,
             message.IdempotencyKey,
-            cancellationToken);
+            cancellationToken
+        );
     }
 }
 
@@ -126,14 +149,16 @@ internal sealed class SyncQuestProgressHandler(IQuestProgressSynchronizer quests
         GameQuestEntrySpot,
         PlayerSessionActor,
         SyncQuestProgressReq,
-        SyncQuestProgressRes>
+        SyncQuestProgressRes
+    >
 {
     public async ValueTask<SyncQuestProgressRes> HandleAsync(
         GameQuestEntrySpot entrySpot,
         PlayerSessionActor actor,
         IZLinkMessageContext context,
         SyncQuestProgressReq request,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken
+    )
     {
         actor.EnsurePlayer(request.PlayerId);
         return await quests.SyncAsync(actor.ActorId, cancellationToken);

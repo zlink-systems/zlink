@@ -37,8 +37,8 @@ public final class SupportActorDirectory {
 
     public synchronized List<SupportUserActor> participants(String conversationId) {
         return conversations.getOrDefault(conversationId, List.of()).stream()
-            .map(actors::get)
-            .filter(actor -> actor != null)
-            .toList();
+                .map(actors::get)
+                .filter(actor -> actor != null)
+                .toList();
     }
 }

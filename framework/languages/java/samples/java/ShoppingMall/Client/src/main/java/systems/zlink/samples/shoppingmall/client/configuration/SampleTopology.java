@@ -11,14 +11,18 @@ public record SampleTopology(String apiAHttpUrl, String apiBHttpUrl) {
             throw new IllegalArgumentException("Usage: Client --config <path>");
         }
         Properties properties = new Properties();
-        try (Reader reader = Files.newBufferedReader(Path.of(args[1]))) { properties.load(reader); }
-        return new SampleTopology(required(properties, "sample.apiAHttpUrl"),
-            required(properties, "sample.apiBHttpUrl"));
+        try (Reader reader = Files.newBufferedReader(Path.of(args[1]))) {
+            properties.load(reader);
+        }
+        return new SampleTopology(
+                required(properties, "sample.apiAHttpUrl"),
+                required(properties, "sample.apiBHttpUrl"));
     }
 
     private static String required(Properties properties, String name) {
         String value = properties.getProperty(name);
-        if (value == null || value.isBlank()) throw new IllegalArgumentException(name + " is required");
+        if (value == null || value.isBlank())
+            throw new IllegalArgumentException(name + " is required");
         return value;
     }
 }

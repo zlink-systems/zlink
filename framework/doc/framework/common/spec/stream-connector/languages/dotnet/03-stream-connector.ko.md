@@ -201,7 +201,7 @@ public interface IZlinkStreamCodecRegistration
 **`.NET` 고유 계약이다.** 상태 전이 자체는 [공통 스펙 §6](../../32-stream-connector.ko.md)이 소유한다.
 
 - `Connect.Async(...)`는 **연결과 receive loop 준비가 끝나면** 완료된다.
-- **callback 밖**의 `Close.Async(...)`는 연결 종료와 terminal callback 정리가 끝나면 완료된다.
+- **callback 밖**의 `Close.Async(...)`는 연결 종료와 connector 내부 정리(pending request 실패 처리, 등록 해제)가 끝나면 완료된다. 사용자 handler가 돌려준 비동기 완료는 기다리지 않는다([공통 스펙 §7](../../32-stream-connector.ko.md)).
 - **callback 안**의 `Close.Async(...)`는 **순환 대기를 피하려고 종료를 시작한 뒤 즉시 반환한다.**
   이후 callback 밖의 `Close.Async(...)` 또는 `DisposeAsync()`가 공유 terminal 결과를 기다린다.
 - **반복된 `Close`와 `DisposeAsync()`는 같은 terminal 결과 또는 실패를 공유한다.**

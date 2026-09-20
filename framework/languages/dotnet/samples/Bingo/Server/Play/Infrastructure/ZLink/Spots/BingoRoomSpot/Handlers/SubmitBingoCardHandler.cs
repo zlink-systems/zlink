@@ -14,7 +14,8 @@ internal sealed class SubmitBingoCardHandler
         PlayerActor actor,
         IZLinkMessageContext context,
         SubmitBingoCardReq message,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken
+    )
     {
         spot.EnsureRoomId(message.RoomId);
         var card = BingoCard.FromSubmittedNumbers(message.Card);

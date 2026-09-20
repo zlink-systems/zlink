@@ -85,6 +85,7 @@ class ZLinkMeshNodeRuntimeTest {
         registration.listen("inproc://game-1");
         registration.configureRouterSocket().setSendHighWaterMark(7);
         registration.configureRouterSocket().setReceiveHighWaterMark(11);
+        registration.configureRouterSocket().setReceiveTimeout(Duration.ofMillis(29));
         registration.configureRouterSocket().setSendTimeout(Duration.ofMillis(23));
         registration.configureSpotPublisher().setSendHighWaterMark(91);
 
@@ -97,6 +98,7 @@ class ZLinkMeshNodeRuntimeTest {
             assertEquals(11L, node.routerReceiveHighWaterMark);
             assertEquals(7, node.pendingAdmissionCapacity);
             assertEquals(Duration.ofMillis(23), node.routerSendTimeout);
+            assertEquals(Duration.ofMillis(29), node.routerReceiveTimeout);
         }
     }
 
@@ -151,6 +153,7 @@ class ZLinkMeshNodeRuntimeTest {
         private long routerReceiveHighWaterMark;
         private int pendingAdmissionCapacity;
         private Duration routerSendTimeout;
+        private Duration routerReceiveTimeout;
         private Consumer<ZLinkMeshDispatchRecord> dispatchReceiver;
 
         @Override public String name() { return "mesh-node"; }
@@ -175,6 +178,9 @@ class ZLinkMeshNodeRuntimeTest {
         }
         @Override public void setRouterSendTimeout(Duration value) {
             routerSendTimeout = value;
+        }
+        @Override public void setRouterReceiveTimeout(Duration value) {
+            routerReceiveTimeout = value;
         }
         @Override public void setApplicationReceiver(
             ZLinkMeshApplicationReceiver value) {

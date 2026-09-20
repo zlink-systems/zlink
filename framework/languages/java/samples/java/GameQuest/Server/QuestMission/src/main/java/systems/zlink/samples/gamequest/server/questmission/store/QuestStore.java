@@ -1,5 +1,11 @@
 package systems.zlink.samples.gamequest.server.questmission.store;
 
+import systems.zlink.samples.gamequest.server.configuration.GameplayStateStore;
+import systems.zlink.samples.gamequest.server.configuration.RedisSampleStore;
+import systems.zlink.samples.gamequest.server.configuration.SampleTopology;
+import systems.zlink.samples.gamequest.server.questmission.domain.QuestDomain;
+import systems.zlink.samples.gamequest.shared.contracts.Messages;
+
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.HashSet;
@@ -7,11 +13,6 @@ import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
-import systems.zlink.samples.gamequest.server.configuration.GameplayStateStore;
-import systems.zlink.samples.gamequest.server.configuration.RedisSampleStore;
-import systems.zlink.samples.gamequest.server.configuration.SampleTopology;
-import systems.zlink.samples.gamequest.server.questmission.domain.QuestDomain;
-import systems.zlink.samples.gamequest.shared.contracts.Messages;
 
 public final class QuestStore implements AutoCloseable {
     private final QuestDomain domain = new QuestDomain();
@@ -36,12 +37,12 @@ public final class QuestStore implements AutoCloseable {
         if (state.appliedEventIds.contains(event.eventId())) {
             shared.recordDeduplicatedEvent(event.eventId());
             return new Messages.QuestProcessingMsg(
-                event.eventId(),
-                event.playerId(),
-                copyProjection(state),
-                List.of(),
-                List.of(),
-                true);
+                    event.eventId(),
+                    event.playerId(),
+                    copyProjection(state),
+                    List.of(),
+                    List.of(),
+                    true);
         }
         List<Messages.QuestProgress> current = copyProjection(state);
         QuestDomain.QuestDecision decision = domain.apply(event, current, nextVersion(state));
@@ -52,57 +53,64 @@ public final class QuestStore implements AutoCloseable {
         state.appliedEventIds.add(event.eventId());
         // --8<-- [end:doc-gq-process]
         return new Messages.QuestProcessingMsg(
-            event.eventId(),
-            event.playerId(),
-            copyProjection(state),
-            decision.progressNotifications(),
-            decision.completedNotifications(),
-            false);
+                event.eventId(),
+                event.playerId(),
+                copyProjection(state),
+                decision.progressNotifications(),
+                decision.completedNotifications(),
+                false);
     }
 
     public Messages.SyncQuestProgressRes sync(String playerId) {
         PlayerState state = state(playerId);
         // --8<-- [start:doc-gq-sync]
-        int firstHuntCount = gameplay.snapshot(playerId).killCounts().stream()
-            .filter(kill -> "wolf".equals(kill.monsterId()))
-            .mapToInt(Messages.KillCountSnapshot::count)
-            .findFirst()
-            .orElse(0);
+        int firstHuntCount =
+                gameplay.snapshot(playerId).killCounts().stream()
+                        .filter(kill -> "wolf".equals(kill.monsterId()))
+                        .mapToInt(Messages.KillCountSnapshot::count)
+                        .findFirst()
+                        .orElse(0);
         List<Messages.QuestProgress> projection = copyProjection(state);
-        Messages.QuestProgress firstHunt = projection.stream()
-            .filter(progress -> progress.questId().equals(Messages.QuestIds.FirstHunt))
-            .findFirst()
-            .orElse(null);
+        Messages.QuestProgress firstHunt =
+                projection.stream()
+                        .filter(progress -> progress.questId().equals(Messages.QuestIds.FirstHunt))
+                        .findFirst()
+                        .orElse(null);
         if (firstHunt == null || firstHunt.currentCount() < firstHuntCount) {
             long now = Instant.now().toEpochMilli();
-            Messages.QuestProgress reconciled = new Messages.QuestProgress(
-                playerId,
-                Messages.QuestIds.FirstHunt,
-                firstHuntCount >= 3 ? Messages.QuestStatuses.RewardGranted : Messages.QuestStatuses.InProgress,
-                firstHuntCount,
-                3,
-                "sync-" + now,
-                now);
+            Messages.QuestProgress reconciled =
+                    new Messages.QuestProgress(
+                            playerId,
+                            Messages.QuestIds.FirstHunt,
+                            firstHuntCount >= 3
+                                    ? Messages.QuestStatuses.RewardGranted
+                                    : Messages.QuestStatuses.InProgress,
+                            firstHuntCount,
+                            3,
+                            "sync-" + now,
+                            now);
             projection.removeIf(progress -> progress.questId().equals(Messages.QuestIds.FirstHunt));
             projection.add(reconciled);
             state.projection = projection;
-            Messages.StoredQuestEvent reconciledEvent = new Messages.StoredQuestEvent(
-                "sync-" + now,
-                null,
-                playerId,
-                Messages.QuestIds.FirstHunt,
-                Messages.QuestProgressReconciledEvent.class.getSimpleName(),
-                0,
-                reconciled.currentCount(),
-                reconciled.requiredCount(),
-                reconciled.status(),
-                nextVersion(state),
-                now);
+            Messages.StoredQuestEvent reconciledEvent =
+                    new Messages.StoredQuestEvent(
+                            "sync-" + now,
+                            null,
+                            playerId,
+                            Messages.QuestIds.FirstHunt,
+                            Messages.QuestProgressReconciledEvent.class.getSimpleName(),
+                            0,
+                            reconciled.currentCount(),
+                            reconciled.requiredCount(),
+                            reconciled.status(),
+                            nextVersion(state),
+                            now);
             state.events.add(reconciledEvent);
             shared.writeProjection(playerId, projection);
             shared.appendQuestEvents(List.of(reconciledEvent));
-            System.out.printf("gamequest-mission reconciled player=%s quest=%s%n",
-                playerId, Messages.QuestIds.FirstHunt);
+            System.out.printf(
+                    "gamequest-mission reconciled player=%s quest=%s%n",
+                    playerId, Messages.QuestIds.FirstHunt);
         }
         return new Messages.SyncQuestProgressRes(copyProjection(state));
         // --8<-- [end:doc-gq-sync]
@@ -117,11 +125,11 @@ public final class QuestStore implements AutoCloseable {
 
     public Messages.QuestProgress rebuildProjection(String playerId, String questId, int count) {
         PlayerState state = state(playerId);
-        List<Messages.StoredQuestEvent> stream = state.events.stream()
-            .filter(event -> event.questId().equals(questId))
-            .toList();
+        List<Messages.StoredQuestEvent> stream =
+                state.events.stream().filter(event -> event.questId().equals(questId)).toList();
         if (stream.isEmpty()) {
-            throw new IllegalStateException("Quest stream was not found for " + playerId + "/" + questId);
+            throw new IllegalStateException(
+                    "Quest stream was not found for " + playerId + "/" + questId);
         }
 
         Messages.QuestProgress rebuilt = domain.fold(playerId, questId, stream);
@@ -172,9 +180,10 @@ public final class QuestStore implements AutoCloseable {
     }
 
     private PlayerState restorePlayer(String playerId) {
-        List<Messages.StoredQuestEvent> stored = shared.readQuestEvents().stream()
-            .filter(event -> event.playerId().equals(playerId))
-            .toList();
+        List<Messages.StoredQuestEvent> stored =
+                shared.readQuestEvents().stream()
+                        .filter(event -> event.playerId().equals(playerId))
+                        .toList();
         PlayerState state = new PlayerState();
         state.events.addAll(stored);
         Set<String> questIds = new HashSet<>();
@@ -185,9 +194,8 @@ public final class QuestStore implements AutoCloseable {
             }
         }
         for (String questId : questIds) {
-            List<Messages.StoredQuestEvent> stream = stored.stream()
-                .filter(event -> event.questId().equals(questId))
-                .toList();
+            List<Messages.StoredQuestEvent> stream =
+                    stored.stream().filter(event -> event.questId().equals(questId)).toList();
             state.projection.add(domain.fold(playerId, questId, stream));
         }
         return state;

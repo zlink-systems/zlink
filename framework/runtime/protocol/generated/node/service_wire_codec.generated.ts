@@ -5600,7 +5600,7 @@ function writeAuthorityRelocationState(input: AuthorityRelocationState, writer: 
 export function decodeAuthorityRelocationState(bytes: Uint8Array, context: ServiceWireDecoderContext): AuthorityRelocationState { const reader = new Reader(bytes); const value = readAuthorityRelocationState(reader, context, {}, 0); reader.done("authority-relocation-state"); return value; }
 export function encodeAuthorityRelocationState(value: AuthorityRelocationState, context: ServiceWireDecoderContext): Uint8Array { const writer = new Writer(); writeAuthorityRelocationState(value, writer, context, {}, 0); return writer.result(); }
 
-export type AuthorityActivationRecoveryState = { readonly hasActivationRecovery: "false" } | { readonly hasActivationRecovery: "true"; readonly reference: CreationContentReference; readonly sha256: Sha256Bytes; readonly encodedSize: CreationRequestSize; readonly inboxSequence: NonzeroU64 };
+export type AuthorityActivationRecoveryState = { readonly hasActivationRecovery: "false" } | { readonly hasActivationRecovery: "true"; readonly reference: CreationContentReference; readonly sha256: Sha256Bytes; readonly encodedSize: CreationRequestSize; readonly inboxSequence: NonzeroU64; readonly replayCursor: U64 };
 
 function readAuthorityActivationRecoveryState(reader: Reader, context: ServiceWireDecoderContext, enclosing: any, flags: number): AuthorityActivationRecoveryState {
   void context; void enclosing; void flags;
@@ -5620,6 +5620,9 @@ function readAuthorityActivationRecoveryState(reader: Reader, context: ServiceWi
 
 
     value["inboxSequence"] = readNonzeroU64(body, context, value, flags);
+
+
+    value["replayCursor"] = readU64(body, context, value, flags);
 
 
   } else fail("authority-activation-recovery-state discriminator");
@@ -5651,6 +5654,10 @@ function writeAuthorityActivationRecoveryState(input: AuthorityActivationRecover
 
 
     writeNonzeroU64(numeric(value["inboxSequence"]), body, context, value, flags);
+    if (value["replayCursor"] === undefined) fail("replayCursor required");
+
+
+    writeU64(numeric(value["replayCursor"]), body, context, value, flags);
   } else fail("authority-activation-recovery-state discriminator");
   const bytes = body.result(); writeU32(bytes.length, writer, context, enclosing, flags); writer.put(bytes);
 }

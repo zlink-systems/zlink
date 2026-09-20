@@ -11,5 +11,4 @@ internal static class Program
 
         await host.RunAsync();
     }
-
 }

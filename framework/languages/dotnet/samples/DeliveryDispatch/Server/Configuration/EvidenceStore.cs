@@ -21,7 +21,8 @@ public sealed class EvidenceStore
             status.CustomerId,
             status.Status,
             status.CourierId ?? string.Empty,
-            status.OccurredAtUnixMs.ToString());
+            status.OccurredAtUnixMs.ToString()
+        );
         lock (_gate)
         {
             File.AppendAllLines(_path, [line]);
@@ -32,9 +33,7 @@ public sealed class EvidenceStore
     {
         lock (_gate)
         {
-            return File.Exists(_path)
-                ? File.ReadAllLines(_path)
-                : [];
+            return File.Exists(_path) ? File.ReadAllLines(_path) : [];
         }
     }
 
@@ -56,6 +55,7 @@ public sealed class EvidenceStore
             parts[1],
             Enum.Parse<DeliveryStatus>(parts[2]),
             string.IsNullOrEmpty(parts[3]) ? null : parts[3],
-            long.Parse(parts[4]));
+            long.Parse(parts[4])
+        );
     }
 }

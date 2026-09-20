@@ -41,13 +41,17 @@ class CreateFreshActorProbeHandler {
       .inMesh(ZoneWorldNames.zoneMesh)
       .request(new PlayerActorCreateReq(request.actorId))
       .submit();
-    context.client.reply(result.status === 'rejected'
-      ? new CreateFreshActorProbeRes(request.actorId, '', '', ZoneWorldErrors.actorUnavailable)
-      : new CreateFreshActorProbeRes(
-        result.actor.actorId,
-        result.actor.objectGeneration.toString(),
-        String(result.actor.nodeRid)
-      )).submit();
+    context.client
+      .reply(
+        result.status === 'rejected'
+          ? new CreateFreshActorProbeRes(request.actorId, '', '', ZoneWorldErrors.actorUnavailable)
+          : new CreateFreshActorProbeRes(
+              result.actor.actorId,
+              result.actor.objectGeneration.toString(),
+              String(result.actor.nodeRid)
+            )
+      )
+      .submit();
   }
 }
 
@@ -68,9 +72,14 @@ class ActorLocationProbeHandler {
   ): Promise<void> {
     const request = payload.decode(ActorLocationProbeReq);
     const actor = await this.actors.find(request.actorId);
-    const response = actor === undefined
-      ? new ActorLocationProbeRes(request.actorId, '', '', ZoneWorldErrors.actorNotFound)
-      : new ActorLocationProbeRes(actor.actorId, actor.objectGeneration.toString(), String(actor.nodeRid));
+    const response =
+      actor === undefined
+        ? new ActorLocationProbeRes(request.actorId, '', '', ZoneWorldErrors.actorNotFound)
+        : new ActorLocationProbeRes(
+            actor.actorId,
+            actor.objectGeneration.toString(),
+            String(actor.nodeRid)
+          );
     context.client.reply(response).submit();
   }
 }
@@ -93,9 +102,9 @@ class MessageFollowProbeRequestSessionHandler {
     const request = payload.decode(MessageFollowProbeReq);
     const actor = context.actors.bound.find((candidate) => candidate.actorId === request.actorId);
     if (actor === undefined) {
-      context.client.reply(
-        new MessageFollowProbeRes(request.probeId, '', ZoneWorldErrors.actorUnavailable)
-      ).submit();
+      context.client
+        .reply(new MessageFollowProbeRes(request.probeId, '', ZoneWorldErrors.actorUnavailable))
+        .submit();
       return;
     }
     try {
@@ -105,9 +114,9 @@ class MessageFollowProbeRequestSessionHandler {
         `message-follow probe terminal actor=${request.actorId} probe=${request.probeId}`,
         error instanceof Error ? error.message : String(error)
       );
-      context.client.reply(
-        new MessageFollowProbeRes(request.probeId, '', ZoneWorldErrors.actorUnavailable)
-      ).submit();
+      context.client
+        .reply(new MessageFollowProbeRes(request.probeId, '', ZoneWorldErrors.actorUnavailable))
+        .submit();
     }
   }
 }

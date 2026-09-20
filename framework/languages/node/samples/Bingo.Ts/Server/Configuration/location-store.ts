@@ -2,7 +2,9 @@ import { ZLinkRedisLocationStore } from '@zlink-systems/framework-locations-redi
 import type { ZLinkLocationOptions } from '@zlink-systems/framework';
 import type { BingoSampleConfig } from './sample-config';
 
-function createBingoLocationStore(config: Pick<BingoSampleConfig, 'redisEndpoint' | 'redisKeyPrefix'>): ZLinkRedisLocationStore {
+function createBingoLocationStore(
+  config: Pick<BingoSampleConfig, 'redisEndpoint' | 'redisKeyPrefix'>
+): ZLinkRedisLocationStore {
   return new ZLinkRedisLocationStore({
     url: `redis://${config.redisEndpoint}`,
     keyPrefix: `${config.redisKeyPrefix}location`

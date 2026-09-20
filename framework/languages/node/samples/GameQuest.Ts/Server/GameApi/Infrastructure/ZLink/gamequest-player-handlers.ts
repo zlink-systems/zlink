@@ -6,7 +6,11 @@ import {
 } from '@zlink-systems/nestjs';
 import { GameplayActionService } from '../../Application/gameplay-action-service';
 import { questMissionSpotId, SampleNames } from '../../../../Shared/Configuration/sample-names';
-import { PacketNames, getQuestProgressReq, syncQuestProgressReq } from '../../../../Shared/Contracts/messages';
+import {
+  PacketNames,
+  getQuestProgressReq,
+  syncQuestProgressReq
+} from '../../../../Shared/Contracts/messages';
 import { GameQuestEntrySpot } from './gamequest-entry-spot';
 import { GameQuestPlayerActor } from './gamequest-player-actor';
 import type {
@@ -27,8 +31,15 @@ import type {
   ZLinkMessageContext
 } from '@zlink-systems/framework';
 
-abstract class GameQuestActionHandler<TRequest, TResponse>
-  implements ZLinkEntrySpotActorRequestHandler<GameQuestEntrySpot, GameQuestPlayerActor, TRequest, TResponse> {
+abstract class GameQuestActionHandler<
+  TRequest,
+  TResponse
+> implements ZLinkEntrySpotActorRequestHandler<
+  GameQuestEntrySpot,
+  GameQuestPlayerActor,
+  TRequest,
+  TResponse
+> {
   constructor(protected readonly actions: GameplayActionService) {}
   abstract handle(
     spot: GameQuestEntrySpot,
@@ -37,12 +48,14 @@ abstract class GameQuestActionHandler<TRequest, TResponse>
     request: TRequest
   ): Promise<TResponse>;
   protected requirePlayer(actor: GameQuestPlayerActor, playerId: string): void {
-    if (actor.actorId !== playerId) throw new Error(`Actor '${actor.actorId}' cannot act for player '${playerId}'.`);
+    if (actor.actorId !== playerId)
+      throw new Error(`Actor '${actor.actorId}' cannot act for player '${playerId}'.`);
   }
 }
 
-abstract class GameQuestActionSendHandler<TMessage extends { playerId: string }>
-  implements ZLinkEntrySpotActorSendHandler<GameQuestEntrySpot, GameQuestPlayerActor, TMessage> {
+abstract class GameQuestActionSendHandler<
+  TMessage extends { playerId: string }
+> implements ZLinkEntrySpotActorSendHandler<GameQuestEntrySpot, GameQuestPlayerActor, TMessage> {
   constructor(protected readonly actions: GameplayActionService) {}
   abstract handle(
     spot: GameQuestEntrySpot,
@@ -51,69 +64,137 @@ abstract class GameQuestActionSendHandler<TMessage extends { playerId: string }>
     message: TMessage
   ): Promise<void>;
   protected requirePlayer(actor: GameQuestPlayerActor, playerId: string): void {
-    if (actor.actorId !== playerId) throw new Error(`Actor '${actor.actorId}' cannot act for player '${playerId}'.`);
+    if (actor.actorId !== playerId)
+      throw new Error(`Actor '${actor.actorId}' cannot act for player '${playerId}'.`);
   }
 }
 
 // --8<-- [start:doc-gq-action-handler]
-@zlinkEntrySpotActorRequestHandler({ actor: () => GameQuestPlayerActor, entrySpot: () => GameQuestEntrySpot, packetName: PacketNames.killMonsterReq })
+@zlinkEntrySpotActorRequestHandler({
+  actor: () => GameQuestPlayerActor,
+  entrySpot: () => GameQuestEntrySpot,
+  packetName: PacketNames.killMonsterReq
+})
 class KillMonsterHandler extends GameQuestActionHandler<KillMonsterReq, { eventId: string }> {
-  constructor(actions: GameplayActionService) { super(actions); }
-  async handle(_spot: GameQuestEntrySpot, actor: GameQuestPlayerActor, _context: ZLinkMessageContext, request: KillMonsterReq) {
+  constructor(actions: GameplayActionService) {
+    super(actions);
+  }
+  async handle(
+    _spot: GameQuestEntrySpot,
+    actor: GameQuestPlayerActor,
+    _context: ZLinkMessageContext,
+    request: KillMonsterReq
+  ) {
     this.requirePlayer(actor, request.playerId);
     return (await this.actions.killMonster(request)).response;
   }
 }
 // --8<-- [end:doc-gq-action-handler]
 
-@zlinkEntrySpotActorSendHandler({ actor: () => GameQuestPlayerActor, entrySpot: () => GameQuestEntrySpot, packetName: PacketNames.collectItemMsg })
+@zlinkEntrySpotActorSendHandler({
+  actor: () => GameQuestPlayerActor,
+  entrySpot: () => GameQuestEntrySpot,
+  packetName: PacketNames.collectItemMsg
+})
 class CollectItemHandler extends GameQuestActionSendHandler<CollectItemMsg> {
-  constructor(actions: GameplayActionService) { super(actions); }
-  async handle(_spot: GameQuestEntrySpot, actor: GameQuestPlayerActor, _context: ZLinkMessageContext, message: CollectItemMsg): Promise<void> {
+  constructor(actions: GameplayActionService) {
+    super(actions);
+  }
+  async handle(
+    _spot: GameQuestEntrySpot,
+    actor: GameQuestPlayerActor,
+    _context: ZLinkMessageContext,
+    message: CollectItemMsg
+  ): Promise<void> {
     this.requirePlayer(actor, message.playerId);
     await this.actions.collectItem(message);
   }
 }
 
-@zlinkEntrySpotActorRequestHandler({ actor: () => GameQuestPlayerActor, entrySpot: () => GameQuestEntrySpot, packetName: PacketNames.completeMissionReq })
-class CompleteMissionHandler extends GameQuestActionHandler<CompleteMissionReq, { eventId: string }> {
-  constructor(actions: GameplayActionService) { super(actions); }
-  async handle(_spot: GameQuestEntrySpot, actor: GameQuestPlayerActor, _context: ZLinkMessageContext, request: CompleteMissionReq) {
+@zlinkEntrySpotActorRequestHandler({
+  actor: () => GameQuestPlayerActor,
+  entrySpot: () => GameQuestEntrySpot,
+  packetName: PacketNames.completeMissionReq
+})
+class CompleteMissionHandler extends GameQuestActionHandler<
+  CompleteMissionReq,
+  { eventId: string }
+> {
+  constructor(actions: GameplayActionService) {
+    super(actions);
+  }
+  async handle(
+    _spot: GameQuestEntrySpot,
+    actor: GameQuestPlayerActor,
+    _context: ZLinkMessageContext,
+    request: CompleteMissionReq
+  ) {
     this.requirePlayer(actor, request.playerId);
     return (await this.actions.completeMission(request)).response;
   }
 }
 
-@zlinkEntrySpotActorSendHandler({ actor: () => GameQuestPlayerActor, entrySpot: () => GameQuestEntrySpot, packetName: PacketNames.enterAreaMsg })
+@zlinkEntrySpotActorSendHandler({
+  actor: () => GameQuestPlayerActor,
+  entrySpot: () => GameQuestEntrySpot,
+  packetName: PacketNames.enterAreaMsg
+})
 class EnterAreaHandler extends GameQuestActionSendHandler<EnterAreaMsg> {
-  constructor(actions: GameplayActionService) { super(actions); }
-  async handle(_spot: GameQuestEntrySpot, actor: GameQuestPlayerActor, _context: ZLinkMessageContext, message: EnterAreaMsg): Promise<void> {
+  constructor(actions: GameplayActionService) {
+    super(actions);
+  }
+  async handle(
+    _spot: GameQuestEntrySpot,
+    actor: GameQuestPlayerActor,
+    _context: ZLinkMessageContext,
+    message: EnterAreaMsg
+  ): Promise<void> {
     this.requirePlayer(actor, message.playerId);
     await this.actions.enterArea(message);
   }
 }
 
-@zlinkEntrySpotActorRequestHandler({ actor: () => GameQuestPlayerActor, entrySpot: () => GameQuestEntrySpot, packetName: PacketNames.unlockFeatureReq })
+@zlinkEntrySpotActorRequestHandler({
+  actor: () => GameQuestPlayerActor,
+  entrySpot: () => GameQuestEntrySpot,
+  packetName: PacketNames.unlockFeatureReq
+})
 class UnlockFeatureHandler extends GameQuestActionHandler<UnlockFeatureReq, { eventId: string }> {
-  constructor(actions: GameplayActionService) { super(actions); }
-  async handle(_spot: GameQuestEntrySpot, actor: GameQuestPlayerActor, _context: ZLinkMessageContext, request: UnlockFeatureReq) {
+  constructor(actions: GameplayActionService) {
+    super(actions);
+  }
+  async handle(
+    _spot: GameQuestEntrySpot,
+    actor: GameQuestPlayerActor,
+    _context: ZLinkMessageContext,
+    request: UnlockFeatureReq
+  ) {
     this.requirePlayer(actor, request.playerId);
     return (await this.actions.unlockFeature(request)).response;
   }
 }
 
-abstract class QuestOwnerRequestHandler<TRequest extends { playerId: string }, TResponse>
-  implements ZLinkEntrySpotActorRequestHandler<GameQuestEntrySpot, GameQuestPlayerActor, TRequest, TResponse> {
+abstract class QuestOwnerRequestHandler<
+  TRequest extends { playerId: string },
+  TResponse
+> implements ZLinkEntrySpotActorRequestHandler<
+  GameQuestEntrySpot,
+  GameQuestPlayerActor,
+  TRequest,
+  TResponse
+> {
   constructor(@Inject(ZLINK_SPOT_OUTBOUND) protected readonly spots: ZLinkSpotOutbound) {}
   protected requirePlayer(actor: GameQuestPlayerActor, playerId: string): void {
-    if (actor.actorId !== playerId) throw new Error(`Actor '${actor.actorId}' cannot query player '${playerId}'.`);
+    if (actor.actorId !== playerId)
+      throw new Error(`Actor '${actor.actorId}' cannot query player '${playerId}'.`);
   }
   protected request(playerId: string, request: object): Promise<TResponse> {
     return this.spots
       .requestToSpot(questMissionSpotId(playerId), request)
       .instanceSpot(SampleNames.playerQuestSpotType)
       .inMesh(SampleNames.playerQuestSpotMesh)
-      .timeout(SampleNames.requestTimeout).submit<TResponse>();
+      .timeout(SampleNames.requestTimeout)
+      .submit<TResponse>();
   }
   abstract handle(
     spot: GameQuestEntrySpot,
@@ -123,19 +204,47 @@ abstract class QuestOwnerRequestHandler<TRequest extends { playerId: string }, T
   ): Promise<TResponse>;
 }
 
-@zlinkEntrySpotActorRequestHandler({ actor: () => GameQuestPlayerActor, entrySpot: () => GameQuestEntrySpot, packetName: PacketNames.getQuestProgressReq })
-class GetQuestProgressHandler extends QuestOwnerRequestHandler<GetQuestProgressReq, GetQuestProgressRes> {
-  constructor(@Inject(ZLINK_SPOT_OUTBOUND) spots: ZLinkSpotOutbound) { super(spots); }
-  async handle(_spot: GameQuestEntrySpot, actor: GameQuestPlayerActor, _context: ZLinkMessageContext, request: GetQuestProgressReq) {
+@zlinkEntrySpotActorRequestHandler({
+  actor: () => GameQuestPlayerActor,
+  entrySpot: () => GameQuestEntrySpot,
+  packetName: PacketNames.getQuestProgressReq
+})
+class GetQuestProgressHandler extends QuestOwnerRequestHandler<
+  GetQuestProgressReq,
+  GetQuestProgressRes
+> {
+  constructor(@Inject(ZLINK_SPOT_OUTBOUND) spots: ZLinkSpotOutbound) {
+    super(spots);
+  }
+  async handle(
+    _spot: GameQuestEntrySpot,
+    actor: GameQuestPlayerActor,
+    _context: ZLinkMessageContext,
+    request: GetQuestProgressReq
+  ) {
     this.requirePlayer(actor, request.playerId);
     return await this.request(request.playerId, getQuestProgressReq(request.playerId));
   }
 }
 
-@zlinkEntrySpotActorRequestHandler({ actor: () => GameQuestPlayerActor, entrySpot: () => GameQuestEntrySpot, packetName: PacketNames.syncQuestProgressReq })
-class SyncQuestProgressHandler extends QuestOwnerRequestHandler<SyncQuestProgressReq, SyncQuestProgressRes> {
-  constructor(@Inject(ZLINK_SPOT_OUTBOUND) spots: ZLinkSpotOutbound) { super(spots); }
-  async handle(_spot: GameQuestEntrySpot, actor: GameQuestPlayerActor, _context: ZLinkMessageContext, request: SyncQuestProgressReq) {
+@zlinkEntrySpotActorRequestHandler({
+  actor: () => GameQuestPlayerActor,
+  entrySpot: () => GameQuestEntrySpot,
+  packetName: PacketNames.syncQuestProgressReq
+})
+class SyncQuestProgressHandler extends QuestOwnerRequestHandler<
+  SyncQuestProgressReq,
+  SyncQuestProgressRes
+> {
+  constructor(@Inject(ZLINK_SPOT_OUTBOUND) spots: ZLinkSpotOutbound) {
+    super(spots);
+  }
+  async handle(
+    _spot: GameQuestEntrySpot,
+    actor: GameQuestPlayerActor,
+    _context: ZLinkMessageContext,
+    request: SyncQuestProgressReq
+  ) {
     this.requirePlayer(actor, request.playerId);
     return await this.request(request.playerId, syncQuestProgressReq(request.playerId));
   }

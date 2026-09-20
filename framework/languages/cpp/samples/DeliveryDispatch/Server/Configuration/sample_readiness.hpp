@@ -27,7 +27,8 @@ class route_readiness_service_t final : public hosted_service_t
     route_readiness_service_t (std::string node_name,
                                std::string mesh_name,
                                std::vector<std::string> target_rids) :
-        _node_name (std::move (node_name)), _mesh_name (std::move (mesh_name)),
+        _node_name (std::move (node_name)),
+        _mesh_name (std::move (mesh_name)),
         _target_rids (std::move (target_rids))
     {
     }
@@ -37,14 +38,18 @@ class route_readiness_service_t final : public hosted_service_t
         auto state = std::make_shared<state_t> ();
         _state = state;
         auto &runtime = services.get_required<route_mesh_runtime_t> ();
-        _observation = runtime.observe (
-          _mesh_name, 64,
-          [state, node_name = _node_name, target_rids = _target_rids] (
-            const observed_status_t<mesh_node_snapshot_t> &observed) {
-              report_if_ready (state, node_name, target_rids, observed.status);
-          });
-        _worker = std::thread ([state, runtime = &runtime, mesh_name = _mesh_name,
-                                node_name = _node_name, target_rids = _target_rids] () mutable {
+        _observation =
+          runtime.observe (_mesh_name,
+                           64,
+                           [state, node_name = _node_name, target_rids = _target_rids] (
+                             const observed_status_t<mesh_node_snapshot_t> &observed) {
+                               report_if_ready (state, node_name, target_rids, observed.status);
+                           });
+        _worker = std::thread ([state,
+                                runtime = &runtime,
+                                mesh_name = _mesh_name,
+                                node_name = _node_name,
+                                target_rids = _target_rids] () mutable {
             while (!state->stopping.load (std::memory_order_acquire)) {
                 try {
                     report_if_ready (state, node_name, target_rids, runtime->snapshot (mesh_name));
@@ -88,13 +93,13 @@ class route_readiness_service_t final : public hosted_service_t
                                  const std::vector<std::string> &target_rids,
                                  const mesh_node_snapshot_t &snapshot)
     {
-        const auto targets_ready = std::ranges::all_of (
-          target_rids, [&snapshot] (const std::string &target_rid) {
-              return std::ranges::any_of (
-                snapshot.peers, [&target_rid] (const mesh_peer_snapshot_t &peer) {
-                    return peer.node_rid.to_string () == target_rid
-                           && peer.state == peer_state_t::ready;
-                });
+        const auto targets_ready =
+          std::ranges::all_of (target_rids, [&snapshot] (const std::string &target_rid) {
+              return std::ranges::any_of (snapshot.peers,
+                                          [&target_rid] (const mesh_peer_snapshot_t &peer) {
+                                              return peer.node_rid.to_string () == target_rid
+                                                     && peer.state == peer_state_t::ready;
+                                          });
           });
         if (!targets_ready || state->reported.exchange (true, std::memory_order_acq_rel))
             return;
@@ -128,18 +133,21 @@ class actor_route_readiness_service_t final : public hosted_service_t
         _state = state;
         auto &runtime = services.get_required<route_mesh_runtime_t> ();
         _observation = runtime.observe (
-          _mesh_name, 64,
+          _mesh_name,
+          64,
           [state, target_rid = _target_rid, target_node_name = _target_node_name] (
             const observed_status_t<mesh_node_snapshot_t> &observed) {
               report_if_ready (state, target_rid, target_node_name, observed.status);
           });
-        _worker = std::thread ([state, runtime = &runtime, mesh_name = _mesh_name,
+        _worker = std::thread ([state,
+                                runtime = &runtime,
+                                mesh_name = _mesh_name,
                                 target_rid = _target_rid,
                                 target_node_name = _target_node_name] () mutable {
             while (!state->stopping.load (std::memory_order_acquire)) {
                 try {
-                    report_if_ready (state, target_rid, target_node_name,
-                                     runtime->snapshot (mesh_name));
+                    report_if_ready (
+                      state, target_rid, target_node_name, runtime->snapshot (mesh_name));
                 }
                 catch (...) {
                 }
@@ -182,14 +190,13 @@ class actor_route_readiness_service_t final : public hosted_service_t
     {
         const auto target_ready = std::any_of (
           snapshot.peers.begin (), snapshot.peers.end (), [&target_rid] (const auto &peer) {
-              return peer.node_rid.to_string () == target_rid
-                     && peer.state == peer_state_t::ready;
+              return peer.node_rid.to_string () == target_rid && peer.state == peer_state_t::ready;
           });
         if (!target_ready || state->reported.exchange (true, std::memory_order_acq_rel))
             return;
         std::osyncstream (std::cout)
-          << "deliverydispatch-ready kind=actor-route node=dispatch target="
-          << target_node_name << std::endl;
+          << "deliverydispatch-ready kind=actor-route node=dispatch target=" << target_node_name
+          << std::endl;
     }
 
     std::string _mesh_name;

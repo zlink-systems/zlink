@@ -55,8 +55,12 @@ class NodeRegistry {
     const changed: NodeView[] = [];
     for (const [nodeId, current] of this.nodes) {
       const lastReportAt = this.lastReportAt.get(nodeId);
-      if (!current.registered || lastReportAt === undefined
-        || now - lastReportAt < ZoneWorldSpec.nodeStatusReportTtlMs) continue;
+      if (
+        !current.registered ||
+        lastReportAt === undefined ||
+        now - lastReportAt < ZoneWorldSpec.nodeStatusReportTtlMs
+      )
+        continue;
       const next = { ...current, registered: false };
       this.nodes.set(nodeId, next);
       changed.push(next);
@@ -64,17 +68,23 @@ class NodeRegistry {
     return changed;
   }
 
-  relocationPair(): {
-    readonly sourceZoneId: string;
-    readonly targetZoneId: string;
-    readonly sourceOwnerNodeRid: string;
-    readonly targetOwnerNodeRid: string;
-  } | undefined {
+  relocationPair():
+    | {
+        readonly sourceZoneId: string;
+        readonly targetZoneId: string;
+        readonly sourceOwnerNodeRid: string;
+        readonly targetOwnerNodeRid: string;
+      }
+    | undefined {
     const sourceZoneId = ZoneIds.northWest;
-    const source = this.snapshot().find((node) => node.registered && node.zones.includes(sourceZoneId));
+    const source = this.snapshot().find(
+      (node) => node.registered && node.zones.includes(sourceZoneId)
+    );
     if (source === undefined) return undefined;
     for (const targetZoneId of [ZoneIds.northEast, ZoneIds.southWest]) {
-      const target = this.snapshot().find((node) => node.registered && node.zones.includes(targetZoneId));
+      const target = this.snapshot().find(
+        (node) => node.registered && node.zones.includes(targetZoneId)
+      );
       if (target === undefined || target.nodeId === source.nodeId) continue;
       const sourceOwnerNodeRid = this.routingIdByNode.get(source.nodeId);
       const targetOwnerNodeRid = this.routingIdByNode.get(target.nodeId);
@@ -85,8 +95,9 @@ class NodeRegistry {
   }
 
   snapshot(): NodeView[] {
-    return [...this.nodes.values()]
-      .sort((left, right) => Buffer.from(left.nodeId).compare(Buffer.from(right.nodeId)));
+    return [...this.nodes.values()].sort((left, right) =>
+      Buffer.from(left.nodeId).compare(Buffer.from(right.nodeId))
+    );
   }
 }
 

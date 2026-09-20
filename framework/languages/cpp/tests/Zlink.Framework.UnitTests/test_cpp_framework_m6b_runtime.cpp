@@ -120,7 +120,56 @@ class counting_location_repository_t final
           std::move (key), cancellation);
     }
 
+    zlink::framework::task_t<zlink::framework::authority_compare_exchange_result_t>
+    compare_exchange_authority (
+      zlink::framework::authority_key_t key,
+      std::string expected_store_version,
+      zlink::framework::authority_mutation_t mutation,
+      std::stop_token cancellation = {}) override
+    {
+        const std::vector<std::byte> *payload = nullptr;
+        if (const auto *put = std::get_if<zlink::framework::authority_put_t> (&mutation))
+            payload = &put->payload;
+        else if (const auto *restore =
+                   std::get_if<zlink::framework::authority_restore_t> (&mutation))
+            payload = &restore->payload;
+        if (payload) {
+            const auto decoded = zlink::framework::runtime::
+              decode_instance_spot_authority_payload (*payload);
+            if (decoded) {
+                const std::lock_guard lock (activation_recovery_writes_mutex);
+                activation_recovery_writes.emplace_back (
+                  key.value,
+                  decoded->activation_recovery
+                    ? std::make_optional (
+                        decoded->activation_recovery->replay_cursor)
+                    : std::nullopt);
+            }
+        }
+        return in_memory_location_repository_t::compare_exchange_authority (
+          std::move (key), std::move (expected_store_version),
+          std::move (mutation), cancellation);
+    }
+
+    void clear_activation_recovery_writes ()
+    {
+        const std::lock_guard lock (activation_recovery_writes_mutex);
+        activation_recovery_writes.clear ();
+    }
+
+    std::vector<std::pair<std::string, std::optional<std::uint64_t>>>
+    activation_recovery_write_snapshot ()
+    {
+        const std::lock_guard lock (activation_recovery_writes_mutex);
+        return activation_recovery_writes;
+    }
+
     std::atomic<std::size_t> authority_reads{0};
+
+  private:
+    std::mutex activation_recovery_writes_mutex;
+    std::vector<std::pair<std::string, std::optional<std::uint64_t>>>
+      activation_recovery_writes;
 };
 
 void verify_message_follow_invalidation_subscriptions_are_lifetime_safe ()
@@ -6456,9 +6505,7 @@ void verify_public_host_dispatches_durable_reply_relay ()
 void verify_remote_user_spot_create_close_terminal_once ()
 {
     using namespace zlink::framework;
-    auto store =
-      std::make_shared<zlink::framework::runtime::
-                         in_memory_location_repository_t> ();
+    auto store = std::make_shared<counting_location_repository_t> ();
     const auto claimed =
       store->claim_owner_lease ("target-owner", 30s)
         .result ()
@@ -6763,8 +6810,8 @@ void verify_remote_user_spot_create_close_terminal_once ()
             && instance_reply_header->terminal_result == 0);
     assert (instance_reply_payload
             && instance_reply_payload->packet_name == "quest.reply");
-    assert (instance_prepare_count == 1);
-    assert (instance_activation_count == 1);
+    assert (instance_prepare_count == 2);
+    assert (instance_activation_count == 2);
 
     instance_reply_header.reset ();
     instance_reply_payload.reset ();
@@ -6791,14 +6838,11 @@ void verify_remote_user_spot_create_close_terminal_once ()
         std::this_thread::sleep_for (1ms);
     }
     assert (instance_reply_header
-            && instance_reply_header->terminal_result == 104);
-    assert (
-      instance_reply_header->failure_code
-      == static_cast<std::uint32_t> (
-        protocol::framework_error_code::requestProtocolError));
-    assert (!instance_reply_payload);
-    assert (instance_prepare_count == 1);
-    assert (instance_activation_count == 1);
+            && instance_reply_header->terminal_result == 0);
+    assert (instance_reply_payload
+            && instance_reply_payload->packet_name == "quest.reply");
+    assert (instance_prepare_count == 3);
+    assert (instance_activation_count == 3);
 
     auto recovery_request = replay_instance_request;
     recovery_request.target.spot_id = "instance-recover";
@@ -6836,13 +6880,44 @@ void verify_remote_user_spot_create_close_terminal_once ()
     assert (instance_reply_header
             && instance_reply_header->terminal_result == 105);
     assert (instance_relocations->size () == 1);
-    assert (instance_prepare_count == 2);
-    assert (instance_activation_count == 2);
+    assert (instance_prepare_count == 4);
+    assert (instance_activation_count == 4);
 
+    const auto recovery_authority_key =
+      zlink::framework::runtime::spot_authority_key ("instance-recover");
+    const auto before_recovery =
+      store->read_authority (recovery_authority_key).result ().value ();
+    const auto *before_recovery_snapshot =
+      std::get_if<authority_snapshot_t> (&before_recovery);
+    assert (before_recovery_snapshot);
+    const auto before_recovery_payload =
+      zlink::framework::runtime::decode_instance_spot_authority_payload (
+        before_recovery_snapshot->payload);
+    assert (before_recovery_payload
+            && before_recovery_payload->activation_recovery
+            && before_recovery_payload->activation_recovery->inbox_sequence == 1
+            && before_recovery_payload->activation_recovery->replay_cursor == 0);
+    store->clear_activation_recovery_writes ();
     assert (target->recover_instance_spot_activations () == 1);
     assert (instance_relocations->size () == 0);
-    assert (instance_prepare_count == 3);
-    assert (instance_activation_count == 3);
+    assert (instance_prepare_count == 5);
+    assert (instance_activation_count == 5);
+    const auto recovery_writes = store->activation_recovery_write_snapshot ();
+    assert (recovery_writes.size () == 2);
+    assert (recovery_writes[0].first == recovery_authority_key.value
+            && recovery_writes[0].second == std::optional<std::uint64_t>{1});
+    assert (recovery_writes[1].first == recovery_authority_key.value
+            && !recovery_writes[1].second);
+    const auto after_recovery =
+      store->read_authority (recovery_authority_key).result ().value ();
+    const auto *after_recovery_snapshot =
+      std::get_if<authority_snapshot_t> (&after_recovery);
+    assert (after_recovery_snapshot);
+    const auto after_recovery_payload =
+      zlink::framework::runtime::decode_instance_spot_authority_payload (
+        after_recovery_snapshot->payload);
+    assert (after_recovery_payload
+            && !after_recovery_payload->activation_recovery);
 
     instance_reply_header.reset ();
     instance_reply_payload.reset ();
@@ -6872,8 +6947,8 @@ void verify_remote_user_spot_create_close_terminal_once ()
             && instance_reply_header->terminal_result == 0);
     assert (instance_reply_payload
             && instance_reply_payload->packet_name == "quest.reply");
-    assert (instance_prepare_count == 3);
-    assert (instance_activation_count == 3);
+    assert (instance_prepare_count == 6);
+    assert (instance_activation_count == 6);
 
     auto closing_instance_request = replay_instance_request;
     closing_instance_request.operation = {123, 458};

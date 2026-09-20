@@ -28,7 +28,8 @@ internal sealed class ZoneNodeBootstrap(
     NodeMaintenancePolicy maintenance,
     NodePlayerCensus census,
     ZoneNodeSettings settings,
-    ILogger<ZoneNodeBootstrap> logger) : IHostedService
+    ILogger<ZoneNodeBootstrap> logger
+) : IHostedService
 {
     private const int StartupRetryAttempts = 120;
     private const int ReplacementReadyAttempts = 8;
@@ -51,10 +52,9 @@ internal sealed class ZoneNodeBootstrap(
             if (census.ZoneIds.Count != 0)
                 throw new InvalidOperationException(
                     "A replacement must reach ready with no Zone of its own. "
-                    + $"node={maintenance.OwnNodeId}; zones={string.Join(',', census.ZoneIds)}");
-            logger.LogInformation(
-                "topology=ready node={NodeId} zones=",
-                maintenance.OwnNodeId);
+                        + $"node={maintenance.OwnNodeId}; zones={string.Join(',', census.ZoneIds)}"
+                );
+            logger.LogInformation("topology=ready node={NodeId} zones=", maintenance.OwnNodeId);
             return;
         }
 
@@ -68,9 +68,9 @@ internal sealed class ZoneNodeBootstrap(
             var claimed = ClaimedZones(locallyClaimed);
             var claimOrder = new List<string>();
             foreach (var zoneId in claimed)
-                foreach (var adjacent in World.AdjacentZones(zoneId))
-                    if (!claimed.Contains(adjacent) && !claimOrder.Contains(adjacent))
-                        claimOrder.Add(adjacent);
+            foreach (var adjacent in World.AdjacentZones(zoneId))
+                if (!claimed.Contains(adjacent) && !claimOrder.Contains(adjacent))
+                    claimOrder.Add(adjacent);
             foreach (var zoneId in ZoneTopology.Zones)
                 if (!claimed.Contains(zoneId) && !claimOrder.Contains(zoneId))
                     claimOrder.Add(zoneId);
@@ -82,13 +82,15 @@ internal sealed class ZoneNodeBootstrap(
             {
                 if (await EnsureZoneAsync(zoneId, cancellationToken))
                     locallyClaimed.Add(zoneId);
-                if (!ClaimedZones(locallyClaimed).SequenceEqual(claimed)) break;
+                if (!ClaimedZones(locallyClaimed).SequenceEqual(claimed))
+                    break;
             }
 
             if (attempt + 1 >= StartupRetryAttempts)
                 throw new InvalidOperationException(
                     $"Zone Spot capacity did not settle at two local owners. node={maintenance.OwnNodeId}; "
-                    + $"zones={string.Join(',', census.ZoneIds)}");
+                        + $"zones={string.Join(',', census.ZoneIds)}"
+                );
             await Task.Delay(StartupRetryDelay, cancellationToken);
         }
         var zones = census.ZoneIds;
@@ -100,14 +102,15 @@ internal sealed class ZoneNodeBootstrap(
         logger.LogInformation(
             "topology=ready node={NodeId} zones={Zones}",
             maintenance.OwnNodeId,
-            string.Join(',', zones));
+            string.Join(',', zones)
+        );
     }
 
     public Task StopAsync(CancellationToken cancellationToken) => Task.CompletedTask;
 
     private IReadOnlyList<string> ClaimedZones(IReadOnlySet<string> locallyClaimed) =>
-        census.ZoneIds
-            .Concat(locallyClaimed)
+        census
+            .ZoneIds.Concat(locallyClaimed)
             .Distinct(StringComparer.Ordinal)
             .OrderBy(value => value, StringComparer.Ordinal)
             .ToArray();
@@ -124,17 +127,21 @@ internal sealed class ZoneNodeBootstrap(
     {
         try
         {
-            var result = await spots.GetOrCreate(zoneId, ZoneWorldNames.ZoneSpotType)
+            var result = await spots
+                .GetOrCreate(zoneId, ZoneWorldNames.ZoneSpotType)
                 .InMesh(ZoneWorldNames.MeshName)
                 .Request(ZLinkMessage.Empty)
                 .Async(cancellationToken);
-            if (result.State is ZLinkSpotCreateState.Rejected) return false;
+            if (result.State is ZLinkSpotCreateState.Rejected)
+                return false;
             logger.LogInformation("zone ensured. zone={ZoneId}", zoneId);
             return result.State is ZLinkSpotCreateState.Created;
         }
         catch (ZLinkFrameworkException exception)
-            when (exception.Kind is ZLinkFrameworkErrorKind.Unavailable
-                      or ZLinkFrameworkErrorKind.DeadlineExceeded)
+            when (exception.Kind
+                    is ZLinkFrameworkErrorKind.Unavailable
+                        or ZLinkFrameworkErrorKind.DeadlineExceeded
+            )
         {
             return false;
         }
@@ -148,13 +155,15 @@ internal sealed class ZoneNodeBootstrap(
     private async Task RestoreMaintenanceAsync(CancellationToken cancellationToken)
     {
         var desired = await store.ReadAllAsync(cancellationToken);
-        foreach (var (nodeId, enabled) in desired) maintenance.Apply(nodeId, enabled);
+        foreach (var (nodeId, enabled) in desired)
+            maintenance.Apply(nodeId, enabled);
 
         logger.LogInformation(
             "maintenance restored. node={NodeId}, own={Own}, known={Known}",
             maintenance.OwnNodeId,
             maintenance.IsOwnNodeUnderMaintenance,
-            desired.Count);
+            desired.Count
+        );
     }
 
     private async Task SpawnBotAsync(BotRoute route, CancellationToken cancellationToken)
@@ -167,18 +176,20 @@ internal sealed class ZoneNodeBootstrap(
                 return;
             }
             catch (ZLinkFrameworkException exception)
-                when (exception.Kind is (ZLinkFrameworkErrorKind.Unavailable
-                          or ZLinkFrameworkErrorKind.DeadlineExceeded)
-                      && attempt + 1 < StartupRetryAttempts)
+                when (exception.Kind
+                        is (
+                            ZLinkFrameworkErrorKind.Unavailable
+                            or ZLinkFrameworkErrorKind.DeadlineExceeded
+                        )
+                    && attempt + 1 < StartupRetryAttempts
+                )
             {
                 await Task.Delay(StartupRetryDelay, cancellationToken);
             }
         }
     }
 
-    private async Task SpawnBotCoreAsync(
-        BotRoute route,
-        CancellationToken cancellationToken)
+    private async Task SpawnBotCoreAsync(BotRoute route, CancellationToken cancellationToken)
     {
         // A bot outlives the node that first requested it. GetOrCreate resolves the global
         // ActorId and joins a concurrent claim instead of doing a separate check-before-create.
@@ -192,9 +203,7 @@ internal sealed class ZoneNodeBootstrap(
 
         if (result is ZLinkActorCreateResult.Existing)
         {
-            logger.LogInformation(
-                "bot already exists. bot={PlayerId}",
-                route.PlayerId);
+            logger.LogInformation("bot already exists. bot={PlayerId}", route.PlayerId);
             return;
         }
         if (result is not ZLinkActorCreateResult.Created created)
@@ -203,7 +212,8 @@ internal sealed class ZoneNodeBootstrap(
         var entered = await actors
             .RequestToActor(
                 created.Actor.ActorId,
-                new EnterWorldReq(route.X, route.Y, IsBot: true, route.DirX, route.DirY))
+                new EnterWorldReq(route.X, route.Y, IsBot: true, route.DirX, route.DirY)
+            )
             .Async<EnterWorldRes>(cancellationToken);
 
         logger.LogInformation(
@@ -213,6 +223,7 @@ internal sealed class ZoneNodeBootstrap(
             route.X,
             route.Y,
             route.DirX,
-            route.DirY);
+            route.DirY
+        );
     }
 }

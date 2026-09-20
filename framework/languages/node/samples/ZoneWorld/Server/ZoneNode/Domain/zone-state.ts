@@ -14,8 +14,12 @@ class ZoneState {
 
   constructor(readonly zoneId: ZoneId) {}
 
-  get tick(): number { return this.currentTick; }
-  get playerCount(): number { return this.residents.size; }
+  get tick(): number {
+    return this.currentTick;
+  }
+  get playerCount(): number {
+    return this.residents.size;
+  }
 
   enter(playerId: string, x: number, y: number, isBot: boolean): void {
     this.residents.set(playerId, { playerId, x, y, isBot });
@@ -26,8 +30,12 @@ class ZoneState {
     if (resident !== undefined) this.residents.set(playerId, { ...resident, x, y });
   }
 
-  leave(playerId: string): void { this.residents.delete(playerId); }
-  nextTick(): number { return ++this.currentTick; }
+  leave(playerId: string): void {
+    this.residents.delete(playerId);
+  }
+  nextTick(): number {
+    return ++this.currentTick;
+  }
 
   applyBorderSnapshot(fromZoneId: string, tick: number, players: readonly PlayerView[]): void {
     if (tick <= (this.borderHighWater.get(fromZoneId) ?? -1)) return;
@@ -54,7 +62,9 @@ class ZoneState {
     for (const resident of this.residents.values()) {
       merged.set(resident.playerId, { ...resident, zoneId: this.zoneId });
     }
-    return [...merged.values()].sort((left, right) => Buffer.from(left.playerId).compare(Buffer.from(right.playerId)));
+    return [...merged.values()].sort((left, right) =>
+      Buffer.from(left.playerId).compare(Buffer.from(right.playerId))
+    );
   }
 
   borderBandFor(toZoneId: ZoneId): PlayerView[] {

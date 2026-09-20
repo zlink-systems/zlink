@@ -1,8 +1,8 @@
 package systems.zlink.tutorial.server.actors
 
-import systems.zlink.framework.actors.ZLinkActor
 import java.util.concurrent.CompletableFuture
 import java.util.concurrent.CompletionStage
+import systems.zlink.framework.actors.ZLinkActor
 import systems.zlink.framework.actors.ZLinkActorContext
 import systems.zlink.framework.actors.ZLinkActorFactory
 
@@ -20,6 +20,7 @@ class Player(private val actorContext: ZLinkActorContext) : ZLinkActor {
         nickname = value
     }
 }
+
 // --8<-- [end:actor-class]
 
 // --8<-- [start:actor-factory]

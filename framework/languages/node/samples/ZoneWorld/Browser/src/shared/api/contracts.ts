@@ -61,11 +61,7 @@ export interface MoveRejectedNotify {
   y: number;
 }
 
-export type MoveRejectReason =
-  | 'OutOfRange'
-  | 'TooFar'
-  | 'DiagonalCrossing'
-  | 'ZoneMaintenance';
+export type MoveRejectReason = 'OutOfRange' | 'TooFar' | 'DiagonalCrossing' | 'ZoneMaintenance';
 
 // --- §6.2 ops console — browser <-> Ops -------------------------------------
 
@@ -146,5 +142,5 @@ export const Packets = {
   SetMaintenanceReq: 'SetMaintenanceReq',
   SetMaintenanceRes: 'SetMaintenanceRes',
   NodeDiagnosticsReq: 'NodeDiagnosticsReq',
-  NodeDiagnosticsRes: 'NodeDiagnosticsRes',
+  NodeDiagnosticsRes: 'NodeDiagnosticsRes'
 } as const;

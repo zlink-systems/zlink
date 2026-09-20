@@ -176,49 +176,15 @@ REDIS_KEY_PREFIX="$TICTACTOE_CPP_REDIS_KEY_PREFIX"
 
 cleanup() {
   local code=$?
-  local cleanup_failed=0
-  local status
   if [[ "$cleanup_done" == true ]]; then
     return
   fi
   cleanup_done=true
-  for ((i=${#PIDS[@]}-1; i>=0; i--)); do
-    kill "${PIDS[$i]}" 2>/dev/null || true
-  done
-  for _ in $(seq 1 300); do
-    local any_alive=0
-    for pid in "${PIDS[@]}"; do
-      if kill -0 "$pid" 2>/dev/null; then
-        any_alive=1
-        break
-      fi
-    done
-    if [[ "$any_alive" == "0" ]]; then
-      break
-    fi
-    sleep 0.1
-  done
-  for pid in "${PIDS[@]}"; do
-    if kill -0 "$pid" 2>/dev/null; then
-      echo "forced cleanup process $pid" >&2
-      kill -9 "$pid" 2>/dev/null || true
-      cleanup_failed=1
-    fi
-  done
-  for pid in "${PIDS[@]}"; do
-    set +e
-    wait "$pid" >/dev/null 2>&1
-    status=$?
-    set -e
-    if [[ "$status" != "0" && "$status" != "127" && "$status" != "130" && "$status" != "143" ]]; then
-      echo "cleanup process $pid exited unexpectedly with status $status" >&2
-      cleanup_failed=1
-    fi
-  done
+  zlink_cpp_sample_stop_processes "${PIDS[@]}"
   if [[ -n "$REDIS_CONTAINER" ]]; then
     zlink_redis_remove_by_id "$REDIS_CONTAINER" || true
   fi
-  if [[ "$code" -ne 0 || "$cleanup_failed" -ne 0 ]]; then
+  if [[ "$code" -ne 0 ]]; then
     echo "TicTacToe sample logs (failure evidence):" >&2
     for log in "$LOG_DIR"/*.log "$FLOW_LOG_DIR"/*.log; do
       [[ -f "$log" ]] || continue
@@ -226,13 +192,10 @@ cleanup() {
       sed -n '1,240p' "$log" >&2
     done
   fi
-  if [[ "$cleanup_failed" -ne 0 && "$code" -eq 0 ]]; then
-    code=1
-  fi
   zlink_sample_close_run_dir "$RUN_DIR" "$code" "TicTacToe"
   return "$code"
 }
-trap 'cleanup; status=$?; exit "$status"' EXIT
+trap zlink_cpp_sample_exit_trap EXIT
 
 if ! command -v docker >/dev/null 2>&1; then
   echo "Docker is required to run the TicTacToe sample." >&2
@@ -384,6 +347,7 @@ grep -Rq "message flow" "$FLOW_LOG_DIR"
 
 cleanup
 trap - EXIT
+zlink_cpp_sample_assert_graceful_teardown
 
 # full client/server self-check completed
 echo "tictactoe-placement=completed"

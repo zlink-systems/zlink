@@ -10,6 +10,6 @@ object SampleLocationStore {
             ZLinkRedisLocationOptions()
                 .setConnectionString(SampleTopology.RedisEndpoint)
                 .setKeyPrefix(SampleTopology.RedisKeyPrefix + "locations:")
-                .setCommandTimeout(Duration.ofMillis(500)),
+                .setCommandTimeout(Duration.ofMillis(500))
         )
 }

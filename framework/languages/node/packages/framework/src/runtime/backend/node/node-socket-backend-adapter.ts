@@ -32,6 +32,7 @@ export function wrapSocket<T extends { close(): void }>(
       peerWeight?: number;
       sendHwm?: number;
       recvHwm?: number;
+      recvTimeout?: number;
       sendTimeout?: number;
       noDrop?: boolean;
       maxMsgSize?: bigint;
@@ -128,6 +129,12 @@ export function wrapSocket<T extends { close(): void }>(
     },
     set receiveHighWaterMark(value: number) {
       requireSocketOptions(socket).recvHwm = value;
+    },
+    get receiveTimeoutMs(): number {
+      return socket.options?.recvTimeout ?? 0;
+    },
+    set receiveTimeoutMs(value: number) {
+      requireSocketOptions(socket).recvTimeout = value;
     },
     get sendTimeoutMs(): number {
       return socket.options?.sendTimeout ?? 0;

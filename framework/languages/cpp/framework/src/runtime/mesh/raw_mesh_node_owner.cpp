@@ -680,6 +680,8 @@ void raw_mesh_node_owner_t::start ()
     router->options ().handover (true);
     router->options ().mandatory (true);
     router->options ().linger (std::chrono::milliseconds (0));
+    if (_options.receive_timeout)
+        router->options ().recv_timeout (*_options.receive_timeout);
     router->set_routing_id (
       zlink::routing_id_t::from (_options.descriptor.node_routing_id));
     application_job_queue_t::receive_flow_registration_t

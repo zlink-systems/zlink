@@ -16,6 +16,5 @@ public final class SampleNames {
     public static final String MatchmakerSpotType = "bingo.matchmaker";
     public static final String WinnerTopic = "bingo.room.reward";
 
-    private SampleNames() {
-    }
+    private SampleNames() {}
 }

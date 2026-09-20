@@ -3,14 +3,24 @@ import { CreateGameEndpoint } from './Handlers/create-game-http-handler';
 import { AuthenticatePlayerHandler } from './Handlers/authenticate-player-handler';
 import { PacketNames } from '../../Shared/Contracts/messages';
 import { SampleNames } from '../Configuration/sample-settings';
-import { TICTACTOE_SAMPLE_CONFIG, createTicTacToeConfigurationModule } from '../Configuration/sample-config';
+import {
+  TICTACTOE_SAMPLE_CONFIG,
+  createTicTacToeConfigurationModule
+} from '../Configuration/sample-config';
 import type { TicTacToeSampleConfig } from '../Configuration/sample-config';
 import { createTicTacToeLocationStore } from '../Configuration/location-store';
 function createTicTacToeApiModule() {
   class TicTacToeApiModule {}
   const configuration = createTicTacToeConfigurationModule([
-    'apiHttpEndpoint', 'apiEndpoints', 'apiSpotEndpoint', 'apiIndex', 'playSpotEndpoints', 'playEndpoints',
-    'redisEndpoint', 'redisKeyPrefix', 'logDir'
+    'apiHttpEndpoint',
+    'apiEndpoints',
+    'apiSpotEndpoint',
+    'apiIndex',
+    'playSpotEndpoints',
+    'playEndpoints',
+    'redisEndpoint',
+    'redisKeyPrefix',
+    'logDir'
   ]);
 
   zlinkModule({
@@ -22,18 +32,20 @@ function createTicTacToeApiModule() {
         useFactory: (config: TicTacToeSampleConfig) => {
           const builder = zlinkFramework();
           builder.disableImplicitHandlerAutoRegistration();
-          builder.configureDispatch()
-            .messageFlow('normal');
+          builder.configureDispatch().messageFlow('normal');
           builder.addLocationStore(createTicTacToeLocationStore(config));
           const apiEndpoint = new URL(config.apiEndpoints[config.apiIndex]);
           // --8<-- [start:doc-explicit-packet-name]
           // request: AuthenticatePlayerReq returns AuthenticatePlayerRes.
-          builder.addClientServerChannel(SampleNames.apiChannel).server()
+          builder
+            .addClientServerChannel(SampleNames.apiChannel)
+            .server()
             .setBindHost(apiEndpoint.hostname)
             .listen(Number(apiEndpoint.port))
             .addRequestHandler(PacketNames.authenticatePlayerReq, AuthenticatePlayerHandler);
           // --8<-- [end:doc-explicit-packet-name]
-          const mesh = builder.addRouteMesh(SampleNames.playSpotNode)
+          const mesh = builder
+            .addRouteMesh(SampleNames.playSpotNode)
             .listen(config.apiSpotEndpoint)
             .setRoutingIdPrefix('tictactoe-api');
           mesh.objects().client();
@@ -47,16 +59,15 @@ function createTicTacToeApiModule() {
         }
       })
     ],
-    providers: [
-      AuthenticatePlayerHandler,
-      CreateGameEndpoint
-    ]
+    providers: [AuthenticatePlayerHandler, CreateGameEndpoint]
   })(TicTacToeApiModule);
 
   return TicTacToeApiModule;
 }
 
-function getCreateGameEndpoint(app: { get(token: unknown, options?: { strict?: boolean }): unknown }): InstanceType<typeof CreateGameEndpoint> {
+function getCreateGameEndpoint(app: {
+  get(token: unknown, options?: { strict?: boolean }): unknown;
+}): InstanceType<typeof CreateGameEndpoint> {
   return app.get(CreateGameEndpoint, { strict: false }) as InstanceType<typeof CreateGameEndpoint>;
 }
 

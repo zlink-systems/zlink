@@ -1,10 +1,6 @@
 package systems.zlink.samples.supportchat.server.session.sessions;
-import systems.zlink.framework.actors.ActorRef;
 
-import java.util.LinkedHashMap;
-import java.util.Map;
-import java.util.concurrent.CompletableFuture;
-import java.util.concurrent.CompletionStage;
+import systems.zlink.framework.actors.ActorRef;
 import systems.zlink.framework.channels.ZLinkClient;
 import systems.zlink.framework.messaging.ZLinkMessage;
 import systems.zlink.framework.streams.ZLinkSession;
@@ -15,6 +11,11 @@ import systems.zlink.framework.streams.ZLinkStreamError;
 import systems.zlink.samples.supportchat.server.configuration.SampleNames;
 import systems.zlink.samples.supportchat.server.configuration.SampleTimings;
 import systems.zlink.samples.supportchat.shared.contracts.Messages;
+
+import java.util.LinkedHashMap;
+import java.util.Map;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CompletionStage;
 
 public final class SupportChatSession implements ZLinkSession {
     private final ZLinkSessionContext context;
@@ -42,9 +43,10 @@ public final class SupportChatSession implements ZLinkSession {
 
     @Override
     public CompletionStage<Void> onDisconnected() {
-        CompletableFuture<?>[] notifications = context.actors().bound().stream()
-            .map(actor -> actor.notifyDisconnected().toCompletableFuture())
-            .toArray(CompletableFuture[]::new);
+        CompletableFuture<?>[] notifications =
+                context.actors().bound().stream()
+                        .map(actor -> actor.notifyDisconnected().toCompletableFuture())
+                        .toArray(CompletableFuture[]::new);
         return CompletableFuture.allOf(notifications);
     }
 
@@ -56,58 +58,66 @@ public final class SupportChatSession implements ZLinkSession {
     // --8<-- [start:doc-sc-session-dispatch]
     @Override
     public CompletionStage<Void> onDispatch(
-        ZLinkSessionDispatchContext dispatch,
-        ZLinkMessage payload) {
+            ZLinkSessionDispatchContext dispatch, ZLinkMessage payload) {
         return switch (dispatch.packetName()) {
             case "AuthenticateReq" -> authenticate(payload.decode(Messages.AuthenticateReq.class));
             case "JoinConversationReq" -> joinConversation(dispatch, payload);
             default -> relayConversationPacket(dispatch, payload);
         };
     }
+
     // --8<-- [end:doc-sc-session-dispatch]
 
     // --8<-- [start:doc-sc-session-auth]
     private CompletionStage<Void> authenticate(Messages.AuthenticateReq request) {
-        return channels
-            .requestToChannel(SampleNames.ApiChannel, new Messages.AuthenticateUserReq(request.accessToken()))
-            .timeout(SampleTimings.RequestTimeout)
-            .submit(Messages.AuthenticateUserRes.class)
-            .thenCompose(authenticated -> {
-                if (!authenticated.accepted()
-                    || authenticated.actorId() == null
-                    || authenticated.displayName() == null
-                    || authenticated.role() == null) {
-                    throw new IllegalStateException(
-                        authenticated.reason() == null ? "SupportChat authentication failed" : authenticated.reason());
-                }
-                identityActorId = authenticated.actorId();
-                identityDisplayName = authenticated.displayName();
-                identityRole = authenticated.role();
-                return channels.requestToChannel(
-                        SampleNames.SupportChannel,
-                        new Messages.EnsureSupportUserActorReq(
-                            identityActorId,
-                            identityDisplayName,
-                            identityRole,
-                            identityActorId))
-                    .timeout(SampleTimings.RequestTimeout)
-                    .submit(Messages.EnsureSupportUserActorRes.class);
-            })
-            .thenCompose(ensured -> bindOrGet(ensured.actor().toActorRef()))
-            .thenAccept(actor -> {
-                identityActor = actor;
-                context.client()
-                    .reply(new Messages.AuthenticateRes(
-                        identityActorId, identityDisplayName, identityRole))
-                    .submit();
-            });
+        return channels.requestToChannel(
+                        SampleNames.ApiChannel,
+                        new Messages.AuthenticateUserReq(request.accessToken()))
+                .timeout(SampleTimings.RequestTimeout)
+                .submit(Messages.AuthenticateUserRes.class)
+                .thenCompose(
+                        authenticated -> {
+                            if (!authenticated.accepted()
+                                    || authenticated.actorId() == null
+                                    || authenticated.displayName() == null
+                                    || authenticated.role() == null) {
+                                throw new IllegalStateException(
+                                        authenticated.reason() == null
+                                                ? "SupportChat authentication failed"
+                                                : authenticated.reason());
+                            }
+                            identityActorId = authenticated.actorId();
+                            identityDisplayName = authenticated.displayName();
+                            identityRole = authenticated.role();
+                            return channels.requestToChannel(
+                                            SampleNames.SupportChannel,
+                                            new Messages.EnsureSupportUserActorReq(
+                                                    identityActorId,
+                                                    identityDisplayName,
+                                                    identityRole,
+                                                    identityActorId))
+                                    .timeout(SampleTimings.RequestTimeout)
+                                    .submit(Messages.EnsureSupportUserActorRes.class);
+                        })
+                .thenCompose(ensured -> bindOrGet(ensured.actor().toActorRef()))
+                .thenAccept(
+                        actor -> {
+                            identityActor = actor;
+                            context.client()
+                                    .reply(
+                                            new Messages.AuthenticateRes(
+                                                    identityActorId,
+                                                    identityDisplayName,
+                                                    identityRole))
+                                    .submit();
+                        });
     }
+
     // --8<-- [end:doc-sc-session-auth]
 
     // --8<-- [start:doc-sc-agent-join]
     private CompletionStage<Void> joinConversation(
-        ZLinkSessionDispatchContext dispatch,
-        ZLinkMessage payload) {
+            ZLinkSessionDispatchContext dispatch, ZLinkMessage payload) {
         if (SampleNames.Roles.Customer.equals(identityRole)) {
             return requireIdentityActor().relay(dispatch, payload).thenApply(ignored -> null);
         }
@@ -117,45 +127,54 @@ public final class SupportChatSession implements ZLinkSession {
             return existing.relay(dispatch, payload).thenApply(ignored -> null);
         }
         return channels.requestToChannel(
-                SampleNames.SupportChannel,
-                new Messages.EnsureAgentConversationReq(
-                    identityActorId, identityDisplayName, conversationId))
-            .timeout(SampleTimings.RequestTimeout)
-            .submit(Messages.EnsureAgentConversationRes.class)
-            .thenCompose(ensured -> bindOrGet(ensured.actor().toActorRef())
-                .thenAccept(actor -> {
-                    conversationActors.put(conversationId, actor);
-                    context.client().reply(
-                        new Messages.JoinConversationRes(ensured.scheduled(), ensured.state())).submit();
-                }));
+                        SampleNames.SupportChannel,
+                        new Messages.EnsureAgentConversationReq(
+                                identityActorId, identityDisplayName, conversationId))
+                .timeout(SampleTimings.RequestTimeout)
+                .submit(Messages.EnsureAgentConversationRes.class)
+                .thenCompose(
+                        ensured ->
+                                bindOrGet(ensured.actor().toActorRef())
+                                        .thenAccept(
+                                                actor -> {
+                                                    conversationActors.put(conversationId, actor);
+                                                    context.client()
+                                                            .reply(
+                                                                    new Messages
+                                                                            .JoinConversationRes(
+                                                                            ensured.scheduled(),
+                                                                            ensured.state()))
+                                                            .submit();
+                                                }));
     }
+
     // --8<-- [end:doc-sc-agent-join]
 
     // --8<-- [start:doc-sc-metadata-relay]
     private CompletionStage<Void> relayConversationPacket(
-        ZLinkSessionDispatchContext dispatch,
-        ZLinkMessage payload) {
+            ZLinkSessionDispatchContext dispatch, ZLinkMessage payload) {
         String conversationId = dispatch.metadata().get(SampleNames.ConversationIdMetadataKey);
-        ZLinkSessionActor target = conversationId == null
-            ? null : conversationActors.get(conversationId);
+        ZLinkSessionActor target =
+                conversationId == null ? null : conversationActors.get(conversationId);
         if (target == null) {
             target = requireIdentityActor();
         }
         return target.relay(dispatch, payload).thenApply(ignored -> null);
     }
+
     // --8<-- [end:doc-sc-metadata-relay]
 
-    private CompletionStage<ZLinkSessionActor> bindOrGet(
-        ActorRef actorRef) {
+    private CompletionStage<ZLinkSessionActor> bindOrGet(ActorRef actorRef) {
         ZLinkSessionActor existing = context.actors().find(actorRef.actorId()).orElse(null);
         return existing == null
-            ? context.actors().bind(actorRef)
-            : CompletableFuture.completedFuture(existing);
+                ? context.actors().bind(actorRef)
+                : CompletableFuture.completedFuture(existing);
     }
 
     private ZLinkSessionActor requireIdentityActor() {
         if (identityActor == null) {
-            throw new IllegalStateException("Client must authenticate before sending conversation packets");
+            throw new IllegalStateException(
+                    "Client must authenticate before sending conversation packets");
         }
         return identityActor;
     }
@@ -163,7 +182,8 @@ public final class SupportChatSession implements ZLinkSession {
     private static String requireConversationId(ZLinkSessionDispatchContext dispatch) {
         String conversationId = dispatch.metadata().get(SampleNames.ConversationIdMetadataKey);
         if (conversationId == null || conversationId.isBlank()) {
-            throw new IllegalStateException("Conversation packet is missing ConversationId metadata");
+            throw new IllegalStateException(
+                    "Conversation packet is missing ConversationId metadata");
         }
         return conversationId;
     }

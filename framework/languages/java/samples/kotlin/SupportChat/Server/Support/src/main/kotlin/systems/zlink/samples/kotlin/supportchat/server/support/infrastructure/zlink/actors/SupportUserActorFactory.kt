@@ -5,7 +5,6 @@ import systems.zlink.framework.actors.ZLinkActorContext
 import systems.zlink.framework.kotlin.ZLinkSuspendingActorFactory
 
 class SupportUserActorFactory : ZLinkSuspendingActorFactory() {
-    override suspend fun createActor(
-        context: ZLinkActorContext,
-    ): ZLinkActor = SupportUserActor(context.actorId(), context)
+    override suspend fun createActor(context: ZLinkActorContext): ZLinkActor =
+        SupportUserActor(context.actorId(), context)
 }

@@ -45,11 +45,19 @@ class redis_bingo_match_reservation_store_t final : public bingo_match_reservati
         const auto now = std::to_string (std::chrono::duration_cast<std::chrono::milliseconds> (
                                            std::chrono::system_clock::now ().time_since_epoch ())
                                            .count ());
-        auto reply = execute (
-          {"EVAL", script (), "1", match_key (request), request.actor_id (), new_room_id,
-           settings.room_name (), settings.mode (), std::to_string (settings.required_players ()),
-           std::to_string (settings.max_draw_number ()), settings.purpose (),
-           settings.has_observed_room_id () ? settings.observed_room_id () : "", now});
+        auto reply = execute ({"EVAL",
+                               script (),
+                               "1",
+                               match_key (request),
+                               request.actor_id (),
+                               new_room_id,
+                               settings.room_name (),
+                               settings.mode (),
+                               std::to_string (settings.required_players ()),
+                               std::to_string (settings.max_draw_number ()),
+                               settings.purpose (),
+                               settings.has_observed_room_id () ? settings.observed_room_id () : "",
+                               now});
         if (reply.size () != 7) {
             throw std::runtime_error ("Redis match queue returned an invalid reservation.");
         }

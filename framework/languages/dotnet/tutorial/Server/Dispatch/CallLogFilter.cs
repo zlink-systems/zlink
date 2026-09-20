@@ -12,7 +12,8 @@ public sealed class CallLogFilter(ILogger<CallLogFilter> logger) : IZLinkHandler
     public async ValueTask InvokeAsync(
         IZLinkHandlerFilterContext context,
         ZLinkHandlerFilterNext next,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken
+    )
     {
         var startedAt = DateTimeOffset.UtcNow;
         logger.LogInformation("dispatch start: {Packet}", context.PacketName);
@@ -25,7 +26,8 @@ public sealed class CallLogFilter(ILogger<CallLogFilter> logger) : IZLinkHandler
         logger.LogInformation(
             "dispatch done: {Packet} in {Elapsed}ms",
             context.PacketName,
-            (int)elapsed.TotalMilliseconds);
+            (int)elapsed.TotalMilliseconds
+        );
     }
 }
 // --8<-- [end:filter-implementation]

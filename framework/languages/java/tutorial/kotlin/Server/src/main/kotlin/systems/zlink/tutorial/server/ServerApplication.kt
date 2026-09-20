@@ -12,13 +12,13 @@ import systems.zlink.framework.locations.redis.ZLinkRedisRelocationOptions
 import systems.zlink.framework.locations.redis.ZLinkRedisRelocationStore
 import systems.zlink.framework.spring.EnableZLinkFramework
 import systems.zlink.framework.spring.ZLinkFrameworkConfigurer
+import systems.zlink.tutorial.server.actors.Player
+import systems.zlink.tutorial.server.actors.PlayerFactory
 import systems.zlink.tutorial.server.channel.GetPlayerProfileHandler
 import systems.zlink.tutorial.server.channel.HandlerGroups
 import systems.zlink.tutorial.server.channel.MaintenanceNoticeSubscriber
 import systems.zlink.tutorial.server.dispatch.CallLogFilter
 import systems.zlink.tutorial.server.ops.NodeStatusHandler
-import systems.zlink.tutorial.server.actors.Player
-import systems.zlink.tutorial.server.actors.PlayerFactory
 import systems.zlink.tutorial.server.sessions.AuthenticateHandler
 import systems.zlink.tutorial.server.sessions.GameSession
 import systems.zlink.tutorial.server.sessions.PingHandler
@@ -41,15 +41,9 @@ class ServerApplication {
         // prefix.
         val locationOptions =
             ZLinkRedisLocationOptions()
-            .setConnectionString(
-                "127.0.0.1:6379",
-            )
-            .setKeyPrefix(
-                "zlink-tutorial-kotlin:location:",
-            )
-        options.addLocationStore(
-            ZLinkRedisLocationStore(locationOptions),
-        )
+                .setConnectionString("127.0.0.1:6379")
+                .setKeyPrefix("zlink-tutorial-kotlin:location:")
+        options.addLocationStore(ZLinkRedisLocationStore(locationOptions))
         // --8<-- [end:location-store]
 
         // --8<-- [start:relocation-store]
@@ -59,8 +53,8 @@ class ServerApplication {
             ZLinkRedisRelocationStore(
                 ZLinkRedisRelocationOptions()
                     .setConnectionString("127.0.0.1:6379")
-                    .setKeyPrefix("zlink-tutorial-kotlin:relocation:"),
-            ),
+                    .setKeyPrefix("zlink-tutorial-kotlin:relocation:")
+            )
         )
         // --8<-- [end:relocation-store]
 
@@ -84,24 +78,23 @@ class ServerApplication {
         // Both sides must name the mesh identically, or they never see each other
         // as peers. The routing id names this node; without it the Framework
         // assigns a generated one, which a caller cannot type into a URL.
-        val mesh = options.addRouteMesh("game")
-            .listen("tcp://0.0.0.0:7601")
-            // What this node tells peers to reach it at. It has to match the
-            // endpoint the caller passes to connect(routingId, endpoint) exactly:
-            // that form of connect checks the advertised endpoint string, and
-            // without this the node would advertise "tcp://0.0.0.0:7601" and the
-            // peer would be rejected as an expected-route mismatch.
-            .setAdvertiseHost("127.0.0.1")
-            .setRoutingId(
-                RoutingId.from("game-server-1"),
-            )
+        val mesh =
+            options
+                .addRouteMesh("game")
+                .listen("tcp://0.0.0.0:7601")
+                // What this node tells peers to reach it at. It has to match the
+                // endpoint the caller passes to connect(routingId, endpoint) exactly:
+                // that form of connect checks the advertised endpoint string, and
+                // without this the node would advertise "tcp://0.0.0.0:7601" and the
+                // peer would be rejected as an expected-route mismatch.
+                .setAdvertiseHost("127.0.0.1")
+                .setRoutingId(RoutingId.from("game-server-1"))
         // --8<-- [end:mesh-register]
 
         // --8<-- [start:channel-register]
         // Only handlers exposed here can be called by other nodes. A handler class
         // sitting in the same package but in another group stays unreachable.
-        mesh.channelName("profile").server()
-            .addHandlerGroup(HandlerGroups.PROFILE)
+        mesh.channelName("profile").server().addHandlerGroup(HandlerGroups.PROFILE)
         // --8<-- [end:channel-register]
 
         // --8<-- [start:node-direct-register]
@@ -117,7 +110,8 @@ class ServerApplication {
         // --8<-- [start:clientserver-register]
         // The caller dials this endpoint directly, so it needs a port of its own
         // and an address to advertise, separate from the mesh.
-        options.addClientServerChannel("ticketing")
+        options
+            .addClientServerChannel("ticketing")
             .server()
             .listen(7611)
             .setBindHost("127.0.0.1")
@@ -130,7 +124,8 @@ class ServerApplication {
         // given here. enableSubscriber() would take it from the location store
         // instead, and this tutorial runs without one. Mixing the two is rejected
         // at startup.
-        options.addFanoutChannel("broadcast")
+        options
+            .addFanoutChannel("broadcast")
             .connect("tcp://127.0.0.1:7612")
             .addPublishHandler(
                 MaintenanceNoticeSubscriber::class.java,
@@ -150,20 +145,15 @@ class ServerApplication {
         // node that registers it is a candidate to host one. Exactly one
         // relocation policy is required; moving a live room to another node is a
         // separate topic.
-        objects.addSpotFactory<GameRoom>(
-            "game-room",
-            GameRoom::class.java,
-        ) { factory ->
+        objects.addSpotFactory<GameRoom>("game-room", GameRoom::class.java) { factory ->
             factory.disableRelocation()
         }
         // --8<-- [end:spot-register]
 
         // --8<-- [start:instance-spot-register]
         // Registered the same way, but callers never create one explicitly.
-        objects.addInstanceSpotFactory<MatchQueue>(
-            "match-queue",
-            MatchQueue::class.java,
-        ) { factory ->
+        objects.addInstanceSpotFactory<MatchQueue>("match-queue", MatchQueue::class.java) { factory
+            ->
             factory.disableRelocation()
         }
         // --8<-- [end:instance-spot-register]
@@ -173,11 +163,10 @@ class ServerApplication {
         objects.addEntrySpot(LobbySpot::class.java)
 
         // Nodes that register "player" are candidates to host one.
-        objects.addActorFactory(
-            "player",
-            Player::class.java,
-            PlayerFactory::class.java,
-        ) { factory -> factory.disableRelocation() }
+        objects.addActorFactory("player", Player::class.java, PlayerFactory::class.java) { factory
+            ->
+            factory.disableRelocation()
+        }
         // --8<-- [end:actor-register]
 
         // --8<-- [start:stream-register]
@@ -186,16 +175,13 @@ class ServerApplication {
         // Session handlers are registered here rather than inside the session,
         // and addSessionPacketHandler takes a plain Class, so the suspending
         // handlers go in by type.
-        options.addStreamNode("client-stream")
+        options
+            .addStreamNode("client-stream")
             .bind("tcp://0.0.0.0:7621")
             .enableActorDispatch()
             .registerSession(GameSession::class.java)
-            .addSessionPacketHandler(
-                PingHandler::class.java,
-            )
-            .addSessionPacketHandler(
-                AuthenticateHandler::class.java,
-            )
+            .addSessionPacketHandler(PingHandler::class.java)
+            .addSessionPacketHandler(AuthenticateHandler::class.java)
         // --8<-- [end:stream-register]
     }
 }

@@ -7,6 +7,7 @@ export interface ZLinkSocketConfig {
   weight?: number;
   sendHighWaterMark?: number;
   receiveHighWaterMark?: number;
+  receiveTimeoutMs?: number;
   sendTimeoutMs?: number;
 }
 

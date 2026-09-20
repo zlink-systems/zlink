@@ -124,12 +124,12 @@ export class ZlinkStreamConnectorLifecycle {
       // takes no argument and reads `closeReason`, so it has to be set before
       // the handler runs.
       this.closeReasonValue ??= 'TransportError';
-      await this.setState(ZlinkStreamConnectionState.Disconnected, error, signal);
+      void this.setState(ZlinkStreamConnectionState.Disconnected, error, signal);
       // Spec stream-connector 32 §6: once the attempts are spent the state is
       // `Disconnected` and the registered disconnect handler runs. A caller
       // that only subscribed to that handler learns about the failure here,
       // not only through the rejected `connect`.
-      await this.publishDisconnectedOnce(signal);
+      this.publishDisconnectedWithoutWaiting(signal);
       throw new ZlinkStreamException(error);
     }
   }
@@ -179,7 +179,7 @@ export class ZlinkStreamConnectorLifecycle {
     // Spec stream-connector 32 §10.1.1: closing the connector ends the
     // connection a wait was observing, and the wait ends with it.
     this.receivedMessages.connectionEnded();
-    await this.setState(ZlinkStreamConnectionState.Closed, undefined, signal);
+    void this.setState(ZlinkStreamConnectionState.Closed, undefined, signal);
     this.publishDisconnectedWithoutWaiting(signal);
     if (errors.length === 1) throw errors[0];
     if (errors.length > 1) throw new AggregateError(errors, 'Stream connector close failed.');
@@ -464,27 +464,21 @@ export class ZlinkStreamConnectorLifecycle {
   /**
    * Runs once the teardown promise has settled, so a handler reached from here
    * may call `connect` without waiting for a task its own caller still holds.
-   * The reconnect is queued before the notification is awaited for the same
-   * reason: spec stream-connector 32 §6 has reconnect on by default, and a
+   * The reconnect is queued after both notifications have been started for the
+   * same reason: spec stream-connector 32 §6 has reconnect on by default, and a
    * handler that is slow — or whose promise never settles at all — must not
-   * cost the connector the attempt. The state is already `Disconnected` and the
-   * state handlers are already invoked by the time the queued microtask runs,
-   * because `setState` records the state and hands the change to the handlers
-   * before it awaits any of them.
+   * cost the connector the attempt.
    */
   private async announceDisconnect(error: ZlinkStreamError): Promise<void> {
     if (this.closeRequested) return;
     const announce = this.claimDisconnectedPublish();
-    const notified = (async (): Promise<void> => {
-      await this.setState(ZlinkStreamConnectionState.Disconnected, error);
-      if (announce) {
-        await this.events.publishDisconnected();
-      }
-    })();
+    void this.setState(ZlinkStreamConnectionState.Disconnected, error);
+    if (announce) {
+      void this.events.publishDisconnected().catch(() => undefined);
+    }
     if (this.shouldReconnect()) {
       queueMicrotask(() => { void this.connect().catch(() => undefined); });
     }
-    await notified;
   }
 
   private shouldReconnect(): boolean {

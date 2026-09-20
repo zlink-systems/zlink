@@ -40,11 +40,14 @@ function createDeliveryDispatchConfigurationModule(
         validatePredefined: false
       })
     ],
-    providers: [{
-      provide: DELIVERYDISPATCH_SAMPLE_CONFIG,
-      inject: [ConfigService],
-      useFactory: (config: ConfigService) => validateSampleConfig(config.get('sample'), requiredKeys)
-    }],
+    providers: [
+      {
+        provide: DELIVERYDISPATCH_SAMPLE_CONFIG,
+        inject: [ConfigService],
+        useFactory: (config: ConfigService) =>
+          validateSampleConfig(config.get('sample'), requiredKeys)
+      }
+    ],
     exports: [DELIVERYDISPATCH_SAMPLE_CONFIG]
   };
 }

@@ -2,12 +2,14 @@ package systems.zlink.samples.gamequest.server.configuration;
 
 import com.fasterxml.jackson.databind.JavaType;
 import com.fasterxml.jackson.databind.ObjectMapper;
+
 import io.lettuce.core.RedisClient;
 import io.lettuce.core.api.StatefulRedisConnection;
 import io.lettuce.core.api.sync.RedisCommands;
-import java.util.ArrayList;
-import java.util.List;
+
 import systems.zlink.samples.gamequest.shared.contracts.Messages;
+
+import java.util.List;
 
 public final class RedisSampleStore implements AutoCloseable {
     private final ObjectMapper json = new ObjectMapper();
@@ -51,8 +53,9 @@ public final class RedisSampleStore implements AutoCloseable {
         if (value == null || value.isBlank()) {
             return List.of();
         }
-        JavaType type = json.getTypeFactory()
-            .constructCollectionType(List.class, Messages.QuestProgress.class);
+        JavaType type =
+                json.getTypeFactory()
+                        .constructCollectionType(List.class, Messages.QuestProgress.class);
         return readJson(value, type);
     }
 
@@ -60,14 +63,14 @@ public final class RedisSampleStore implements AutoCloseable {
         if (events.isEmpty()) {
             return;
         }
-        redis.rpush(key("quest-events"), events.stream().map(this::writeJson).toArray(String[]::new));
+        redis.rpush(
+                key("quest-events"), events.stream().map(this::writeJson).toArray(String[]::new));
     }
 
     public List<Messages.StoredQuestEvent> readQuestEvents() {
-        return redis.lrange(key("quest-events"), 0, -1)
-            .stream()
-            .map(value -> readJson(value, Messages.StoredQuestEvent.class))
-            .toList();
+        return redis.lrange(key("quest-events"), 0, -1).stream()
+                .map(value -> readJson(value, Messages.StoredQuestEvent.class))
+                .toList();
     }
 
     public void recordDeduplicatedEvent(String eventId) {
@@ -115,5 +118,4 @@ public final class RedisSampleStore implements AutoCloseable {
     private static String redisUri(String endpoint) {
         return endpoint.startsWith("redis://") ? endpoint : "redis://" + endpoint;
     }
-
 }

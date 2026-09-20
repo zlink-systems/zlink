@@ -22,7 +22,7 @@ internal sealed class TicTacToeMatch(string roomId, TimeSpan turnTimeout)
         {
             0 => TicTacToeMarks.X,
             1 => TicTacToeMarks.O,
-            _ => throw new InvalidOperationException("Tic-tac-toe game already has two players.")
+            _ => throw new InvalidOperationException("Tic-tac-toe game already has two players."),
         };
 
         _players.Add(actorId, mark);
@@ -55,9 +55,11 @@ internal sealed class TicTacToeMatch(string roomId, TimeSpan turnTimeout)
 
     public TicTacToeTickChange Tick(DateTimeOffset now)
     {
-        if (_status != TicTacToeGameStatuses.InProgress
+        if (
+            _status != TicTacToeGameStatuses.InProgress
             || _turnDeadline is not { } deadline
-            || now < deadline)
+            || now < deadline
+        )
             return new TicTacToeTickChange(Snapshot(), false);
 
         var timedOut = _players.FirstOrDefault(player => player.Value == _nextTurn).Key;
@@ -85,7 +87,8 @@ internal sealed class TicTacToeMatch(string roomId, TimeSpan turnTimeout)
             string.IsNullOrEmpty(x) ? null : x,
             string.IsNullOrEmpty(o) ? null : o,
             _lastMoveActorId,
-            _lastMoveCell);
+            _lastMoveCell
+        );
     }
 
     private void AdvanceAfterMove(string actorId, string mark, DateTimeOffset now)
@@ -118,13 +121,8 @@ internal sealed class TicTacToeMatch(string roomId, TimeSpan turnTimeout)
     }
 }
 
-internal sealed record TicTacToeJoinChange(
-    GameState State,
-    string Mark,
-    bool IsNewPlayer);
+internal sealed record TicTacToeJoinChange(GameState State, string Mark, bool IsNewPlayer);
 
 internal sealed record TicTacToeMoveChange(GameState State);
 
-internal sealed record TicTacToeTickChange(
-    GameState State,
-    bool HasChanged);
+internal sealed record TicTacToeTickChange(GameState State, bool HasChanged);

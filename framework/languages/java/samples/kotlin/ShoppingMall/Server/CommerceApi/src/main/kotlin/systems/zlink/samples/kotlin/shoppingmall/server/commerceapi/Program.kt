@@ -15,8 +15,8 @@ import systems.zlink.samples.kotlin.shoppingmall.server.commerceapi.handlers.Ser
 import systems.zlink.samples.kotlin.shoppingmall.server.configuration.CommerceStore
 import systems.zlink.samples.kotlin.shoppingmall.server.configuration.SampleNames
 import systems.zlink.samples.kotlin.shoppingmall.server.configuration.SampleTopology
-import systems.zlink.samples.kotlin.shoppingmall.shared.contracts.GetOrderStateRes
 import systems.zlink.samples.kotlin.shoppingmall.shared.contracts.ContinueOrderWorkflowRes
+import systems.zlink.samples.kotlin.shoppingmall.shared.contracts.GetOrderStateRes
 import systems.zlink.samples.kotlin.shoppingmall.shared.contracts.RebuildProjectionApiRes
 import systems.zlink.samples.kotlin.shoppingmall.shared.contracts.ServerAssertionReq
 import systems.zlink.samples.kotlin.shoppingmall.shared.contracts.StartOrderReq
@@ -25,18 +25,22 @@ import systems.zlink.samples.kotlin.shoppingmall.shared.contracts.StartOrderRes
 fun main(args: Array<String>) {
     val app = CommerceApiApplication.run(SampleTopology.configPath(args))
     val topology = app.getBean(SampleTopology::class.java)
-    val http = startHttp(
-        topology,
-        app.getBean(StartOrderUseCase::class.java),
-        app.getBean(OrderWorkflowRouter::class.java),
-        app.getBean(CommerceStore::class.java),
-        app.getBean(ServerAssertionHandler::class.java),
-        app.getBean(ZLinkRouteMeshRuntime::class.java),
-    )
-    Runtime.getRuntime().addShutdownHook(Thread {
-        http.stop(0)
-        app.close()
-    })
+    val http =
+        startHttp(
+            topology,
+            app.getBean(StartOrderUseCase::class.java),
+            app.getBean(OrderWorkflowRouter::class.java),
+            app.getBean(CommerceStore::class.java),
+            app.getBean(ServerAssertionHandler::class.java),
+            app.getBean(ZLinkRouteMeshRuntime::class.java),
+        )
+    Runtime.getRuntime()
+        .addShutdownHook(
+            Thread {
+                http.stop(0)
+                app.close()
+            }
+        )
     Thread.currentThread().join()
 }
 
@@ -52,10 +56,19 @@ private fun startHttp(
     val role = topology.role()
     val endpoint = URI.create(role.httpEndpoint)
     val server = HttpServer.create(InetSocketAddress(endpoint.host, endpoint.port), 0)
-    server.createContext("/health") { exchange -> exchange.writeJson(json, 200, mapOf("status" to "ok")) }
+    server.createContext("/health") { exchange ->
+        exchange.writeJson(json, 200, mapOf("status" to "ok"))
+    }
     server.createContext("/orders/start") { exchange ->
-        if (exchange.requestMethod != "POST") return@createContext exchange.writeJson(json, 405, mapOf("error" to "method not allowed"))
-        exchange.runSafely(json) { starts.execute(json.readValue(exchange.requestBody, StartOrderReq::class.java)) }
+        if (exchange.requestMethod != "POST")
+            return@createContext exchange.writeJson(
+                json,
+                405,
+                mapOf("error" to "method not allowed"),
+            )
+        exchange.runSafely(json) {
+            starts.execute(json.readValue(exchange.requestBody, StartOrderReq::class.java))
+        }
     }
     server.createContext("/orders/") { exchange ->
         val parts = exchange.requestURI.path.split("/")
@@ -63,7 +76,9 @@ private fun startHttp(
         exchange.runSafely(json) {
             when {
                 exchange.requestMethod == "GET" && parts.size == 3 ->
-                    GetOrderStateRes(store.findReadModel(orderId) ?: error("Order '$orderId' does not exist."))
+                    GetOrderStateRes(
+                        store.findReadModel(orderId) ?: error("Order '$orderId' does not exist.")
+                    )
                 exchange.requestMethod == "POST" && parts.getOrElse(3) { "" } == "continue" ->
                     ContinueOrderWorkflowRes(workflows.continueWorkflow(orderId))
                 exchange.requestMethod == "POST" && parts.getOrElse(3) { "" } == "rebuild" ->
@@ -80,7 +95,11 @@ private fun startHttp(
         }
     }
     server.createContext("/self-check/workflow/inventory-reserved") { exchange ->
-        exchange.runSafely(json) { starts.prepareInventoryReserved(json.readValue(exchange.requestBody, StartOrderReq::class.java)) }
+        exchange.runSafely(json) {
+            starts.prepareInventoryReserved(
+                json.readValue(exchange.requestBody, StartOrderReq::class.java)
+            )
+        }
     }
     server.createContext("/self-check/workflow/") { exchange ->
         val orderId = exchange.requestURI.path.split("/").getOrElse(3) { "" }
@@ -98,7 +117,9 @@ private fun startHttp(
         }
     }
     server.createContext("/self-check/assert") { exchange ->
-        exchange.runSafely(json) { assertions.assert(json.readValue(exchange.requestBody, ServerAssertionReq::class.java)) }
+        exchange.runSafely(json) {
+            assertions.assert(json.readValue(exchange.requestBody, ServerAssertionReq::class.java))
+        }
     }
     server.start()
     println("shoppingmall-ready kind=http node=${role.instanceId}")
@@ -107,24 +128,30 @@ private fun startHttp(
 }
 
 private fun startObjectRouteReadiness(nodeId: String, meshes: ZLinkRouteMeshRuntime) {
-    val readiness = Executors.newSingleThreadScheduledExecutor { task ->
-        Thread(task, "shoppingmall-object-route-readiness-$nodeId").apply { isDaemon = true }
-    }
-    val attempts = AtomicInteger()
-    readiness.scheduleWithFixedDelay({
-        val attempt = attempts.incrementAndGet()
-        try {
-            if (meshes.isReady(SampleNames.OrderWorkflowMesh)) {
-                println("shoppingmall-ready kind=object-route node=$nodeId target=workflow-a")
-                println("shoppingmall-ready kind=object-route node=$nodeId target=workflow-b")
-                readiness.shutdown()
-            }
-        } catch (_: IllegalStateException) {
-            // The passive runtime view becomes available after Framework startup.
-        } finally {
-            if (attempt >= 300) readiness.shutdown()
+    val readiness =
+        Executors.newSingleThreadScheduledExecutor { task ->
+            Thread(task, "shoppingmall-object-route-readiness-$nodeId").apply { isDaemon = true }
         }
-    }, 0, 100, TimeUnit.MILLISECONDS)
+    val attempts = AtomicInteger()
+    readiness.scheduleWithFixedDelay(
+        {
+            val attempt = attempts.incrementAndGet()
+            try {
+                if (meshes.isReady(SampleNames.OrderWorkflowMesh)) {
+                    println("shoppingmall-ready kind=object-route node=$nodeId target=workflow-a")
+                    println("shoppingmall-ready kind=object-route node=$nodeId target=workflow-b")
+                    readiness.shutdown()
+                }
+            } catch (_: IllegalStateException) {
+                // The passive runtime view becomes available after Framework startup.
+            } finally {
+                if (attempt >= 300) readiness.shutdown()
+            }
+        },
+        0,
+        100,
+        TimeUnit.MILLISECONDS,
+    )
 }
 
 private fun HttpExchange.runSafely(json: ObjectMapper, action: suspend () -> Any) {

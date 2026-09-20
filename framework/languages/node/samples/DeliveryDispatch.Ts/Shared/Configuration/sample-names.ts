@@ -25,8 +25,4 @@ const SampleTimings = {
   clientTimeout: 30000
 } as const;
 
-export {
-  DeliveryDispatchNodeIds,
-  SampleNames,
-  SampleTimings
-};
+export { DeliveryDispatchNodeIds, SampleNames, SampleTimings };

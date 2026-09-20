@@ -11,16 +11,14 @@ import systems.zlink.samples.kotlin.tictactoe.shared.contracts.JoinGameNotify
 import systems.zlink.samples.kotlin.tictactoe.shared.contracts.PlayerInfo
 import systems.zlink.samples.kotlin.tictactoe.shared.contracts.TicTacToeGameJoinRes
 
-class PlayActor(
-    val actorId: String,
-    private val context: ZLinkActorContext,
-) : ZLinkActor {
+class PlayActor(val actorId: String, private val context: ZLinkActorContext) : ZLinkActor {
     private var joinedRoomId: String? = null
     private var pendingRoomId: String? = null
     private val completedJoinOperations = mutableSetOf<ZLinkActorJoinOperationId>()
     private var player: PlayerInfo? = null
     var destroyAfterEntrySpotJoin: Boolean = false
         private set
+
     var disconnected: Boolean = false
         private set
 
@@ -53,11 +51,12 @@ class PlayActor(
     }
 
     override fun onJoinCompleted(completion: ZLinkActorJoinCompletion): CompletionStage<Void> {
-        val operationId = when (completion) {
-            is ZLinkActorJoinCompletion.Accepted -> completion.operationId()
-            is ZLinkActorJoinCompletion.Rejected -> completion.operationId()
-            is ZLinkActorJoinCompletion.Failed -> completion.operationId()
-        }
+        val operationId =
+            when (completion) {
+                is ZLinkActorJoinCompletion.Accepted -> completion.operationId()
+                is ZLinkActorJoinCompletion.Rejected -> completion.operationId()
+                is ZLinkActorJoinCompletion.Failed -> completion.operationId()
+            }
         if (!completedJoinOperations.add(operationId)) {
             return CompletableFuture.completedFuture(null)
         }
@@ -75,17 +74,14 @@ class PlayActor(
                 context.boundSession().send(JoinGameNotify(reply.state)).submit()
             }
             is ZLinkActorJoinCompletion.Rejected ->
-                context.boundSession()
+                context
+                    .boundSession()
                     .send(JoinGameFailedNotify(roomId.orEmpty(), "Rejected"))
                     .submit()
             is ZLinkActorJoinCompletion.Failed ->
-                context.boundSession()
-                    .send(
-                        JoinGameFailedNotify(
-                            roomId.orEmpty(),
-                            completion.kind().name,
-                        ),
-                    )
+                context
+                    .boundSession()
+                    .send(JoinGameFailedNotify(roomId.orEmpty(), completion.kind().name))
                     .submit()
         }
     }

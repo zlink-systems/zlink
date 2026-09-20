@@ -8,10 +8,9 @@ namespace zlink::samples::tictactoe
 
 // --8<-- [start:doc-join-defer]
 // C++은 handler class 대신 Entry Spot member 함수다.
-inline task_t<void>
-tictactoe_entry_spot_t::join_game (player_actor_t &actor,
-                                   message_context_t &,
-                                   const join_game_msg_t &request)
+inline task_t<void> tictactoe_entry_spot_t::join_game (player_actor_t &actor,
+                                                       message_context_t &,
+                                                       const join_game_msg_t &request)
 {
     /* 공통 sample spec §13: JoinSpot payload에는 인증 때 actor에 설정한 PlayerInfo가 들어가고,
      * owner room Spot이 level 조건을 확인한다. */

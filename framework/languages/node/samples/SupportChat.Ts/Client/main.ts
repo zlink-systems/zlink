@@ -9,7 +9,15 @@ async function main(): Promise<void> {
   const clients = Array.from({ length: 9 }, () => createClient(config.sessionStreamEndpoint));
   try {
     await new SupportChatClientScenario().run(
-      clients[0], clients[1], clients[2], clients[3], clients[4], clients[5], clients[6], clients[7], clients[8]
+      clients[0],
+      clients[1],
+      clients[2],
+      clients[3],
+      clients[4],
+      clients[5],
+      clients[6],
+      clients[7],
+      clients[8]
     );
   } finally {
     await Promise.allSettled(clients.map((client) => client.close()));

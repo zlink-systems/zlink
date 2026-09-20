@@ -16,6 +16,7 @@ public static class OrderContractMapper
             state.Reason,
             state.Amount,
             state.Currency,
-            state.UpdatedAtUnixMs);
+            state.UpdatedAtUnixMs
+        );
     }
 }

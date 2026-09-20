@@ -18,13 +18,14 @@ import org.springframework.boot.context.properties.EnableConfigurationProperties
 import org.springframework.context.ConfigurableApplicationContext
 import org.springframework.context.annotation.Bean
 import org.springframework.core.env.StandardEnvironment
-import systems.zlink.framework.channels.ZLinkRouteClient
+import systems.zlink.contracts.core.RoutingId
 import systems.zlink.framework.ZLinkMessageContext
 import systems.zlink.framework.actors.ActorRef
 import systems.zlink.framework.actors.ZLinkActor
 import systems.zlink.framework.actors.ZLinkActorContext
 import systems.zlink.framework.actors.ZLinkActorCreateResult
 import systems.zlink.framework.actors.ZLinkActorManager
+import systems.zlink.framework.channels.ZLinkRouteClient
 import systems.zlink.framework.configuration.ZLinkMessageFlowLogMode
 import systems.zlink.framework.kotlin.ZLinkSuspendingActorFactory
 import systems.zlink.framework.kotlin.ZLinkSuspendingEntrySpot
@@ -32,21 +33,19 @@ import systems.zlink.framework.kotlin.ZLinkSuspendingEntrySpotActorSendHandler
 import systems.zlink.framework.kotlin.ZLinkSuspendingSession
 import systems.zlink.framework.kotlin.kotlin
 import systems.zlink.framework.kotlin.useCoroutineHandlers
-import systems.zlink.framework.locations.redis.ZLinkRedisLocationStore
 import systems.zlink.framework.locations.redis.ZLinkRedisRelocationOptions
 import systems.zlink.framework.locations.redis.ZLinkRedisRelocationStore
 import systems.zlink.framework.messaging.ZLinkMessage
 import systems.zlink.framework.monitoring.ZLinkRouteMeshRuntime
+import systems.zlink.framework.spots.ZLinkEntrySpotContext
 import systems.zlink.framework.spring.EnableZLinkFramework
 import systems.zlink.framework.spring.ZLinkFrameworkConfigurer
-import systems.zlink.contracts.core.RoutingId
+import systems.zlink.framework.streams.ZLinkSessionActor
 import systems.zlink.framework.streams.ZLinkSessionContext
 import systems.zlink.framework.streams.ZLinkSessionDispatchContext
-import systems.zlink.framework.streams.ZLinkSessionActor
-import systems.zlink.framework.spots.ZLinkEntrySpotContext
-import systems.zlink.samples.kotlin.gamequest.server.configuration.RedisSampleStore
 import systems.zlink.samples.kotlin.gamequest.server.configuration.GameQuestReadinessReporter
 import systems.zlink.samples.kotlin.gamequest.server.configuration.GameplayStateStore
+import systems.zlink.samples.kotlin.gamequest.server.configuration.RedisSampleStore
 import systems.zlink.samples.kotlin.gamequest.server.configuration.SampleLocationStore
 import systems.zlink.samples.kotlin.gamequest.server.configuration.SampleNames
 import systems.zlink.samples.kotlin.gamequest.server.configuration.SampleTimings
@@ -63,10 +62,8 @@ import systems.zlink.samples.kotlin.gamequest.shared.contracts.GetGameplaySnapsh
 import systems.zlink.samples.kotlin.gamequest.shared.contracts.GetGameplaySnapshotRes
 import systems.zlink.samples.kotlin.gamequest.shared.contracts.GetQuestProgressReq
 import systems.zlink.samples.kotlin.gamequest.shared.contracts.GetQuestProgressRes
-import systems.zlink.samples.kotlin.gamequest.shared.contracts.ItemCountSnapshot
 import systems.zlink.samples.kotlin.gamequest.shared.contracts.JoinSessionReq
 import systems.zlink.samples.kotlin.gamequest.shared.contracts.JoinSessionRes
-import systems.zlink.samples.kotlin.gamequest.shared.contracts.KillCountSnapshot
 import systems.zlink.samples.kotlin.gamequest.shared.contracts.KillMonsterReq
 import systems.zlink.samples.kotlin.gamequest.shared.contracts.KillMonsterRes
 import systems.zlink.samples.kotlin.gamequest.shared.contracts.QuestCompletedEvent
@@ -89,19 +86,19 @@ fun main(args: Array<String>) {
     val topology = app.getBean(SampleTopology::class.java)
     println("gamequest-ready kind=stream node=${topology.gameApi().instanceName}")
     val http = startHttp(Program.store, topology)
-    Runtime.getRuntime().addShutdownHook(Thread {
-        http.stop(0)
-        app.close()
-    })
+    Runtime.getRuntime()
+        .addShutdownHook(
+            Thread {
+                http.stop(0)
+                app.close()
+            }
+        )
     Thread.currentThread().join()
 }
 
 @EnableZLinkFramework
 @EnableConfigurationProperties(SampleTopology::class)
-@SpringBootApplication(
-    proxyBeanMethods = false,
-    scanBasePackageClasses = [Program::class],
-)
+@SpringBootApplication(proxyBeanMethods = false, scanBasePackageClasses = [Program::class])
 class Program {
     @Bean
     fun gameApiFramework(topology: SampleTopology): ZLinkFrameworkConfigurer {
@@ -114,27 +111,30 @@ class Program {
                 ZLinkRedisRelocationStore(
                     ZLinkRedisRelocationOptions()
                         .setConnectionString(location.redisEndpoint)
-                        .setKeyPrefix("${location.redisKeyPrefix}relocation:"),
-                ),
+                        .setKeyPrefix("${location.redisKeyPrefix}relocation:")
+                )
             )
             options.useCoroutineHandlers(Dispatchers.Default)
             options.addHandlersFromPackageOf(Program::class.java)
-            options.configureDispatch()
-                .messageFlow(ZLinkMessageFlowLogMode.NORMAL)
-
+            options.configureDispatch().messageFlow(ZLinkMessageFlowLogMode.NORMAL)
 
             // --8<-- [start:doc-gq-api-register]
-            options.addRouteMesh(SampleNames.PlayerQuestMesh)
+            options
+                .addRouteMesh(SampleNames.PlayerQuestMesh)
                 .setRoutingId(RoutingId.from("gamequest-api-${api.instanceName}"))
                 .listen()
-                .objects().server()
+                .objects()
+                .server()
                 .addEntrySpot(GameQuestEntrySpot::class.java)
                 .addActorFactory(
                     SampleNames.PlayerSessionActorType,
                     GameQuestPlayerActor::class.java,
                     GameQuestPlayerActorFactory::class.java,
-                ) { factory -> factory.recreateOnRelocation() }
-            options.addStreamNode(SampleNames.StreamNode)
+                ) { factory ->
+                    factory.recreateOnRelocation()
+                }
+            options
+                .addStreamNode(SampleNames.StreamNode)
                 .bind(api.streamEndpoint)
                 .enableActorDispatch()
                 .registerSession(GameQuestSession::class.java)
@@ -147,7 +147,10 @@ class Program {
         GameQuestStore(topology).also { store = it }
 
     @Bean
-    fun gameQuestApiServices(store: GameQuestStore, routes: ZLinkRouteClient): GameQuestApiServices {
+    fun gameQuestApiServices(
+        store: GameQuestStore,
+        routes: ZLinkRouteClient,
+    ): GameQuestApiServices {
         Companion.store = store
         Companion.routes = routes
         return GameQuestApiServices()
@@ -165,17 +168,26 @@ class Program {
     companion object {
         lateinit var store: GameQuestStore
         lateinit var routes: ZLinkRouteClient
+
         fun run(configPath: String): ConfigurableApplicationContext {
-            val environment = StandardEnvironment().apply {
-                propertySources.remove(StandardEnvironment.SYSTEM_ENVIRONMENT_PROPERTY_SOURCE_NAME)
-                propertySources.remove(StandardEnvironment.SYSTEM_PROPERTIES_PROPERTY_SOURCE_NAME)
-            }
-            val context = SpringApplicationBuilder(Program::class.java)
-                .environment(environment)
-                .also { it.application().setKeepAlive(true) }
-                .web(WebApplicationType.NONE)
-                .properties("spring.config.location=${Path.of(configPath).toAbsolutePath().toUri()}")
-                .run()
+            val environment =
+                StandardEnvironment().apply {
+                    propertySources.remove(
+                        StandardEnvironment.SYSTEM_ENVIRONMENT_PROPERTY_SOURCE_NAME
+                    )
+                    propertySources.remove(
+                        StandardEnvironment.SYSTEM_PROPERTIES_PROPERTY_SOURCE_NAME
+                    )
+                }
+            val context =
+                SpringApplicationBuilder(Program::class.java)
+                    .environment(environment)
+                    .also { it.application().setKeepAlive(true) }
+                    .web(WebApplicationType.NONE)
+                    .properties(
+                        "spring.config.location=${Path.of(configPath).toAbsolutePath().toUri()}"
+                    )
+                    .run()
             return context
         }
     }
@@ -190,6 +202,7 @@ class GameQuestSession(
 ) : ZLinkSuspendingSession() {
     private var playerId: String? = null
     private var playerActor: ZLinkSessionActor? = null
+
     override fun context(): ZLinkSessionContext = context
 
     override suspend fun onDisconnectedSuspending() {
@@ -197,10 +210,14 @@ class GameQuestSession(
         playerId?.let(store::unbind)
     }
 
-    override suspend fun onDispatchSuspending(dispatch: ZLinkSessionDispatchContext, payload: ZLinkMessage) {
+    override suspend fun onDispatchSuspending(
+        dispatch: ZLinkSessionDispatchContext,
+        payload: ZLinkMessage,
+    ) {
         when (dispatch.packetName()) {
             "JoinSessionReq" -> handleJoin(payload.decode(JoinSessionReq::class.java))
-            "GetQuestProgressReq" -> handleGetProgress(payload.decode(GetQuestProgressReq::class.java))
+            "GetQuestProgressReq" ->
+                handleGetProgress(payload.decode(GetQuestProgressReq::class.java))
             "SyncQuestProgressReq" -> handleSync(payload.decode(SyncQuestProgressReq::class.java))
             "KillMonsterReq" -> handleKill(payload.decode(KillMonsterReq::class.java))
             "CollectItemMsg" -> handleCollect(payload.decode(CollectItemMsg::class.java))
@@ -216,40 +233,44 @@ class GameQuestSession(
         store.bind(request.playerId, topology.gameApi().instanceName)
         // --8<-- [start:doc-gq-join-bind]
         val actorRef = ensurePlayerActor(request)
-        playerActor = context.actors().find(actorRef.actorId).orElse(null)
-            ?: context.actors().bind(actorRef).await()
+        playerActor =
+            context.actors().find(actorRef.actorId).orElse(null)
+                ?: context.actors().bind(actorRef).await()
         // --8<-- [end:doc-gq-join-bind]
-        val ownerProjection = routes
-            .requestToSpot(request.playerId, GetQuestProgressReq(request.playerId))
-            .timeout(SampleTimings.RequestTimeout)
-            .instanceSpot(SampleNames.PlayerQuestSpotType)
-            .inMesh(SampleNames.PlayerQuestMesh)
-            .submit(GetQuestProgressRes::class.java)
-            .await()
+        val ownerProjection =
+            routes
+                .requestToSpot(request.playerId, GetQuestProgressReq(request.playerId))
+                .timeout(SampleTimings.RequestTimeout)
+                .instanceSpot(SampleNames.PlayerQuestSpotType)
+                .inMesh(SampleNames.PlayerQuestMesh)
+                .submit(GetQuestProgressRes::class.java)
+                .await()
         store.mergeProjection(request.playerId, ownerProjection.activeQuests)
         context.client().reply(JoinSessionRes(ownerProjection.activeQuests)).submit()
     }
 
     private suspend fun handleGetProgress(request: GetQuestProgressReq) {
-        val ownerProjection = routes
-            .requestToSpot(request.playerId, request)
-            .timeout(SampleTimings.RequestTimeout)
-            .instanceSpot(SampleNames.PlayerQuestSpotType)
-            .inMesh(SampleNames.PlayerQuestMesh)
-            .submit(GetQuestProgressRes::class.java)
-            .await()
+        val ownerProjection =
+            routes
+                .requestToSpot(request.playerId, request)
+                .timeout(SampleTimings.RequestTimeout)
+                .instanceSpot(SampleNames.PlayerQuestSpotType)
+                .inMesh(SampleNames.PlayerQuestMesh)
+                .submit(GetQuestProgressRes::class.java)
+                .await()
         store.mergeProjection(request.playerId, ownerProjection.activeQuests)
         context.client().reply(ownerProjection).submit()
     }
 
     private suspend fun handleSync(request: SyncQuestProgressReq) {
-        val response = routes
-            .requestToSpot(request.playerId, request)
-            .timeout(SampleTimings.RequestTimeout)
-            .instanceSpot(SampleNames.PlayerQuestSpotType)
-            .inMesh(SampleNames.PlayerQuestMesh)
-            .submit(SyncQuestProgressRes::class.java)
-            .await()
+        val response =
+            routes
+                .requestToSpot(request.playerId, request)
+                .timeout(SampleTimings.RequestTimeout)
+                .instanceSpot(SampleNames.PlayerQuestSpotType)
+                .inMesh(SampleNames.PlayerQuestMesh)
+                .submit(SyncQuestProgressRes::class.java)
+                .await()
         store.mergeProjection(request.playerId, response.updatedQuests)
         context.client().reply(response).submit()
     }
@@ -257,21 +278,51 @@ class GameQuestSession(
     // --8<-- [start:doc-gq-action-handler]
     private suspend fun handleKill(request: KillMonsterReq) {
         try {
-            val processed = process(event(request.playerId, request.idempotencyKey, "kill", request.monsterId, 1, true))
+            val processed =
+                process(
+                    event(
+                        request.playerId,
+                        request.idempotencyKey,
+                        "kill",
+                        request.monsterId,
+                        1,
+                        true,
+                    )
+                )
             context.client().reply(KillMonsterRes(processed.eventId)).submit()
         } catch (failure: Exception) {
             println("gamequest-owner unavailable player=${request.playerId}")
             throw failure
         }
     }
+
     // --8<-- [end:doc-gq-action-handler]
 
     private suspend fun handleCollect(message: CollectItemMsg) {
-        process(event(message.playerId, message.idempotencyKey, "collect", message.itemId, message.count, true))
+        process(
+            event(
+                message.playerId,
+                message.idempotencyKey,
+                "collect",
+                message.itemId,
+                message.count,
+                true,
+            )
+        )
     }
 
     private suspend fun handleMission(request: CompleteMissionReq) {
-        val processed = process(event(request.playerId, request.idempotencyKey, "mission", request.missionId, 1, true))
+        val processed =
+            process(
+                event(
+                    request.playerId,
+                    request.idempotencyKey,
+                    "mission",
+                    request.missionId,
+                    1,
+                    true,
+                )
+            )
         context.client().reply(CompleteMissionRes(processed.eventId)).submit()
     }
 
@@ -280,7 +331,17 @@ class GameQuestSession(
     }
 
     private suspend fun handleFeature(request: UnlockFeatureReq) {
-        val processed = process(event(request.playerId, request.idempotencyKey, "feature", request.featureId, 1, true))
+        val processed =
+            process(
+                event(
+                    request.playerId,
+                    request.idempotencyKey,
+                    "feature",
+                    request.featureId,
+                    1,
+                    true,
+                )
+            )
         context.client().reply(UnlockFeatureRes(processed.eventId)).submit()
     }
 
@@ -301,17 +362,28 @@ class GameQuestSession(
     }
 
     private suspend fun ensurePlayerActor(request: JoinSessionReq): ActorRef =
-        when (val result = actors.kotlin().getOrCreate(
-            request.playerId,
-            SampleNames.PlayerSessionActorType,
-        ).request(request).await()) {
+        when (
+            val result =
+                actors
+                    .kotlin()
+                    .getOrCreate(request.playerId, SampleNames.PlayerSessionActorType)
+                    .request(request)
+                    .await()
+        ) {
             is ZLinkActorCreateResult.Existing -> result.actor
             is ZLinkActorCreateResult.Created -> result.actor
             is ZLinkActorCreateResult.Rejected ->
                 error("Player session Actor creation was rejected")
         }
 
-    private fun event(playerId: String, idempotencyKey: String, eventType: String, value: String, count: Int, publish: Boolean) =
+    private fun event(
+        playerId: String,
+        idempotencyKey: String,
+        eventType: String,
+        value: String,
+        count: Int,
+        publish: Boolean,
+    ) =
         GameplayMsg.create(
             "$playerId-$idempotencyKey",
             playerId,
@@ -325,10 +397,8 @@ class GameQuestSession(
         )
 }
 
-class GameQuestPlayerActor(
-    private val id: String,
-    private val actorContext: ZLinkActorContext,
-) : ZLinkActor {
+class GameQuestPlayerActor(private val id: String, private val actorContext: ZLinkActorContext) :
+    ZLinkActor {
     override fun context(): ZLinkActorContext = actorContext
 
     fun push(message: QuestProcessingMsg) {
@@ -342,23 +412,19 @@ class GameQuestPlayerActorFactory : ZLinkSuspendingActorFactory() {
         GameQuestPlayerActor(context.actorId(), context)
 }
 
-class GameQuestEntrySpot(
-    override val context: ZLinkEntrySpotContext,
-) : ZLinkSuspendingEntrySpot<GameQuestPlayerActor>() {
-    override suspend fun onJoinedActorSuspending(actor: GameQuestPlayerActor) {
-    }
+class GameQuestEntrySpot(override val context: ZLinkEntrySpotContext) :
+    ZLinkSuspendingEntrySpot<GameQuestPlayerActor>() {
+    override suspend fun onJoinedActorSuspending(actor: GameQuestPlayerActor) {}
 
-    override suspend fun onLeaveActorSuspending(actor: GameQuestPlayerActor) {
-    }
+    override suspend fun onLeaveActorSuspending(actor: GameQuestPlayerActor) {}
 }
 
 // --8<-- [start:doc-gq-progress-push]
-class QuestProcessingActorHandler(
-    private val store: GameQuestStore,
-) : ZLinkSuspendingEntrySpotActorSendHandler<
-    GameQuestEntrySpot,
-    GameQuestPlayerActor,
-    QuestProcessingMsg,
+class QuestProcessingActorHandler(private val store: GameQuestStore) :
+    ZLinkSuspendingEntrySpotActorSendHandler<
+        GameQuestEntrySpot,
+        GameQuestPlayerActor,
+        QuestProcessingMsg,
     > {
     override suspend fun handle(
         entrySpot: GameQuestEntrySpot,
@@ -370,13 +436,16 @@ class QuestProcessingActorHandler(
         actor.push(message)
     }
 }
+
 // --8<-- [end:doc-gq-progress-push]
 
 private fun startHttp(store: GameQuestStore, topology: SampleTopology): HttpServer {
     val json = jacksonObjectMapper()
     val uri = URI.create(topology.gameApi().httpEndpoint)
     val server = HttpServer.create(InetSocketAddress(uri.host, uri.port), 0)
-    server.createContext("/health") { exchange -> writeJson(exchange, 200, mapOf("status" to "ok")) }
+    server.createContext("/health") { exchange ->
+        writeJson(exchange, 200, mapOf("status" to "ok"))
+    }
     server.createContext("/internal/snapshot") { exchange ->
         val request = json.readValue<GetGameplaySnapshotReq>(exchange.requestBody)
         writeJson(exchange, 200, store.snapshot(request.playerId))
@@ -386,50 +455,55 @@ private fun startHttp(store: GameQuestStore, topology: SampleTopology): HttpServ
         writeJson(exchange, 200, GetQuestProgressRes(store.projection(playerId)))
     }
     server.createContext("/self-check/gameplay/kill-without-publish/") { exchange ->
-        val playerId = exchange.requestURI.path.removePrefix("/self-check/gameplay/kill-without-publish/")
+        val playerId =
+            exchange.requestURI.path.removePrefix("/self-check/gameplay/kill-without-publish/")
         store.addUnpublishedKill(playerId)
         writeJson(exchange, 200, mapOf("accepted" to true))
     }
-    server.createContext("/self-check/projection/") { exchange -> handleProjection(exchange, store, topology) }
-    server.createContext("/self-check/assert") { exchange -> writeJson(exchange, 200, store.assertState()) }
+    server.createContext("/self-check/projection/") { exchange ->
+        handleProjection(exchange, store, topology)
+    }
+    server.createContext("/self-check/assert") { exchange ->
+        writeJson(exchange, 200, store.assertState())
+    }
     server.start()
     return server
 }
 
-private fun handleProjection(exchange: HttpExchange, store: GameQuestStore, topology: SampleTopology) {
+private fun handleProjection(
+    exchange: HttpExchange,
+    store: GameQuestStore,
+    topology: SampleTopology,
+) {
     val parts = exchange.requestURI.path.split("/")
     val playerId = parts.getOrElse(3) { "" }
     val questId = parts.getOrElse(4) { "" }
     when (parts.getOrElse(5) { "" }) {
         "delete" -> {
-            val deleted = kotlinx.coroutines.runBlocking {
+            val deleted =
+                kotlinx.coroutines.runBlocking {
                     Program.routes
-                    .requestToSpot(
-                        playerId,
-                        DeleteQuestProjectionReq(playerId, questId),
-                    )
-                    .timeout(SampleTimings.RequestTimeout)
-                    .instanceSpot(SampleNames.PlayerQuestSpotType)
-                    .inMesh(SampleNames.PlayerQuestMesh)
-                    .submit(DeleteQuestProjectionRes::class.java)
-                    .await()
-            }
+                        .requestToSpot(playerId, DeleteQuestProjectionReq(playerId, questId))
+                        .timeout(SampleTimings.RequestTimeout)
+                        .instanceSpot(SampleNames.PlayerQuestSpotType)
+                        .inMesh(SampleNames.PlayerQuestMesh)
+                        .submit(DeleteQuestProjectionRes::class.java)
+                        .await()
+                }
             store.deleteProjection(playerId, questId)
             writeJson(exchange, 200, deleted)
         }
         "rebuild" -> {
-            val rebuilt = kotlinx.coroutines.runBlocking {
+            val rebuilt =
+                kotlinx.coroutines.runBlocking {
                     Program.routes
-                    .requestToSpot(
-                        playerId,
-                        RebuildQuestProjectionReq(playerId, questId, 0),
-                    )
-                    .timeout(SampleTimings.RequestTimeout)
-                    .instanceSpot(SampleNames.PlayerQuestSpotType)
-                    .inMesh(SampleNames.PlayerQuestMesh)
-                    .submit(QuestProgress::class.java)
-                    .await()
-            }
+                        .requestToSpot(playerId, RebuildQuestProjectionReq(playerId, questId, 0))
+                        .timeout(SampleTimings.RequestTimeout)
+                        .instanceSpot(SampleNames.PlayerQuestSpotType)
+                        .inMesh(SampleNames.PlayerQuestMesh)
+                        .submit(QuestProgress::class.java)
+                        .await()
+                }
             store.mergeProjection(playerId, listOf(rebuilt))
             writeJson(exchange, 200, rebuilt)
         }
@@ -449,14 +523,11 @@ class GameQuestStore(topology: SampleTopology) : AutoCloseable {
     private val gameplay = GameplayStateStore(topology)
     private val projections = mutableMapOf<String, MutableList<QuestProgress>>()
 
-    @Synchronized
-    fun bind(playerId: String, apiName: String) = shared.bind(playerId, apiName)
+    @Synchronized fun bind(playerId: String, apiName: String) = shared.bind(playerId, apiName)
 
-    @Synchronized
-    fun unbind(playerId: String) = shared.unbind(playerId)
+    @Synchronized fun unbind(playerId: String) = shared.unbind(playerId)
 
-    @Synchronized
-    fun recordGameplay(event: GameplayMsg) = gameplay.record(event)
+    @Synchronized fun recordGameplay(event: GameplayMsg) = gameplay.record(event)
 
     @Synchronized
     fun mergeProjection(playerId: String, projection: List<QuestProgress>) {
@@ -494,60 +565,131 @@ class GameQuestStore(topology: SampleTopology) : AutoCloseable {
         val alice = projection("player-alice")
         val bob = projection("player-bob")
         val evidence = mutableListOf<String>()
-        alice.forEach { evidence += "${it.playerId}:${it.questId}:${it.status}:${it.currentCount}/${it.requiredCount}" }
-        bob.forEach { evidence += "${it.playerId}:${it.questId}:${it.status}:${it.currentCount}/${it.requiredCount}" }
+        alice.forEach {
+            evidence +=
+                "${it.playerId}:${it.questId}:${it.status}:${it.currentCount}/${it.requiredCount}"
+        }
+        bob.forEach {
+            evidence +=
+                "${it.playerId}:${it.questId}:${it.status}:${it.currentCount}/${it.requiredCount}"
+        }
         val bindingHistory = shared.bindingHistory()
         val activeBindings = shared.activeBindings()
         val events = shared.readQuestEvents()
         val rehydrates = shared.rehydrates()
         bindingHistory.forEach { evidence += "binding:$it" }
-        events.forEach { evidence += "event:${it.playerId}:${it.questId}:${it.eventType}:v${it.version}:source=${it.sourceEventId}" }
+        events.forEach {
+            evidence +=
+                "event:${it.playerId}:${it.questId}:${it.eventType}:v${it.version}:source=${it.sourceEventId}"
+        }
         rehydrates.forEach { (playerId, count) -> evidence += "rehydrated:$playerId:$count" }
 
-        val checks = listOf(
-            check(evidence, "missing:player-alice:first-hunt:RewardGranted") {
-                alice.any { it.questId == QuestIds.FirstHunt && it.status == QuestStatuses.RewardGranted }
-            },
-            check(evidence, "missing:player-alice:open-auction:RewardGranted") {
-                alice.any { it.questId == QuestIds.OpenAuction && it.status == QuestStatuses.RewardGranted }
-            },
-            check(evidence, "missing:player-bob:herb-gathering:RewardGranted") {
-                bob.any { it.questId == QuestIds.HerbGathering && it.status == QuestStatuses.RewardGranted }
-            },
-            check(evidence, "missing:binding:player-bob:api-b") { bindingHistory.contains("player-bob:api-b") },
-            check(evidence, "unexpected:active-binding:player-alice") { !activeBindings.contains("player-alice") },
-            check(evidence, "missing:event:player-alice:first-hunt:QuestProgressedEvent:3") {
-                count(events, "player-alice", QuestIds.FirstHunt, QuestProgressedEvent::class.java.simpleName) == 3L
-            },
-            check(evidence, "missing:event:player-alice:first-hunt:QuestCompletedEvent:1") {
-                count(events, "player-alice", QuestIds.FirstHunt, QuestCompletedEvent::class.java.simpleName) == 1L
-            },
-            check(evidence, "missing:event:player-alice:first-hunt:QuestRewardGrantedEvent:1") {
-                count(events, "player-alice", QuestIds.FirstHunt, QuestRewardGrantedEvent::class.java.simpleName) == 1L
-            },
-            check(evidence, "missing:event:player-alice:first-hunt:QuestProgressReconciledEvent:1") {
-                count(events, "player-alice", QuestIds.FirstHunt, QuestProgressReconciledEvent::class.java.simpleName) == 1L
-            },
-            check(evidence, "missing:event:player-alice:open-auction:QuestCompletedEvent:1") {
-                count(events, "player-alice", QuestIds.OpenAuction, QuestCompletedEvent::class.java.simpleName) == 1L
-            },
-            check(evidence, "missing:event:player-alice:open-auction:QuestRewardGrantedEvent:1") {
-                count(events, "player-alice", QuestIds.OpenAuction, QuestRewardGrantedEvent::class.java.simpleName) == 1L
-            },
-            check(evidence, "missing:event:player-bob:herb-gathering:QuestCompletedEvent:1") {
-                count(events, "player-bob", QuestIds.HerbGathering, QuestCompletedEvent::class.java.simpleName) == 1L
-            },
-            check(evidence, "missing:event:player-bob:herb-gathering:QuestRewardGrantedEvent:1") {
-                count(events, "player-bob", QuestIds.HerbGathering, QuestRewardGrantedEvent::class.java.simpleName) == 1L
-            },
-            check(evidence, "missing:rehydrated:player-alice:2") {
-                rehydrates.getOrDefault("player-alice", "0").toInt() >= 2
-            },
-            check(evidence, "missing:rehydrated:player-bob:1") {
-                rehydrates.getOrDefault("player-bob", "0").toInt() >= 1
-            },
-            check(evidence, "duplicate:event-version") { uniqueEventVersions(events) },
-        )
+        val checks =
+            listOf(
+                check(evidence, "missing:player-alice:first-hunt:RewardGranted") {
+                    alice.any {
+                        it.questId == QuestIds.FirstHunt && it.status == QuestStatuses.RewardGranted
+                    }
+                },
+                check(evidence, "missing:player-alice:open-auction:RewardGranted") {
+                    alice.any {
+                        it.questId == QuestIds.OpenAuction &&
+                            it.status == QuestStatuses.RewardGranted
+                    }
+                },
+                check(evidence, "missing:player-bob:herb-gathering:RewardGranted") {
+                    bob.any {
+                        it.questId == QuestIds.HerbGathering &&
+                            it.status == QuestStatuses.RewardGranted
+                    }
+                },
+                check(evidence, "missing:binding:player-bob:api-b") {
+                    bindingHistory.contains("player-bob:api-b")
+                },
+                check(evidence, "unexpected:active-binding:player-alice") {
+                    !activeBindings.contains("player-alice")
+                },
+                check(evidence, "missing:event:player-alice:first-hunt:QuestProgressedEvent:3") {
+                    count(
+                        events,
+                        "player-alice",
+                        QuestIds.FirstHunt,
+                        QuestProgressedEvent::class.java.simpleName,
+                    ) == 3L
+                },
+                check(evidence, "missing:event:player-alice:first-hunt:QuestCompletedEvent:1") {
+                    count(
+                        events,
+                        "player-alice",
+                        QuestIds.FirstHunt,
+                        QuestCompletedEvent::class.java.simpleName,
+                    ) == 1L
+                },
+                check(evidence, "missing:event:player-alice:first-hunt:QuestRewardGrantedEvent:1") {
+                    count(
+                        events,
+                        "player-alice",
+                        QuestIds.FirstHunt,
+                        QuestRewardGrantedEvent::class.java.simpleName,
+                    ) == 1L
+                },
+                check(
+                    evidence,
+                    "missing:event:player-alice:first-hunt:QuestProgressReconciledEvent:1",
+                ) {
+                    count(
+                        events,
+                        "player-alice",
+                        QuestIds.FirstHunt,
+                        QuestProgressReconciledEvent::class.java.simpleName,
+                    ) == 1L
+                },
+                check(evidence, "missing:event:player-alice:open-auction:QuestCompletedEvent:1") {
+                    count(
+                        events,
+                        "player-alice",
+                        QuestIds.OpenAuction,
+                        QuestCompletedEvent::class.java.simpleName,
+                    ) == 1L
+                },
+                check(
+                    evidence,
+                    "missing:event:player-alice:open-auction:QuestRewardGrantedEvent:1",
+                ) {
+                    count(
+                        events,
+                        "player-alice",
+                        QuestIds.OpenAuction,
+                        QuestRewardGrantedEvent::class.java.simpleName,
+                    ) == 1L
+                },
+                check(evidence, "missing:event:player-bob:herb-gathering:QuestCompletedEvent:1") {
+                    count(
+                        events,
+                        "player-bob",
+                        QuestIds.HerbGathering,
+                        QuestCompletedEvent::class.java.simpleName,
+                    ) == 1L
+                },
+                check(
+                    evidence,
+                    "missing:event:player-bob:herb-gathering:QuestRewardGrantedEvent:1",
+                ) {
+                    count(
+                        events,
+                        "player-bob",
+                        QuestIds.HerbGathering,
+                        QuestRewardGrantedEvent::class.java.simpleName,
+                    ) == 1L
+                },
+                check(evidence, "missing:rehydrated:player-alice:2") {
+                    rehydrates.getOrDefault("player-alice", "0").toInt() >= 2
+                },
+                check(evidence, "missing:rehydrated:player-bob:1") {
+                    rehydrates.getOrDefault("player-bob", "0").toInt() >= 1
+                },
+                check(evidence, "duplicate:event-version") { uniqueEventVersions(events) },
+            )
         var passed = true
         checks.forEach { passed = it() && passed }
         return GameQuestServerAssertRes(passed, evidence.sorted())
@@ -558,17 +700,27 @@ class GameQuestStore(topology: SampleTopology) : AutoCloseable {
         shared.close()
     }
 
-    private fun check(evidence: MutableList<String>, failure: String, condition: () -> Boolean): () -> Boolean =
-        {
-            condition().also { passed ->
-                if (!passed) {
-                    evidence += "failure:$failure"
-                }
+    private fun check(
+        evidence: MutableList<String>,
+        failure: String,
+        condition: () -> Boolean,
+    ): () -> Boolean = {
+        condition().also { passed ->
+            if (!passed) {
+                evidence += "failure:$failure"
             }
         }
+    }
 
-    private fun count(events: List<StoredQuestEvent>, playerId: String, questId: String, eventType: String): Long =
-        events.count { it.playerId == playerId && it.questId == questId && it.eventType == eventType }.toLong()
+    private fun count(
+        events: List<StoredQuestEvent>,
+        playerId: String,
+        questId: String,
+        eventType: String,
+    ): Long =
+        events
+            .count { it.playerId == playerId && it.questId == questId && it.eventType == eventType }
+            .toLong()
 
     private fun uniqueEventVersions(events: List<StoredQuestEvent>): Boolean =
         events.map { "${it.playerId}:${it.questId}:${it.version}" }.distinct().size == events.size

@@ -20,11 +20,12 @@ data class ConversationPolicy(
     val maxMessageLength: Int,
 ) {
     companion object {
-        val Sample: ConversationPolicy = ConversationPolicy(
-            idleTimeout = Duration.ofSeconds(3),
-            closeGraceTimeout = Duration.ofSeconds(2),
-            maxMessageLength = 500,
-        )
+        val Sample: ConversationPolicy =
+            ConversationPolicy(
+                idleTimeout = Duration.ofSeconds(3),
+                closeGraceTimeout = Duration.ofSeconds(2),
+                maxMessageLength = 500,
+            )
     }
 }
 
@@ -72,7 +73,4 @@ data class ConversationEvent(
     val isTyping: Boolean? = null,
 )
 
-data class ConversationChange(
-    val state: ConversationSnapshot,
-    val events: List<ConversationEvent>,
-)
+data class ConversationChange(val state: ConversationSnapshot, val events: List<ConversationEvent>)

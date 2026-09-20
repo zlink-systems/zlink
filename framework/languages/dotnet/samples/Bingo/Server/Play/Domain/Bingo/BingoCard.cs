@@ -23,11 +23,10 @@ internal sealed class BingoCard
             throw new InvalidOperationException($"Bingo card must contain {CellCount} cells.");
 
         var numbers = submitted.ToArray();
-        if (numbers[FreeCellIndex] != 0) throw new InvalidOperationException("Bingo card center cell must be 0.");
+        if (numbers[FreeCellIndex] != 0)
+            throw new InvalidOperationException("Bingo card center cell must be 0.");
 
-        var playableNumbers = numbers
-            .Where(static number => number != 0)
-            .ToArray();
+        var playableNumbers = numbers.Where(static number => number != 0).ToArray();
         if (playableNumbers.Any(static number => number < 1 || number > 15))
             throw new InvalidOperationException("Bingo card numbers must be between 1 and 15.");
 
@@ -64,9 +63,11 @@ internal sealed class BingoCard
     private int CountCompletedLines()
     {
         var completed = 0;
-        for (var row = 0; row < Size; row++) completed += IsRowComplete(row) ? 1 : 0;
+        for (var row = 0; row < Size; row++)
+            completed += IsRowComplete(row) ? 1 : 0;
 
-        for (var column = 0; column < Size; column++) completed += IsColumnComplete(column) ? 1 : 0;
+        for (var column = 0; column < Size; column++)
+            completed += IsColumnComplete(column) ? 1 : 0;
 
         completed += IsDiagonalComplete(0, Size + 1) ? 1 : 0;
         completed += IsDiagonalComplete(Size - 1, Size - 1) ? 1 : 0;

@@ -9,35 +9,35 @@ namespace ZoneWorld.Server.Gateway.Infrastructure.ZLink.Sessions;
 /// Serves runner-only location probes through the Gateway's existing Object Client.
 /// NodeRid values are evidence only and are never used for application routing.
 /// </summary>
-public sealed class RelocationProbeService(
-    IZLinkSpotManager spots,
-    IZLinkActorManager actors)
+public sealed class RelocationProbeService(IZLinkSpotManager spots, IZLinkActorManager actors)
 {
     private static readonly (string Source, string Target)[] AdjacentPairs =
     [
         (ZoneIds.NorthWest, ZoneIds.NorthEast),
         (ZoneIds.NorthWest, ZoneIds.SouthWest),
         (ZoneIds.NorthEast, ZoneIds.SouthEast),
-        (ZoneIds.SouthWest, ZoneIds.SouthEast)
+        (ZoneIds.SouthWest, ZoneIds.SouthEast),
     ];
 
-    public async ValueTask<RelocationPairRes> SelectPairAsync(
-        CancellationToken cancellationToken)
+    public async ValueTask<RelocationPairRes> SelectPairAsync(CancellationToken cancellationToken)
     {
         foreach (var (sourceZoneId, targetZoneId) in AdjacentPairs)
         {
             var source = await spots.FindAsync(sourceZoneId, cancellationToken);
             var target = await spots.FindAsync(targetZoneId, cancellationToken);
-            if (source is null
+            if (
+                source is null
                 || target is null
-                || source.Value.NodeRid.Equals(target.Value.NodeRid))
+                || source.Value.NodeRid.Equals(target.Value.NodeRid)
+            )
                 continue;
 
             return new RelocationPairRes(
                 sourceZoneId,
                 targetZoneId,
                 source.Value.NodeRid.ToString(),
-                target.Value.NodeRid.ToString());
+                target.Value.NodeRid.ToString()
+            );
         }
 
         return new RelocationPairRes(
@@ -45,12 +45,14 @@ public sealed class RelocationProbeService(
             string.Empty,
             string.Empty,
             string.Empty,
-            "NoCrossNodeAdjacentPair");
+            "NoCrossNodeAdjacentPair"
+        );
     }
 
     public async ValueTask<ActorLocationProbeRes> FindActorAsync(
         string actorId,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken
+    )
     {
         var actor = await actors.FindAsync(actorId, cancellationToken);
         return actor is null
@@ -58,12 +60,14 @@ public sealed class RelocationProbeService(
             : new ActorLocationProbeRes(
                 actor.Value.ActorId,
                 actor.Value.ObjectGeneration,
-                actor.Value.NodeRid.ToString());
+                actor.Value.NodeRid.ToString()
+            );
     }
 
     public async ValueTask<FreshActorProbeRes> CreateFreshActorAsync(
         string actorId,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken
+    )
     {
         var result = await actors
             .GetOrCreate(actorId, ZoneWorldNames.PlayerActorType)
@@ -74,13 +78,14 @@ public sealed class RelocationProbeService(
         {
             ZLinkActorCreateResult.Created created => created.Actor,
             ZLinkActorCreateResult.Existing existing => existing.Actor,
-            _ => default
+            _ => default,
         };
         return actor == default
             ? new FreshActorProbeRes(actorId, 0, string.Empty, "ActorCreateRejected")
             : new FreshActorProbeRes(
                 actor.ActorId,
                 actor.ObjectGeneration,
-                actor.NodeRid.ToString());
+                actor.NodeRid.ToString()
+            );
     }
 }

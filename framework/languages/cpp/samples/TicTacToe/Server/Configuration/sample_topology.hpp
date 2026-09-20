@@ -149,10 +149,7 @@ struct sample_topology_t
         return {play_a_endpoint, play_b_endpoint};
     }
 
-    std::vector<std::string> all_api_endpoints () const
-    {
-        return {api_a_endpoint, api_b_endpoint};
-    }
+    std::vector<std::string> all_api_endpoints () const { return {api_a_endpoint, api_b_endpoint}; }
 
     std::string peer_play_endpoint () const
     {
@@ -203,7 +200,6 @@ struct sample_topology_t
     {
         return play_node == "b" ? play_b_stream_endpoint : play_a_stream_endpoint;
     }
-
 };
 
 } // namespace zlink::samples::tictactoe

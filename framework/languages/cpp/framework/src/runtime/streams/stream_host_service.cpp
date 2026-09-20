@@ -742,14 +742,9 @@ void close_stream (tcp::socket &socket) noexcept
     socket.close (ignored);
 }
 
-void close_stream (websocket_stream_t &stream) noexcept
-{
-    close_stream (stream.next_layer ());
-}
-
 template <typename TStream> void close_stream (TStream &stream) noexcept
 {
-    close_stream (stream.lowest_layer ());
+    close_stream (stream.next_layer ());
 }
 
 template <typename TStream>

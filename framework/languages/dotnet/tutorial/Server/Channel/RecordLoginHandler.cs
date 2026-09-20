@@ -15,7 +15,8 @@ public sealed class RecordLoginHandler : IZLinkSendHandler<RecordLogin>
     public ValueTask HandleAsync(
         RecordLogin message,
         IZLinkMessageContext context,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken
+    )
     {
         _logger.LogInformation("login recorded: {PlayerId}", message.PlayerId);
         return ValueTask.CompletedTask;

@@ -53,6 +53,15 @@ class ZLinkLiveSocketConfig implements ZLinkSocketConfig {
     this.socket.receiveHighWaterMark = value;
   }
 
+  get receiveTimeoutMs(): number {
+    return this.socket.receiveTimeoutMs;
+  }
+
+  set receiveTimeoutMs(value: number) {
+    requireValidSendTimeoutMs('receiveTimeoutMs', value);
+    this.socket.receiveTimeoutMs = value;
+  }
+
   get sendTimeoutMs(): number {
     return this.socket.sendTimeoutMs;
   }

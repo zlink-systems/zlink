@@ -42,12 +42,19 @@ public final class SessionRouteBlockProxy {
             server.setReuseAddress(true);
             server.bind(new InetSocketAddress(listenHost, listenPort));
             System.out.println(
-                "proxy-ready listen=" + listenHost + ":" + listenPort
-                    + " target=" + targetHost + ":" + targetPort);
+                    "proxy-ready listen="
+                            + listenHost
+                            + ":"
+                            + listenPort
+                            + " target="
+                            + targetHost
+                            + ":"
+                            + targetPort);
             System.out.flush();
             while (true) {
                 Socket accepted = server.accept();
-                Thread.ofVirtual().start(() -> handleConnection(accepted, targetHost, targetPort, armFile));
+                Thread.ofVirtual()
+                        .start(() -> handleConnection(accepted, targetHost, targetPort, armFile));
             }
         }
     }
@@ -57,11 +64,16 @@ public final class SessionRouteBlockProxy {
         try (client) {
             try (Socket upstream = new Socket(targetHost, targetPort)) {
                 System.out.println(
-                    "proxy-connection listen=" + client.getLocalSocketAddress()
-                        + " target=" + targetHost + ":" + targetPort);
+                        "proxy-connection listen="
+                                + client.getLocalSocketAddress()
+                                + " target="
+                                + targetHost
+                                + ":"
+                                + targetPort);
                 System.out.flush();
-                Thread downstream = Thread.ofVirtual().start(
-                    () -> pump(upstream, client, "gateway-to-peer", armFile));
+                Thread downstream =
+                        Thread.ofVirtual()
+                                .start(() -> pump(upstream, client, "gateway-to-peer", armFile));
                 pump(client, upstream, "peer-to-gateway", armFile);
                 downstream.join(Duration.ofSeconds(5));
             }
@@ -113,13 +125,12 @@ public final class SessionRouteBlockProxy {
 
     private static boolean isCommand44(byte[] body) {
         return body.length >= 5
-            && body[0] == WIRE_MAGIC[0]
-            && body[1] == WIRE_MAGIC[1]
-            && body[3] == SESSION_RELOCATION_ROUTE;
+                && body[0] == WIRE_MAGIC[0]
+                && body[1] == WIRE_MAGIC[1]
+                && body[3] == SESSION_RELOCATION_ROUTE;
     }
 
-    private record Frame(byte[] raw, int flags, byte[] body) {
-    }
+    private record Frame(byte[] raw, int flags, byte[] body) {}
 
     /** Splits a byte stream into ZMP frames, holding a partial trailing frame across calls. */
     private static final class FrameParser {
@@ -139,12 +150,16 @@ public final class SessionRouteBlockProxy {
                 }
                 int flags = buffer[offset + 2] & 0xFF;
                 int kind = buffer[offset + 3] & 0xFF;
-                long size = ((long) (buffer[offset + 4] & 0xFF) << 24)
-                    | ((buffer[offset + 5] & 0xFF) << 16)
-                    | ((buffer[offset + 6] & 0xFF) << 8)
-                    | (buffer[offset + 7] & 0xFF);
-                int headerSize = ZMP_HEADER_SIZE
-                    + (ZMP_REQUEST_REPLY_KINDS.contains(kind) ? ZMP_REQUEST_SEQUENCE_SIZE : 0);
+                long size =
+                        ((long) (buffer[offset + 4] & 0xFF) << 24)
+                                | ((buffer[offset + 5] & 0xFF) << 16)
+                                | ((buffer[offset + 6] & 0xFF) << 8)
+                                | (buffer[offset + 7] & 0xFF);
+                int headerSize =
+                        ZMP_HEADER_SIZE
+                                + (ZMP_REQUEST_REPLY_KINDS.contains(kind)
+                                        ? ZMP_REQUEST_SEQUENCE_SIZE
+                                        : 0);
                 long total = headerSize + size;
                 if (buffer.length - offset < total) {
                     break;
@@ -178,6 +193,5 @@ public final class SessionRouteBlockProxy {
         return options;
     }
 
-    private SessionRouteBlockProxy() {
-    }
+    private SessionRouteBlockProxy() {}
 }

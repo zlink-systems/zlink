@@ -531,9 +531,11 @@ state handler 모두 같다. connector를 닫아야만 등록을 없앨 수 있�
 동안 보관한다. 나머지 언어는 값을 버려도 등록이 남고 명시적으로 해제할 때까지 유지된다. 돌려주는 타입 이름은 언어
 문서가 소유한다.
 
-**connector는 handler의 완료를 기다리지 않는다.** 등록된 handler를 실행하는 것은 connector의
-일이지만 그 handler가 끝나기를 기다리는 것은 아니다. `close`는 끊김 handler를 **실행한 뒤**
-돌아오며 그 handler가 끝났는지는 보지 않는다. 재연결도 같다(§6).
+**connector는 handler의 완료를 기다리지 않는다.** 등록된 handler — push handler, error handler,
+끊김 handler, 연결 상태 handler와 request callback — 를 실행하는 것은 connector의 일이지만 그
+handler가 끝나기를 기다리는 것은 아니다. 종류에 따른 예외는 없다. `close`는 연결 상태 handler와
+끊김 handler를 **실행한 뒤** 돌아오며 그 handler가 끝났는지는 보지 않는다. 재연결 시도가 소진되어
+끊길 때와 transport 오류로 끊길 때도 같다(§6).
 
 connector가 기다리는 것은 자기 것뿐이다 — 보내지 못한 frame의 배출, transport 종료, 대기 중인
 request의 실패 처리. 이것이 끝나면 `close`가 돌아온다.
@@ -754,12 +756,12 @@ Unity WebGL UPM package는 새 wire runtime을 만들지 않는다. npm package 
 | **옵션 검증** | **연결이 이뤄지기 전에 전 항목을 검증하고, 값 범위 위반은 `ValidationFailed`, 항목 사이 불일치는 `ConfigurationError`로 거부한다(§6.3)** |
 | **transport 추론** | **transport를 명시하지 않으면 endpoint scheme이 정하고, 명시한 값이 scheme과 어긋나면 `ConfigurationError`다(§3.1)** |
 | **오류 전달** | **받는 쪽이 §9의 13개 중 무엇인지 읽어낸다. 언어 표준 예외를 그대로 쓰지 않는다(§9.2)** |
-| **재연결 지연** | **시도 사이의 대기가 기준 지연의 50%에서 100% 사이에 들어간다. 시도를 다 쓰면 상태가 `Disconnected`가 되고 끊김 handler가 실행된다(§6)** |
+| **재연결 지연** | **시도 사이의 대기가 기준 지연의 50%에서 100% 사이에 들어간다. 시도가 소진되면 상태가 `Disconnected`가 되고 끊김 handler가 실행된다(§6)** |
 | **등록 해제** | **push·error·disconnect·connection state 네 등록이 모두 해제할 수 있는 값을 돌려주고, 해제한 handler는 그 뒤의 dispatch에서 실행되지 않는다(§7)** |
 | **수신 개수** | **`receivedCount(name)`가 받은 개수를 세고 소비해도 줄지 않으며, dispatch mode와 무관하다. 연결이 성립할 때 0에서 다시 시작한다(§10)** |
 | **대기 표면** | **이름을 명시하는 길과 payload type에서 결정하는 길이 모두 있고, 술어와 반환이 message이며, 관측 조건 위반은 `ValidationFailed`·연결 종료는 `Disconnected`다(§10.1)** |
 | **flow 노출과 전파** | **수신 message가 flow 식별자와 출처를 노출하고, ambient 문맥이 없는 런타임은 명시 전달 수단을 제공한다(§5.5)** |
-| **handler와 종료** | **끝나지 않는 끊김 handler가 있어도 `close`가 돌아온다. handler는 `close`가 돌아오기 전에 실행됐다(§7)** |
+| **handler와 종료** | **push·error·끊김·연결 상태 handler와 request callback 다섯 종류 모두, 끝나지 않는 handler가 있어도 connector가 그 완료를 기다리지 않는다. `close`는 연결 상태 handler와 끊김 handler를 실행한 뒤 돌아온다. 재연결 소진과 transport 오류로 끊길 때도 같은 순서로 실행하고 기다리지 않는다(§7)** |
 | **종료 사유 읽기** | **끊긴 뒤 이벤트를 받지 않은 코드도 같은 값을 읽는다. 첫 connect 실패에도 사유가 남고, 재연결해도 지워지지 않는다(§6.2)** |
 | diagnostics level | `Off` outbound frame에 flow 필드·flag(0x10) 부재, inbound flow 값 검증 생략, `Errors` 기본값에서 현행 wire 유지, one-way `Send`의 correlation id 부재(§13) |
 

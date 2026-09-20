@@ -444,6 +444,45 @@ test('MeshNode descriptors keep an explicit Spot stable type instead of adding a
   assert.deepEqual(published.spotTypes, ['game.room']);
 });
 
+test('Object Server descriptor publishes an Entry Spot ID without application Entry Spot registration', async () => {
+  class PlayerActorFactory {}
+  const registration = framework.createFrameworkRegistrationWithBuilder((builder) => {
+    builder.addRouteMesh('game')
+      .objects().server()
+      .addActorFactory('player', PlayerActorFactory, (factory) => factory.disableRelocation());
+  });
+  const manager = new framework.ZLinkSpotNodeRuntimeManager({ registration });
+  manager.meshNodes.set('game', {
+    status: () => ({
+      routingId: 'game-node',
+      lifecycleGeneration: 1n,
+      localEndpoint: 'tcp://127.0.0.1:9400'
+    })
+  });
+  let published;
+  manager.locationAutoConnect = {
+    runtime: {
+      currentOwnerToken: { ownerId: 'owner-a', leaseGeneration: 1n },
+      writeMeshNode: async (descriptor) => {
+        published = descriptor;
+        return {
+          status: framework.ZLinkLocationWriteStatus.Stored,
+          updatedAt: new Date()
+        };
+      }
+    }
+  };
+
+  assert.equal(registration.spotNodes.get('game').entrySpotType, undefined);
+  await manager.publishMeshNodeState(framework.ZLinkFrameworkRuntimeState.Serving);
+
+  assert.match(
+    published.entrySpotId,
+    /^game-entry-[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/
+  );
+  assert.notEqual(published.entrySpotId, 'game-node');
+});
+
 test('backend raw STREAM does not expose the removed bindings Session Actor service API', async () => {
   const factory = new backend.ZLinkNodeBackendAdapterFactory();
   const channel = factory.createChannelAdapter();
@@ -1999,6 +2038,31 @@ test('backend adapter creates context and core socket wrappers through public bi
     for (const disposable of disposables.reverse()) {
       await disposable.dispose();
     }
+    await context.dispose();
+  }
+});
+
+test('backend adapter applies receive timeout to the binding socket', async () => {
+  const factory = new backend.ZLinkNodeBackendAdapterFactory();
+  const channel = factory.createChannelAdapter();
+  const context = channel.createContext();
+  const router = channel.createRouterSocket(context);
+  const meshNode = factory.createMeshAdapter().createMeshNode(context, {
+    meshName: 'backend.receive-timeout',
+    routingId: `backend-receive-timeout-${process.pid}`,
+    receiveTimeoutMs: 41,
+    applicationJobQueue: applicationJobQueue()
+  });
+
+  try {
+    router.receiveTimeoutMs = 37;
+    meshNode.setBind(`inproc://backend-receive-timeout-${process.pid}`);
+    meshNode.start();
+    assert.equal(router.nativeInstance.options.recvTimeout, 37);
+    assert.equal(meshNode.runtime.router.socket.options.recvTimeout, 41);
+  } finally {
+    meshNode.close();
+    await router.dispose();
     await context.dispose();
   }
 });

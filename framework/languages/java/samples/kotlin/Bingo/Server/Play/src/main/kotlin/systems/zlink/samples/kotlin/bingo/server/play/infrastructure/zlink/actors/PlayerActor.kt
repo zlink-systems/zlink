@@ -3,26 +3,27 @@ package systems.zlink.samples.kotlin.bingo.server.play.infrastructure.zlink.acto
 import java.util.concurrent.CompletableFuture
 import java.util.concurrent.CompletionStage
 import org.slf4j.LoggerFactory
-import systems.zlink.framework.actors.ZLinkActorJoinCompletion
-import systems.zlink.framework.actors.ZLinkActorJoinOperationId
 import systems.zlink.framework.actors.ZLinkActor
 import systems.zlink.framework.actors.ZLinkActorContext
+import systems.zlink.framework.actors.ZLinkActorJoinCompletion
+import systems.zlink.framework.actors.ZLinkActorJoinOperationId
 import systems.zlink.samples.kotlin.bingo.shared.contracts.BingoRoomJoinRes
 
-class PlayerActor(
-    private val actorId: String,
-    private val context: ZLinkActorContext,
-) : ZLinkActor {
+class PlayerActor(private val actorId: String, private val context: ZLinkActorContext) :
+    ZLinkActor {
     private val logger = LoggerFactory.getLogger(PlayerActor::class.java)
 
     var displayName: String = actorId
         private set
+
     var roomId: String = ""
         private set
+
     private var pendingRoomId: String? = null
     private val completedJoinOperations = mutableSetOf<ZLinkActorJoinOperationId>()
     var destroyAfterEntrySpotJoin: Boolean = false
         private set
+
     var disconnected: Boolean = false
         private set
 
@@ -44,11 +45,12 @@ class PlayerActor(
     }
 
     override fun onJoinCompleted(completion: ZLinkActorJoinCompletion): CompletionStage<Void> {
-        val operationId = when (completion) {
-            is ZLinkActorJoinCompletion.Accepted -> completion.operationId()
-            is ZLinkActorJoinCompletion.Rejected -> completion.operationId()
-            is ZLinkActorJoinCompletion.Failed -> completion.operationId()
-        }
+        val operationId =
+            when (completion) {
+                is ZLinkActorJoinCompletion.Accepted -> completion.operationId()
+                is ZLinkActorJoinCompletion.Rejected -> completion.operationId()
+                is ZLinkActorJoinCompletion.Failed -> completion.operationId()
+            }
         if (!completedJoinOperations.add(operationId)) {
             return CompletableFuture.completedFuture(null)
         }
@@ -77,8 +79,6 @@ class PlayerActor(
     }
 
     fun push(message: Any): CompletionStage<Void> {
-        return context.boundSession()
-            .send(message)
-            .submit()
+        return context.boundSession().send(message).submit()
     }
 }

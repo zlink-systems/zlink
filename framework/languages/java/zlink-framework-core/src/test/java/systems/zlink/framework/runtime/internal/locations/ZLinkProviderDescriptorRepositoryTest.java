@@ -3,8 +3,11 @@ package systems.zlink.framework.runtime.internal.locations;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertInstanceOf;
 
+import java.time.Clock;
 import java.time.Duration;
 import java.time.Instant;
+import java.time.ZoneId;
+import java.time.ZoneOffset;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
@@ -25,6 +28,76 @@ import systems.zlink.framework.runtime.locations
     .ZLinkInMemoryProviderLocationStore;
 
 class ZLinkProviderDescriptorRepositoryTest {
+    @Test
+    void newClaimTakesOverDescriptorWhoseOwnerLeaseExpired()
+        throws Exception {
+        var clock = new MutableClock(
+            Instant.parse("2026-09-20T00:00:00Z"));
+        var provider = new ZLinkInMemoryProviderLocationStore(clock);
+        var owners = new ZLinkProviderOwnerLeaseRepository(provider);
+        var descriptors = new ZLinkProviderDescriptorRepository(provider);
+        var expiredOwner = assertInstanceOf(
+            ZLinkOwnerLeaseClaimed.class,
+            owners.claim("expired-descriptor-owner", Duration.ofMinutes(1))
+                .toCompletableFuture().get()).token();
+        assertEquals(
+            ZLinkLocationWriteStatus.STORED,
+            descriptors.updateMeshNode(
+                    descriptor(expiredOwner, 1),
+                    ZLinkLocationWriteIntent.NEW_CLAIM)
+                .toCompletableFuture().get().status());
+
+        clock.advance(Duration.ofMinutes(1));
+        assertInstanceOf(
+            ZLinkOwnerLeaseMissing.class,
+            owners.read(expiredOwner.ownerId()).toCompletableFuture().get());
+        var successor = assertInstanceOf(
+            ZLinkOwnerLeaseClaimed.class,
+            owners.claim("successor-descriptor-owner", Duration.ofMinutes(1))
+                .toCompletableFuture().get()).token();
+
+        assertEquals(
+            1,
+            Long.compareUnsigned(
+                successor.leaseGeneration(),
+                expiredOwner.leaseGeneration()));
+        assertEquals(
+            ZLinkLocationWriteStatus.STORED,
+            descriptors.updateMeshNode(
+                    descriptor(successor, 1),
+                    ZLinkLocationWriteIntent.NEW_CLAIM)
+                .toCompletableFuture().get().status());
+    }
+
+    @Test
+    void newClaimRejectsDescriptorWhoseOwnerLeaseIsLive()
+        throws Exception {
+        var provider = new ZLinkInMemoryProviderLocationStore();
+        var owners = new ZLinkProviderOwnerLeaseRepository(provider);
+        var descriptors = new ZLinkProviderDescriptorRepository(provider);
+        var liveOwner = assertInstanceOf(
+            ZLinkOwnerLeaseClaimed.class,
+            owners.claim("live-descriptor-owner", Duration.ofMinutes(1))
+                .toCompletableFuture().get()).token();
+        assertEquals(
+            ZLinkLocationWriteStatus.STORED,
+            descriptors.updateMeshNode(
+                    descriptor(liveOwner, 1),
+                    ZLinkLocationWriteIntent.NEW_CLAIM)
+                .toCompletableFuture().get().status());
+        var contender = assertInstanceOf(
+            ZLinkOwnerLeaseClaimed.class,
+            owners.claim("contending-descriptor-owner", Duration.ofMinutes(1))
+                .toCompletableFuture().get()).token();
+
+        assertEquals(
+            ZLinkLocationWriteStatus.REJECTED_CONFLICT,
+            descriptors.updateMeshNode(
+                    descriptor(contender, 1),
+                    ZLinkLocationWriteIntent.NEW_CLAIM)
+                .toCompletableFuture().get().status());
+    }
+
     @Test
     void meshDescriptorUsesOwnerVersionFenceAndOpaqueSnapshot()
         throws Exception {
@@ -229,5 +302,32 @@ class ZLinkProviderDescriptorRepositoryTest {
             owner.ownerId(),
             owner.leaseGeneration(),
             Instant.parse("2026-07-29T00:00:00Z"));
+    }
+
+    private static final class MutableClock extends Clock {
+        private Instant now;
+
+        private MutableClock(Instant now) {
+            this.now = now;
+        }
+
+        private void advance(Duration duration) {
+            now = now.plus(duration);
+        }
+
+        @Override
+        public ZoneId getZone() {
+            return ZoneOffset.UTC;
+        }
+
+        @Override
+        public Clock withZone(ZoneId zone) {
+            return this;
+        }
+
+        @Override
+        public Instant instant() {
+            return now;
+        }
     }
 }

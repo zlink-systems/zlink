@@ -1,10 +1,9 @@
 package systems.zlink.samples.kotlin.supportchat.server.support.infrastructure.zlink.spots.entryspot.handlers
 
 import kotlinx.coroutines.future.await
-import systems.zlink.framework.actors.ActorRef
+import systems.zlink.framework.ZLinkMessageContext
 import systems.zlink.framework.actors.ZLinkActorManager
 import systems.zlink.framework.kotlin.ZLinkSuspendingEntrySpotActorRequestHandler
-import systems.zlink.framework.ZLinkMessageContext
 import systems.zlink.samples.kotlin.supportchat.server.configuration.SupportChatRoles
 import systems.zlink.samples.kotlin.supportchat.server.support.application.AgentAssignmentService
 import systems.zlink.samples.kotlin.supportchat.server.support.infrastructure.zlink.actors.SupportActorDirectory
@@ -17,11 +16,12 @@ class SetAgentAvailableHandler(
     private val assignment: AgentAssignmentService,
     private val actors: ZLinkActorManager,
     private val directory: SupportActorDirectory,
-) : ZLinkSuspendingEntrySpotActorRequestHandler<
-    SupportEntrySpot,
-    SupportUserActor,
-    SetAgentAvailableReq,
-    SetAgentAvailableRes,
+) :
+    ZLinkSuspendingEntrySpotActorRequestHandler<
+        SupportEntrySpot,
+        SupportUserActor,
+        SetAgentAvailableReq,
+        SetAgentAvailableRes,
     > {
     // --8<-- [start:doc-sc-set-available]
     override suspend fun handle(
@@ -33,8 +33,11 @@ class SetAgentAvailableHandler(
         if (actor.role != SupportChatRoles.Agent) {
             throw IllegalStateException("Only agent actors can set availability.")
         }
-        val actorRef = actors.find(actor.actorId).await().orElse(null)
-            ?: throw IllegalStateException("Support actor ref is not available. actor=${actor.actorId}")
+        val actorRef =
+            actors.find(actor.actorId).await().orElse(null)
+                ?: throw IllegalStateException(
+                    "Support actor ref is not available. actor=${actor.actorId}"
+                )
         directory.addOrUpdate(actor, actorRef)
         assignment.setAvailable(actor.actorId, actor.displayName, request.isAvailable)
         return SetAgentAvailableRes(request.isAvailable)

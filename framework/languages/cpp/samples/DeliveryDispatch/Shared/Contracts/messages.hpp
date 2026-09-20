@@ -376,8 +376,8 @@ inline void to_json (nlohmann::json &json, const delivery_status_changed_req_t &
     json = {{"deliveryId", value.delivery_id},
             {"customerId", value.customer_id},
             {"status", value.status},
-            {"courierId", value.courier_id ? nlohmann::json (*value.courier_id)
-                                             : nlohmann::json (nullptr)},
+            {"courierId",
+             value.courier_id ? nlohmann::json (*value.courier_id) : nlohmann::json (nullptr)},
             {"occurredAtUnixMs", value.occurred_at_unix_ms}};
 }
 
@@ -395,8 +395,8 @@ inline void to_json (nlohmann::json &json, const delivery_status_updated_msg_t &
     json = {{"deliveryId", value.delivery_id},
             {"customerId", value.customer_id},
             {"status", value.status},
-            {"courierId", value.courier_id ? nlohmann::json (*value.courier_id)
-                                             : nlohmann::json (nullptr)},
+            {"courierId",
+             value.courier_id ? nlohmann::json (*value.courier_id) : nlohmann::json (nullptr)},
             {"occurredAtUnixMs", value.occurred_at_unix_ms}};
 }
 
@@ -424,8 +424,8 @@ inline void to_json (nlohmann::json &json, const delivery_status_notify_t &value
 {
     json = {{"deliveryId", value.delivery_id},
             {"status", value.status},
-            {"courierId", value.courier_id ? nlohmann::json (*value.courier_id)
-                                             : nlohmann::json (nullptr)},
+            {"courierId",
+             value.courier_id ? nlohmann::json (*value.courier_id) : nlohmann::json (nullptr)},
             {"occurredAtUnixMs", value.occurred_at_unix_ms}};
 }
 

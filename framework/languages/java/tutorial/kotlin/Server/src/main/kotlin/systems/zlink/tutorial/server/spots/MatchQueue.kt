@@ -1,8 +1,8 @@
 package systems.zlink.tutorial.server.spots
 
-import systems.zlink.framework.kotlin.addHandler
 import systems.zlink.framework.kotlin.ZLinkSuspendingInstanceSpot
 import systems.zlink.framework.kotlin.ZLinkSuspendingSpotRequestHandler
+import systems.zlink.framework.kotlin.addHandler
 import systems.zlink.framework.spots.ZLinkInstanceSpotContext
 import systems.zlink.tutorial.shared.JoinMatchQueue
 import systems.zlink.tutorial.shared.MatchQueueStatus
@@ -15,17 +15,14 @@ import systems.zlink.tutorial.shared.MatchQueueStatus
 //
 // ZLinkSuspendingInstanceSpot is the Kotlin base for this kind of Spot, the
 // counterpart of ZLinkSuspendingSpot for a room.
-class MatchQueue(
-    override val context: ZLinkInstanceSpotContext,
-) : ZLinkSuspendingInstanceSpot() {
+class MatchQueue(override val context: ZLinkInstanceSpotContext) : ZLinkSuspendingInstanceSpot() {
 
     private val waiting = mutableListOf<String>()
 
     init {
         // Handlers are named here, the same way
         // the room names its own.
-        context.handlers()
-            .addHandler<JoinMatchQueueHandler>()
+        context.handlers().addHandler<JoinMatchQueueHandler>()
     }
 
     fun waiting(): Int = waiting.size
@@ -34,6 +31,7 @@ class MatchQueue(
         waiting.add(playerId)
     }
 }
+
 // --8<-- [end:instance-spot-class]
 
 // --8<-- [start:instance-spot-handler]
@@ -41,15 +39,9 @@ class MatchQueue(
 // handlers: the first type argument is the
 // queue, the other two are request and reply.
 class JoinMatchQueueHandler :
-    ZLinkSuspendingSpotRequestHandler<
-        MatchQueue,
-        JoinMatchQueue,
-        MatchQueueStatus> {
+    ZLinkSuspendingSpotRequestHandler<MatchQueue, JoinMatchQueue, MatchQueueStatus> {
 
-    override suspend fun handle(
-        spot: MatchQueue,
-        request: JoinMatchQueue,
-    ): MatchQueueStatus {
+    override suspend fun handle(spot: MatchQueue, request: JoinMatchQueue): MatchQueueStatus {
         spot.enqueue(request.playerId)
         return MatchQueueStatus(spot.waiting())
     }

@@ -1,0 +1,5 @@
+# Sources the guides excerpt. The repository style applies, except that a call
+# which does not fit in 100 columns puts every argument on its own line instead
+# of bin-packing them (doc/principal/dev/source-formatting.ko.md).
+BasedOnStyle: InheritParentConfig
+BinPackArguments: false

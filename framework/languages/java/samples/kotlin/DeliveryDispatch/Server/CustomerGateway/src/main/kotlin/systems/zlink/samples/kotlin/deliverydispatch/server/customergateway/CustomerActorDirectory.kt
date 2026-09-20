@@ -9,9 +9,7 @@ class CustomerActorDirectory {
     private val deliveryCustomers = mutableMapOf<String, String>()
 
     fun register(actor: CustomerActor) {
-        synchronized(gate) {
-            actors[actor.actorId()] = actor
-        }
+        synchronized(gate) { actors[actor.actorId()] = actor }
     }
 
     fun remove(actorId: String) {
@@ -22,22 +20,20 @@ class CustomerActorDirectory {
     }
 
     fun subscribe(customerId: String, deliveryId: String) {
-        synchronized(gate) {
-            deliveryCustomers[deliveryId] = customerId
-        }
+        synchronized(gate) { deliveryCustomers[deliveryId] = customerId }
     }
 
     fun push(status: DeliveryStatusChangedReq) {
-        val actor = synchronized(gate) {
-            deliveryCustomers[status.deliveryId]?.let { actors[it] }
-        } ?: return
+        val actor =
+            synchronized(gate) { deliveryCustomers[status.deliveryId]?.let { actors[it] } }
+                ?: return
         actor.push(
             DeliveryStatusNotify(
                 deliveryId = status.deliveryId,
                 status = status.status,
                 courierId = status.courierId,
                 occurredAt = status.occurredAt,
-            ),
+            )
         )
     }
 }

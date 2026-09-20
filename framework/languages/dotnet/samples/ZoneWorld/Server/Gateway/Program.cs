@@ -8,8 +8,9 @@ using ZoneWorld.Shared.Contracts;
 
 var configuration = ZoneWorldConfiguration.Load(args);
 var shared = configuration.Shared;
-var gateway = configuration.Gateway
-              ?? throw new InvalidOperationException("Gateway configuration is required.");
+var gateway =
+    configuration.Gateway
+    ?? throw new InvalidOperationException("Gateway configuration is required.");
 
 var builder = Host.CreateApplicationBuilder(args);
 builder.Configuration.Sources.Clear();
@@ -28,17 +29,19 @@ builder.Services.AddSingleton<RelocationProbeService>();
 
 builder.Services.AddZLinkFramework(options =>
 {
-    options.AddLocationStore(new ZLinkRedisLocationStore(redis =>
-    {
-        redis.ConnectionString = shared.RedisEndpoint;
-        redis.KeyPrefix = shared.RedisKeyPrefix;
-    }));
-    options.ConfigureDispatch()
-        .Diagnostics.SetLevel(ZLinkDiagnosticsLevel.Normal);
+    options.AddLocationStore(
+        new ZLinkRedisLocationStore(redis =>
+        {
+            redis.ConnectionString = shared.RedisEndpoint;
+            redis.KeyPrefix = shared.RedisKeyPrefix;
+        })
+    );
+    options.ConfigureDispatch().Diagnostics.SetLevel(ZLinkDiagnosticsLevel.Normal);
     options.AddHandlersFromAssemblyOf(typeof(PlayerSession));
 
     // The browser's end of the world.
-    options.AddStreamNode(ZoneWorldNames.GatewayStreamNode)
+    options
+        .AddStreamNode(ZoneWorldNames.GatewayStreamNode)
         .Bind(gateway.StreamEndpoint)
         .EnableActorDispatch()
         .AddSession<PlayerSession>();
@@ -46,7 +49,8 @@ builder.Services.AddZLinkFramework(options =>
     // The Gateway joins the spot mesh but hosts nothing in it — no entry spot, no actor
     // factory. Membership is what lets it bind a session to an actor living on a zone
     // node and relay packets to it.
-    var mesh = options.AddRouteMesh(ZoneWorldNames.MeshName)
+    var mesh = options
+        .AddRouteMesh(ZoneWorldNames.MeshName)
         .SetRoutingIdPrefix("gw0")
         .Listen(gateway.MeshEndpoint);
     if (!string.IsNullOrWhiteSpace(gateway.MeshAdvertiseHost))

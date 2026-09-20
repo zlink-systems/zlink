@@ -2,14 +2,14 @@ package systems.zlink.samples.kotlin.supportchat.server.session
 
 import java.nio.file.Path
 import kotlinx.coroutines.Dispatchers
+import org.springframework.boot.ApplicationRunner
 import org.springframework.boot.WebApplicationType
 import org.springframework.boot.autoconfigure.SpringBootApplication
 import org.springframework.boot.builder.SpringApplicationBuilder
 import org.springframework.boot.context.properties.EnableConfigurationProperties
-import org.springframework.core.env.StandardEnvironment
 import org.springframework.context.ConfigurableApplicationContext
 import org.springframework.context.annotation.Bean
-import org.springframework.boot.ApplicationRunner
+import org.springframework.core.env.StandardEnvironment
 import systems.zlink.framework.configuration.ZLinkMessageFlowLogMode
 import systems.zlink.framework.kotlin.configureDispatch
 import systems.zlink.framework.kotlin.useCoroutineHandlers
@@ -36,20 +36,16 @@ class SessionApplication {
             val session = topology.session()
             options.addHandlersFromPackageOf(SessionApplication::class.java)
             options.useCoroutineHandlers(Dispatchers.Default)
-            options.configureDispatch {
-                messageFlow(ZLinkMessageFlowLogMode.NORMAL)
-            }
+            options.configureDispatch { messageFlow(ZLinkMessageFlowLogMode.NORMAL) }
             options.configureLocations()
             // --8<-- [start:doc-sc-session-register]
-            options.addClientServerChannel(SampleNames.ApiChannel)
-                .client()
-            options.addClientServerChannel(SampleNames.SupportChannel)
-                .client()
+            options.addClientServerChannel(SampleNames.ApiChannel).client()
+            options.addClientServerChannel(SampleNames.SupportChannel).client()
             val node = options.addRouteMesh(SampleNames.SupportSpotDiscovery)
-            node.listen(session.routerEndpoint)
-                .setRoutingIdPrefix("support-session")
+            node.listen(session.routerEndpoint).setRoutingIdPrefix("support-session")
             node.objects().client()
-            options.addStreamNode(SampleNames.StreamNode)
+            options
+                .addStreamNode(SampleNames.StreamNode)
                 .bind(session.streamEndpoint)
                 .enableActorDispatch()
                 .registerSession(SupportChatSession::class.java)
@@ -57,26 +53,36 @@ class SessionApplication {
         }
 
     @Bean
-    fun sessionStreamReadiness(): ApplicationRunner =
-        ApplicationRunner { println("supportchat-ready kind=stream node=session") }
+    fun sessionStreamReadiness(): ApplicationRunner = ApplicationRunner {
+        println("supportchat-ready kind=stream node=session")
+    }
 
     @Bean(destroyMethod = "close")
     fun sessionSpotRouteReadiness(meshes: ZLinkRouteMeshRuntime): SupportChatReadinessReporter =
         SupportChatReadinessReporter("session", meshes)
 
     @Bean
-    fun locationStore(topology: SampleTopology): ZLinkRedisLocationStore = SampleLocationStore.create(topology)
+    fun locationStore(topology: SampleTopology): ZLinkRedisLocationStore =
+        SampleLocationStore.create(topology)
 
     companion object {
         fun run(configPath: String): ConfigurableApplicationContext {
-            val environment = StandardEnvironment().apply {
-                propertySources.remove(StandardEnvironment.SYSTEM_ENVIRONMENT_PROPERTY_SOURCE_NAME)
-                propertySources.remove(StandardEnvironment.SYSTEM_PROPERTIES_PROPERTY_SOURCE_NAME)
-            }
-            val builder = SpringApplicationBuilder(SessionApplication::class.java)
-                .environment(environment)
-                .web(WebApplicationType.NONE)
-                .properties("spring.config.location=${Path.of(configPath).toAbsolutePath().toUri()}")
+            val environment =
+                StandardEnvironment().apply {
+                    propertySources.remove(
+                        StandardEnvironment.SYSTEM_ENVIRONMENT_PROPERTY_SOURCE_NAME
+                    )
+                    propertySources.remove(
+                        StandardEnvironment.SYSTEM_PROPERTIES_PROPERTY_SOURCE_NAME
+                    )
+                }
+            val builder =
+                SpringApplicationBuilder(SessionApplication::class.java)
+                    .environment(environment)
+                    .web(WebApplicationType.NONE)
+                    .properties(
+                        "spring.config.location=${Path.of(configPath).toAbsolutePath().toUri()}"
+                    )
             builder.application().setKeepAlive(true)
             return builder.run()
         }

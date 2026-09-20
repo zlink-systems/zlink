@@ -1,16 +1,16 @@
 package systems.zlink.samples.kotlin.supportchat.server.support
 
-import java.nio.file.Path
 import java.net.URI
+import java.nio.file.Path
 import kotlinx.coroutines.Dispatchers
+import org.springframework.boot.ApplicationRunner
 import org.springframework.boot.WebApplicationType
 import org.springframework.boot.autoconfigure.SpringBootApplication
 import org.springframework.boot.builder.SpringApplicationBuilder
 import org.springframework.boot.context.properties.EnableConfigurationProperties
-import org.springframework.core.env.StandardEnvironment
 import org.springframework.context.ConfigurableApplicationContext
 import org.springframework.context.annotation.Bean
-import org.springframework.boot.ApplicationRunner
+import org.springframework.core.env.StandardEnvironment
 import systems.zlink.framework.configuration.ZLinkMessageFlowLogMode
 import systems.zlink.framework.kotlin.configureDispatch
 import systems.zlink.framework.kotlin.useCoroutineHandlers
@@ -29,9 +29,9 @@ import systems.zlink.samples.kotlin.supportchat.server.support.application.Conve
 import systems.zlink.samples.kotlin.supportchat.server.support.application.SupportConversationAllocator
 import systems.zlink.samples.kotlin.supportchat.server.support.infrastructure.zlink.FrameworkConversationStarter
 import systems.zlink.samples.kotlin.supportchat.server.support.infrastructure.zlink.actors.SupportActorDirectory
+import systems.zlink.samples.kotlin.supportchat.server.support.infrastructure.zlink.actors.SupportUserActor
 import systems.zlink.samples.kotlin.supportchat.server.support.infrastructure.zlink.actors.SupportUserActorFactory
 import systems.zlink.samples.kotlin.supportchat.server.support.infrastructure.zlink.actors.SupportUserActorRelocationAdapter
-import systems.zlink.samples.kotlin.supportchat.server.support.infrastructure.zlink.actors.SupportUserActor
 import systems.zlink.samples.kotlin.supportchat.server.support.infrastructure.zlink.spots.conversationspot.ConversationSpot
 import systems.zlink.samples.kotlin.supportchat.server.support.infrastructure.zlink.spots.conversationspot.notifications.ConversationNotificationPublisher
 import systems.zlink.samples.kotlin.supportchat.server.support.infrastructure.zlink.spots.entryspot.SupportEntrySpot
@@ -55,25 +55,24 @@ class SupportApplication {
                 ZLinkRedisRelocationStore(
                     ZLinkRedisRelocationOptions()
                         .setConnectionString(topology.location().redisEndpoint)
-                        .setKeyPrefix(topology.location().redisKeyPrefix + "relocation:"),
-                ),
+                        .setKeyPrefix(topology.location().redisKeyPrefix + "relocation:")
+                )
             )
-            options.configureDispatch {
-                messageFlow(ZLinkMessageFlowLogMode.NORMAL)
-            }
-            options.addClientServerChannel(SampleNames.SupportChannel)
+            options.configureDispatch { messageFlow(ZLinkMessageFlowLogMode.NORMAL) }
+            options
+                .addClientServerChannel(SampleNames.SupportChannel)
                 .server()
                 .setBindHost(channelEndpoint.host)
                 .setAdvertiseHost(channelEndpoint.host)
                 .listen(channelEndpoint.port)
                 .addHandlerGroup(SampleNames.SupportChannel)
-            options.addClientServerChannel(SampleNames.ApiChannel)
-                .client()
+            options.addClientServerChannel(SampleNames.ApiChannel).client()
             // --8<-- [start:doc-sc-support-register]
             val node = options.addRouteMesh(SampleNames.SupportSpotDiscovery)
-            node.listen(support.routerEndpoint)
-                .setRoutingIdPrefix("support-owner")
-            node.objects().server()
+            node.listen(support.routerEndpoint).setRoutingIdPrefix("support-owner")
+            node
+                .objects()
+                .server()
                 .addEntrySpot(SupportEntrySpot::class.java)
                 .addActorFactory(
                     SampleNames.SupportActorType,
@@ -82,22 +81,23 @@ class SupportApplication {
                 ) { factory ->
                     factory.preserveStateWith(SupportUserActorRelocationAdapter::class.java)
                 }
-                .addSpotFactory(
-                    SampleNames.ConversationSpotType,
-                    ConversationSpot::class.java,
-                ) { factory -> factory.disableRelocation() }
+                .addSpotFactory(SampleNames.ConversationSpotType, ConversationSpot::class.java) {
+                    factory ->
+                    factory.disableRelocation()
+                }
             // --8<-- [end:doc-sc-support-register]
         }
 
     @Bean
-    fun supportPublicReadiness(): ApplicationRunner =
-        ApplicationRunner { println("supportchat-ready kind=public node=support") }
+    fun supportPublicReadiness(): ApplicationRunner = ApplicationRunner {
+        println("supportchat-ready kind=public node=support")
+    }
 
     @Bean
-    fun locationStore(topology: SampleTopology): ZLinkRedisLocationStore = SampleLocationStore.create(topology)
+    fun locationStore(topology: SampleTopology): ZLinkRedisLocationStore =
+        SampleLocationStore.create(topology)
 
-    @Bean
-    fun supportActorDirectory(): SupportActorDirectory = SupportActorDirectory()
+    @Bean fun supportActorDirectory(): SupportActorDirectory = SupportActorDirectory()
 
     @Bean
     fun agentAvailabilityDirectory(): AgentAvailabilityDirectory =
@@ -112,8 +112,9 @@ class SupportApplication {
         FrameworkConversationStarter(spots)
 
     @Bean
-    fun supportConversationAllocator(conversations: ConversationStarter): SupportConversationAllocator =
-        SupportConversationAllocator(conversations)
+    fun supportConversationAllocator(
+        conversations: ConversationStarter
+    ): SupportConversationAllocator = SupportConversationAllocator(conversations)
 
     @Bean
     fun conversationNotificationPublisher(): ConversationNotificationPublisher =
@@ -121,14 +122,22 @@ class SupportApplication {
 
     companion object {
         fun run(configPath: String): ConfigurableApplicationContext {
-            val environment = StandardEnvironment().apply {
-                propertySources.remove(StandardEnvironment.SYSTEM_ENVIRONMENT_PROPERTY_SOURCE_NAME)
-                propertySources.remove(StandardEnvironment.SYSTEM_PROPERTIES_PROPERTY_SOURCE_NAME)
-            }
-            val builder = SpringApplicationBuilder(SupportApplication::class.java)
-                .environment(environment)
-                .web(WebApplicationType.NONE)
-                .properties("spring.config.location=${Path.of(configPath).toAbsolutePath().toUri()}")
+            val environment =
+                StandardEnvironment().apply {
+                    propertySources.remove(
+                        StandardEnvironment.SYSTEM_ENVIRONMENT_PROPERTY_SOURCE_NAME
+                    )
+                    propertySources.remove(
+                        StandardEnvironment.SYSTEM_PROPERTIES_PROPERTY_SOURCE_NAME
+                    )
+                }
+            val builder =
+                SpringApplicationBuilder(SupportApplication::class.java)
+                    .environment(environment)
+                    .web(WebApplicationType.NONE)
+                    .properties(
+                        "spring.config.location=${Path.of(configPath).toAbsolutePath().toUri()}"
+                    )
             builder.application().setKeepAlive(true)
             return builder.run()
         }

@@ -7,13 +7,14 @@ namespace Bingo.Server.Api.Handlers;
 [ZLinkHandlerGroup("api")]
 internal sealed class ReportBingoResultHandler(
     BingoPlayerRecordStore records,
-    ILogger<ReportBingoResultHandler> logger)
-    : IZLinkRequestHandler<ReportBingoResultReq, ReportBingoResultRes>
+    ILogger<ReportBingoResultHandler> logger
+) : IZLinkRequestHandler<ReportBingoResultReq, ReportBingoResultRes>
 {
     public ValueTask<ReportBingoResultRes> HandleAsync(
         ReportBingoResultReq request,
         IZLinkMessageContext context,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken
+    )
     {
         cancellationToken.ThrowIfCancellationRequested();
         var record = records.Report(request.ActorId, request.Won);
@@ -24,7 +25,8 @@ internal sealed class ReportBingoResultHandler(
             request.Won,
             request.FinalDrawSeq,
             record.Wins,
-            record.Losses);
+            record.Losses
+        );
         return ValueTask.FromResult(record);
     }
 }

@@ -8,7 +8,8 @@ internal sealed class GameplayActionService(
     IGameplayEventStore store,
     IGameplayEventOwnerDispatcher ownerDispatcher,
     GameQuestRuntimeConfiguration configuration,
-    ILogger<GameplayActionService> logger)
+    ILogger<GameplayActionService> logger
+)
 {
     private readonly string _apiName = configuration.InstanceName;
 
@@ -17,11 +18,19 @@ internal sealed class GameplayActionService(
         string monsterId,
         string areaId,
         string idempotencyKey,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken
+    )
     {
         var dispatched = await StoreAndDispatchAsync(
-            GameplayDomain.CreateMonsterKilled(playerId, monsterId, areaId, idempotencyKey, _apiName),
-            cancellationToken);
+            GameplayDomain.CreateMonsterKilled(
+                playerId,
+                monsterId,
+                areaId,
+                idempotencyKey,
+                _apiName
+            ),
+            cancellationToken
+        );
         return dispatched.EventId;
     }
 
@@ -30,11 +39,13 @@ internal sealed class GameplayActionService(
         string itemId,
         int count,
         string idempotencyKey,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken
+    )
     {
         var dispatched = await StoreAndDispatchAsync(
             GameplayDomain.CreateItemCollected(playerId, itemId, count, idempotencyKey, _apiName),
-            cancellationToken);
+            cancellationToken
+        );
         return dispatched.EventId;
     }
 
@@ -42,17 +53,20 @@ internal sealed class GameplayActionService(
         string playerId,
         string areaId,
         string idempotencyKey,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken
+    )
     {
         var dispatched = await StoreAndDispatchAsync(
             GameplayDomain.CreateAreaEntered(playerId, areaId, idempotencyKey, _apiName),
-            cancellationToken);
+            cancellationToken
+        );
         return dispatched.EventId;
     }
 
     private async ValueTask<GameplayEvent> StoreAndDispatchAsync(
         GameplayEvent candidate,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken
+    )
     {
         // --8<-- [start:doc-gq-store-dispatch]
         var stored = await store.GetOrAddGameplayEventAsync(candidate, cancellationToken);
@@ -64,9 +78,7 @@ internal sealed class GameplayActionService(
         catch (ZLinkFrameworkException exception)
             when (exception.Kind == ZLinkFrameworkErrorKind.Unavailable)
         {
-            logger.LogInformation(
-                "gamequest-owner unavailable player={PlayerId}",
-                stored.PlayerId);
+            logger.LogInformation("gamequest-owner unavailable player={PlayerId}", stored.PlayerId);
             throw;
         }
         // --8<-- [end:doc-gq-store-dispatch]
@@ -75,7 +87,8 @@ internal sealed class GameplayActionService(
             stored.PlayerId,
             stored.EventId,
             stored.EventType,
-            routedTo);
+            routedTo
+        );
         return stored;
     }
 }
@@ -84,12 +97,14 @@ internal interface IGameplayEventStore
 {
     ValueTask<GameplayEvent> GetOrAddGameplayEventAsync(
         GameplayEvent candidate,
-        CancellationToken cancellationToken);
+        CancellationToken cancellationToken
+    );
 }
 
 internal interface IGameplayEventOwnerDispatcher
 {
     ValueTask<string> DispatchAsync(
         GameplayEvent gameplayEvent,
-        CancellationToken cancellationToken);
+        CancellationToken cancellationToken
+    );
 }

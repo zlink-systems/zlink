@@ -15,7 +15,4 @@ const SampleTimings = {
   clientTimeout: 10000
 } as const;
 
-export {
-  SampleNames,
-  SampleTimings
-};
+export { SampleNames, SampleTimings };

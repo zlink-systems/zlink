@@ -6,7 +6,12 @@ class OrderAggregate {
   private state?: OrderState;
   private currentEventType?: OrderEventType;
 
-  apply(orderId: string, eventType: OrderEventType, payload: Record<string, any>, occurredAtUnixMs: number): void {
+  apply(
+    orderId: string,
+    eventType: OrderEventType,
+    payload: Record<string, any>,
+    occurredAtUnixMs: number
+  ): void {
     this.currentEventType = eventType;
     if (eventType === 'OrderStarted') {
       this.state = {
@@ -21,13 +26,36 @@ class OrderAggregate {
     }
     const current = this.requireState();
     if (eventType === 'InventoryReserved') {
-      this.state = { ...current, status: OrderStatuses.InventoryReserved, reservationId: payload.reservationId, updatedAtUnixMs: occurredAtUnixMs };
+      this.state = {
+        ...current,
+        status: OrderStatuses.InventoryReserved,
+        reservationId: payload.reservationId,
+        updatedAtUnixMs: occurredAtUnixMs
+      };
     } else if (eventType === 'PaymentAuthorized') {
-      this.state = { ...current, status: OrderStatuses.PaymentAuthorized, paymentId: payload.paymentId, updatedAtUnixMs: occurredAtUnixMs };
+      this.state = {
+        ...current,
+        status: OrderStatuses.PaymentAuthorized,
+        paymentId: payload.paymentId,
+        updatedAtUnixMs: occurredAtUnixMs
+      };
     } else if (eventType === 'OrderConfirmed') {
-      this.state = { ...current, status: OrderStatuses.Confirmed, updatedAtUnixMs: occurredAtUnixMs };
-    } else if (eventType === 'InventoryReservationFailed' || eventType === 'PaymentFailed' || eventType === 'OrderFailed') {
-      this.state = { ...current, status: OrderStatuses.Failed, reason: payload.reason, updatedAtUnixMs: occurredAtUnixMs };
+      this.state = {
+        ...current,
+        status: OrderStatuses.Confirmed,
+        updatedAtUnixMs: occurredAtUnixMs
+      };
+    } else if (
+      eventType === 'InventoryReservationFailed' ||
+      eventType === 'PaymentFailed' ||
+      eventType === 'OrderFailed'
+    ) {
+      this.state = {
+        ...current,
+        status: OrderStatuses.Failed,
+        reason: payload.reason,
+        updatedAtUnixMs: occurredAtUnixMs
+      };
     }
   }
 
@@ -41,7 +69,8 @@ class OrderAggregate {
   }
 
   private requireState(): OrderState {
-    if (this.state === undefined) throw new Error('Order event stream does not start with OrderStarted.');
+    if (this.state === undefined)
+      throw new Error('Order event stream does not start with OrderStarted.');
     return this.state;
   }
 }

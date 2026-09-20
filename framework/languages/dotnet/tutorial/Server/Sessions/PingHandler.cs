@@ -11,9 +11,11 @@ public sealed class PingHandler : IZLinkSessionPacketHandler<IZLinkSessionContex
         IZLinkSessionContext context,
         ZLinkSessionDispatchContext dispatch,
         Ping message,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken
+    )
         // Reply answers a request. To push to a client that is not waiting for
         // one, use Client.Send instead.
-        => context.Client.Reply(new Pong(message.SentAtUnixMs)).Async(cancellationToken);
+        =>
+        context.Client.Reply(new Pong(message.SentAtUnixMs)).Async(cancellationToken);
 }
 // --8<-- [end:session-handler]

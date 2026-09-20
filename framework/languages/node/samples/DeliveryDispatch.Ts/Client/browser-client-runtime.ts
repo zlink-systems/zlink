@@ -17,7 +17,7 @@ async function loadBrowserConfig<T>(): Promise<T> {
   if (!response.ok) {
     throw new Error(`Browser sample config failed with HTTP ${response.status}.`);
   }
-  return await response.json() as T;
+  return (await response.json()) as T;
 }
 
 async function runBrowserSample(sample: string, scenario: () => Promise<void>): Promise<void> {
@@ -128,13 +128,6 @@ class DefaultBrowserHttpRequest implements BrowserHttpRequest {
   }
 }
 
-export {
-  BrowserHttpClientFactory,
-  loadBrowserConfig,
-  runBrowserSample
-};
+export { BrowserHttpClientFactory, loadBrowserConfig, runBrowserSample };
 
-export type {
-  BrowserHttpClient,
-  BrowserSampleResult
-};
+export type { BrowserHttpClient, BrowserSampleResult };

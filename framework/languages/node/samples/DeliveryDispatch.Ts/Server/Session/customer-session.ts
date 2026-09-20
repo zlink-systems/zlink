@@ -26,7 +26,8 @@ class CustomerSession implements ZLinkSession {
   async onDispatch(dispatch: ZLinkSessionDispatchContext, payload: ZLinkMessage): Promise<void> {
     if (await this.context.handlers.tryHandle(dispatch, payload)) return;
     const actor = this.context.actors.find(CustomerId);
-    if (actor === undefined) throw new Error(`No customer actor is bound for packet '${dispatch.packetName}'.`);
+    if (actor === undefined)
+      throw new Error(`No customer actor is bound for packet '${dispatch.packetName}'.`);
     await actor.relay(payload);
   }
 }
@@ -39,7 +40,11 @@ class SubscribeDeliverySessionHandler {
     private readonly directory: CustomerActorDirectory
   ) {}
 
-  async handle(context: ZLinkSessionContext, _dispatch: ZLinkSessionDispatchContext, payload: ZLinkMessage): Promise<void> {
+  async handle(
+    context: ZLinkSessionContext,
+    _dispatch: ZLinkSessionDispatchContext,
+    payload: ZLinkMessage
+  ): Promise<void> {
     const request = payload.decode(SubscribeDeliveryReq);
     console.error(`deliverydispatch session: find customer delivery=${request.deliveryId}`);
     const ensured = await this.actors
@@ -66,8 +71,4 @@ class CustomerSessionFactory implements ZLinkSessionFactory<CustomerSession> {
   }
 }
 
-export {
-  CustomerSession,
-  CustomerSessionFactory,
-  SubscribeDeliverySessionHandler
-};
+export { CustomerSession, CustomerSessionFactory, SubscribeDeliverySessionHandler };

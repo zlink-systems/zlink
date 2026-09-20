@@ -1,15 +1,17 @@
 package systems.zlink.samples.zoneworld.server.zone.handlers;
 
-import java.util.concurrent.CompletableFuture;
-import java.util.concurrent.CompletionStage;
 import systems.zlink.framework.handlers.ZLinkHandlerGroup;
 import systems.zlink.framework.spots.ZLinkSpotPacketHandler;
 import systems.zlink.samples.zoneworld.server.zone.spots.ZoneSpot;
 import systems.zlink.samples.zoneworld.shared.Messages;
 import systems.zlink.samples.zoneworld.shared.ZoneWorldNames;
+
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CompletionStage;
+
 @ZLinkHandlerGroup(ZoneWorldNames.ZONE_CHANNEL)
 public final class DeliverAnnouncementHandler
-    implements ZLinkSpotPacketHandler<ZoneSpot, Messages.DeliverAnnounceMsg> {
+        implements ZLinkSpotPacketHandler<ZoneSpot, Messages.DeliverAnnounceMsg> {
     @Override
     public CompletionStage<Void> handle(ZoneSpot spot, Messages.DeliverAnnounceMsg message) {
         spot.deliverAnnouncement(message);

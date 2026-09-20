@@ -2,10 +2,9 @@ package systems.zlink.samples.kotlin.bingo.client
 
 import java.net.URI
 import java.time.Duration
-import java.util.concurrent.CompletableFuture
+import systems.zlink.framework.codecs.protobuf.ZLinkProtobufCodec
 import systems.zlink.framework.kotlin.ZLinkKotlinStreamConnector
 import systems.zlink.framework.kotlin.kotlin
-import systems.zlink.framework.codecs.protobuf.ZLinkProtobufCodec
 import systems.zlink.samples.kotlin.bingo.client.configuration.SampleTimings
 import systems.zlink.samples.kotlin.bingo.client.configuration.SampleTopology
 import systems.zlink.stream.connector.ZLinkStreamConnectorFactory
@@ -28,23 +27,24 @@ suspend fun main(args: Array<String>) {
 }
 
 private fun createClient(endpoint: String): ZLinkKotlinStreamConnector {
-    val client = ZLinkStreamConnectorFactory.create(
-        ZLinkStreamConnectorOptions(
-            URI.create(endpoint),
-            ZLinkStreamDispatchMode.IMMEDIATE,
-            SampleTimings.RequestTimeout,
-            2,
-            SampleTimings.ConnectTimeout,
-            64 * 1024,
-            false,
-            Duration.ofSeconds(1),
-            SampleTimings.RequestTimeout.plusSeconds(5),
-            true,
-            Duration.ofMillis(250),
-            Duration.ofSeconds(5),
-            2.0,
-            ZLinkProtobufCodec.defaultCodec(),
-        ),
-    )
+    val client =
+        ZLinkStreamConnectorFactory.create(
+            ZLinkStreamConnectorOptions(
+                URI.create(endpoint),
+                ZLinkStreamDispatchMode.IMMEDIATE,
+                SampleTimings.RequestTimeout,
+                2,
+                SampleTimings.ConnectTimeout,
+                64 * 1024,
+                false,
+                Duration.ofSeconds(1),
+                SampleTimings.RequestTimeout.plusSeconds(5),
+                true,
+                Duration.ofMillis(250),
+                Duration.ofSeconds(5),
+                2.0,
+                ZLinkProtobufCodec.defaultCodec(),
+            )
+        )
     return client.kotlin()
 }

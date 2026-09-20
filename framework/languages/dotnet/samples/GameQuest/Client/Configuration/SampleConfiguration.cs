@@ -27,19 +27,21 @@ public sealed record GameQuestTopology(
     string GameApiAStreamEndpoint,
     string GameApiBStreamEndpoint,
     string CloseReplayReleaseFile,
-    string OwnerLossReleaseFile)
+    string OwnerLossReleaseFile
+)
 {
     public static GameQuestTopology Load(string[] args)
     {
         if (args.Length != 2 || args[0] != "--config")
             throw new ArgumentException("Usage: --config PATH");
 
-        var topology = new ConfigurationBuilder()
-                           .AddJsonFile(Path.GetFullPath(args[1]), optional: false, reloadOnChange: false)
-                           .Build()
-                           .GetRequiredSection("Client")
-                           .Get<GameQuestTopology>()
-                       ?? throw new InvalidOperationException("GameQuest client configuration is empty.");
+        var topology =
+            new ConfigurationBuilder()
+                .AddJsonFile(Path.GetFullPath(args[1]), optional: false, reloadOnChange: false)
+                .Build()
+                .GetRequiredSection("Client")
+                .Get<GameQuestTopology>()
+            ?? throw new InvalidOperationException("GameQuest client configuration is empty.");
         foreach (var property in typeof(GameQuestTopology).GetProperties())
             if (string.IsNullOrWhiteSpace((string?)property.GetValue(topology)))
                 throw new InvalidOperationException($"Client.{property.Name} is required.");

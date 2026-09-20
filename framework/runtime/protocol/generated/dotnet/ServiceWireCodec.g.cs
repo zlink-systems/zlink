@@ -639,7 +639,7 @@ internal static class ServiceWireCodec
 
     internal abstract record AuthorityActivationRecoveryState;
     internal sealed record AuthorityActivationRecoveryStateCase0() : AuthorityActivationRecoveryState;
-    internal sealed record AuthorityActivationRecoveryStateCase1(CreationContentReference Reference, Sha256Bytes Sha256, CreationRequestSize EncodedSize, NonzeroU64 InboxSequence) : AuthorityActivationRecoveryState;
+    internal sealed record AuthorityActivationRecoveryStateCase1(CreationContentReference Reference, Sha256Bytes Sha256, CreationRequestSize EncodedSize, NonzeroU64 InboxSequence, U64 ReplayCursor) : AuthorityActivationRecoveryState;
 
     internal sealed record AuthorityPayloadV1(AuthorityOperationKind OperationKind, AuthorityObjectIdentity Object, Text8 OwnerId, NonzeroU64 OwnerLeaseGeneration, Text8 OwnerMeshName, Rid OwnerNodeRid, NonzeroU64 OwnerNodeGeneration, AuthorityRelocationState RelocationState, AuthorityActivationRecoveryState ActivationRecoveryState);
 
@@ -5101,8 +5101,9 @@ internal static class ServiceWireCodec
             var Sha256 = ReadSha256Bytes(selected, context);
             var EncodedSize = ReadCreationRequestSize(selected, context);
             var InboxSequence = ReadNonzeroU64(selected, context);
+            var ReplayCursor = ReadU64(selected, context);
             selected.End("authority-activation-recovery-state");
-            AuthorityActivationRecoveryState value = new AuthorityActivationRecoveryStateCase1(Reference, Sha256, EncodedSize, InboxSequence);
+            AuthorityActivationRecoveryState value = new AuthorityActivationRecoveryStateCase1(Reference, Sha256, EncodedSize, InboxSequence, ReplayCursor);
             return value;
         }
         throw Error("authority-activation-recovery-state: discriminator");
@@ -5127,6 +5128,7 @@ internal static class ServiceWireCodec
             WriteSha256Bytes(body, item.Sha256, context);
             WriteCreationRequestSize(body, item.EncodedSize, context);
             WriteNonzeroU64(body, item.InboxSequence, context);
+            WriteU64(body, item.ReplayCursor, context);
             WriteU32(writer, new U32(checked((uint)body.Length)), context);
             writer.Bytes(body.ToArray());
             break;

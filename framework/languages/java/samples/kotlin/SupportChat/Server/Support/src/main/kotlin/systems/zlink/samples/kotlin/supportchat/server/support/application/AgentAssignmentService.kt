@@ -1,15 +1,9 @@
 package systems.zlink.samples.kotlin.supportchat.server.support.application
 
-class AgentAssignmentService(
-    private val availability: AgentAvailabilityDirectory,
-) {
+class AgentAssignmentService(private val availability: AgentAvailabilityDirectory) {
     private val reservations = linkedMapOf<String, String>()
 
-    fun setAvailable(
-        rosterActorId: String,
-        displayName: String,
-        isAvailable: Boolean,
-    ) {
+    fun setAvailable(rosterActorId: String, displayName: String, isAvailable: Boolean) {
         val activeConversations = reservations.values.count { it == rosterActorId }
         availability.setAvailable(rosterActorId, displayName, isAvailable, activeConversations)
     }

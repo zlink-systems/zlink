@@ -17,8 +17,4 @@ function playerIdFromQuestMissionSpotId(spotId: string): string {
   return spotId.slice(questMissionSpotIdPrefix.length);
 }
 
-export {
-  SampleNames,
-  questMissionSpotId,
-  playerIdFromQuestMissionSpotId
-};
+export { SampleNames, questMissionSpotId, playerIdFromQuestMissionSpotId };

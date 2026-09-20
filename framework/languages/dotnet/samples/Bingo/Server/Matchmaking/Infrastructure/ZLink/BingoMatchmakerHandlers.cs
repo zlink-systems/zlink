@@ -11,7 +11,8 @@ internal sealed class ReserveBingoRoomHandler(IBingoMatchReservationStore reserv
     public async ValueTask<ReserveBingoRoomRes> HandleAsync(
         BingoMatchmaker spot,
         ReserveBingoRoomReq request,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken
+    )
     {
         spot.RecordActivity();
         return await reservations.ReserveAsync(request, cancellationToken);
@@ -19,13 +20,13 @@ internal sealed class ReserveBingoRoomHandler(IBingoMatchReservationStore reserv
 }
 
 // --8<-- [start:doc-bingo-matchmaker-idle]
-internal sealed class BingoMatchmakerIdleTimer
-    : IZLinkSpotTimerHandler<BingoMatchmaker>
+internal sealed class BingoMatchmakerIdleTimer : IZLinkSpotTimerHandler<BingoMatchmaker>
 {
     public async ValueTask HandleAsync(
         BingoMatchmaker spot,
         ZLinkTimerTick tick,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken
+    )
     {
         _ = tick;
         if (DateTimeOffset.UtcNow - spot.LastActivity >= TimeSpan.FromSeconds(30))

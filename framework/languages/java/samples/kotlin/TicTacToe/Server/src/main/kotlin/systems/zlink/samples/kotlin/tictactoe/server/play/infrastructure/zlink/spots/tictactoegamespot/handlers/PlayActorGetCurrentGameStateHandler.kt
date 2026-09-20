@@ -19,7 +19,9 @@ class PlayActorGetCurrentGameStateHandler {
         context: ZLinkMessageContext,
         request: JoinGameMsg,
     ) {
-        actor.context().boundSession()
+        actor
+            .context()
+            .boundSession()
             .send(JoinGameNotify(spot.currentState(actor, request.roomId)))
             .submit()
             .await()

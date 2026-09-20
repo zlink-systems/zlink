@@ -1,9 +1,8 @@
 package systems.zlink.samples.kotlin.shoppingmall.server.orderworkflow.domain
 
 /**
- * Order domain events. Each event type maps to its simple class name, which is
- * also the `eventType` discriminator in the store and the sequence the
- * self-check assertion compares against.
+ * Order domain events. Each event type maps to its simple class name, which is also the `eventType`
+ * discriminator in the store and the sequence the self-check assertion compares against.
  */
 object OrderEventTypes {
     const val OrderStarted = "OrderStartedEvent"

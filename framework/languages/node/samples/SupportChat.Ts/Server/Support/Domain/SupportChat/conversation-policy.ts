@@ -4,7 +4,9 @@ class ConversationPolicy {
 
   validateMessage(text: string): void {
     if (text.trim().length === 0 || text.length > this.maximumMessageLength) {
-      throw new Error(`Chat message text must contain between 1 and ${this.maximumMessageLength} characters.`);
+      throw new Error(
+        `Chat message text must contain between 1 and ${this.maximumMessageLength} characters.`
+      );
     }
   }
 }

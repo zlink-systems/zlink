@@ -41,8 +41,7 @@ class SupportChatSession(
         }
     }
 
-    override suspend fun onErrorSuspending(error: ZLinkStreamError) {
-    }
+    override suspend fun onErrorSuspending(error: ZLinkStreamError) {}
 
     // --8<-- [start:doc-sc-session-dispatch]
     override suspend fun onDispatchSuspending(
@@ -55,51 +54,62 @@ class SupportChatSession(
             else -> relayConversationPacket(dispatch, payload)
         }
     }
+
     // --8<-- [end:doc-sc-session-dispatch]
 
     private suspend fun authenticate(request: AuthenticateReq) {
-        val authenticated = channels
-            .requestToChannel(SampleNames.ApiChannel, AuthenticateUserReq(request.accessToken))
-            .timeout(SampleTimings.RequestTimeout)
-            .submit(AuthenticateUserRes::class.java)
-            .await()
-        if (!authenticated.accepted ||
-            authenticated.actorId.isNullOrBlank() ||
-            authenticated.displayName.isNullOrBlank() ||
-            authenticated.role.isNullOrBlank()
+        val authenticated =
+            channels
+                .requestToChannel(SampleNames.ApiChannel, AuthenticateUserReq(request.accessToken))
+                .timeout(SampleTimings.RequestTimeout)
+                .submit(AuthenticateUserRes::class.java)
+                .await()
+        if (
+            !authenticated.accepted ||
+                authenticated.actorId.isNullOrBlank() ||
+                authenticated.displayName.isNullOrBlank() ||
+                authenticated.role.isNullOrBlank()
         ) {
-            throw IllegalStateException(authenticated.reason ?: "SupportChat authentication failed.")
+            throw IllegalStateException(
+                authenticated.reason ?: "SupportChat authentication failed."
+            )
         }
-        val actorId = authenticated.actorId
-            ?: throw IllegalStateException("SupportChat authentication did not return an actor id.")
-        val displayName = authenticated.displayName
-            ?: throw IllegalStateException("SupportChat authentication did not return a display name.")
-        val role = authenticated.role
-            ?: throw IllegalStateException("SupportChat authentication did not return a role.")
+        val actorId =
+            authenticated.actorId
+                ?: throw IllegalStateException(
+                    "SupportChat authentication did not return an actor id."
+                )
+        val displayName =
+            authenticated.displayName
+                ?: throw IllegalStateException(
+                    "SupportChat authentication did not return a display name."
+                )
+        val role =
+            authenticated.role
+                ?: throw IllegalStateException("SupportChat authentication did not return a role.")
 
         // --8<-- [start:doc-sc-session-auth]
-        val ensured = channels
-            .requestToChannel(
-                SampleNames.SupportChannel,
-                EnsureSupportUserActorReq(
-                    actorId = actorId,
-                    displayName = displayName,
-                    role = role,
-                    participantId = actorId,
-                ),
-            )
-            .timeout(SampleTimings.RequestTimeout)
-            .submit(EnsureSupportUserActorRes::class.java)
-            .await()
+        val ensured =
+            channels
+                .requestToChannel(
+                    SampleNames.SupportChannel,
+                    EnsureSupportUserActorReq(
+                        actorId = actorId,
+                        displayName = displayName,
+                        role = role,
+                        participantId = actorId,
+                    ),
+                )
+                .timeout(SampleTimings.RequestTimeout)
+                .submit(EnsureSupportUserActorRes::class.java)
+                .await()
 
         identityActor = context.actors().bindOrGetActor(ensured.actor.toActorRef())
         identityActorId = actorId
         identityDisplayName = displayName
         identityRole = role
         // --8<-- [end:doc-sc-session-auth]
-        context.client()
-            .reply(AuthenticateRes(actorId, displayName, role))
-            .submit()
+        context.client().reply(AuthenticateRes(actorId, displayName, role)).submit()
     }
 
     private suspend fun joinConversation(
@@ -119,16 +129,18 @@ class SupportChatSession(
         }
 
         // --8<-- [start:doc-sc-agent-join]
-        val ensured = channels
-            .requestToChannel(
-                SampleNames.SupportChannel,
-                EnsureAgentConversationReq(identityActorId, identityDisplayName, conversationId),
-            )
-            .timeout(SampleTimings.RequestTimeout)
-            .submit(EnsureAgentConversationRes::class.java)
-            .await()
+        val ensured =
+            channels
+                .requestToChannel(
+                    SampleNames.SupportChannel,
+                    EnsureAgentConversationReq(identityActorId, identityDisplayName, conversationId),
+                )
+                .timeout(SampleTimings.RequestTimeout)
+                .submit(EnsureAgentConversationRes::class.java)
+                .await()
 
-        conversationActors[conversationId] = context.actors().bindOrGetActor(ensured.actor.toActorRef())
+        conversationActors[conversationId] =
+            context.actors().bindOrGetActor(ensured.actor.toActorRef())
         logger.info(
             "session: agent joined conversation. roster={}, conversation={}",
             identityActorId,
@@ -147,16 +159,20 @@ class SupportChatSession(
         val target = conversationId?.let { conversationActors[it] } ?: requireIdentityActor()
         target.relay(dispatch, payload).await()
     }
+
     // --8<-- [end:doc-sc-metadata-relay]
 
     private fun requireIdentityActor(): ZLinkSessionActor =
-        identityActor ?: throw IllegalStateException(
-            "Client must authenticate before sending conversation packets.",
-        )
+        identityActor
+            ?: throw IllegalStateException(
+                "Client must authenticate before sending conversation packets."
+            )
 
     private fun requireConversationId(dispatch: ZLinkSessionDispatchContext): String =
         dispatch.metadata()[SampleNames.ConversationIdMetadataKey]
-            ?: throw IllegalStateException("Conversation packet is missing the ConversationId metadata.")
+            ?: throw IllegalStateException(
+                "Conversation packet is missing the ConversationId metadata."
+            )
 
     private companion object {
         private val logger = LoggerFactory.getLogger(SupportChatSession::class.java)

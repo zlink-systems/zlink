@@ -1,16 +1,18 @@
 package systems.zlink.samples.zoneworld.server.zone.actors;
 
-import java.util.LinkedHashSet;
-import java.util.List;
-import java.util.Set;
-import java.util.concurrent.CompletableFuture;
-import java.util.concurrent.CompletionStage;
 import systems.zlink.framework.actors.ZLinkActor;
 import systems.zlink.framework.actors.ZLinkActorContext;
 import systems.zlink.framework.actors.ZLinkActorJoinCompletion;
 import systems.zlink.framework.actors.ZLinkActorJoinOperationId;
 import systems.zlink.samples.zoneworld.shared.Messages;
 import systems.zlink.samples.zoneworld.shared.ZoneWorldSpec;
+
+import java.util.LinkedHashSet;
+import java.util.List;
+import java.util.Set;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CompletionStage;
+
 public final class PlayerActor implements ZLinkActor {
     private static final int COMPLETED_JOIN_RETENTION = 256;
     private final String actorId;
@@ -134,18 +136,18 @@ public final class PlayerActor implements ZLinkActor {
     }
 
     public void restoreState(
-        int x,
-        int y,
-        String zoneId,
-        boolean bot,
-        int dirX,
-        int dirY,
-        int pendingX,
-        int pendingY,
-        String pendingZone,
-        boolean pendingJoin,
-        String pendingPurpose,
-        List<ZLinkActorJoinOperationId> completedJoins) {
+            int x,
+            int y,
+            String zoneId,
+            boolean bot,
+            int dirX,
+            int dirY,
+            int pendingX,
+            int pendingY,
+            String pendingZone,
+            boolean pendingJoin,
+            String pendingPurpose,
+            List<ZLinkActorJoinOperationId> completedJoins) {
         this.x = x;
         this.y = y;
         this.zoneId = zoneId;
@@ -166,27 +168,30 @@ public final class PlayerActor implements ZLinkActor {
         if (isBot) return CompletableFuture.completedFuture(null);
         return context.boundSession().send(message).submit();
     }
+
     // --8<-- [end:doc-zw-state-push]
 
     // --8<-- [start:doc-zw-join-completed]
     @Override
     public CompletionStage<Void> onJoinCompleted(ZLinkActorJoinCompletion completion) {
-        ZLinkActorJoinOperationId operationId = completion instanceof ZLinkActorJoinCompletion.Accepted accepted
-            ? accepted.operationId()
-            : completion instanceof ZLinkActorJoinCompletion.Rejected rejected
-                ? rejected.operationId()
-                : ((ZLinkActorJoinCompletion.Failed) completion).operationId();
+        ZLinkActorJoinOperationId operationId =
+                completion instanceof ZLinkActorJoinCompletion.Accepted accepted
+                        ? accepted.operationId()
+                        : completion instanceof ZLinkActorJoinCompletion.Rejected rejected
+                                ? rejected.operationId()
+                                : ((ZLinkActorJoinCompletion.Failed) completion).operationId();
         if (completedJoins.contains(operationId)) return CompletableFuture.completedFuture(null);
         rememberJoin(operationId);
 
         pendingJoin = false;
         if (completion instanceof ZLinkActorJoinCompletion.Accepted accepted) {
             Messages.EnterZoneRes reply = accepted.reply().decode(Messages.EnterZoneRes.class);
-            String joinedZone = reply.zoneId().isBlank()
-                ? pendingZone == null || pendingZone.isBlank()
-                    ? ZoneWorldSpec.zoneOf(pendingX, pendingY)
-                    : pendingZone
-                : reply.zoneId();
+            String joinedZone =
+                    reply.zoneId().isBlank()
+                            ? pendingZone == null || pendingZone.isBlank()
+                                    ? ZoneWorldSpec.zoneOf(pendingX, pendingY)
+                                    : pendingZone
+                            : reply.zoneId();
             applyAtZone(pendingX, pendingY, joinedZone, isBot);
             pendingZone = null;
             if (pendingPurpose == JoinPurpose.INITIAL_HUMAN) {
@@ -201,14 +206,20 @@ public final class PlayerActor implements ZLinkActor {
             return CompletableFuture.completedFuture(null);
         }
 
-        String reason = completion instanceof ZLinkActorJoinCompletion.Rejected rejected
-            ? rejected.reply().decode(Messages.EnterZoneRes.class).error()
-            : mapFailure(((ZLinkActorJoinCompletion.Failed) completion).kind().name());
+        String reason =
+                completion instanceof ZLinkActorJoinCompletion.Rejected rejected
+                        ? rejected.reply().decode(Messages.EnterZoneRes.class).error()
+                        : mapFailure(((ZLinkActorJoinCompletion.Failed) completion).kind().name());
         pendingZone = null;
         if (pendingPurpose == JoinPurpose.INITIAL_HUMAN) {
             pendingPurpose = JoinPurpose.NONE;
-            return send(new Messages.JoinWorldNotify(
-                actorId, ZoneWorldSpec.zoneOf(pendingX, pendingY), pendingX, pendingY, reason));
+            return send(
+                    new Messages.JoinWorldNotify(
+                            actorId,
+                            ZoneWorldSpec.zoneOf(pendingX, pendingY),
+                            pendingX,
+                            pendingY,
+                            reason));
         }
         if (pendingPurpose == JoinPurpose.CRASH_PROBE) {
             pendingPurpose = JoinPurpose.NONE;
@@ -219,6 +230,7 @@ public final class PlayerActor implements ZLinkActor {
         reverseDirection();
         return CompletableFuture.completedFuture(null);
     }
+
     // --8<-- [end:doc-zw-join-completed]
 
     private static String mapFailure(String kind) {
@@ -239,5 +251,11 @@ public final class PlayerActor implements ZLinkActor {
         }
     }
 
-    private enum JoinPurpose { NONE, INITIAL_HUMAN, INITIAL_BOT, ZONE_CHANGE, CRASH_PROBE }
+    private enum JoinPurpose {
+        NONE,
+        INITIAL_HUMAN,
+        INITIAL_BOT,
+        ZONE_CHANGE,
+        CRASH_PROBE
+    }
 }

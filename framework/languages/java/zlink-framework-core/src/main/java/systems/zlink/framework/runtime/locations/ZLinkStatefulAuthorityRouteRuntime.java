@@ -1,6 +1,9 @@
 package systems.zlink.framework.runtime.locations;
 import java.util.Objects;
 import java.util.concurrent.CompletionException;
+import java.security.MessageDigest;
+import java.security.NoSuchAlgorithmException;
+import java.util.Arrays;
 
 import java.time.Duration;
 import java.util.HashMap;
@@ -19,6 +22,11 @@ import systems.zlink.framework.runtime.internal.locations.ZLinkAuthorityScanCurs
 import systems.zlink.framework.runtime.internal.locations.ZLinkAuthorityScanExpired;
 import systems.zlink.framework.runtime.internal.locations.ZLinkAuthoritySnapshot;
 import systems.zlink.framework.runtime.internal.locations.ZLinkLocationRepository;
+import systems.zlink.framework.runtime.internal.locations.ZLinkRelocationFound;
+import systems.zlink.framework.runtime.internal.locations.ZLinkRelocationStore;
+import systems.zlink.framework.runtime.internal.locations.ZLinkAuthorityExpectFound;
+import systems.zlink.framework.runtime.internal.locations.ZLinkAuthorityPut;
+import systems.zlink.framework.runtime.internal.locations.ZLinkAuthorityStored;
 import systems.zlink.framework.runtime.internal.locations.ZLinkPlacementAllocationState;
 import systems.zlink.framework.locations.ZLinkPlacementObjectKind;
 import systems.zlink.framework.runtime.internal.locations.ZLinkStoreCancellation;
@@ -34,6 +42,7 @@ public final class ZLinkStatefulAuthorityRouteRuntime
     private static final ZLinkStoreCancellation OPEN = () -> false;
 
     private final ZLinkLocationRepository store;
+    private final ZLinkRelocationStore relocationStore;
     private final Map<String, ZLinkInternalMeshNode> meshNodes;
     private final Duration pollingInterval;
     private final Consumer<Throwable> reportFailure;
@@ -57,7 +66,17 @@ public final class ZLinkStatefulAuthorityRouteRuntime
         Map<String, ZLinkInternalMeshNode> meshNodes,
         Duration pollingInterval,
         Consumer<Throwable> reportFailure) {
+        this(store, null, meshNodes, pollingInterval, reportFailure);
+    }
+
+    public ZLinkStatefulAuthorityRouteRuntime(
+        ZLinkLocationRepository store,
+        ZLinkRelocationStore relocationStore,
+        Map<String, ZLinkInternalMeshNode> meshNodes,
+        Duration pollingInterval,
+        Consumer<Throwable> reportFailure) {
         this.store = Objects.requireNonNull(store, "store");
+        this.relocationStore = relocationStore;
         this.meshNodes = Map.copyOf(
             Objects.requireNonNull(
                 meshNodes, "meshNodes"));
@@ -86,6 +105,7 @@ public final class ZLinkStatefulAuthorityRouteRuntime
 
     public CompletionStage<Void> reconcile() {
         return scan(Optional.empty(), new HashMap<>())
+            .thenCompose(this::recoverActivations)
             .thenAccept(next -> inStateLane(() -> {
                 applyCore(next);
                 return null;
@@ -177,10 +197,168 @@ public final class ZLinkStatefulAuthorityRouteRuntime
                     == ZLinkPlacementAllocationState.ACTIVE;
                 return value.instance()
                     .<Applied>map(ignored -> new InstanceApplied(
-                        value.stableType(), value.meshName(), ready, route, instance))
+                        value.stableType(), value.meshName(), ready, route, instance,
+                        value.activationRecoveryState()))
                     .orElseGet(() -> new UserApplied(
                         value.stableType(), value.meshName(), ready, route));
             });
+    }
+
+    private CompletionStage<Map<String, Applied>> recoverActivations(
+        Map<String, Applied> routes) {
+        CompletionStage<Void> tail = CompletableFuture.completedFuture(null);
+        for (Map.Entry<String, Applied> entry : routes.entrySet()) {
+            if (!(entry.getValue() instanceof InstanceApplied instance)
+                || instance.activationRecovery().isEmpty()) {
+                continue;
+            }
+            ZLinkInternalMeshNode node = meshNodes.get(instance.meshName());
+            if (node == null
+                || !instance.instance().targetNodeRid().equals(node.routingId())
+                || instance.instance().targetNodeGeneration()
+                    != node.lifecycleGeneration()) {
+                continue;
+            }
+            tail = tail.thenCompose(ignored -> recoverActivation(
+                    entry.getKey(), node, instance)
+                .thenAccept(recovered -> routes.put(entry.getKey(), recovered)));
+        }
+        return tail.thenApply(ignored -> routes);
+    }
+
+    private CompletionStage<InstanceApplied> recoverActivation(
+        String key,
+        ZLinkInternalMeshNode node,
+        InstanceApplied applied) {
+        ZLinkServiceAuthorityPayloadCodec.ActivationRecoveryState recovery =
+            applied.activationRecovery().orElseThrow();
+        if (relocationStore == null) {
+            return CompletableFuture.failedFuture(new IllegalStateException(
+                "Instance activation recovery requires a Relocation Store"));
+        }
+        CompletionStage<String> completedVersion;
+        if (Long.compareUnsigned(
+                recovery.replayCursor(), recovery.inboxSequence()) < 0) {
+            completedVersion = relocationStore.get(recovery.reference(), OPEN)
+                .thenCompose(read -> {
+                    if (!(read instanceof ZLinkRelocationFound found)) {
+                        return CompletableFuture.failedFuture(
+                            new IllegalStateException(
+                                "Instance activation recovery root is missing"));
+                    }
+                    byte[] payload = found.payload();
+                    if (payload.length != recovery.encodedSize()
+                        || !Arrays.equals(sha256(payload), recovery.sha256())) {
+                        return CompletableFuture.failedFuture(
+                            new IllegalStateException(
+                                "Instance activation recovery root failed integrity validation"));
+                    }
+                    var envelope = new systems.zlink.framework.runtime.internal.service
+                        .ZLinkInstanceActivationRecoveryCodec().decode(payload);
+                    if (!envelope.targetSpotId().equals(
+                            applied.instance().targetSpotId())
+                        || !envelope.stableType().equals(applied.stableType())
+                        || !envelope.targetMeshName().equals(applied.meshName())
+                        || !envelope.targetNodeRid().equals(
+                            applied.instance().targetNodeRid())
+                        || envelope.targetNodeGeneration()
+                            != applied.instance().targetNodeGeneration()
+                        || !envelope.descriptorVersion().equals(
+                            Long.toString(node.status().descriptorRevision()))) {
+                        return CompletableFuture.failedFuture(
+                            new IllegalStateException(
+                                "Instance activation recovery root does not match authority"));
+                    }
+                    return node.recoverInstanceActivation(
+                            envelope, applied.instance())
+                        .thenCompose(ignored -> store.compareExchange(
+                            key,
+                            new ZLinkAuthorityExpectFound(
+                                applied.instance().storeVersion()),
+                            new ZLinkAuthorityPut(encodeReady(
+                                applied,
+                                Optional.of(new ZLinkServiceAuthorityPayloadCodec
+                                    .ActivationRecoveryState(
+                                        recovery.reference(), recovery.sha256(),
+                                        recovery.encodedSize(), recovery.inboxSequence(),
+                                        recovery.inboxSequence())))),
+                            OPEN))
+                        .thenApply(result -> requireStored(
+                            result,
+                            "Instance activation terminal completion record")
+                            .storeVersion());
+                });
+        } else {
+            completedVersion = CompletableFuture.completedFuture(
+                applied.instance().storeVersion());
+        }
+        return completedVersion.thenCompose(storeVersion -> store.compareExchange(
+                key,
+                new ZLinkAuthorityExpectFound(storeVersion),
+                new ZLinkAuthorityPut(encodeReady(applied, Optional.empty())),
+                OPEN))
+            .thenCompose(result -> {
+                ZLinkAuthorityStored released = requireStored(
+                    result, "Instance activation recovery pointer release");
+                return relocationStore.delete(recovery.reference(), OPEN)
+                    .handle((ignored, failure) -> {
+                        if (failure != null) {
+                            reportFailure.accept(unwrap(failure));
+                        }
+                        return withoutRecovery(applied, released);
+                    });
+            });
+    }
+
+    private byte[] encodeReady(
+        InstanceApplied applied,
+        Optional<ZLinkServiceAuthorityPayloadCodec.ActivationRecoveryState> recovery) {
+        return payloadCodec.encodeInstance(
+            ZLinkServiceAuthorityPayloadCodec.State.READY,
+            applied.stableType(),
+            applied.instance().targetSpotId(),
+            applied.route().ownerId(),
+            applied.instance().leaseGeneration(),
+            applied.meshName(),
+            applied.instance().targetNodeRid(),
+            applied.instance().targetNodeGeneration(),
+            recovery);
+    }
+
+    private static ZLinkAuthorityStored requireStored(
+        systems.zlink.framework.runtime.internal.locations.ZLinkAuthorityWriteResult result,
+        String operation) {
+        if (result instanceof ZLinkAuthorityStored stored) return stored;
+        throw new IllegalStateException(
+            operation + " failed: " + result.getClass().getSimpleName());
+    }
+
+    private static InstanceApplied withoutRecovery(
+        InstanceApplied applied,
+        ZLinkAuthorityStored stored) {
+        var route = applied.route();
+        var instance = applied.instance();
+        return new InstanceApplied(
+            applied.stableType(), applied.meshName(), true,
+            new ZLinkInternalMeshNode.SpotAuthorityRoute(
+                route.spotId(), route.objectGeneration(), route.targetNodeRid(),
+                route.targetNodeGeneration(), route.authorityOwnerGeneration(),
+                route.ownerLeaseGeneration(), route.ownerId(), route.meshName(),
+                stored.storeVersion()),
+            new ZLinkServiceM6BWireCodec.InstanceRouteFence(
+                instance.targetNodeRid(), instance.targetNodeGeneration(),
+                instance.targetSpotId(), instance.objectGeneration(),
+                instance.ownerId(), instance.authorityOwnerGeneration(),
+                instance.leaseGeneration(), stored.storeVersion()),
+            Optional.empty());
+    }
+
+    private static byte[] sha256(byte[] payload) {
+        try {
+            return MessageDigest.getInstance("SHA-256").digest(payload);
+        } catch (NoSuchAlgorithmException impossible) {
+            throw new IllegalStateException(impossible);
+        }
     }
 
     private void applyCore(Map<String, Applied> next) {
@@ -293,7 +471,9 @@ public final class ZLinkStatefulAuthorityRouteRuntime
         String meshName,
         boolean ready,
         ZLinkInternalMeshNode.SpotAuthorityRoute route,
-        ZLinkServiceM6BWireCodec.InstanceRouteFence instance) implements Applied {
+        ZLinkServiceM6BWireCodec.InstanceRouteFence instance,
+        Optional<ZLinkServiceAuthorityPayloadCodec.ActivationRecoveryState>
+            activationRecovery) implements Applied {
     }
 
 }

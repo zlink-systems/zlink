@@ -11,7 +11,5 @@ class LegacyPlayerController {
 
     @GetMapping("/player/{playerId}")
     fun redirect(@PathVariable playerId: String): ResponseEntity<Void> =
-        ResponseEntity.status(301)
-            .location(URI.create("/players/$playerId"))
-            .build()
+        ResponseEntity.status(301).location(URI.create("/players/$playerId")).build()
 }

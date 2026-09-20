@@ -32,16 +32,12 @@ const encoder = new TextEncoder();
 // The tutorial keeps the examples linear so each call shows the public API that performs it.
 async function main(): Promise<void> {
   // --8<-- [start:http-client-create]
-  const client = ZLinkHttpClient.create(clientBaseUrl)
-    .timeout(3000)
-    .build();
+  const client = ZLinkHttpClient.create(clientBaseUrl).timeout(3000).build();
   // --8<-- [end:http-client-create]
 
   try {
     // --8<-- [start:http-first-request]
-    const first = await client
-      .get('/players/p1/profile')
-      .submit<PlayerProfile>();
+    const first = await client.get('/players/p1/profile').submit<PlayerProfile>();
     console.log(`first request: ${first.body.playerId} ${first.body.nickname}`);
     // --8<-- [end:http-first-request]
 
@@ -61,14 +57,8 @@ async function main(): Promise<void> {
     // --8<-- [end:http-request-shaping]
 
     // --8<-- [start:http-json-body]
-    const player = await client
-      .post('/players/p2')
-      .body({ nickname: 'rookie' })
-      .submit<string>();
-    const room = await client
-      .post('/rooms')
-      .body({ title: 'tutorial-room' })
-      .fetch<string>();
+    const player = await client.post('/players/p2').body({ nickname: 'rookie' }).submit<string>();
+    const room = await client.post('/rooms').body({ title: 'tutorial-room' }).fetch<string>();
     // The room id returned here is used by the following room requests.
     const chat = await client
       .post(`/rooms/${room}/chat`)
@@ -81,7 +71,9 @@ async function main(): Promise<void> {
     const typed = await client.get('/players/p2').submit<PlayerInfo>();
     const raw = await client.get('/players/p2').submitRaw();
     const fetched = await client.get('/players/p2').fetch<PlayerInfo>();
-    console.log(`response kinds: typed ${typed.status} raw ${raw.headers['content-type']} fetch ${fetched.nickname}`);
+    console.log(
+      `response kinds: typed ${typed.status} raw ${raw.headers['content-type']} fetch ${fetched.nickname}`
+    );
     // --8<-- [end:http-response-kinds]
 
     // --8<-- [start:http-compressed-response]
@@ -89,13 +81,12 @@ async function main(): Promise<void> {
       .compression()
       .get(`/rooms/${room}`)
       .submitRaw();
-    console.log(`compressed response: ${compressed.status} encoding-removed ${compressed.headers['content-encoding'] === undefined}`);
+    console.log(
+      `compressed response: ${compressed.status} encoding-removed ${compressed.headers['content-encoding'] === undefined}`
+    );
     // --8<-- [end:http-compressed-response]
 
-    await client
-      .post('/players/p1')
-      .body({ nickname: 'rookie' })
-      .submitRaw();
+    await client.post('/players/p1').body({ nickname: 'rookie' }).submitRaw();
 
     // --8<-- [start:http-redirect]
     const redirected = await ZLinkHttpClient.create(clientBaseUrl)
@@ -121,12 +112,10 @@ async function main(): Promise<void> {
     // --8<-- [start:http-download-stream]
     let downloadChunks = 0;
     let downloadBytes = 0;
-    await client
-      .get(`/rooms/${room}/export`)
-      .download((chunk) => {
-        downloadChunks++;
-        downloadBytes += chunk.byteLength;
-      });
+    await client.get(`/rooms/${room}/export`).download((chunk) => {
+      downloadChunks++;
+      downloadBytes += chunk.byteLength;
+    });
     console.log(`download stream: chunks ${downloadChunks} bytes ${downloadBytes}`);
     // --8<-- [end:http-download-stream]
 
@@ -153,13 +142,13 @@ async function main(): Promise<void> {
     }
     let connectionRefusedKind = 'unknown';
     try {
-      await ZLinkHttpClient.create('http://127.0.0.1:6380')
-        .get('/players/p1')
-        .submitRaw();
+      await ZLinkHttpClient.create('http://127.0.0.1:6380').get('/players/p1').submitRaw();
     } catch (error: unknown) {
       connectionRefusedKind = frameworkKindName(error);
     }
-    console.log(`error kinds: bad request ${badRequestKind} connection refused ${connectionRefusedKind}`);
+    console.log(
+      `error kinds: bad request ${badRequestKind} connection refused ${connectionRefusedKind}`
+    );
     // --8<-- [end:http-error-kinds]
   } finally {
     await client.close();
@@ -169,20 +158,22 @@ async function main(): Promise<void> {
 function frameworkKindName(error: unknown): string {
   const kind = (error as { readonly kind?: unknown }).kind;
   if (typeof kind !== 'number') return String(kind);
-  return [
-    'NotFound',
-    'AlreadyExists',
-    'TypeMismatch',
-    'NotConfigured',
-    'Rejected',
-    'Unavailable',
-    'DeadlineExceeded',
-    'ShuttingDown',
-    'ProtocolError',
-    'InvalidOperation',
-    'DataLost',
-    'InternalFailure'
-  ][kind] ?? String(kind);
+  return (
+    [
+      'NotFound',
+      'AlreadyExists',
+      'TypeMismatch',
+      'NotConfigured',
+      'Rejected',
+      'Unavailable',
+      'DeadlineExceeded',
+      'ShuttingDown',
+      'ProtocolError',
+      'InvalidOperation',
+      'DataLost',
+      'InternalFailure'
+    ][kind] ?? String(kind)
+  );
 }
 
 main().catch((error: unknown) => {

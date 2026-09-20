@@ -28,8 +28,7 @@ int main (int argc, char **argv)
         // Rooms are addressed by id, not by host, so their current location is
         // kept here. Every node reads and writes the same store under the same
         // prefix.
-        options
-          .add_location_store<fw::redis::redis_location_store_t> ()
+        options.add_location_store<fw::redis::redis_location_store_t> ()
           .set_connection_string ("127.0.0.1:6379")
           .set_key_prefix ("zlink-tutorial-cpp:location:");
         // --8<-- [end:location-store]
@@ -37,8 +36,7 @@ int main (int argc, char **argv)
         // --8<-- [start:relocation-store]
         // Registering any Spot factory requires this store, even with relocation
         // turned off: the registration itself is the condition.
-        options
-          .add_relocation_store<fw::redis::redis_relocation_store_t> ()
+        options.add_relocation_store<fw::redis::redis_relocation_store_t> ()
           .set_connection_string ("127.0.0.1:6379")
           .set_key_prefix ("zlink-tutorial-cpp:relocation:");
         // --8<-- [end:relocation-store]
@@ -54,23 +52,21 @@ int main (int argc, char **argv)
         // as peers. The routing id names this node; without it the Framework
         // assigns a generated one, which a caller cannot type into a URL.
         zlink::routing_id_t routing_id = zlink::routing_id_t::from ("game-server-1");
-        auto mesh =
-          options
-            .add_route_mesh ("game")
-            .listen ("tcp://0.0.0.0:7401")
-            .set_routing_id (routing_id)
-            // A wildcard bind host leaves peers with no address to dial
-            // back, so the address to publish is given here.
-            .set_advertise_host ("127.0.0.1");
+        auto mesh = options.add_route_mesh ("game")
+                      .listen ("tcp://0.0.0.0:7401")
+                      .set_routing_id (routing_id)
+                      // A wildcard bind host leaves peers with no address to dial
+                      // back, so the address to publish is given here.
+                      .set_advertise_host ("127.0.0.1");
         // --8<-- [end:mesh-register]
 
         // --8<-- [start:channel-register]
         // Only handlers exposed here can be called by other nodes. A handler class
         // sitting in the same binary but left out stays unreachable.
-        mesh
-          .channel ("profile")
+        mesh.channel ("profile")
           .server ()
-          .add_request_handler<get_player_profile_handler_t, get_player_profile_t,
+          .add_request_handler<get_player_profile_handler_t,
+                               get_player_profile_t,
                                player_profile_t> ()
           .add_send_handler<record_login_handler_t, record_login_t> ();
         // --8<-- [end:channel-register]
@@ -84,13 +80,13 @@ int main (int argc, char **argv)
         // --8<-- [start:clientserver-register]
         // The caller dials this endpoint directly, so it needs a port of its own and
         // an address to advertise, separate from the mesh.
-        options
-          .add_client_server_channel ("ticketing")
+        options.add_client_server_channel ("ticketing")
           .server ()
           .listen (7411)
           .set_bind_host ("127.0.0.1")
           .set_advertise_host ("127.0.0.1")
-          .add_request_handler<issue_session_ticket_handler_t, issue_session_ticket_t,
+          .add_request_handler<issue_session_ticket_handler_t,
+                               issue_session_ticket_t,
                                session_ticket_t> ();
         // --8<-- [end:clientserver-register]
 
@@ -99,13 +95,9 @@ int main (int argc, char **argv)
         // then maps that group. Without a Location Store the subscriber is told
         // the publisher's endpoint outright; connect(...) is what makes this
         // subscriber manual, so enable_subscriber() must not be added next to it.
-        options
-          .handlers ()
-          .group ("broadcast")
-          .add_publish<maintenance_notice_subscriber_t> ();
+        options.handlers ().group ("broadcast").add_publish<maintenance_notice_subscriber_t> ();
 
-        options
-          .add_fanout_channel ("broadcast")
+        options.add_fanout_channel ("broadcast")
           .connect ("tcp://127.0.0.1:7412")
           .use_handler_group ("broadcast");
         // --8<-- [end:fanout-subscribe]
@@ -141,8 +133,7 @@ int main (int argc, char **argv)
         // --8<-- [start:stream-register]
         // The port game clients connect to. One session type per stream node,
         // and actor dispatch must be on for a session to relay to its player.
-        options
-          .add_stream_node ("client-stream")
+        options.add_stream_node ("client-stream")
           .bind ("tcp://0.0.0.0:7421")
           .enable_actor_dispatch ()
           .register_session<game_session_t> ();
@@ -151,8 +142,7 @@ int main (int argc, char **argv)
         // The Server answers messages, so it opened no HTTP surface of its own
         // until this admin endpoint. The port only has to differ from the
         // Client's 5180 when both run on the same host.
-        options
-          .http ()
+        options.http ()
           .listen ("http://127.0.0.1:5181")
           .map_post<authenticated_channel_weight_handler_t> ("/admin/channels/{channel}/weight");
     });

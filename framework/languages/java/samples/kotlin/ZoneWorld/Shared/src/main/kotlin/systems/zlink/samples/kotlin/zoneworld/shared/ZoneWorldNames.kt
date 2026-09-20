@@ -28,10 +28,13 @@ object ZoneWorldNames {
     // it observes in the mesh runtime without asking the node anything - a node that
     // has stopped is not there to answer.
     const val ROUTING_ID_PREFIX = "zoneworld-kotlin-"
-    private val ROUTING_ID = Regex(
-        "^" + ROUTING_ID_PREFIX + "(.+)" +
-            "-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$",
-    )
+    private val ROUTING_ID =
+        Regex(
+            "^" +
+                ROUTING_ID_PREFIX +
+                "(.+)" +
+                "-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
+        )
 
     fun routingIdPrefix(identity: String) = ROUTING_ID_PREFIX + identity
 

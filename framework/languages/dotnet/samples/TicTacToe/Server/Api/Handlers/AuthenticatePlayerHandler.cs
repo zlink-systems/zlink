@@ -10,11 +10,12 @@ internal sealed class AuthenticatePlayerHandler(ILogger<AuthenticatePlayerHandle
     public ValueTask<AuthenticatePlayerRes> HandleAsync(
         AuthenticatePlayerReq request,
         IZLinkMessageContext context,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken
+    )
     {
-
         var actorId = request.AccessToken.Trim();
-        if (string.IsNullOrWhiteSpace(actorId)) throw new InvalidOperationException("Authentication token is empty.");
+        if (string.IsNullOrWhiteSpace(actorId))
+            throw new InvalidOperationException("Authentication token is empty.");
 
         var player = CreatePlayer(actorId);
 
@@ -22,7 +23,8 @@ internal sealed class AuthenticatePlayerHandler(ILogger<AuthenticatePlayerHandle
             "play -> api: authenticate accepted. player={ActorId}, level={Level}, wins={Wins}",
             player.ActorId,
             player.Level,
-            player.Wins);
+            player.Wins
+        );
         return ValueTask.FromResult(new AuthenticatePlayerRes(player));
     }
 
@@ -33,7 +35,7 @@ internal sealed class AuthenticatePlayerHandler(ILogger<AuthenticatePlayerHandle
             "player-x" => new PlayerInfo(actorId, "Player X", 5, 99),
             "player-o" => new PlayerInfo(actorId, "Player O", 4, 12),
             "observer" => new PlayerInfo(actorId, "Observer", 1, 0),
-            _ => new PlayerInfo(actorId, actorId, 3, 0)
+            _ => new PlayerInfo(actorId, actorId, 3, 0),
         };
     }
 }

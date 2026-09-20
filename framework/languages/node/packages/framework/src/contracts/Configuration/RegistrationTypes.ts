@@ -198,8 +198,6 @@ export interface ZLinkClientCapabilityOptions {
   readonly manualConnections?: readonly string[];
   readonly sendHighWaterMark?: number;
   readonly receiveHighWaterMark?: number;
-  readonly mailboxMessageBudget?: number;
-  readonly mailboxByteBudget?: number;
   readonly sendTimeoutMs?: number;
   readonly maxMessageSize?: number;
 }
@@ -434,6 +432,7 @@ export interface ZLinkSpotRouterCapabilityOptions {
   readonly routingId?: string;
   readonly sendHighWaterMark?: number;
   readonly receiveHighWaterMark?: number;
+  readonly receiveTimeoutMs?: number;
   readonly sendTimeoutMs?: number;
 }
 

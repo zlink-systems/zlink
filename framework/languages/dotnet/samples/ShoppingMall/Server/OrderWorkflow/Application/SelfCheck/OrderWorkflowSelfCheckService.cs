@@ -7,11 +7,13 @@ namespace ShoppingMall.Server.OrderWorkflow.Application.SelfCheck;
 
 internal sealed class OrderWorkflowSelfCheckService(
     OrderWorkflowService workflow,
-    ICommerceStateStore commerce)
+    ICommerceStateStore commerce
+)
 {
     public async ValueTask<OrderState> PrepareInventoryReservedCheckpointAsync(
         StartOrderWorkflowReq command,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken
+    )
     {
         var started = await workflow.StartAsync(command, cancellationToken);
         return started.Status == OrderStatuses.Created
@@ -21,11 +23,11 @@ internal sealed class OrderWorkflowSelfCheckService(
 
     public ValueTask ArmPlannedRelocationReplayAsync(
         string orderId,
-        CancellationToken cancellationToken) =>
-        commerce.ArmPlannedRelocationReplayAsync(orderId, cancellationToken);
+        CancellationToken cancellationToken
+    ) => commerce.ArmPlannedRelocationReplayAsync(orderId, cancellationToken);
 
     public ValueTask<bool> TryConsumePlannedRelocationReplayAsync(
         string orderId,
-        CancellationToken cancellationToken) =>
-        commerce.TryConsumePlannedRelocationReplayAsync(orderId, cancellationToken);
+        CancellationToken cancellationToken
+    ) => commerce.TryConsumePlannedRelocationReplayAsync(orderId, cancellationToken);
 }

@@ -30,19 +30,24 @@ function createTicTacToeConfigurationModule(
   const configPath = readConfigPath(process.argv.slice(2));
   return {
     module: TicTacToeConfigurationModule,
-    imports: [ConfigModule.forRoot({
-      cache: true,
-      ignoreEnvFile: true,
-      isGlobal: false,
-      load: [() => ({ sample: readSampleConfig(configPath) })],
-      skipProcessEnv: true,
-      validatePredefined: false
-    })],
-    providers: [{
-      provide: TICTACTOE_SAMPLE_CONFIG,
-      inject: [ConfigService],
-      useFactory: (config: ConfigService) => validateSampleConfig(config.get('sample'), requiredKeys)
-    }],
+    imports: [
+      ConfigModule.forRoot({
+        cache: true,
+        ignoreEnvFile: true,
+        isGlobal: false,
+        load: [() => ({ sample: readSampleConfig(configPath) })],
+        skipProcessEnv: true,
+        validatePredefined: false
+      })
+    ],
+    providers: [
+      {
+        provide: TICTACTOE_SAMPLE_CONFIG,
+        inject: [ConfigService],
+        useFactory: (config: ConfigService) =>
+          validateSampleConfig(config.get('sample'), requiredKeys)
+      }
+    ],
     exports: [TICTACTOE_SAMPLE_CONFIG]
   };
 }
@@ -75,7 +80,11 @@ function validateSampleConfig(
 function validateValue(key: keyof TicTacToeSampleConfig, value: unknown): void {
   if (typeof value === 'string' && value.length > 0) return;
   if (typeof value === 'number' && Number.isInteger(value) && value >= 0) return;
-  if (Array.isArray(value) && value.length > 0 && value.every((entry) => typeof entry === 'string' && entry.length > 0)) {
+  if (
+    Array.isArray(value) &&
+    value.length > 0 &&
+    value.every((entry) => typeof entry === 'string' && entry.length > 0)
+  ) {
     return;
   }
   throw new Error(`Configuration value 'sample.${key}' has an invalid value.`);

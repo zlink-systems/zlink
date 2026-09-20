@@ -612,6 +612,78 @@ TEST (CppFrameworkOpaqueLocationStore, PrivateRepositoryPersistsLeaseAndDescript
     EXPECT_EQ (page.items.front ().owner_id, "owner-a");
 }
 
+TEST (CppFrameworkOpaqueLocationStore, MeshNewClaimUsesStoredOwnerLeaseExactRead)
+{
+    in_memory_location_store_t provider;
+    provider_location_repository_t repository (provider);
+    const auto expired_claim =
+      repository.claim_owner_lease ("expired-descriptor-owner", 30s).result ().value ();
+    const auto *expired_owner = std::get_if<owner_lease_claimed_t> (&expired_claim);
+    ASSERT_NE (expired_owner, nullptr);
+
+    const auto descriptor = [] (std::string rid, const location_owner_token_t &owner) {
+        mesh_node_descriptor_t value;
+        value.mesh_name = "descriptor-fence";
+        value.rid = zlink::routing_id_t::from (std::move (rid));
+        value.lifecycle_generation = 1;
+        value.descriptor_revision = 1;
+        value.endpoint = "tcp://127.0.0.1:7001";
+        value.owner_id = owner.owner_id;
+        value.lease_generation = owner.lease_generation;
+        value.object_role = object_role_t::server;
+        value.state = framework_runtime_state_t::serving;
+        return value;
+    };
+    ASSERT_EQ (repository
+                 .update_mesh_node (descriptor ("expired", expired_owner->token),
+                                    location_write_intent_t::new_claim)
+                 .result ()
+                 .value ()
+                 .status,
+               location_write_status_t::stored);
+    ASSERT_NE (std::get_if<owner_lease_released_t> (
+                 &repository.release_owner_lease (expired_owner->token).result ().value ()),
+               nullptr);
+    ASSERT_TRUE (std::holds_alternative<owner_lease_missing_t> (
+      repository.read_owner_lease (expired_owner->token.owner_id).result ().value ()));
+
+    const auto successor_claim =
+      repository.claim_owner_lease ("successor-descriptor-owner", 30s).result ().value ();
+    const auto *successor = std::get_if<owner_lease_claimed_t> (&successor_claim);
+    ASSERT_NE (successor, nullptr);
+    ASSERT_GT (successor->token.lease_generation, expired_owner->token.lease_generation);
+    EXPECT_EQ (repository
+                 .update_mesh_node (descriptor ("expired", successor->token),
+                                    location_write_intent_t::new_claim)
+                 .result ()
+                 .value ()
+                 .status,
+               location_write_status_t::stored);
+
+    const auto live_claim =
+      repository.claim_owner_lease ("live-descriptor-owner", 30s).result ().value ();
+    const auto *live_owner = std::get_if<owner_lease_claimed_t> (&live_claim);
+    ASSERT_NE (live_owner, nullptr);
+    ASSERT_EQ (repository
+                 .update_mesh_node (descriptor ("live", live_owner->token),
+                                    location_write_intent_t::new_claim)
+                 .result ()
+                 .value ()
+                 .status,
+               location_write_status_t::stored);
+    const auto contender_claim =
+      repository.claim_owner_lease ("contending-descriptor-owner", 30s).result ().value ();
+    const auto *contender = std::get_if<owner_lease_claimed_t> (&contender_claim);
+    ASSERT_NE (contender, nullptr);
+    EXPECT_EQ (repository
+                 .update_mesh_node (descriptor ("live", contender->token),
+                                    location_write_intent_t::new_claim)
+                 .result ()
+                 .value ()
+                 .status,
+               location_write_status_t::rejected_conflict);
+}
+
 TEST (CppFrameworkOpaqueLocationStore, ExpiredOwnerLeaseReclaimsReservedAuthority)
 {
     in_memory_location_store_t provider;
@@ -1227,6 +1299,76 @@ TEST (CppFrameworkOpaqueLocationStore, PrivateRepositoryPersistsAuthorityLifecyc
                  .store_version,
                exhausted_actor.store_version);
 
+}
+
+TEST (CppFrameworkOpaqueLocationStore, ReservationLivesOnlyInReservedAuthorityRow)
+{
+    in_memory_location_store_t provider;
+    provider_location_repository_t repository (provider);
+    const auto lease = repository.claim_owner_lease ("single-row-owner", 30s).result ().value ();
+    const auto *owner = std::get_if<owner_lease_claimed_t> (&lease);
+    ASSERT_NE (owner, nullptr);
+
+    mesh_node_descriptor_t descriptor;
+    descriptor.mesh_name = "single-row-mesh";
+    descriptor.rid = zlink::routing_id_t::from (std::string{"single-row-node"});
+    descriptor.lifecycle_generation = 1;
+    descriptor.descriptor_revision = 1;
+    descriptor.endpoint = "tcp://127.0.0.1:7001";
+    descriptor.owner_id = owner->token.owner_id;
+    descriptor.lease_generation = owner->token.lease_generation;
+    descriptor.object_role = object_role_t::server;
+    descriptor.state = framework_runtime_state_t::serving;
+    descriptor.object_capabilities.push_back (
+      {placement_object_kind_t::actor, "player", maintenance_policy_kind_t::recreate, false, 0});
+    descriptor.capacity.actors.limit = 1;
+    ASSERT_EQ (repository.update_mesh_node (descriptor, location_write_intent_t::new_claim)
+                 .result ().value ().status,
+               location_write_status_t::stored);
+
+    object_reserve_request_t request;
+    request.key = {placement_object_kind_t::actor, "single-row-actor"};
+    request.intent.stable_type = "player";
+    request.intent.request_content_reference = "inline-v1:cmVxdWVzdA";
+    request.intent.request_sha256 = sha256 (bytes ("request"));
+    request.intent.request_encoded_size = 7;
+    request.target = {"single-row-mesh", node_rid_t::from_string ("single-row-node"),
+                      1, owner->token};
+    request.creating_payload = bytes ("creating");
+    request.capacity_bundle.actor_slots = 1;
+
+    const auto reserved = repository.reserve (request).result ().value ();
+    const auto *reservation = std::get_if<object_reserved_t> (&reserved);
+    ASSERT_NE (reservation, nullptr);
+    const auto authority = repository.read_authority (
+      actor_authority_key (request.key.global_id)).result ().value ();
+    const auto *snapshot = std::get_if<authority_snapshot_t> (&authority);
+    ASSERT_NE (snapshot, nullptr);
+    EXPECT_EQ (snapshot->allocation.state, placement_allocation_state_t::reserved);
+    ASSERT_TRUE (snapshot->pending_creation);
+    EXPECT_EQ (snapshot->pending_creation->reservation_id,
+               reservation->fence.reservation_id);
+    EXPECT_EQ (snapshot->pending_creation->request_content_reference,
+               request.intent.request_content_reference);
+    EXPECT_EQ (snapshot->pending_creation->request_sha256,
+               request.intent.request_sha256);
+    EXPECT_EQ (snapshot->pending_creation->request_encoded_size,
+               request.intent.request_encoded_size);
+
+    const auto reservation_rows = provider.scan (
+      {.prefix = "zlink:v11:creation-reservation:",
+       .cursor = std::nullopt,
+       .limit = 10}).result ().value ();
+    const auto *reservation_page = std::get_if<store_scan_page_t> (&reservation_rows);
+    ASSERT_NE (reservation_page, nullptr);
+    EXPECT_TRUE (reservation_page->items.empty ());
+
+    const auto committed = repository.commit (
+      {request.key, reservation->fence, bytes ("ready")}).result ().value ();
+    const auto *ready = std::get_if<object_committed_t> (&committed);
+    ASSERT_NE (ready, nullptr);
+    EXPECT_EQ (ready->ready.allocation.state, placement_allocation_state_t::active);
+    EXPECT_FALSE (ready->ready.pending_creation);
 }
 
 TEST (CppFrameworkOpaqueLocationStore, RetargetUsesCapacityRowsAtomically)

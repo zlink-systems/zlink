@@ -20,7 +20,6 @@ class OpsEndpoints(route: ZLinkRouteClient) {
     suspend fun nodeStatus(@PathVariable nodeRid: String): NodeStatus =
         // The target is one node, named by its routing id. No channel takes part,
         // so no candidate is chosen: this node answers or the call fails.
-        route.requestToNode<NodeStatus>("game", RoutingId.from(nodeRid), GetNodeStatus())
-            .await()
+        route.requestToNode<NodeStatus>("game", RoutingId.from(nodeRid), GetNodeStatus()).await()
     // --8<-- [end:node-direct-call]
 }

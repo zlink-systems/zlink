@@ -15,7 +15,8 @@ internal sealed class ConversationSpot(
     ConversationNotificationPublisher notifications,
     AgentAssignmentService assignment,
     SupportActorDirectory directory,
-    ILogger<ConversationSpot> logger) : IZLinkSpot<SupportUserActor>
+    ILogger<ConversationSpot> logger
+) : IZLinkSpot<SupportUserActor>
 {
     internal static readonly TimeSpan IdleCheckPeriod = TimeSpan.FromMilliseconds(200);
 
@@ -23,14 +24,17 @@ internal sealed class ConversationSpot(
     // actor, while agent events go to the roster actor that represents the human agent
     // across all rooms. ConversationId on each notification disambiguates the room.
     private readonly Dictionary<string, SupportUserActor> _actors = new(StringComparer.Ordinal);
-    private readonly Dictionary<string, ConversationChange> _pendingJoinChanges = new(StringComparer.Ordinal);
+    private readonly Dictionary<string, ConversationChange> _pendingJoinChanges = new(
+        StringComparer.Ordinal
+    );
     private Conversation? _conversation;
 
     public IZLinkSpotContext Context { get; } = context;
 
     public ValueTask<ZLinkSpotCreateResponse> OnCreateAsync(
         ZLinkMessage request,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken
+    )
     {
         var create = request.Decode<ConversationCreateReq>();
         var conversationId = Context.SpotId.ToString();
@@ -40,25 +44,28 @@ internal sealed class ConversationSpot(
             create.CustomerActorId,
             create.CustomerDisplayName,
             create.CreatedAtUnixMs,
-            new ConversationPolicy(
-                SampleTimings.IdleTimeout,
-                SampleTimings.CloseGraceTimeout,
-                500));
+            new ConversationPolicy(SampleTimings.IdleTimeout, SampleTimings.CloseGraceTimeout, 500)
+        );
         logger.LogInformation(
             "supportchat-conversation created conversation={ConversationId}",
-            conversationId);
+            conversationId
+        );
         logger.LogInformation(
             "supportchat-conversation status={Status} conversation={ConversationId}",
             ConversationStatuses.WaitingForAgent,
-            conversationId);
-        return ValueTask.FromResult(ZLinkSpotCreateResponse.Accept(
-            new ConversationCreateRes(
-                ConversationContracts.ToState(_conversation.Snapshot()))));
+            conversationId
+        );
+        return ValueTask.FromResult(
+            ZLinkSpotCreateResponse.Accept(
+                new ConversationCreateRes(ConversationContracts.ToState(_conversation.Snapshot()))
+            )
+        );
     }
 
     public async ValueTask OnClosingAsync(
         ZLinkSpotClosingContext context,
-        CancellationToken cleanupCancellationToken)
+        CancellationToken cleanupCancellationToken
+    )
     {
         _ = context;
         cleanupCancellationToken.ThrowIfCancellationRequested();
@@ -69,7 +76,8 @@ internal sealed class ConversationSpot(
     // lifecycle one stage. No-op until the conversation exists and has messages.
     public ValueTask CheckIdleAsync(CancellationToken cancellationToken)
     {
-        if (_conversation is null) return ValueTask.CompletedTask;
+        if (_conversation is null)
+            return ValueTask.CompletedTask;
         var change = _conversation.MarkIdle(NowUnixMs());
         return PublishChangeAsync(change, cancellationToken);
     }
@@ -80,30 +88,36 @@ internal sealed class ConversationSpot(
     public async ValueTask<ZLinkSpotActorJoinResult> OnActorJoinAsync(
         string actorId,
         ZLinkMessage request,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken
+    )
     {
         var conversation = RequireConversation();
         var join = request.Decode<JoinConversationReq>();
         if (string.Equals(join.Role, SupportChatRoles.Agent, StringComparison.Ordinal))
         {
-            var participantId = string.IsNullOrWhiteSpace(join.ParticipantId) ? actorId : join.ParticipantId;
-            var displayName = string.IsNullOrWhiteSpace(join.DisplayName) ? participantId : join.DisplayName;
+            var participantId = string.IsNullOrWhiteSpace(join.ParticipantId)
+                ? actorId
+                : join.ParticipantId;
+            var displayName = string.IsNullOrWhiteSpace(join.DisplayName)
+                ? participantId
+                : join.DisplayName;
             var change = conversation.JoinAgent(participantId, displayName, NowUnixMs());
             _pendingJoinChanges[actorId] = change;
             await ValueTask.CompletedTask;
-            return ZLinkSpotActorJoinResult.Accept(new JoinConversationRes(
-                false,
-                ConversationContracts.ToState(change.State)));
+            return ZLinkSpotActorJoinResult.Accept(
+                new JoinConversationRes(false, ConversationContracts.ToState(change.State))
+            );
         }
 
-        return ZLinkSpotActorJoinResult.Accept(new JoinConversationRes(
-            false,
-            ConversationContracts.ToState(conversation.Snapshot())));
+        return ZLinkSpotActorJoinResult.Accept(
+            new JoinConversationRes(false, ConversationContracts.ToState(conversation.Snapshot()))
+        );
     }
 
     public async ValueTask OnJoinedActorAsync(
         SupportUserActor actor,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken
+    )
     {
         var conversation = RequireConversation();
 
@@ -116,7 +130,8 @@ internal sealed class ConversationSpot(
             logger.LogInformation(
                 "supportchat-conversation agent-joined conversation={ConversationId} agent={AgentId}",
                 conversation.ConversationId,
-                actor.ParticipantId);
+                actor.ParticipantId
+            );
             return;
         }
 
@@ -125,12 +140,9 @@ internal sealed class ConversationSpot(
 
         // The customer has joined; pick a capacity-available agent and notify its roster.
         await AssignAgentAsync(cancellationToken);
-
     }
 
-    public ValueTask OnLeaveActorAsync(
-        SupportUserActor actor,
-        CancellationToken cancellationToken)
+    public ValueTask OnLeaveActorAsync(SupportUserActor actor, CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
         _pendingJoinChanges.Remove(actor.ActorId);
@@ -145,17 +157,21 @@ internal sealed class ConversationSpot(
     {
         var conversation = RequireConversation();
         var assigned = assignment.AssignForConversation(conversation.ConversationId);
-        if (assigned is null) return;
+        if (assigned is null)
+            return;
 
         await notifications.PublishAssignedToRosterAsync(
             directory.Get(assigned.RosterActorId).Actor,
             conversation.Snapshot(),
-            cancellationToken);
+            cancellationToken
+        );
         logger.LogInformation(
             "support conversation: assigned. conversation={ConversationId}, roster={RosterActorId}",
             conversation.ConversationId,
-            assigned.RosterActorId);
+            assigned.RosterActorId
+        );
     }
+
     // --8<-- [end:doc-sc-assign]
 
     // A reconnected client has a fresh session and no local conversation view, so it
@@ -169,30 +185,39 @@ internal sealed class ConversationSpot(
         logger.LogInformation(
             "support conversation: membership refreshed. conversation={ConversationId}, participant={ParticipantId}",
             conversation.ConversationId,
-            actor.ParticipantId);
+            actor.ParticipantId
+        );
         return new JoinConversationRes(
             false,
-            ConversationContracts.ToState(conversation.Snapshot()));
+            ConversationContracts.ToState(conversation.Snapshot())
+        );
     }
 
     public async ValueTask<SendChatMessageRes> SendMessageAsync(
         SupportUserActor actor,
         SendChatMessageReq request,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken
+    )
     {
-        var change = RequireConversation().SendMessage(actor.ParticipantId, request.Text, NowUnixMs());
+        var change = RequireConversation()
+            .SendMessage(actor.ParticipantId, request.Text, NowUnixMs());
         await PublishChangeAsync(change, cancellationToken);
-        var appended = change.Events.Single(static item => item.Kind == ConversationEventKind.MessageAppended).Message
-                       ?? throw new InvalidOperationException("Message event was not created.");
+        var appended =
+            change
+                .Events.Single(static item => item.Kind == ConversationEventKind.MessageAppended)
+                .Message
+            ?? throw new InvalidOperationException("Message event was not created.");
         return new SendChatMessageRes(
             ConversationContracts.ToMessage(appended),
-            ConversationContracts.ToState(change.State));
+            ConversationContracts.ToState(change.State)
+        );
     }
 
     public async ValueTask SetTypingAsync(
         SupportUserActor actor,
         SetTypingMsg request,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken
+    )
     {
         var change = RequireConversation().SetTyping(actor.ParticipantId, request.IsTyping);
         await PublishChangeAsync(change, cancellationToken);
@@ -201,7 +226,8 @@ internal sealed class ConversationSpot(
     public async ValueTask<CloseConversationRes> CloseAsync(
         SupportUserActor actor,
         CloseConversationReq request,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken
+    )
     {
         var change = RequireConversation().Close(actor.ParticipantId, request.Reason);
         await PublishChangeAsync(change, cancellationToken);
@@ -210,7 +236,10 @@ internal sealed class ConversationSpot(
 
     // Publishes conversation events and, when the conversation closes, frees the
     // assigned agent's capacity so it can take new conversations.
-    private async ValueTask PublishChangeAsync(ConversationChange change, CancellationToken cancellationToken)
+    private async ValueTask PublishChangeAsync(
+        ConversationChange change,
+        CancellationToken cancellationToken
+    )
     {
         await notifications.PublishAsync(change.Events, _actors, cancellationToken);
         foreach (var item in change.Events)
@@ -218,7 +247,8 @@ internal sealed class ConversationSpot(
             logger.LogInformation(
                 "supportchat-conversation status={Status} conversation={ConversationId}",
                 item.State.Status,
-                item.State.ConversationId);
+                item.State.ConversationId
+            );
         }
 
         if (change.Events.Any(static item => item.Kind == ConversationEventKind.Closed))
@@ -227,7 +257,8 @@ internal sealed class ConversationSpot(
 
     private Conversation RequireConversation()
     {
-        return _conversation ?? throw new InvalidOperationException("Conversation has not been created.");
+        return _conversation
+            ?? throw new InvalidOperationException("Conversation has not been created.");
     }
 
     private static long NowUnixMs()

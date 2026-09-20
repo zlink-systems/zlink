@@ -221,7 +221,8 @@ class player_entry_spot_t : public entry_spot_t<player_actor_t>
         }
         if (!notify.completed_quest_id.empty ()) {
             const auto completed =
-              std::find_if (notify.projection.begin (), notify.projection.end (),
+              std::find_if (notify.projection.begin (),
+                            notify.projection.end (),
                             [&] (const quest_progress_t &progress) {
                                 return progress.quest_id == notify.completed_quest_id;
                             });
@@ -242,7 +243,6 @@ class player_entry_spot_t : public entry_spot_t<player_actor_t>
 class gamequest_session_t final : public packet_stream_session_t
 {
   public:
-
     gamequest_session_t (route_client_t &routes,
                          game_api_store_t &store,
                          sample_topology_t &topology,
@@ -316,12 +316,13 @@ class gamequest_session_t final : public packet_stream_session_t
         if (packet == projection_admin_req_t::packet_name) {
             const auto request = payload.parse_json<projection_admin_req_t> ();
             if (request.operation == "close") {
-                co_await _routes.send_to_spot (
-                  player_spot_id (request.player_id),
-                  close_player_quest_msg_t{std::string ("client-self-check")})
+                co_await _routes
+                  .send_to_spot (player_spot_id (request.player_id),
+                                 close_player_quest_msg_t{std::string ("client-self-check")})
                   .async ();
-                stream.reply_packet (zlink::message_t::from_json (
-                  projection_admin_res_t{true, _store.projection (request.player_id)}))
+                stream
+                  .reply_packet (zlink::message_t::from_json (
+                    projection_admin_res_t{true, _store.projection (request.player_id)}))
                   .async ();
                 co_return;
             }
@@ -343,8 +344,8 @@ class gamequest_session_t final : public packet_stream_session_t
         if (packet == kill_monster_req_t::packet_name) {
             const auto request = payload.parse_json<kill_monster_req_t> ();
             // --8<-- [start:doc-gq-store-dispatch]
-            const auto event = event_for (request.player_id, request.idempotency_key,
-                                          "MonsterKilled", request.monster_id, 1);
+            const auto event = event_for (
+              request.player_id, request.idempotency_key, "MonsterKilled", request.monster_id, 1);
             try {
                 co_await apply_event (event);
             }
@@ -362,15 +363,18 @@ class gamequest_session_t final : public packet_stream_session_t
         // --8<-- [end:doc-gq-action-handler]
         if (packet == collect_item_req_t::packet_name) {
             const auto request = payload.parse_json<collect_item_req_t> ();
-            const auto event = event_for (request.player_id, request.idempotency_key,
-                                          "ItemCollected", request.item_id, request.count);
+            const auto event = event_for (request.player_id,
+                                          request.idempotency_key,
+                                          "ItemCollected",
+                                          request.item_id,
+                                          request.count);
             co_await apply_event (event);
             co_return;
         }
         if (packet == enter_area_req_t::packet_name) {
             const auto request = payload.parse_json<enter_area_req_t> ();
-            const auto event = event_for (request.player_id, request.idempotency_key, "AreaEntered",
-                                          request.area_id, 1);
+            const auto event = event_for (
+              request.player_id, request.idempotency_key, "AreaEntered", request.area_id, 1);
             co_await apply_event (event);
             co_return;
         }
@@ -385,7 +389,9 @@ class gamequest_session_t final : public packet_stream_session_t
                               std::string value,
                               int count) const
     {
-        return {player_id + "-" + idempotency_key, std::move (player_id), std::move (event_type),
+        return {player_id + "-" + idempotency_key,
+                std::move (player_id),
+                std::move (event_type),
                 gameplay_payload (value, count),
                 static_cast<long long> (std::time (nullptr)) * 1000LL};
     }
@@ -482,7 +488,8 @@ int main (int argc, char **argv)
     app.add_hosted_service (
       std::make_unique<sample_readiness_service_t> ("stream", topology.api_name));
     app.add_hosted_service (std::make_unique<spot_route_readiness_service_t> (
-      "gamequest", topology.api_name,
+      "gamequest",
+      topology.api_name,
       std::vector<std::string>{sample_names_t::mission_a_rid, sample_names_t::mission_b_rid}));
     options.http ()
       .listen (topology.selected_api_http_url ())

@@ -298,12 +298,6 @@ class provider_location_repository_t final : public location_repository_t
               key.value);
             if (!decoded_key)
                 return authority_conflict (std::move (current));
-            const object_creation_key_t object_key_value{
-              snapshot.allocation.object_kind, decoded_key->object_id};
-            const auto reservation_key = key_reservation (object_key_value);
-            const auto reservation = read (reservation_key);
-            const auto *stored_reservation =
-              std::get_if<store_found_t> (&reservation);
             store_write_request_t write_request;
             write_request.conditions = {
               version_condition (row_key, found->value.version),
@@ -314,11 +308,6 @@ class provider_location_repository_t final : public location_repository_t
             write_request.mutations = {
               store_delete_t{row_key},
               store_put_t{capacity.key, encode_capacity_record (capacity.record), std::nullopt}};
-            if (stored_reservation) {
-                write_request.conditions.push_back (
-                  version_condition (reservation_key, stored_reservation->value.version));
-                write_request.mutations.push_back (store_delete_t{reservation_key});
-            }
             auto written = write (std::move (write_request));
             if (const auto *applied = std::get_if<store_write_applied_t> (&written))
                 return completed (authority_compare_exchange_result_t{
@@ -626,24 +615,9 @@ class provider_location_repository_t final : public location_repository_t
         if (object_generation >= max_generation || owner_generation_value >= max_generation)
             return completed (object_reserve_result_t{authority_generation_exhausted_t{}});
 
-        const auto reservation_key = key_reservation (request.key);
-        auto old_reservation = read (reservation_key);
-        auto reservation_condition = condition_for (reservation_key, old_reservation);
-        if (const auto *found = std::get_if<store_found_t> (&old_reservation)) {
-            const auto record = parse_json (found->value.bytes);
-            if (record.at ("status").get<std::string> () != "aborted")
-                return completed (object_reserve_result_t{object_reserve_conflict_t{
-                  authority_missing_t{std::get<store_missing_t> (authority).store_now}}});
-        }
-
-        // The real expected_store_version can't be known until the write
-        // below returns its opaque per-key version (checklist C-4d), so
-        // both `fence` and `creating` are seeded with a placeholder here
-        // and patched with the real value after a successful write, below.
-        // The reservation record's persisted fence copy keeps this
-        // placeholder -- same_fence no longer compares expected_store_version
-        // (reservation_id, already unique per attempt, is the identity), so
-        // it is write-only bookkeeping, not a second source of truth.
+        // The authority write assigns the opaque version.  The returned
+        // fence receives it after the write; pendingCreation is the durable
+        // reservation identity while the row remains reserved.
         object_reservation_fence_t fence{"reservation-" + std::to_string (object_generation) + "-"
                                            + std::to_string (owner_generation_value),
                                          "pending",
@@ -664,9 +638,8 @@ class provider_location_repository_t final : public location_repository_t
             fence.reservation_id, request.intent.request_content_reference,
             request.intent.request_sha256,
             static_cast<std::uint32_t> (request.intent.request_encoded_size)}};
-        auto reservation_record = encode_reservation (request, fence, creating, "prepared");
         auto written = write (
-          {{missing_condition (authority_key), std::move (reservation_condition),
+          {{missing_condition (authority_key),
             condition_for (object_counter_key, object_generations),
             condition_for (authority_owner_counter_key, owner_generations),
             version_condition (target->key, target->provider_version),
@@ -674,7 +647,6 @@ class provider_location_repository_t final : public location_repository_t
                                target->owner_provider_version),
             capacity.condition},
            {store_put_t{authority_key, encode_authority (creating), std::nullopt},
-            store_put_t{reservation_key, to_bytes (reservation_record.dump ()), std::nullopt},
             store_put_t{object_counter_key, to_bytes (std::to_string (object_generation + 1)),
                         std::nullopt},
             store_put_t{authority_owner_counter_key,
@@ -719,24 +691,6 @@ class provider_location_repository_t final : public location_repository_t
         if (!current.pending_creation)
             return stale_authority_reclaim_result_t::recovery_required;
 
-        const auto reservation_key = key_reservation (key);
-        auto reservation = read (reservation_key);
-        const auto *stored_reservation = std::get_if<store_found_t> (&reservation);
-        if (!stored_reservation)
-            return stale_authority_reclaim_result_t::recovery_required;
-        auto reservation_record = parse_json (stored_reservation->value.bytes);
-        if (reservation_record.at ("status").get<std::string> () != "prepared")
-            return stale_authority_reclaim_result_t::recovery_required;
-        const object_reservation_fence_t current_fence{
-          current.pending_creation->reservation_id,
-          current.store_version,
-          current.object_generation,
-          current.authority_owner_generation,
-          current.allocation.target,
-          current.allocation.capacity_bundle};
-        if (!same_fence (decode_fence (reservation_record.at ("fence")), current_fence))
-            return stale_authority_reclaim_result_t::recovery_required;
-
         const auto target = read_target_descriptor (current.allocation.target, false, false);
         if (!target)
             return stale_authority_reclaim_result_t::recovery_required;
@@ -744,14 +698,11 @@ class provider_location_repository_t final : public location_repository_t
         if (!adjust_capacity (capacity.record, current.allocation.capacity_bundle, -1, 0))
             return stale_authority_reclaim_result_t::recovery_required;
 
-        reservation_record["status"] = "aborted";
         const auto written = write (
           {{version_condition (authority_key, stored_authority.value.version),
             std::move (stale_owner_condition),
-            version_condition (reservation_key, stored_reservation->value.version),
             capacity.condition},
            {store_delete_t{authority_key},
-            store_put_t{reservation_key, to_bytes (reservation_record.dump ()), std::nullopt},
             store_put_t{capacity.key, encode_capacity_record (capacity.record), std::nullopt}}});
         return std::holds_alternative<store_write_applied_t> (written)
                  ? stale_authority_reclaim_result_t::reclaimed
@@ -851,35 +802,6 @@ class provider_location_repository_t final : public location_repository_t
             return cancelled<object_commit_result_t> ();
         if (request.ready_payload.size () > 1024u * 1024u)
             throw std::invalid_argument ("object commit payload exceeds 1 MiB");
-        const auto reservation_key = key_reservation (request.key);
-        auto reservation = read (reservation_key);
-        const auto *stored_reservation = std::get_if<store_found_t> (&reservation);
-        if (!stored_reservation)
-            return completed (object_commit_result_t{object_commit_stale_t{}});
-        auto record = parse_json (stored_reservation->value.bytes);
-        const auto stored_fence = decode_fence (record.at ("fence"));
-        if (!same_fence (stored_fence, request.fence))
-            return completed (object_commit_result_t{object_commit_stale_t{}});
-        const auto status = record.at ("status").get<std::string> ();
-        if (status == "committed") {
-            // The reservation's cached "snapshot" copy has no provider
-            // version of its own (checklist C-4d: encode_authority no
-            // longer carries one, and this cache predates the write that
-            // would assign one anyway). A caller that replays this commit
-            // may chain a further CAS off the returned store_version (see
-            // public_host_runtime.cpp's post-commit compare_exchange_
-            // authority call), so source it from a fresh read of the live
-            // authority row instead of guessing.
-            auto cached = decode_authority (to_bytes (record.at ("snapshot").dump ()), std::string{},
-                                            stored_reservation->value.store_now);
-            auto live = read (key_authority (object_key (request.key)));
-            if (const auto *live_found = std::get_if<store_found_t> (&live))
-                cached.store_version = live_found->value.version.value;
-            return completed (object_commit_result_t{object_already_committed_t{std::move (cached)}});
-        }
-        if (status != "prepared")
-            return completed (object_commit_result_t{object_commit_stale_t{}});
-
         const auto authority_key = key_authority (object_key (request.key));
         auto authority = read (authority_key);
         if (authority_mutation_locked (object_key (request.key)))
@@ -892,8 +814,21 @@ class provider_location_repository_t final : public location_repository_t
         auto snapshot =
           decode_authority (stored_authority->value.bytes, stored_authority->value.version,
                             stored_authority->value.store_now);
-        if (snapshot.store_version != request.fence.expected_store_version
-            || snapshot.allocation.state != placement_allocation_state_t::reserved)
+        const auto matches_reservation = snapshot.pending_creation
+                                         && snapshot.object_generation
+                                              == request.fence.object_generation
+                                         && snapshot.authority_owner_generation
+                                              == request.fence.authority_owner_generation
+                                         && same_owner (snapshot.owner,
+                                                        request.fence.target.owner)
+                                         && snapshot.pending_creation->reservation_id
+                                              == request.fence.reservation_id;
+        if (!matches_reservation) {
+            if (!snapshot.pending_creation)
+                return completed (object_commit_result_t{object_already_committed_t{std::move (snapshot)}});
+            return completed (object_commit_result_t{object_commit_stale_t{}});
+        }
+        if (snapshot.allocation.state != placement_allocation_state_t::reserved)
             return completed (
               object_commit_result_t{object_commit_conflict_t{std::move (snapshot)}});
         auto target = read_target_descriptor (request.fence.target);
@@ -907,17 +842,13 @@ class provider_location_repository_t final : public location_repository_t
         snapshot.payload = std::move (request.ready_payload);
         snapshot.allocation.state = placement_allocation_state_t::active;
         snapshot.pending_creation.reset ();
-        record["status"] = "committed";
-        record["snapshot"] = parse_json (encode_authority (snapshot));
         auto written =
           write ({{version_condition (authority_key, stored_authority->value.version),
-                   version_condition (reservation_key, stored_reservation->value.version),
                    version_condition (key_owner (request.fence.target.owner.owner_id),
                                       target->owner_provider_version),
                    version_condition (target->key, target->provider_version),
                    capacity.condition},
                   {store_put_t{authority_key, encode_authority (snapshot), std::nullopt},
-                   store_put_t{reservation_key, to_bytes (record.dump ()), std::nullopt},
                    store_put_t{capacity.key, encode_capacity_record (capacity.record),
                                std::nullopt}}}, terminal, terminal_deadline);
         const auto *applied = std::get_if<store_write_applied_t> (&written);
@@ -936,19 +867,6 @@ class provider_location_repository_t final : public location_repository_t
     {
         if (cancellation.stop_requested ())
             return cancelled<object_abort_result_t> ();
-        const auto reservation_key = key_reservation (request.key);
-        auto reservation = read (reservation_key);
-        const auto *stored_reservation = std::get_if<store_found_t> (&reservation);
-        if (!stored_reservation)
-            return completed (object_abort_result_t{object_abort_stale_t{}});
-        auto record = parse_json (stored_reservation->value.bytes);
-        if (!same_fence (decode_fence (record.at ("fence")), request.fence))
-            return completed (object_abort_result_t{object_abort_stale_t{}});
-        const auto status = record.at ("status").get<std::string> ();
-        if (status == "aborted")
-            return completed (object_abort_result_t{object_already_aborted_t{}});
-        if (status != "prepared")
-            return completed (object_abort_result_t{object_abort_stale_t{}});
         const auto authority_key = key_authority (object_key (request.key));
         auto authority = read (authority_key);
         if (authority_mutation_locked (object_key (request.key)))
@@ -961,22 +879,28 @@ class provider_location_repository_t final : public location_repository_t
         const auto snapshot =
           decode_authority (stored_authority->value.bytes, stored_authority->value.version,
                             stored_authority->value.store_now);
-        if (snapshot.store_version != request.fence.expected_store_version)
-            return completed (object_abort_result_t{object_abort_conflict_t{snapshot}});
+        const auto matches_reservation = snapshot.pending_creation
+                                         && snapshot.object_generation
+                                              == request.fence.object_generation
+                                         && snapshot.authority_owner_generation
+                                              == request.fence.authority_owner_generation
+                                         && same_owner (snapshot.owner,
+                                                        request.fence.target.owner)
+                                         && snapshot.pending_creation->reservation_id
+                                              == request.fence.reservation_id;
+        if (!matches_reservation)
+            return completed (object_abort_result_t{object_abort_stale_t{}});
         auto target = read_target_descriptor (request.fence.target, false);
         if (!target)
             return completed (object_abort_result_t{object_abort_conflict_t{snapshot}});
         auto capacity = read_capacity (request.fence.target, *target);
         if (!adjust_capacity (capacity.record, request.fence.capacity_bundle, -1, 0))
             return completed (object_abort_result_t{object_abort_conflict_t{snapshot}});
-        record["status"] = "aborted";
         auto written =
           write ({{version_condition (authority_key, stored_authority->value.version),
-                   version_condition (reservation_key, stored_reservation->value.version),
                    version_condition (target->key, target->provider_version),
                    capacity.condition},
                   {store_delete_t{authority_key},
-                   store_put_t{reservation_key, to_bytes (record.dump ()), std::nullopt},
                    store_put_t{capacity.key, encode_capacity_record (capacity.record),
                                std::nullopt}}}, terminal, terminal_deadline);
         if (!std::holds_alternative<store_write_applied_t> (written))
@@ -2370,11 +2294,6 @@ class provider_location_repository_t final : public location_repository_t
         return {preimage_authority (decoded->kind, decoded->object_id)};
     }
 
-    static store_key_t key_reservation (const object_creation_key_t &key)
-    {
-        return {std::string (prefix) + "creation-reservation:" + segment (object_key (key))};
-    }
-
     static store_key_t key_creation_terminal (const creation_operation_identity_t &operation)
     {
         return {std::string (prefix)
@@ -3588,18 +3507,6 @@ class provider_location_repository_t final : public location_repository_t
             return authority_missing_t{found->value.store_now};
         }
         return authority_missing_t{std::get<store_missing_t> (current).store_now};
-    }
-
-    static json_t encode_reservation (const object_reserve_request_t &request,
-                                      const object_reservation_fence_t &fence,
-                                      const authority_snapshot_t &snapshot,
-                                      std::string_view status)
-    {
-        return {{"status", status},
-                {"object", encode_creation_key (request.key)},
-                {"stableType", request.intent.stable_type},
-                {"fence", encode_fence (fence)},
-                {"snapshot", parse_json (encode_authority (snapshot))}};
     }
 
     static json_t encode_aggregate (const aggregate_prepare_request_t &request,

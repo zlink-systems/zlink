@@ -156,12 +156,12 @@ function Cleanup([int]$Status) {
 $Status = 1
 try {
     & cmake --build $BuildDir --config $BuildConfiguration --parallel 2 --target `
-        sample_cpp_framework_deliverydispatch_dispatch `
-        sample_cpp_framework_deliverydispatch_courier_actor_node `
-        sample_cpp_framework_deliverydispatch_customer_gateway `
-        sample_cpp_framework_deliverydispatch_courier_session `
-        sample_cpp_framework_deliverydispatch_tracking `
-        sample_cpp_framework_deliverydispatch_client
+        zdd_dispatch `
+        zdd_courier_actor_node `
+        zdd_customer_gateway `
+        zdd_courier_session `
+        zdd_tracking `
+        zdd_client
     if ($LASTEXITCODE -ne 0) { throw "DeliveryDispatch sample build failed." }
 
     $ports = @(Get-ZlinkSamplePorts -Count 20 -Paired)

@@ -11,7 +11,7 @@ import {
   EnterZoneReq,
   MessageFollowProbeRes,
   MoveRejectedNotify,
-  PacketNames,
+  PacketNames
 } from '../../../../../Shared/contracts';
 import { MoveRejectReasons, ZoneIds, zoneOf } from '../../../../../Shared/spec';
 import type { ZoneId } from '../../../../../Shared/spec';
@@ -25,10 +25,7 @@ import type {
   MessageFollowProbeMsg,
   MoveMsg
 } from '../../../../../Shared/contracts';
-import type {
-  ZLinkMessageContext,
-  ZLinkSpotOutbound
-} from '@zlink-systems/framework';
+import type { ZLinkMessageContext, ZLinkSpotOutbound } from '@zlink-systems/framework';
 import { PlayerActor } from '../Actors/player-actor';
 import { ZoneEntrySpot } from '../Spots/zone-entry-spot';
 import { ZoneSpot } from '../Spots/zone-spot';
@@ -53,10 +50,13 @@ class EntryEnterWorldHandler {
     const targetZone = zoneOf(request.x, request.y);
     actor.beginPendingJoin(request.isBot ? 'bot' : 'world');
     try {
-      actor.context.joinSpot(
-        targetZone,
-        new EnterZoneReq(actor.actorId, request.x, request.y, request.isBot, true)
-      ).timeout(10_000).defer();
+      actor.context
+        .joinSpot(
+          targetZone,
+          new EnterZoneReq(actor.actorId, request.x, request.y, request.isBot, true)
+        )
+        .timeout(10_000)
+        .defer();
     } catch (error) {
       actor.completePendingJoin();
       throw error;
@@ -66,12 +66,7 @@ class EntryEnterWorldHandler {
     actor.y = request.y;
     actor.zoneId = targetZone;
     actor.isBot = request.isBot;
-    return new EnterWorldRes(
-      targetZone,
-      request.x,
-      request.y,
-      null
-    );
+    return new EnterWorldRes(targetZone, request.x, request.y, null);
   }
 }
 
@@ -94,13 +89,15 @@ class EntryJoinWorldHandler {
       return;
     }
     const targetZone = zoneOf(actor.x, actor.y);
-    console.log(`join world handler actor=${actor.actorId} current=${String(actor.context.spotId)} target=${targetZone}`);
+    console.log(
+      `join world handler actor=${actor.actorId} current=${String(actor.context.spotId)} target=${targetZone}`
+    );
     actor.beginPendingJoin('world');
     try {
-      actor.context.joinSpot(
-        targetZone,
-        new EnterZoneReq(actor.actorId, actor.x, actor.y, false, true)
-      ).timeout(10_000).defer();
+      actor.context
+        .joinSpot(targetZone, new EnterZoneReq(actor.actorId, actor.x, actor.y, false, true))
+        .timeout(10_000)
+        .defer();
     } catch (error) {
       actor.completePendingJoin();
       throw error;
@@ -130,9 +127,7 @@ class PlayerRejoinWorldHandler {
 
 @Injectable()
 class PlayerMovement {
-  constructor(
-    @Inject(ZLINK_SPOT_OUTBOUND) private readonly spotOutbound: ZLinkSpotOutbound
-  ) {}
+  constructor(@Inject(ZLINK_SPOT_OUTBOUND) private readonly spotOutbound: ZLinkSpotOutbound) {}
 
   async move(actor: PlayerActor, x: number, y: number): Promise<void> {
     const previousZone = actor.zoneId;
@@ -147,7 +142,8 @@ class PlayerMovement {
       actor.x = x;
       actor.y = y;
       const spotRid = actor.context.spotId;
-      if (spotRid === undefined) throw new Error(`Player '${actor.actorId}' is not joined to a zone.`);
+      if (spotRid === undefined)
+        throw new Error(`Player '${actor.actorId}' is not joined to a zone.`);
       await this.spotOutbound
         .sendToSpot(spotRid, new UpdateZonePositionMsg(actor.actorId, x, y))
         .submit();
@@ -156,20 +152,25 @@ class PlayerMovement {
     // --8<-- [start:doc-zw-zone-change]
     actor.beginPendingJoin(actor.isBot ? 'bot' : 'move');
     try {
-      actor.context.joinSpot(
-        targetZone,
-        new EnterZoneReq(actor.actorId, x, y, actor.isBot, false)
-      ).timeout(10_000).defer();
+      actor.context
+        .joinSpot(targetZone, new EnterZoneReq(actor.actorId, x, y, actor.isBot, false))
+        .timeout(10_000)
+        .defer();
     } catch (error) {
       actor.completePendingJoin();
       throw error;
     }
-    console.log(`zone change scheduled player=${actor.actorId} from=${previousZone} to=${targetZone}`);
+    console.log(
+      `zone change scheduled player=${actor.actorId} from=${previousZone} to=${targetZone}`
+    );
     // --8<-- [end:doc-zw-zone-change]
     // --8<-- [end:doc-zw-move]
   }
 
-  private async reject(actor: PlayerActor, reason: typeof MoveRejectReasons[keyof typeof MoveRejectReasons]): Promise<void> {
+  private async reject(
+    actor: PlayerActor,
+    reason: (typeof MoveRejectReasons)[keyof typeof MoveRejectReasons]
+  ): Promise<void> {
     if (actor.isBot) {
       actor.dirX *= -1;
       actor.dirY *= -1;
@@ -197,8 +198,8 @@ class PlayerMoveHandler {
   ): Promise<void> {
     if (actor.actorId === 'player-a1') {
       console.log(
-        `player move handler actor=${actor.actorId} spot=${String(actor.context.spotId)}`
-          + ` from=${actor.x},${actor.y} to=${message.x},${message.y}`
+        `player move handler actor=${actor.actorId} spot=${String(actor.context.spotId)}` +
+          ` from=${actor.x},${actor.y} to=${message.x},${message.y}`
       );
     }
     await this.movement.move(actor, message.x, message.y);
@@ -288,5 +289,5 @@ export {
   PlayerMessageFollowProbeSendHandler,
   PlayerMoveHandler,
   PlayerMovement,
-  PlayerRejoinWorldHandler,
+  PlayerRejoinWorldHandler
 };

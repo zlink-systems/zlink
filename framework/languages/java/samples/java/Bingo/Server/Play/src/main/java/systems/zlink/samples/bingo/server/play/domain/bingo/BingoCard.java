@@ -32,7 +32,8 @@ public final class BingoCard {
                 continue;
             }
             if (number < 1 || number > 15 || !seen.add(number)) {
-                throw new IllegalArgumentException("bingo card numbers must be unique values from 1 to 15");
+                throw new IllegalArgumentException(
+                        "bingo card numbers must be unique values from 1 to 15");
             }
         }
         ArrayList<Boolean> marks = new ArrayList<>();

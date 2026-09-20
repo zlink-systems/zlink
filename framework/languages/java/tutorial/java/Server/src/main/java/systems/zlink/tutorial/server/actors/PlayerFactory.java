@@ -1,10 +1,11 @@
 package systems.zlink.tutorial.server.actors;
 
-import java.util.concurrent.CompletableFuture;
-import java.util.concurrent.CompletionStage;
 import systems.zlink.framework.actors.ZLinkActor;
 import systems.zlink.framework.actors.ZLinkActorContext;
 import systems.zlink.framework.actors.ZLinkActorFactory;
+
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CompletionStage;
 
 // --8<-- [start:actor-factory]
 // The Framework creates players through this factory rather than by calling a

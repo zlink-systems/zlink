@@ -1,6 +1,7 @@
 package systems.zlink.samples.kotlin.zoneworld.server.configuration
 
 import org.springframework.boot.context.properties.ConfigurationProperties
+
 @ConfigurationProperties("sample")
 data class SampleTopology(
     val role: String? = null,
@@ -16,16 +17,26 @@ data class SampleTopology(
     val meshAdvertiseHost: String? = null,
 ) {
     fun isRole(expected: String) = role.equals(expected, ignoreCase = true)
-    fun required(value: String?, name: String): String = value?.takeIf { it.isNotBlank() }
-        ?: error("sample.$name is required")
+
+    fun required(value: String?, name: String): String =
+        value?.takeIf { it.isNotBlank() } ?: error("sample.$name is required")
+
     fun roleValue() = required(role, "role")
+
     fun nodeValue() = required(nodeId, "node-id")
+
     fun meshValue() = required(meshEndpoint, "mesh-endpoint")
+
     fun streamValue() = required(streamEndpoint, "stream-endpoint")
+
     fun redisValue() = required(redisEndpoint, "redis-endpoint")
+
     fun prefixValue() = required(redisKeyPrefix, "redis-key-prefix")
+
     fun isSubscriberOnly() = subscriberOnly == true
+
     fun botsDisabled() = disableBots == true
+
     fun allowsEmptyZoneSet() = allowEmptyZoneSet == true
 
     fun validate() {
@@ -35,7 +46,9 @@ data class SampleTopology(
         }
         if (value == "zone") nodeValue()
         if (value != "zone") streamValue()
-        meshValue(); redisValue(); prefixValue()
+        meshValue()
+        redisValue()
+        prefixValue()
     }
 
     companion object {

@@ -3,13 +3,10 @@ package systems.zlink.samples.zoneworld.server.zone;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 
-import java.util.concurrent.CompletableFuture;
-import java.util.concurrent.TimeUnit;
-import java.util.concurrent.atomic.AtomicInteger;
-import java.util.concurrent.locks.LockSupport;
 import org.junit.jupiter.api.Test;
 import org.springframework.context.SmartLifecycle;
 import org.springframework.context.support.GenericApplicationContext;
+
 import systems.zlink.contracts.core.RoutingId;
 import systems.zlink.framework.channels.ZLinkRequestCall;
 import systems.zlink.framework.channels.ZLinkRouteClient;
@@ -19,6 +16,11 @@ import systems.zlink.framework.spots.ZLinkSpotSendCall;
 import systems.zlink.samples.zoneworld.server.configuration.NodeCensus;
 import systems.zlink.samples.zoneworld.server.configuration.NodeMaintenanceState;
 import systems.zlink.samples.zoneworld.server.configuration.SampleTopology;
+
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.locks.LockSupport;
 
 final class ZoneStatusReporterLifecycleTest {
     @Test
@@ -36,10 +38,14 @@ final class ZoneStatusReporterLifecycleTest {
 
             context.close();
 
-            assertEquals(0, runtime.postStopSubmissions.get(),
-                "the status producer must stop before its route runtime port");
-            assertEquals(0, runtime.runningProducerStops.get(),
-                "the route runtime must not observe a running status producer while stopping");
+            assertEquals(
+                    0,
+                    runtime.postStopSubmissions.get(),
+                    "the status producer must stop before its route runtime port");
+            assertEquals(
+                    0,
+                    runtime.runningProducerStops.get(),
+                    "the route runtime must not observe a running status producer while stopping");
         } finally {
             context.close();
         }
@@ -62,21 +68,21 @@ final class ZoneStatusReporterLifecycleTest {
 
     private static ZoneStatusReporter reporter(RuntimePort runtime) {
         return new ZoneStatusReporter(
-            new SampleTopology(
-                "zone",
-                "zone-node-1",
-                "tcp://127.0.0.1:1",
-                null,
-                "redis://127.0.0.1:1",
-                "test:",
-                false,
-                false,
-                false,
-                "",
-                ""),
-            runtime,
-            new NodeCensus(),
-            new NodeMaintenanceState());
+                new SampleTopology(
+                        "zone",
+                        "zone-node-1",
+                        "tcp://127.0.0.1:1",
+                        null,
+                        "redis://127.0.0.1:1",
+                        "test:",
+                        false,
+                        false,
+                        false,
+                        "",
+                        ""),
+                runtime,
+                new NodeCensus(),
+                new NodeMaintenanceState());
     }
 
     private static final class RuntimePort implements ZLinkRouteClient, SmartLifecycle {
@@ -114,7 +120,8 @@ final class ZoneStatusReporterLifecycleTest {
         }
 
         @Override
-        public ZLinkRequestCall requestToNode(String channelName, RoutingId target, Object message) {
+        public ZLinkRequestCall requestToNode(
+                String channelName, RoutingId target, Object message) {
             throw new UnsupportedOperationException();
         }
 
@@ -133,8 +140,7 @@ final class ZoneStatusReporterLifecycleTest {
             running = false;
             stopped = true;
             Object currentProducer = producer;
-            if (!(currentProducer instanceof SmartLifecycle lifecycle)
-                || lifecycle.isRunning()) {
+            if (!(currentProducer instanceof SmartLifecycle lifecycle) || lifecycle.isRunning()) {
                 runningProducerStops.incrementAndGet();
             }
             LockSupport.parkNanos(TimeUnit.MILLISECONDS.toNanos(2_200));

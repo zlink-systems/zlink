@@ -10,11 +10,10 @@ import systems.zlink.framework.spots.ZLinkSpotManager
 import systems.zlink.samples.kotlin.bingo.server.configuration.SampleNames
 import systems.zlink.samples.kotlin.bingo.server.configuration.SampleTimings
 import systems.zlink.samples.kotlin.bingo.server.play.domain.bingo.BingoRoomSettings
-import systems.zlink.samples.kotlin.bingo.server.play.infrastructure.zlink.spots.bingoroomspot.BingoRoomSpot
 import systems.zlink.samples.kotlin.bingo.server.play.infrastructure.zlink.actors.PlayerActor
-import systems.zlink.samples.kotlin.bingo.shared.contracts.BingoRoomSettingsPayload
 import systems.zlink.samples.kotlin.bingo.shared.contracts.BingoRoomCreateReq
 import systems.zlink.samples.kotlin.bingo.shared.contracts.BingoRoomJoinReq
+import systems.zlink.samples.kotlin.bingo.shared.contracts.BingoRoomSettingsPayload
 import systems.zlink.samples.kotlin.bingo.shared.contracts.EnsurePlayerActorReq
 import systems.zlink.samples.kotlin.bingo.shared.contracts.ObserveBingoEventsReq
 import systems.zlink.samples.kotlin.bingo.shared.contracts.ObserveBingoEventsRes
@@ -41,10 +40,10 @@ class BingoEntrySpot(
             logger.info("bingo-lifecycle entry-destroy-complete actor={}", actor.actorId())
         }
     }
+
     // --8<-- [end:doc-bingo-entry-destroy]
 
-    override suspend fun onLeaveActorSuspending(actor: PlayerActor) {
-    }
+    override suspend fun onLeaveActorSuspending(actor: PlayerActor) {}
 
     override suspend fun onDisconnectActorSuspending(actor: PlayerActor) {
         actor.markDisconnected()
@@ -55,33 +54,34 @@ class BingoEntrySpot(
         request: ObserveBingoEventsReq,
     ): ObserveBingoEventsRes {
         val observerSpotId = "observe:${request.roomId}:${actor.actorId()}"
-        val settings = BingoRoomSettings.createObserver(
-            request.roomId,
-            actor.actorId(),
-            SampleTimings.DrawPeriod.toMillis(),
-        )
-        val settingsPayload = BingoRoomSettingsPayload(
-            mode = settings.mode,
-            roomName = settings.roomName,
-            requiredPlayers = settings.requiredPlayers,
-            maxDrawNumber = settings.maxDrawNumber,
-            purpose = settings.purpose,
-            observedRoomId = settings.observedRoomId ?: "",
-        )
-        spots.getOrCreate(observerSpotId, SampleNames.RoomSpotType)
+        val settings =
+            BingoRoomSettings.createObserver(
+                request.roomId,
+                actor.actorId(),
+                SampleTimings.DrawPeriod.toMillis(),
+            )
+        val settingsPayload =
+            BingoRoomSettingsPayload(
+                mode = settings.mode,
+                roomName = settings.roomName,
+                requiredPlayers = settings.requiredPlayers,
+                maxDrawNumber = settings.maxDrawNumber,
+                purpose = settings.purpose,
+                observedRoomId = settings.observedRoomId ?: "",
+            )
+        spots
+            .getOrCreate(observerSpotId, SampleNames.RoomSpotType)
             .inMesh(SampleNames.Mesh)
             .request(BingoRoomCreateReq(settingsPayload))
             .submit()
             .await()
-        actor.context().joinSpot(
-            observerSpotId,
-            BingoRoomJoinReq(
-                request.roomId,
-                actor.actorId(),
-                actor.displayName,
-                true,
-            ),
-        ).defer()
+        actor
+            .context()
+            .joinSpot(
+                observerSpotId,
+                BingoRoomJoinReq(request.roomId, actor.actorId(), actor.displayName, true),
+            )
+            .defer()
         return ObserveBingoEventsRes(true)
     }
 }

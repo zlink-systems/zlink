@@ -12,7 +12,8 @@ public sealed record NodeView(
     bool Connected,
     bool Maintenance,
     IReadOnlyList<string> Zones,
-    int PlayerCount);
+    int PlayerCount
+);
 
 // ---------------------------------------------------------------------------
 // §7.1 game — browser <-> Gateway (STREAM)
@@ -25,7 +26,8 @@ public sealed record JoinWorldRes(
     string ZoneId,
     int X,
     int Y,
-    string? Error = null);
+    string? Error = null
+);
 
 public sealed record MoveMsg(int X, int Y);
 
@@ -51,7 +53,8 @@ public sealed record NodeStatusNotify(
     bool Connected,
     bool Maintenance,
     IReadOnlyList<string> Zones,
-    int PlayerCount);
+    int PlayerCount
+);
 
 public sealed record NodeAlertNotify(string NodeId, string Kind, string Detail, string OccurredAt);
 
@@ -65,7 +68,8 @@ public sealed record SetMaintenanceRes(
     string NodeId,
     bool Enabled,
     IReadOnlyList<string> Zones,
-    string? Error = null);
+    string? Error = null
+);
 
 public sealed record NodeDiagnosticsReq(string NodeId);
 
@@ -74,7 +78,8 @@ public sealed record NodeDiagnosticsRes(
     IReadOnlyList<string> Zones,
     int PlayerCount,
     bool Maintenance,
-    string? Error = null);
+    string? Error = null
+);
 
 /// <summary>
 /// Ops-only self-check request. It selects adjacent Zone Spots whose current owners
@@ -87,7 +92,8 @@ public sealed record RelocationPairRes(
     string TargetZoneId,
     string SourceOwnerNodeRid,
     string TargetOwnerNodeRid,
-    string? Error = null);
+    string? Error = null
+);
 
 /// <summary>
 /// Ops-only self-check request used to verify that relocation preserves the Actor
@@ -99,7 +105,8 @@ public sealed record ActorLocationProbeRes(
     string ActorId,
     ulong ObjectGeneration,
     string OwnerNodeRid,
-    string? Error = null);
+    string? Error = null
+);
 
 public sealed record FreshActorProbeReq(string ActorId);
 
@@ -107,7 +114,8 @@ public sealed record FreshActorProbeRes(
     string ActorId,
     ulong ObjectGeneration,
     string OwnerNodeRid,
-    string? Error = null);
+    string? Error = null
+);
 
 // ---------------------------------------------------------------------------
 // §7.3 server internal
@@ -139,14 +147,20 @@ public sealed record EnterWorldReq(int X, int Y, bool IsBot, int DirX = 0, int D
 public sealed record EnterWorldRes(string ZoneId, int X, int Y, string? Error = null);
 
 /// <summary>ZoneNode -> Ops (channel `zoneworld.report`). Sent when the event occurs (§8.1).</summary>
-public sealed record ReportSpotEventMsg(string NodeId, string Kind, string Detail, string OccurredAt);
+public sealed record ReportSpotEventMsg(
+    string NodeId,
+    string Kind,
+    string Detail,
+    string OccurredAt
+);
 
 /// <summary>ZoneNode -> Ops (channel `zoneworld.report`). Sent every five seconds (§2.2).</summary>
 public sealed record ReportNodeStatusMsg(
     string NodeId,
     IReadOnlyList<string> Zones,
     int PlayerCount,
-    bool Maintenance);
+    bool Maintenance
+);
 
 /// <summary>
 /// Zone spot -> adjacent zone spot (spot pub/sub, topic `zone.border.&lt;from&gt;.&lt;to&gt;`).
@@ -156,7 +170,8 @@ public sealed record ZoneBorderEvent(
     string FromZoneId,
     string ToZoneId,
     long Tick,
-    IReadOnlyList<PlayerView> Players);
+    IReadOnlyList<PlayerView> Players
+);
 
 /// <summary>
 /// Player actor -> zone spot, as the JoinSpot admission payload. Joining is what
@@ -175,7 +190,8 @@ public sealed record EnterZoneReq(
     bool IsBot,
     bool InitialEntry,
     string? FromZoneId,
-    bool CrashBoundaryProbe = false);
+    bool CrashBoundaryProbe = false
+);
 
 public sealed record EnterZoneRes(string ZoneId, string? Error = null);
 
@@ -183,11 +199,7 @@ public sealed record EnterZoneRes(string ZoneId, string? Error = null);
 /// Player actor -> current Zone Spot. Same-zone movement updates the Spot's rendering
 /// projection through this message; the actor remains the coordinate authority (§2.1, §7.1).
 /// </summary>
-public sealed record UpdatePositionMsg(
-    string PlayerId,
-    int X,
-    int Y,
-    bool IsBot);
+public sealed record UpdatePositionMsg(string PlayerId, int X, int Y, bool IsBot);
 
 /// <summary>
 /// Zone spot -> player actor. The actor forwards the snapshot through its current
@@ -196,7 +208,8 @@ public sealed record UpdatePositionMsg(
 public sealed record DeliverZoneStateMsg(
     string ZoneId,
     long Tick,
-    IReadOnlyList<PlayerView> Players);
+    IReadOnlyList<PlayerView> Players
+);
 
 public sealed record DeliverZoneChangedMsg(string PlayerId, string ZoneId);
 

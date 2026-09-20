@@ -4,7 +4,7 @@ internal enum QuestProgressStatus
 {
     Active,
     Completed,
-    RewardGranted
+    RewardGranted,
 }
 
 internal sealed record GameplayFact(
@@ -14,13 +14,15 @@ internal sealed record GameplayFact(
     string Value,
     int Count,
     string SourceApi,
-    long OccurredAtUnixMs);
+    long OccurredAtUnixMs
+);
 
 internal sealed record QuestDefinition(
     string QuestId,
     string EventType,
     string Value,
-    int Required);
+    int Required
+);
 
 internal sealed record QuestProgressState(
     string PlayerId,
@@ -30,7 +32,8 @@ internal sealed record QuestProgressState(
     int RequiredCount,
     string? LastSourceEventId,
     long Version,
-    long UpdatedAtUnixMs);
+    long UpdatedAtUnixMs
+);
 
 internal abstract record QuestDomainEvent(
     string EventId,
@@ -38,7 +41,8 @@ internal abstract record QuestDomainEvent(
     string PlayerId,
     string QuestId,
     long Version,
-    long OccurredAtUnixMs);
+    long OccurredAtUnixMs
+);
 
 internal sealed record QuestProgressed(
     string EventId,
@@ -49,8 +53,8 @@ internal sealed record QuestProgressed(
     int CurrentCount,
     int RequiredCount,
     long Version,
-    long OccurredAtUnixMs)
-    : QuestDomainEvent(EventId, SourceEventId, PlayerId, QuestId, Version, OccurredAtUnixMs);
+    long OccurredAtUnixMs
+) : QuestDomainEvent(EventId, SourceEventId, PlayerId, QuestId, Version, OccurredAtUnixMs);
 
 internal sealed record QuestCompleted(
     string EventId,
@@ -58,8 +62,8 @@ internal sealed record QuestCompleted(
     string PlayerId,
     string QuestId,
     long Version,
-    long OccurredAtUnixMs)
-    : QuestDomainEvent(EventId, SourceEventId, PlayerId, QuestId, Version, OccurredAtUnixMs);
+    long OccurredAtUnixMs
+) : QuestDomainEvent(EventId, SourceEventId, PlayerId, QuestId, Version, OccurredAtUnixMs);
 
 internal sealed record QuestRewardGranted(
     string EventId,
@@ -68,8 +72,8 @@ internal sealed record QuestRewardGranted(
     string QuestId,
     string RewardId,
     long Version,
-    long OccurredAtUnixMs)
-    : QuestDomainEvent(EventId, SourceEventId, PlayerId, QuestId, Version, OccurredAtUnixMs);
+    long OccurredAtUnixMs
+) : QuestDomainEvent(EventId, SourceEventId, PlayerId, QuestId, Version, OccurredAtUnixMs);
 
 internal sealed record QuestProgressReconciled(
     string EventId,
@@ -79,8 +83,8 @@ internal sealed record QuestProgressReconciled(
     int CurrentCount,
     string Reason,
     long Version,
-    long OccurredAtUnixMs)
-    : QuestDomainEvent(EventId, SourceEventId, PlayerId, QuestId, Version, OccurredAtUnixMs);
+    long OccurredAtUnixMs
+) : QuestDomainEvent(EventId, SourceEventId, PlayerId, QuestId, Version, OccurredAtUnixMs);
 
 internal static class QuestCatalog
 {
@@ -88,20 +92,22 @@ internal static class QuestCatalog
     [
         new("first-hunt", "MonsterKilled", "*", 3),
         new("herb-gathering", "ItemCollected", "healing-herb", 5),
-        new("visit-ruins", "AreaEntered", "ruins", 1)
+        new("visit-ruins", "AreaEntered", "ruins", 1),
     ];
 
     public static QuestDefinition? Match(GameplayFact gameplayFact)
     {
         return All.FirstOrDefault(definition =>
             definition.EventType == gameplayFact.EventType
-            && (definition.Value == "*" || definition.Value == gameplayFact.Value));
+            && (definition.Value == "*" || definition.Value == gameplayFact.Value)
+        );
     }
 }
 
 internal sealed record QuestProgressDecision(
     QuestProgressState State,
-    IReadOnlyList<QuestDomainEvent> Events);
+    IReadOnlyList<QuestDomainEvent> Events
+);
 
 internal sealed class QuestProgressAggregate
 {
@@ -111,7 +117,8 @@ internal sealed class QuestProgressAggregate
     private QuestProgressAggregate(
         QuestDefinition definition,
         QuestProgressState? state,
-        HashSet<string> appliedSourceEventIds)
+        HashSet<string> appliedSourceEventIds
+    )
     {
         _definition = definition;
         State = state;
@@ -122,13 +129,15 @@ internal sealed class QuestProgressAggregate
 
     public static QuestProgressAggregate Rehydrate(
         QuestDefinition definition,
-        IReadOnlyList<QuestDomainEvent> stream)
+        IReadOnlyList<QuestDomainEvent> stream
+    )
     {
         if (stream.Count == 0)
             return new QuestProgressAggregate(
                 definition,
                 null,
-                new HashSet<string>(StringComparer.Ordinal));
+                new HashSet<string>(StringComparer.Ordinal)
+            );
 
         var currentCount = 0;
         var requiredCount = definition.Required;
@@ -141,7 +150,8 @@ internal sealed class QuestProgressAggregate
         {
             if (@event.QuestId != definition.QuestId)
                 throw new InvalidOperationException(
-                    $"Quest stream '{@event.QuestId}' cannot rehydrate '{definition.QuestId}'.");
+                    $"Quest stream '{@event.QuestId}' cannot rehydrate '{definition.QuestId}'."
+                );
 
             switch (@event)
             {
@@ -173,68 +183,85 @@ internal sealed class QuestProgressAggregate
             requiredCount,
             lastSourceEventId,
             ordered[^1].Version,
-            updatedAtUnixMs);
+            updatedAtUnixMs
+        );
         return new QuestProgressAggregate(definition, state, appliedSourceEventIds);
     }
 
     public QuestProgressDecision? Decide(GameplayFact gameplayFact)
     {
-        if (_appliedSourceEventIds.Contains(gameplayFact.EventId)) return null;
+        if (_appliedSourceEventIds.Contains(gameplayFact.EventId))
+            return null;
 
         var before = State;
-        var nextCount = gameplayFact.EventType == "SnapshotKillCount"
-            ? Math.Max(before?.CurrentCount ?? 0, gameplayFact.Count)
-            : Math.Min(_definition.Required, (before?.CurrentCount ?? 0) + gameplayFact.Count);
-        var nextStatus = nextCount >= _definition.Required
-            ? QuestProgressStatus.RewardGranted
-            : QuestProgressStatus.Active;
-        if (before is not null
-            && before.CurrentCount == nextCount
-            && before.Status == nextStatus) return null;
+        var nextCount =
+            gameplayFact.EventType == "SnapshotKillCount"
+                ? Math.Max(before?.CurrentCount ?? 0, gameplayFact.Count)
+                : Math.Min(_definition.Required, (before?.CurrentCount ?? 0) + gameplayFact.Count);
+        var nextStatus =
+            nextCount >= _definition.Required
+                ? QuestProgressStatus.RewardGranted
+                : QuestProgressStatus.Active;
+        if (before is not null && before.CurrentCount == nextCount && before.Status == nextStatus)
+            return null;
 
         var now = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
         var events = new List<QuestDomainEvent>();
         var nextVersion = before?.Version ?? 0;
         if (gameplayFact.EventType == "SnapshotKillCount")
-            events.Add(new QuestProgressReconciled(
-                EventId("QuestReconciled"),
-                gameplayFact.EventId,
-                gameplayFact.PlayerId,
-                _definition.QuestId,
-                nextCount,
-                "GameplaySnapshot",
-                ++nextVersion,
-                now));
+            events.Add(
+                new QuestProgressReconciled(
+                    EventId("QuestReconciled"),
+                    gameplayFact.EventId,
+                    gameplayFact.PlayerId,
+                    _definition.QuestId,
+                    nextCount,
+                    "GameplaySnapshot",
+                    ++nextVersion,
+                    now
+                )
+            );
         else
-            events.Add(new QuestProgressed(
-                EventId("QuestProgressedEvent"),
-                gameplayFact.EventId,
-                gameplayFact.PlayerId,
-                _definition.QuestId,
-                Math.Max(0, nextCount - (before?.CurrentCount ?? 0)),
-                nextCount,
-                _definition.Required,
-                ++nextVersion,
-                now));
+            events.Add(
+                new QuestProgressed(
+                    EventId("QuestProgressedEvent"),
+                    gameplayFact.EventId,
+                    gameplayFact.PlayerId,
+                    _definition.QuestId,
+                    Math.Max(0, nextCount - (before?.CurrentCount ?? 0)),
+                    nextCount,
+                    _definition.Required,
+                    ++nextVersion,
+                    now
+                )
+            );
 
-        if (before?.Status != QuestProgressStatus.RewardGranted
-            && nextStatus == QuestProgressStatus.RewardGranted)
+        if (
+            before?.Status != QuestProgressStatus.RewardGranted
+            && nextStatus == QuestProgressStatus.RewardGranted
+        )
         {
-            events.Add(new QuestCompleted(
-                EventId("QuestCompletedEvent"),
-                gameplayFact.EventId,
-                gameplayFact.PlayerId,
-                _definition.QuestId,
-                ++nextVersion,
-                now));
-            events.Add(new QuestRewardGranted(
-                EventId("QuestRewardGrantedEvent"),
-                gameplayFact.EventId,
-                gameplayFact.PlayerId,
-                _definition.QuestId,
-                $"reward-{_definition.QuestId}",
-                ++nextVersion,
-                now));
+            events.Add(
+                new QuestCompleted(
+                    EventId("QuestCompletedEvent"),
+                    gameplayFact.EventId,
+                    gameplayFact.PlayerId,
+                    _definition.QuestId,
+                    ++nextVersion,
+                    now
+                )
+            );
+            events.Add(
+                new QuestRewardGranted(
+                    EventId("QuestRewardGrantedEvent"),
+                    gameplayFact.EventId,
+                    gameplayFact.PlayerId,
+                    _definition.QuestId,
+                    $"reward-{_definition.QuestId}",
+                    ++nextVersion,
+                    now
+                )
+            );
         }
 
         State = new QuestProgressState(
@@ -245,7 +272,8 @@ internal sealed class QuestProgressAggregate
             _definition.Required,
             gameplayFact.EventId,
             nextVersion,
-            now);
+            now
+        );
         _appliedSourceEventIds.Add(gameplayFact.EventId);
         return new QuestProgressDecision(State, events);
 

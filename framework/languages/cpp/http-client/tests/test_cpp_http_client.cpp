@@ -1442,8 +1442,7 @@ TEST (ZLinkHttpClient, RejectsUnsupportedRedirectLocationAsProtocolError)
 
     const auto result = client.get ("/redirect-custom")
                           .header ("X-ZLink-Redirect-Location", "games")
-                          .submit_raw ()
-                          .result ();
+                          .submit_raw ();
 
     ASSERT_FALSE (result);
     EXPECT_EQ (result.error_kind (),
@@ -1542,7 +1541,7 @@ TEST (ZLinkHttpClient, MapsConnectionRefusalToUnavailable)
                     .timeout (500ms)
                     .build ();
 
-    const auto result = client.get ("/games").submit_raw ().result ();
+    const auto result = client.get ("/games").submit_raw ();
 
     ASSERT_FALSE (result);
     EXPECT_EQ (result.error_kind (),
@@ -1646,7 +1645,7 @@ TEST (ZLinkHttpClient, RejectsMalformedCompressedResponseAsProtocolError)
     auto client =
       zlink::http_client::client_t::create (server.base_url ()).compression ().build ();
 
-    const auto result = client.get ("/gzip-malformed").submit_raw ().result ();
+    const auto result = client.get ("/gzip-malformed").submit_raw ();
 
     ASSERT_FALSE (result);
     EXPECT_EQ (result.error_kind (),
@@ -2021,7 +2020,7 @@ TEST (ZLinkHttpClient, MapsProxyConnectFailureToUnavailable)
                     .proxy (proxy.url ())
                     .build ();
 
-    const auto result = client.get ("/games").submit_raw ().result ();
+    const auto result = client.get ("/games").submit_raw ();
 
     ASSERT_FALSE (result);
     EXPECT_EQ (result.error_kind (),

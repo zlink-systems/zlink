@@ -69,8 +69,11 @@ class PlayerQuestAggregate {
     if (event.sourceEventId !== undefined) this.sourceEventIds.add(event.sourceEventId);
     const payload = event.payload;
     const current = this.quests.get(event.questId);
-    if (event.type === 'QuestProgressed' &&
-        typeof payload.currentCount === 'number' && typeof payload.requiredCount === 'number') {
+    if (
+      event.type === 'QuestProgressed' &&
+      typeof payload.currentCount === 'number' &&
+      typeof payload.requiredCount === 'number'
+    ) {
       const conditions = new Set(current?.matchedConditions ?? []);
       if (typeof payload.conditionKey === 'string') conditions.add(payload.conditionKey);
       this.quests.set(event.questId, {
@@ -99,9 +102,19 @@ class PlayerQuestAggregate {
     }
     if (current === undefined) return;
     if (event.type === 'QuestCompleted') {
-      this.quests.set(event.questId, { ...current, status: QuestStatuses.Completed, version: event.version, updatedAtUnixMs: event.createdAtUnixMs });
+      this.quests.set(event.questId, {
+        ...current,
+        status: QuestStatuses.Completed,
+        version: event.version,
+        updatedAtUnixMs: event.createdAtUnixMs
+      });
     } else if (event.type === 'QuestRewardGranted') {
-      this.quests.set(event.questId, { ...current, status: QuestStatuses.RewardGranted, version: event.version, updatedAtUnixMs: event.createdAtUnixMs });
+      this.quests.set(event.questId, {
+        ...current,
+        status: QuestStatuses.RewardGranted,
+        version: event.version,
+        updatedAtUnixMs: event.createdAtUnixMs
+      });
     }
   }
 }
@@ -114,7 +127,9 @@ const QuestDomain = {
       decisions.push(counterDecision(event, aggregate, QuestIds.FirstHunt, event.payload.count, 3));
     }
     if (event.type === 'ItemCollected' && event.payload.value === 'healing-herb') {
-      decisions.push(counterDecision(event, aggregate, QuestIds.HerbGathering, event.payload.count, 5));
+      decisions.push(
+        counterDecision(event, aggregate, QuestIds.HerbGathering, event.payload.count, 5)
+      );
     }
     if (event.type === 'FeatureUnlocked' && event.payload.value === 'auction') {
       decisions.push(conditionDecision(event, aggregate, QuestIds.OpenAuction, 'auction', 1));
@@ -136,25 +151,39 @@ const QuestDomain = {
     aggregate: PlayerQuestAggregate
   ): QuestDecision {
     // --8<-- [start:doc-gq-sync-fact]
-    const factCount = snapshot.killCounts.find(
-      (entry) => entry.monsterId === firstHuntTarget.monsterId && entry.areaId === firstHuntTarget.areaId
-    )?.count ?? 0;
+    const factCount =
+      snapshot.killCounts.find(
+        (entry) =>
+          entry.monsterId === firstHuntTarget.monsterId && entry.areaId === firstHuntTarget.areaId
+      )?.count ?? 0;
     // --8<-- [end:doc-gq-sync-fact]
     const current = aggregate.quest(QuestIds.FirstHunt);
     if (factCount <= 0 || (current?.currentCount ?? 0) === factCount) return emptyDecision();
     const now = Date.now();
     const sourceEventId = `reconcile-${playerId}-first-hunt-${now}`;
-    const events: ProposedQuestEvent[] = [{
-      eventId: sourceEventId,
-      playerId,
-      questId: QuestIds.FirstHunt,
-      type: 'QuestReconciled',
-      sourceEventId: undefined,
-      payload: { playerId, questId: QuestIds.FirstHunt, currentCount: factCount, reason: 'sync', reconciledAtUnixMs: now },
-      createdAtUnixMs: now
-    }];
-    const completed = (current?.currentCount ?? 0) < 3 && factCount >= 3 && current?.status !== QuestStatuses.RewardGranted;
-    if (completed) events.push(...completionEvents(playerId, QuestIds.FirstHunt, sourceEventId, now));
+    const events: ProposedQuestEvent[] = [
+      {
+        eventId: sourceEventId,
+        playerId,
+        questId: QuestIds.FirstHunt,
+        type: 'QuestReconciled',
+        sourceEventId: undefined,
+        payload: {
+          playerId,
+          questId: QuestIds.FirstHunt,
+          currentCount: factCount,
+          reason: 'sync',
+          reconciledAtUnixMs: now
+        },
+        createdAtUnixMs: now
+      }
+    ];
+    const completed =
+      (current?.currentCount ?? 0) < 3 &&
+      factCount >= 3 &&
+      current?.status !== QuestStatuses.RewardGranted;
+    if (completed)
+      events.push(...completionEvents(playerId, QuestIds.FirstHunt, sourceEventId, now));
     return {
       events,
       changedQuestIds: [QuestIds.FirstHunt],
@@ -187,8 +216,18 @@ function conditionDecision(
   requiredCount: number
 ): QuestDecision {
   const current = aggregate.quest(questId);
-  if (current?.status === QuestStatuses.RewardGranted || current?.matchedConditions.has(conditionKey) === true) return emptyDecision();
-  return progressDecision(event, questId, (current?.currentCount ?? 0) + 1, requiredCount, conditionKey);
+  if (
+    current?.status === QuestStatuses.RewardGranted ||
+    current?.matchedConditions.has(conditionKey) === true
+  )
+    return emptyDecision();
+  return progressDecision(
+    event,
+    questId,
+    (current?.currentCount ?? 0) + 1,
+    requiredCount,
+    conditionKey
+  );
 }
 
 function orderedDecision(
@@ -199,8 +238,18 @@ function orderedDecision(
   requiredCount: number
 ): QuestDecision {
   const current = aggregate.quest(questId);
-  if (current?.status === QuestStatuses.RewardGranted || (current?.currentCount ?? 0) !== expectedStep) return emptyDecision();
-  return progressDecision(event, questId, expectedStep + 1, requiredCount, `step-${expectedStep + 1}`);
+  if (
+    current?.status === QuestStatuses.RewardGranted ||
+    (current?.currentCount ?? 0) !== expectedStep
+  )
+    return emptyDecision();
+  return progressDecision(
+    event,
+    questId,
+    expectedStep + 1,
+    requiredCount,
+    `step-${expectedStep + 1}`
+  );
 }
 
 function progressDecision(
@@ -211,30 +260,56 @@ function progressDecision(
   conditionKey?: string
 ): QuestDecision {
   const now = Date.now();
-  const events: ProposedQuestEvent[] = [{
-    eventId: `${questId}-${event.eventId}-progress`,
-    sourceEventId: event.eventId,
-    playerId: event.playerId,
-    questId,
-    type: 'QuestProgressed',
-    payload: { playerId: event.playerId, questId, delta: event.payload.count, currentCount, requiredCount, sourceEventId: event.eventId, conditionKey },
-    createdAtUnixMs: now
-  }];
+  const events: ProposedQuestEvent[] = [
+    {
+      eventId: `${questId}-${event.eventId}-progress`,
+      sourceEventId: event.eventId,
+      playerId: event.playerId,
+      questId,
+      type: 'QuestProgressed',
+      payload: {
+        playerId: event.playerId,
+        questId,
+        delta: event.payload.count,
+        currentCount,
+        requiredCount,
+        sourceEventId: event.eventId,
+        conditionKey
+      },
+      createdAtUnixMs: now
+    }
+  ];
   const completed = currentCount >= requiredCount;
   if (completed) events.push(...completionEvents(event.playerId, questId, event.eventId, now));
   return { events, changedQuestIds: [questId], completedQuestIds: completed ? [questId] : [] };
 }
 
-function completionEvents(playerId: string, questId: string, sourceEventId: string, now: number): ProposedQuestEvent[] {
-  return [{
-    eventId: `${questId}-${sourceEventId}-completed`, sourceEventId, playerId, questId,
-    type: 'QuestCompleted',
-    payload: { playerId, questId, sourceEventId, completedAtUnixMs: now }, createdAtUnixMs: now
-  }, {
-    eventId: `${questId}-${sourceEventId}-reward`, sourceEventId, playerId, questId,
-    type: 'QuestRewardGranted',
-    payload: { playerId, questId, rewardId: `reward-${questId}`, grantedAtUnixMs: now }, createdAtUnixMs: now
-  }];
+function completionEvents(
+  playerId: string,
+  questId: string,
+  sourceEventId: string,
+  now: number
+): ProposedQuestEvent[] {
+  return [
+    {
+      eventId: `${questId}-${sourceEventId}-completed`,
+      sourceEventId,
+      playerId,
+      questId,
+      type: 'QuestCompleted',
+      payload: { playerId, questId, sourceEventId, completedAtUnixMs: now },
+      createdAtUnixMs: now
+    },
+    {
+      eventId: `${questId}-${sourceEventId}-reward`,
+      sourceEventId,
+      playerId,
+      questId,
+      type: 'QuestRewardGranted',
+      payload: { playerId, questId, rewardId: `reward-${questId}`, grantedAtUnixMs: now },
+      createdAtUnixMs: now
+    }
+  ];
 }
 
 function mergeDecisions(decisions: QuestDecision[]): QuestDecision {

@@ -1,8 +1,14 @@
 import { ZLinkModule, zlinkFramework, zlinkModule } from '@zlink-systems/nestjs';
-import { createGameQuestLocationStore, gameQuestLocationOptions } from '../Configuration/location-store';
+import {
+  createGameQuestLocationStore,
+  gameQuestLocationOptions
+} from '../Configuration/location-store';
 import { createGameQuestRelocationStore } from '../Configuration/relocation-store';
 import { GAMEQUEST_INSTANCE_ID, GAMEQUEST_LOCATION_STORE } from '../Configuration/tokens';
-import { GAMEQUEST_SAMPLE_CONFIG, createGameQuestConfigurationModule } from '../Configuration/sample-config';
+import {
+  GAMEQUEST_SAMPLE_CONFIG,
+  createGameQuestConfigurationModule
+} from '../Configuration/sample-config';
 import {
   GameplayStateStore,
   QuestEventStore,
@@ -17,9 +23,8 @@ import type { GameQuestServerConfig } from '../Configuration/sample-config';
 
 function createQuestMissionModule(instanceId: 'mission-a' | 'mission-b') {
   class GameQuestQuestModule {}
-  const spotRouterEndpointKey = instanceId === 'mission-a'
-    ? 'missionASpotRouterEndpoint'
-    : 'missionBSpotRouterEndpoint';
+  const spotRouterEndpointKey =
+    instanceId === 'mission-a' ? 'missionASpotRouterEndpoint' : 'missionBSpotRouterEndpoint';
   const configuration = createGameQuestConfigurationModule([
     spotRouterEndpointKey,
     instanceId === 'mission-a' ? 'missionAHttpUrl' : 'missionBHttpUrl',
@@ -37,20 +42,21 @@ function createQuestMissionModule(instanceId: 'mission-a' | 'mission-b') {
         inject: [GAMEQUEST_SAMPLE_CONFIG],
         useFactory: (config: GameQuestServerConfig) => {
           const builder = zlinkFramework();
-          builder.configureDispatch()
-            .messageFlow('normal');
+          builder.configureDispatch().messageFlow('normal');
           builder.addLocationStore(createGameQuestLocationStore(config));
           builder.addRelocationStore(createGameQuestRelocationStore(config));
           gameQuestLocationOptions(builder.configureLocations());
           // --8<-- [start:doc-gq-mission-register]
-          const spotMesh = builder.addRouteMesh(SampleNames.playerQuestSpotMesh)
+          const spotMesh = builder
+            .addRouteMesh(SampleNames.playerQuestSpotMesh)
             .listen(config[spotRouterEndpointKey])
             .setRoutingIdPrefix('gamequest-mission');
-          spotMesh.objects().server().addInstanceSpotFactory(
-            SampleNames.playerQuestSpotType,
-            PlayerQuestSpot,
-            (factory) => factory.recreateOnRelocation()
-          );
+          spotMesh
+            .objects()
+            .server()
+            .addInstanceSpotFactory(SampleNames.playerQuestSpotType, PlayerQuestSpot, (factory) =>
+              factory.recreateOnRelocation()
+            );
           // --8<-- [end:doc-gq-mission-register]
           return builder.build();
         }

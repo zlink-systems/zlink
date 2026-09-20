@@ -8,7 +8,8 @@ namespace ZoneWorld.Server.ZoneNode.Application.Zone;
 public sealed record ZoneTickOutput(
     ZoneStateNotify Notify,
     IReadOnlyList<string> PushTargets,
-    IReadOnlyList<ZoneBorderEvent> BorderEvents);
+    IReadOnlyList<ZoneBorderEvent> BorderEvents
+);
 
 /// <summary>
 /// One tick of a zone (§2.5): advance the counter, build the player list the clients see,
@@ -22,12 +23,14 @@ public static class ZoneTickUseCase
         var tick = state.NextTick();
         var notify = new ZoneStateNotify(state.ZoneId, tick, state.VisiblePlayers());
 
-        var borderEvents = World.AdjacentZones(state.ZoneId)
+        var borderEvents = World
+            .AdjacentZones(state.ZoneId)
             .Select(adjacent => new ZoneBorderEvent(
                 state.ZoneId,
                 adjacent,
                 tick,
-                state.BorderBandFor(adjacent)))
+                state.BorderBandFor(adjacent)
+            ))
             .ToArray();
 
         // Bots are not push targets: they have no bound session, so a push addressed to
@@ -39,14 +42,14 @@ public static class ZoneTickUseCase
         return new ZoneTickOutput(notify, pushTargets, borderEvents);
     }
 
-    public static IReadOnlyList<string> Humans(ZoneState state) =>
-        Residents(state, isBot: false);
+    public static IReadOnlyList<string> Humans(ZoneState state) => Residents(state, isBot: false);
 
-    public static IReadOnlyList<string> Bots(ZoneState state) =>
-        Residents(state, isBot: true);
+    public static IReadOnlyList<string> Bots(ZoneState state) => Residents(state, isBot: true);
 
     private static IReadOnlyList<string> Residents(ZoneState state, bool isBot) =>
-        state.ResidentIds
-            .Where(playerId => state.TryGetResident(playerId, out var resident) && resident.IsBot == isBot)
+        state
+            .ResidentIds.Where(playerId =>
+                state.TryGetResident(playerId, out var resident) && resident.IsBot == isBot
+            )
             .ToArray();
 }

@@ -4,24 +4,16 @@ import systems.zlink.framework.messaging.ZLinkMessage
 import systems.zlink.samples.kotlin.bingo.server.configuration.SampleTimings
 import systems.zlink.samples.kotlin.bingo.server.play.domain.bingo.BingoRoomSettings
 import systems.zlink.samples.kotlin.bingo.server.play.infrastructure.zlink.spots.bingoroomspot.BingoRoomSpot
-import systems.zlink.samples.kotlin.bingo.shared.contracts.BingoRoomSettingsPayload
 import systems.zlink.samples.kotlin.bingo.shared.contracts.BingoRoomCreateReq
 
 class BingoRoomSettingsInitializer {
-    fun handle(
-        spot: BingoRoomSpot,
-        request: ZLinkMessage,
-    ) {
+    fun handle(spot: BingoRoomSpot, request: ZLinkMessage) {
         spot.applySettings(decodeSettings(request))
     }
 
     private fun decodeSettings(request: ZLinkMessage): BingoRoomSettings {
         if (request.isEmpty()) {
-            return BingoRoomSettings.create(
-                "two-player",
-                0,
-                SampleTimings.DrawPeriod.toMillis(),
-            )
+            return BingoRoomSettings.create("two-player", 0, SampleTimings.DrawPeriod.toMillis())
         }
         val settings = request.decode(BingoRoomCreateReq::class.java).settings
         return BingoRoomSettings(

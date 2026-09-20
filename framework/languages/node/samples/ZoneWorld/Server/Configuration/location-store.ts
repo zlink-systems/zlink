@@ -29,8 +29,4 @@ function zoneWorldLocationOptions(options: ZLinkLocationOptions, shared: SharedS
   }
 }
 
-export {
-  createZoneWorldLocationStore,
-  createZoneWorldRelocationStore,
-  zoneWorldLocationOptions
-};
+export { createZoneWorldLocationStore, createZoneWorldRelocationStore, zoneWorldLocationOptions };

@@ -1,18 +1,16 @@
 package systems.zlink.samples.kotlin.deliverydispatch.client
 
-
-import systems.zlink.stream.connector.ZLinkStreamMessage
-import java.time.Duration
 import java.net.URI
+import java.time.Duration
 import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.async
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.runBlocking
-import systems.zlink.httpclient.ZLinkHttpClient
-import systems.zlink.httpclient.kotlin.fetch
 import systems.zlink.framework.kotlin.ZLinkKotlinStreamAssert
 import systems.zlink.framework.kotlin.await
 import systems.zlink.framework.kotlin.kotlin
+import systems.zlink.httpclient.ZLinkHttpClient
+import systems.zlink.httpclient.kotlin.fetch
 import systems.zlink.samples.kotlin.deliverydispatch.server.configuration.SampleNames
 import systems.zlink.samples.kotlin.deliverydispatch.server.configuration.SampleTimings
 import systems.zlink.samples.kotlin.deliverydispatch.server.configuration.SampleTopology
@@ -32,12 +30,11 @@ import systems.zlink.stream.connector.ZLinkStreamConnector
 import systems.zlink.stream.connector.ZLinkStreamConnectorFactory
 import systems.zlink.stream.connector.ZLinkStreamConnectorOptions
 import systems.zlink.stream.connector.ZLinkStreamDispatchMode
+import systems.zlink.stream.connector.ZLinkStreamMessage
 
 fun main(args: Array<String>) {
     SampleTopology.configure(args)
-    runBlocking {
-        DeliveryDispatchClientScenario().run()
-    }
+    runBlocking { DeliveryDispatchClientScenario().run() }
 }
 
 class DeliveryDispatchClientScenario {
@@ -54,17 +51,21 @@ class DeliveryDispatchClientScenario {
             courierA.connect().submit().await()
             courierB.connect().submit().await()
 
-            val courierABound = courierA
-                .request(BindCourierSessionReq("courier-a"))
-                .submit(BindCourierSessionRes::class.java).await()
+            val courierABound =
+                courierA
+                    .request(BindCourierSessionReq("courier-a"))
+                    .submit(BindCourierSessionRes::class.java)
+                    .await()
             ZLinkKotlinStreamAssert.ensure(
                 courierABound.courierId == "courier-a",
                 "courier-a binding id mismatch",
             )
             println("deliverydispatch-bind=courier-a")
-            val courierBBound = courierB
-                .request(BindCourierSessionReq("courier-b"))
-                .submit(BindCourierSessionRes::class.java).await()
+            val courierBBound =
+                courierB
+                    .request(BindCourierSessionReq("courier-b"))
+                    .submit(BindCourierSessionRes::class.java)
+                    .await()
             ZLinkKotlinStreamAssert.ensure(
                 courierBBound.courierId == "courier-b",
                 "courier-b binding id mismatch",
@@ -89,43 +90,66 @@ class DeliveryDispatchClientScenario {
         otherCourier: ZLinkStreamConnector,
     ) = coroutineScope {
         val deliveryId = "delivery-success"
-        val offer = courier
-            .waitFor(OfferDeliveryNotify::class.java)
-            .where(OfferDeliveryNotify::class.java) { message -> message.payload().deliveryId == deliveryId }
-            .submit(OfferDeliveryNotify::class.java)
-        val noOtherCourierOffer = async(start = CoroutineStart.UNDISPATCHED) {
-            otherCourier.kotlin().expectNone<OfferDeliveryNotify>(OfferDeliveryNotify::class.java.simpleName)
-                .within(Duration.ofSeconds(1))
-                .await()
-        }
-        val statuses = async(start = CoroutineStart.UNDISPATCHED) {
-            customer.kotlin().waitForSequence<DeliveryStatusNotify>(DeliveryStatusNotify::class.java.simpleName)
-                .expect { message -> matchesStatus(message, deliveryId, DeliveryStatus.Assigned) }
-                .expect { message -> matchesStatus(message, deliveryId, DeliveryStatus.Accepted) }
-                .expect { message -> matchesStatus(message, deliveryId, DeliveryStatus.PickedUp) }
-                .expect { message -> matchesStatus(message, deliveryId, DeliveryStatus.Delivered) }
-                .await()
-        }
+        val offer =
+            courier
+                .waitFor(OfferDeliveryNotify::class.java)
+                .where(OfferDeliveryNotify::class.java) { message ->
+                    message.payload().deliveryId == deliveryId
+                }
+                .submit(OfferDeliveryNotify::class.java)
+        val noOtherCourierOffer =
+            async(start = CoroutineStart.UNDISPATCHED) {
+                otherCourier
+                    .kotlin()
+                    .expectNone<OfferDeliveryNotify>(OfferDeliveryNotify::class.java.simpleName)
+                    .within(Duration.ofSeconds(1))
+                    .await()
+            }
+        val statuses =
+            async(start = CoroutineStart.UNDISPATCHED) {
+                customer
+                    .kotlin()
+                    .waitForSequence<DeliveryStatusNotify>(
+                        DeliveryStatusNotify::class.java.simpleName
+                    )
+                    .expect { message ->
+                        matchesStatus(message, deliveryId, DeliveryStatus.Assigned)
+                    }
+                    .expect { message ->
+                        matchesStatus(message, deliveryId, DeliveryStatus.Accepted)
+                    }
+                    .expect { message ->
+                        matchesStatus(message, deliveryId, DeliveryStatus.PickedUp)
+                    }
+                    .expect { message ->
+                        matchesStatus(message, deliveryId, DeliveryStatus.Delivered)
+                    }
+                    .await()
+            }
 
-        val subscribed = customer
-            .request(SubscribeDeliveryReq(deliveryId))
-            .submit(SubscribeDeliveryRes::class.java).await()
+        val subscribed =
+            customer
+                .request(SubscribeDeliveryReq(deliveryId))
+                .submit(SubscribeDeliveryRes::class.java)
+                .await()
         ZLinkKotlinStreamAssert.ensure(
             subscribed.deliveryId == deliveryId,
             "success subscription id mismatch",
         )
         println("deliverydispatch-subscribe=$deliveryId")
 
-        val created = post(
-            path = "/deliveries",
-            body = CreateDeliveryReq(
-                deliveryId = deliveryId,
-                customerId = "customer-1",
-                pickupAddress = "Kitchen 12",
-                dropoffAddress = "Customer Lobby",
-            ),
-            responseType = CreateDeliveryRes::class.java,
-        )
+        val created =
+            post(
+                path = "/deliveries",
+                body =
+                    CreateDeliveryReq(
+                        deliveryId = deliveryId,
+                        customerId = "customer-1",
+                        pickupAddress = "Kitchen 12",
+                        dropoffAddress = "Customer Lobby",
+                    ),
+                responseType = CreateDeliveryRes::class.java,
+            )
         ZLinkKotlinStreamAssert.ensure(
             created.deliveryId == deliveryId,
             "created success delivery id mismatch",
@@ -152,47 +176,70 @@ class DeliveryDispatchClientScenario {
         courierB: ZLinkStreamConnector,
     ) = coroutineScope {
         val deliveryId = "delivery-reassign"
-        val firstOffer = courierA
-            .waitFor(OfferDeliveryNotify::class.java)
-            .where(OfferDeliveryNotify::class.java) { message ->
-                message.payload().deliveryId == deliveryId && message.payload().courierId == "courier-a"
+        val firstOffer =
+            courierA
+                .waitFor(OfferDeliveryNotify::class.java)
+                .where(OfferDeliveryNotify::class.java) { message ->
+                    message.payload().deliveryId == deliveryId &&
+                        message.payload().courierId == "courier-a"
+                }
+                .submit(OfferDeliveryNotify::class.java)
+        val secondOffer =
+            courierB
+                .waitFor(OfferDeliveryNotify::class.java)
+                .where(OfferDeliveryNotify::class.java) { message ->
+                    message.payload().deliveryId == deliveryId &&
+                        message.payload().courierId == "courier-b"
+                }
+                .submit(OfferDeliveryNotify::class.java)
+        val statuses =
+            async(start = CoroutineStart.UNDISPATCHED) {
+                customer
+                    .kotlin()
+                    .waitForSequence<DeliveryStatusNotify>(
+                        DeliveryStatusNotify::class.java.simpleName
+                    )
+                    .expect { message ->
+                        matchesStatus(message, deliveryId, DeliveryStatus.Assigned)
+                    }
+                    .expect { message ->
+                        matchesStatus(message, deliveryId, DeliveryStatus.Reassigned)
+                    }
+                    .expect { message ->
+                        matchesStatus(message, deliveryId, DeliveryStatus.Accepted)
+                    }
+                    .expect { message ->
+                        matchesStatus(message, deliveryId, DeliveryStatus.PickedUp)
+                    }
+                    .expect { message ->
+                        matchesStatus(message, deliveryId, DeliveryStatus.Delivered)
+                    }
+                    .await()
             }
-            .submit(OfferDeliveryNotify::class.java)
-        val secondOffer = courierB
-            .waitFor(OfferDeliveryNotify::class.java)
-            .where(OfferDeliveryNotify::class.java) { message ->
-                message.payload().deliveryId == deliveryId && message.payload().courierId == "courier-b"
-            }
-            .submit(OfferDeliveryNotify::class.java)
-        val statuses = async(start = CoroutineStart.UNDISPATCHED) {
-            customer.kotlin().waitForSequence<DeliveryStatusNotify>(DeliveryStatusNotify::class.java.simpleName)
-                .expect { message -> matchesStatus(message, deliveryId, DeliveryStatus.Assigned) }
-                .expect { message -> matchesStatus(message, deliveryId, DeliveryStatus.Reassigned) }
-                .expect { message -> matchesStatus(message, deliveryId, DeliveryStatus.Accepted) }
-                .expect { message -> matchesStatus(message, deliveryId, DeliveryStatus.PickedUp) }
-                .expect { message -> matchesStatus(message, deliveryId, DeliveryStatus.Delivered) }
-                .await()
-        }
 
-        val subscribed = customer
-            .request(SubscribeDeliveryReq(deliveryId))
-            .submit(SubscribeDeliveryRes::class.java).await()
+        val subscribed =
+            customer
+                .request(SubscribeDeliveryReq(deliveryId))
+                .submit(SubscribeDeliveryRes::class.java)
+                .await()
         ZLinkKotlinStreamAssert.ensure(
             subscribed.deliveryId == deliveryId,
             "reassignment subscription id mismatch",
         )
         println("deliverydispatch-subscribe=$deliveryId")
 
-        val created = post(
-            path = "/deliveries",
-            body = CreateDeliveryReq(
-                deliveryId = deliveryId,
-                customerId = "customer-1",
-                pickupAddress = "Kitchen 12",
-                dropoffAddress = "Customer Lobby",
-            ),
-            responseType = CreateDeliveryRes::class.java,
-        )
+        val created =
+            post(
+                path = "/deliveries",
+                body =
+                    CreateDeliveryReq(
+                        deliveryId = deliveryId,
+                        customerId = "customer-1",
+                        pickupAddress = "Kitchen 12",
+                        dropoffAddress = "Customer Lobby",
+                    ),
+                responseType = CreateDeliveryRes::class.java,
+            )
         ZLinkKotlinStreamAssert.ensure(
             created.deliveryId == deliveryId,
             "created reassignment delivery id mismatch",
@@ -218,7 +265,8 @@ class DeliveryDispatchClientScenario {
         )
         courierA
             .send(CourierDecisionMsg(staleOffer.deliveryId, staleOffer.courierId, true, null))
-            .submit().await()
+            .submit()
+            .await()
         println(SampleNames.ReassignmentMarker)
     }
 
@@ -228,44 +276,61 @@ class DeliveryDispatchClientScenario {
         courierB: ZLinkStreamConnector,
     ) = coroutineScope {
         val deliveryId = "delivery-exhausted"
-        val firstOffer = courierA
-            .waitFor(OfferDeliveryNotify::class.java)
-            .where(OfferDeliveryNotify::class.java) { message ->
-                message.payload().deliveryId == deliveryId && message.payload().courierId == "courier-a"
+        val firstOffer =
+            courierA
+                .waitFor(OfferDeliveryNotify::class.java)
+                .where(OfferDeliveryNotify::class.java) { message ->
+                    message.payload().deliveryId == deliveryId &&
+                        message.payload().courierId == "courier-a"
+                }
+                .submit(OfferDeliveryNotify::class.java)
+        val secondOffer =
+            courierB
+                .waitFor(OfferDeliveryNotify::class.java)
+                .where(OfferDeliveryNotify::class.java) { message ->
+                    message.payload().deliveryId == deliveryId &&
+                        message.payload().courierId == "courier-b"
+                }
+                .submit(OfferDeliveryNotify::class.java)
+        val statuses =
+            async(start = CoroutineStart.UNDISPATCHED) {
+                customer
+                    .kotlin()
+                    .waitForSequence<DeliveryStatusNotify>(
+                        DeliveryStatusNotify::class.java.simpleName
+                    )
+                    .expect { message ->
+                        matchesStatus(message, deliveryId, DeliveryStatus.Assigned)
+                    }
+                    .expect { message ->
+                        matchesStatus(message, deliveryId, DeliveryStatus.Reassigned)
+                    }
+                    .expect { message -> matchesStatus(message, deliveryId, DeliveryStatus.Failed) }
+                    .await()
             }
-            .submit(OfferDeliveryNotify::class.java)
-        val secondOffer = courierB
-            .waitFor(OfferDeliveryNotify::class.java)
-            .where(OfferDeliveryNotify::class.java) { message ->
-                message.payload().deliveryId == deliveryId && message.payload().courierId == "courier-b"
-            }
-            .submit(OfferDeliveryNotify::class.java)
-        val statuses = async(start = CoroutineStart.UNDISPATCHED) {
-            customer.kotlin().waitForSequence<DeliveryStatusNotify>(DeliveryStatusNotify::class.java.simpleName)
-                .expect { message -> matchesStatus(message, deliveryId, DeliveryStatus.Assigned) }
-                .expect { message -> matchesStatus(message, deliveryId, DeliveryStatus.Reassigned) }
-                .expect { message -> matchesStatus(message, deliveryId, DeliveryStatus.Failed) }
-                .await()
-        }
 
-        val subscribed = customer
-            .request(SubscribeDeliveryReq(deliveryId))
-            .submit(SubscribeDeliveryRes::class.java).await()
+        val subscribed =
+            customer
+                .request(SubscribeDeliveryReq(deliveryId))
+                .submit(SubscribeDeliveryRes::class.java)
+                .await()
         ZLinkKotlinStreamAssert.ensure(
             subscribed.deliveryId == deliveryId,
             "exhausted subscription id mismatch",
         )
 
-        val created = post(
-            path = "/deliveries",
-            body = CreateDeliveryReq(
-                deliveryId = deliveryId,
-                customerId = "customer-1",
-                pickupAddress = "Kitchen 12",
-                dropoffAddress = "Customer Lobby",
-            ),
-            responseType = CreateDeliveryRes::class.java,
-        )
+        val created =
+            post(
+                path = "/deliveries",
+                body =
+                    CreateDeliveryReq(
+                        deliveryId = deliveryId,
+                        customerId = "customer-1",
+                        pickupAddress = "Kitchen 12",
+                        dropoffAddress = "Customer Lobby",
+                    ),
+                responseType = CreateDeliveryRes::class.java,
+            )
         ZLinkKotlinStreamAssert.ensure(
             created.deliveryId == deliveryId,
             "created exhausted delivery id mismatch",
@@ -274,11 +339,13 @@ class DeliveryDispatchClientScenario {
         val first = firstOffer.await().payload()
         courierA
             .send(CourierDecisionMsg(first.deliveryId, first.courierId, false, "declined"))
-            .submit().await()
+            .submit()
+            .await()
         val second = secondOffer.await().payload()
         courierB
             .send(CourierDecisionMsg(second.deliveryId, second.courierId, false, "declined"))
-            .submit().await()
+            .submit()
+            .await()
 
         val notifications = statuses.await().map { it.payload() }
         ZLinkKotlinStreamAssert.ensure(
@@ -292,16 +359,19 @@ class DeliveryDispatchClientScenario {
         deliveryId: String,
         status: DeliveryStatus,
     ): Boolean {
-        println("deliverydispatch-status=${message.payload().deliveryId}:${message.payload().status}")
+        println(
+            "deliverydispatch-status=${message.payload().deliveryId}:${message.payload().status}"
+        )
         return message.payload().deliveryId == deliveryId && message.payload().status == status
     }
 
     private suspend fun assertServerEvidence() {
-        val response = post(
-            path = "/self-check/assert",
-            body = ServerAssertionReq("delivery-success", "delivery-reassign"),
-            responseType = ServerAssertionRes::class.java,
-        )
+        val response =
+            post(
+                path = "/self-check/assert",
+                body = ServerAssertionReq("delivery-success", "delivery-reassign"),
+                responseType = ServerAssertionRes::class.java,
+            )
         ZLinkKotlinStreamAssert.ensure(response.passed, "server delivery evidence failed")
         println(SampleNames.ServerEvidenceMarker)
     }
@@ -341,7 +411,6 @@ class DeliveryDispatchClientScenario {
                 null,
                 null,
                 null,
-            ),
+            )
         )
-
 }

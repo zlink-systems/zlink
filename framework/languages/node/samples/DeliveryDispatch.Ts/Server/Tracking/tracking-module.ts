@@ -1,7 +1,10 @@
 import { ZLinkModule, zlinkFramework, zlinkModule } from '@zlink-systems/nestjs';
 import { DeliveryDispatchNodeIds, SampleNames } from '../../Shared/Configuration/sample-names';
 import { EvidenceStore } from '../Configuration/evidence-store';
-import { createDeliveryDispatchLocationStore, deliveryDispatchLocationOptions } from '../Configuration/location-store';
+import {
+  createDeliveryDispatchLocationStore,
+  deliveryDispatchLocationOptions
+} from '../Configuration/location-store';
 import {
   DELIVERYDISPATCH_SAMPLE_CONFIG,
   createDeliveryDispatchConfigurationModule
@@ -27,15 +30,16 @@ function createTrackingModule() {
         inject: [DELIVERYDISPATCH_SAMPLE_CONFIG],
         useFactory: (config: DeliveryDispatchServerConfig) => {
           const builder = zlinkFramework();
-          builder.configureDispatch()
-            .messageFlow('normal');
+          builder.configureDispatch().messageFlow('normal');
           builder.addLocationStore(createDeliveryDispatchLocationStore(config));
           deliveryDispatchLocationOptions(builder.configureLocations());
-          const mesh = builder.addRouteMesh(SampleNames.customerMeshName)
+          const mesh = builder
+            .addRouteMesh(SampleNames.customerMeshName)
             .listen(config.trackingSpotEndpoint)
             .routingId(DeliveryDispatchNodeIds.tracking);
           mesh.objects().client();
-          builder.addClientServerChannel(SampleNames.trackingChannel)
+          builder
+            .addClientServerChannel(SampleNames.trackingChannel)
             .server()
             .listen()
             .addHandlerGroup('tracking');
@@ -52,7 +56,8 @@ function createTrackingModule() {
       {
         provide: 'DELIVERYDISPATCH_LOCATION_STORE',
         inject: [DELIVERYDISPATCH_SAMPLE_CONFIG],
-        useFactory: (config: DeliveryDispatchServerConfig) => createDeliveryDispatchLocationStore(config)
+        useFactory: (config: DeliveryDispatchServerConfig) =>
+          createDeliveryDispatchLocationStore(config)
       }
     ]
   })(TrackingModule);

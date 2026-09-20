@@ -8,7 +8,6 @@ import org.springframework.boot.context.properties.EnableConfigurationProperties
 import org.springframework.context.annotation.Bean
 import org.springframework.core.env.StandardEnvironment
 import systems.zlink.framework.codecs.protobuf.ZLinkProtobufCodec
-import systems.zlink.framework.locations.redis.ZLinkRedisLocationStore
 import systems.zlink.framework.locations.redis.ZLinkRedisRelocationOptions
 import systems.zlink.framework.locations.redis.ZLinkRedisRelocationStore
 import systems.zlink.framework.spring.EnableZLinkFramework
@@ -34,35 +33,46 @@ class MatchmakingServerApplication {
                 ZLinkRedisRelocationStore(
                     ZLinkRedisRelocationOptions()
                         .setConnectionString(topology.redisEndpoint)
-                        .setKeyPrefix(topology.redisKeyPrefix + "relocation:"),
-                ),
+                        .setKeyPrefix(topology.redisKeyPrefix + "relocation:")
+                )
             )
             options.addHandlersFromPackageOf(MatchmakingServerApplication::class.java)
-            options.addRouteMesh(SampleNames.MatchmakingMesh)
+            options
+                .addRouteMesh(SampleNames.MatchmakingMesh)
                 .setRoutingIdPrefix("matchmaking")
                 .listen(topology.matchmakingRouterEndpoint)
-                .objects().server()
+                .objects()
+                .server()
                 .addInstanceSpotFactory(
                     SampleNames.MatchmakerSpotType,
                     BingoMatchmaker::class.java,
-                ) { factory -> factory.recreateOnRelocation() }
+                ) { factory ->
+                    factory.recreateOnRelocation()
+                }
         }
 
     @Bean(destroyMethod = "close")
-    fun reservations(topology: SampleTopology) =
-        RedisBingoMatchReservationStore(topology)
+    fun reservations(topology: SampleTopology) = RedisBingoMatchReservationStore(topology)
 
     companion object {
         fun run(args: Array<String>): AutoCloseable {
-            val environment = StandardEnvironment().apply {
-                propertySources.remove(StandardEnvironment.SYSTEM_ENVIRONMENT_PROPERTY_SOURCE_NAME)
-                propertySources.remove(StandardEnvironment.SYSTEM_PROPERTIES_PROPERTY_SOURCE_NAME)
-            }
+            val environment =
+                StandardEnvironment().apply {
+                    propertySources.remove(
+                        StandardEnvironment.SYSTEM_ENVIRONMENT_PROPERTY_SOURCE_NAME
+                    )
+                    propertySources.remove(
+                        StandardEnvironment.SYSTEM_PROPERTIES_PROPERTY_SOURCE_NAME
+                    )
+                }
             val configPath = SampleTopology.configPath(args)
-            val builder = SpringApplicationBuilder(MatchmakingServerApplication::class.java)
-                .environment(environment)
-                .properties("spring.config.location=${Path.of(configPath).toAbsolutePath().toUri()}")
-                .web(WebApplicationType.NONE)
+            val builder =
+                SpringApplicationBuilder(MatchmakingServerApplication::class.java)
+                    .environment(environment)
+                    .properties(
+                        "spring.config.location=${Path.of(configPath).toAbsolutePath().toUri()}"
+                    )
+                    .web(WebApplicationType.NONE)
             builder.application().setKeepAlive(true)
             val context = builder.run()
             return AutoCloseable { context.close() }

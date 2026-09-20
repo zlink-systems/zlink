@@ -21,6 +21,7 @@ import systems.zlink.framework.runtime.internal.service.ZLinkServiceM6AWireCodec
 import systems.zlink.framework.runtime.internal.service.ZLinkServiceM6BWireCodec;
 import systems.zlink.framework.runtime.internal.service.ZLinkServiceMessageFollowWireCodec;
 import systems.zlink.framework.runtime.internal.service.ZLinkServiceRelocationWireCodec;
+import systems.zlink.framework.runtime.internal.service.ZLinkInstanceActivationRecoveryCodec;
 import systems.zlink.framework.streams.ZLinkStreamCodec;
 import systems.zlink.framework.runtime.internal.dispatch.ZLinkApplicationJobQueue;
 
@@ -97,6 +98,11 @@ public interface ZLinkInternalMeshNode extends ZLinkBackendObject {
     }
 
     default void setRouterSendTimeout(Duration value) {
+        // Optional for test and alternate backends that do not expose Core
+        // RouteMesh admission yet.
+    }
+
+    default void setRouterReceiveTimeout(Duration value) {
         // Optional for test and alternate backends that do not expose Core
         // RouteMesh admission yet.
     }
@@ -567,6 +573,14 @@ public interface ZLinkInternalMeshNode extends ZLinkBackendObject {
     default void forgetInstanceIntent(
         ZLinkServiceM6BWireCodec.InstanceRouteFence route) {
         // Alternate backends may materialize Instance Spot elsewhere.
+    }
+
+    default CompletionStage<Void> recoverInstanceActivation(
+        ZLinkInstanceActivationRecoveryCodec.RecoveryEnvelope envelope,
+        ZLinkServiceM6BWireCodec.InstanceRouteFence route) {
+        return CompletableFuture.failedFuture(
+            new UnsupportedOperationException(
+                "Instance activation recovery is unavailable"));
     }
 
     @FunctionalInterface

@@ -11,9 +11,7 @@ import systems.zlink.tutorial.shared.JoinMatchQueue
 import systems.zlink.tutorial.shared.MatchQueueStatus
 
 @RestController
-class MatchQueueEndpoints(
-    private val route: ZLinkRouteClient,
-) {
+class MatchQueueEndpoints(private val route: ZLinkRouteClient) {
 
     // --8<-- [start:instance-spot-call]
     @PostMapping("/match-queues/{mode}")

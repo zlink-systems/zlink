@@ -325,10 +325,7 @@ internal sealed class ZlinkStreamConnectorLifecycle(
                         // the registered disconnect handlers run (spec §6). A configuration
                         // with unlimited attempts never reaches this point.
                         await TransitionToDisconnectedAsync(lastError, CancellationToken.None).ConfigureAwait(false);
-                        await callbacks.NotifyDisconnectedAsync(
-                                LastCloseReason ?? MapCloseReason(lastError),
-                                CancellationToken.None)
-                            .ConfigureAwait(false);
+                        StartDisconnectNotification(LastCloseReason ?? MapCloseReason(lastError));
                         throw new ZlinkStreamException(lastError);
                     }
 
@@ -550,10 +547,7 @@ internal sealed class ZlinkStreamConnectorLifecycle(
         // Spec §10.1.1: a wait is released when the connection it observed ends, here,
         // and not when the reconnect that may follow establishes the next one.
         Capture(onConnectionEnded);
-        await CaptureAsync(() => callbacks.NotifyDisconnectedAsync(
-                explicitCloseReason ?? MapCloseReason(error),
-                CancellationToken.None))
-            .ConfigureAwait(false);
+        StartDisconnectNotification(explicitCloseReason ?? MapCloseReason(error));
         Capture(() => reconnectStart?.Start());
 
         if (closeFailure is not null && terminalFailures is not null)
@@ -638,12 +632,21 @@ internal sealed class ZlinkStreamConnectorLifecycle(
         return new ZlinkStreamConnectionStateChanged(previous, next, error);
     }
 
-    private async ValueTask NotifyStateChangedAsync(
+    private ValueTask NotifyStateChangedAsync(
         ZlinkStreamConnectionStateChanged? change,
         CancellationToken cancellationToken)
     {
-        if (change is not null)
-            await callbacks.NotifyConnectionStateChangedAsync(change, cancellationToken).ConfigureAwait(false);
+        if (change is null) return ValueTask.CompletedTask;
+
+        var notification = callbacks.NotifyConnectionStateChangedAsync(change, cancellationToken);
+        if (notification.IsCompleted)
+        {
+            notification.GetAwaiter().GetResult();
+            return ValueTask.CompletedTask;
+        }
+
+        ObserveBackgroundTask(notification.AsTask());
+        return ValueTask.CompletedTask;
     }
 
     private IDisposable EnterWorker(ZlinkStreamLifecycleWorkKind workKind) =>

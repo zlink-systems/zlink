@@ -399,12 +399,20 @@ public sealed class ActorManagerProductionTests
         capacityCondition = null!;
         targetRid = default;
 
-        var reservation = request.Mutations
+        var authority = request.Mutations
             .OfType<ZLinkStoreMutation.Put>()
             .SingleOrDefault(mutation => mutation.Key.Value.StartsWith(
-                "zlink:v11:creation-reservation:",
+                "authority\0actor\0",
                 StringComparison.Ordinal));
-        if (reservation is null)
+        if (authority is null)
+            return false;
+
+        using var authorityDocument = JsonDocument.Parse(authority.Bytes);
+        var authorityRoot = authorityDocument.RootElement;
+        var allocation = authorityRoot.GetProperty("allocation");
+        if (allocation.GetProperty("state").GetString() != "reserved"
+            || authorityRoot.GetProperty("pendingCreation").ValueKind
+            != JsonValueKind.Object)
             return false;
 
         capacity = request.Mutations
@@ -431,13 +439,12 @@ public sealed class ActorManagerProductionTests
                     version.Key == capacityKey,
                 _ => false
             });
-        using var reservationDocument = JsonDocument.Parse(reservation.Bytes);
         // ZLinkMeshNodeDescriptorKey.Rid wire name is routingIdHex
         // (checklist C-4: shared with the authority allocation.descriptor
         // field, 21-location-runtime.md#2.4), not "rid".
         targetRid = RoutingId.FromHex(
-            reservationDocument.RootElement
-                .GetProperty("targetDescriptor")
+            allocation
+                .GetProperty("descriptor")
                 .GetProperty("routingIdHex")
                 .GetString()!);
         return true;

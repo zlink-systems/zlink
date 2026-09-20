@@ -24,7 +24,9 @@ class DeliveryEvidenceStore(stateDir: String) {
         courierId: String,
         occurredAt: Instant,
     ) {
-        val line = listOf(deliveryId, customerId, status.name, courierId, occurredAt.toString()).joinToString("|")
+        val line =
+            listOf(deliveryId, customerId, status.name, courierId, occurredAt.toString())
+                .joinToString("|")
         Files.writeString(
             evidenceFile(deliveryId),
             "$line\n",
@@ -53,34 +55,37 @@ class DeliveryEvidenceStore(stateDir: String) {
         reassignedDeliveryId: String,
     ): ServerAssertionRes {
         val evidence = mutableListOf<String>()
-        val successful = matches(
-            actual = statuses(successfulDeliveryId),
-            expected = listOf(
-                ExpectedStatus(DeliveryStatus.Assigned, "courier-a"),
-                ExpectedStatus(DeliveryStatus.Accepted, "courier-a"),
-                ExpectedStatus(DeliveryStatus.PickedUp, "courier-a"),
-                ExpectedStatus(DeliveryStatus.Delivered, "courier-a"),
-            ),
-            evidence = evidence,
-            deliveryId = successfulDeliveryId,
-        )
-        val reassigned = matches(
-            actual = statuses(reassignedDeliveryId),
-            expected = listOf(
-                ExpectedStatus(DeliveryStatus.Assigned, "courier-a"),
-                ExpectedStatus(DeliveryStatus.Reassigned, "courier-b"),
-                ExpectedStatus(DeliveryStatus.Accepted, "courier-b"),
-                ExpectedStatus(DeliveryStatus.PickedUp, "courier-b"),
-                ExpectedStatus(DeliveryStatus.Delivered, "courier-b"),
-            ),
-            evidence = evidence,
-            deliveryId = reassignedDeliveryId,
-        )
+        val successful =
+            matches(
+                actual = statuses(successfulDeliveryId),
+                expected =
+                    listOf(
+                        ExpectedStatus(DeliveryStatus.Assigned, "courier-a"),
+                        ExpectedStatus(DeliveryStatus.Accepted, "courier-a"),
+                        ExpectedStatus(DeliveryStatus.PickedUp, "courier-a"),
+                        ExpectedStatus(DeliveryStatus.Delivered, "courier-a"),
+                    ),
+                evidence = evidence,
+                deliveryId = successfulDeliveryId,
+            )
+        val reassigned =
+            matches(
+                actual = statuses(reassignedDeliveryId),
+                expected =
+                    listOf(
+                        ExpectedStatus(DeliveryStatus.Assigned, "courier-a"),
+                        ExpectedStatus(DeliveryStatus.Reassigned, "courier-b"),
+                        ExpectedStatus(DeliveryStatus.Accepted, "courier-b"),
+                        ExpectedStatus(DeliveryStatus.PickedUp, "courier-b"),
+                        ExpectedStatus(DeliveryStatus.Delivered, "courier-b"),
+                    ),
+                evidence = evidence,
+                deliveryId = reassignedDeliveryId,
+            )
         return ServerAssertionRes(successful && reassigned, evidence.toTypedArray())
     }
 
-    private fun evidenceFile(deliveryId: String): Path =
-        root.resolve("$deliveryId.evidence")
+    private fun evidenceFile(deliveryId: String): Path = root.resolve("$deliveryId.evidence")
 
     private fun statuses(deliveryId: String): List<DeliveryStatusNotify> =
         read(deliveryId).mapNotNull(::lineToStatus)
@@ -109,11 +114,14 @@ class DeliveryEvidenceStore(stateDir: String) {
             return false
         }
         actual.zip(expected).forEachIndexed { index, (actualStatus, expectedStatus) ->
-            if (actualStatus.status != expectedStatus.status || actualStatus.courierId != expectedStatus.courierId) {
+            if (
+                actualStatus.status != expectedStatus.status ||
+                    actualStatus.courierId != expectedStatus.courierId
+            ) {
                 evidence.add(
                     "$deliveryId status[$index] expected " +
                         "${expectedStatus.status}/${expectedStatus.courierId} but saw " +
-                        "${actualStatus.status}/${actualStatus.courierId}",
+                        "${actualStatus.status}/${actualStatus.courierId}"
                 )
                 return false
             }
@@ -122,8 +130,5 @@ class DeliveryEvidenceStore(stateDir: String) {
         return true
     }
 
-    private data class ExpectedStatus(
-        val status: DeliveryStatus,
-        val courierId: String,
-    )
+    private data class ExpectedStatus(val status: DeliveryStatus, val courierId: String)
 }

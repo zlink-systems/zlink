@@ -38,7 +38,8 @@ int main (int argc, char **argv)
     customer_mesh.objects ().client ();
     options.handlers ().group ("tracking").add<delivery_status_changed_handler_t> ();
     app.add_hosted_service (std::make_unique<route_readiness_service_t> (
-      sample_names_t::tracking_node, sample_names_t::customer_actor_discovery,
+      sample_names_t::tracking_node,
+      sample_names_t::customer_actor_discovery,
       std::vector<std::string>{sample_names_t::customer_gateway_route_node}));
     return app.run (argc, argv);
 }

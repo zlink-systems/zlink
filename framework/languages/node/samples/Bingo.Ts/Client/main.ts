@@ -14,11 +14,7 @@ async function main(): Promise<void> {
   try {
     await new BingoClientScenario().run(client1, client2, observer);
   } finally {
-    await Promise.allSettled([
-      client1.close(),
-      client2.close(),
-      observer.close()
-    ]);
+    await Promise.allSettled([client1.close(), client2.close(), observer.close()]);
   }
 
   console.log('bingo=completed');

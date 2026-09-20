@@ -10,16 +10,17 @@ class PlayerActorRelocationAdapter : ZLinkActorRelocationAdapter<PlayerActor> {
     override fun capture(
         actor: PlayerActor,
         cancellation: ZLinkRelocationCancellation,
-    ): CompletionStage<ByteArray> = CompletableFuture.completedFuture(
-        json.writeValueAsBytes(
-            TransferState(
-                actor.displayName,
-                actor.roomId,
-                actor.destroyAfterEntrySpotJoin,
-                actor.disconnected,
-            ),
-        ),
-    )
+    ): CompletionStage<ByteArray> =
+        CompletableFuture.completedFuture(
+            json.writeValueAsBytes(
+                TransferState(
+                    actor.displayName,
+                    actor.roomId,
+                    actor.destroyAfterEntrySpotJoin,
+                    actor.disconnected,
+                )
+            )
+        )
 
     override fun restore(
         actor: PlayerActor,

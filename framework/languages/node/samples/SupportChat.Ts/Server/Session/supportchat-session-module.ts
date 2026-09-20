@@ -1,17 +1,27 @@
 import { ZLinkModule, zlinkFramework, zlinkModule } from '@zlink-systems/nestjs';
 import { SampleNames } from '../Configuration/sample-names';
-import { createSupportChatLocationStore, supportChatLocationOptions } from '../Configuration/location-store';
+import {
+  createSupportChatLocationStore,
+  supportChatLocationOptions
+} from '../Configuration/location-store';
 import {
   SupportChatSessionFactory,
   SupportChatSessionRouter
 } from './Sessions/supportchat-session';
-import { SUPPORT_CHAT_CONFIG, createSupportChatConfigurationModule } from '../Configuration/sample-config';
+import {
+  SUPPORT_CHAT_CONFIG,
+  createSupportChatConfigurationModule
+} from '../Configuration/sample-config';
 import type { SupportChatServerConfig } from '../Configuration/sample-config';
 
 function createSupportChatSessionModule() {
   class SupportChatSessionModule {}
   const configuration = createSupportChatConfigurationModule([
-    'sessionSpotEndpoint', 'sessionStreamEndpoint', 'redisEndpoint', 'redisKeyPrefix', 'logDir'
+    'sessionSpotEndpoint',
+    'sessionStreamEndpoint',
+    'redisEndpoint',
+    'redisKeyPrefix',
+    'logDir'
   ]);
 
   zlinkModule(__dirname, {
@@ -23,19 +33,21 @@ function createSupportChatSessionModule() {
         useFactory: (config: SupportChatServerConfig) => {
           const locationStore = createSupportChatLocationStore(config);
           const builder = zlinkFramework();
-          builder.configureDispatch()
-            .messageFlow('normal');
+          builder.configureDispatch().messageFlow('normal');
           builder.addLocationStore(locationStore);
           supportChatLocationOptions(builder.configureLocations());
           // --8<-- [start:doc-sc-session-register]
-          const mesh = builder.addRouteMesh(SampleNames.conversationSpotMesh)
-            .listen(config.sessionSpotEndpoint).setRoutingIdPrefix('support-session');
+          const mesh = builder
+            .addRouteMesh(SampleNames.conversationSpotMesh)
+            .listen(config.sessionSpotEndpoint)
+            .setRoutingIdPrefix('support-session');
           mesh.objects().client();
           builder.addClientServerChannel(SampleNames.apiChannel).client();
-          return builder.addStreamNode(SampleNames.sessionStreamNode)
-              .enableActorDispatch()
-              .bind(config.sessionStreamEndpoint)
-              .registerSession(SupportChatSessionFactory as never)
+          return builder
+            .addStreamNode(SampleNames.sessionStreamNode)
+            .enableActorDispatch()
+            .bind(config.sessionStreamEndpoint)
+            .registerSession(SupportChatSessionFactory as never)
             .build();
           // --8<-- [end:doc-sc-session-register]
         }

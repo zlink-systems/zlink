@@ -25,8 +25,7 @@ public final class ZoneWorldNames {
 
     public static final String ZONE_ROUTING_ID_PREFIX = "zn";
 
-    private ZoneWorldNames() {
-    }
+    private ZoneWorldNames() {}
 
     public static String borderTopic(String from, String to) {
         return "zone.border." + from + "." + to;

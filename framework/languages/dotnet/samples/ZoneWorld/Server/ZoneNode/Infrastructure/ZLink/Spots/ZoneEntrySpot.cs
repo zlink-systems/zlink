@@ -3,8 +3,8 @@ using Zlink.Framework.Contracts.Handlers;
 using Zlink.Framework.Contracts.Messaging;
 using Zlink.Framework.Contracts.Spots;
 using ZoneWorld.Server.Configuration;
-using ZoneWorld.Server.ZoneNode.Infrastructure.ZLink.Actors;
 using ZoneWorld.Server.ZoneNode.Domain.ZoneWorld;
+using ZoneWorld.Server.ZoneNode.Infrastructure.ZLink.Actors;
 using ZoneWorld.Shared.Contracts;
 
 namespace ZoneWorld.Server.ZoneNode.Infrastructure.ZLink.Spots;
@@ -21,8 +21,8 @@ public sealed class ZoneEntrySpot(IZLinkEntrySpotContext context) : IZLinkEntryS
     public ValueTask<ZLinkSpotActorJoinResult> OnActorJoinAsync(
         string actorId,
         ZLinkMessage request,
-        CancellationToken cancellationToken) =>
-        ValueTask.FromResult<ZLinkSpotActorJoinResult>(ZLinkSpotActorJoinResult.Accept());
+        CancellationToken cancellationToken
+    ) => ValueTask.FromResult<ZLinkSpotActorJoinResult>(ZLinkSpotActorJoinResult.Accept());
 
     public ValueTask OnJoinedActorAsync(PlayerActor actor, CancellationToken cancellationToken) =>
         ValueTask.CompletedTask;
@@ -45,7 +45,8 @@ internal sealed class PlayerEnterWorldHandler(ILogger<PlayerEnterWorldHandler> l
         PlayerActor actor,
         IZLinkMessageContext context,
         EnterWorldReq message,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken
+    )
     {
         return await EnterWorld.RunAsync(actor, message, logger, cancellationToken);
     }
@@ -65,7 +66,8 @@ internal sealed class PlayerJoinWorldHandler(ILogger<PlayerJoinWorldHandler> log
         PlayerActor actor,
         IZLinkMessageContext context,
         JoinWorldReq message,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken
+    )
     {
         _ = entrySpot;
         _ = context;
@@ -73,7 +75,8 @@ internal sealed class PlayerJoinWorldHandler(ILogger<PlayerJoinWorldHandler> log
             actor,
             new EnterWorldReq(ZoneWorldSpec.SpawnX, ZoneWorldSpec.SpawnY, IsBot: false),
             logger,
-            cancellationToken);
+            cancellationToken
+        );
     }
 }
 
@@ -83,7 +86,8 @@ internal static class EnterWorld
         PlayerActor actor,
         EnterWorldReq message,
         ILogger logger,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken
+    )
     {
         // The patrol direction has to be on the actor before it joins, because the zone
         // spot preserves it across the join and relocation carries it to the next node.
@@ -96,18 +100,20 @@ internal static class EnterWorld
         var zoneId = ZoneWorldSpec.ZoneOf(message.X, message.Y);
         actor.TrackDeferredJoin(
             new PlayerPosition(message.X, message.Y),
-            message.IsBot
-                ? PlayerJoinPurpose.InitialBotEntry
-                : PlayerJoinPurpose.InitialHumanEntry);
-        actor.Context.JoinSpot(
-            zoneId,
-            new EnterZoneReq(
-                actor.ActorId,
-                message.X,
-                message.Y,
-                message.IsBot,
-                InitialEntry: true,
-                FromZoneId: null))
+            message.IsBot ? PlayerJoinPurpose.InitialBotEntry : PlayerJoinPurpose.InitialHumanEntry
+        );
+        actor
+            .Context.JoinSpot(
+                zoneId,
+                new EnterZoneReq(
+                    actor.ActorId,
+                    message.X,
+                    message.Y,
+                    message.IsBot,
+                    InitialEntry: true,
+                    FromZoneId: null
+                )
+            )
             .Defer();
         // --8<-- [end:doc-zw-entry-join]
 
@@ -115,9 +121,9 @@ internal static class EnterWorld
             "player entry scheduled. player={PlayerId}, zone={ZoneId}, bot={IsBot}",
             actor.ActorId,
             zoneId,
-            message.IsBot);
+            message.IsBot
+        );
 
-        return ValueTask.FromResult(
-            new EnterWorldRes(zoneId, message.X, message.Y));
+        return ValueTask.FromResult(new EnterWorldRes(zoneId, message.X, message.Y));
     }
 }

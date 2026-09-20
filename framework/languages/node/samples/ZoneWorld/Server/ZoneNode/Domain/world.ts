@@ -9,10 +9,14 @@ function inRange(x: number, y: number): boolean {
 
 function adjacentZones(zoneId: ZoneId): readonly ZoneId[] {
   switch (zoneId) {
-    case ZoneIds.northWest: return [ZoneIds.northEast, ZoneIds.southWest];
-    case ZoneIds.northEast: return [ZoneIds.northWest, ZoneIds.southEast];
-    case ZoneIds.southWest: return [ZoneIds.northWest, ZoneIds.southEast];
-    case ZoneIds.southEast: return [ZoneIds.northEast, ZoneIds.southWest];
+    case ZoneIds.northWest:
+      return [ZoneIds.northEast, ZoneIds.southWest];
+    case ZoneIds.northEast:
+      return [ZoneIds.northWest, ZoneIds.southEast];
+    case ZoneIds.southWest:
+      return [ZoneIds.northWest, ZoneIds.southEast];
+    case ZoneIds.southEast:
+      return [ZoneIds.northEast, ZoneIds.southWest];
   }
 }
 

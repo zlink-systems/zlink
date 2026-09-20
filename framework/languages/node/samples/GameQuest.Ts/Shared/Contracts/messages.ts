@@ -1,33 +1,72 @@
 class KillMonsterReq {
-  constructor(readonly playerId: string, readonly monsterId: string, readonly areaId: string, readonly idempotencyKey: string) {}
+  constructor(
+    readonly playerId: string,
+    readonly monsterId: string,
+    readonly areaId: string,
+    readonly idempotencyKey: string
+  ) {}
 }
 type KillMonsterRes = { eventId: string };
 class CollectItemMsg {
-  constructor(readonly playerId: string, readonly itemId: string, readonly count: number, readonly idempotencyKey: string) {}
+  constructor(
+    readonly playerId: string,
+    readonly itemId: string,
+    readonly count: number,
+    readonly idempotencyKey: string
+  ) {}
 }
 class CompleteMissionReq {
-  constructor(readonly playerId: string, readonly missionId: string, readonly idempotencyKey: string) {}
+  constructor(
+    readonly playerId: string,
+    readonly missionId: string,
+    readonly idempotencyKey: string
+  ) {}
 }
 type CompleteMissionRes = { eventId: string };
 class EnterAreaMsg {
-  constructor(readonly playerId: string, readonly areaId: string, readonly idempotencyKey: string) {}
+  constructor(
+    readonly playerId: string,
+    readonly areaId: string,
+    readonly idempotencyKey: string
+  ) {}
 }
 class UnlockFeatureReq {
-  constructor(readonly playerId: string, readonly featureId: string, readonly idempotencyKey: string) {}
+  constructor(
+    readonly playerId: string,
+    readonly featureId: string,
+    readonly idempotencyKey: string
+  ) {}
 }
 type UnlockFeatureRes = { eventId: string };
-class JoinSessionReq { constructor(readonly playerId: string) {} }
-class JoinSessionRes {
-  constructor(readonly playerId: string, readonly activeQuests: QuestProgress[]) {}
+class JoinSessionReq {
+  constructor(readonly playerId: string) {}
 }
-class GetQuestProgressReq { constructor(readonly playerId: string) {} }
+class JoinSessionRes {
+  constructor(
+    readonly playerId: string,
+    readonly activeQuests: QuestProgress[]
+  ) {}
+}
+class GetQuestProgressReq {
+  constructor(readonly playerId: string) {}
+}
 type GetQuestProgressRes = { activeQuests: QuestProgress[] };
-class SyncQuestProgressReq { constructor(readonly playerId: string) {} }
+class SyncQuestProgressReq {
+  constructor(readonly playerId: string) {}
+}
 type SyncQuestProgressRes = { updatedQuests: QuestProgress[] };
-class DeleteQuestProjectionReq { constructor(readonly playerId: string, readonly questId: string) {} }
+class DeleteQuestProjectionReq {
+  constructor(
+    readonly playerId: string,
+    readonly questId: string
+  ) {}
+}
 type DeleteQuestProjectionRes = { deleted: boolean };
 class RebuildQuestProjectionReq {
-  constructor(readonly playerId: string, readonly questId: string) {}
+  constructor(
+    readonly playerId: string,
+    readonly questId: string
+  ) {}
 }
 type RebuildQuestProjectionRes = QuestProgress;
 class ClosePlayerQuestMsg {}
@@ -44,10 +83,17 @@ type GetGameplaySnapshotRes = {
 type KillCountSnapshot = { monsterId: string; areaId?: string; count: number };
 type ItemCountSnapshot = { itemId: string; count: number };
 class QuestProgressNotify {
-  constructor(readonly playerId: string, readonly progress: QuestProgress) {}
+  constructor(
+    readonly playerId: string,
+    readonly progress: QuestProgress
+  ) {}
 }
 class QuestCompletedNotify {
-  constructor(readonly playerId: string, readonly progress: QuestProgress, readonly rewardGranted: boolean) {}
+  constructor(
+    readonly playerId: string,
+    readonly progress: QuestProgress,
+    readonly rewardGranted: boolean
+  ) {}
 }
 class DeliverQuestNotificationMsg {
   readonly packetName: string;
@@ -181,15 +227,29 @@ const PacketNames = {
   questCompletedNotify: 'QuestCompletedNotify'
 } as const;
 
-function killMonsterReq(playerId: string, monsterId: string, areaId: string, idempotencyKey: string): KillMonsterReq {
+function killMonsterReq(
+  playerId: string,
+  monsterId: string,
+  areaId: string,
+  idempotencyKey: string
+): KillMonsterReq {
   return new KillMonsterReq(playerId, monsterId, areaId, idempotencyKey);
 }
 
-function collectItemMsg(playerId: string, itemId: string, count: number, idempotencyKey: string): CollectItemMsg {
+function collectItemMsg(
+  playerId: string,
+  itemId: string,
+  count: number,
+  idempotencyKey: string
+): CollectItemMsg {
   return new CollectItemMsg(playerId, itemId, count, idempotencyKey);
 }
 
-function completeMissionReq(playerId: string, missionId: string, idempotencyKey: string): CompleteMissionReq {
+function completeMissionReq(
+  playerId: string,
+  missionId: string,
+  idempotencyKey: string
+): CompleteMissionReq {
   return new CompleteMissionReq(playerId, missionId, idempotencyKey);
 }
 
@@ -197,7 +257,11 @@ function enterAreaMsg(playerId: string, areaId: string, idempotencyKey: string):
   return new EnterAreaMsg(playerId, areaId, idempotencyKey);
 }
 
-function unlockFeatureReq(playerId: string, featureId: string, idempotencyKey: string): UnlockFeatureReq {
+function unlockFeatureReq(
+  playerId: string,
+  featureId: string,
+  idempotencyKey: string
+): UnlockFeatureReq {
   return new UnlockFeatureReq(playerId, featureId, idempotencyKey);
 }
 
@@ -222,7 +286,13 @@ function rebuildQuestProjectionReq(playerId: string, questId: string): RebuildQu
 }
 
 function gameplayMsg(event: GameplayEventEnvelope): GameplayMsg {
-  return new GameplayMsg(event.eventId, event.playerId, event.type, event.payload, event.occurredAtUnixMs);
+  return new GameplayMsg(
+    event.eventId,
+    event.playerId,
+    event.type,
+    event.payload,
+    event.occurredAtUnixMs
+  );
 }
 
 export {

@@ -1,17 +1,17 @@
 import { Injectable } from '@nestjs/common';
 import { ZLinkSpotActorSend } from '@zlink-systems/framework';
-import type {
-  ZLinkMessageContext,
-  ZLinkSpotActorSendHandler
-} from '@zlink-systems/framework';
+import type { ZLinkMessageContext, ZLinkSpotActorSendHandler } from '@zlink-systems/framework';
 import { PlayActor } from '../../../Actors/play-actor';
 import type { LeaveGameMsg } from '../../../../../../../Shared/Contracts/messages';
 import { PacketNames } from '../../../../../../../Shared/Contracts/messages';
 import { TicTacToeGameSpot } from '../tictactoe-game-spot';
 
 @Injectable()
-class PlayActorLeaveGameHandler
-  implements ZLinkSpotActorSendHandler<TicTacToeGameSpot, PlayActor, LeaveGameMsg> {
+class PlayActorLeaveGameHandler implements ZLinkSpotActorSendHandler<
+  TicTacToeGameSpot,
+  PlayActor,
+  LeaveGameMsg
+> {
   // --8<-- [start:doc-ttt-leave-game]
   @ZLinkSpotActorSend(PacketNames.leaveGameMsg)
   async handle(

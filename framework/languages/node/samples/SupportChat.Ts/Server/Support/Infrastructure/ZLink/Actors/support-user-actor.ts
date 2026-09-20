@@ -1,7 +1,4 @@
-import {
-  zlinkEntrySpotActorSendHandler,
-  zlinkSpotActorSendHandler
-} from '@zlink-systems/nestjs';
+import { zlinkEntrySpotActorSendHandler, zlinkSpotActorSendHandler } from '@zlink-systems/nestjs';
 import { SupportEntrySpot } from '../Spots/EntrySpot/support-entry-spot';
 import { ConversationSpot } from '../Spots/ConversationSpot/conversation-spot';
 import { joinConversation } from '../../../../../Shared/Contracts/messages';
@@ -21,17 +18,17 @@ import type {
   ZLinkActorJoinCompletion,
   ZLinkMessageContext
 } from '@zlink-systems/framework';
-import {
-  JoinConversationFailedNotify
-} from '../../../../../Shared/Contracts/messages';
+import { JoinConversationFailedNotify } from '../../../../../Shared/Contracts/messages';
 
 class DeliverSupportNotificationMsg {
   readonly packetName: string;
 
-  constructor(readonly message: unknown, readonly conversationId: string) {
-    this.packetName = typeof message === 'object' && message !== null
-      ? message.constructor.name
-      : '';
+  constructor(
+    readonly message: unknown,
+    readonly conversationId: string
+  ) {
+    this.packetName =
+      typeof message === 'object' && message !== null ? message.constructor.name : '';
   }
 }
 
@@ -48,7 +45,10 @@ class SupportUserActor implements ZLinkActor {
   private pendingConversationId?: string;
   private readonly completedJoinOperations = new Set<string>();
 
-  constructor(readonly actorId: string, readonly context: ZLinkActorContext) {}
+  constructor(
+    readonly actorId: string,
+    readonly context: ZLinkActorContext
+  ) {}
 
   async push(message: unknown, conversationId: string): Promise<void> {
     try {
@@ -69,10 +69,12 @@ class SupportUserActor implements ZLinkActor {
       throw new Error('A conversation join is already pending.');
     }
     this.pendingConversationId = message.conversationId;
-    this.context.joinSpot(
-      message.conversationId,
-      joinConversation(message.participantId, message.role, message.displayName)
-    ).defer();
+    this.context
+      .joinSpot(
+        message.conversationId,
+        joinConversation(message.participantId, message.role, message.displayName)
+      )
+      .defer();
     return {
       scheduled: true,
       state: {
@@ -108,11 +110,7 @@ class SupportUserActor implements ZLinkActor {
       return;
     }
     await this.push(
-      new JoinConversationFailedNotify(
-        conversationId,
-        String(completion.kind),
-        false
-      ),
+      new JoinConversationFailedNotify(conversationId, String(completion.kind), false),
       conversationId
     );
   }
@@ -129,7 +127,12 @@ class SupportUserActor implements ZLinkActor {
   packetName: 'DeliverSupportNotificationMsg'
 })
 class DeliverSupportNotificationMsgHandler {
-  async handle(_spot: unknown, actor: SupportUserActor, _context: ZLinkMessageContext, message: DeliverSupportNotificationMsg): Promise<void> {
+  async handle(
+    _spot: unknown,
+    actor: SupportUserActor,
+    _context: ZLinkMessageContext,
+    message: DeliverSupportNotificationMsg
+  ): Promise<void> {
     await actor.push(
       rehydrateSupportNotification(message.packetName, message.message),
       message.conversationId
@@ -148,7 +151,10 @@ function rehydrateSupportNotification(packetName: string, payload: unknown): unk
         value.state as ConversationState
       );
     case 'ConversationAssignedNotify':
-      return new ConversationAssignedNotify(value.conversationId as string, value.state as ConversationState);
+      return new ConversationAssignedNotify(
+        value.conversationId as string,
+        value.state as ConversationState
+      );
     case 'ChatMessageNotify':
       return new ChatMessageNotify(
         value.conversationId as string,
@@ -163,9 +169,15 @@ function rehydrateSupportNotification(packetName: string, payload: unknown): unk
         value.state as ConversationState
       );
     case 'ConversationIdleNotify':
-      return new ConversationIdleNotify(value.conversationId as string, value.state as ConversationState);
+      return new ConversationIdleNotify(
+        value.conversationId as string,
+        value.state as ConversationState
+      );
     case 'ConversationClosedNotify':
-      return new ConversationClosedNotify(value.conversationId as string, value.state as ConversationState);
+      return new ConversationClosedNotify(
+        value.conversationId as string,
+        value.state as ConversationState
+      );
     default:
       throw new Error(`Unsupported SupportChat notification '${packetName}'.`);
   }

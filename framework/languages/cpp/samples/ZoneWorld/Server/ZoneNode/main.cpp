@@ -78,7 +78,11 @@ inline void prepare_join (player_actor_t &actor, int x, int y, bool initial, boo
     // --8<-- [start:doc-zw-zone-change]
     actor.context ()
       .join_spot (actor.pending_zone_id,
-                  enter_zone_req_t{actor.player_id, x, y, actor.is_bot, initial,
+                  enter_zone_req_t{actor.player_id,
+                                   x,
+                                   y,
+                                   actor.is_bot,
+                                   initial,
                                    actor.initial_entry ? std::nullopt
                                                        : std::optional<std::string> (actor.zone_id),
                                    crash})
@@ -217,8 +221,10 @@ class zone_entry_spot_t final : public fw::entry_spot_t<player_actor_t>
                                                const actor_location_probe_req_t &)
     {
         const auto &reference = actor.context ().actor_ref ();
-        return {actor.player_id, reference.object_generation (),
-                std::string (reference.node_rid ().value ()), std::nullopt};
+        return {actor.player_id,
+                reference.object_generation (),
+                std::string (reference.node_rid ().value ()),
+                std::nullopt};
     }
 
     void follow_probe_one_way (player_actor_t &actor,
@@ -324,8 +330,8 @@ class zone_spot_t final : public fw::spot_t<player_actor_t>
                 co_return;
             enter = found->second;
             _pending.erase (found);
-            _players[actor.player_id] = {actor.player_id, enter.x, enter.y, _context.spot_id (),
-                                         enter.is_bot};
+            _players[actor.player_id] = {
+              actor.player_id, enter.x, enter.y, _context.spot_id (), enter.is_bot};
         }
         actor.x = enter.x;
         actor.y = enter.y;
@@ -372,9 +378,8 @@ class zone_spot_t final : public fw::spot_t<player_actor_t>
         co_return;
     }
 
-    fw::task_t<void> move (player_actor_t &actor,
-                           fw::message_context_t &,
-                           const move_msg_t &message)
+    fw::task_t<void>
+    move (player_actor_t &actor, fw::message_context_t &, const move_msg_t &message)
     {
         if (!apply_move_authority (actor, message))
             co_return;
@@ -385,14 +390,14 @@ class zone_spot_t final : public fw::spot_t<player_actor_t>
         co_return;
     }
 
-    fw::task_t<void> bot_tick (player_actor_t &actor,
-                               fw::message_context_t &,
-                               const bot_tick_msg_t &)
+    fw::task_t<void>
+    bot_tick (player_actor_t &actor, fw::message_context_t &, const bot_tick_msg_t &)
     {
         if (!actor.is_bot)
             co_return;
-        if (apply_move_authority (actor, move_msg_t{actor.x + actor.dir_x * spec_t::bot_step,
-                                                    actor.y + actor.dir_y * spec_t::bot_step})) {
+        if (apply_move_authority (actor,
+                                  move_msg_t{actor.x + actor.dir_x * spec_t::bot_step,
+                                             actor.y + actor.dir_y * spec_t::bot_step})) {
             co_await _context
               .send_to_spot (_context.spot_id (),
                              update_position_msg_t{actor.player_id, actor.x, actor.y, actor.is_bot})
@@ -434,8 +439,10 @@ class zone_spot_t final : public fw::spot_t<player_actor_t>
                                                const actor_location_probe_req_t &)
     {
         const auto &reference = actor.context ().actor_ref ();
-        return {actor.player_id, reference.object_generation (),
-                std::string (reference.node_rid ().value ()), std::nullopt};
+        return {actor.player_id,
+                reference.object_generation (),
+                std::string (reference.node_rid ().value ()),
+                std::nullopt};
     }
 
     void follow_probe_one_way (player_actor_t &actor,
@@ -505,8 +512,9 @@ class zone_spot_t final : public fw::spot_t<player_actor_t>
         auto found = _borders.find (event.from_zone_id);
         if (found == _borders.end () || event.tick > found->second.event.tick) {
             _borders[event.from_zone_id] = border_state_t{event, _tick};
-            if (std::any_of (event.players.begin (), event.players.end (),
-                             [] (const auto &player) { return !player.is_bot; }))
+            if (std::any_of (event.players.begin (), event.players.end (), [] (const auto &player) {
+                    return !player.is_bot;
+                }))
                 std::cout << "zoneworld-border-received zone=" << _context.spot_id ()
                           << " from=" << event.from_zone_id << " tick=" << event.tick
                           << " players=" << event.players.size () << std::endl;
@@ -534,7 +542,9 @@ class zone_spot_t final : public fw::spot_t<player_actor_t>
         // --8<-- [start:doc-zw-border-publish]
         for (const auto &to : adjacent_zones (_context.spot_id ())) {
             std::vector<player_view_t> border_players;
-            std::copy_if (local.begin (), local.end (), std::back_inserter (border_players),
+            std::copy_if (local.begin (),
+                          local.end (),
+                          std::back_inserter (border_players),
                           [] (const auto &player) {
                               return std::abs (player.x - spec_t::zone_split) <= spec_t::border_band
                                      || std::abs (player.y - spec_t::zone_split)
@@ -649,7 +659,9 @@ class diagnostics_handler_t
         if (request.node_id != g_node_state->node_id)
             throw fw::framework_exception_t (fw::framework_error_kind_t::not_found,
                                              "diagnostics target does not match this node");
-        return {request.node_id, g_node_state->zone_snapshot (), g_node_state->player_count (),
+        return {request.node_id,
+                g_node_state->zone_snapshot (),
+                g_node_state->player_count (),
                 g_node_state->maintenance.load ()};
     }
 };
@@ -760,9 +772,10 @@ class node_report_service_t final : public fw::hosted_service_t
                                 + "; timer=" + event.diagnostic.timer_name
                                 + "; detail=" + event.diagnostic.message;
             co_await _routes
-              ->send_to_channel (names_t::report_channel,
-                                 report_spot_event_msg_t{g_node_state->node_id, kind, detail,
-                                                         format_timestamp (event.timestamp)})
+              ->send_to_channel (
+                names_t::report_channel,
+                report_spot_event_msg_t{
+                  g_node_state->node_id, kind, detail, format_timestamp (event.timestamp)})
               .async ();
             std::cout << "zoneworld-spot-event-reported node=" << g_node_state->node_id
                       << " kind=" << kind << " " << detail << std::endl;
@@ -850,8 +863,7 @@ class zone_bootstrap_service_t final : public fw::hosted_service_t
         return order;
     }
 
-    fw::task_t<void> bootstrap (fw::spot_manager_t &spots,
-                                const std::vector<std::string> &claimed)
+    fw::task_t<void> bootstrap (fw::spot_manager_t &spots, const std::vector<std::string> &claimed)
     {
         for (const auto &zone : claim_order (claimed)) {
             if (_stopping.load () || g_node_state->zone_snapshot () != claimed)
@@ -878,15 +890,14 @@ class zone_bootstrap_service_t final : public fw::hosted_service_t
             bool succeeded = false;
         };
         auto completion = std::make_shared<completion_t> ();
-        fw::observe_task_completion (
-          work, [completion] (const fw::result_t<void> &result) {
-              {
-                  std::lock_guard lock (completion->mutex);
-                  completion->succeeded = static_cast<bool> (result);
-                  completion->completed = true;
-              }
-              completion->ready.notify_one ();
-          });
+        fw::observe_task_completion (work, [completion] (const fw::result_t<void> &result) {
+            {
+                std::lock_guard lock (completion->mutex);
+                completion->succeeded = static_cast<bool> (result);
+                completion->completed = true;
+            }
+            completion->ready.notify_one ();
+        });
         std::unique_lock lock (completion->mutex);
         completion->ready.wait (lock, [&completion] { return completion->completed; });
         return completion->succeeded;
@@ -901,8 +912,7 @@ class zone_bootstrap_service_t final : public fw::hosted_service_t
             if (!await_bootstrap (bootstrap (spots, claimed))) {
                 if (_stopping.load ())
                     return;
-                std::cerr << "Zone Spot claim failed. node=" << _configuration.node_id
-                          << std::endl;
+                std::cerr << "Zone Spot claim failed. node=" << _configuration.node_id << std::endl;
             }
             const auto zones = g_node_state->zone_snapshot ();
             if (_configuration.allow_empty_zone_set && zones.empty () && attempt >= 8) {
@@ -991,9 +1001,11 @@ int main (int argc, char **argv)
         // --8<-- [end:doc-multi-channel-register]
         mesh.channel (names_t::ops_channel (configuration.node_id))
           .server ()
-          .add_request_handler<apply_maintenance_handler_t, apply_node_maintenance_req_t,
+          .add_request_handler<apply_maintenance_handler_t,
+                               apply_node_maintenance_req_t,
                                apply_node_maintenance_res_t> ()
-          .add_request_handler<diagnostics_handler_t, get_node_diagnostics_req_t,
+          .add_request_handler<diagnostics_handler_t,
+                               get_node_diagnostics_req_t,
                                get_node_diagnostics_res_t> ();
         mesh.objects ()
           .server ()

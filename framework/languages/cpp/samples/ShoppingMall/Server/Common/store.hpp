@@ -60,7 +60,8 @@ class redis_state_store_t
     void seed_defaults () const
     {
         update ([] (nlohmann::json &state) {
-            if (!state.empty ()) return;
+            if (!state.empty ())
+                return;
             state = nlohmann::json::object ();
             state["nextOrderSequence"] = 0;
             state["idempotency"] = nlohmann::json::object ();
@@ -77,8 +78,7 @@ class redis_state_store_t
             state["carts"]["cart-success"] =
               cart_seed_t{"cart-success", {{"sku-ok", 1}}, decimal_t ("120.00"), "USD"};
             state["carts"]["cart-inventory-fail"] =
-              cart_seed_t{"cart-inventory-fail", {{"sku-rare", 1}}, decimal_t ("120.00"),
-                          "USD"};
+              cart_seed_t{"cart-inventory-fail", {{"sku-rare", 1}}, decimal_t ("120.00"), "USD"};
 
             state["inventory"] = nlohmann::json::object ();
             state["inventory"]["sku-ok"] = inventory_seed_t{"sku-ok", 100};
@@ -100,8 +100,8 @@ class redis_state_store_t
         {
             const auto deadline = std::chrono::steady_clock::now () + std::chrono::seconds (10);
             while (std::chrono::steady_clock::now () < deadline) {
-                if (_store.execute_string (
-                      {"SET", _store.lock_key (), _token, "NX", "PX", "30000"}) == "OK") {
+                if (_store.execute_string ({"SET", _store.lock_key (), _token, "NX", "PX", "30000"})
+                    == "OK") {
                     _locked = true;
                     return;
                 }
@@ -133,7 +133,7 @@ class redis_state_store_t
       private:
         static std::string make_token ()
         {
-            static thread_local std::mt19937_64 rng{std::random_device{} ()};
+            static thread_local std::mt19937_64 rng{std::random_device{}()};
             return std::to_string (std::chrono::steady_clock::now ().time_since_epoch ().count ())
                    + ":" + std::to_string (rng ());
         }
@@ -301,7 +301,8 @@ inline std::vector<std::string> event_types_for (const nlohmann::json &state,
                                                  const std::string &order_id)
 {
     std::vector<std::string> result;
-    if (!state["events"].contains (order_id)) return result;
+    if (!state["events"].contains (order_id))
+        return result;
     for (const auto &event : state["events"][order_id]) {
         result.push_back (event.value ("eventType", ""));
     }

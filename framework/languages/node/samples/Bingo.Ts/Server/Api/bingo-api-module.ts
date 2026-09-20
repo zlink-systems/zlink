@@ -1,7 +1,10 @@
 import { ZLinkModule, zlinkFramework, zlinkModule } from '@zlink-systems/nestjs';
 import { bingoFrameworkProtobuf } from '../../Shared/Contracts/protobuf-framework-codec';
 import { SampleNames } from '../Configuration/sample-names';
-import { BINGO_SAMPLE_CONFIG, createBingoConfigurationModule } from '../Configuration/sample-config';
+import {
+  BINGO_SAMPLE_CONFIG,
+  createBingoConfigurationModule
+} from '../Configuration/sample-config';
 import type { BingoSampleConfig } from '../Configuration/sample-config';
 import { bingoLocationOptions, createBingoLocationStore } from '../Configuration/location-store';
 import { bingoMeterProvider } from '../runtime-support';
@@ -27,28 +30,31 @@ function createBingoApiModule() {
         useFactory: (config: BingoSampleConfig) => {
           const builder = zlinkFramework();
           builder.options({
-            metrics: { meterProvider: bingoMeterProvider },
+            metrics: { meterProvider: bingoMeterProvider }
           });
-          builder.configureDispatch()
-            .messageFlow('normal');
+          builder.configureDispatch().messageFlow('normal');
           builder.addLocationStore(createBingoLocationStore(config));
           bingoLocationOptions(builder.configureLocations());
           // --8<-- [start:doc-codec-register]
           // Every payload this process sends is encoded with Protobuf instead of the default codec.
           builder.codecs().use(bingoFrameworkProtobuf);
           // --8<-- [end:doc-codec-register]
-          const apiMesh = builder.addRouteMesh(SampleNames.playMeshName)
+          const apiMesh = builder
+            .addRouteMesh(SampleNames.playMeshName)
             .setRoutingIdPrefix('api')
             .listen(config.apiEndpoint);
           apiMesh.objects().client();
-          builder.addClientServerChannel(SampleNames.apiChannel)
+          builder
+            .addClientServerChannel(SampleNames.apiChannel)
             .server()
             .listen()
             .addHandlerGroup('api');
-          builder.addRouteMesh(SampleNames.matchmakingMeshName)
+          builder
+            .addRouteMesh(SampleNames.matchmakingMeshName)
             .setRoutingIdPrefix('api-matchmaking')
             .listen(config.apiMatchmakingEndpoint)
-            .objects().client();
+            .objects()
+            .client();
           return builder.build();
         }
       })

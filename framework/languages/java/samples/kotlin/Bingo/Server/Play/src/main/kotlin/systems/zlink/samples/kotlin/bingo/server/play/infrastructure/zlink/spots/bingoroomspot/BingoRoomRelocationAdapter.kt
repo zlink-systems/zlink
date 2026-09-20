@@ -1,8 +1,7 @@
 package systems.zlink.samples.kotlin.bingo.server.play.infrastructure.zlink.spots.bingoroomspot
 
-
-import java.util.concurrent.CancellationException
 import com.fasterxml.jackson.databind.ObjectMapper
+import java.util.concurrent.CancellationException
 import java.util.concurrent.CompletableFuture
 import java.util.concurrent.CompletionStage
 import systems.zlink.framework.actors.ZLinkRelocationCancellation
@@ -10,9 +9,8 @@ import systems.zlink.framework.spots.ZLinkSpotRelocationAdapter
 import systems.zlink.samples.kotlin.bingo.server.play.domain.bingo.BingoRoomSettings
 import systems.zlink.samples.kotlin.bingo.shared.contracts.BingoRoomState
 
-class BingoRoomRelocationAdapter(
-    private val json: ObjectMapper,
-) : ZLinkSpotRelocationAdapter<BingoRoomSpot> {
+class BingoRoomRelocationAdapter(private val json: ObjectMapper) :
+    ZLinkSpotRelocationAdapter<BingoRoomSpot> {
     // --8<-- [start:doc-bingo-relocation-adapter]
     override fun capture(
         spot: BingoRoomSpot,
@@ -21,9 +19,10 @@ class BingoRoomRelocationAdapter(
         ensureActive(cancellation)
         val state = spot.captureRelocationState()
         return CompletableFuture.completedFuture(
-            json.writeValueAsBytes(Payload(state.settings, state.state)),
+            json.writeValueAsBytes(Payload(state.settings, state.state))
         )
     }
+
     // --8<-- [end:doc-bingo-relocation-adapter]
 
     override fun restore(
@@ -33,22 +32,15 @@ class BingoRoomRelocationAdapter(
     ): CompletionStage<Void> {
         ensureActive(cancellation)
         val payload = json.readValue(state, Payload::class.java)
-        spot.restoreRelocationState(
-            BingoRoomSpot.RelocationState(payload.settings, payload.state),
-        )
+        spot.restoreRelocationState(BingoRoomSpot.RelocationState(payload.settings, payload.state))
         return CompletableFuture.completedFuture(null)
     }
 
     private fun ensureActive(cancellation: ZLinkRelocationCancellation) {
         if (cancellation.isCancellationRequested) {
-            throw CancellationException(
-                "Bingo room relocation was cancelled",
-            )
+            throw CancellationException("Bingo room relocation was cancelled")
         }
     }
 
-    private data class Payload(
-        val settings: BingoRoomSettings,
-        val state: BingoRoomState,
-    )
+    private data class Payload(val settings: BingoRoomSettings, val state: BingoRoomState)
 }

@@ -25,8 +25,9 @@ inline order_state_t get_order (zlink::http_client::client_t &api, const std::st
 {
     return api.post ("/orders/get")
       .body (get_order_state_req_t{order_id})
-      .submit<get_order_state_res_t> ().value ().body
-      .state;
+      .submit<get_order_state_res_t> ()
+      .value ()
+      .body.state;
 }
 
 inline order_state_t wait_for_status (zlink::http_client::client_t &api,
@@ -130,16 +131,16 @@ class shoppingmall_client_scenario_t
           wait_for_status (api_a, pending.order_id, order_status_t::confirmed);
         ensure (pending_confirmed.status == order_status_t::confirmed, "pending confirmed");
 
-        auto resumed = api_b.post ("/orders/continue")
-                         .body (continue_order_workflow_req_t{resume_order_id,
-                                                              "continue:" + resume_order_id})
-                         .submit<continue_order_workflow_res_t> ().value ().body;
+        auto resumed =
+          api_b.post ("/orders/continue")
+            .body (continue_order_workflow_req_t{resume_order_id, "continue:" + resume_order_id})
+            .submit<continue_order_workflow_res_t> ()
+            .value ()
+            .body;
         ensure (resumed.state.status == order_status_t::confirmed, "resumed confirmed");
-        ensure (resumed.state.reservation_id.value_or ("")
-                  == "reservation-" + resume_order_id,
+        ensure (resumed.state.reservation_id.value_or ("") == "reservation-" + resume_order_id,
                 "resumed reservation");
-        ensure (resumed.state.payment_id.value_or ("")
-                  == "payment-" + resume_order_id,
+        ensure (resumed.state.payment_id.value_or ("") == "payment-" + resume_order_id,
                 "resumed payment");
 
         const auto inventory_req =
@@ -170,18 +171,20 @@ class shoppingmall_client_scenario_t
                 "payment failure");
 
         auto healed = api_b.post ("/orders/continue")
-                        .body (continue_order_workflow_req_t{projection_continue_order_id,
-                                                             "continue:" +
-                                                               projection_continue_order_id})
-                        .submit<continue_order_workflow_res_t> ().value ().body;
+                        .body (continue_order_workflow_req_t{
+                          projection_continue_order_id, "continue:" + projection_continue_order_id})
+                        .submit<continue_order_workflow_res_t> ()
+                        .value ()
+                        .body;
         ensure (healed.state.status == order_status_t::confirmed, "healed projection");
         auto healed_read = get_order (api_a, projection_continue_order_id);
         ensure (healed_read.status == order_status_t::confirmed, "healed read");
         auto rebuilt = api_a.post ("/orders/rebuild")
-                         .body (rebuild_order_projection_req_t{projection_rebuild_order_id,
-                                                               "rebuild:" +
-                                                                 projection_rebuild_order_id})
-                         .submit<rebuild_order_projection_res_t> ().value ().body;
+                         .body (rebuild_order_projection_req_t{
+                           projection_rebuild_order_id, "rebuild:" + projection_rebuild_order_id})
+                         .submit<rebuild_order_projection_res_t> ()
+                         .value ()
+                         .body;
         ensure (rebuilt.state.status == order_status_t::confirmed, "rebuilt projection");
         auto rebuilt_read = get_order (api_b, projection_rebuild_order_id);
         ensure (rebuilt_read.status == order_status_t::confirmed, "rebuilt read");
@@ -193,11 +196,8 @@ class shoppingmall_client_scenario_t
 
         const auto scale_req =
           start_order_req_t{"cart-success", "addr-office", "pm-ok", "order-scale-001"};
-        auto scale = api_b.post ("/orders/start")
-                       .body (scale_req)
-                       .submit<start_order_res_t> ()
-                       .value ()
-                       .body;
+        auto scale =
+          api_b.post ("/orders/start").body (scale_req).submit<start_order_res_t> ().value ().body;
         emit_produced_order ("scale-out", scale.order_id);
         auto scale_confirmed = wait_for_status (api_a, scale.order_id, order_status_t::confirmed);
         ensure (scale_confirmed.status == order_status_t::confirmed, "scale confirmed");

@@ -3,7 +3,10 @@ import { DeliveryDispatchNodeIds, SampleNames } from '../../Shared/Configuration
 import { CustomerSessionFactory } from './customer-session';
 import { CustomerActorDirectory, CustomerActorFactory } from './customer-actor';
 import { CustomerEntrySpot } from './customer-entry-spot';
-import { createDeliveryDispatchLocationStore, deliveryDispatchLocationOptions } from '../Configuration/location-store';
+import {
+  createDeliveryDispatchLocationStore,
+  deliveryDispatchLocationOptions
+} from '../Configuration/location-store';
 import {
   DELIVERYDISPATCH_SAMPLE_CONFIG,
   createDeliveryDispatchConfigurationModule
@@ -30,12 +33,13 @@ function createSessionModule() {
         inject: [DELIVERYDISPATCH_SAMPLE_CONFIG],
         useFactory: (config: DeliveryDispatchServerConfig) => {
           const builder = zlinkFramework();
-          builder.configureDispatch()
-            .messageFlow('normal');
+          builder.configureDispatch().messageFlow('normal');
           builder.addLocationStore(createDeliveryDispatchLocationStore(config));
           deliveryDispatchLocationOptions(builder.configureLocations());
-          const mesh = builder.addRouteMesh(SampleNames.customerMeshName)
-              .listen(config.sessionSpotRouterEndpoint).routingId(DeliveryDispatchNodeIds.customerGateway);
+          const mesh = builder
+            .addRouteMesh(SampleNames.customerMeshName)
+            .listen(config.sessionSpotRouterEndpoint)
+            .routingId(DeliveryDispatchNodeIds.customerGateway);
           const objectServer = mesh.objects().server();
           objectServer.addEntrySpot(CustomerEntrySpot);
           objectServer.addActorFactory(
@@ -43,10 +47,11 @@ function createSessionModule() {
             CustomerActorFactory,
             (factory) => factory.disableRelocation()
           );
-          return builder.addStreamNode(SampleNames.customerStreamNode)
-              .enableActorDispatch()
-              .bind(config.sessionStreamEndpoint)
-              .registerSession(CustomerSessionFactory)
+          return builder
+            .addStreamNode(SampleNames.customerStreamNode)
+            .enableActorDispatch()
+            .bind(config.sessionStreamEndpoint)
+            .registerSession(CustomerSessionFactory)
             .build();
         }
       })
@@ -56,7 +61,8 @@ function createSessionModule() {
       {
         provide: 'DELIVERYDISPATCH_LOCATION_STORE',
         inject: [DELIVERYDISPATCH_SAMPLE_CONFIG],
-        useFactory: (config: DeliveryDispatchServerConfig) => createDeliveryDispatchLocationStore(config)
+        useFactory: (config: DeliveryDispatchServerConfig) =>
+          createDeliveryDispatchLocationStore(config)
       },
       CustomerSessionFactory,
       CustomerActorFactory,

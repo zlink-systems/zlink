@@ -13,12 +13,11 @@ internal sealed record SampleSettings(
     IReadOnlyList<string> PlayEndpoints,
     string RedisEndpoint,
     string RedisKeyPrefix,
-    string LogDirectory)
+    string LogDirectory
+)
 {
     public IReadOnlyList<PlayNodeInfo> PlayNodes =>
-        PlayEndpoints
-            .Select(static endpoint => new PlayNodeInfo(endpoint))
-            .ToArray();
+        PlayEndpoints.Select(static endpoint => new PlayNodeInfo(endpoint)).ToArray();
 
     public static SampleSettings LoadApi(string[] args)
     {
@@ -35,7 +34,8 @@ internal sealed record SampleSettings(
             playEndpoints,
             RequireString(section, nameof(RedisEndpoint)),
             RequireString(section, nameof(RedisKeyPrefix)),
-            RequireString(section, nameof(LogDirectory)));
+            RequireString(section, nameof(LogDirectory))
+        );
     }
 
     public static SampleSettings LoadPlay(string[] args)
@@ -52,7 +52,8 @@ internal sealed record SampleSettings(
             RequireList(section, nameof(PlayEndpoints), 2),
             RequireString(section, nameof(RedisEndpoint)),
             RequireString(section, nameof(RedisKeyPrefix)),
-            RequireString(section, nameof(LogDirectory)));
+            RequireString(section, nameof(LogDirectory))
+        );
     }
 
     private static IConfigurationSection LoadSection(string[] args)
@@ -77,7 +78,8 @@ internal sealed record SampleSettings(
     private static IReadOnlyList<string> RequireList(
         IConfigurationSection section,
         string name,
-        int count)
+        int count
+    )
     {
         var values = ReadList(section, name);
         return values.Count == count
@@ -85,42 +87,42 @@ internal sealed record SampleSettings(
             : throw new InvalidOperationException($"Sample.{name} must contain {count} values.");
     }
 
-    private static string RequireTcpEndpoint(
-        IConfigurationSection section,
-        string name)
+    private static string RequireTcpEndpoint(IConfigurationSection section, string name)
     {
         var endpoint = RequireString(section, name);
         return IsTcpEndpoint(endpoint)
             ? endpoint
             : throw new InvalidOperationException(
-                $"Sample.{name} must be an absolute tcp endpoint with an explicit port.");
+                $"Sample.{name} must be an absolute tcp endpoint with an explicit port."
+            );
     }
 
     private static IReadOnlyList<string> RequireTcpEndpointList(
         IConfigurationSection section,
         string name,
-        int count)
+        int count
+    )
     {
         var endpoints = RequireList(section, name, count);
         return endpoints.All(IsTcpEndpoint)
             ? endpoints
             : throw new InvalidOperationException(
-                $"Sample.{name} must contain absolute tcp endpoints with explicit ports.");
+                $"Sample.{name} must contain absolute tcp endpoints with explicit ports."
+            );
     }
 
     private static bool IsTcpEndpoint(string endpoint)
     {
         return Uri.TryCreate(endpoint, UriKind.Absolute, out var uri)
-               && string.Equals(uri.Scheme, "tcp", StringComparison.OrdinalIgnoreCase)
-               && !string.IsNullOrWhiteSpace(uri.Host)
-               && uri.Port is > 0 and <= 65535;
+            && string.Equals(uri.Scheme, "tcp", StringComparison.OrdinalIgnoreCase)
+            && !string.IsNullOrWhiteSpace(uri.Host)
+            && uri.Port is > 0 and <= 65535;
     }
 
-    private static IReadOnlyList<string> ReadList(
-        IConfigurationSection section,
-        string name)
+    private static IReadOnlyList<string> ReadList(IConfigurationSection section, string name)
     {
-        return section.GetSection(name)
+        return section
+            .GetSection(name)
             .GetChildren()
             .Select(static child => child.Value)
             .Where(static value => !string.IsNullOrWhiteSpace(value))

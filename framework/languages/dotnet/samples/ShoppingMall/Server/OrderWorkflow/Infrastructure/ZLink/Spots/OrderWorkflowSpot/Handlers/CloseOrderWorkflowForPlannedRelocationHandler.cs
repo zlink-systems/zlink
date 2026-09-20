@@ -3,16 +3,18 @@ using Zlink.Framework.Contracts.Spots;
 
 namespace ShoppingMall.Server.OrderWorkflow.Infrastructure.ZLink.Spots.OrderWorkflowSpot.Handlers;
 
-internal sealed class CloseOrderWorkflowForPlannedRelocationHandler :
-    IZLinkSpotRequestHandler<
+internal sealed class CloseOrderWorkflowForPlannedRelocationHandler
+    : IZLinkSpotRequestHandler<
         OrderWorkflowSpot,
         CloseOrderWorkflowForPlannedRelocationReq,
-        CloseOrderWorkflowForPlannedRelocationRes>
+        CloseOrderWorkflowForPlannedRelocationRes
+    >
 {
     public ValueTask<CloseOrderWorkflowForPlannedRelocationRes> HandleAsync(
         OrderWorkflowSpot spot,
         CloseOrderWorkflowForPlannedRelocationReq request,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken
+    )
     {
         return spot.CloseForPlannedRelocationAsync(request, cancellationToken);
     }

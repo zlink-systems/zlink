@@ -25,11 +25,13 @@ public sealed class RedisJsonStore : IAsyncDisposable
     public async ValueTask<T> ReadAsync<T>(
         string key,
         T fallback,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken
+    )
     {
         cancellationToken.ThrowIfCancellationRequested();
         var json = await _database.StringGetAsync(key).ConfigureAwait(false);
-        if (json.IsNullOrEmpty) return fallback;
+        if (json.IsNullOrEmpty)
+            return fallback;
 
         return JsonSerializer.Deserialize<T>(json!, JsonOptions) ?? fallback;
     }
@@ -38,16 +40,24 @@ public sealed class RedisJsonStore : IAsyncDisposable
         string key,
         T fallback,
         Func<T, TResult> update,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken
+    )
     {
         var lockKey = $"{key}:lock";
-        var lockValue = Environment.MachineName + ":" + Environment.ProcessId + ":" + Guid.NewGuid().ToString("N");
+        var lockValue =
+            Environment.MachineName
+            + ":"
+            + Environment.ProcessId
+            + ":"
+            + Guid.NewGuid().ToString("N");
         await AcquireLockAsync(lockKey, lockValue, cancellationToken).ConfigureAwait(false);
         try
         {
             var value = await ReadAsync(key, fallback, cancellationToken).ConfigureAwait(false);
             var result = update(value);
-            await _database.StringSetAsync(key, JsonSerializer.Serialize(value, JsonOptions)).ConfigureAwait(false);
+            await _database
+                .StringSetAsync(key, JsonSerializer.Serialize(value, JsonOptions))
+                .ConfigureAwait(false);
             return result;
         }
         finally
@@ -60,25 +70,33 @@ public sealed class RedisJsonStore : IAsyncDisposable
         string key,
         T fallback,
         Action<T> update,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken
+    )
     {
         await UpdateAsync(
-            key,
-            fallback,
-            value =>
-            {
-                update(value);
-                return true;
-            },
-            cancellationToken).ConfigureAwait(false);
+                key,
+                fallback,
+                value =>
+                {
+                    update(value);
+                    return true;
+                },
+                cancellationToken
+            )
+            .ConfigureAwait(false);
     }
 
     private async ValueTask AcquireLockAsync(
         string lockKey,
         string lockValue,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken
+    )
     {
-        while (!await _database.LockTakeAsync(lockKey, lockValue, TimeSpan.FromSeconds(30)).ConfigureAwait(false))
+        while (
+            !await _database
+                .LockTakeAsync(lockKey, lockValue, TimeSpan.FromSeconds(30))
+                .ConfigureAwait(false)
+        )
             await Task.Delay(10, cancellationToken).ConfigureAwait(false);
     }
 }

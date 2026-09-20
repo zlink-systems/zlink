@@ -11,7 +11,9 @@ internal sealed class AgentAssignmentService(AgentAvailabilityDirectory availabi
     // from the reservations that survived the temporary session disconnect.
     public void SetAvailable(string rosterActorId, string displayName, bool isAvailable)
     {
-        var activeConversations = _reservations.Values.Count(id => string.Equals(id, rosterActorId, StringComparison.Ordinal));
+        var activeConversations = _reservations.Values.Count(id =>
+            string.Equals(id, rosterActorId, StringComparison.Ordinal)
+        );
         availability.SetAvailable(rosterActorId, displayName, isAvailable, activeConversations);
     }
 
@@ -19,9 +21,11 @@ internal sealed class AgentAssignmentService(AgentAvailabilityDirectory availabi
     // when the conversation is already assigned or no agent has spare capacity.
     public AvailableAgent? AssignForConversation(string conversationId)
     {
-        if (_reservations.ContainsKey(conversationId)) return null;
+        if (_reservations.ContainsKey(conversationId))
+            return null;
         var assigned = availability.Assign();
-        if (assigned is null) return null;
+        if (assigned is null)
+            return null;
 
         _reservations[conversationId] = assigned.RosterActorId;
         return assigned;

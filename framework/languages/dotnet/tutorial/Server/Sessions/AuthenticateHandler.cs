@@ -14,7 +14,8 @@ public sealed class AuthenticateHandler(IZLinkActorManager players)
         IZLinkSessionContext context,
         ZLinkSessionDispatchContext dispatch,
         Authenticate message,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken
+    )
     {
         // A returning client finds its existing player rather than a new one.
         var result = await players
@@ -27,7 +28,7 @@ public sealed class AuthenticateHandler(IZLinkActorManager players)
         {
             ZLinkActorCreateResult.Existing value => value.Actor,
             ZLinkActorCreateResult.Created value => value.Actor,
-            _ => throw new InvalidOperationException("Player creation was rejected.")
+            _ => throw new InvalidOperationException("Player creation was rejected."),
         };
 
         var bound = await context.Actors.BindOrGetAsync(player, cancellationToken);

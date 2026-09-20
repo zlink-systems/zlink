@@ -41,10 +41,11 @@ class delivery_status_changed_handler_t
         }
         _actors
           .send (actor_ref->actor_id (),
-                          delivery_status_updated_msg_t{request.delivery_id,
-                                                        request.customer_id,
-                                                        request.status, request.courier_id,
-                                                        request.occurred_at_unix_ms})
+                 delivery_status_updated_msg_t{request.delivery_id,
+                                               request.customer_id,
+                                               request.status,
+                                               request.courier_id,
+                                               request.occurred_at_unix_ms})
           .async ();
         // --8<-- [end:doc-dd-tracking-forward]
 

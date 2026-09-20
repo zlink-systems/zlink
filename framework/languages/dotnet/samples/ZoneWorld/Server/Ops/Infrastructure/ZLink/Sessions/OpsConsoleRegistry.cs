@@ -13,8 +13,12 @@ public sealed class OpsConsoleRegistry(ILogger<OpsConsoleRegistry>? logger = nul
 {
     private const int RecentAlertCount = 20;
 
-    private readonly ConcurrentDictionary<string, IZLinkSessionContext> _consoles = new(StringComparer.Ordinal);
-    private readonly Dictionary<string, NodeStatusNotify> _latestNodes = new(StringComparer.Ordinal);
+    private readonly ConcurrentDictionary<string, IZLinkSessionContext> _consoles = new(
+        StringComparer.Ordinal
+    );
+    private readonly Dictionary<string, NodeStatusNotify> _latestNodes = new(
+        StringComparer.Ordinal
+    );
     private readonly Queue<NodeAlertNotify> _recentAlerts = new();
     private readonly object _nodeGate = new();
 
@@ -32,10 +36,12 @@ public sealed class OpsConsoleRegistry(ILogger<OpsConsoleRegistry>? logger = nul
     /// </summary>
     public async ValueTask ReplayNodesAsync(
         IZLinkSessionContext context,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken
+    )
     {
         NodeStatusNotify[] snapshot;
-        lock (_nodeGate) snapshot = _latestNodes.Values.ToArray();
+        lock (_nodeGate)
+            snapshot = _latestNodes.Values.ToArray();
 
         foreach (var node in snapshot)
             await SendAsync(context, node, cancellationToken);
@@ -48,10 +54,12 @@ public sealed class OpsConsoleRegistry(ILogger<OpsConsoleRegistry>? logger = nul
     /// </summary>
     public async ValueTask ReplayAlertsAsync(
         IZLinkSessionContext context,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken
+    )
     {
         NodeAlertNotify[] backlog;
-        lock (_recentAlerts) backlog = _recentAlerts.ToArray();
+        lock (_recentAlerts)
+            backlog = _recentAlerts.ToArray();
 
         foreach (var alert in backlog)
             await SendAsync(context, alert, cancellationToken);
@@ -62,17 +70,20 @@ public sealed class OpsConsoleRegistry(ILogger<OpsConsoleRegistry>? logger = nul
         lock (_recentAlerts)
         {
             _recentAlerts.Enqueue(alert);
-            while (_recentAlerts.Count > RecentAlertCount) _recentAlerts.Dequeue();
+            while (_recentAlerts.Count > RecentAlertCount)
+                _recentAlerts.Dequeue();
         }
     }
 
     public void Remove(IZLinkSessionContext context) =>
         ((ICollection<KeyValuePair<string, IZLinkSessionContext>>)_consoles).Remove(
-            new KeyValuePair<string, IZLinkSessionContext>(context.SessionId, context));
+            new KeyValuePair<string, IZLinkSessionContext>(context.SessionId, context)
+        );
 
     public async ValueTask BroadcastAsync(
         NodeStatusNotify message,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken
+    )
     {
         IZLinkSessionContext[] consoles;
         lock (_nodeGate)
@@ -84,9 +95,7 @@ public sealed class OpsConsoleRegistry(ILogger<OpsConsoleRegistry>? logger = nul
         await SendAllAsync(consoles, message, cancellationToken);
     }
 
-    public ValueTask BroadcastAsync<TMessage>(
-        TMessage message,
-        CancellationToken cancellationToken)
+    public ValueTask BroadcastAsync<TMessage>(TMessage message, CancellationToken cancellationToken)
     {
         return SendAllAsync(_consoles.Values.ToArray(), message, cancellationToken);
     }
@@ -94,7 +103,8 @@ public sealed class OpsConsoleRegistry(ILogger<OpsConsoleRegistry>? logger = nul
     private async ValueTask SendAllAsync<TMessage>(
         IReadOnlyList<IZLinkSessionContext> consoles,
         TMessage message,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken
+    )
     {
         foreach (var console in consoles)
         {
@@ -114,7 +124,8 @@ public sealed class OpsConsoleRegistry(ILogger<OpsConsoleRegistry>? logger = nul
                     error,
                     "ops console push dropped. session={SessionId}, message={MessageType}",
                     console.SessionId,
-                    typeof(TMessage).Name);
+                    typeof(TMessage).Name
+                );
             }
         }
     }
@@ -122,6 +133,6 @@ public sealed class OpsConsoleRegistry(ILogger<OpsConsoleRegistry>? logger = nul
     private static async ValueTask SendAsync<TMessage>(
         IZLinkSessionContext context,
         TMessage message,
-        CancellationToken cancellationToken) =>
-        await context.Client.Send(message).Async(cancellationToken);
+        CancellationToken cancellationToken
+    ) => await context.Client.Send(message).Async(cancellationToken);
 }

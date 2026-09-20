@@ -1,8 +1,5 @@
 import { Inject, Injectable } from '@nestjs/common';
-import {
-  ZLINK_ACTOR_CLIENT,
-  zlinkEntrySpotActorSendHandler
-} from '@zlink-systems/nestjs';
+import { ZLINK_ACTOR_CLIENT, zlinkEntrySpotActorSendHandler } from '@zlink-systems/nestjs';
 import { PlayerActor } from '../../Actors/player-actor';
 import {
   DestroyBingoActorMsg,
@@ -22,9 +19,7 @@ import type {
 class BingoEntrySpot implements ZLinkEntrySpot<PlayerActor> {
   readonly context!: ZLinkEntrySpotContext<PlayerActor>;
 
-  constructor(
-    @Inject(ZLINK_ACTOR_CLIENT) private readonly actors: ZLinkActorClient
-  ) {}
+  constructor(@Inject(ZLINK_ACTOR_CLIENT) private readonly actors: ZLinkActorClient) {}
 
   // --8<-- [start:doc-bingo-entry-destroy]
   async onJoinedActor(actor: PlayerActor): Promise<void> {
@@ -32,20 +27,18 @@ class BingoEntrySpot implements ZLinkEntrySpot<PlayerActor> {
       console.error(`bingo-lifecycle entry-joined actor=${actor.actorId} destroy=false`);
       return;
     }
-    await this.actors
-      .sendToActor(actor.actorId, new DestroyBingoActorMsg({}))
-      .submit();
+    await this.actors.sendToActor(actor.actorId, new DestroyBingoActorMsg({})).submit();
   }
   // --8<-- [end:doc-bingo-entry-destroy]
 
-  async onActorJoin(
-    _actorId: string,
-    _request: ZLinkMessage
-  ): Promise<ZLinkSpotActorJoinResult> {
+  async onActorJoin(_actorId: string, _request: ZLinkMessage): Promise<ZLinkSpotActorJoinResult> {
     return { accepted: true };
   }
 
-  async onCreateActor(actor: PlayerActor, createRequest: ZLinkMessage): Promise<ZLinkActorCreateResponse> {
+  async onCreateActor(
+    actor: PlayerActor,
+    createRequest: ZLinkMessage
+  ): Promise<ZLinkActorCreateResponse> {
     const request = createRequest.decode<PlayerActorCreateReq>();
     actor.displayName = request.displayName;
     return { accepted: true };
@@ -58,11 +51,14 @@ class BingoEntrySpot implements ZLinkEntrySpot<PlayerActor> {
   async onDisconnectActor(_actor: PlayerActor): Promise<void> {}
 
   scheduleDestroy(actor: PlayerActor): void {
-    void this.context.runIoWorker(async () => true).submit().then(async () => {
-      console.error(`bingo-lifecycle entry-destroy-start actor=${actor.actorId}`);
-      await this.context.destroyActor(actor);
-      console.error(`bingo-lifecycle entry-destroy-complete actor=${actor.actorId}`);
-    });
+    void this.context
+      .runIoWorker(async () => true)
+      .submit()
+      .then(async () => {
+        console.error(`bingo-lifecycle entry-destroy-start actor=${actor.actorId}`);
+        await this.context.destroyActor(actor);
+        console.error(`bingo-lifecycle entry-destroy-complete actor=${actor.actorId}`);
+      });
   }
 }
 

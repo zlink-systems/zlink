@@ -756,6 +756,39 @@ read_mesh_state (faulting_mesh_location_repository_t &store,
     return found->state;
 }
 
+void verify_server_descriptor_publishes_framework_entry_spot_without_application_entry ()
+{
+    auto registration = make_named_node ("descriptor-entry", "descriptor-entry-node");
+    registration->object_role = zlink::framework::object_role_t::server;
+    assert (!registration->spot_state->snapshot.entry_spot_name);
+
+    zlink::framework::serializer_registry_t serializers;
+    zlink::framework::service_collection_t services;
+    auto owned_store =
+      std::make_unique<zlink::framework::runtime::in_memory_location_repository_t> ();
+    auto &store = *owned_store;
+    services.add_singleton<zlink::framework::location_repository_t> (
+      std::unique_ptr<zlink::framework::location_repository_t> (owned_store.release ()));
+    services.add_singleton<zlink::framework::runtime::location_runtime_t> (
+      std::make_unique<zlink::framework::runtime::location_runtime_t> (store));
+    register_mesh_location_resolvers (services);
+    auto provider = services.build_provider ();
+    provider.get_required<zlink::framework::runtime::location_runtime_t> ().start (
+      *registration->routing_id);
+
+    zlink::framework::runtime::mesh_node_host_service_t service (
+      {registration}, serializers);
+    service.start (provider);
+    const auto nodes = store.list_mesh_nodes ("descriptor-entry").result ().value ();
+    assert (nodes.items.size () == 1);
+    const auto &descriptor = nodes.items.front ();
+    assert (descriptor.entry_spot_id);
+    assert (!descriptor.entry_spot_id->empty ());
+    assert (*descriptor.entry_spot_id
+            == service.nodes ().front ()->native_node ().entry_spot ().spot_id ());
+    service.stop ();
+}
+
 void verify_descriptor_retire_order_and_pre_seal_rollback ()
 {
     using zlink::framework::framework_runtime_state_t;
@@ -2284,6 +2317,7 @@ int main (int argc, char **argv)
     verify_local_and_wire_application_owner_keys_match ();
     verify_owner_drain_continuation_during_executor_shutdown ();
     verify_deferred_application_terminal_ownership ();
+    verify_server_descriptor_publishes_framework_entry_spot_without_application_entry ();
     verify_descriptor_retire_order_and_pre_seal_rollback ();
     verify_local_node_submit_bridge ();
     verify_route_internal_packets_precede_application_dispatch ();

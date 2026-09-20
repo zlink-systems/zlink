@@ -22,7 +22,9 @@ const BINGO_SAMPLE_CONFIG = Symbol.for('BINGO_SAMPLE_CONFIG');
 class BingoConfigurationModule {}
 Module({})(BingoConfigurationModule);
 
-function createBingoConfigurationModule(requiredKeys: readonly (keyof BingoSampleConfig)[]): DynamicModule {
+function createBingoConfigurationModule(
+  requiredKeys: readonly (keyof BingoSampleConfig)[]
+): DynamicModule {
   const configPath = readConfigPath(process.argv.slice(2));
   return {
     module: BingoConfigurationModule,
@@ -36,11 +38,14 @@ function createBingoConfigurationModule(requiredKeys: readonly (keyof BingoSampl
         validatePredefined: false
       })
     ],
-    providers: [{
-      provide: BINGO_SAMPLE_CONFIG,
-      inject: [ConfigService],
-      useFactory: (config: ConfigService) => validateSampleConfig(config.get('sample'), requiredKeys)
-    }],
+    providers: [
+      {
+        provide: BINGO_SAMPLE_CONFIG,
+        inject: [ConfigService],
+        useFactory: (config: ConfigService) =>
+          validateSampleConfig(config.get('sample'), requiredKeys)
+      }
+    ],
     exports: [BINGO_SAMPLE_CONFIG]
   };
 }

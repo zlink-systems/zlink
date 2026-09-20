@@ -14,7 +14,6 @@ public sealed class SampleRoleOptions
     public string LogDir { get; set; } = string.Empty;
 
     public string WorkDir { get; set; } = string.Empty;
-
 }
 
 /// <summary>
@@ -33,9 +32,9 @@ public sealed record SampleConfiguration(SampleTopology Topology, SampleRoleOpti
     /// </summary>
     public static SampleConfiguration Load(string[] args)
     {
-        var path = ReadOption(args, "--config")
-                   ?? throw new ArgumentException(
-                       "DeliveryDispatch roles require --config <path>.");
+        var path =
+            ReadOption(args, "--config")
+            ?? throw new ArgumentException("DeliveryDispatch roles require --config <path>.");
         if (!File.Exists(path))
             throw new FileNotFoundException($"Configuration file was not found: {path}", path);
 
@@ -43,10 +42,12 @@ public sealed record SampleConfiguration(SampleTopology Topology, SampleRoleOpti
             .AddJsonFile(path, optional: false, reloadOnChange: false)
             .Build();
 
-        var role = configuration.GetSection("sample:role").Get<SampleRoleOptions>()
-                   ?? throw new InvalidOperationException("sample.role is missing.");
-        var topology = configuration.GetSection("sample:topology").Get<SampleTopologyOptions>()
-                       ?? throw new InvalidOperationException("sample.topology is missing.");
+        var role =
+            configuration.GetSection("sample:role").Get<SampleRoleOptions>()
+            ?? throw new InvalidOperationException("sample.role is missing.");
+        var topology =
+            configuration.GetSection("sample:topology").Get<SampleTopologyOptions>()
+            ?? throw new InvalidOperationException("sample.topology is missing.");
 
         Require(role.Name, "sample.role.name");
         Require(role.LogDir, "sample.role.logDir");

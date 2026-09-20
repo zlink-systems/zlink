@@ -21,7 +21,7 @@ public static class SampleNames
     [
         BingoSamplePlayers.Player1,
         BingoSamplePlayers.Player2,
-        BingoSamplePlayers.Observer
+        BingoSamplePlayers.Observer,
     ];
 
     public const string PlayerJoinedPacket = nameof(PlayerJoinedNotify);

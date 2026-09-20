@@ -74,7 +74,7 @@ const LAYOUT_KEYS = new Set([
   ...FIELD_KEYS, "kind", "counts", "countFrom", "item",
 ]);
 const DISCRIMINATOR_KEYS = new Set(["name", "source", "$ref"]);
-const CASE_KEYS = new Set(["when", "fields"]);
+const CASE_KEYS = new Set(["when", "fields", "constraints"]);
 const PRESENCE_RULE_KEYS = new Set(["when", "require", "forbid"]);
 const TYPE_CONSTRAINT_KEYS = new Set([
   "kind", "field", "fields", "left", "right", "comparison", "unless", "requires", "when",
@@ -450,7 +450,18 @@ function typeOperations(type, node, model, runtimePredicates) {
       },
       cases: Object.fromEntries(type.cases.map((entry) => [
         conditionSignature(entry.when),
-        { fields: fieldOperations(entry.fields, model) },
+        {
+          fields: fieldOperations(entry.fields, model),
+          ...(hasOwn(entry, "constraints") ? {
+            constraints: entry.constraints.map((constraint) => constraintOperation(
+              lowerConstraint(
+                constraint,
+                { kind: "struct", fields: entry.fields },
+                model,
+              ),
+            )),
+          } : {}),
+        },
       ])),
       otherwise: type.otherwise === "protocol-error"
         ? { kind: "protocol-error" }
@@ -493,7 +504,16 @@ function lowerType(type, model, runtimePredicates) {
     node.bodyLengthCovers = type.bodyLengthCovers ?? null;
     node.cases = Object.fromEntries(type.cases.map((entry) => [
       conditionSignature(entry.when),
-      { fields: lowerFields(entry.fields, model) },
+      {
+        fields: lowerFields(entry.fields, model),
+        ...(hasOwn(entry, "constraints") ? {
+          constraints: entry.constraints.map((constraint) => lowerConstraint(
+            constraint,
+            { kind: "struct", fields: entry.fields },
+            model,
+          )),
+        } : {}),
+      },
     ]));
     node.otherwise = lowerUnionOtherwise(type.otherwise, model);
   } else if (type.kind === "tlv32") {
@@ -706,6 +726,8 @@ function assertTypeKeywords(type, index, errors) {
       const caseLocation = `${location}.cases[${caseIndex}]`;
       assertKeys(entry, CASE_KEYS, caseLocation, errors);
       assertFields(entry.fields, `${caseLocation}.fields`, errors);
+      assertConstraints(entry.constraints, TYPE_CONSTRAINT_KEYS,
+        `${caseLocation}.constraints`, errors);
     });
     if (isObject(type.otherwise)) {
       assertKeys(type.otherwise, new Set(["fields"]), `${location}.otherwise`, errors);
@@ -1048,6 +1070,22 @@ function runSelfTests(schemaPath) {
   );
   assert(irUnions.some((type) => type.otherwise.kind === "fields"
     && type.otherwise.fields.length === 0));
+  const activationRecovery = types.get("authority-activation-recovery-state");
+  const activationPresent = activationRecovery.cases['{"hasActivationRecovery":"true"}'];
+  assert.deepEqual(activationPresent.constraints, [{
+    kind: "field-less-than-or-equal",
+    left: fieldOperand("replayCursor"),
+    right: fieldOperand("inboxSequence"),
+  }]);
+  assert.deepEqual(
+    activationRecovery.operations[0].cases['{"hasActivationRecovery":"true"}'].constraints,
+    [{
+      op: "constraint",
+      kind: "field-less-than-or-equal",
+      left: fieldOperand("replayCursor"),
+      right: fieldOperand("inboxSequence"),
+    }],
+  );
 
   assert(ir.semanticContexts.every((context) => context.parameter === "decoder-context"));
   assert.deepEqual(actorSend.allowedFlags, [

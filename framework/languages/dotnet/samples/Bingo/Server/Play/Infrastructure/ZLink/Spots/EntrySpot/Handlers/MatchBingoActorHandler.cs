@@ -8,8 +8,7 @@ using Zlink.Framework.Contracts.Spots;
 
 namespace Bingo.Server.Play.Infrastructure.ZLink.Spots.EntrySpot.Handlers;
 
-internal sealed class MatchBingoActorHandler(
-    ILogger<MatchBingoActorHandler> logger)
+internal sealed class MatchBingoActorHandler(ILogger<MatchBingoActorHandler> logger)
     : IZLinkEntrySpotActorRequestHandler<BingoEntrySpot, PlayerActor, MatchBingoReq, MatchBingoRes>
 {
     public async ValueTask<MatchBingoRes> HandleAsync(
@@ -17,55 +16,67 @@ internal sealed class MatchBingoActorHandler(
         PlayerActor actor,
         IZLinkMessageContext context,
         MatchBingoReq message,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken
+    )
     {
-        logger.LogInformation("match: actor request. actor={ActorId}, mode={Mode}", actor.ActorId, message.Mode);
+        logger.LogInformation(
+            "match: actor request. actor={ActorId}, mode={Mode}",
+            actor.ActorId,
+            message.Mode
+        );
         // --8<-- [start:doc-bingo-match-actor]
         var apiRequest = new MatchBingoApiReq
         {
             ActorId = actor.ActorId,
             DisplayName = actor.DisplayName,
-            Mode = message.Mode
+            Mode = message.Mode,
         };
-        var matched = await entrySpot.Context.Outbound
-            .RequestToChannel(SampleNames.ApiChannel, apiRequest)
+        var matched = await entrySpot
+            .Context.Outbound.RequestToChannel(SampleNames.ApiChannel, apiRequest)
             .Timeout(TimeSpan.FromSeconds(5))
             .Async<MatchBingoApiRes>(cancellationToken);
-        logger.LogInformation("match: room allocated. actor={ActorId}, room={RoomId}", actor.ActorId, matched.RoomId);
+        logger.LogInformation(
+            "match: room allocated. actor={ActorId}, room={RoomId}",
+            actor.ActorId,
+            matched.RoomId
+        );
 
         actor.TrackDeferredJoin(matched.RoomId, observeOnly: false);
-        actor.Context.JoinSpot(
+        actor
+            .Context.JoinSpot(
                 matched.RoomId,
                 new BingoRoomJoinReq
                 {
                     RoomId = matched.RoomId,
                     ActorId = actor.ActorId,
                     DisplayName = actor.DisplayName,
-                    ObserveOnly = false
-                })
+                    ObserveOnly = false,
+                }
+            )
             .Defer();
         // --8<-- [end:doc-bingo-match-actor]
-        logger.LogInformation("match: actor join scheduled. actor={ActorId}, room={RoomId}", actor.ActorId,
-            matched.RoomId);
+        logger.LogInformation(
+            "match: actor join scheduled. actor={ActorId}, room={RoomId}",
+            actor.ActorId,
+            matched.RoomId
+        );
 
         var state = new BingoRoomState
         {
             RoomId = matched.RoomId,
             Status = BingoRoomStatuses.WaitingForPlayers,
             HostActorId = actor.ActorId,
-            CanStart = false
+            CanStart = false,
         };
-        state.Players.Add(new BingoPlayerState
-        {
-            ActorId = actor.ActorId,
-            DisplayName = actor.DisplayName,
-            Seat = 0,
-            IsHost = true
-        });
-        return new MatchBingoRes
-        {
-            RoomId = matched.RoomId,
-            State = state
-        };
+        state.Players.Add(
+            new BingoPlayerState
+            {
+                ActorId = actor.ActorId,
+                DisplayName = actor.DisplayName,
+                Seat = 0,
+                IsHost = true,
+            }
+        );
+        return new MatchBingoRes { RoomId = matched.RoomId, State = state };
     }
 }

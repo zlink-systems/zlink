@@ -6,9 +6,7 @@ import java.nio.file.Path;
 import java.util.Properties;
 
 public record ClientOptions(
-    String customerStreamEndpoint,
-    String courierStreamEndpoint,
-    String dispatchHttpEndpoint) {
+        String customerStreamEndpoint, String courierStreamEndpoint, String dispatchHttpEndpoint) {
 
     public static ClientOptions load(String[] args) {
         if (args.length != 2 || !"--config".equals(args[0]) || args[1].isBlank()) {
@@ -18,12 +16,13 @@ public record ClientOptions(
         try (Reader reader = Files.newBufferedReader(Path.of(args[1]))) {
             properties.load(reader);
         } catch (Exception error) {
-            throw new IllegalStateException("Could not load DeliveryDispatch client config.", error);
+            throw new IllegalStateException(
+                    "Could not load DeliveryDispatch client config.", error);
         }
         return new ClientOptions(
-            required(properties, "customerStreamEndpoint"),
-            required(properties, "courierStreamEndpoint"),
-            required(properties, "dispatchHttpEndpoint"));
+                required(properties, "customerStreamEndpoint"),
+                required(properties, "courierStreamEndpoint"),
+                required(properties, "dispatchHttpEndpoint"));
     }
 
     private static String required(Properties properties, String name) {

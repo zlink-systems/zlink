@@ -229,6 +229,7 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode,
     private volatile ExecutorService pump;
     private volatile long routerHighWaterMark = 16_777_216L;
     private volatile long routerReceiveHighWaterMark = 16_777_216L;
+    private volatile Duration routerReceiveTimeout;
     private volatile int placementWeight = 100;
     private volatile ZLinkServiceNodeDescriptor.ObjectRole objectRole =
         ZLinkServiceNodeDescriptor.ObjectRole.NONE;
@@ -705,6 +706,11 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode,
     }
 
     @Override
+    public void setRouterReceiveTimeout(Duration value) {
+        routerReceiveTimeout = Objects.requireNonNull(value, "value");
+    }
+
+    @Override
     public void start() {
         requireCreated();
         if (bindEndpoint == null) {
@@ -717,6 +723,9 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode,
         try {
             opened.options().sendHwm(routerHighWaterMark);
             opened.options().recvHwm(routerReceiveHighWaterMark);
+            if (routerReceiveTimeout != null) {
+                opened.options().recvTimeout(routerReceiveTimeout);
+            }
             // RouteMesh admission is peer-initiated when automatic discovery
             // chooses the other node as the deterministic dialer. Enable the
             // ZMTP probe on this ROUTER before bind so that an inbound,
@@ -3784,6 +3793,15 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode,
         ZLinkServiceM6BWireCodec.InstanceRouteFence route) {
         ((ZLinkJavaRawSpotNode) spotNode())
             .forgetInstanceSpotAuthority(route);
+    }
+
+    @Override
+    public CompletionStage<Void> recoverInstanceActivation(
+        systems.zlink.framework.runtime.internal.service
+            .ZLinkInstanceActivationRecoveryCodec.RecoveryEnvelope envelope,
+        ZLinkServiceM6BWireCodec.InstanceRouteFence route) {
+        return ((ZLinkJavaRawSpotNode) spotNode())
+            .recoverInstanceSpot(envelope, route);
     }
 
     private void completeUserSpotCreate(

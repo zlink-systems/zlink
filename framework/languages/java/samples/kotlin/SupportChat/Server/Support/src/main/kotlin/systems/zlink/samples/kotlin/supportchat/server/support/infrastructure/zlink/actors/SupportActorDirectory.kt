@@ -13,14 +13,16 @@ class SupportActorDirectory {
     private val actors = linkedMapOf<String, SupportActorDirectoryEntry>()
 
     fun addOrUpdate(actor: SupportUserActor, actorRef: ActorRef) {
-        actors[actor.actorId] = SupportActorDirectoryEntry(
-            actor = actor,
-            ref = actorRef,
-            displayName = actor.displayName,
-            role = actor.role,
-        )
+        actors[actor.actorId] =
+            SupportActorDirectoryEntry(
+                actor = actor,
+                ref = actorRef,
+                displayName = actor.displayName,
+                role = actor.role,
+            )
     }
 
     fun get(actorId: String): SupportActorDirectoryEntry =
-        actors[actorId] ?: throw IllegalStateException("Support actor is not available. actor=$actorId")
+        actors[actorId]
+            ?: throw IllegalStateException("Support actor is not available. actor=$actorId")
 }

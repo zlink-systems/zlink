@@ -34,22 +34,20 @@ data class StartOrderReq(
     val paymentMethodId: String,
     val idempotencyKey: String,
 )
+
 // --8<-- [end:doc-explicit-packet-name]
 
 data class StartOrderRes(val orderId: String, val status: String)
 
-@ZLinkPacket("GetOrderStateReq")
-data class GetOrderStateReq(val orderId: String)
+@ZLinkPacket("GetOrderStateReq") data class GetOrderStateReq(val orderId: String)
 
 data class GetOrderStateRes(val state: OrderState)
 
-@ZLinkPacket("DeleteProjectionReq")
-data class DeleteProjectionReq(val orderId: String)
+@ZLinkPacket("DeleteProjectionReq") data class DeleteProjectionReq(val orderId: String)
 
 data class DeleteProjectionRes(val deleted: Boolean)
 
-@ZLinkPacket("RebuildProjectionApiReq")
-data class RebuildProjectionApiReq(val orderId: String)
+@ZLinkPacket("RebuildProjectionApiReq") data class RebuildProjectionApiReq(val orderId: String)
 
 data class RebuildProjectionApiRes(val state: OrderState)
 
@@ -101,15 +99,13 @@ data class StartOrderWorkflowReq(
 
 data class StartOrderWorkflowRes(val state: OrderState)
 
-@ZLinkPacket("ContinueOrderWorkflowReq")
-data class ContinueOrderWorkflowReq(val orderId: String)
+@ZLinkPacket("ContinueOrderWorkflowReq") data class ContinueOrderWorkflowReq(val orderId: String)
 
 data class RunOrderWorkflowMsg(val orderId: String)
 
 data class ContinueOrderWorkflowRes(val state: OrderState, val objectGeneration: Long? = null)
 
-@ZLinkPacket("RebuildOrderProjectionReq")
-data class RebuildOrderProjectionReq(val orderId: String)
+@ZLinkPacket("RebuildOrderProjectionReq") data class RebuildOrderProjectionReq(val orderId: String)
 
 data class RebuildOrderProjectionRes(val state: OrderState)
 

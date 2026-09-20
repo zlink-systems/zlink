@@ -68,9 +68,7 @@ function nameFor(kind: ZLinkFrameworkErrorKind): string {
 // Wrap the route dispatch once, ahead of the endpoints, so it covers every
 // call below it. Nothing else in the process is a framework error, so an error
 // of any other type is rethrown for the surface's own handler.
-export async function withZLinkErrorResponse(
-  next: () => Promise<HttpResult>
-): Promise<HttpResult> {
+export async function withZLinkErrorResponse(next: () => Promise<HttpResult>): Promise<HttpResult> {
   try {
     return await next();
   } catch (error: unknown) {

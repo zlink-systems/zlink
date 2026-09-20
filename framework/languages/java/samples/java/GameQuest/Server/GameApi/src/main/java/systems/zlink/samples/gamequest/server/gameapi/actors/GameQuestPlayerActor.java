@@ -1,10 +1,11 @@
 package systems.zlink.samples.gamequest.server.gameapi.actors;
 
-import java.util.concurrent.CompletableFuture;
-import java.util.concurrent.CompletionStage;
 import systems.zlink.framework.actors.ZLinkActor;
 import systems.zlink.framework.actors.ZLinkActorContext;
 import systems.zlink.samples.gamequest.shared.contracts.Messages;
+
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CompletionStage;
 
 public final class GameQuestPlayerActor implements ZLinkActor {
     private final String actorId;
@@ -27,12 +28,14 @@ public final class GameQuestPlayerActor implements ZLinkActor {
     public CompletionStage<Void> push(Messages.QuestProcessingMsg message) {
         CompletionStage<Void> sends = CompletableFuture.completedFuture(null);
         for (Messages.QuestProgressNotify notification : message.progressNotifications()) {
-            sends = sends.thenCompose(ignored ->
-                context.boundSession().send(notification).submit());
+            sends =
+                    sends.thenCompose(
+                            ignored -> context.boundSession().send(notification).submit());
         }
         for (Messages.QuestCompletedNotify notification : message.completedNotifications()) {
-            sends = sends.thenCompose(ignored ->
-                context.boundSession().send(notification).submit());
+            sends =
+                    sends.thenCompose(
+                            ignored -> context.boundSession().send(notification).submit());
         }
         return sends;
     }

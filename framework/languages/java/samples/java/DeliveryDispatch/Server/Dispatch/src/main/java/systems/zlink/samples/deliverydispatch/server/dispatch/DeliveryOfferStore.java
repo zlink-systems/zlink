@@ -1,5 +1,7 @@
 package systems.zlink.samples.deliverydispatch.server.dispatch;
 
+import systems.zlink.samples.deliverydispatch.shared.contracts.Messages;
+
 import java.time.Clock;
 import java.time.Duration;
 import java.time.Instant;
@@ -8,7 +10,6 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
-import systems.zlink.samples.deliverydispatch.shared.contracts.Messages;
 
 /**
  * The offers dispatch is waiting on. This is the whole of the waiting: no blocked thread and no
@@ -30,8 +31,9 @@ public final class DeliveryOfferStore {
     /** Records a new offer and returns its attempt number. */
     public int offer(Messages.AssignDeliveryMsg request, int candidateIndex, Duration timeout) {
         synchronized (gate) {
-            MutableOffer offer = offers.computeIfAbsent(
-                request.deliveryId(), ignored -> new MutableOffer(request));
+            MutableOffer offer =
+                    offers.computeIfAbsent(
+                            request.deliveryId(), ignored -> new MutableOffer(request));
             offer.request = request;
             offer.candidateIndex = candidateIndex;
             offer.attempt += 1;
@@ -43,8 +45,8 @@ public final class DeliveryOfferStore {
 
     /**
      * Closes the offer a decision belongs to and returns it. A decision naming another attempt
-     * arrived after the offer was reassigned, and an offer already settled has been answered —
-     * both are dropped.
+     * arrived after the offer was reassigned, and an offer already settled has been answered — both
+     * are dropped.
      */
     public Optional<DeliveryOffer> settle(String deliveryId, int attempt) {
         synchronized (gate) {
@@ -81,11 +83,10 @@ public final class DeliveryOfferStore {
 
     /** One delivery's offer in flight. The row decides what happens next. */
     public record DeliveryOffer(
-        Messages.AssignDeliveryMsg request,
-        int candidateIndex,
-        int attempt,
-        Instant deadline) {
-    }
+            Messages.AssignDeliveryMsg request,
+            int candidateIndex,
+            int attempt,
+            Instant deadline) {}
 
     private static final class MutableOffer {
         private Messages.AssignDeliveryMsg request;

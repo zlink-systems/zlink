@@ -1,8 +1,9 @@
 package systems.zlink.samples.deliverydispatch.server.customergateway;
 
+import systems.zlink.samples.deliverydispatch.shared.contracts.Messages;
+
 import java.util.HashMap;
 import java.util.Map;
-import systems.zlink.samples.deliverydispatch.shared.contracts.Messages;
 
 public final class CustomerActorDirectory {
     private final Object gate = new Object();
@@ -37,10 +38,11 @@ public final class CustomerActorDirectory {
         if (actor == null) {
             return;
         }
-        actor.push(new Messages.DeliveryStatusNotify(
-            status.deliveryId(),
-            status.status(),
-            status.courierId(),
-            status.occurredAt()));
+        actor.push(
+                new Messages.DeliveryStatusNotify(
+                        status.deliveryId(),
+                        status.status(),
+                        status.courierId(),
+                        status.occurredAt()));
     }
 }

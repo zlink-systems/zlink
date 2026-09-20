@@ -8,7 +8,8 @@ internal sealed record GameplayEvent(
     string Value,
     int Count,
     string SourceApi,
-    long CreatedAtUnixMs);
+    long CreatedAtUnixMs
+);
 
 internal static class GameplayDomain
 {
@@ -17,7 +18,8 @@ internal static class GameplayDomain
         string monsterId,
         string areaId,
         string idempotencyKey,
-        string sourceApi)
+        string sourceApi
+    )
     {
         return Create(playerId, idempotencyKey, "MonsterKilled", monsterId, 1, sourceApi);
     }
@@ -27,7 +29,8 @@ internal static class GameplayDomain
         string itemId,
         int count,
         string idempotencyKey,
-        string sourceApi)
+        string sourceApi
+    )
     {
         return Create(playerId, idempotencyKey, "ItemCollected", itemId, count, sourceApi);
     }
@@ -36,7 +39,8 @@ internal static class GameplayDomain
         string playerId,
         string areaId,
         string idempotencyKey,
-        string sourceApi)
+        string sourceApi
+    )
     {
         return Create(playerId, idempotencyKey, "AreaEntered", areaId, 1, sourceApi);
     }
@@ -47,14 +51,17 @@ internal static class GameplayDomain
         string eventType,
         string value,
         int count,
-        string sourceApi)
+        string sourceApi
+    )
     {
-        if (string.IsNullOrWhiteSpace(playerId)) throw new InvalidOperationException("Player id is required.");
+        if (string.IsNullOrWhiteSpace(playerId))
+            throw new InvalidOperationException("Player id is required.");
 
         if (string.IsNullOrWhiteSpace(idempotencyKey))
             throw new InvalidOperationException("Idempotency key is required.");
 
-        if (count <= 0) throw new InvalidOperationException("Count must be positive.");
+        if (count <= 0)
+            throw new InvalidOperationException("Count must be positive.");
 
         return new GameplayEvent(
             $"{playerId}-{idempotencyKey}",
@@ -64,6 +71,7 @@ internal static class GameplayDomain
             value,
             count,
             sourceApi,
-            DateTimeOffset.UtcNow.ToUnixTimeMilliseconds());
+            DateTimeOffset.UtcNow.ToUnixTimeMilliseconds()
+        );
     }
 }

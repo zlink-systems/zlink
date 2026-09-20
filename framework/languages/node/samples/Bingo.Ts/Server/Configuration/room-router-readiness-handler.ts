@@ -1,4 +1,9 @@
-import { Inject, Injectable, type OnApplicationBootstrap, type OnApplicationShutdown } from '@nestjs/common';
+import {
+  Inject,
+  Injectable,
+  type OnApplicationBootstrap,
+  type OnApplicationShutdown
+} from '@nestjs/common';
 import { ZLinkPeerState, type ZLinkRouteMeshRuntime } from '@zlink-systems/framework';
 import { ZLINK_ROUTE_MESH_RUNTIME } from '@zlink-systems/nestjs';
 import { BINGO_SAMPLE_CONFIG, type BingoSampleConfig } from './sample-config';
@@ -31,20 +36,28 @@ class RoomRouterReadinessHandler implements OnApplicationBootstrap, OnApplicatio
   }
 
   private async observePlayPeer(): Promise<void> {
-    const hasReadyPeer = (): boolean => this.routeRuntime.snapshot(SampleNames.roomSpotNode).peers
-      .some((peer) => peer.state === ZLinkPeerState.Ready);
+    const hasReadyPeer = (): boolean =>
+      this.routeRuntime
+        .snapshot(SampleNames.roomSpotNode)
+        .peers.some((peer) => peer.state === ZLinkPeerState.Ready);
     if (hasReadyPeer()) {
-      this.emit(`bingo-ready kind=peer-route node=${this.config.nodeId} peer=${this.config.peerNodeId}`);
+      this.emit(
+        `bingo-ready kind=peer-route node=${this.config.nodeId} peer=${this.config.peerNodeId}`
+      );
       return;
     }
     const observations = this.routeRuntime.observe(SampleNames.roomSpotNode, 64, this.stop.signal);
     if (hasReadyPeer()) {
-      this.emit(`bingo-ready kind=peer-route node=${this.config.nodeId} peer=${this.config.peerNodeId}`);
+      this.emit(
+        `bingo-ready kind=peer-route node=${this.config.nodeId} peer=${this.config.peerNodeId}`
+      );
       return;
     }
     for await (const observed of observations) {
       if (!observed.status.peers.some((peer) => peer.state === ZLinkPeerState.Ready)) continue;
-      this.emit(`bingo-ready kind=peer-route node=${this.config.nodeId} peer=${this.config.peerNodeId}`);
+      this.emit(
+        `bingo-ready kind=peer-route node=${this.config.nodeId} peer=${this.config.peerNodeId}`
+      );
       return;
     }
   }

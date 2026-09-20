@@ -29,10 +29,9 @@ async function waitForRouteMeshReady(
   } catch (error: unknown) {
     if (!signal.aborted) throw error;
   }
-  throw new Error(`SupportChat RouteMesh '${meshName}' did not become ready before startup deadline.`);
+  throw new Error(
+    `SupportChat RouteMesh '${meshName}' did not become ready before startup deadline.`
+  );
 }
 
-export {
-  waitForRouteMeshReady,
-  waitForShutdown
-};
+export { waitForRouteMeshReady, waitForShutdown };

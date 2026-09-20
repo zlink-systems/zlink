@@ -93,7 +93,11 @@ class TicTacToeMatch<TPlayer extends TicTacToePlayer = TicTacToePlayer> {
   }
 
   tick(now: number = Date.now()): TicTacToeTickChange {
-    if (this.status !== GameStatus.InProgress || this.turnDeadline === null || now < this.turnDeadline) {
+    if (
+      this.status !== GameStatus.InProgress ||
+      this.turnDeadline === null ||
+      now < this.turnDeadline
+    ) {
       return { state: this.snapshot(), changed: false };
     }
     this.status = GameStatus.TurnTimedOut;
@@ -118,11 +122,15 @@ class TicTacToeMatch<TPlayer extends TicTacToePlayer = TicTacToePlayer> {
   }
 
   xActorId(): string | null {
-    return [...this.players.values()].find((player) => player.mark === GameMarks.x)?.actorId ?? null;
+    return (
+      [...this.players.values()].find((player) => player.mark === GameMarks.x)?.actorId ?? null
+    );
   }
 
   oActorId(): string | null {
-    return [...this.players.values()].find((player) => player.mark === GameMarks.o)?.actorId ?? null;
+    return (
+      [...this.players.values()].find((player) => player.mark === GameMarks.o)?.actorId ?? null
+    );
   }
 
   advanceAfterMove(actorId: string, mark: string): void {
@@ -154,4 +162,10 @@ class TicTacToeMatch<TPlayer extends TicTacToePlayer = TicTacToePlayer> {
 }
 
 export { TicTacToeMatch };
-export type { JoinedPlayer, TicTacToeJoinChange, TicTacToeMoveChange, TicTacToePlayer, TicTacToeTickChange };
+export type {
+  JoinedPlayer,
+  TicTacToeJoinChange,
+  TicTacToeMoveChange,
+  TicTacToePlayer,
+  TicTacToeTickChange
+};

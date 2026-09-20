@@ -6,28 +6,37 @@ using Zlink.Framework.Contracts.Spots;
 namespace TicTacToe.Server.Play.Infrastructure.ZLink.Spots.EntrySpot.Handlers;
 
 internal sealed class PlayActorObserveMilestoneHandler(
-    ILogger<PlayActorObserveMilestoneHandler> logger)
-    : IZLinkEntrySpotActorRequestHandler<PlayEntrySpot, PlayActor, ObserveMilestoneReq, ObserveMilestoneRes>
+    ILogger<PlayActorObserveMilestoneHandler> logger
+)
+    : IZLinkEntrySpotActorRequestHandler<
+        PlayEntrySpot,
+        PlayActor,
+        ObserveMilestoneReq,
+        ObserveMilestoneRes
+    >
 {
     public async ValueTask<ObserveMilestoneRes> HandleAsync(
         PlayEntrySpot entrySpot,
         PlayActor actor,
         IZLinkMessageContext context,
         ObserveMilestoneReq message,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken
+    )
     {
         _ = message;
 
         logger.LogInformation(
             "actor: ObserveMilestoneReq received. actor={ActorId}",
-            actor.ActorId);
+            actor.ActorId
+        );
 
         await entrySpot.SubscribeMilestoneAsync(actor, cancellationToken);
 
         logger.LogInformation(
             "actor: ObserveMilestoneReq completed. actor={ActorId}, subscribed={Subscribed}",
             actor.ActorId,
-            true);
+            true
+        );
         return new ObserveMilestoneRes(true);
     }
 }

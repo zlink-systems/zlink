@@ -1,12 +1,17 @@
 import { ZoneState } from '../../../Domain/zone-state';
 import { Inject, Injectable, Scope } from '@nestjs/common';
-import {
-  ZLINK_ACTOR_CLIENT,
-  ZLINK_SPOT_PUBLISHER_CLIENT
-} from '@zlink-systems/nestjs';
+import { ZLINK_ACTOR_CLIENT, ZLINK_SPOT_PUBLISHER_CLIENT } from '@zlink-systems/nestjs';
 import { ZoneWorldNames, ZoneWorldSpec } from '../../../../../Shared/spec';
 import type { ZoneId } from '../../../../../Shared/spec';
-import { BotTickMsg, EnterZoneReq, EnterZoneRes, JoinWorldRes, ZoneChangedNotify, ZoneBorderEvent, ZoneStateNotify } from '../../../../../Shared/contracts';
+import {
+  BotTickMsg,
+  EnterZoneReq,
+  EnterZoneRes,
+  JoinWorldRes,
+  ZoneChangedNotify,
+  ZoneBorderEvent,
+  ZoneStateNotify
+} from '../../../../../Shared/contracts';
 import type {
   ZLinkActorClient,
   ZLinkMessage,
@@ -19,10 +24,7 @@ import type {
 import type { PlayerActor } from '../Actors/player-actor';
 import { DeliverZoneNotificationMsg } from '../Actors/player-actor';
 import { adjacentZones } from '../../../Domain/world';
-import {
-  BotTickHandler,
-  ZoneTickHandler
-} from '../Handlers/zone-runtime-handlers';
+import { BotTickHandler, ZoneTickHandler } from '../Handlers/zone-runtime-handlers';
 import { NodeRuntimeState } from '../../../Domain/node-runtime-state';
 
 interface ZoneParticipant {
@@ -79,15 +81,24 @@ class ZoneSpot implements ZLinkSpot<PlayerActor> {
   async onActorJoin(actorId: string, request: ZLinkMessage): Promise<ZLinkSpotActorJoinResult> {
     const enter = request.decode(EnterZoneReq);
     if (enter.playerId !== actorId) {
-      console.log(`zone admission rejected zone=${String(this.context.spotId)} player=${actorId} reason=player-id`);
+      console.log(
+        `zone admission rejected zone=${String(this.context.spotId)} player=${actorId} reason=player-id`
+      );
       return { accepted: false };
     }
     // --8<-- [start:doc-zw-admission]
     if (this.nodeState.rejectsArrival()) {
-      console.log(`zone admission rejected zone=${String(this.context.spotId)} player=${actorId} reason=maintenance`);
-      return { accepted: false, reply: new EnterZoneRes(String(this.context.spotId), 'ZoneMaintenance') };
+      console.log(
+        `zone admission rejected zone=${String(this.context.spotId)} player=${actorId} reason=maintenance`
+      );
+      return {
+        accepted: false,
+        reply: new EnterZoneRes(String(this.context.spotId), 'ZoneMaintenance')
+      };
     }
-    console.log(`zone admission accepted zone=${String(this.context.spotId)} player=${actorId} initial=${enter.initialEntry}`);
+    console.log(
+      `zone admission accepted zone=${String(this.context.spotId)} player=${actorId} initial=${enter.initialEntry}`
+    );
     this.pendingJoins.set(actorId, enter);
     return { accepted: true };
     // --8<-- [end:doc-zw-admission]
@@ -116,12 +127,14 @@ class ZoneSpot implements ZLinkSpot<PlayerActor> {
     this.nodeState.joined(actorId, participant.zoneId);
     this.requireState().enter(actorId, participant.x, participant.y, participant.isBot);
     if (!participant.isBot && !enter.initialEntry) {
-      await this.notifyActor(participant.actorId, new ZoneChangedNotify(
-        actorId,
-        participant.zoneId
-      ));
+      await this.notifyActor(
+        participant.actorId,
+        new ZoneChangedNotify(actorId, participant.zoneId)
+      );
     }
-    console.log(`zone player entered zone=${participant.zoneId} player=${actorId} initial=${enter.initialEntry}`);
+    console.log(
+      `zone player entered zone=${participant.zoneId} player=${actorId} initial=${enter.initialEntry}`
+    );
   }
 
   async onLeaveActor(actor: PlayerActor): Promise<void> {
@@ -145,13 +158,7 @@ class ZoneSpot implements ZLinkSpot<PlayerActor> {
     this.actors.set(actor.actorId, participant);
     this.nodeState.joined(actor.actorId, participant.zoneId);
     state.enter(actor.actorId, participant.x, participant.y, participant.isBot);
-    return new JoinWorldRes(
-      actor.actorId,
-      participant.zoneId,
-      participant.x,
-      participant.y,
-      null
-    );
+    return new JoinWorldRes(actor.actorId, participant.zoneId, participant.x, participant.y, null);
   }
 
   updatePosition(actorId: string, x: number, y: number): void {
@@ -176,18 +183,22 @@ class ZoneSpot implements ZLinkSpot<PlayerActor> {
     // adjacent Zone Spot.
     // --8<-- [start:doc-zw-border-publish]
     for (const adjacent of adjacentZones(state.zoneId)) {
-      await this.publisher.publish(
-        ZoneWorldNames.zoneMesh,
-        ZoneWorldNames.bridgeMesh,
-        ZoneWorldNames.borderTopic(state.zoneId, adjacent),
-        new ZoneBorderEvent(state.zoneId, adjacent, tick, state.borderBandFor(adjacent))
-      ).submit();
+      await this.publisher
+        .publish(
+          ZoneWorldNames.zoneMesh,
+          ZoneWorldNames.bridgeMesh,
+          ZoneWorldNames.borderTopic(state.zoneId, adjacent),
+          new ZoneBorderEvent(state.zoneId, adjacent, tick, state.borderBandFor(adjacent))
+        )
+        .submit();
     }
     // --8<-- [end:doc-zw-border-publish]
     await Promise.allSettled(
       [...this.actors.values()]
         .filter((actor) => !actor.isBot)
-        .map((actor) => this.notifyActor(actor.actorId, new ZoneStateNotify(state.zoneId, tick, visible)))
+        .map((actor) =>
+          this.notifyActor(actor.actorId, new ZoneStateNotify(state.zoneId, tick, visible))
+        )
     );
     for (const zoneId of state.expireStaleSnapshots()) {
       console.log(`border snapshot expired zone=${state.zoneId} source=${zoneId} tick=${tick}`);
@@ -196,7 +207,9 @@ class ZoneSpot implements ZLinkSpot<PlayerActor> {
 
   async pushHumans(payload: unknown): Promise<void> {
     await Promise.allSettled(
-      [...this.actors.values()].filter((actor) => !actor.isBot).map((actor) => this.notifyActor(actor.actorId, payload))
+      [...this.actors.values()]
+        .filter((actor) => !actor.isBot)
+        .map((actor) => this.notifyActor(actor.actorId, payload))
     );
   }
 
@@ -211,7 +224,9 @@ class ZoneSpot implements ZLinkSpot<PlayerActor> {
     const task = this.runBotTicks();
     this.botTickTask = task;
     void task.then(
-      () => { if (this.botTickTask === task) this.botTickTask = undefined; },
+      () => {
+        if (this.botTickTask === task) this.botTickTask = undefined;
+      },
       (error: unknown) => {
         this.botTickFailure = error;
         if (this.botTickTask === task) this.botTickTask = undefined;
@@ -224,18 +239,13 @@ class ZoneSpot implements ZLinkSpot<PlayerActor> {
       // Movement is owned by the Actor turn. The Spot timer only submits the
       // command, so it must not depend on a reply terminal before scheduling
       // the next tick.
-      await this.actorClient.sendToActor(
-        actor.actorId,
-        new BotTickMsg()
-      ).submit();
+      await this.actorClient.sendToActor(actor.actorId, new BotTickMsg()).submit();
     }
   }
 
   private async notifyActor(actorId: string, payload: unknown): Promise<void> {
     try {
-      await this.actorClient
-        .sendToActor(actorId, new DeliverZoneNotificationMsg(payload))
-        .submit();
+      await this.actorClient.sendToActor(actorId, new DeliverZoneNotificationMsg(payload)).submit();
     } catch (error) {
       // A repeated relocation that returns an actor to this node (ZW-B7) can
       // leave the first send resolving the previous tenure's cached route,
@@ -244,10 +254,10 @@ class ZoneSpot implements ZLinkSpot<PlayerActor> {
       // re-resolve retry reaches the committed owner. The framework never
       // resubmits on its own; retrying is an application decision.
       if (!isStaleRouteError(error)) throw error;
-      console.log(`actor notify re-resolved after stale route zone=${String(this.context.spotId)} player=${actorId}`);
-      await this.actorClient
-        .sendToActor(actorId, new DeliverZoneNotificationMsg(payload))
-        .submit();
+      console.log(
+        `actor notify re-resolved after stale route zone=${String(this.context.spotId)} player=${actorId}`
+      );
+      await this.actorClient.sendToActor(actorId, new DeliverZoneNotificationMsg(payload)).submit();
     }
   }
 

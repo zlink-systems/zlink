@@ -27,23 +27,30 @@ const GAMEQUEST_SAMPLE_CONFIG = Symbol.for('GAMEQUEST_SAMPLE_CONFIG');
 class GameQuestConfigurationModule {}
 Module({})(GameQuestConfigurationModule);
 
-function createGameQuestConfigurationModule(requiredKeys: readonly (keyof GameQuestServerConfig)[]): DynamicModule {
+function createGameQuestConfigurationModule(
+  requiredKeys: readonly (keyof GameQuestServerConfig)[]
+): DynamicModule {
   const configPath = readConfigPath(process.argv.slice(2));
   return {
     module: GameQuestConfigurationModule,
-    imports: [ConfigModule.forRoot({
-      cache: true,
-      ignoreEnvFile: true,
-      isGlobal: false,
-      load: [() => ({ sample: readSampleConfig(configPath) })],
-      skipProcessEnv: true,
-      validatePredefined: false
-    })],
-    providers: [{
-      provide: GAMEQUEST_SAMPLE_CONFIG,
-      inject: [ConfigService],
-      useFactory: (config: ConfigService) => validateSampleConfig(config.get('sample'), requiredKeys)
-    }],
+    imports: [
+      ConfigModule.forRoot({
+        cache: true,
+        ignoreEnvFile: true,
+        isGlobal: false,
+        load: [() => ({ sample: readSampleConfig(configPath) })],
+        skipProcessEnv: true,
+        validatePredefined: false
+      })
+    ],
+    providers: [
+      {
+        provide: GAMEQUEST_SAMPLE_CONFIG,
+        inject: [ConfigService],
+        useFactory: (config: ConfigService) =>
+          validateSampleConfig(config.get('sample'), requiredKeys)
+      }
+    ],
     exports: [GAMEQUEST_SAMPLE_CONFIG]
   };
 }
@@ -61,7 +68,10 @@ function readSampleConfig(configPath: string): unknown {
   return document.sample;
 }
 
-function validateSampleConfig(value: unknown, requiredKeys: readonly (keyof GameQuestServerConfig)[]): GameQuestServerConfig {
+function validateSampleConfig(
+  value: unknown,
+  requiredKeys: readonly (keyof GameQuestServerConfig)[]
+): GameQuestServerConfig {
   if (value === null || typeof value !== 'object' || Array.isArray(value)) {
     throw new Error("Configuration section 'sample' must be an object.");
   }

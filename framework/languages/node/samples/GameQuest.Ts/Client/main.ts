@@ -7,9 +7,15 @@ import { BrowserHttpClientFactory, runBrowserSample } from './browser-client-run
 
 async function main(): Promise<void> {
   const config = await loadSampleConfig();
-  const apiA = BrowserHttpClientFactory.create(config.apiAHttpUrl).timeout(SampleNames.clientTimeout).build();
-  const apiB = BrowserHttpClientFactory.create(config.apiBHttpUrl).timeout(SampleNames.clientTimeout).build();
-  const missionA = BrowserHttpClientFactory.create(config.missionAHttpUrl).timeout(SampleNames.clientTimeout).build();
+  const apiA = BrowserHttpClientFactory.create(config.apiAHttpUrl)
+    .timeout(SampleNames.clientTimeout)
+    .build();
+  const apiB = BrowserHttpClientFactory.create(config.apiBHttpUrl)
+    .timeout(SampleNames.clientTimeout)
+    .build();
+  const missionA = BrowserHttpClientFactory.create(config.missionAHttpUrl)
+    .timeout(SampleNames.clientTimeout)
+    .build();
   const apiAStream = createClient(config.apiAStreamEndpoint, 'api-a');
   const apiBStream = createClient(config.apiBStreamEndpoint, 'api-b');
   const apiBReconnectStream = createClient(config.apiBStreamEndpoint, 'api-b-reconnect');
@@ -47,7 +53,9 @@ function createClient(endpoint: string, name: string): ZlinkStreamConnector {
     heartbeat: { enabled: false }
   });
   client.onErrorReceived((error) => {
-    console.error(`stream-error sample=GameQuest client=${name} code=${error.code} message=${error.message}`);
+    console.error(
+      `stream-error sample=GameQuest client=${name} code=${error.code} message=${error.message}`
+    );
   });
   return client;
 }

@@ -24,7 +24,6 @@ object SampleNames {
     const val PlayerSessionActorType = "gamequest.player-session"
     const val CompletedMarker = "gamequest=completed"
     const val ServerEvidenceMarker = "gamequest-server-evidence=completed"
-
 }
 
 object SampleTimings {
@@ -44,24 +43,27 @@ data class SampleTopology(
     val redisEndpoint: String? = null,
     val redisKeyPrefix: String? = null,
 ) {
-    fun gameApi(): GameApi = GameApi(
-        required(instanceName, "instanceName"),
-        required(logDirectory, "logDirectory"),
-        required(streamEndpoint, "streamEndpoint"),
-        required(httpEndpoint, "httpEndpoint"),
-    )
+    fun gameApi(): GameApi =
+        GameApi(
+            required(instanceName, "instanceName"),
+            required(logDirectory, "logDirectory"),
+            required(streamEndpoint, "streamEndpoint"),
+            required(httpEndpoint, "httpEndpoint"),
+        )
 
-    fun questMission(): QuestMission = QuestMission(
-        required(instanceName, "instanceName"),
-        required(logDirectory, "logDirectory"),
-        required(channelEndpoint, "channelEndpoint"),
-        required(httpEndpoint, "httpEndpoint"),
-    )
+    fun questMission(): QuestMission =
+        QuestMission(
+            required(instanceName, "instanceName"),
+            required(logDirectory, "logDirectory"),
+            required(channelEndpoint, "channelEndpoint"),
+            required(httpEndpoint, "httpEndpoint"),
+        )
 
-    fun location(): Location = Location(
-        required(redisEndpoint, "redisEndpoint"),
-        required(redisKeyPrefix, "redisKeyPrefix"),
-    )
+    fun location(): Location =
+        Location(
+            required(redisEndpoint, "redisEndpoint"),
+            required(redisKeyPrefix, "redisKeyPrefix"),
+        )
 
     data class GameApi(
         val instanceName: String,
@@ -101,7 +103,7 @@ object SampleLocationStore {
             ZLinkRedisLocationOptions()
                 .setConnectionString(location.redisEndpoint)
                 .setKeyPrefix("${location.redisKeyPrefix}locations:")
-                .setCommandTimeout(Duration.ofMillis(500)),
+                .setCommandTimeout(Duration.ofMillis(500))
         )
     }
 }
@@ -123,6 +125,7 @@ class RedisSampleStore(topology: SampleTopology) : AutoCloseable {
     }
 
     fun bindingHistory(): List<String> = redis.smembers(key("binding-history")).sorted()
+
     fun activeBindings(): List<String> = redis.smembers(key("active-bindings")).sorted()
 
     fun writeProjection(playerId: String, projection: List<QuestProgress>) {
@@ -132,12 +135,14 @@ class RedisSampleStore(topology: SampleTopology) : AutoCloseable {
     fun readProjection(playerId: String): List<QuestProgress> {
         val value = redis.get(key("projection:$playerId"))
         if (value.isNullOrBlank()) return emptyList()
-        val type: JavaType = json.typeFactory.constructCollectionType(List::class.java, QuestProgress::class.java)
+        val type: JavaType =
+            json.typeFactory.constructCollectionType(List::class.java, QuestProgress::class.java)
         return json.readValue(value, type)
     }
 
     fun appendQuestEvents(events: List<StoredQuestEvent>) {
-        if (events.isNotEmpty()) redis.rpush(key("quest-events"), *events.map(json::writeValueAsString).toTypedArray())
+        if (events.isNotEmpty())
+            redis.rpush(key("quest-events"), *events.map(json::writeValueAsString).toTypedArray())
     }
 
     fun readQuestEvents(): List<StoredQuestEvent> =
@@ -154,7 +159,9 @@ class RedisSampleStore(topology: SampleTopology) : AutoCloseable {
     }
 
     private fun key(name: String): String = "${location.redisKeyPrefix}gamequest:$name"
-    private fun redisUri(endpoint: String): String = if (endpoint.startsWith("redis://")) endpoint else "redis://$endpoint"
+
+    private fun redisUri(endpoint: String): String =
+        if (endpoint.startsWith("redis://")) endpoint else "redis://$endpoint"
 }
 
 class GameplayStateStore(topology: SampleTopology) : AutoCloseable {
@@ -179,19 +186,29 @@ class GameplayStateStore(topology: SampleTopology) : AutoCloseable {
         increment(key("kills:$playerId"), monsterId, count)
 
     fun snapshot(playerId: String): GetGameplaySnapshotRes {
-        val kills = redis.hgetall(key("kills:$playerId")).map {
-            KillCountSnapshot(it.key, null, it.value.toInt())
-        }
-        val items = redis.hgetall(key("items:$playerId")).map {
-            ItemCountSnapshot(it.key, it.value.toInt())
-        }
+        val kills =
+            redis.hgetall(key("kills:$playerId")).map {
+                KillCountSnapshot(it.key, null, it.value.toInt())
+            }
+        val items =
+            redis.hgetall(key("items:$playerId")).map {
+                ItemCountSnapshot(it.key, it.value.toInt())
+            }
         val missions = redis.smembers(key("missions:$playerId")).sorted()
         val features = redis.smembers(key("features:$playerId")).sorted()
         val areas = redis.smembers(key("areas:$playerId")).sorted()
         return GetGameplaySnapshotRes(
-            playerId, kills, items, missions, features, areas,
-            kills.sumOf { it.count.toLong() } + items.sumOf { it.count.toLong() }
-                + missions.size + features.size + areas.size,
+            playerId,
+            kills,
+            items,
+            missions,
+            features,
+            areas,
+            kills.sumOf { it.count.toLong() } +
+                items.sumOf { it.count.toLong() } +
+                missions.size +
+                features.size +
+                areas.size,
         )
     }
 
@@ -205,5 +222,7 @@ class GameplayStateStore(topology: SampleTopology) : AutoCloseable {
     }
 
     private fun key(name: String) = "${location.redisKeyPrefix}gamequest:gameplay:$name"
-    private fun redisUri(endpoint: String) = if (endpoint.startsWith("redis://")) endpoint else "redis://$endpoint"
+
+    private fun redisUri(endpoint: String) =
+        if (endpoint.startsWith("redis://")) endpoint else "redis://$endpoint"
 }

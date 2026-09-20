@@ -15,28 +15,32 @@ data class SampleTopology(
     val supportSpotRouterEndpoint: String?,
     val streamEndpoint: String?,
 ) {
-    fun location(): SampleLocation = SampleLocation(
-        redisEndpoint = required(redisEndpoint, "redisEndpoint"),
-        redisKeyPrefix = required(redisKeyPrefix, "redisKeyPrefix"),
-    )
+    fun location(): SampleLocation =
+        SampleLocation(
+            redisEndpoint = required(redisEndpoint, "redisEndpoint"),
+            redisKeyPrefix = required(redisKeyPrefix, "redisKeyPrefix"),
+        )
 
     fun logDirectory(): String = required(logDirectory, "logDirectory")
 
-    fun api(): ApiTopology = ApiTopology(
-        channelEndpoint = required(apiChannelEndpoint, "apiChannelEndpoint"),
-        routerEndpoint = required(apiSpotRouterEndpoint, "apiSpotRouterEndpoint"),
-        httpEndpoint = required(apiHttpEndpoint, "apiHttpEndpoint"),
-    )
+    fun api(): ApiTopology =
+        ApiTopology(
+            channelEndpoint = required(apiChannelEndpoint, "apiChannelEndpoint"),
+            routerEndpoint = required(apiSpotRouterEndpoint, "apiSpotRouterEndpoint"),
+            httpEndpoint = required(apiHttpEndpoint, "apiHttpEndpoint"),
+        )
 
-    fun session(): SampleSessionNode = SampleSessionNode(
-        routerEndpoint = required(sessionRouterEndpoint, "sessionRouterEndpoint"),
-        streamEndpoint = required(streamEndpoint, "streamEndpoint"),
-    )
+    fun session(): SampleSessionNode =
+        SampleSessionNode(
+            routerEndpoint = required(sessionRouterEndpoint, "sessionRouterEndpoint"),
+            streamEndpoint = required(streamEndpoint, "streamEndpoint"),
+        )
 
-    fun support(): SupportTopology = SupportTopology(
-        channelEndpoint = required(supportChannelEndpoint, "supportChannelEndpoint"),
-        routerEndpoint = required(supportSpotRouterEndpoint, "supportSpotRouterEndpoint"),
-    )
+    fun support(): SupportTopology =
+        SupportTopology(
+            channelEndpoint = required(supportChannelEndpoint, "supportChannelEndpoint"),
+            routerEndpoint = required(supportSpotRouterEndpoint, "supportSpotRouterEndpoint"),
+        )
 
     companion object {
         fun configPath(args: Array<String>): String {
@@ -59,12 +63,6 @@ data class ApiTopology(
     val httpEndpoint: String,
 )
 
-data class SupportTopology(
-    val channelEndpoint: String,
-    val routerEndpoint: String,
-)
+data class SupportTopology(val channelEndpoint: String, val routerEndpoint: String)
 
-data class SampleSessionNode(
-    val routerEndpoint: String,
-    val streamEndpoint: String,
-)
+data class SampleSessionNode(val routerEndpoint: String, val streamEndpoint: String)

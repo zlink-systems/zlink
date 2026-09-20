@@ -51,31 +51,37 @@ import { joinAndWaitForOwnedState } from './join-readiness';
 
 async function main(): Promise<void> {
   const path = readConfigPath(process.argv.slice(2));
-  const config = validateConfiguration(JSON.parse(fs.readFileSync(path, 'utf8')) as unknown, 'client');
+  const config = validateConfiguration(
+    JSON.parse(fs.readFileSync(path, 'utf8')) as unknown,
+    'client'
+  );
   if (config.client === undefined) throw new Error('Client configuration is required.');
   const scenario = config.client.scenarios;
   if (scenario === undefined) throw new Error('A special scenario name is required.');
-  if (scenario === 'B4-C2-C3') await runFailureTransition(config.client.gatewayEndpoint, config.client.opsEndpoint);
+  if (scenario === 'B4-C2-C3')
+    await runFailureTransition(config.client.gatewayEndpoint, config.client.opsEndpoint);
   else if (scenario === 'LAYOUT') await runLayoutProbe(config.client.opsEndpoint);
   else if (scenario === 'PAIR') await runOpsProbe(config.client.opsEndpoint);
   else if (scenario === 'C4') await runSpotAlert(config.client.opsEndpoint);
   else if (scenario === 'D2') await runExtraSubscriber(config.client.opsEndpoint);
-  else if (scenario === 'E') await runMaintenance(config.client.gatewayEndpoint, config.client.opsEndpoint);
-  else if (scenario === 'E5-arm') await runMaintenanceArm(
-    config.client.opsEndpoint,
-    config.client.targetNodeId ?? NodeIds.east
-  );
-  else if (scenario === 'E5') await runMaintenanceRestore(
-    config.client.opsEndpoint,
-    config.client.targetNodeId ?? NodeIds.east
-  );
-  else if (scenario === 'G3' || scenario === 'G4') await runReplacementCreation(
-    config.client.gatewayEndpoint,
-    config.client.opsEndpoint,
-    scenario,
-    config.client.targetNodeId ?? NodeIds.east
-  );
-  else if (scenario === 'F') await runBots(config.client.gatewayEndpoint, config.client.opsEndpoint);
+  else if (scenario === 'E')
+    await runMaintenance(config.client.gatewayEndpoint, config.client.opsEndpoint);
+  else if (scenario === 'E5-arm')
+    await runMaintenanceArm(config.client.opsEndpoint, config.client.targetNodeId ?? NodeIds.east);
+  else if (scenario === 'E5')
+    await runMaintenanceRestore(
+      config.client.opsEndpoint,
+      config.client.targetNodeId ?? NodeIds.east
+    );
+  else if (scenario === 'G3' || scenario === 'G4')
+    await runReplacementCreation(
+      config.client.gatewayEndpoint,
+      config.client.opsEndpoint,
+      scenario,
+      config.client.targetNodeId ?? NodeIds.east
+    );
+  else if (scenario === 'F')
+    await runBots(config.client.gatewayEndpoint, config.client.opsEndpoint);
   else throw new Error(`Unknown special scenario '${scenario}'.`);
 }
 
@@ -92,22 +98,45 @@ async function runFailureTransition(gatewayEndpoint: string, opsEndpoint: string
     const sourceJoin = await joinAndWaitForOwnedState(source, 'player-b4-west');
     const targetJoin = await joinAndWaitForOwnedState(target, 'player-b4-east');
     await walkTo(source, sourceJoin.playerId, sourceJoin, boundary.observer.x, boundary.observer.y);
-    await walkTo(target, targetJoin.playerId, targetJoin, boundary.targetInside.x, boundary.targetInside.y);
-    await source.waitFor<ZoneStateNotify>(PacketNames.zoneStateNotify)
-      .where((message) => message.payload.players.some((player) =>
-        player.playerId === targetJoin.playerId && player.zoneId === pair.targetZoneId))
-      .timeout(20_000).submit();
+    await walkTo(
+      target,
+      targetJoin.playerId,
+      targetJoin,
+      boundary.targetInside.x,
+      boundary.targetInside.y
+    );
+    await source
+      .waitFor<ZoneStateNotify>(PacketNames.zoneStateNotify)
+      .where((message) =>
+        message.payload.players.some(
+          (player) => player.playerId === targetJoin.playerId && player.zoneId === pair.targetZoneId
+        )
+      )
+      .timeout(20_000)
+      .submit();
     zlinkStreamAssert.ensure(targetNode.registered, 'ZW-C3 did not begin from Registered=true.');
     zlinkStreamAssert.ensure(targetNode.connected, 'ZW-C2 did not begin from Connected=true.');
-    const expired = source.waitFor<ZoneStateNotify>(PacketNames.zoneStateNotify)
-      .where((message) => !message.payload.players.some((player) => player.zoneId === pair.targetZoneId))
-      .timeout(60_000).submit();
-    const unregistered = ops.waitFor<NodeStatusNotify>(PacketNames.nodeStatusNotify)
-      .where((message) => message.payload.nodeId === targetNode.nodeId && !message.payload.registered)
-      .timeout(60_000).submit();
-    const disconnected = ops.waitFor<NodeStatusNotify>(PacketNames.nodeStatusNotify)
-      .where((message) => message.payload.nodeId === targetNode.nodeId && !message.payload.connected)
-      .timeout(60_000).submit();
+    const expired = source
+      .waitFor<ZoneStateNotify>(PacketNames.zoneStateNotify)
+      .where(
+        (message) => !message.payload.players.some((player) => player.zoneId === pair.targetZoneId)
+      )
+      .timeout(60_000)
+      .submit();
+    const unregistered = ops
+      .waitFor<NodeStatusNotify>(PacketNames.nodeStatusNotify)
+      .where(
+        (message) => message.payload.nodeId === targetNode.nodeId && !message.payload.registered
+      )
+      .timeout(60_000)
+      .submit();
+    const disconnected = ops
+      .waitFor<NodeStatusNotify>(PacketNames.nodeStatusNotify)
+      .where(
+        (message) => message.payload.nodeId === targetNode.nodeId && !message.payload.connected
+      )
+      .timeout(60_000)
+      .submit();
     console.log(`scenario ZW-B4-C2-C3 armed node=${targetNode.nodeId}`);
     await Promise.all([
       withScenarioContext('ZW-B4 border snapshot expiry', expired),
@@ -115,7 +144,9 @@ async function runFailureTransition(gatewayEndpoint: string, opsEndpoint: string
       withScenarioContext('ZW-C3 report TTL expired status', unregistered)
     ]);
     const previousOwnerTerminal = await target
-      .request(new MessageFollowProbeReq(targetJoin.playerId, 'zw-g4-crashed-owner', 'crash-boundary'))
+      .request(
+        new MessageFollowProbeReq(targetJoin.playerId, 'zw-g4-crashed-owner', 'crash-boundary')
+      )
       .packetName(PacketNames.messageFollowProbeReq)
       .submit<MessageFollowProbeRes>();
     zlinkStreamAssert.ensure(
@@ -158,9 +189,11 @@ async function runSpotAlert(opsEndpoint: string): Promise<void> {
   const ops = connector(opsEndpoint);
   try {
     await ops.connect();
-    const alert = ops.waitFor<NodeAlertNotify>(PacketNames.nodeAlertNotify)
+    const alert = ops
+      .waitFor<NodeAlertNotify>(PacketNames.nodeAlertNotify)
       .where((message) => message.payload.kind === NodeAlertKinds.timerHandlerFailed)
-      .timeout(60_000).submit();
+      .timeout(60_000)
+      .submit();
     await watch(ops);
     console.log('scenario ZW-C4 armed');
     await alert;
@@ -175,8 +208,10 @@ async function runExtraSubscriber(opsEndpoint: string): Promise<void> {
   try {
     await ops.connect();
     await watch(ops);
-    await ops.request(new AnnounceWorldReq('extra-node-ready'))
-      .packetName(PacketNames.announceWorldReq).submit<AnnounceWorldRes>();
+    await ops
+      .request(new AnnounceWorldReq('extra-node-ready'))
+      .packetName(PacketNames.announceWorldReq)
+      .submit<AnnounceWorldRes>();
     console.log('scenario ZW-D2 published');
   } finally {
     await closeAll(ops);
@@ -234,8 +269,10 @@ async function verifyMaintainedLocalMovement(
   try {
     await game.connect();
     const joined = await joinAndWaitForOwnedState(game, 'player-e1');
-    const sameOwnerTarget = sourceNode.zones.find((zoneId) =>
-      zoneId !== sourceZoneId && (zoneId === ZoneIds.northEast || zoneId === ZoneIds.southWest));
+    const sameOwnerTarget = sourceNode.zones.find(
+      (zoneId) =>
+        zoneId !== sourceZoneId && (zoneId === ZoneIds.northEast || zoneId === ZoneIds.southWest)
+    );
     if (sameOwnerTarget === undefined) {
       throw new Error(`ZW-E4 Ops layout has no adjacent same-owner zone for '${sourceZoneId}'.`);
     }
@@ -262,7 +299,10 @@ async function verifyNewJoinRejection(
     await setMaintenance(ops, sourceNodeId, true);
     await newcomer.connect();
     const rejected = await join(newcomer, 'player-e3');
-    zlinkStreamAssert.ensure(rejected.error === MoveRejectReasons.zoneMaintenance, 'ZW-E2 entry was not rejected.');
+    zlinkStreamAssert.ensure(
+      rejected.error === MoveRejectReasons.zoneMaintenance,
+      'ZW-E2 entry was not rejected.'
+    );
     console.log('scenario ZW-E2 passed');
   } finally {
     await setMaintenance(ops, sourceNodeId, false);
@@ -277,10 +317,14 @@ async function runMaintenanceArm(opsEndpoint: string, targetNodeId: string): Pro
     const nodes = await watch(ops);
     const target = nodes.nodes.find((node) => node.nodeId === targetNodeId);
     if (target?.registered !== true || target.connected !== true) {
-      await ops.waitFor<NodeStatusNotify>(PacketNames.nodeStatusNotify)
-        .where((message) => message.payload.nodeId === targetNodeId
-          && message.payload.registered
-          && message.payload.connected)
+      await ops
+        .waitFor<NodeStatusNotify>(PacketNames.nodeStatusNotify)
+        .where(
+          (message) =>
+            message.payload.nodeId === targetNodeId &&
+            message.payload.registered &&
+            message.payload.connected
+        )
         .timeout(20_000)
         .submit();
     }
@@ -297,17 +341,25 @@ async function runMaintenanceRestore(opsEndpoint: string, targetNodeId: string):
   try {
     await ops.connect();
     // Status payloads have no incarnation token, so accept ready only after this connection observes the old node leave.
-    const targetStopped = ops.waitFor<NodeStatusNotify>(PacketNames.nodeStatusNotify)
-      .where((message) => message.payload.nodeId === targetNodeId
-        && (!message.payload.registered || !message.payload.connected))
+    const targetStopped = ops
+      .waitFor<NodeStatusNotify>(PacketNames.nodeStatusNotify)
+      .where(
+        (message) =>
+          message.payload.nodeId === targetNodeId &&
+          (!message.payload.registered || !message.payload.connected)
+      )
       .timeout(20_000)
       .submit();
     console.log('scenario ZW-E5 restore armed');
     await targetStopped;
-    const replacementReady = ops.waitFor<NodeStatusNotify>(PacketNames.nodeStatusNotify)
-      .where((message) => message.payload.nodeId === targetNodeId
-        && message.payload.registered
-        && message.payload.connected)
+    const replacementReady = ops
+      .waitFor<NodeStatusNotify>(PacketNames.nodeStatusNotify)
+      .where(
+        (message) =>
+          message.payload.nodeId === targetNodeId &&
+          message.payload.registered &&
+          message.payload.connected
+      )
       .timeout(20_000)
       .submit();
     console.log('scenario ZW-E5 replacement waiting');
@@ -350,25 +402,30 @@ async function runReplacementCreation(
         .request(new CreateFreshActorProbeReq(actorId))
         .packetName(PacketNames.createFreshActorProbeReq)
         .submit<CreateFreshActorProbeRes>();
-      zlinkStreamAssert.ensure(created.error === null, `ZW-${scenario} fresh Actor creation failed.`);
+      zlinkStreamAssert.ensure(
+        created.error === null,
+        `ZW-${scenario} fresh Actor creation failed.`
+      );
       const located = await game
         .request(new ActorLocationProbeReq(actorId))
         .packetName(PacketNames.actorLocationProbeReq)
         .submit<ActorLocationProbeRes>();
       zlinkStreamAssert.ensure(
-        located.error === null
-          && located.actorId === created.actorId
-          && located.objectGeneration === created.objectGeneration
-          && located.nodeRid === created.nodeRid,
+        located.error === null &&
+          located.actorId === created.actorId &&
+          located.objectGeneration === created.objectGeneration &&
+          located.nodeRid === created.nodeRid,
         `ZW-${scenario} fresh Actor routing probe did not match creation.`
       );
-      console.log(`fresh-actor-proof=${JSON.stringify({
-        scenario,
-        nodeId: emptyReport.nodeId,
-        actorId: created.actorId,
-        objectGeneration: created.objectGeneration,
-        nodeRid: created.nodeRid
-      })}`);
+      console.log(
+        `fresh-actor-proof=${JSON.stringify({
+          scenario,
+          nodeId: emptyReport.nodeId,
+          actorId: created.actorId,
+          objectGeneration: created.objectGeneration,
+          nodeRid: created.nodeRid
+        })}`
+      );
     }
   } finally {
     await closeAll(game, ops);
@@ -382,7 +439,8 @@ async function waitForNodeReport(
 ): Promise<WatchNodesRes['nodes'][number]> {
   const current = (await watch(ops)).nodes.find((node) => node.nodeId === nodeId);
   if (current !== undefined && predicate(current)) return current;
-  const observed = await ops.waitFor<NodeStatusNotify>(PacketNames.nodeStatusNotify)
+  const observed = await ops
+    .waitFor<NodeStatusNotify>(PacketNames.nodeStatusNotify)
     .where((message) => message.payload.nodeId === nodeId && predicate(message.payload))
     .timeout(20_000)
     .submit();
@@ -403,11 +461,16 @@ async function runBots(gatewayEndpoint: string, opsEndpoint: string): Promise<vo
     console.log('scenario ZW-F3 passed');
     // ZW-F4 is negative evidence the runner reads from the owner logs: this traffic walks
     // every push path (announce, rejected move, tick) while bots share the zone.
-    await ops.request(new AnnounceWorldReq('bots receive nothing')).packetName(PacketNames.announceWorldReq).submit();
+    await ops
+      .request(new AnnounceWorldReq('bots receive nothing'))
+      .packetName(PacketNames.announceWorldReq)
+      .submit();
     await expectRejected(game, -40, joined.y, MoveRejectReasons.outOfRange);
-    await game.waitFor<ZoneStateNotify>(PacketNames.zoneStateNotify)
+    await game
+      .waitFor<ZoneStateNotify>(PacketNames.zoneStateNotify)
       .where((message) => message.payload.players.some((player) => player.isBot))
-      .timeout(20_000).submit();
+      .timeout(20_000)
+      .submit();
     console.log('scenario ZW-F4 passed');
   } finally {
     await closeAll(game, ops);
@@ -422,24 +485,31 @@ async function verifyBotReversalOnRejection(
   ops: ZlinkStreamConnector,
   nodes: WatchNodesRes
 ): Promise<void> {
-  const boundary = await game.waitFor<ZoneStateNotify>(PacketNames.zoneStateNotify)
+  const boundary = await game
+    .waitFor<ZoneStateNotify>(PacketNames.zoneStateNotify)
     .where((message) => findAboutToCross(message.payload) !== undefined)
-    .timeout(30_000).submit();
+    .timeout(30_000)
+    .submit();
   const bot = findAboutToCross(boundary.payload);
   if (bot === undefined) throw new Error('ZW-F3 boundary observation lost its bot.');
   const eastbound = bot.zoneId === ZoneIds.northWest;
-  const targetNodeId = requireZoneOwner(nodes, eastbound ? ZoneIds.northEast : ZoneIds.northWest).nodeId;
+  const targetNodeId = requireZoneOwner(
+    nodes,
+    eastbound ? ZoneIds.northEast : ZoneIds.northWest
+  ).nodeId;
   await setMaintenance(ops, targetNodeId, true);
   try {
     let peak = bot.x;
-    const reversed = await game.waitFor<ZoneStateNotify>(PacketNames.zoneStateNotify)
+    const reversed = await game
+      .waitFor<ZoneStateNotify>(PacketNames.zoneStateNotify)
       .where((message) => {
         const current = message.payload.players.find((player) => player.playerId === bot.playerId);
         if (current === undefined) return false;
         if (eastbound ? current.x > peak : current.x < peak) peak = current.x;
         return eastbound ? current.x < peak : current.x > peak;
       })
-      .timeout(30_000).submit();
+      .timeout(30_000)
+      .submit();
     const after = requirePlayer(reversed.payload.players, bot.playerId);
     zlinkStreamAssert.ensure(
       eastbound ? after.x < peak : after.x > peak,
@@ -451,28 +521,48 @@ async function verifyBotReversalOnRejection(
 }
 
 function findAboutToCross(state: ZoneStateNotify): PlayerView | undefined {
-  return state.players.find((player) => player.isBot && player.playerId.endsWith('-x')
-    && ((player.zoneId === ZoneIds.northWest && player.x + ZoneWorldSpec.botStep >= ZoneWorldSpec.zoneSplit)
-      || (player.zoneId === ZoneIds.northEast && player.x - ZoneWorldSpec.botStep < ZoneWorldSpec.zoneSplit)));
+  return state.players.find(
+    (player) =>
+      player.isBot &&
+      player.playerId.endsWith('-x') &&
+      ((player.zoneId === ZoneIds.northWest &&
+        player.x + ZoneWorldSpec.botStep >= ZoneWorldSpec.zoneSplit) ||
+        (player.zoneId === ZoneIds.northEast &&
+          player.x - ZoneWorldSpec.botStep < ZoneWorldSpec.zoneSplit))
+  );
 }
 
 async function verifyRepresentativeBotMovement(game: ZlinkStreamConnector): Promise<void> {
   const representatives = [BotIds.northEastX, BotIds.southWestY] as const;
-  const initial = await game.waitFor<ZoneStateNotify>(PacketNames.zoneStateNotify)
-    .where((message) => representatives.every((playerId) => message.payload.players.some((player) =>
-      player.playerId === playerId && player.zoneId === ZoneIds.northWest)))
+  const initial = await game
+    .waitFor<ZoneStateNotify>(PacketNames.zoneStateNotify)
+    .where((message) =>
+      representatives.every((playerId) =>
+        message.payload.players.some(
+          (player) => player.playerId === playerId && player.zoneId === ZoneIds.northWest
+        )
+      )
+    )
     .timeout(30_000)
     .submit();
   const xBot = requirePlayer(initial.payload.players, BotIds.northEastX);
   const yBot = requirePlayer(initial.payload.players, BotIds.southWestY);
-  const xMoved = game.waitFor<ZoneStateNotify>(PacketNames.zoneStateNotify)
-    .where((message) => message.payload.players.some((player) =>
-      player.playerId === xBot.playerId && player.x !== xBot.x && player.y === xBot.y))
+  const xMoved = game
+    .waitFor<ZoneStateNotify>(PacketNames.zoneStateNotify)
+    .where((message) =>
+      message.payload.players.some(
+        (player) => player.playerId === xBot.playerId && player.x !== xBot.x && player.y === xBot.y
+      )
+    )
     .timeout(30_000)
     .submit();
-  const yMoved = game.waitFor<ZoneStateNotify>(PacketNames.zoneStateNotify)
-    .where((message) => message.payload.players.some((player) =>
-      player.playerId === yBot.playerId && player.x === yBot.x && player.y !== yBot.y))
+  const yMoved = game
+    .waitFor<ZoneStateNotify>(PacketNames.zoneStateNotify)
+    .where((message) =>
+      message.payload.players.some(
+        (player) => player.playerId === yBot.playerId && player.x === yBot.x && player.y !== yBot.y
+      )
+    )
     .timeout(30_000)
     .submit();
   const [xState, yState] = await Promise.all([xMoved, yMoved]);
@@ -482,7 +572,8 @@ async function verifyRepresentativeBotMovement(game: ZlinkStreamConnector): Prom
 
 function requirePlayer(players: readonly PlayerView[], playerId: string): PlayerView {
   const player = players.find((candidate) => candidate.playerId === playerId);
-  if (player === undefined) throw new Error(`Bot '${playerId}' disappeared from the observed zone.`);
+  if (player === undefined)
+    throw new Error(`Bot '${playerId}' disappeared from the observed zone.`);
   return player;
 }
 
@@ -505,7 +596,8 @@ function connector(endpoint: string): ZlinkStreamConnector {
 }
 
 async function join(client: ZlinkStreamConnector, playerId: string): Promise<JoinWorldRes> {
-  const reply = client.waitFor<JoinWorldRes>(PacketNames.joinWorldRes)
+  const reply = client
+    .waitFor<JoinWorldRes>(PacketNames.joinWorldRes)
     .where((message) => message.payload.playerId === playerId)
     .timeout(10_000)
     .submit();
@@ -514,13 +606,21 @@ async function join(client: ZlinkStreamConnector, playerId: string): Promise<Joi
 }
 
 async function watch(ops: ZlinkStreamConnector): Promise<WatchNodesRes> {
-  return await ops.request(new WatchNodesReq()).packetName(PacketNames.watchNodesReq).submit<WatchNodesRes>();
+  return await ops
+    .request(new WatchNodesReq())
+    .packetName(PacketNames.watchNodesReq)
+    .submit<WatchNodesRes>();
 }
 
 async function relocationPair(ops: ZlinkStreamConnector): Promise<RelocationPairRes> {
-  const pair = await ops.request(new RelocationPairReq())
-    .packetName(PacketNames.relocationPairReq).submit<RelocationPairRes>();
-  zlinkStreamAssert.ensure(pair.error === null, 'Ops did not report a cross-owner adjacent zone pair.');
+  const pair = await ops
+    .request(new RelocationPairReq())
+    .packetName(PacketNames.relocationPairReq)
+    .submit<RelocationPairRes>();
+  zlinkStreamAssert.ensure(
+    pair.error === null,
+    'Ops did not report a cross-owner adjacent zone pair.'
+  );
   return pair;
 }
 
@@ -533,25 +633,37 @@ function requireZoneOwner(nodes: WatchNodesRes, zoneId: string): WatchNodesRes['
 function boundaryRoute(targetZoneId: string) {
   if (targetZoneId === ZoneIds.northEast) {
     return {
-      observer: { x: 45, y: 25 }, sourceEdge: { x: 49, y: 25 }, targetInside: { x: 52, y: 25 }
+      observer: { x: 45, y: 25 },
+      sourceEdge: { x: 49, y: 25 },
+      targetInside: { x: 52, y: 25 }
     } as const;
   }
   if (targetZoneId === ZoneIds.southWest) {
     return {
-      observer: { x: 25, y: 45 }, sourceEdge: { x: 25, y: 49 }, targetInside: { x: 25, y: 52 }
+      observer: { x: 25, y: 45 },
+      sourceEdge: { x: 25, y: 49 },
+      targetInside: { x: 25, y: 52 }
     } as const;
   }
   throw new Error(`Unsupported Ops-selected target zone '${targetZoneId}'.`);
 }
 
 async function diagnose(ops: ZlinkStreamConnector, nodeId: string): Promise<NodeDiagnosticsRes> {
-  return await ops.request(new NodeDiagnosticsReq(nodeId))
-    .packetName(PacketNames.nodeDiagnosticsReq).submit<NodeDiagnosticsRes>();
+  return await ops
+    .request(new NodeDiagnosticsReq(nodeId))
+    .packetName(PacketNames.nodeDiagnosticsReq)
+    .submit<NodeDiagnosticsRes>();
 }
 
-async function setMaintenance(ops: ZlinkStreamConnector, nodeId: string, enabled: boolean): Promise<SetMaintenanceRes> {
-  const response = await ops.request(new SetMaintenanceReq(nodeId, enabled))
-    .packetName(PacketNames.setMaintenanceReq).submit<SetMaintenanceRes>();
+async function setMaintenance(
+  ops: ZlinkStreamConnector,
+  nodeId: string,
+  enabled: boolean
+): Promise<SetMaintenanceRes> {
+  const response = await ops
+    .request(new SetMaintenanceReq(nodeId, enabled))
+    .packetName(PacketNames.setMaintenanceReq)
+    .submit<SetMaintenanceRes>();
   //  Ops commits the desired state before it tries the owner-consistent
   //  channel to the node, so `nodeUnavailable` still means the state was
   //  recorded - a node that is between transport connections reads it back
@@ -562,9 +674,13 @@ async function setMaintenance(ops: ZlinkStreamConnector, nodeId: string, enabled
     `Maintenance request for '${nodeId}' failed.`
   );
   if (response.error !== null) return response;
-  const observed = ops.waitFor<NodeStatusNotify>(PacketNames.nodeStatusNotify)
-    .where((message) => message.payload.nodeId === nodeId && message.payload.maintenance === enabled)
-    .timeout(20_000).submit();
+  const observed = ops
+    .waitFor<NodeStatusNotify>(PacketNames.nodeStatusNotify)
+    .where(
+      (message) => message.payload.nodeId === nodeId && message.payload.maintenance === enabled
+    )
+    .timeout(20_000)
+    .submit();
   await withScenarioContext(`maintenance status ${nodeId}=${enabled}`, observed);
   return response;
 }
@@ -574,7 +690,11 @@ async function resetMaintenance(ops: ZlinkStreamConnector): Promise<void> {
   await setMaintenance(ops, NodeIds.east, false);
 }
 
-async function expectMaintenanceRejection(client: ZlinkStreamConnector, x: number, y: number): Promise<void> {
+async function expectMaintenanceRejection(
+  client: ZlinkStreamConnector,
+  x: number,
+  y: number
+): Promise<void> {
   await expectRejected(client, x, y, MoveRejectReasons.zoneMaintenance);
 }
 
@@ -584,9 +704,11 @@ async function expectRejected(
   y: number,
   reason: string
 ): Promise<void> {
-  const rejected = client.waitFor<MoveRejectedNotify>(PacketNames.moveRejectedNotify)
+  const rejected = client
+    .waitFor<MoveRejectedNotify>(PacketNames.moveRejectedNotify)
     .where((message) => message.payload.reason === reason)
-    .timeout(20_000).submit();
+    .timeout(20_000)
+    .submit();
   await client.send(new MoveMsg(x, y)).packetName(PacketNames.moveMsg).submit();
   await withScenarioContext(`move rejection ${reason} at ${x},${y}`, rejected);
 }
@@ -621,22 +743,46 @@ async function moveAcrossZoneAndWait(
   y: number
 ): Promise<void> {
   const targetZone = zoneOf(x, y);
-  const changed = client.waitFor<ZoneChangedNotify>(PacketNames.zoneChangedNotify)
-    .where((message) => message.payload.playerId === playerId && message.payload.zoneId === targetZone)
-    .timeout(20_000).submit();
-  const settled = client.waitFor<ZoneStateNotify>(PacketNames.zoneStateNotify)
-    .where((message) => message.payload.zoneId === targetZone && message.payload.players.some((player) =>
-      player.playerId === playerId && player.x === x && player.y === y))
-    .timeout(20_000).submit();
+  const changed = client
+    .waitFor<ZoneChangedNotify>(PacketNames.zoneChangedNotify)
+    .where(
+      (message) => message.payload.playerId === playerId && message.payload.zoneId === targetZone
+    )
+    .timeout(20_000)
+    .submit();
+  const settled = client
+    .waitFor<ZoneStateNotify>(PacketNames.zoneStateNotify)
+    .where(
+      (message) =>
+        message.payload.zoneId === targetZone &&
+        message.payload.players.some(
+          (player) => player.playerId === playerId && player.x === x && player.y === y
+        )
+    )
+    .timeout(20_000)
+    .submit();
   await client.send(new MoveMsg(x, y)).packetName(PacketNames.moveMsg).submit();
-  await withScenarioContext(`player ${playerId} zone ${targetZone}`, Promise.all([changed, settled]));
+  await withScenarioContext(
+    `player ${playerId} zone ${targetZone}`,
+    Promise.all([changed, settled])
+  );
 }
 
-async function moveAndWait(client: ZlinkStreamConnector, playerId: string, x: number, y: number): Promise<void> {
-  const observed = client.waitFor<ZoneStateNotify>(PacketNames.zoneStateNotify)
-    .where((message) => message.payload.players.some((player) =>
-      player.playerId === playerId && player.x === x && player.y === y))
-    .timeout(20_000).submit();
+async function moveAndWait(
+  client: ZlinkStreamConnector,
+  playerId: string,
+  x: number,
+  y: number
+): Promise<void> {
+  const observed = client
+    .waitFor<ZoneStateNotify>(PacketNames.zoneStateNotify)
+    .where((message) =>
+      message.payload.players.some(
+        (player) => player.playerId === playerId && player.x === x && player.y === y
+      )
+    )
+    .timeout(20_000)
+    .submit();
   await client.send(new MoveMsg(x, y)).packetName(PacketNames.moveMsg).submit();
   await withScenarioContext(`player ${playerId} position ${x},${y}`, observed);
 }
@@ -650,7 +796,9 @@ async function withScenarioContext<T>(description: string, observed: Promise<T>)
 }
 
 function stepToward(value: number, target: number): number {
-  return value === target ? value : value + Math.sign(target - value) * Math.min(5, Math.abs(target - value));
+  return value === target
+    ? value
+    : value + Math.sign(target - value) * Math.min(5, Math.abs(target - value));
 }
 
 async function closeAll(...clients: ZlinkStreamConnector[]): Promise<void> {

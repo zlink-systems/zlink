@@ -246,7 +246,7 @@ frame — such as the typed payload envelope — use it.
 |---|---|
 | `discriminators` | the list of values that select a case. Each entry's `source` gives the origin — the string `"wire"` (a value read immediately before this layout, whose layout is the entry's `$ref`), the object `{ "enclosingField": "<field>" }` (a field already read from the struct containing this union), the object `{ "context": "<name>" }` (a name in `semanticContexts`) |
 | `bodyLengthType`, `bodyLengthCovers` | a length prefix before the selected case and its coverage (`selected-case`). A union without them places the case directly, with no length prefix |
-| `cases` | a list of `{ "when": { discriminator: value, … }, "fields": [...] }`. Every discriminator is assigned exactly once |
+| `cases` | a list of `{ "when": { discriminator: value, … }, "fields": [...], "constraints": [...] }`. Every discriminator is assigned exactly once. `constraints` is optional and applies the same kinds as a struct's `constraints` (§4.5) to that case's fields |
 | `otherwise` | when no case matches — `protocol-error` (reject) or an explicit field list `{ "fields": [...] }` (the current schema uses only the empty list) |
 | `trailingBytes` | `forbidden` |
 | `presence`, `release` | literals stating when the union appears and when it is released. No effect on layout |

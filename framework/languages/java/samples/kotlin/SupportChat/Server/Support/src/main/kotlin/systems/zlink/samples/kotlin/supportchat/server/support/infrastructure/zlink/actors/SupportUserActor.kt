@@ -1,25 +1,21 @@
 package systems.zlink.samples.kotlin.supportchat.server.support.infrastructure.zlink.actors
 
-
-import systems.zlink.framework.actors.ZLinkActorJoinOperationId
+import java.util.concurrent.CompletableFuture
+import java.util.concurrent.CompletionStage
 import systems.zlink.framework.actors.ZLinkActor
 import systems.zlink.framework.actors.ZLinkActorContext
 import systems.zlink.framework.actors.ZLinkActorJoinCompletion
-import systems.zlink.samples.kotlin.supportchat.server.configuration.SampleTimings
-import systems.zlink.samples.kotlin.supportchat.server.configuration.SampleNames
-import systems.zlink.samples.kotlin.supportchat.server.configuration.SupportChatRoles
+import systems.zlink.framework.actors.ZLinkActorJoinOperationId
 import systems.zlink.samples.kotlin.supportchat.server.configuration.ConversationStatuses
+import systems.zlink.samples.kotlin.supportchat.server.configuration.SampleNames
+import systems.zlink.samples.kotlin.supportchat.server.configuration.SampleTimings
+import systems.zlink.samples.kotlin.supportchat.server.configuration.SupportChatRoles
+import systems.zlink.samples.kotlin.supportchat.shared.contracts.ConversationState
+import systems.zlink.samples.kotlin.supportchat.shared.contracts.JoinConversationFailedNotify
 import systems.zlink.samples.kotlin.supportchat.shared.contracts.JoinConversationReq
 import systems.zlink.samples.kotlin.supportchat.shared.contracts.JoinConversationRes
-import systems.zlink.samples.kotlin.supportchat.shared.contracts.JoinConversationFailedNotify
-import java.util.concurrent.CompletionStage
-import java.util.concurrent.CompletableFuture
-import systems.zlink.samples.kotlin.supportchat.shared.contracts.ConversationState
 
-class SupportUserActor(
-    val actorId: String,
-    private val context: ZLinkActorContext,
-) : ZLinkActor {
+class SupportUserActor(val actorId: String, private val context: ZLinkActorContext) : ZLinkActor {
     var displayName: String = actorId
         private set
 
@@ -31,16 +27,13 @@ class SupportUserActor(
 
     var conversationId: String = ""
         private set
+
     private var pendingConversationId: String? = null
     private val completedJoinOperations = mutableSetOf<ZLinkActorJoinOperationId>()
 
     override fun context(): ZLinkActorContext = context
 
-    fun setIdentity(
-        displayName: String,
-        role: String,
-        participantId: String,
-    ) {
+    fun setIdentity(displayName: String, role: String, participantId: String) {
         this.displayName = displayName
         this.role = role
         this.participantId = participantId
@@ -56,12 +49,9 @@ class SupportUserActor(
         pendingConversationId = conversationId.ifBlank { null }
     }
 
-    fun completedJoinOperations(): Set<ZLinkActorJoinOperationId> =
-        completedJoinOperations.toSet()
+    fun completedJoinOperations(): Set<ZLinkActorJoinOperationId> = completedJoinOperations.toSet()
 
-    fun restoreCompletedJoinOperations(
-        operationIds: Collection<ZLinkActorJoinOperationId>,
-    ) {
+    fun restoreCompletedJoinOperations(operationIds: Collection<ZLinkActorJoinOperationId>) {
         completedJoinOperations.addAll(operationIds)
     }
 
@@ -72,30 +62,32 @@ class SupportUserActor(
     ): JoinConversationRes {
         check(pendingConversationId == null) { "A conversation join is already pending" }
         pendingConversationId = conversationId
-        context.joinSpot(conversationId, request)
-            .timeout(SampleTimings.RequestTimeout)
-            .defer()
+        context.joinSpot(conversationId, request).timeout(SampleTimings.RequestTimeout).defer()
         return JoinConversationRes(
             scheduled = true,
-            state = ConversationState(
-                conversationId = conversationId,
-                subject = subject,
-                status = ConversationStatuses.WaitingForAgent,
-                customerActorId = if (request.role == SupportChatRoles.Customer) request.participantId else "",
-                agentActorId = null,
-                lastMessageSeq = 0,
-                lastMessageAtUnixMs = null,
-                idleDeadlineUnixMs = null,
-            ),
+            state =
+                ConversationState(
+                    conversationId = conversationId,
+                    subject = subject,
+                    status = ConversationStatuses.WaitingForAgent,
+                    customerActorId =
+                        if (request.role == SupportChatRoles.Customer) request.participantId
+                        else "",
+                    agentActorId = null,
+                    lastMessageSeq = 0,
+                    lastMessageAtUnixMs = null,
+                    idleDeadlineUnixMs = null,
+                ),
         )
     }
 
     override fun onJoinCompleted(completion: ZLinkActorJoinCompletion): CompletionStage<Void> {
-        val operationId = when (completion) {
-            is ZLinkActorJoinCompletion.Accepted -> completion.operationId()
-            is ZLinkActorJoinCompletion.Rejected -> completion.operationId()
-            is ZLinkActorJoinCompletion.Failed -> completion.operationId()
-        }
+        val operationId =
+            when (completion) {
+                is ZLinkActorJoinCompletion.Accepted -> completion.operationId()
+                is ZLinkActorJoinCompletion.Rejected -> completion.operationId()
+                is ZLinkActorJoinCompletion.Failed -> completion.operationId()
+            }
         if (!completedJoinOperations.add(operationId)) {
             return CompletableFuture.completedFuture(null)
         }
@@ -108,19 +100,15 @@ class SupportUserActor(
         return when (completion) {
             is ZLinkActorJoinCompletion.Accepted -> CompletableFuture.completedFuture(null)
             is ZLinkActorJoinCompletion.Rejected ->
-                context.boundSession()
+                context
+                    .boundSession()
                     .send(JoinConversationFailedNotify(pending, "Rejected", false))
                     .metadata(SampleNames.ConversationIdMetadataKey, pending)
                     .submit()
             is ZLinkActorJoinCompletion.Failed ->
-                context.boundSession()
-                    .send(
-                        JoinConversationFailedNotify(
-                            pending,
-                            completion.kind().name,
-                            false,
-                        ),
-                    )
+                context
+                    .boundSession()
+                    .send(JoinConversationFailedNotify(pending, completion.kind().name, false))
                     .metadata(SampleNames.ConversationIdMetadataKey, pending)
                     .submit()
         }

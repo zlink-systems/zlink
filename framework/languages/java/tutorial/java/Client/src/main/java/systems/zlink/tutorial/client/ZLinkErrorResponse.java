@@ -5,6 +5,7 @@ import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
+
 import systems.zlink.framework.errors.ZLinkFrameworkErrorKind;
 import systems.zlink.framework.errors.ZLinkFrameworkException;
 
@@ -55,13 +56,12 @@ public class ZLinkErrorResponse {
     @ExceptionHandler(ZLinkFrameworkException.class)
     ResponseEntity<Body> frameworkError(ZLinkFrameworkException error) {
         return ResponseEntity.status(statusFor(error.kind()))
-            .contentType(MediaType.APPLICATION_JSON)
-            .body(new Body(nameFor(error.kind()), error.getMessage()));
+                .contentType(MediaType.APPLICATION_JSON)
+                .body(new Body(nameFor(error.kind()), error.getMessage()));
     }
 
     // Same body as the other languages: the kind's name, then the message the
     // framework raised.
-    record Body(String error, String message) {
-    }
+    record Body(String error, String message) {}
 }
 // --8<-- [end:error-mapping]

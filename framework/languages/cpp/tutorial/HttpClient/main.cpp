@@ -54,10 +54,9 @@ fw::task_t<int> run ()
     try {
         // --8<-- [start:http-client-create]
         // The client is shared by the sequential examples and destroyed at program exit.
-        auto client =
-          hc::client_t::create ("http://127.0.0.1:5180")
-            .timeout (std::chrono::seconds (3))
-            .build ();
+        auto client = hc::client_t::create ("http://127.0.0.1:5180")
+                        .timeout (std::chrono::seconds (3))
+                        .build ();
         // --8<-- [end:http-client-create]
 
         // --8<-- [start:http-first-request]
@@ -70,42 +69,30 @@ fw::task_t<int> run ()
         // --8<-- [start:http-request-shaping]
         // The request overrides both a header and its timeout; the admin client has another
         // base URL.
-        const auto status =
-          co_await client
-            .get ("/ops/nodes/game-server-1/status")
-            .header ("x-trace-id", "tutorial-1")
-            .timeout (std::chrono::seconds (5))
-            .async<node_status_t> ();
-        auto admin =
-          hc::client_t::create ("http://127.0.0.1:5181")
-            .basic_auth ("ops", "tutorial-admin")
-            .build ();
-        const auto weight =
-          co_await admin
-            .post ("/admin/channels/profile/weight")
-            .query ("value", "2")
-            .async<weight_response_t> ();
+        const auto status = co_await client.get ("/ops/nodes/game-server-1/status")
+                              .header ("x-trace-id", "tutorial-1")
+                              .timeout (std::chrono::seconds (5))
+                              .async<node_status_t> ();
+        auto admin = hc::client_t::create ("http://127.0.0.1:5181")
+                       .basic_auth ("ops", "tutorial-admin")
+                       .build ();
+        const auto weight = co_await admin.post ("/admin/channels/profile/weight")
+                              .query ("value", "2")
+                              .async<weight_response_t> ();
         std::cout << "request shaping: status " << status.status << " weight " << weight.body.weight
                   << std::endl;
         // --8<-- [end:http-request-shaping]
 
         // --8<-- [start:http-json-body]
         // The room id is state shared by the room create, chat, and later room requests.
-        const auto player =
-          co_await client
-            .post ("/players/p2")
-            .body (create_player_t{"rookie"})
-            .async<std::string> ();
+        const auto player = co_await client.post ("/players/p2")
+                              .body (create_player_t{"rookie"})
+                              .async<std::string> ();
         const auto room =
-          co_await client
-            .post ("/rooms")
-            .body (open_room_t{"tutorial-room"})
-            .async<std::string> ();
-        const auto chat =
-          co_await client
-            .post ("/rooms/" + room.body + "/chat")
-            .body (post_chat_t{"p2", "hello"})
-            .async_raw ();
+          co_await client.post ("/rooms").body (open_room_t{"tutorial-room"}).async<std::string> ();
+        const auto chat = co_await client.post ("/rooms/" + room.body + "/chat")
+                            .body (post_chat_t{"p2", "hello"})
+                            .async_raw ();
         const auto room_id = room.body;
         std::cout << "json body: player " << player.status << " room " << room_id << " chat "
                   << chat.status << std::endl;
@@ -123,9 +110,7 @@ fw::task_t<int> run ()
         // --8<-- [start:http-compressed-response]
         // compression() asks the server for gzip and removes content-encoding after decoding.
         auto compressed_client =
-          hc::client_t::create ("http://127.0.0.1:5180")
-            .compression ()
-            .build ();
+          hc::client_t::create ("http://127.0.0.1:5180").compression ().build ();
         const auto compressed =
           co_await compressed_client.get ("/rooms/" + room_id).async<room_state_t> ();
         const bool encoding_removed = compressed.headers.count ("content-encoding") == 0;
@@ -135,14 +120,11 @@ fw::task_t<int> run ()
 
         // --8<-- [start:http-redirect]
         // followRedirects() follows the path-absolute Location from the legacy route.
-        (void) co_await client
-          .post ("/players/p1")
+        (void) co_await client.post ("/players/p1")
           .body (create_player_t{"rookie"})
           .async<std::string> ();
         auto redirect_client =
-          hc::client_t::create ("http://127.0.0.1:5180")
-            .follow_redirects ()
-            .build ();
+          hc::client_t::create ("http://127.0.0.1:5180").follow_redirects ().build ();
         const auto redirected = co_await redirect_client.get ("/player/p1").async<player_info_t> ();
         std::cout << "redirect: " << redirected.status << " " << redirected.body.player_id
                   << std::endl;
@@ -152,19 +134,15 @@ fw::task_t<int> run ()
         // The admin endpoint uses a separate base URL, so two clients show the 401 and 200 paths.
         auto unauthenticated_admin = hc::client_t::create ("http://127.0.0.1:5181").build ();
         const auto without_auth =
-          co_await unauthenticated_admin
-            .post ("/admin/channels/profile/weight")
+          co_await unauthenticated_admin.post ("/admin/channels/profile/weight")
             .query ("value", "2")
             .async_raw ();
-        auto authenticated_admin =
-          hc::client_t::create ("http://127.0.0.1:5181")
-            .basic_auth ("ops", "tutorial-admin")
-            .build ();
-        const auto with_auth =
-          co_await authenticated_admin
-            .post ("/admin/channels/profile/weight")
-            .query ("value", "2")
-            .async_raw ();
+        auto authenticated_admin = hc::client_t::create ("http://127.0.0.1:5181")
+                                     .basic_auth ("ops", "tutorial-admin")
+                                     .build ();
+        const auto with_auth = co_await authenticated_admin.post ("/admin/channels/profile/weight")
+                                 .query ("value", "2")
+                                 .async_raw ();
         std::cout << "basic auth: without " << without_auth.status << " with " << with_auth.status
                   << std::endl;
         // --8<-- [end:http-basic-auth]
@@ -174,8 +152,8 @@ fw::task_t<int> run ()
         // chunk.
         std::size_t chunks = 0;
         std::size_t bytes = 0;
-        (void) co_await client.get ("/rooms/" + room_id + "/export").download (
-          [&] (std::string_view chunk) {
+        (void) co_await client.get ("/rooms/" + room_id + "/export")
+          .download ([&] (std::string_view chunk) {
               ++chunks;
               bytes += chunk.size ();
           });
@@ -189,17 +167,15 @@ fw::task_t<int> run ()
           "{\"playerId\":\"p2\",\"text\":\"import-two\"}\n",
           "{\"playerId\":\"p2\",\"text\":\"import-three\"}\n"};
         std::size_t next_chunk = 0;
-        const auto imported =
-          co_await client
-            .post ("/rooms/" + room_id + "/import")
-            .body_stream (
-              [&] () -> std::optional<std::string> {
-                  if (next_chunk == import_chunks.size ())
-                      return std::nullopt;
-                  return import_chunks[next_chunk++];
-              },
-              "application/x-ndjson")
-            .async<import_response_t> ();
+        const auto imported = co_await client.post ("/rooms/" + room_id + "/import")
+                                .body_stream (
+                                  [&] () -> std::optional<std::string> {
+                                      if (next_chunk == import_chunks.size ())
+                                          return std::nullopt;
+                                      return import_chunks[next_chunk++];
+                                  },
+                                  "application/x-ndjson")
+                                .async<import_response_t> ();
         std::cout << "upload stream: imported " << imported.body.imported << std::endl;
         // --8<-- [end:http-upload-stream]
 
@@ -207,8 +183,7 @@ fw::task_t<int> run ()
         // Typed status failures are InternalFailure; a refused TCP connection is Unavailable.
         auto bad_request = fw::framework_error_kind_t::internal_failure;
         try {
-            (void) co_await client
-              .post ("/players/p3")
+            (void) co_await client.post ("/players/p3")
               .body ("not-json", "text/plain")
               .async<player_info_t> ();
         }

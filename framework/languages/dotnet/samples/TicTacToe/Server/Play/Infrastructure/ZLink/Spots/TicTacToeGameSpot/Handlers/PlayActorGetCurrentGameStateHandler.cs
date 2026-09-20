@@ -6,26 +6,24 @@ using Zlink.Framework.Contracts.Spots;
 namespace TicTacToe.Server.Play.Infrastructure.ZLink.Spots.TicTacToeGameSpot.Handlers;
 
 internal sealed class PlayActorGetCurrentGameStateHandler(
-    ILogger<PlayActorGetCurrentGameStateHandler> logger)
-    : IZLinkSpotActorSendHandler<
-        TicTacToeGame,
-        PlayActor,
-        JoinGameMsg>
+    ILogger<PlayActorGetCurrentGameStateHandler> logger
+) : IZLinkSpotActorSendHandler<TicTacToeGame, PlayActor, JoinGameMsg>
 {
     public async ValueTask HandleAsync(
         TicTacToeGame spot,
         PlayActor actor,
         IZLinkMessageContext context,
         JoinGameMsg message,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken
+    )
     {
         var state = spot.GetCurrentState(actor, message.RoomId);
-        await actor.Context.BoundSession.Send(new JoinGameNotify(state))
-            .Async(cancellationToken);
+        await actor.Context.BoundSession.Send(new JoinGameNotify(state)).Async(cancellationToken);
 
         logger.LogInformation(
             "game spot: current state returned to reconnected actor. actor={ActorId}, roomId={RoomId}",
             actor.ActorId,
-            state.RoomId);
+            state.RoomId
+        );
     }
 }

@@ -1,13 +1,12 @@
 package systems.zlink.samples.kotlin.shoppingmall.server.configuration
 
-
-import java.nio.channels.FileLock
 import com.fasterxml.jackson.databind.JsonNode
 import com.fasterxml.jackson.databind.ObjectMapper
 import com.fasterxml.jackson.databind.node.ArrayNode
 import com.fasterxml.jackson.databind.node.ObjectNode
 import com.fasterxml.jackson.module.kotlin.registerKotlinModule
 import java.nio.channels.FileChannel
+import java.nio.channels.FileLock
 import java.nio.charset.StandardCharsets
 import java.nio.file.Files
 import java.nio.file.Path
@@ -20,10 +19,9 @@ import systems.zlink.samples.kotlin.shoppingmall.shared.contracts.OrderState
 import systems.zlink.samples.kotlin.shoppingmall.shared.contracts.PaymentMethodSeed
 
 /**
- * File-backed shared store for event stream, read-model projection, and
- * commerce business state. Every mutation takes an OS file lock, reads the
- * whole JSON document, applies the change, and writes it back; both
- * CommerceApi instances and both OrderWorkflow instances share one document.
+ * File-backed shared store for event stream, read-model projection, and commerce business state.
+ * Every mutation takes an OS file lock, reads the whole JSON document, applies the change, and
+ * writes it back; both CommerceApi instances and both OrderWorkflow instances share one document.
  */
 class CommerceStore(private val topology: SampleTopology) {
     val json: ObjectMapper = ObjectMapper().registerKotlinModule()
@@ -48,9 +46,17 @@ class CommerceStore(private val topology: SampleTopology) {
         val createdAtUnixMs: Long,
     )
 
-    data class ReserveInventoryResult(val accepted: Boolean, val reservationId: String?, val reason: String?)
+    data class ReserveInventoryResult(
+        val accepted: Boolean,
+        val reservationId: String?,
+        val reason: String?,
+    )
 
-    data class AuthorizePaymentResult(val accepted: Boolean, val paymentId: String?, val reason: String?)
+    data class AuthorizePaymentResult(
+        val accepted: Boolean,
+        val paymentId: String?,
+        val reason: String?,
+    )
 
     data class IdempotencyMapping(
         val idempotencyKey: String,
@@ -69,12 +75,33 @@ class CommerceStore(private val topology: SampleTopology) {
     fun seedDefaults() {
         mutate { state ->
             val carts = childObject(state, "carts")
-            putCart(carts, CartSeed("cart-success",
-                listOf(OrderLineInput("sku-keyboard", 1), OrderLineInput("sku-mouse", 1)), 120.00, "USD"))
-            putCart(carts, CartSeed("cart-inventory-fail",
-                listOf(OrderLineInput("sku-soldout", 2)), 88.00, "USD"))
-            putCart(carts, CartSeed("cart-payment-fail",
-                listOf(OrderLineInput("sku-headset", 1)), 64.00, "USD"))
+            putCart(
+                carts,
+                CartSeed(
+                    "cart-success",
+                    listOf(OrderLineInput("sku-keyboard", 1), OrderLineInput("sku-mouse", 1)),
+                    120.00,
+                    "USD",
+                ),
+            )
+            putCart(
+                carts,
+                CartSeed(
+                    "cart-inventory-fail",
+                    listOf(OrderLineInput("sku-soldout", 2)),
+                    88.00,
+                    "USD",
+                ),
+            )
+            putCart(
+                carts,
+                CartSeed(
+                    "cart-payment-fail",
+                    listOf(OrderLineInput("sku-headset", 1)),
+                    64.00,
+                    "USD",
+                ),
+            )
 
             val inventory = childObject(state, "inventory")
             putIfAbsentInt(inventory, "sku-keyboard", 20)
@@ -93,20 +120,22 @@ class CommerceStore(private val topology: SampleTopology) {
         }
     }
 
-    fun findCart(cartId: String): CartSeed? =
-        read { state ->
-            val carts = state.get("carts")
-            if (carts == null || !carts.has(cartId)) null else readCart(carts.get(cartId))
-        }
+    fun findCart(cartId: String): CartSeed? = read { state ->
+        val carts = state.get("carts")
+        if (carts == null || !carts.has(cartId)) null else readCart(carts.get(cartId))
+    }
 
-    fun shippingAddressExists(shippingAddressId: String): Boolean =
-        read { state -> state.get("shippingAddresses")?.has(shippingAddressId) == true }
+    fun shippingAddressExists(shippingAddressId: String): Boolean = read { state ->
+        state.get("shippingAddresses")?.has(shippingAddressId) == true
+    }
 
-    fun paymentMethodExists(paymentMethodId: String): Boolean =
-        read { state -> state.get("paymentMethods")?.has(paymentMethodId) == true }
+    fun paymentMethodExists(paymentMethodId: String): Boolean = read { state ->
+        state.get("paymentMethods")?.has(paymentMethodId) == true
+    }
 
-    fun findIdempotency(idempotencyKey: String): IdempotencyMapping? =
-        read { state -> findMapping(state, idempotencyKey) }
+    fun findIdempotency(idempotencyKey: String): IdempotencyMapping? = read { state ->
+        findMapping(state, idempotencyKey)
+    }
 
     fun reserveIdempotency(idempotencyKey: String, ownerInstanceId: String): IdempotencyMapping =
         mutate { state ->
@@ -152,7 +181,11 @@ class CommerceStore(private val topology: SampleTopology) {
             for (line in lines) {
                 val available = inventory.path(line.sku).asInt(0)
                 if (line.quantity > available) {
-                    return@mutate ReserveInventoryResult(false, null, "inventory unavailable for ${line.sku}")
+                    return@mutate ReserveInventoryResult(
+                        false,
+                        null,
+                        "inventory unavailable for ${line.sku}",
+                    )
                 }
             }
             for (line in lines) {
@@ -176,49 +209,49 @@ class CommerceStore(private val topology: SampleTopology) {
         paymentMethodId: String,
         amount: Double,
         currency: String,
-    ): AuthorizePaymentResult =
-        mutate { state ->
-            val method = state.get("paymentMethods")?.get(paymentMethodId)
-            val shouldAuthorize = method?.path("shouldAuthorize")?.asBoolean(false) == true
-            if (!shouldAuthorize) {
-                val reason = if (method == null) {
+    ): AuthorizePaymentResult = mutate { state ->
+        val method = state.get("paymentMethods")?.get(paymentMethodId)
+        val shouldAuthorize = method?.path("shouldAuthorize")?.asBoolean(false) == true
+        if (!shouldAuthorize) {
+            val reason =
+                if (method == null) {
                     "payment method missing"
                 } else {
                     method.path("failureReason").asText("payment failed")
                 }
-                childObject(state, "paymentAttempts").put(orderId, reason)
-                AuthorizePaymentResult(false, null, reason)
-            } else {
-                val paymentId = "payment-$orderId"
-                val payments = childObject(state, "payments")
-                if (payments.has(paymentId)) {
-                    println("shoppingmall-order external-effect-repeated order=$orderId")
-                }
-                payments.put(paymentId, "%.2f %s".format(amount, currency))
-                AuthorizePaymentResult(true, paymentId, null)
+            childObject(state, "paymentAttempts").put(orderId, reason)
+            AuthorizePaymentResult(false, null, reason)
+        } else {
+            val paymentId = "payment-$orderId"
+            val payments = childObject(state, "payments")
+            if (payments.has(paymentId)) {
+                println("shoppingmall-order external-effect-repeated order=$orderId")
             }
+            payments.put(paymentId, "%.2f %s".format(amount, currency))
+            AuthorizePaymentResult(true, paymentId, null)
         }
+    }
 
-    fun readEvents(orderId: String): List<StoredEvent> =
-        read { state ->
-            val events = mutableListOf<StoredEvent>()
-            val streams = state.get("events")
-            if (streams != null && streams.has(orderId)) {
-                for (node in streams.get(orderId)) {
-                    events.add(readStoredEvent(node))
-                }
+    fun readEvents(orderId: String): List<StoredEvent> = read { state ->
+        val events = mutableListOf<StoredEvent>()
+        val streams = state.get("events")
+        if (streams != null && streams.has(orderId)) {
+            for (node in streams.get(orderId)) {
+                events.add(readStoredEvent(node))
             }
-            events.sortedBy { it.version }
         }
+        events.sortedBy { it.version }
+    }
 
     fun appendEvents(orderId: String, expectedVersion: Long, events: List<StoredEvent>): Long =
         mutate { state ->
             val streams = childObject(state, "events")
-            val stream = if (streams.has(orderId)) {
-                streams.get(orderId) as ArrayNode
-            } else {
-                streams.putArray(orderId)
-            }
+            val stream =
+                if (streams.has(orderId)) {
+                    streams.get(orderId) as ArrayNode
+                } else {
+                    streams.putArray(orderId)
+                }
             var currentVersion = 0L
             val existing = mutableListOf<StoredEvent>()
             for (node in stream) {
@@ -229,7 +262,7 @@ class CommerceStore(private val topology: SampleTopology) {
             if (currentVersion != expectedVersion) {
                 throw IllegalStateException(
                     "Order stream version mismatch for '$orderId': expected $expectedVersion " +
-                        "but found $currentVersion.",
+                        "but found $currentVersion."
                 )
             }
             for (event in events) {
@@ -248,9 +281,10 @@ class CommerceStore(private val topology: SampleTopology) {
         when (candidate.eventType) {
             "OrderStartedEvent" -> {
                 for (stored in existing) {
-                    if (stored.eventType == "OrderStartedEvent" &&
-                        candidate.sourceCommandId != null &&
-                        candidate.sourceCommandId == stored.sourceCommandId
+                    if (
+                        stored.eventType == "OrderStartedEvent" &&
+                            candidate.sourceCommandId != null &&
+                            candidate.sourceCommandId == stored.sourceCommandId
                     ) {
                         return true
                     }
@@ -259,9 +293,10 @@ class CommerceStore(private val topology: SampleTopology) {
             "InventoryReservedEvent" -> {
                 val reservationId = candidate.payload.path("reservationId").asText(null)
                 for (stored in existing) {
-                    if (stored.eventType == "InventoryReservedEvent" &&
-                        reservationId != null &&
-                        reservationId == stored.payload.path("reservationId").asText(null)
+                    if (
+                        stored.eventType == "InventoryReservedEvent" &&
+                            reservationId != null &&
+                            reservationId == stored.payload.path("reservationId").asText(null)
                     ) {
                         return true
                     }
@@ -270,15 +305,17 @@ class CommerceStore(private val topology: SampleTopology) {
             "PaymentAuthorizedEvent" -> {
                 val paymentId = candidate.payload.path("paymentId").asText(null)
                 for (stored in existing) {
-                    if (stored.eventType == "PaymentAuthorizedEvent" &&
-                        paymentId != null &&
-                        paymentId == stored.payload.path("paymentId").asText(null)
+                    if (
+                        stored.eventType == "PaymentAuthorizedEvent" &&
+                            paymentId != null &&
+                            paymentId == stored.payload.path("paymentId").asText(null)
                     ) {
                         return true
                     }
                 }
             }
-            "OrderConfirmedEvent", "OrderFailedEvent" -> {
+            "OrderConfirmedEvent",
+            "OrderFailedEvent" -> {
                 for (stored in existing) {
                     if (candidate.eventType == stored.eventType) {
                         return true
@@ -289,61 +326,59 @@ class CommerceStore(private val topology: SampleTopology) {
         return false
     }
 
-    fun findReadModel(orderId: String): OrderState? =
-        read { state ->
-            val models = state.get("readModels")
-            if (models == null || !models.has(orderId)) null else readState(models.get(orderId))
-        }
+    fun findReadModel(orderId: String): OrderState? = read { state ->
+        val models = state.get("readModels")
+        if (models == null || !models.has(orderId)) null else readState(models.get(orderId))
+    }
 
     fun saveReadModel(orderState: OrderState) {
         mutate { state ->
-            childObject(state, "readModels").set<JsonNode>(orderState.orderId, writeState(orderState))
+            childObject(state, "readModels")
+                .set<JsonNode>(orderState.orderId, writeState(orderState))
             null
         }
     }
 
-    fun deleteReadModel(orderId: String): Boolean =
-        mutate { state ->
-            val models = childObject(state, "readModels")
-            if (!models.has(orderId)) {
-                false
-            } else {
-                models.remove(orderId)
-                true
-            }
+    fun deleteReadModel(orderId: String): Boolean = mutate { state ->
+        val models = childObject(state, "readModels")
+        if (!models.has(orderId)) {
+            false
+        } else {
+            models.remove(orderId)
+            true
         }
+    }
 
-    fun evidence(orderIds: List<String>): StoreEvidence =
-        read { state ->
-            val eventsByOrder = LinkedHashMap<String, List<String>>()
-            val streams = state.get("events")
-            for (orderId in orderIds) {
-                val types = mutableListOf<String>()
-                if (streams != null && streams.has(orderId)) {
-                    val sorted = mutableListOf<StoredEvent>()
-                    for (node in streams.get(orderId)) {
-                        sorted.add(readStoredEvent(node))
-                    }
-                    sorted.sortBy { it.version }
-                    for (stored in sorted) {
-                        types.add(stored.eventType)
-                    }
+    fun evidence(orderIds: List<String>): StoreEvidence = read { state ->
+        val eventsByOrder = LinkedHashMap<String, List<String>>()
+        val streams = state.get("events")
+        for (orderId in orderIds) {
+            val types = mutableListOf<String>()
+            if (streams != null && streams.has(orderId)) {
+                val sorted = mutableListOf<StoredEvent>()
+                for (node in streams.get(orderId)) {
+                    sorted.add(readStoredEvent(node))
                 }
-                eventsByOrder[orderId] = types
-            }
-            val paymentFailureCount = sizeOf(state.get("paymentAttempts"))
-            val releasedReservationCount = sizeOf(state.get("releasedReservations"))
-            var startedCount = 0
-            val mappings = state.get("idempotency")
-            if (mappings != null) {
-                for (mapping in mappings) {
-                    if (mapping.path("started").asBoolean(false)) {
-                        startedCount++
-                    }
+                sorted.sortBy { it.version }
+                for (stored in sorted) {
+                    types.add(stored.eventType)
                 }
             }
-            StoreEvidence(eventsByOrder, paymentFailureCount, releasedReservationCount, startedCount)
+            eventsByOrder[orderId] = types
         }
+        val paymentFailureCount = sizeOf(state.get("paymentAttempts"))
+        val releasedReservationCount = sizeOf(state.get("releasedReservations"))
+        var startedCount = 0
+        val mappings = state.get("idempotency")
+        if (mappings != null) {
+            for (mapping in mappings) {
+                if (mapping.path("started").asBoolean(false)) {
+                    startedCount++
+                }
+            }
+        }
+        StoreEvidence(eventsByOrder, paymentFailureCount, releasedReservationCount, startedCount)
+    }
 
     fun placeholder(orderId: String): OrderState = topology.failedPlaceholder(orderId)
 
@@ -425,7 +460,8 @@ class CommerceStore(private val topology: SampleTopology) {
     private fun readStoredEvent(node: JsonNode): StoredEvent =
         StoredEvent(
             node.path("eventId").asText(),
-            if (node.path("sourceCommandId").isNull) null else node.path("sourceCommandId").asText(null),
+            if (node.path("sourceCommandId").isNull) null
+            else node.path("sourceCommandId").asText(null),
             node.path("orderId").asText(),
             node.path("eventType").asText(),
             node.path("payload"),
@@ -457,7 +493,8 @@ class CommerceStore(private val topology: SampleTopology) {
             textOrNull(node, "reservationId"),
             textOrNull(node, "paymentId"),
             textOrNull(node, "reason"),
-            if (node.has("amount") && !node.path("amount").isNull) node.path("amount").asDouble() else null,
+            if (node.has("amount") && !node.path("amount").isNull) node.path("amount").asDouble()
+            else null,
             textOrNull(node, "currency"),
             node.path("updatedAtUnixMs").asLong(),
         )
@@ -506,21 +543,23 @@ class CommerceStore(private val topology: SampleTopology) {
 
     private fun <T> mutate(mutator: (ObjectNode) -> T): T = withState(mutator, true)
 
-    private fun <T> withState(action: (ObjectNode) -> T, write: Boolean): T = synchronized(stateMutex) {
-        FileChannel.open(lockFile, StandardOpenOption.CREATE, StandardOpenOption.WRITE).use { channel ->
-            val lock = acquire(channel)
-            try {
-                val state = loadState()
-                val result = action(state)
-                if (write) {
-                    saveState(state)
+    private fun <T> withState(action: (ObjectNode) -> T, write: Boolean): T =
+        synchronized(stateMutex) {
+            FileChannel.open(lockFile, StandardOpenOption.CREATE, StandardOpenOption.WRITE).use {
+                channel ->
+                val lock = acquire(channel)
+                try {
+                    val state = loadState()
+                    val result = action(state)
+                    if (write) {
+                        saveState(state)
+                    }
+                    return result
+                } finally {
+                    lock.release()
                 }
-                return result
-            } finally {
-                lock.release()
             }
         }
-    }
 
     private fun acquire(channel: FileChannel): FileLock {
         val deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(30)
@@ -547,7 +586,10 @@ class CommerceStore(private val topology: SampleTopology) {
     private fun saveState(state: ObjectNode) {
         Files.write(
             stateFile,
-            json.writerWithDefaultPrettyPrinter().writeValueAsString(state).toByteArray(StandardCharsets.UTF_8),
+            json
+                .writerWithDefaultPrettyPrinter()
+                .writeValueAsString(state)
+                .toByteArray(StandardCharsets.UTF_8),
             StandardOpenOption.CREATE,
             StandardOpenOption.TRUNCATE_EXISTING,
             StandardOpenOption.WRITE,

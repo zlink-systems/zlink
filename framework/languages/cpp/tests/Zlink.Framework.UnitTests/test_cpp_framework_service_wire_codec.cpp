@@ -427,6 +427,31 @@ void verify_generated_adoption_goldens ()
         assert (runtime_rejected);
     }
 }
+
+void verify_actor_create_reply_canonical_union ()
+{
+    // Source: service-wire-v1.schema.json:3081 and the .NET reference
+    // codec's EncodeActorCreateReply at ZLinkServiceWireCodec.cs:598.
+    // The shared actor-create-v1 golden contains a request, not a reply.
+    const auto golden = from_hex (
+      "5a4d0114000000000000000001000000000000000002"
+      "001403737263076163746f722d610000000000000005");
+    const auto decoded = protocol::decode_actor_create_reply (golden);
+    assert (decoded.header.correlation == 1);
+    assert (decoded.header.terminal_result == 0);
+    assert (decoded.header.failure_code == 0);
+    assert (decoded.result == protocol::actor_create_result_t::created);
+    const std::vector<std::uint8_t> expected_node_routing_id{'s', 'r', 'c'};
+    assert (decoded.node_routing_id == expected_node_routing_id);
+    assert (decoded.actor_id == "actor-a");
+    assert (decoded.object_generation == 5);
+    assert (protocol::encode_actor_create_reply (
+              decoded.header.correlation, decoded.header.terminal_result,
+              decoded.header.failure_code, decoded.result,
+              decoded.node_routing_id, decoded.actor_id,
+              decoded.object_generation)
+            == golden);
+}
 }
 
 // Frozen pre-Issue-49 encoder: the final wire, including multipart lengths,
@@ -595,6 +620,7 @@ int main ()
         assert (retained.size () == 4096 && retained.bytes ().back () == std::byte{0x5a});
     }
     verify_generated_adoption_goldens ();
+    verify_actor_create_reply_canonical_union ();
     const protocol::actor_route_fence_t bound_actor{
       .actor_id = "actor-a",
       .object_generation = 1,

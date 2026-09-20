@@ -6,8 +6,8 @@ import org.springframework.boot.autoconfigure.SpringBootApplication
 import org.springframework.boot.builder.SpringApplicationBuilder
 import org.springframework.context.annotation.Bean
 import systems.zlink.framework.configuration.ZLinkMessageFlowLogMode
-import systems.zlink.framework.locations.redis.ZLinkRedisLocationStore
 import systems.zlink.framework.kotlin.useCoroutineHandlers
+import systems.zlink.framework.locations.redis.ZLinkRedisLocationStore
 import systems.zlink.framework.monitoring.ZLinkRouteMeshRuntime
 import systems.zlink.framework.spring.EnableZLinkFramework
 import systems.zlink.framework.spring.ZLinkFrameworkConfigurer
@@ -24,27 +24,25 @@ import systems.zlink.samples.kotlin.deliverydispatch.server.couriersession.sessi
 )
 class CourierSessionApplication {
     @Bean
-    fun courierSessionFramework(): ZLinkFrameworkConfigurer =
-        ZLinkFrameworkConfigurer { options ->
-            options.useCoroutineHandlers(Dispatchers.Default)
-            options.addHandlersFromPackageOf(CourierSessionApplication::class.java)
-            options.configureDispatch()
-                .messageFlow(ZLinkMessageFlowLogMode.NORMAL)
+    fun courierSessionFramework(): ZLinkFrameworkConfigurer = ZLinkFrameworkConfigurer { options ->
+        options.useCoroutineHandlers(Dispatchers.Default)
+        options.addHandlersFromPackageOf(CourierSessionApplication::class.java)
+        options.configureDispatch().messageFlow(ZLinkMessageFlowLogMode.NORMAL)
 
-            options.addClientServerChannel(SampleNames.CourierChannel)
-                .client()
-            val node = options.addRouteMesh(SampleNames.CourierSpotMesh)
-            node.listen(SampleTopology.CourierSessionSpotEndpoint)
-                .setRoutingIdPrefix("delivery-session")
-            node.objects().client()
-            options.addStreamNode(SampleNames.CourierStreamNode)
-                .bind(SampleTopology.CourierStreamEndpoint)
-                .enableActorDispatch()
-                .registerSession(CourierSession::class.java)
-        }
+        options.addClientServerChannel(SampleNames.CourierChannel).client()
+        val node = options.addRouteMesh(SampleNames.CourierSpotMesh)
+        node
+            .listen(SampleTopology.CourierSessionSpotEndpoint)
+            .setRoutingIdPrefix("delivery-session")
+        node.objects().client()
+        options
+            .addStreamNode(SampleNames.CourierStreamNode)
+            .bind(SampleTopology.CourierStreamEndpoint)
+            .enableActorDispatch()
+            .registerSession(CourierSession::class.java)
+    }
 
-    @Bean
-    fun locationStore(): ZLinkRedisLocationStore = SampleLocationStore.create()
+    @Bean fun locationStore(): ZLinkRedisLocationStore = SampleLocationStore.create()
 
     @Bean(destroyMethod = "close")
     fun readinessReporter(meshes: ZLinkRouteMeshRuntime): DeliveryDispatchReadinessReporter =
@@ -56,8 +54,9 @@ class CourierSessionApplication {
 
     companion object {
         fun run(args: Array<String> = emptyArray()): AutoCloseable {
-            val builder = SpringApplicationBuilder(CourierSessionApplication::class.java)
-                .web(WebApplicationType.NONE)
+            val builder =
+                SpringApplicationBuilder(CourierSessionApplication::class.java)
+                    .web(WebApplicationType.NONE)
             builder.application().setKeepAlive(true)
             val context = builder.run(*args)
             return AutoCloseable { context.close() }

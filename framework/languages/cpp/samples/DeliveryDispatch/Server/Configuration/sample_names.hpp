@@ -29,7 +29,6 @@ struct sample_names_t
     static constexpr const char *courier_session_route_node = courier_session_node;
     static constexpr const char *courier_actor_type = "delivery-courier";
     static constexpr const char *customer_id = "customer-1";
-
 };
 
 } // namespace zlink::samples::deliverydispatch

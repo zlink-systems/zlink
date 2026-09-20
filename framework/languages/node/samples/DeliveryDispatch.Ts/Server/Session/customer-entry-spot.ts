@@ -1,8 +1,5 @@
 import { CustomerActor } from './customer-actor';
-import type {
-  ZLinkEntrySpot,
-  ZLinkEntrySpotContext
-} from '@zlink-systems/framework';
+import type { ZLinkEntrySpot, ZLinkEntrySpotContext } from '@zlink-systems/framework';
 
 class CustomerEntrySpot implements ZLinkEntrySpot<CustomerActor> {
   readonly context!: ZLinkEntrySpotContext<CustomerActor>;

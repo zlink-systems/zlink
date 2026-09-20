@@ -8600,9 +8600,7 @@ public sealed partial class EntrySpotActorDispatchTests
                 1,
                 owner.OwnerId,
                 checked((ulong)owner.LeaseGeneration),
-                RecoveryReference: null,
-                RecoveryChecksum: 0,
-                ReplayCursor: 0));
+                ActivationRecovery: null));
         await ReserveAndCommitLocalAuthorityAsync(
             store,
             key,

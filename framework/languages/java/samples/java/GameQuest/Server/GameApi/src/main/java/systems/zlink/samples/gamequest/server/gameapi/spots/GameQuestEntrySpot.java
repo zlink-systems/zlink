@@ -1,10 +1,11 @@
 package systems.zlink.samples.gamequest.server.gameapi.spots;
 
-import java.util.concurrent.CompletableFuture;
-import java.util.concurrent.CompletionStage;
 import systems.zlink.framework.spots.ZLinkEntrySpot;
 import systems.zlink.framework.spots.ZLinkEntrySpotContext;
 import systems.zlink.samples.gamequest.server.gameapi.actors.GameQuestPlayerActor;
+
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CompletionStage;
 
 public final class GameQuestEntrySpot implements ZLinkEntrySpot<GameQuestPlayerActor> {
     private final ZLinkEntrySpotContext context;

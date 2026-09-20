@@ -7,22 +7,23 @@ using Zlink.Framework.Contracts.Spots;
 namespace TicTacToe.Server.Play.Infrastructure.ZLink.Spots.EntrySpot.Handlers;
 
 // --8<-- [start:doc-ttt-milestone-handler]
-internal sealed class PlayerWinMilestoneEventHandler(
-    ILogger<PlayerWinMilestoneEventHandler> logger)
+internal sealed class PlayerWinMilestoneEventHandler(ILogger<PlayerWinMilestoneEventHandler> logger)
     : IZLinkSpotSubscriptionHandler<PlayEntrySpot, PlayerWinMilestoneEvent>
 {
     public async ValueTask HandleAsync(
         PlayEntrySpot spot,
         PlayerWinMilestoneEvent message,
         ZLinkPublishMessageContext context,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken
+    )
     {
         _ = context;
         logger.LogInformation(
             "entry spot: milestone event received. actor={ActorId}, roomId={RoomId}, wins={Wins}",
             message.ActorId,
             message.RoomId,
-            message.Wins);
+            message.Wins
+        );
 
         await spot.NotifyMilestoneAsync(message, cancellationToken);
     }
