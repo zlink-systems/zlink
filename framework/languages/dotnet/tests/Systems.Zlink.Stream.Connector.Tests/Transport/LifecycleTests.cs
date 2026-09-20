@@ -845,7 +845,7 @@ public sealed partial class StreamConnectorTests
     }
 
     [Fact]
-    public async Task SharedCloseWaitsForTerminalCallbacksAndSupportsSelfClose()
+    public async Task SharedCloseDoesNotWaitForTerminalCallbacksAndSupportsSelfClose()
     {
         using var listener = new TcpListener(IPAddress.Loopback, 0);
         listener.Start();
@@ -886,11 +886,13 @@ public sealed partial class StreamConnectorTests
         using var canceled = new CancellationTokenSource();
         canceled.Cancel();
 
-        await Assert.ThrowsAnyAsync<OperationCanceledException>(async () =>
-            await connector.Close.Async(canceled.Token));
-        Assert.False(firstClose.IsCompleted);
-        Assert.False(repeatedClose.IsCompleted);
-        Assert.False(dispose.IsCompleted);
+        await firstClose.WaitAsync(TimeSpan.FromSeconds(5));
+        await repeatedClose.WaitAsync(TimeSpan.FromSeconds(5));
+        await dispose.WaitAsync(TimeSpan.FromSeconds(5));
+        await connector.Close.Async(canceled.Token);
+        Assert.True(firstClose.IsCompleted);
+        Assert.True(repeatedClose.IsCompleted);
+        Assert.True(dispose.IsCompleted);
 
         releaseTerminal.TrySetResult();
         await firstClose.WaitAsync(TimeSpan.FromSeconds(5));
@@ -1373,7 +1375,7 @@ public sealed partial class StreamConnectorTests
     }
 
     [Fact]
-    public async Task AsyncStateSubscribersRunInRegistrationOrderAndCanSelfClose()
+    public async Task AsyncStateSubscribersRunSequentiallyWithoutBlockingConnectAndCanSelfClose()
     {
         using var listener = new TcpListener(IPAddress.Loopback, 0);
         listener.Start();
@@ -1413,10 +1415,10 @@ public sealed partial class StreamConnectorTests
 
         var connect = connector.Connect.Async().AsTask();
         await firstEntered.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        await connect.WaitAsync(TimeSpan.FromSeconds(5));
         Assert.False(secondEntered.Task.IsCompleted);
 
         releaseFirst.TrySetResult();
-        await Assert.ThrowsAsync<ObjectDisposedException>(async () => await connect);
         await secondEntered.Task.WaitAsync(TimeSpan.FromSeconds(5));
         await connector.Close.Async().AsTask().WaitAsync(TimeSpan.FromSeconds(5));
         await server.WaitAsync(TimeSpan.FromSeconds(5));
