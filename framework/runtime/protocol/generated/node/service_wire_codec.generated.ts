@@ -3769,71 +3769,71 @@ export type DescriptorExtension = { readonly runtimeState: RuntimeState; readonl
 
 function readDescriptorExtension(reader: Reader, context: ServiceWireDecoderContext, enclosing: any, flags: number): DescriptorExtension {
   void context; void enclosing; void flags;
-  const total = Number(readU32(reader, context, enclosing, flags)); if (total > 1048576) fail("descriptor-extension maximum"); const body = reader.bounded(total); const value: any = {}; let previous = -1; let knownFields = 0;
+  const total = Number(readU32(reader, context, enclosing, flags)); if (total > 1048576) fail("descriptor-extension maximum"); const body = reader.bounded(total); const value: any = {}; let previous = -1;
   while (body.remaining > 0) { const fieldId = Number(readU8(body, context, value, flags)); const length = Number(readU32(body, context, value, flags)); if (fieldId <= previous) fail("descriptor-extension order"); previous = fieldId; const item = body.bounded(length); switch (fieldId) {
     case 1:
-          knownFields += 1; if (value["runtimeState"] !== undefined) fail("descriptor-extension duplicate"); value["runtimeState"] = readRuntimeState(item, context, value, flags);
+          if (value["runtimeState"] !== undefined) fail("descriptor-extension duplicate"); value["runtimeState"] = readRuntimeState(item, context, value, flags);
 
 
           item.done("runtimeState"); break;
     case 2:
-          knownFields += 1; if (value["applicationVersion"] !== undefined) fail("descriptor-extension duplicate"); value["applicationVersion"] = readApplicationVersion(item, context, value, flags);
+          if (value["applicationVersion"] !== undefined) fail("descriptor-extension duplicate"); value["applicationVersion"] = readApplicationVersion(item, context, value, flags);
 
 
           item.done("applicationVersion"); break;
     case 3:
-          knownFields += 1; if (value["spotTypes"] !== undefined) fail("descriptor-extension duplicate"); value["spotTypes"] = readSortedText8Vector(item, context, value, flags);
+          if (value["spotTypes"] !== undefined) fail("descriptor-extension duplicate"); value["spotTypes"] = readSortedText8Vector(item, context, value, flags);
 
 
           item.done("spotTypes"); break;
     case 4:
-          knownFields += 1; if (value["statefulCapabilities"] !== undefined) fail("descriptor-extension duplicate"); value["statefulCapabilities"] = readStatefulCapabilityVector(item, context, value, flags);
+          if (value["statefulCapabilities"] !== undefined) fail("descriptor-extension duplicate"); value["statefulCapabilities"] = readStatefulCapabilityVector(item, context, value, flags);
 
 
           item.done("statefulCapabilities"); break;
     case 5:
-          knownFields += 1; if (value["maintenanceWave"] !== undefined) fail("descriptor-extension duplicate"); value["maintenanceWave"] = readOptionalText8(item, context, value, flags);
+          if (value["maintenanceWave"] !== undefined) fail("descriptor-extension duplicate"); value["maintenanceWave"] = readOptionalText8(item, context, value, flags);
 
 
           item.done("maintenanceWave"); break;
     case 6:
-          knownFields += 1; if (value["protocolCapabilities"] !== undefined) fail("descriptor-extension duplicate"); value["protocolCapabilities"] = readSortedText8Vector(item, context, value, flags);
+          if (value["protocolCapabilities"] !== undefined) fail("descriptor-extension duplicate"); value["protocolCapabilities"] = readSortedText8Vector(item, context, value, flags);
 
           if (!value["protocolCapabilities"].includes("framework-service-v13")) fail("protocolCapabilities required capability");
           item.done("protocolCapabilities"); break;
     case 7:
-          knownFields += 1; if (value["objectRole"] !== undefined) fail("descriptor-extension duplicate"); value["objectRole"] = readObjectRole(item, context, value, flags);
+          if (value["objectRole"] !== undefined) fail("descriptor-extension duplicate"); value["objectRole"] = readObjectRole(item, context, value, flags);
 
 
           item.done("objectRole"); break;
     case 8:
-          knownFields += 1; if (value["placementWeight"] !== undefined) fail("descriptor-extension duplicate"); value["placementWeight"] = readU32(item, context, value, flags);
+          if (value["placementWeight"] !== undefined) fail("descriptor-extension duplicate"); value["placementWeight"] = readU32(item, context, value, flags);
           if (numeric(value["placementWeight"]) < 0n || numeric(value["placementWeight"]) > 100n) fail("placementWeight constraint");
 
           item.done("placementWeight"); break;
     case 9:
-          knownFields += 1; if (value["activeCapacityLimit"] !== undefined) fail("descriptor-extension duplicate"); value["activeCapacityLimit"] = readObjectCapacityLimit(item, context, value, flags);
+          if (value["activeCapacityLimit"] !== undefined) fail("descriptor-extension duplicate"); value["activeCapacityLimit"] = readObjectCapacityLimit(item, context, value, flags);
 
 
           item.done("activeCapacityLimit"); break;
     case 10:
-          knownFields += 1; if (value["pendingCapacityLimit"] !== undefined) fail("descriptor-extension duplicate"); value["pendingCapacityLimit"] = readObjectPendingCapacityLimit(item, context, value, flags);
+          if (value["pendingCapacityLimit"] !== undefined) fail("descriptor-extension duplicate"); value["pendingCapacityLimit"] = readObjectPendingCapacityLimit(item, context, value, flags);
 
 
           item.done("pendingCapacityLimit"); break;
     case 11:
-          knownFields += 1; if (value["activeCapacityUsed"] !== undefined) fail("descriptor-extension duplicate"); value["activeCapacityUsed"] = readU32(item, context, value, flags);
+          if (value["activeCapacityUsed"] !== undefined) fail("descriptor-extension duplicate"); value["activeCapacityUsed"] = readU32(item, context, value, flags);
 
 
           item.done("activeCapacityUsed"); break;
     case 12:
-          knownFields += 1; if (value["pendingCapacityUsed"] !== undefined) fail("descriptor-extension duplicate"); value["pendingCapacityUsed"] = readU32(item, context, value, flags);
+          if (value["pendingCapacityUsed"] !== undefined) fail("descriptor-extension duplicate"); value["pendingCapacityUsed"] = readU32(item, context, value, flags);
 
 
           item.done("pendingCapacityUsed"); break;
     default: item.take(item.remaining); break;
   } }
-  if ((knownFields !== 0 || total === 0) && (value["runtimeState"] === undefined || value["applicationVersion"] === undefined || value["protocolCapabilities"] === undefined || value["objectRole"] === undefined || value["placementWeight"] === undefined || value["activeCapacityLimit"] === undefined || value["pendingCapacityLimit"] === undefined || value["activeCapacityUsed"] === undefined || value["pendingCapacityUsed"] === undefined)) fail("descriptor-extension required");
+  if (value["runtimeState"] === undefined || value["applicationVersion"] === undefined || value["protocolCapabilities"] === undefined || value["objectRole"] === undefined || value["placementWeight"] === undefined || value["activeCapacityLimit"] === undefined || value["pendingCapacityLimit"] === undefined || value["activeCapacityUsed"] === undefined || value["pendingCapacityUsed"] === undefined) fail("descriptor-extension required");
 
   return value;
 }

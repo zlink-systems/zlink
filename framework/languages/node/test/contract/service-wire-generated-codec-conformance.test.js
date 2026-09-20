@@ -127,6 +127,9 @@ function indexedCases() {
 test('generated TypeScript codec consumes every indexed conformance case', () => {
   assert.equal(catalog.version, 2);
   assert.equal(catalog.fixtures.length, 9);
+  assert.equal(catalog.fixtures.reduce((count, fixture) => count + fixture.canonical.length, 0), 11);
+  assert.equal(catalog.fixtures.reduce((count, fixture) => count + fixture.malformed.length, 0), 12);
+  assert.equal(catalog.operationCases.length, 12);
 
   for (const item of indexedCases()) {
     const operation = item.kind === 'operation' ? item.entry.operation : item.kind;
