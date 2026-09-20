@@ -4,9 +4,9 @@ import org.springframework.boot.autoconfigure.SpringBootApplication
 import org.springframework.boot.runApplication
 import org.springframework.context.annotation.Bean
 import systems.zlink.contracts.core.RoutingId
-import systems.zlink.framework.spring.EnableZLinkFramework
 import systems.zlink.framework.locations.redis.ZLinkRedisLocationOptions
 import systems.zlink.framework.locations.redis.ZLinkRedisLocationStore
+import systems.zlink.framework.spring.EnableZLinkFramework
 import systems.zlink.framework.spring.ZLinkFrameworkConfigurer
 
 @EnableZLinkFramework
@@ -23,15 +23,14 @@ class ClientApplication {
             ZLinkRedisLocationStore(
                 ZLinkRedisLocationOptions()
                     .setConnectionString("127.0.0.1:6379")
-                    .setKeyPrefix("zlink-tutorial-kotlin:location:"),
-            ),
+                    .setKeyPrefix("zlink-tutorial-kotlin:location:")
+            )
         )
         // --8<-- [end:location-store-client]
 
         // --8<-- [start:channel-client-register]
         // This node opens an endpoint too. Both sides listen to become peers.
-        val mesh = options.addRouteMesh("game")
-            .listen("tcp://0.0.0.0:7602")
+        val mesh = options.addRouteMesh("game").listen("tcp://0.0.0.0:7602")
 
         // client() means this node exposes no handler for the channel; it only calls.
         mesh.channelName("profile").client()
@@ -44,24 +43,20 @@ class ClientApplication {
         // peer is rejected unless it answers with that id AND advertises exactly
         // this endpoint string -- which is why the server sets its advertise host.
         // connect(endpoint) alone would connect to whoever is there.
-        mesh.peerConnections().connect(
-            RoutingId.from("game-server-1"),
-            "tcp://127.0.0.1:7601",
-        )
+        mesh.peerConnections().connect(RoutingId.from("game-server-1"), "tcp://127.0.0.1:7601")
         // --8<-- [end:channel-client-register]
 
         // --8<-- [start:clientserver-client-register]
         // Here the caller decides who answers: the server it dialed. Mesh peers
         // play no part in the choice.
-        options.addClientServerChannel("ticketing")
-            .client()
-            .connect("tcp://127.0.0.1:7611")
+        options.addClientServerChannel("ticketing").client().connect("tcp://127.0.0.1:7611")
         // --8<-- [end:clientserver-client-register]
 
         // --8<-- [start:fanout-publish-register]
         // The publisher keeps no subscriber list. Subscribers may come and go with
         // no change here.
-        options.addFanoutChannel("broadcast")
+        options
+            .addFanoutChannel("broadcast")
             .setRoutingIdPrefix("game-client-broadcast")
             .enablePublisher("tcp://127.0.0.1:7612")
         // --8<-- [end:fanout-publish-register]

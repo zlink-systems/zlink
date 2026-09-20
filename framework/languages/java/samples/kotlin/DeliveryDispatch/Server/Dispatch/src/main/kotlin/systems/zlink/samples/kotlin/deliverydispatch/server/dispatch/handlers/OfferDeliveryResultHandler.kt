@@ -26,14 +26,14 @@ class OfferDeliveryResultHandler(
             println(
                 "deliverydispatch-dispatch stale-decision-ignored " +
                     "delivery=${message.deliveryId} courier=${message.courierId} " +
-                    "attempt=${message.attempt}",
+                    "attempt=${message.attempt}"
             )
             return
         }
 
         println(
             "deliverydispatch dispatch: decision delivery=${message.deliveryId} " +
-                "courier=${message.courierId} attempt=${message.attempt} accepted=${message.accepted}",
+                "courier=${message.courierId} attempt=${message.attempt} accepted=${message.accepted}"
         )
         worker.settle(offer, message.accepted, message.reason)
         // --8<-- [end:doc-dd-decision-settle]

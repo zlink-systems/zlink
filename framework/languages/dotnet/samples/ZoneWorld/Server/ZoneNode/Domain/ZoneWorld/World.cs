@@ -15,14 +15,15 @@ public static class World
     /// Zones that share an edge. The diagonal pair is not adjacent, which is why a
     /// move may not cross both boundaries at once (§2.2 DiagonalCrossing).
     /// </summary>
-    public static IReadOnlyList<string> AdjacentZones(string zoneId) => zoneId switch
-    {
-        ZoneIds.NorthWest => [ZoneIds.NorthEast, ZoneIds.SouthWest],
-        ZoneIds.NorthEast => [ZoneIds.NorthWest, ZoneIds.SouthEast],
-        ZoneIds.SouthWest => [ZoneIds.NorthWest, ZoneIds.SouthEast],
-        ZoneIds.SouthEast => [ZoneIds.NorthEast, ZoneIds.SouthWest],
-        _ => throw new ArgumentOutOfRangeException(nameof(zoneId), zoneId, "Unknown zone.")
-    };
+    public static IReadOnlyList<string> AdjacentZones(string zoneId) =>
+        zoneId switch
+        {
+            ZoneIds.NorthWest => [ZoneIds.NorthEast, ZoneIds.SouthWest],
+            ZoneIds.NorthEast => [ZoneIds.NorthWest, ZoneIds.SouthEast],
+            ZoneIds.SouthWest => [ZoneIds.NorthWest, ZoneIds.SouthEast],
+            ZoneIds.SouthEast => [ZoneIds.NorthEast, ZoneIds.SouthWest],
+            _ => throw new ArgumentOutOfRangeException(nameof(zoneId), zoneId, "Unknown zone."),
+        };
 
     /// <summary>
     /// Whether a player standing at (x, y) inside <paramref name="fromZoneId"/> is close
@@ -31,7 +32,8 @@ public static class World
     /// </summary>
     public static bool InBorderBand(int x, int y, string fromZoneId, string toZoneId)
     {
-        if (ZoneWorldSpec.ZoneOf(x, y) != fromZoneId) return false;
+        if (ZoneWorldSpec.ZoneOf(x, y) != fromZoneId)
+            return false;
 
         var split = ZoneWorldSpec.ZoneSplit;
         var band = ZoneWorldSpec.BorderBand;
@@ -39,7 +41,8 @@ public static class World
         var crossesY = IsNorth(fromZoneId) != IsNorth(toZoneId);
 
         // Diagonal zones share no edge, so they have no band.
-        if (crossesX == crossesY) return false;
+        if (crossesX == crossesY)
+            return false;
 
         var distance = crossesX
             ? Math.Abs((IsWest(fromZoneId) ? split - 1 - x : x - split))
@@ -48,11 +51,9 @@ public static class World
         return distance < band;
     }
 
-    public static bool IsWest(string zoneId) =>
-        zoneId is ZoneIds.NorthWest or ZoneIds.SouthWest;
+    public static bool IsWest(string zoneId) => zoneId is ZoneIds.NorthWest or ZoneIds.SouthWest;
 
-    public static bool IsNorth(string zoneId) =>
-        zoneId is ZoneIds.NorthWest or ZoneIds.NorthEast;
+    public static bool IsNorth(string zoneId) => zoneId is ZoneIds.NorthWest or ZoneIds.NorthEast;
 }
 
 public readonly record struct PlayerPosition(int X, int Y)

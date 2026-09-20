@@ -4,11 +4,13 @@ import systems.zlink.framework.spots.ZLinkSpotRequestHandler;
 import systems.zlink.samples.shoppingmall.server.orderworkflow.OrderWorkflowService;
 import systems.zlink.samples.shoppingmall.server.orderworkflow.spots.OrderWorkflowSpot;
 import systems.zlink.samples.shoppingmall.shared.contracts.Messages;
+
 import java.util.concurrent.CompletionStage;
 
 // --8<-- [start:doc-sm-start-handler]
 public final class StartOrderWorkflowSpotHandler
-    implements ZLinkSpotRequestHandler<OrderWorkflowSpot, Messages.StartOrderWorkflowReq, Messages.StartOrderWorkflowRes> {
+        implements ZLinkSpotRequestHandler<
+                OrderWorkflowSpot, Messages.StartOrderWorkflowReq, Messages.StartOrderWorkflowRes> {
     private final OrderWorkflowService workflow;
 
     public StartOrderWorkflowSpotHandler(OrderWorkflowService workflow) {
@@ -18,13 +20,19 @@ public final class StartOrderWorkflowSpotHandler
     // --8<-- [start:doc-sm-spot-start]
     @Override
     public CompletionStage<Messages.StartOrderWorkflowRes> handle(
-        OrderWorkflowSpot spot,
-        Messages.StartOrderWorkflowReq request) {
-        System.out.println("shoppingmall-order started order=" + request.orderId()
-            + " spot=" + spot.context().spotId());
+            OrderWorkflowSpot spot, Messages.StartOrderWorkflowReq request) {
+        System.out.println(
+                "shoppingmall-order started order="
+                        + request.orderId()
+                        + " spot="
+                        + spot.context().spotId());
         return workflow.startInSpot(spot, request)
-            .thenCompose(state -> spot.closeIfTerminal(state)
-                .thenApply(ignored -> new Messages.StartOrderWorkflowRes(state)));
+                .thenCompose(
+                        state ->
+                                spot.closeIfTerminal(state)
+                                        .thenApply(
+                                                ignored ->
+                                                        new Messages.StartOrderWorkflowRes(state)));
     }
     // --8<-- [end:doc-sm-spot-start]
 }

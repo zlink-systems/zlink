@@ -4,9 +4,8 @@ using Zlink.Framework.Contracts.Streams;
 
 namespace Bingo.Server.Session.Sessions;
 
-internal sealed class BingoSession(
-    IZLinkSessionContext context,
-    ILogger<BingoSession> logger) : IZLinkSession
+internal sealed class BingoSession(IZLinkSessionContext context, ILogger<BingoSession> logger)
+    : IZLinkSession
 {
     public IZLinkSessionContext Context { get; } = context;
 
@@ -25,15 +24,15 @@ internal sealed class BingoSession(
         {
             logger.LogInformation(
                 "bingo-lifecycle session-disconnect actor={ActorId} destroy=false",
-                actor.ActorId);
+                actor.ActorId
+            );
         }
         return ValueTask.CompletedTask;
     }
+
     // --8<-- [end:doc-bingo-session-disconnect]
 
-    public ValueTask OnErrorAsync(
-        ZLinkStreamError error,
-        CancellationToken cancellationToken)
+    public ValueTask OnErrorAsync(ZLinkStreamError error, CancellationToken cancellationToken)
     {
         return ValueTask.CompletedTask;
     }
@@ -42,17 +41,16 @@ internal sealed class BingoSession(
     public async ValueTask OnDispatchAsync(
         ZLinkSessionDispatchContext dispatch,
         ZLinkMessage payload,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken
+    )
     {
         if (await Context.Handlers.TryHandleAsync(dispatch, payload, cancellationToken))
             return;
 
         var actor = RequireSingleBoundActor($"relaying packet '{dispatch.PacketName}'");
-        await actor.RelayAsync(
-                payload,
-                cancellationToken)
-            ;
+        await actor.RelayAsync(payload, cancellationToken);
     }
+
     // --8<-- [end:doc-bingo-session-relay]
 
     private IZLinkSessionActor RequireSingleBoundActor(string action)
@@ -62,7 +60,9 @@ internal sealed class BingoSession(
         {
             1 => actors.Single(),
             0 => throw new InvalidOperationException($"Client must authenticate before {action}."),
-            _ => throw new InvalidOperationException($"Exactly one actor must be bound before {action}.")
+            _ => throw new InvalidOperationException(
+                $"Exactly one actor must be bound before {action}."
+            ),
         };
     }
 }

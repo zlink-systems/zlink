@@ -4,8 +4,8 @@ import com.fasterxml.jackson.databind.ObjectMapper
 import java.time.Duration
 import java.time.Instant
 import kotlinx.coroutines.future.await
-import systems.zlink.framework.kotlin.addHandler
 import systems.zlink.framework.kotlin.ZLinkSuspendingSpot
+import systems.zlink.framework.kotlin.addHandler
 import systems.zlink.framework.messaging.ZLinkMessage
 import systems.zlink.framework.spots.ZLinkSpotActorJoinResult
 import systems.zlink.framework.spots.ZLinkSpotClosingContext
@@ -33,7 +33,8 @@ import systems.zlink.samples.kotlin.tictactoe.shared.contracts.TicTacToeGameJoin
 class TicTacToeGame(
     override val context: ZLinkSpotContext,
     private val createdHandler: TicTacToeGameCreatedHandler,
-    private val json: ObjectMapper,) : ZLinkSuspendingSpot<PlayActor>() {
+    private val json: ObjectMapper,
+) : ZLinkSuspendingSpot<PlayActor>() {
     private val gameTickPeriod: Duration = Duration.ofSeconds(1)
     private val turnTimeout: Duration = Duration.ofSeconds(15)
     val roomId: String = context.spotId()
@@ -72,8 +73,9 @@ class TicTacToeGame(
     }
 
     override suspend fun onJoinedActorSuspending(actor: PlayActor) {
-        val joinRequest = pendingJoins.remove(actor.actorId)
-            ?: error("joined actor does not have a pending admission")
+        val joinRequest =
+            pendingJoins.remove(actor.actorId)
+                ?: error("joined actor does not have a pending admission")
         join(actor, joinRequest.roomId, joinRequest.player)
     }
 
@@ -88,13 +90,12 @@ class TicTacToeGame(
     // --8<-- [start:doc-ttt-timer-register]
     override suspend fun onInitializeSuspending() {
         // timer: TicTacToeGameTimerHandler가 turn timeout을 주기적으로 확인한다.
-        gameTick = context.addTimer(
-            "game-tick",
-            gameTickPeriod,
-            TicTacToeGameTimerHandler::class.java,
-            null,
-        ).await()
+        gameTick =
+            context
+                .addTimer("game-tick", gameTickPeriod, TicTacToeGameTimerHandler::class.java, null)
+                .await()
     }
+
     // --8<-- [end:doc-ttt-timer-register]
 
     override suspend fun onClosingSuspending(context: ZLinkSpotClosingContext) {
@@ -127,6 +128,7 @@ class TicTacToeGame(
         broadcast(state, actor.actorId)
         return TicTacToeGameJoinRes(state)
     }
+
     // --8<-- [end:doc-ttt-game-join]
 
     private fun validateJoin(roomId: String, player: PlayerInfo) {
@@ -139,8 +141,9 @@ class TicTacToeGame(
 
     suspend fun placeMark(actor: PlayActor, cell: Int): PlaceMarkRes {
         ensureCreated()
-        val slot = players.firstOrNull { it.actor.actorId == actor.actorId }
-            ?: throw IllegalStateException("player has not joined")
+        val slot =
+            players.firstOrNull { it.actor.actorId == actor.actorId }
+                ?: throw IllegalStateException("player has not joined")
 
         val change = match.placeMark(actor.actorId, cell, Instant.now())
         val state = change.after
@@ -149,8 +152,7 @@ class TicTacToeGame(
         return PlaceMarkRes(state)
     }
 
-    fun hasPlayer(actorId: String): Boolean =
-        players.any { it.actor.actorId == actorId }
+    fun hasPlayer(actorId: String): Boolean = players.any { it.actor.actorId == actorId }
 
     fun currentState(actor: PlayActor, requestedRoomId: String): GameState {
         val joinedRoomId = actor.requireJoinedGame()
@@ -193,11 +195,10 @@ class TicTacToeGame(
             .map { it.actor }
             .filter { excludedActorId == null || it.actorId != excludedActorId }
             .forEach { actor ->
-                actor.context().boundSession()
-                    .send(GameStateNotify(state))
-                    .submit()
+                actor.context().boundSession().send(GameStateNotify(state)).submit()
             }
     }
+
     // --8<-- [end:doc-ttt-broadcast]
 
     private fun notifyPlayerJoined(
@@ -206,23 +207,20 @@ class TicTacToeGame(
         state: GameState,
     ) {
         val player = joinedActor.requirePlayer()
-        val message = PlayerJoinedNotify(
-            roomId = state.roomId,
-            actorId = joinedActor.actorId,
-            displayName = player.displayName,
-            level = player.level,
-            mark = joinedSlot.mark,
-            state = state,
-        )
+        val message =
+            PlayerJoinedNotify(
+                roomId = state.roomId,
+                actorId = joinedActor.actorId,
+                displayName = player.displayName,
+                level = player.level,
+                mark = joinedSlot.mark,
+                state = state,
+            )
         players
             .asSequence()
             .map { it.actor }
             .filter { it.actorId != joinedActor.actorId }
-            .forEach { actor ->
-                actor.context().boundSession()
-                    .send(message)
-                    .submit()
-            }
+            .forEach { actor -> actor.context().boundSession().send(message).submit() }
     }
 
     private data class PlayerSlot(var actor: PlayActor, val mark: String)
@@ -236,18 +234,13 @@ class TicTacToeGame(
         actor.markForDestroyAfterRoomLeave()
         context.leaveActor(actor).await()
     }
+
     // --8<-- [end:doc-ttt-leave-game]
 
     private fun isTerminal(state: GameState): Boolean =
-        state.status == "Won" ||
-            state.status == "Draw" ||
-            state.status == "TurnTimedOut"
+        state.status == "Won" || state.status == "Draw" || state.status == "TurnTimedOut"
 
-    private suspend fun publishWinMilestone(
-        actor: PlayActor,
-        before: GameState,
-        after: GameState,
-    ) {
+    private suspend fun publishWinMilestone(actor: PlayActor, before: GameState, after: GameState) {
         if (after.status != "Won" || before.status == "Won" || after.winner != actor.actorId) {
             return
         }
@@ -257,7 +250,8 @@ class TicTacToeGame(
             return
         }
         // --8<-- [start:doc-multicast-publish]
-        context.outbound()
+        context
+            .outbound()
             .publish(
                 SampleNames.PlayNode,
                 SampleNames.PlayerMilestoneTopic,

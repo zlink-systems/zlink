@@ -1,19 +1,21 @@
 package systems.zlink.samples.supportchat.server.support.handlers;
-import java.util.concurrent.CompletionStage;
-import systems.zlink.framework.actors.ActorRef;
-import systems.zlink.framework.actors.ZLinkActorCreateResult;
 
-import systems.zlink.framework.actors.ActorRefSnapshot;
-import systems.zlink.framework.actors.ZLinkActorManager;
 import systems.zlink.framework.ZLinkMessageContext;
+import systems.zlink.framework.actors.ActorRef;
+import systems.zlink.framework.actors.ActorRefSnapshot;
+import systems.zlink.framework.actors.ZLinkActorCreateResult;
+import systems.zlink.framework.actors.ZLinkActorManager;
 import systems.zlink.framework.channels.ZLinkRequestHandler;
 import systems.zlink.framework.handlers.ZLinkHandlerGroup;
 import systems.zlink.samples.supportchat.server.configuration.SampleNames;
 import systems.zlink.samples.supportchat.shared.contracts.Messages;
 
+import java.util.concurrent.CompletionStage;
+
 @ZLinkHandlerGroup(SampleNames.SupportChannel)
 public final class EnsureSupportUserActorHandler
-    implements ZLinkRequestHandler<Messages.EnsureSupportUserActorReq, Messages.EnsureSupportUserActorRes> {
+        implements ZLinkRequestHandler<
+                Messages.EnsureSupportUserActorReq, Messages.EnsureSupportUserActorRes> {
     private final ZLinkActorManager actors;
 
     public EnsureSupportUserActorHandler(ZLinkActorManager actors) {
@@ -22,17 +24,17 @@ public final class EnsureSupportUserActorHandler
 
     @Override
     public CompletionStage<Messages.EnsureSupportUserActorRes> handle(
-        Messages.EnsureSupportUserActorReq request,
-        ZLinkMessageContext context) {
+            Messages.EnsureSupportUserActorReq request, ZLinkMessageContext context) {
         return actors.getOrCreate(request.actorId(), SampleNames.SupportActorType)
-            .request(request)
-            .submit()
-            .thenApply(result -> new Messages.EnsureSupportUserActorRes(
-                ActorRefSnapshot.from(actorRef(result))));
+                .request(request)
+                .submit()
+                .thenApply(
+                        result ->
+                                new Messages.EnsureSupportUserActorRes(
+                                        ActorRefSnapshot.from(actorRef(result))));
     }
 
-    private static ActorRef actorRef(
-        ZLinkActorCreateResult result) {
+    private static ActorRef actorRef(ZLinkActorCreateResult result) {
         if (result instanceof ZLinkActorCreateResult.Created created) {
             return created.actor();
         }

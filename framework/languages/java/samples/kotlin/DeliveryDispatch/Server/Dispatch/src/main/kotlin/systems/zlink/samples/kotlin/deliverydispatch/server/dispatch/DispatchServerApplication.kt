@@ -1,19 +1,18 @@
 package systems.zlink.samples.kotlin.deliverydispatch.server.dispatch
 
-
-import java.net.URI
-import systems.zlink.framework.actors.ZLinkActorClient
 import com.fasterxml.jackson.databind.ObjectMapper
 import com.fasterxml.jackson.module.kotlin.KotlinModule
+import java.net.URI
 import kotlinx.coroutines.Dispatchers
 import org.springframework.boot.WebApplicationType
 import org.springframework.boot.autoconfigure.SpringBootApplication
 import org.springframework.boot.builder.SpringApplicationBuilder
 import org.springframework.context.annotation.Bean
+import systems.zlink.framework.actors.ZLinkActorClient
 import systems.zlink.framework.channels.ZLinkClient
 import systems.zlink.framework.configuration.ZLinkMessageFlowLogMode
-import systems.zlink.framework.locations.redis.ZLinkRedisLocationStore
 import systems.zlink.framework.kotlin.useCoroutineHandlers
+import systems.zlink.framework.locations.redis.ZLinkRedisLocationStore
 import systems.zlink.framework.monitoring.ZLinkRouteMeshRuntime
 import systems.zlink.framework.spring.EnableZLinkFramework
 import systems.zlink.framework.spring.ZLinkFrameworkConfigurer
@@ -29,39 +28,34 @@ import systems.zlink.samples.kotlin.deliverydispatch.server.configuration.Sample
 )
 class DispatchServerApplication {
     @Bean
-    fun dispatchFramework(): ZLinkFrameworkConfigurer =
-        ZLinkFrameworkConfigurer { options ->
-            options.useCoroutineHandlers(Dispatchers.Default)
-            options.addHandlersFromPackageOf(DispatchServerApplication::class.java)
-            options.configureDispatch()
-                .messageFlow(ZLinkMessageFlowLogMode.NORMAL)
+    fun dispatchFramework(): ZLinkFrameworkConfigurer = ZLinkFrameworkConfigurer { options ->
+        options.useCoroutineHandlers(Dispatchers.Default)
+        options.addHandlersFromPackageOf(DispatchServerApplication::class.java)
+        options.configureDispatch().messageFlow(ZLinkMessageFlowLogMode.NORMAL)
 
-            // --8<-- [start:doc-dd-dispatch-register]
-            options.addClientServerChannel(SampleNames.CourierChannel)
-                .client()
-            // The courier's decision comes back here as its own one-way message, so dispatch has
-            // to be a channel server (common sample spec section 7.4).
-            val dispatchEndpoint = URI.create(SampleTopology.DispatchChannelEndpoint)
-            options.addClientServerChannel(SampleNames.DispatchChannel)
-                .client()
-            options.addClientServerChannel(SampleNames.DispatchChannel)
-                .server()
-                .setBindHost(dispatchEndpoint.host)
-                .setAdvertiseHost(dispatchEndpoint.host)
-                .listen(dispatchEndpoint.port)
-                .addHandlerGroup(SampleNames.DispatchChannel)
-            options.addClientServerChannel(SampleNames.TrackingChannel)
-                .client()
-            val courierRoutes = options.addRouteMesh(SampleNames.CourierSpotMesh)
-            courierRoutes
-                .listen(SampleTopology.DispatchSpotEndpoint)
-                .setRoutingIdPrefix("delivery-dispatch")
-            courierRoutes.objects().client()
-            // --8<-- [end:doc-dd-dispatch-register]
-        }
+        // --8<-- [start:doc-dd-dispatch-register]
+        options.addClientServerChannel(SampleNames.CourierChannel).client()
+        // The courier's decision comes back here as its own one-way message, so dispatch has
+        // to be a channel server (common sample spec section 7.4).
+        val dispatchEndpoint = URI.create(SampleTopology.DispatchChannelEndpoint)
+        options.addClientServerChannel(SampleNames.DispatchChannel).client()
+        options
+            .addClientServerChannel(SampleNames.DispatchChannel)
+            .server()
+            .setBindHost(dispatchEndpoint.host)
+            .setAdvertiseHost(dispatchEndpoint.host)
+            .listen(dispatchEndpoint.port)
+            .addHandlerGroup(SampleNames.DispatchChannel)
+        options.addClientServerChannel(SampleNames.TrackingChannel).client()
+        val courierRoutes = options.addRouteMesh(SampleNames.CourierSpotMesh)
+        courierRoutes
+            .listen(SampleTopology.DispatchSpotEndpoint)
+            .setRoutingIdPrefix("delivery-dispatch")
+        courierRoutes.objects().client()
+        // --8<-- [end:doc-dd-dispatch-register]
+    }
 
-    @Bean
-    fun locationStore(): ZLinkRedisLocationStore = SampleLocationStore.create()
+    @Bean fun locationStore(): ZLinkRedisLocationStore = SampleLocationStore.create()
 
     @Bean(destroyMethod = "close")
     fun readinessReporter(meshes: ZLinkRouteMeshRuntime): DeliveryDispatchReadinessReporter =
@@ -70,8 +64,7 @@ class DispatchServerApplication {
     @Bean
     fun dispatchWorkQueue(worker: DispatchWorker): DispatchWorkQueue = DispatchWorkQueue(worker)
 
-    @Bean
-    fun deliveryOfferStore(): DeliveryOfferStore = DeliveryOfferStore()
+    @Bean fun deliveryOfferStore(): DeliveryOfferStore = DeliveryOfferStore()
 
     @Bean
     fun dispatchWorker(
@@ -94,13 +87,13 @@ class DispatchServerApplication {
     ): DispatchHttpServer = DispatchHttpServer(json, channels, queue)
 
     @Bean
-    fun objectMapper(): ObjectMapper =
-        ObjectMapper().registerModule(KotlinModule.Builder().build())
+    fun objectMapper(): ObjectMapper = ObjectMapper().registerModule(KotlinModule.Builder().build())
 
     companion object {
         fun run(args: Array<String> = emptyArray()): AutoCloseable {
-            val builder = SpringApplicationBuilder(DispatchServerApplication::class.java)
-                .web(WebApplicationType.NONE)
+            val builder =
+                SpringApplicationBuilder(DispatchServerApplication::class.java)
+                    .web(WebApplicationType.NONE)
             builder.application().setKeepAlive(true)
             val context = builder.run(*args)
             return AutoCloseable { context.close() }

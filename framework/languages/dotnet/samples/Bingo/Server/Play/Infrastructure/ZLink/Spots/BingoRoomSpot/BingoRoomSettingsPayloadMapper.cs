@@ -8,20 +8,27 @@ internal static class BingoRoomSettingsPayloadMapper
 {
     public static BingoRoomSettings FromCreateRequest(
         ZLinkMessage request,
-        BingoRoomSettings defaultSettings)
+        BingoRoomSettings defaultSettings
+    )
     {
-        if (request.IsEmpty) return defaultSettings;
+        if (request.IsEmpty)
+            return defaultSettings;
 
-        var payload = request.Decode<BingoRoomCreateReq>().Settings
-                      ?? throw new InvalidOperationException(
-                          "Bingo room create request is missing settings.");
+        var payload =
+            request.Decode<BingoRoomCreateReq>().Settings
+            ?? throw new InvalidOperationException(
+                "Bingo room create request is missing settings."
+            );
         return new BingoRoomSettings(
             payload.RoomName,
             payload.Mode,
             payload.RequiredPlayers,
             payload.MaxDrawNumber,
-            string.IsNullOrWhiteSpace(payload.Purpose) ? BingoRoomSettings.GamePurpose : payload.Purpose,
-            payload.HasObservedRoomId ? payload.ObservedRoomId : null);
+            string.IsNullOrWhiteSpace(payload.Purpose)
+                ? BingoRoomSettings.GamePurpose
+                : payload.Purpose,
+            payload.HasObservedRoomId ? payload.ObservedRoomId : null
+        );
     }
 
     public static BingoRoomCreateReq ToCreateRequest(BingoRoomSettings settings) =>
@@ -35,10 +42,11 @@ internal static class BingoRoomSettingsPayloadMapper
             Mode = settings.Mode,
             RequiredPlayers = settings.RequiredPlayers,
             MaxDrawNumber = settings.MaxDrawNumber,
-            Purpose = settings.Purpose
+            Purpose = settings.Purpose,
         };
 
-        if (settings.ObservedRoomId is not null) payload.ObservedRoomId = settings.ObservedRoomId;
+        if (settings.ObservedRoomId is not null)
+            payload.ObservedRoomId = settings.ObservedRoomId;
 
         return payload;
     }

@@ -6,17 +6,21 @@ internal interface IOrderWorkflowRouter
 {
     ValueTask<OrderState> StartAsync(
         StartOrderWorkflowReq command,
-        CancellationToken cancellationToken);
+        CancellationToken cancellationToken
+    );
 
     ValueTask<OrderState> ContinueAsync(
         ContinueOrderWorkflowReq command,
-        CancellationToken cancellationToken);
+        CancellationToken cancellationToken
+    );
 
     ValueTask<OrderState> RebuildProjectionAsync(
         RebuildOrderProjectionReq command,
-        CancellationToken cancellationToken);
+        CancellationToken cancellationToken
+    );
 
     ValueTask<OrderState> PrepareInventoryReservedCheckpointAsync(
         StartOrderWorkflowReq command,
-        CancellationToken cancellationToken);
+        CancellationToken cancellationToken
+    );
 }

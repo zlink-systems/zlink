@@ -20,7 +20,8 @@ public sealed class ChangeNicknameHandler
         Player player,
         IZLinkMessageContext context,
         ChangeNickname message,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken
+    )
     {
         player.Rename(message.Nickname);
 
@@ -30,17 +31,16 @@ public sealed class ChangeNicknameHandler
         // Rename is already complete, so only that failure is discarded.
         try
         {
-            await player.Context.BoundSession
-                .Send(new NicknameChanged(player.Nickname))
+            await player
+                .Context.BoundSession.Send(new NicknameChanged(player.Nickname))
                 .Async(cancellationToken);
         }
         catch (ZLinkFrameworkException error)
-            when (error.Kind == ZLinkFrameworkErrorKind.InvalidOperation)
-        {
-        }
+            when (error.Kind == ZLinkFrameworkErrorKind.InvalidOperation) { }
         // --8<-- [end:actor-push]
     }
 }
+
 // --8<-- [end:actor-send-handler]
 // --8<-- [start:actor-request-handler]
 
@@ -52,8 +52,8 @@ public sealed class GetPlayerHandler
         Player player,
         IZLinkMessageContext context,
         GetPlayer request,
-        CancellationToken cancellationToken)
-        => ValueTask.FromResult(new PlayerInfo(player.Context.ActorId, player.Nickname));
+        CancellationToken cancellationToken
+    ) => ValueTask.FromResult(new PlayerInfo(player.Context.ActorId, player.Nickname));
 }
 // --8<-- [end:actor-request-handler]
 // --8<-- [end:actor-handlers]

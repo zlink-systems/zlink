@@ -10,17 +10,20 @@ data class PlayerProfile(val playerId: String, val nickname: String, val level: 
 
 // One-way: the caller does not wait, so this message has no reply class.
 data class RecordLogin(val playerId: String)
+
 // --8<-- [end:channel-contracts]
 
 // --8<-- [start:clientserver-contracts]
 data class IssueSessionTicket(val playerId: String)
 
 data class SessionTicket(val value: String)
+
 // --8<-- [end:clientserver-contracts]
 
 // --8<-- [start:fanout-contracts]
 // Published without naming a recipient. Every subscribed node receives it.
 data class MaintenanceNotice(val message: String)
+
 // --8<-- [end:fanout-contracts]
 
 // --8<-- [start:spot-contracts]
@@ -34,6 +37,7 @@ data class PostChat(val playerId: String, val text: String)
 class GetRoomState
 
 data class RoomState(val title: String, val chat: List<String>)
+
 // --8<-- [end:spot-contracts]
 
 // --8<-- [start:instance-spot-contracts]
@@ -41,6 +45,7 @@ data class RoomState(val title: String, val chat: List<String>)
 data class JoinMatchQueue(val playerId: String)
 
 data class MatchQueueStatus(val waiting: Int)
+
 // --8<-- [end:instance-spot-contracts]
 
 // --8<-- [start:actor-contracts]
@@ -53,6 +58,7 @@ data class ChangeNickname(val nickname: String)
 class GetPlayer
 
 data class PlayerInfo(val playerId: String, val nickname: String)
+
 // --8<-- [end:actor-contracts]
 
 // --8<-- [start:stream-contracts]
@@ -62,6 +68,7 @@ data class PlayerInfo(val playerId: String, val nickname: String)
 data class Ping(val sentAtUnixMs: String)
 
 data class Pong(val sentAtUnixMs: String)
+
 // --8<-- [end:stream-contracts]
 
 // --8<-- [start:session-actor-contracts]
@@ -71,6 +78,7 @@ data class Authenticated(val playerId: String)
 
 // Pushed by the player to its own connection, with no request to answer.
 data class NicknameChanged(val nickname: String)
+
 // --8<-- [end:session-actor-contracts]
 
 // --8<-- [start:node-direct-contracts]

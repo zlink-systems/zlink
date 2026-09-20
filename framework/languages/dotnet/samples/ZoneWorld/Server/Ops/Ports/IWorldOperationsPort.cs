@@ -11,10 +11,12 @@ public interface IWorldOperationsPort
     ValueTask PublishAnnouncementAsync(
         string announcementId,
         string text,
-        CancellationToken cancellationToken);
+        CancellationToken cancellationToken
+    );
 
     ValueTask PublishMaintenanceChangeAsync(
         string nodeId,
         bool enabled,
-        CancellationToken cancellationToken);
+        CancellationToken cancellationToken
+    );
 }

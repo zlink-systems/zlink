@@ -4,10 +4,14 @@ import systems.zlink.framework.spots.ZLinkSpotRequestHandler;
 import systems.zlink.samples.shoppingmall.server.orderworkflow.OrderWorkflowService;
 import systems.zlink.samples.shoppingmall.server.orderworkflow.spots.OrderWorkflowSpot;
 import systems.zlink.samples.shoppingmall.shared.contracts.Messages;
+
 import java.util.concurrent.CompletionStage;
 
 public final class RebuildOrderProjectionSpotHandler
-    implements ZLinkSpotRequestHandler<OrderWorkflowSpot, Messages.RebuildOrderProjectionReq, Messages.RebuildOrderProjectionRes> {
+        implements ZLinkSpotRequestHandler<
+                OrderWorkflowSpot,
+                Messages.RebuildOrderProjectionReq,
+                Messages.RebuildOrderProjectionRes> {
     private final OrderWorkflowService workflow;
 
     public RebuildOrderProjectionSpotHandler(OrderWorkflowService workflow) {
@@ -16,10 +20,9 @@ public final class RebuildOrderProjectionSpotHandler
 
     @Override
     public CompletionStage<Messages.RebuildOrderProjectionRes> handle(
-        OrderWorkflowSpot spot,
-        Messages.RebuildOrderProjectionReq request) {
+            OrderWorkflowSpot spot, Messages.RebuildOrderProjectionReq request) {
         Messages.OrderState state = workflow.rebuildProjectionInSpot(request.orderId());
         return spot.closeIfTerminal(state)
-            .thenApply(ignored -> new Messages.RebuildOrderProjectionRes(state));
+                .thenApply(ignored -> new Messages.RebuildOrderProjectionRes(state));
     }
 }

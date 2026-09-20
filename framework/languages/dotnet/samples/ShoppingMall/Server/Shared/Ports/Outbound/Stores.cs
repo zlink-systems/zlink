@@ -7,89 +7,93 @@ public interface IOrderEventStore
 {
     ValueTask<IReadOnlyList<StoredOrderEvent>> ReadAsync(
         string orderId,
-        CancellationToken cancellationToken);
+        CancellationToken cancellationToken
+    );
 
     ValueTask AppendAsync(
         string orderId,
         long expectedVersion,
         IReadOnlyList<OrderDomainEvent> events,
-        CancellationToken cancellationToken);
+        CancellationToken cancellationToken
+    );
 }
 
 public interface IOrderReadModelStore
 {
-    ValueTask<OrderProjectionState?> FindAsync(
-        string orderId,
-        CancellationToken cancellationToken);
+    ValueTask<OrderProjectionState?> FindAsync(string orderId, CancellationToken cancellationToken);
 
-    ValueTask SaveAsync(
-        OrderProjectionState state,
-        CancellationToken cancellationToken);
+    ValueTask SaveAsync(OrderProjectionState state, CancellationToken cancellationToken);
 
-    ValueTask DeleteAsync(
-        string orderId,
-        CancellationToken cancellationToken);
+    ValueTask DeleteAsync(string orderId, CancellationToken cancellationToken);
 }
 
 public interface ICommerceStateStore
 {
-    ValueTask<CartSeed> GetCartAsync(
-        string cartId,
-        CancellationToken cancellationToken);
+    ValueTask<CartSeed> GetCartAsync(string cartId, CancellationToken cancellationToken);
 
     ValueTask ValidateShippingAddressAsync(
         string shippingAddressId,
-        CancellationToken cancellationToken);
+        CancellationToken cancellationToken
+    );
 
     ValueTask<PaymentMethodSeed> GetPaymentMethodAsync(
         string paymentMethodId,
-        CancellationToken cancellationToken);
+        CancellationToken cancellationToken
+    );
 
     ValueTask<IdempotencyMapping?> FindIdempotencyAsync(
         string idempotencyKey,
-        CancellationToken cancellationToken);
+        CancellationToken cancellationToken
+    );
 
     ValueTask<IdempotencyReservation> ReserveIdempotencyAsync(
         string idempotencyKey,
-        CancellationToken cancellationToken);
+        CancellationToken cancellationToken
+    );
 
     ValueTask MarkIdempotencyStartedAsync(
         string idempotencyKey,
-        CancellationToken cancellationToken);
+        CancellationToken cancellationToken
+    );
 
     ValueTask CreatePendingMappingAsync(
         string idempotencyKey,
         string orderId,
-        CancellationToken cancellationToken);
+        CancellationToken cancellationToken
+    );
 
-    ValueTask ArmPlannedRelocationReplayAsync(
-        string orderId,
-        CancellationToken cancellationToken);
+    ValueTask ArmPlannedRelocationReplayAsync(string orderId, CancellationToken cancellationToken);
 
     ValueTask<bool> TryConsumePlannedRelocationReplayAsync(
         string orderId,
-        CancellationToken cancellationToken);
+        CancellationToken cancellationToken
+    );
 
     ValueTask SaveOrderPaymentMethodAsync(
         string orderId,
         string paymentMethodId,
-        CancellationToken cancellationToken);
+        CancellationToken cancellationToken
+    );
 
     ValueTask<string> GetOrderPaymentMethodAsync(
         string orderId,
-        CancellationToken cancellationToken);
+        CancellationToken cancellationToken
+    );
 
     ValueTask<ReserveInventoryResult> ReserveInventoryAsync(
         ReserveInventoryCommand command,
-        CancellationToken cancellationToken);
+        CancellationToken cancellationToken
+    );
 
     ValueTask<ReleaseInventoryResult> ReleaseInventoryAsync(
         ReleaseInventoryCommand command,
-        CancellationToken cancellationToken);
+        CancellationToken cancellationToken
+    );
 
     ValueTask<AuthorizePaymentResult> AuthorizePaymentAsync(
         AuthorizePaymentCommand command,
-        CancellationToken cancellationToken);
+        CancellationToken cancellationToken
+    );
 }
 
 public sealed record StoredOrderEvent(
@@ -99,14 +103,13 @@ public sealed record StoredOrderEvent(
     string EventType,
     byte[] Payload,
     long Version,
-    long CreatedAtUnixMs);
+    long CreatedAtUnixMs
+);
 
 public static class StoredOrderEventPayload
 {
     public static byte[] Encode(OrderDomainEvent domainEvent) =>
-        System.Text.Json.JsonSerializer.SerializeToUtf8Bytes(
-            domainEvent,
-            domainEvent.GetType());
+        System.Text.Json.JsonSerializer.SerializeToUtf8Bytes(domainEvent, domainEvent.GetType());
 
     public static OrderDomainEvent Decode(this StoredOrderEvent storedEvent)
     {
@@ -121,37 +124,36 @@ public static class StoredOrderEventPayload
             nameof(OrderConfirmedEvent) => typeof(OrderConfirmedEvent),
             nameof(OrderFailedEvent) => typeof(OrderFailedEvent),
             _ => throw new InvalidOperationException(
-                $"Unsupported stored order event type '{storedEvent.EventType}'.")
+                $"Unsupported stored order event type '{storedEvent.EventType}'."
+            ),
         };
-        return (OrderDomainEvent?)System.Text.Json.JsonSerializer.Deserialize(
-                   storedEvent.Payload,
-                   type)
-               ?? throw new InvalidOperationException(
-                   $"Stored order event '{storedEvent.EventId}' has an empty payload.");
+        return (OrderDomainEvent?)
+                System.Text.Json.JsonSerializer.Deserialize(storedEvent.Payload, type)
+            ?? throw new InvalidOperationException(
+                $"Stored order event '{storedEvent.EventId}' has an empty payload."
+            );
     }
 }
 
-public sealed record IdempotencyMapping(
-    string IdempotencyKey,
-    string OrderId,
-    bool Started);
+public sealed record IdempotencyMapping(string IdempotencyKey, string OrderId, bool Started);
 
-public sealed record IdempotencyReservation(
-    IdempotencyMapping Mapping,
-    bool Created);
+public sealed record IdempotencyReservation(IdempotencyMapping Mapping, bool Created);
 
 public sealed record StoreEvidence(
     IReadOnlyDictionary<string, string[]> EventsByOrder,
     int PaymentFailureCount,
     int ReleasedReservationCount,
-    int StartedIdempotencyCount);
+    int StartedIdempotencyCount
+);
 
 public sealed class OrderStreamVersionConflictException(
     string orderId,
     long expectedVersion,
-    long actualVersion)
+    long actualVersion
+)
     : Exception(
-        $"Order stream version mismatch. order={orderId}, expected={expectedVersion}, actual={actualVersion}")
+        $"Order stream version mismatch. order={orderId}, expected={expectedVersion}, actual={actualVersion}"
+    )
 {
     public string OrderId { get; } = orderId;
 

@@ -7,12 +7,14 @@ import type {
 } from '@zlink-systems/framework';
 
 class BingoSession implements ZLinkSession {
-  constructor(
-    readonly context: ZLinkSessionContext
-  ) {}
+  constructor(readonly context: ZLinkSessionContext) {}
 
   // --8<-- [start:doc-bingo-session-relay]
-  async onDispatch(dispatch: ZLinkSessionDispatchContext, payload: ZLinkMessage, signal?: AbortSignal): Promise<void> {
+  async onDispatch(
+    dispatch: ZLinkSessionDispatchContext,
+    payload: ZLinkMessage,
+    signal?: AbortSignal
+  ): Promise<void> {
     if (await this.context.handlers.tryHandle(dispatch, payload)) {
       return;
     }
@@ -29,7 +31,9 @@ class BingoSession implements ZLinkSession {
     const actors = this.context.actors.bound;
     // Framework cleanup owns disconnect notification; this callback only records
     // the sample lifecycle evidence without submitting another notification.
-    console.error(`bingo-lifecycle session-disconnect actor=${actors[0]?.actorId ?? '-'} destroy=false`);
+    console.error(
+      `bingo-lifecycle session-disconnect actor=${actors[0]?.actorId ?? '-'} destroy=false`
+    );
   }
   // --8<-- [end:doc-bingo-session-disconnect]
 }

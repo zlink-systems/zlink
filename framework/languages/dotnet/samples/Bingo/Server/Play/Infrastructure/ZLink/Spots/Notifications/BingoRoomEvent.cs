@@ -12,4 +12,5 @@ internal sealed record BingoRoomEvent(
     string? JoinedDisplayName = null,
     int Seat = -1,
     bool IsHost = false,
-    int DrawnNumber = 0);
+    int DrawnNumber = 0
+);

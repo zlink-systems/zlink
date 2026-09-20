@@ -89,15 +89,9 @@ struct sample_topology_t
     api_instance_topology_t for_api_instance (const std::string &instance_id) const
     {
         if (instance_id == "api-b") {
-            return {"api-b",
-                    api_b_http_url,
-                    api_b_route_endpoint,
-                    api_b_spot_router_endpoint};
+            return {"api-b", api_b_http_url, api_b_route_endpoint, api_b_spot_router_endpoint};
         }
-        return {"api-a",
-                api_a_http_url,
-                api_a_route_endpoint,
-                api_a_spot_router_endpoint};
+        return {"api-a", api_a_http_url, api_a_route_endpoint, api_a_spot_router_endpoint};
     }
 
     workflow_instance_topology_t for_workflow_instance (const std::string &instance_id) const
@@ -117,7 +111,6 @@ struct sample_topology_t
                 workflow_a_spot_endpoint,
                 workflow_a_spot_router_endpoint};
     }
-
 };
 
 

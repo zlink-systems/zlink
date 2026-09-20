@@ -9,8 +9,10 @@ import type {
 import { OpsConsoleRegistry } from './ops-console-registry';
 
 class OpsSession implements ZLinkSession {
-  constructor(readonly context: ZLinkSessionContext, private readonly consoles: OpsConsoleRegistry) {
-  }
+  constructor(
+    readonly context: ZLinkSessionContext,
+    private readonly consoles: OpsConsoleRegistry
+  ) {}
 
   async onConnected(): Promise<void> {
     this.consoles.add(this.context);
@@ -22,7 +24,7 @@ class OpsSession implements ZLinkSession {
   }
 
   async onDispatch(dispatch: ZLinkSessionDispatchContext, payload: ZLinkMessage): Promise<void> {
-    if (!await this.context.handlers.tryHandle(dispatch, payload)) {
+    if (!(await this.context.handlers.tryHandle(dispatch, payload))) {
       throw new Error(`Unsupported ops packet '${dispatch.packetName}'.`);
     }
   }

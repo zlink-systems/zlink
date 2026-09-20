@@ -25,15 +25,15 @@ int main (int argc, char **argv)
 {
     const auto stream_endpoint = read_option (argc, argv, "--stream-endpoint");
     if (stream_endpoint.empty ()) {
-        std::cerr << "usage: " << argv[0]
-                  << " --stream-endpoint <endpoint>\n";
+        std::cerr << "usage: " << argv[0] << " --stream-endpoint <endpoint>\n";
         return 2;
     }
     try {
         zlink::samples::supportchat::supportchat_client_scenario_t scenario;
         scenario.run (stream_endpoint);
         return 0;
-    } catch (const std::exception &error) {
+    }
+    catch (const std::exception &error) {
         std::cerr << "supportchat client failed: " << error.what () << std::endl;
         return 1;
     }

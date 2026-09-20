@@ -101,15 +101,18 @@ class quest_event_store_t
         append_unlocked (stream,
                          reconciliation ? stored_quest_event_t::reconciled
                                         : stored_quest_event_t::progressed,
-                         event, *rule, next_count - previous_count, next_count);
+                         event,
+                         *rule,
+                         next_count - previous_count,
+                         next_count);
         // --8<-- [end:doc-gq-process]
 
         std::string completed_quest_id;
         bool reward_granted = false;
         if (next_count >= rule->required_count && previous_status == quest_status_t::active) {
             append_unlocked (stream, stored_quest_event_t::completed, event, *rule, 0, next_count);
-            append_unlocked (stream, stored_quest_event_t::reward_granted, event, *rule, 0,
-                             next_count);
+            append_unlocked (
+              stream, stored_quest_event_t::reward_granted, event, *rule, 0, next_count);
             completed_quest_id = rule->quest_id;
             reward_granted = true;
         }
@@ -118,8 +121,10 @@ class quest_event_store_t
                   << " quest=" << rule->quest_id << "\n";
         auto updated = replay_unlocked (event.player_id);
         _projections[event.player_id] = updated;
-        return {std::move (updated), completed_quest_id,
-                reconciliation ? rule->quest_id : std::string{}, reward_granted};
+        return {std::move (updated),
+                completed_quest_id,
+                reconciliation ? rule->quest_id : std::string{},
+                reward_granted};
     }
 
     std::vector<quest_progress_t> projection (const std::string &player_id) const
@@ -133,7 +138,8 @@ class quest_event_store_t
         const std::lock_guard lock (_mutex);
         auto &projection = _projections[player_id];
         projection.erase (
-          std::remove_if (projection.begin (), projection.end (),
+          std::remove_if (projection.begin (),
+                          projection.end (),
                           [&] (const auto &item) { return item.quest_id == quest_id; }),
           projection.end ());
     }
@@ -190,8 +196,9 @@ class quest_event_store_t
                                                   const std::string &quest_id)
     {
         const auto found =
-          std::find_if (projection.begin (), projection.end (),
-                        [&] (const quest_progress_t &item) { return item.quest_id == quest_id; });
+          std::find_if (projection.begin (), projection.end (), [&] (const quest_progress_t &item) {
+              return item.quest_id == quest_id;
+          });
         return found == projection.end () ? nullptr : &*found;
     }
 
@@ -225,8 +232,9 @@ class quest_event_store_t
         }
         for (const auto &stored : stream->second) {
             auto found = std::find_if (
-              projection.begin (), projection.end (),
-              [&] (const quest_progress_t &item) { return item.quest_id == stored.quest_id; });
+              projection.begin (), projection.end (), [&] (const quest_progress_t &item) {
+                  return item.quest_id == stored.quest_id;
+              });
             if (found == projection.end ()) {
                 quest_progress_t progress;
                 progress.player_id = stored.player_id;
@@ -271,7 +279,10 @@ class player_quest_spot_t : public instance_spot_t
                          actor_directory_t &directory,
                          actor_client_t &actors,
                          sample_topology_t &topology) :
-        _store (store), _directory (directory), _actors (actors), _topology (topology),
+        _store (store),
+        _directory (directory),
+        _actors (actors),
+        _topology (topology),
         _context (std::move (context))
     {
     }
@@ -323,8 +334,8 @@ class player_quest_spot_t : public instance_spot_t
         }
         co_await _actors
           .send (actor->actor_id (),
-                 notify_quest_progress_msg_t{message.player_id, result.projection,
-                                             result.completed_quest_id})
+                 notify_quest_progress_msg_t{
+                   message.player_id, result.projection, result.completed_quest_id})
           .async ();
         // --8<-- [end:doc-gq-notify-actor]
         std::cerr << "gamequest mission notified player=" << message.player_id
@@ -338,7 +349,8 @@ class player_quest_spot_t : public instance_spot_t
         if (request.snapshot_kill_count > 0) {
             const gameplay_msg_t snapshot{request.player_id + "-snapshot-"
                                             + std::to_string (request.snapshot_kill_count),
-                                          request.player_id, "SnapshotKillCount",
+                                          request.player_id,
+                                          "SnapshotKillCount",
                                           gameplay_payload ("kills", request.snapshot_kill_count),
                                           static_cast<long long> (std::time (nullptr)) * 1000LL};
             auto result = _store.apply (decode_gameplay (snapshot));
@@ -418,9 +430,9 @@ int main (int argc, char **argv)
     // --8<-- [start:doc-gq-mission-register]
     auto gamequest = options.add_route_mesh ("gamequest");
     gamequest
-      .set_routing_id (zlink::routing_id_t::from (
-        topology.mission_name == "mission-b" ? sample_names_t::mission_b_rid
-                                             : sample_names_t::mission_a_rid))
+      .set_routing_id (zlink::routing_id_t::from (topology.mission_name == "mission-b"
+                                                    ? sample_names_t::mission_b_rid
+                                                    : sample_names_t::mission_a_rid))
       .listen (topology.selected_mission_spot_route_endpoint ());
     /* GameApi owns the outbound peer connections for this RouteMesh. A
          * RouteMesh connection carries traffic in both directions, so the
@@ -428,12 +440,14 @@ int main (int argc, char **argv)
          * without creating a duplicate admission path here. */
     gamequest.objects ()
       .server ()
-      .add_instance_spot_factory<player_quest_spot_t, quest_event_store_t, actor_directory_t,
-                                 actor_client_t, sample_topology_t> (
-        sample_names_t::player_quest_spot)
+      .add_instance_spot_factory<player_quest_spot_t,
+                                 quest_event_store_t,
+                                 actor_directory_t,
+                                 actor_client_t,
+                                 sample_topology_t> (sample_names_t::player_quest_spot)
       .recreate_on_relocation ();
     // --8<-- [end:doc-gq-mission-register]
-    app.add_hosted_service (std::make_unique<sample_readiness_service_t> (
-      "instance-factory", topology.mission_name));
+    app.add_hosted_service (
+      std::make_unique<sample_readiness_service_t> ("instance-factory", topology.mission_name));
     return app.run (argc, argv);
 }

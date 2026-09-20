@@ -71,10 +71,7 @@ class ConversationSpot implements ZLinkSpot<SupportUserActor> {
     await this.timer?.cancel();
   }
 
-  async onActorJoin(
-    actorId: string,
-    request: ZLinkMessage
-  ): Promise<ZLinkSpotActorJoinResult> {
+  async onActorJoin(actorId: string, request: ZLinkMessage): Promise<ZLinkSpotActorJoinResult> {
     const join = request.decode(JoinConversationReq);
     this.pendingJoins.set(actorId, {
       actorId,
@@ -133,20 +130,30 @@ class ConversationSpot implements ZLinkSpot<SupportUserActor> {
     return this.requireConversation().snapshot();
   }
 
-  assignAgent(agentActorId: string, displayName: string): { state: ConversationState; event: ConversationEvent } {
+  assignAgent(
+    agentActorId: string,
+    displayName: string
+  ): { state: ConversationState; event: ConversationEvent } {
     return this.requireConversation().assign(agentActorId, displayName);
   }
 
   join(actorId: string): ConversationState {
     const actor = this.requireActor(actorId);
     const previousStatus = this.requireConversation().snapshot().status;
-    const joined = this.requireConversation().join(actor.participantId, actor.role, actor.displayName);
+    const joined = this.requireConversation().join(
+      actor.participantId,
+      actor.role,
+      actor.displayName
+    );
     this.reportStatusTransition(previousStatus, joined.state);
     return joined.state;
   }
 
   // --8<-- [start:doc-sc-message-push]
-  async sendChat(actorId: string, text: string): Promise<{ message: ChatMessage; state: ConversationState }> {
+  async sendChat(
+    actorId: string,
+    text: string
+  ): Promise<{ message: ChatMessage; state: ConversationState }> {
     const actor = this.requireActor(actorId);
     this.requireParticipant(actor);
     const previousStatus = this.requireConversation().snapshot().status;
@@ -161,7 +168,8 @@ class ConversationSpot implements ZLinkSpot<SupportUserActor> {
     const actor = this.requireActor(actorId);
     this.requireParticipant(actor);
     const event = this.requireConversation().changeTyping(actor.participantId, isTyping);
-    if (event !== undefined) await this.notifications.publish(event, this.otherActorRefs(actor.actorId));
+    if (event !== undefined)
+      await this.notifications.publish(event, this.otherActorRefs(actor.actorId));
   }
 
   async close(actorId: string): Promise<ConversationState> {
@@ -215,7 +223,9 @@ class ConversationSpot implements ZLinkSpot<SupportUserActor> {
   }
 
   private reportStatus(state: ConversationState): void {
-    console.log(`supportchat-conversation status=${state.status} conversation=${state.conversationId}`);
+    console.log(
+      `supportchat-conversation status=${state.status} conversation=${state.conversationId}`
+    );
   }
 
   private reportStatusTransition(previousStatus: string, state: ConversationState): void {
@@ -224,7 +234,8 @@ class ConversationSpot implements ZLinkSpot<SupportUserActor> {
 
   private requireActor(actorId: string): ConversationParticipant {
     const actor = this.actors.get(actorId);
-    if (actor === undefined) throw new Error(`Actor '${actorId}' is not joined to this conversation.`);
+    if (actor === undefined)
+      throw new Error(`Actor '${actorId}' is not joined to this conversation.`);
     return actor;
   }
 

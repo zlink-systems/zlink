@@ -11,5 +11,4 @@ object SampleNames {
     const val PlayerMilestoneTopic: String = "tictactoe.player.milestone"
     const val RequiredLevel: Int = 3
     val RequestTimeout: Duration = Duration.ofSeconds(5)
-
 }

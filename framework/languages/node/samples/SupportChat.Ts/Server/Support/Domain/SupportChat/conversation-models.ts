@@ -1,7 +1,4 @@
-export {
-  ConversationStatuses,
-  SupportChatRoles
-} from '../../../../Shared/Contracts/messages';
+export { ConversationStatuses, SupportChatRoles } from '../../../../Shared/Contracts/messages';
 
 export type {
   ChatMessage,

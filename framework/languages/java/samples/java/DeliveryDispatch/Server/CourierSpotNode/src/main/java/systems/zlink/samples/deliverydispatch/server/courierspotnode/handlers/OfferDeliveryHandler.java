@@ -1,11 +1,12 @@
 package systems.zlink.samples.deliverydispatch.server.courierspotnode.handlers;
 
-import java.util.concurrent.CompletionStage;
 import systems.zlink.framework.actors.ZLinkActorClient;
 import systems.zlink.framework.actors.ZLinkActorManager;
 import systems.zlink.framework.spots.ZLinkSpotPacketHandler;
 import systems.zlink.samples.deliverydispatch.server.courierspotnode.spots.CourierEntrySpot;
 import systems.zlink.samples.deliverydispatch.shared.contracts.Messages;
+
+import java.util.concurrent.CompletionStage;
 
 /**
  * The offer arrives as a one-way send, is handed to the courier actor, and this handler returns —
@@ -14,7 +15,7 @@ import systems.zlink.samples.deliverydispatch.shared.contracts.Messages;
  * worker (common sample spec section 7.4).
  */
 public final class OfferDeliveryHandler
-    implements ZLinkSpotPacketHandler<CourierEntrySpot, Messages.OfferDeliveryMsg> {
+        implements ZLinkSpotPacketHandler<CourierEntrySpot, Messages.OfferDeliveryMsg> {
     private final ZLinkActorManager actors;
     private final ZLinkActorClient actorClient;
 
@@ -25,10 +26,16 @@ public final class OfferDeliveryHandler
 
     @Override
     public CompletionStage<Void> handle(CourierEntrySpot spot, Messages.OfferDeliveryMsg message) {
-        return actors.find(message.courierId()).thenCompose(found -> {
-            var actorRef = found.orElseThrow(() -> new IllegalStateException(
-                "Courier actor is not bound: " + message.courierId()));
-            return actorClient.sendToActor(actorRef.actorId(), message).submit();
-        });
+        return actors.find(message.courierId())
+                .thenCompose(
+                        found -> {
+                            var actorRef =
+                                    found.orElseThrow(
+                                            () ->
+                                                    new IllegalStateException(
+                                                            "Courier actor is not bound: "
+                                                                    + message.courierId()));
+                            return actorClient.sendToActor(actorRef.actorId(), message).submit();
+                        });
     }
 }

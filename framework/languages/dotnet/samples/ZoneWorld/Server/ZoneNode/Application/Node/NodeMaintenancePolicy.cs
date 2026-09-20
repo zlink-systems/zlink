@@ -1,4 +1,5 @@
 using System.Collections.Concurrent;
+
 namespace ZoneWorld.Server.ZoneNode.Application.Node;
 
 /// <summary>
@@ -18,7 +19,8 @@ public sealed class NodeMaintenancePolicy(string ownNodeId)
     public string OwnNodeId { get; } = ownNodeId;
 
     /// <summary>The authoritative answer for this node. No cache is involved.</summary>
-    public bool IsOwnNodeUnderMaintenance => _byNode.TryGetValue(OwnNodeId, out var enabled) && enabled;
+    public bool IsOwnNodeUnderMaintenance =>
+        _byNode.TryGetValue(OwnNodeId, out var enabled) && enabled;
 
     public bool IsUnderMaintenance(string nodeId) =>
         _byNode.TryGetValue(nodeId, out var enabled) && enabled;

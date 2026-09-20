@@ -4,20 +4,22 @@ import org.springframework.boot.context.properties.ConfigurationProperties;
 
 @ConfigurationProperties("sample")
 public record SampleTopology(
-    String redisEndpoint,
-    String redisKeyPrefix,
-    String logDirectory,
-    String apiChannelEndpoint,
-    String apiSpotRouterEndpoint,
-    String apiHttpEndpoint,
-    String supportChannelEndpoint,
-    String sessionStreamEndpoint,
-    String sessionSpotRouterEndpoint,
-    String supportSpotRouterEndpoint,
-    String supportHttpEndpoint) {
+        String redisEndpoint,
+        String redisKeyPrefix,
+        String logDirectory,
+        String apiChannelEndpoint,
+        String apiSpotRouterEndpoint,
+        String apiHttpEndpoint,
+        String supportChannelEndpoint,
+        String sessionStreamEndpoint,
+        String sessionSpotRouterEndpoint,
+        String supportSpotRouterEndpoint,
+        String supportHttpEndpoint) {
 
     public Location location() {
-        return new Location(required(redisEndpoint, "redisEndpoint"), required(redisKeyPrefix, "redisKeyPrefix"));
+        return new Location(
+                required(redisEndpoint, "redisEndpoint"),
+                required(redisKeyPrefix, "redisKeyPrefix"));
     }
 
     public String requiredLogDirectory() {
@@ -26,22 +28,22 @@ public record SampleTopology(
 
     public Api api() {
         return new Api(
-            required(apiChannelEndpoint, "apiChannelEndpoint"),
-            required(apiSpotRouterEndpoint, "apiSpotRouterEndpoint"),
-            required(apiHttpEndpoint, "apiHttpEndpoint"));
+                required(apiChannelEndpoint, "apiChannelEndpoint"),
+                required(apiSpotRouterEndpoint, "apiSpotRouterEndpoint"),
+                required(apiHttpEndpoint, "apiHttpEndpoint"));
     }
 
     public Session session() {
         return new Session(
-            required(sessionStreamEndpoint, "sessionStreamEndpoint"),
-            required(sessionSpotRouterEndpoint, "sessionSpotRouterEndpoint"));
+                required(sessionStreamEndpoint, "sessionStreamEndpoint"),
+                required(sessionSpotRouterEndpoint, "sessionSpotRouterEndpoint"));
     }
 
     public Support support() {
         return new Support(
-            required(supportChannelEndpoint, "supportChannelEndpoint"),
-            required(supportSpotRouterEndpoint, "supportSpotRouterEndpoint"),
-            required(supportHttpEndpoint, "supportHttpEndpoint"));
+                required(supportChannelEndpoint, "supportChannelEndpoint"),
+                required(supportSpotRouterEndpoint, "supportSpotRouterEndpoint"),
+                required(supportHttpEndpoint, "supportHttpEndpoint"));
     }
 
     public static String configPath(String[] args) {
@@ -58,20 +60,11 @@ public record SampleTopology(
         return value;
     }
 
-    public record Location(String redisEndpoint, String redisKeyPrefix) {
-    }
+    public record Location(String redisEndpoint, String redisKeyPrefix) {}
 
-    public record Api(String channelEndpoint, String spotRouterEndpoint, String httpEndpoint) {
-    }
+    public record Api(String channelEndpoint, String spotRouterEndpoint, String httpEndpoint) {}
 
-    public record Session(
-        String streamEndpoint,
-        String routerEndpoint) {
-    }
+    public record Session(String streamEndpoint, String routerEndpoint) {}
 
-    public record Support(
-        String channelEndpoint,
-        String routerEndpoint,
-        String httpEndpoint) {
-    }
+    public record Support(String channelEndpoint, String routerEndpoint, String httpEndpoint) {}
 }

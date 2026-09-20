@@ -10,17 +10,11 @@ data class CreateDeliveryReq(
     val dropoffAddress: String,
 )
 
-data class CreateDeliveryRes(
-    val deliveryId: String,
-)
+data class CreateDeliveryRes(val deliveryId: String)
 
-data class SubscribeDeliveryReq(
-    val deliveryId: String,
-)
+data class SubscribeDeliveryReq(val deliveryId: String)
 
-data class SubscribeDeliveryRes(
-    val deliveryId: String,
-)
+data class SubscribeDeliveryRes(val deliveryId: String)
 
 data class DeliveryStatusNotify(
     val deliveryId: String,
@@ -48,10 +42,7 @@ data class BindCourierSessionRes(
     val sessionRoute: String,
 )
 
-data class BindCourierReq(
-    val courierId: String,
-    val sessionRoute: String,
-)
+data class BindCourierReq(val courierId: String, val sessionRoute: String)
 
 data class BindCourierRes(
     val courierId: String,
@@ -59,23 +50,13 @@ data class BindCourierRes(
     val sessionRoute: String,
 )
 
-data class FindCourierActorReq(
-    val courierId: String,
-)
+data class FindCourierActorReq(val courierId: String)
 
-data class FindCourierActorRes(
-    val courierId: String,
-    val actor: ActorRefSnapshot?,
-)
+data class FindCourierActorRes(val courierId: String, val actor: ActorRefSnapshot?)
 
-data class EnsureCourierActorReq(
-    val courierId: String,
-)
+data class EnsureCourierActorReq(val courierId: String)
 
-data class EnsureCourierActorRes(
-    val courierId: String,
-    val actor: ActorRefSnapshot,
-)
+data class EnsureCourierActorRes(val courierId: String, val actor: ActorRefSnapshot)
 
 /**
  * The offer, and the courier's answer to it. Both are one-way (common sample spec section 7.4): a
@@ -131,38 +112,19 @@ data class DeliveryStatusUpdatedMsg(
     val occurredAt: Instant,
 )
 
-data class DeliveryStatusChangedRes(
-    val deliveryId: String,
-    val status: DeliveryStatus,
-)
+data class DeliveryStatusChangedRes(val deliveryId: String, val status: DeliveryStatus)
 
-data class FindCustomerActorReq(
-    val customerId: String,
-)
+data class FindCustomerActorReq(val customerId: String)
 
-data class FindCustomerActorRes(
-    val customerId: String,
-    val actorRef: ActorRefSnapshot?,
-)
+data class FindCustomerActorRes(val customerId: String, val actorRef: ActorRefSnapshot?)
 
-data class ServerAssertionReq(
-    val successfulDeliveryId: String,
-    val reassignedDeliveryId: String,
-)
+data class ServerAssertionReq(val successfulDeliveryId: String, val reassignedDeliveryId: String)
 
-data class ServerAssertionRes(
-    val passed: Boolean,
-    val evidence: Array<String>,
-)
+data class ServerAssertionRes(val passed: Boolean, val evidence: Array<String>)
 
-data class EnsureCustomerActorReq(
-    val customerId: String,
-)
+data class EnsureCustomerActorReq(val customerId: String)
 
-data class EnsureCustomerActorRes(
-    val customerId: String,
-    val actorRef: ActorRefSnapshot,
-)
+data class EnsureCustomerActorRes(val customerId: String, val actorRef: ActorRefSnapshot)
 
 enum class DeliveryStatus {
     Created,

@@ -11,7 +11,9 @@ class AssignDeliveryHandler implements ZLinkSendHandler<AssignDeliveryMsg> {
   async handle(request: AssignDeliveryMsg, context: ZLinkMessageContext): Promise<void> {
     void context;
     this.worker.assign(request);
-    console.error(`deliverydispatch dispatch: queued delivery=${request.deliveryId} customer=${request.customerId}`);
+    console.error(
+      `deliverydispatch dispatch: queued delivery=${request.deliveryId} customer=${request.customerId}`
+    );
   }
 }
 

@@ -7,6 +7,5 @@ public final class SampleNames {
     public static final String GameEndedPacket = "BingoGameEndedNotify";
     public static final String RewardAnnouncedPacket = "BingoRewardAnnouncedNotify";
 
-    private SampleNames() {
-    }
+    private SampleNames() {}
 }

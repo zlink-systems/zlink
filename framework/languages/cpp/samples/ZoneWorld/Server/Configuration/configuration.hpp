@@ -26,30 +26,25 @@ struct configuration_t
     bool allow_empty_zone_set = false;
     std::optional<std::string> fault_tick_zone;
 
-    static configuration_t bind (
-      const zlink::framework::configuration_section_t &section)
+    static configuration_t bind (const zlink::framework::configuration_section_t &section)
     {
-        return {
-          section.require ("redisEndpoint"),
-          section.require ("redisKeyPrefix"),
-          section.require ("nodeId"),
-          section.require ("meshEndpoint"),
-          section.require ("streamEndpoint"),
-          section.require ("broadcastEndpoint"),
-          section.require ("bootstrapHttpEndpoint"),
-          section.require ("logDir"),
-          section.get ("meshAdvertiseHost"),
-          section.get ("subscriberOnly").value_or ("false") == "true",
-          section.get ("disableBots").value_or ("false") == "true",
-          section.get ("allowEmptyZoneSet").value_or ("false") == "true",
-          section.get ("faultTickZone")};
+        return {section.require ("redisEndpoint"),
+                section.require ("redisKeyPrefix"),
+                section.require ("nodeId"),
+                section.require ("meshEndpoint"),
+                section.require ("streamEndpoint"),
+                section.require ("broadcastEndpoint"),
+                section.require ("bootstrapHttpEndpoint"),
+                section.require ("logDir"),
+                section.get ("meshAdvertiseHost"),
+                section.get ("subscriberOnly").value_or ("false") == "true",
+                section.get ("disableBots").value_or ("false") == "true",
+                section.get ("allowEmptyZoneSet").value_or ("false") == "true",
+                section.get ("faultTickZone")};
     }
 };
 
-inline configuration_t load_configuration (
-  zlink::framework::app_t &app,
-  int argc,
-  char **argv)
+inline configuration_t load_configuration (zlink::framework::app_t &app, int argc, char **argv)
 {
     app.config ().load_cli (argc, argv);
     const auto path = app.config ().model ().get ("config");

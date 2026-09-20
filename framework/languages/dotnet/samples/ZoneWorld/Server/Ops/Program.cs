@@ -16,8 +16,8 @@ using ZoneWorld.Shared.Contracts;
 
 var configuration = ZoneWorldConfiguration.Load(args);
 var shared = configuration.Shared;
-var ops = configuration.Ops
-          ?? throw new InvalidOperationException("Ops configuration is required.");
+var ops =
+    configuration.Ops ?? throw new InvalidOperationException("Ops configuration is required.");
 
 var builder = Host.CreateApplicationBuilder(args);
 builder.Configuration.Sources.Clear();
@@ -31,12 +31,13 @@ builder.Logging.AddSimpleConsole(console =>
 
 builder.Services.AddSingleton(shared);
 builder.Services.AddSingleton(ops);
-builder.Services.AddSingleton<IConnectionMultiplexer>(
-    _ => ConnectionMultiplexer.Connect(shared.RedisEndpoint));
-builder.Services.AddSingleton<IMaintenanceStorePort>(services =>
-    new MaintenanceStoreRepository(
-        services.GetRequiredService<IConnectionMultiplexer>(),
-        shared.RedisKeyPrefix));
+builder.Services.AddSingleton<IConnectionMultiplexer>(_ =>
+    ConnectionMultiplexer.Connect(shared.RedisEndpoint)
+);
+builder.Services.AddSingleton<IMaintenanceStorePort>(services => new MaintenanceStoreRepository(
+    services.GetRequiredService<IConnectionMultiplexer>(),
+    shared.RedisKeyPrefix
+));
 builder.Services.AddSingleton(TimeProvider.System);
 builder.Services.AddSingleton<NodeRegistry>();
 builder.Services.AddSingleton<OpsConsoleRegistry>();
@@ -46,35 +47,36 @@ builder.Services.AddSingleton<MaintenanceService>();
 builder.Services.AddSingleton<NodeDiagnosticsService>();
 builder.Services.AddZLinkFramework(options =>
 {
-    options.AddLocationStore(new ZLinkRedisLocationStore(redis =>
-    {
-        redis.ConnectionString = shared.RedisEndpoint;
-        redis.KeyPrefix = shared.RedisKeyPrefix;
-    }));
+    options.AddLocationStore(
+        new ZLinkRedisLocationStore(redis =>
+        {
+            redis.ConnectionString = shared.RedisEndpoint;
+            redis.KeyPrefix = shared.RedisKeyPrefix;
+        })
+    );
     // owner lease는 Location runtime 5절이 정한 기본값을 그대로 쓴다 — TTL 15초, 갱신
     // 5초, renew timeout 3초, fencing margin 5초. ZoneWorld 스펙은 report TTL 15초(2.2)만
     // 정하고 owner lease 재정의를 요구하지 않으므로 어떤 역할도 덮어쓰지 않는다.
 
-    options.ConfigureDispatch()
-        .Diagnostics.SetLevel(ZLinkDiagnosticsLevel.Normal);
+    options.ConfigureDispatch().Diagnostics.SetLevel(ZLinkDiagnosticsLevel.Normal);
     options.AddHandlersFromAssemblyOf(typeof(OpsConsoleSession));
 
-    options.AddStreamNode(ZoneWorldNames.OpsStreamNode)
+    options
+        .AddStreamNode(ZoneWorldNames.OpsStreamNode)
         .Bind(ops.StreamEndpoint)
         .AddSession<OpsConsoleSession>();
 
     // The announcement and the maintenance change both leave here without a node list.
     // Adding a node changes nothing on this side — that is the whole point (ZW-D2).
     // --8<-- [start:doc-zw-fanout-publisher]
-    options.AddFanoutChannel(ZoneWorldNames.BroadcastChannel)
-        .EnablePublisher();
+    options.AddFanoutChannel(ZoneWorldNames.BroadcastChannel).EnablePublisher();
     // --8<-- [end:doc-zw-fanout-publisher]
 
-    var mesh = options.AddRouteMesh(ZoneWorldNames.MeshName)
+    var mesh = options
+        .AddRouteMesh(ZoneWorldNames.MeshName)
         .Listen(ops.MeshEndpoint)
         .SetRoutingIdPrefix("ops");
-    mesh.Channel(ZoneWorldNames.ReportChannel).Server()
-        .AddHandlerGroup(HandlerGroups.Ops);
+    mesh.Channel(ZoneWorldNames.ReportChannel).Server().AddHandlerGroup(HandlerGroups.Ops);
 });
 
 // Hosted services start in registration order. Observe the RouteMesh only after

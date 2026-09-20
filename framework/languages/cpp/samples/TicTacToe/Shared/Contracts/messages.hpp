@@ -18,8 +18,7 @@ void write_nullable (nlohmann::json &json, const char *name, const std::optional
     json[name] = value ? nlohmann::json (*value) : nlohmann::json (nullptr);
 }
 
-template <typename T>
-std::optional<T> read_nullable (const nlohmann::json &json, const char *name)
+template <typename T> std::optional<T> read_nullable (const nlohmann::json &json, const char *name)
 {
     const auto found = json.find (name);
     if (found == json.end () || found->is_null ()) {
@@ -462,7 +461,9 @@ inline void to_json (nlohmann::json &json, const observe_milestone_req_t &)
     json = nlohmann::json::object ();
 }
 
-inline void from_json (const nlohmann::json &, observe_milestone_req_t &) {}
+inline void from_json (const nlohmann::json &, observe_milestone_req_t &)
+{
+}
 
 inline void to_json (nlohmann::json &json, const observe_milestone_res_t &value)
 {

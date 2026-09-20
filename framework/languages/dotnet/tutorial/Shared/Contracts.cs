@@ -10,17 +10,20 @@ public sealed record PlayerProfile(string PlayerId, string Nickname, int Level);
 
 // One-way: the caller does not wait, so this message has no reply record.
 public sealed record RecordLogin(string PlayerId);
+
 // --8<-- [end:channel-contracts]
 
 // --8<-- [start:clientserver-contracts]
 public sealed record IssueSessionTicket(string PlayerId);
 
 public sealed record SessionTicket(string Value);
+
 // --8<-- [end:clientserver-contracts]
 
 // --8<-- [start:fanout-contracts]
 // Published without naming a recipient. Every subscribed node receives it.
 public sealed record MaintenanceNotice(string Message);
+
 // --8<-- [end:fanout-contracts]
 
 // --8<-- [start:spot-contracts]
@@ -33,6 +36,7 @@ public sealed record PostChat(string PlayerId, string Text);
 public sealed record GetRoomState;
 
 public sealed record RoomState(string Title, IReadOnlyList<string> Chat);
+
 // --8<-- [end:spot-contracts]
 
 // --8<-- [start:instance-spot-contracts]
@@ -40,6 +44,7 @@ public sealed record RoomState(string Title, IReadOnlyList<string> Chat);
 public sealed record JoinMatchQueue(string PlayerId);
 
 public sealed record MatchQueueStatus(int Waiting);
+
 // --8<-- [end:instance-spot-contracts]
 
 // --8<-- [start:actor-contracts]
@@ -51,6 +56,7 @@ public sealed record ChangeNickname(string Nickname);
 public sealed record GetPlayer;
 
 public sealed record PlayerInfo(string PlayerId, string Nickname);
+
 // --8<-- [end:actor-contracts]
 
 // --8<-- [start:stream-contracts]
@@ -60,6 +66,7 @@ public sealed record PlayerInfo(string PlayerId, string Nickname);
 public sealed record Ping(string SentAtUnixMs);
 
 public sealed record Pong(string SentAtUnixMs);
+
 // --8<-- [end:stream-contracts]
 
 // --8<-- [start:session-actor-contracts]
@@ -69,6 +76,7 @@ public sealed record Authenticated(string PlayerId);
 
 // Pushed by the player to its own connection, with no request to answer.
 public sealed record NicknameChanged(string Nickname);
+
 // --8<-- [end:session-actor-contracts]
 
 // --8<-- [start:node-direct-contracts]
@@ -81,5 +89,6 @@ public sealed record NodeStatus(
     string? ChannelName,
     string CalledBy,
     string Uptime,
-    int ProcessId);
+    int ProcessId
+);
 // --8<-- [end:node-direct-contracts]

@@ -20,14 +20,14 @@ class SupportEntrySpot implements ZLinkEntrySpot<SupportUserActor> {
     private readonly directory: SupportActorDirectory
   ) {}
 
-  async onActorJoin(
-    _actorId: string,
-    _request: ZLinkMessage
-  ): Promise<ZLinkSpotActorJoinResult> {
+  async onActorJoin(_actorId: string, _request: ZLinkMessage): Promise<ZLinkSpotActorJoinResult> {
     return { accepted: true };
   }
 
-  async onCreateActor(actor: SupportUserActor, request: ZLinkMessage): Promise<ZLinkActorCreateResponse> {
+  async onCreateActor(
+    actor: SupportUserActor,
+    request: ZLinkMessage
+  ): Promise<ZLinkActorCreateResponse> {
     const value = request.decode(SupportUserActorCreateReq);
     this.directory.bind(actor.actorId, {
       displayName: value.displayName,

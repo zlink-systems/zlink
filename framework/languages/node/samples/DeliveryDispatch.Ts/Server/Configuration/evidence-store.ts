@@ -7,7 +7,8 @@ class EvidenceStore {
   private readonly filePath: string | undefined;
 
   constructor(workDir?: string) {
-    this.filePath = workDir === undefined ? undefined : path.join(workDir, 'deliverydispatch-evidence.jsonl');
+    this.filePath =
+      workDir === undefined ? undefined : path.join(workDir, 'deliverydispatch-evidence.jsonl');
     if (this.filePath !== undefined) fs.mkdirSync(path.dirname(this.filePath), { recursive: true });
   }
 
@@ -39,14 +40,19 @@ class EvidenceStore {
     expected: readonly { readonly status: DeliveryStatus; readonly courierId?: string }[]
   ): boolean {
     const observed = this.readEvents().filter((event) => event.deliveryId === deliveryId);
-    return observed.length === expected.length && observed.every((event, index) =>
-      event.status === expected[index]?.status && event.courierId === expected[index]?.courierId
+    return (
+      observed.length === expected.length &&
+      observed.every(
+        (event, index) =>
+          event.status === expected[index]?.status && event.courierId === expected[index]?.courierId
+      )
     );
   }
 
   readLines(): string[] {
-    return this.readEvents().map((event) =>
-      `${event.deliveryId}:${event.status}:${event.courierId ?? '-'}:${event.occurredAtUnixMs}`
+    return this.readEvents().map(
+      (event) =>
+        `${event.deliveryId}:${event.status}:${event.courierId ?? '-'}:${event.occurredAtUnixMs}`
     );
   }
 
@@ -54,7 +60,8 @@ class EvidenceStore {
     if (this.filePath === undefined || !fs.existsSync(this.filePath)) {
       return this.events;
     }
-    return fs.readFileSync(this.filePath, 'utf8')
+    return fs
+      .readFileSync(this.filePath, 'utf8')
       .split('\n')
       .filter((line) => line.length > 0)
       .map((line) => JSON.parse(line) as DeliveryStatusChangedReq);

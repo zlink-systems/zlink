@@ -25,7 +25,8 @@ class GameQuestSession implements ZLinkSession {
   async onDispatch(dispatch: ZLinkSessionDispatchContext, payload: ZLinkMessage): Promise<void> {
     if (await this.context.handlers.tryHandle(dispatch, payload)) return;
     const actor = this.context.actors.bound.length === 1 ? this.context.actors.bound[0] : undefined;
-    if (actor === undefined) throw new Error(`JoinSessionReq is required before '${dispatch.packetName}'.`);
+    if (actor === undefined)
+      throw new Error(`JoinSessionReq is required before '${dispatch.packetName}'.`);
     await actor.relay(payload);
   }
 }
@@ -50,13 +51,14 @@ class JoinSessionHandler {
     }
     // --8<-- [start:doc-gq-join-bind]
     const located = await this.actorManager.find(request.playerId);
-    const created = located === undefined
-      ? await this.actorManager
-        .getOrCreate(request.playerId, SampleNames.playerActorType)
-        .inMesh(SampleNames.playerQuestSpotMesh)
-        .request(request)
-        .submit()
-      : undefined;
+    const created =
+      located === undefined
+        ? await this.actorManager
+            .getOrCreate(request.playerId, SampleNames.playerActorType)
+            .inMesh(SampleNames.playerQuestSpotMesh)
+            .request(request)
+            .submit()
+        : undefined;
     if (created?.status === 'rejected') {
       throw new Error(`Player actor '${request.playerId}' creation was rejected.`);
     }

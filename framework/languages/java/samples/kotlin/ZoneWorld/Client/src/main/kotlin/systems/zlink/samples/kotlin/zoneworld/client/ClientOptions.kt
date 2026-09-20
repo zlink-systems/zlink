@@ -4,6 +4,7 @@ import java.io.Reader
 import java.nio.file.Files
 import java.nio.file.Path
 import java.util.Properties
+
 data class ClientOptions(
     val gatewayEndpoint: String,
     val opsEndpoint: String,
@@ -17,7 +18,9 @@ data class ClientOptions(
                 "Usage: ZoneWorldClient --config <path>"
             }
             val properties = Properties()
-            Files.newBufferedReader(Path.of(args[1])).use { reader: Reader -> properties.load(reader) }
+            Files.newBufferedReader(Path.of(args[1])).use { reader: Reader ->
+                properties.load(reader)
+            }
             return ClientOptions(
                 gatewayEndpoint = required(properties, "sample.gateway-endpoint"),
                 opsEndpoint = required(properties, "sample.ops-endpoint"),
@@ -28,7 +31,6 @@ data class ClientOptions(
         }
 
         private fun required(properties: Properties, key: String): String =
-            properties.getProperty(key)?.takeIf { it.isNotBlank() }
-                ?: error("$key is required")
+            properties.getProperty(key)?.takeIf { it.isNotBlank() } ?: error("$key is required")
     }
 }

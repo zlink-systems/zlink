@@ -14,14 +14,16 @@ internal sealed class PlayActorPlaceMarkHandler(ILogger<PlayActorPlaceMarkHandle
         PlayActor actor,
         IZLinkMessageContext context,
         PlaceMarkReq message,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken
+    )
     {
         var roomId = actor.RequireJoinedRoom();
         logger.LogInformation(
             "actor: PlaceMarkReq received. actor={ActorId}, roomId={RoomId}, cell={Cell}",
             actor.ActorId,
             roomId,
-            message.Cell);
+            message.Cell
+        );
 
         var reply = await spot.PlaceMarkAsync(actor, message.Cell, cancellationToken);
 
@@ -30,7 +32,8 @@ internal sealed class PlayActorPlaceMarkHandler(ILogger<PlayActorPlaceMarkHandle
             actor.ActorId,
             reply.State.RoomId,
             reply.State.Board,
-            reply.State.Status);
+            reply.State.Status
+        );
         return reply;
     }
 }

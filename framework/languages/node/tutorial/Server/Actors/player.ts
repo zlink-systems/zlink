@@ -77,12 +77,12 @@ class ChangeNicknameHandler {
     // on an HTTP path with no bound connection, where push ends with InvalidOperation.
     // Rename is already complete, so only that failure is discarded.
     try {
-      await player.context.boundSession
-        .send(new NicknameChanged(player.nickname))
-        .submit();
+      await player.context.boundSession.send(new NicknameChanged(player.nickname)).submit();
     } catch (error) {
-      if (!(error instanceof ZLinkFrameworkException)
-          || error.kind !== ZLinkFrameworkErrorKind.InvalidOperation) {
+      if (
+        !(error instanceof ZLinkFrameworkException) ||
+        error.kind !== ZLinkFrameworkErrorKind.InvalidOperation
+      ) {
         throw error;
       }
     }

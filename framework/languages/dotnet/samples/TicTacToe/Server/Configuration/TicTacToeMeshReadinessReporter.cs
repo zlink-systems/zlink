@@ -8,19 +8,21 @@ namespace TicTacToe.Server.Configuration;
 internal enum TicTacToeReadyKind
 {
     PeerRoute,
-    SpotRoute
+    SpotRoute,
 }
 
 internal sealed record TicTacToeMeshReadiness(
     TicTacToeReadyKind Kind,
     string NodeId,
     string MeshName,
-    string? PeerNodeId = null);
+    string? PeerNodeId = null
+);
 
 internal sealed class TicTacToeMeshReadinessReporter(
     IEnumerable<TicTacToeMeshReadiness> readiness,
     IZLinkRouteMeshRuntime routeMesh,
-    ILogger<TicTacToeMeshReadinessReporter> logger) : IHostedService
+    ILogger<TicTacToeMeshReadinessReporter> logger
+) : IHostedService
 {
     private readonly List<TicTacToeMeshReadiness> pending = readiness.ToList();
     private CancellationTokenSource? stopping;
@@ -35,15 +37,14 @@ internal sealed class TicTacToeMeshReadinessReporter(
 
     public async Task StopAsync(CancellationToken cancellationToken)
     {
-        if (stopping is null || reporting is null) return;
+        if (stopping is null || reporting is null)
+            return;
         await stopping.CancelAsync();
         try
         {
             await reporting.WaitAsync(cancellationToken);
         }
-        catch (OperationCanceledException) when (stopping.IsCancellationRequested)
-        {
-        }
+        catch (OperationCanceledException) when (stopping.IsCancellationRequested) { }
         finally
         {
             stopping.Dispose();
@@ -59,7 +60,8 @@ internal sealed class TicTacToeMeshReadinessReporter(
                 var report = pending[index];
                 try
                 {
-                    if (!IsReady(report)) continue;
+                    if (!IsReady(report))
+                        continue;
                 }
                 catch (InvalidOperationException)
                 {
@@ -88,13 +90,14 @@ internal sealed class TicTacToeMeshReadinessReporter(
             // The spot mesh uses a fixed RID so the expected peer can be named at all.
             TicTacToeReadyKind.PeerRoute => status.Peers.Any(peer =>
                 peer.NodeRid == SampleNodes.RouteMeshRoutingId(report.PeerNodeId!)
-                && peer.State == ZLinkPeerState.Ready),
+                && peer.State == ZLinkPeerState.Ready
+            ),
             // Spec 10.1: this row means the Api node can reach the Play spot mesh, not merely
             // that the mesh object exists. Mesh IsReady can be true before any object-capable Play
             // peer is admitted, which lets the client start too early and fail its first JoinSpot.
             TicTacToeReadyKind.SpotRoute => status.IsReady
                 && status.Peers.Any(peer => peer.State == ZLinkPeerState.Ready),
-            _ => false
+            _ => false,
         };
     }
 
@@ -106,13 +109,15 @@ internal sealed class TicTacToeMeshReadinessReporter(
                 logger.LogInformation(
                     "tictactoe-ready kind=peer-route node={NodeId} peer={PeerNodeId}",
                     report.NodeId,
-                    report.PeerNodeId);
+                    report.PeerNodeId
+                );
                 break;
             case TicTacToeReadyKind.SpotRoute:
                 logger.LogInformation(
                     "tictactoe-ready kind=spot-route node={NodeId} mesh={MeshName}",
                     report.NodeId,
-                    report.MeshName);
+                    report.MeshName
+                );
                 break;
         }
     }

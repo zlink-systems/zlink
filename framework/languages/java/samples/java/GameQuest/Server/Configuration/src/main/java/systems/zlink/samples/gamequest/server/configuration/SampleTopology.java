@@ -4,35 +4,35 @@ import org.springframework.boot.context.properties.ConfigurationProperties;
 
 @ConfigurationProperties("sample")
 public record SampleTopology(
-    String instanceName,
-    String logDirectory,
-    String streamEndpoint,
-    String spotRouterEndpoint,
-    String httpEndpoint,
-    String redisEndpoint,
-    String redisKeyPrefix) {
+        String instanceName,
+        String logDirectory,
+        String streamEndpoint,
+        String spotRouterEndpoint,
+        String httpEndpoint,
+        String redisEndpoint,
+        String redisKeyPrefix) {
 
     public GameApi gameApi() {
         return new GameApi(
-            required(instanceName, "instanceName"),
-            required(logDirectory, "logDirectory"),
-            required(streamEndpoint, "streamEndpoint"),
-            required(httpEndpoint, "httpEndpoint"),
-            required(spotRouterEndpoint, "spotRouterEndpoint"));
+                required(instanceName, "instanceName"),
+                required(logDirectory, "logDirectory"),
+                required(streamEndpoint, "streamEndpoint"),
+                required(httpEndpoint, "httpEndpoint"),
+                required(spotRouterEndpoint, "spotRouterEndpoint"));
     }
 
     public QuestMission questMission() {
         return new QuestMission(
-            required(instanceName, "instanceName"),
-            required(logDirectory, "logDirectory"),
-            required(httpEndpoint, "httpEndpoint"),
-            required(spotRouterEndpoint, "spotRouterEndpoint"));
+                required(instanceName, "instanceName"),
+                required(logDirectory, "logDirectory"),
+                required(httpEndpoint, "httpEndpoint"),
+                required(spotRouterEndpoint, "spotRouterEndpoint"));
     }
 
     public Location location() {
         return new Location(
-            required(redisEndpoint, "redisEndpoint"),
-            required(redisKeyPrefix, "redisKeyPrefix"));
+                required(redisEndpoint, "redisEndpoint"),
+                required(redisKeyPrefix, "redisKeyPrefix"));
     }
 
     public static String configPath(String[] args) {
@@ -50,20 +50,17 @@ public record SampleTopology(
     }
 
     public record GameApi(
-        String instanceName,
-        String logDirectory,
-        String streamEndpoint,
-        String httpEndpoint,
-        String spotRouterEndpoint) {
-    }
+            String instanceName,
+            String logDirectory,
+            String streamEndpoint,
+            String httpEndpoint,
+            String spotRouterEndpoint) {}
 
     public record QuestMission(
-        String instanceName,
-        String logDirectory,
-        String httpEndpoint,
-        String spotRouterEndpoint) {
-    }
+            String instanceName,
+            String logDirectory,
+            String httpEndpoint,
+            String spotRouterEndpoint) {}
 
-    public record Location(String redisEndpoint, String redisKeyPrefix) {
-    }
+    public record Location(String redisEndpoint, String redisKeyPrefix) {}
 }

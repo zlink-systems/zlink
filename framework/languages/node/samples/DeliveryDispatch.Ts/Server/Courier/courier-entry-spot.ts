@@ -1,7 +1,4 @@
-import type {
-  ZLinkEntrySpot,
-  ZLinkEntrySpotContext
-} from '@zlink-systems/framework';
+import type { ZLinkEntrySpot, ZLinkEntrySpotContext } from '@zlink-systems/framework';
 import type { CourierActor } from './courier-actor';
 
 class CourierEntrySpot implements ZLinkEntrySpot<CourierActor> {

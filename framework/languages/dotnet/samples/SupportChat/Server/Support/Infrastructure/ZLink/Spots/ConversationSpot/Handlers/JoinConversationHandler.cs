@@ -1,6 +1,6 @@
-using Zlink.Framework.Contracts.Handlers;
 using SupportChat.Server.Support.Infrastructure.ZLink.Actors;
 using SupportChat.Shared.Contracts;
+using Zlink.Framework.Contracts.Handlers;
 using Zlink.Framework.Contracts.Spots;
 
 namespace SupportChat.Server.Support.Infrastructure.ZLink.Spots.ConversationSpot.Handlers;
@@ -13,14 +13,16 @@ internal sealed class JoinConversationHandler
         ConversationSpot,
         SupportUserActor,
         JoinConversationReq,
-        JoinConversationRes>
+        JoinConversationRes
+    >
 {
     public ValueTask<JoinConversationRes> HandleAsync(
         ConversationSpot spot,
         SupportUserActor actor,
         IZLinkMessageContext context,
         JoinConversationReq message,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken
+    )
     {
         _ = context;
         _ = message;

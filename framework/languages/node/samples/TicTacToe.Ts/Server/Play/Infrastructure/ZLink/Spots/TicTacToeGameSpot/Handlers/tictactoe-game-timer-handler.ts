@@ -1,7 +1,4 @@
-import type {
-  ZLinkSpotTimerHandler,
-  ZLinkTimerTick
-} from '@zlink-systems/framework';
+import type { ZLinkSpotTimerHandler, ZLinkTimerTick } from '@zlink-systems/framework';
 import { Injectable } from '@nestjs/common';
 import { TicTacToeGameSpot } from '../tictactoe-game-spot';
 

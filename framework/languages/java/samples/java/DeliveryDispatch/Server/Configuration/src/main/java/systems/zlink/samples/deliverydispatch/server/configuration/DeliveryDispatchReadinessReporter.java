@@ -1,14 +1,16 @@
 package systems.zlink.samples.deliverydispatch.server.configuration;
 
+import org.springframework.context.SmartLifecycle;
+
+import systems.zlink.framework.monitoring.ZLinkMeshPeerSnapshot;
+import systems.zlink.framework.monitoring.ZLinkPeerState;
+import systems.zlink.framework.monitoring.ZLinkRouteMeshRuntime;
+
 import java.util.Arrays;
 import java.util.List;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
-import systems.zlink.framework.monitoring.ZLinkMeshPeerSnapshot;
-import systems.zlink.framework.monitoring.ZLinkPeerState;
-import systems.zlink.framework.monitoring.ZLinkRouteMeshRuntime;
-import org.springframework.context.SmartLifecycle;
 
 /** Emits sample-owned readiness evidence from the public RouteMesh monitoring surface. */
 public final class DeliveryDispatchReadinessReporter implements SmartLifecycle {
@@ -22,10 +24,10 @@ public final class DeliveryDispatchReadinessReporter implements SmartLifecycle {
     private ScheduledExecutorService executor;
 
     public DeliveryDispatchReadinessReporter(
-        ZLinkRouteMeshRuntime routeMeshRuntime,
-        String nodeName,
-        String meshName,
-        String... actorRouteTargets) {
+            ZLinkRouteMeshRuntime routeMeshRuntime,
+            String nodeName,
+            String meshName,
+            String... actorRouteTargets) {
         this.routeMeshRuntime = routeMeshRuntime;
         this.nodeName = nodeName;
         this.meshName = meshName;
@@ -39,11 +41,13 @@ public final class DeliveryDispatchReadinessReporter implements SmartLifecycle {
             return;
         }
         running = true;
-        executor = Executors.newSingleThreadScheduledExecutor(runnable -> {
-            Thread thread = new Thread(runnable, "deliverydispatch-readiness");
-            thread.setDaemon(true);
-            return thread;
-        });
+        executor =
+                Executors.newSingleThreadScheduledExecutor(
+                        runnable -> {
+                            Thread thread = new Thread(runnable, "deliverydispatch-readiness");
+                            thread.setDaemon(true);
+                            return thread;
+                        });
         executor.scheduleAtFixedRate(this::reportReadyState, 0, 100, TimeUnit.MILLISECONDS);
     }
 
@@ -88,13 +92,19 @@ public final class DeliveryDispatchReadinessReporter implements SmartLifecycle {
                 continue;
             }
             actorRouteReported[index] = true;
-            System.out.println("deliverydispatch-ready kind=actor-route node=" + nodeName
-                + " target=" + actorRouteTargets.get(index));
+            System.out.println(
+                    "deliverydispatch-ready kind=actor-route node="
+                            + nodeName
+                            + " target="
+                            + actorRouteTargets.get(index));
         }
     }
 
     private static boolean hasReadyPeer(List<ZLinkMeshPeerSnapshot> peers, String nodeName) {
-        return peers.stream().anyMatch(peer ->
-            peer.nodeRid().toString().equals(nodeName) && peer.state() == ZLinkPeerState.READY);
+        return peers.stream()
+                .anyMatch(
+                        peer ->
+                                peer.nodeRid().toString().equals(nodeName)
+                                        && peer.state() == ZLinkPeerState.READY);
     }
 }

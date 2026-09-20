@@ -18,11 +18,11 @@ import org.springframework.boot.context.properties.EnableConfigurationProperties
 import org.springframework.context.ConfigurableApplicationContext
 import org.springframework.context.annotation.Bean
 import org.springframework.core.env.StandardEnvironment
-import systems.zlink.framework.channels.ZLinkRouteClient
+import systems.zlink.contracts.core.RoutingId
 import systems.zlink.framework.actors.ZLinkActorClient
+import systems.zlink.framework.channels.ZLinkRouteClient
 import systems.zlink.framework.configuration.ZLinkMessageFlowLogMode
 import systems.zlink.framework.kotlin.useCoroutineHandlers
-import systems.zlink.framework.locations.redis.ZLinkRedisLocationStore
 import systems.zlink.framework.locations.redis.ZLinkRedisRelocationOptions
 import systems.zlink.framework.locations.redis.ZLinkRedisRelocationStore
 import systems.zlink.framework.spots.ZLinkInstanceSpot
@@ -31,9 +31,8 @@ import systems.zlink.framework.spots.ZLinkSpotPacketHandler
 import systems.zlink.framework.spots.ZLinkSpotRequestHandler
 import systems.zlink.framework.spring.EnableZLinkFramework
 import systems.zlink.framework.spring.ZLinkFrameworkConfigurer
-import systems.zlink.contracts.core.RoutingId
-import systems.zlink.samples.kotlin.gamequest.server.configuration.RedisSampleStore
 import systems.zlink.samples.kotlin.gamequest.server.configuration.GameplayStateStore
+import systems.zlink.samples.kotlin.gamequest.server.configuration.RedisSampleStore
 import systems.zlink.samples.kotlin.gamequest.server.configuration.SampleLocationStore
 import systems.zlink.samples.kotlin.gamequest.server.configuration.SampleNames
 import systems.zlink.samples.kotlin.gamequest.server.configuration.SampleTopology
@@ -62,24 +61,20 @@ fun main(args: Array<String>) {
     val store = Program.store
     val topology = app.getBean(SampleTopology::class.java)
     println("gamequest-ready kind=instance-factory node=${topology.questMission().instanceName}")
-    val http = startHttp(
-        store,
-        app.getBean(ZLinkRouteClient::class.java),
-        topology,
-    )
-    Runtime.getRuntime().addShutdownHook(Thread {
-        http.stop(0)
-        app.close()
-    })
+    val http = startHttp(store, app.getBean(ZLinkRouteClient::class.java), topology)
+    Runtime.getRuntime()
+        .addShutdownHook(
+            Thread {
+                http.stop(0)
+                app.close()
+            }
+        )
     Thread.currentThread().join()
 }
 
 @EnableZLinkFramework
 @EnableConfigurationProperties(SampleTopology::class)
-@SpringBootApplication(
-    proxyBeanMethods = false,
-    scanBasePackageClasses = [Program::class],
-)
+@SpringBootApplication(proxyBeanMethods = false, scanBasePackageClasses = [Program::class])
 class Program {
     @Bean
     fun questMissionFramework(topology: SampleTopology): ZLinkFrameworkConfigurer {
@@ -92,45 +87,55 @@ class Program {
                 ZLinkRedisRelocationStore(
                     ZLinkRedisRelocationOptions()
                         .setConnectionString(location.redisEndpoint)
-                        .setKeyPrefix("${location.redisKeyPrefix}relocation:"),
-                ),
+                        .setKeyPrefix("${location.redisKeyPrefix}relocation:")
+                )
             )
             options.useCoroutineHandlers(Dispatchers.Default)
             options.addHandlersFromPackageOf(Program::class.java)
-            options.configureDispatch()
-                .messageFlow(ZLinkMessageFlowLogMode.NORMAL)
-
+            options.configureDispatch().messageFlow(ZLinkMessageFlowLogMode.NORMAL)
 
             // --8<-- [start:doc-gq-mission-register]
-            options.addRouteMesh(SampleNames.PlayerQuestMesh)
+            options
+                .addRouteMesh(SampleNames.PlayerQuestMesh)
                 .setRoutingId(RoutingId.from("gamequest-mission-${mission.instanceName}"))
                 .listen(mission.channelEndpoint)
-                .objects().server()
+                .objects()
+                .server()
                 .addInstanceSpotFactory(
                     SampleNames.PlayerQuestSpotType,
                     PlayerQuestSpot::class.java,
-                ) { factory -> factory.recreateOnRelocation() }
+                ) { factory ->
+                    factory.recreateOnRelocation()
+                }
             // --8<-- [end:doc-gq-mission-register]
         }
     }
 
     @Bean(destroyMethod = "close")
-    fun questStore(topology: SampleTopology): QuestStore =
-        QuestStore(topology).also { store = it }
+    fun questStore(topology: SampleTopology): QuestStore = QuestStore(topology).also { store = it }
 
     companion object {
         lateinit var store: QuestStore
+
         fun run(configPath: String): ConfigurableApplicationContext {
-            val environment = StandardEnvironment().apply {
-                propertySources.remove(StandardEnvironment.SYSTEM_ENVIRONMENT_PROPERTY_SOURCE_NAME)
-                propertySources.remove(StandardEnvironment.SYSTEM_PROPERTIES_PROPERTY_SOURCE_NAME)
-            }
-            val context = SpringApplicationBuilder(Program::class.java)
-                .environment(environment)
-                .also { it.application().setKeepAlive(true) }
-                .web(WebApplicationType.NONE)
-                .properties("spring.config.location=${Path.of(configPath).toAbsolutePath().toUri()}")
-                .run()
+            val environment =
+                StandardEnvironment().apply {
+                    propertySources.remove(
+                        StandardEnvironment.SYSTEM_ENVIRONMENT_PROPERTY_SOURCE_NAME
+                    )
+                    propertySources.remove(
+                        StandardEnvironment.SYSTEM_PROPERTIES_PROPERTY_SOURCE_NAME
+                    )
+                }
+            val context =
+                SpringApplicationBuilder(Program::class.java)
+                    .environment(environment)
+                    .also { it.application().setKeepAlive(true) }
+                    .web(WebApplicationType.NONE)
+                    .properties(
+                        "spring.config.location=${Path.of(configPath).toAbsolutePath().toUri()}"
+                    )
+                    .run()
             return context
         }
     }
@@ -144,14 +149,18 @@ private fun startHttp(
     val json = jacksonObjectMapper()
     val uri = URI.create(topology.questMission().httpEndpoint)
     val server = HttpServer.create(InetSocketAddress(uri.host, uri.port), 0)
-    server.createContext("/health") { exchange -> writeJson(exchange, 200, mapOf("status" to "ok")) }
+    server.createContext("/health") { exchange ->
+        writeJson(exchange, 200, mapOf("status" to "ok"))
+    }
     server.createContext("/self-check/owner/") { exchange ->
         val parts = exchange.requestURI.path.split("/")
         val playerId = parts.getOrElse(3) { "" }
         routes.sendToSpot(playerId, ClosePlayerQuestMsg()).submit().toCompletableFuture().join()
         writeJson(exchange, 202, mapOf("closed" to true, "owner" to true))
     }
-    server.createContext("/self-check/events") { exchange -> writeJson(exchange, 200, store.events()) }
+    server.createContext("/self-check/events") { exchange ->
+        writeJson(exchange, 200, store.events())
+    }
     server.start()
     return server
 }
@@ -175,14 +184,17 @@ class PlayerQuestSpot(
     override fun onInitialize(): CompletionStage<Void> {
         val generation = store.markRehydrated(instanceContext.spotId())
         if (generation > 1) {
-            println("gamequest-mission replayed player=${instanceContext.spotId()} generation=$generation")
+            println(
+                "gamequest-mission replayed player=${instanceContext.spotId()} generation=$generation"
+            )
         }
         println(
             "gamequest-owner-ready player=${instanceContext.spotId()} " +
-                "node=${store.nodeName()} generation=$generation",
+                "node=${store.nodeName()} generation=$generation"
         )
         return CompletableFuture.completedFuture(null)
     }
+
     // --8<-- [end:doc-gq-spot-init]
 
     fun requirePlayer(playerId: String) {
@@ -198,68 +210,65 @@ class PlayerQuestSpot(
 }
 
 // --8<-- [start:doc-gq-apply-handler]
-class GameplayMsgRouteHandler(
-    private val actors: ZLinkActorClient,
-) : ZLinkSpotPacketHandler<PlayerQuestSpot, GameplayMsg> {
-    override fun handle(
-        spot: PlayerQuestSpot,
-        request: GameplayMsg,
-    ): CompletionStage<Void> {
+class GameplayMsgRouteHandler(private val actors: ZLinkActorClient) :
+    ZLinkSpotPacketHandler<PlayerQuestSpot, GameplayMsg> {
+    override fun handle(spot: PlayerQuestSpot, request: GameplayMsg): CompletionStage<Void> {
         val processed = spot.apply(request)
         // --8<-- [start:doc-gq-notify-actor]
         processed.projection.firstOrNull()?.let { progress ->
-            println("gamequest-mission processed player=${request.playerId} quest=${progress.questId}")
+            println(
+                "gamequest-mission processed player=${request.playerId} quest=${progress.questId}"
+            )
         }
         actors.sendToActor(request.playerId, processed).submit()
         // --8<-- [end:doc-gq-notify-actor]
         return CompletableFuture.completedFuture(null)
     }
 }
+
 // --8<-- [end:doc-gq-apply-handler]
 
-class GetQuestProgressHandler(
-    private val store: QuestStore,
-) : ZLinkSpotRequestHandler<PlayerQuestSpot, GetQuestProgressReq, GetQuestProgressRes> {
+class GetQuestProgressHandler(private val store: QuestStore) :
+    ZLinkSpotRequestHandler<PlayerQuestSpot, GetQuestProgressReq, GetQuestProgressRes> {
     override fun handle(
         spot: PlayerQuestSpot,
         request: GetQuestProgressReq,
     ): CompletionStage<GetQuestProgressRes> {
         spot.requirePlayer(request.playerId)
-        return CompletableFuture.completedFuture(GetQuestProgressRes(store.projection(request.playerId)))
+        return CompletableFuture.completedFuture(
+            GetQuestProgressRes(store.projection(request.playerId))
+        )
     }
 }
 
-class DeleteQuestProjectionHandler(
-    private val store: QuestStore,
-) : ZLinkSpotRequestHandler<PlayerQuestSpot, DeleteQuestProjectionReq, DeleteQuestProjectionRes> {
+class DeleteQuestProjectionHandler(private val store: QuestStore) :
+    ZLinkSpotRequestHandler<PlayerQuestSpot, DeleteQuestProjectionReq, DeleteQuestProjectionRes> {
     override fun handle(
         spot: PlayerQuestSpot,
         request: DeleteQuestProjectionReq,
     ): CompletionStage<DeleteQuestProjectionRes> {
         spot.requirePlayer(request.playerId)
         return CompletableFuture.completedFuture(
-            store.deleteProjection(request.playerId, request.questId),
+            store.deleteProjection(request.playerId, request.questId)
         )
     }
 }
 
-class RebuildQuestProjectionHandler(
-    private val store: QuestStore,
-) : ZLinkSpotRequestHandler<PlayerQuestSpot, RebuildQuestProjectionReq, QuestProgress> {
+class RebuildQuestProjectionHandler(private val store: QuestStore) :
+    ZLinkSpotRequestHandler<PlayerQuestSpot, RebuildQuestProjectionReq, QuestProgress> {
     override fun handle(
         spot: PlayerQuestSpot,
         request: RebuildQuestProjectionReq,
     ): CompletionStage<QuestProgress> {
         spot.requirePlayer(request.playerId)
         return CompletableFuture.completedFuture(
-            store.rebuildProjection(request.playerId, request.questId),
+            store.rebuildProjection(request.playerId, request.questId)
         )
     }
 }
 
-class SyncQuestProgressHandler(
-    private val store: QuestStore,
-) : ZLinkSpotRequestHandler<PlayerQuestSpot, SyncQuestProgressReq, SyncQuestProgressRes> {
+class SyncQuestProgressHandler(private val store: QuestStore) :
+    ZLinkSpotRequestHandler<PlayerQuestSpot, SyncQuestProgressReq, SyncQuestProgressRes> {
     override fun handle(
         spot: PlayerQuestSpot,
         request: SyncQuestProgressReq,
@@ -276,6 +285,7 @@ class ClosePlayerQuestSpotHandler : ZLinkSpotPacketHandler<PlayerQuestSpot, Clos
         request: ClosePlayerQuestMsg,
     ): CompletionStage<Void> = spot.context().close().thenApply { null }
 }
+
 // --8<-- [end:doc-gq-close-handler]
 
 class QuestStore(private val topology: SampleTopology) : AutoCloseable {
@@ -304,7 +314,8 @@ class QuestStore(private val topology: SampleTopology) : AutoCloseable {
             )
         }
         eventIdsByIdempotency[key] = event.eventId
-        val decision = domain.apply(event, copyProjection(event.playerId), nextVersion(event.playerId))
+        val decision =
+            domain.apply(event, copyProjection(event.playerId), nextVersion(event.playerId))
         projections[event.playerId] = decision.projection.toMutableList()
         events += decision.storedEvents
         shared.writeProjection(event.playerId, decision.projection)
@@ -324,36 +335,40 @@ class QuestStore(private val topology: SampleTopology) : AutoCloseable {
     fun sync(playerId: String): SyncQuestProgressRes {
         // --8<-- [start:doc-gq-sync]
         restorePlayer(playerId)
-        val firstHuntCount = gameplay.snapshot(playerId).killCounts
-            .firstOrNull { it.monsterId == "wolf" }?.count ?: 0
+        val firstHuntCount =
+            gameplay.snapshot(playerId).killCounts.firstOrNull { it.monsterId == "wolf" }?.count
+                ?: 0
         val projection = copyProjection(playerId).toMutableList()
         val firstHunt = projection.firstOrNull { it.questId == QuestIds.FirstHunt }
         if (firstHunt == null || firstHunt.currentCount < firstHuntCount) {
             val now = Instant.now().toEpochMilli()
-            val reconciled = QuestProgress(
-                playerId,
-                QuestIds.FirstHunt,
-                if (firstHuntCount >= 3) QuestStatuses.RewardGranted else QuestStatuses.InProgress,
-                firstHuntCount,
-                3,
-                "sync-$now",
-                now,
-            )
+            val reconciled =
+                QuestProgress(
+                    playerId,
+                    QuestIds.FirstHunt,
+                    if (firstHuntCount >= 3) QuestStatuses.RewardGranted
+                    else QuestStatuses.InProgress,
+                    firstHuntCount,
+                    3,
+                    "sync-$now",
+                    now,
+                )
             projection.removeIf { it.questId == QuestIds.FirstHunt }
             projection += reconciled
             projections[playerId] = projection
-            val reconciledEvent = StoredQuestEvent(
-                "sync-$now",
-                null,
-                playerId,
-                QuestIds.FirstHunt,
-                QuestProgressReconciledEvent::class.java.simpleName,
-                reconciled.currentCount,
-                reconciled.requiredCount,
-                reconciled.status,
-                nextVersion(playerId),
-                now,
-            )
+            val reconciledEvent =
+                StoredQuestEvent(
+                    "sync-$now",
+                    null,
+                    playerId,
+                    QuestIds.FirstHunt,
+                    QuestProgressReconciledEvent::class.java.simpleName,
+                    reconciled.currentCount,
+                    reconciled.requiredCount,
+                    reconciled.status,
+                    nextVersion(playerId),
+                    now,
+                )
             events += reconciledEvent
             shared.writeProjection(playerId, projection)
             shared.appendQuestEvents(listOf(reconciledEvent))
@@ -375,18 +390,22 @@ class QuestStore(private val topology: SampleTopology) : AutoCloseable {
     @Synchronized
     fun rebuildProjection(playerId: String, questId: String): QuestProgress {
         restorePlayer(playerId)
-        val stream = events.filter { it.playerId == playerId && it.questId == questId }.sortedBy { it.version }
+        val stream =
+            events
+                .filter { it.playerId == playerId && it.questId == questId }
+                .sortedBy { it.version }
         require(stream.isNotEmpty()) { "Quest stream was not found for $playerId/$questId" }
         val last = stream.last()
-        val rebuilt = QuestProgress(
-            playerId,
-            questId,
-            last.status,
-            last.currentCount,
-            last.requiredCount,
-            last.sourceEventId,
-            stream.maxOf { it.createdAtUnixMs },
-        )
+        val rebuilt =
+            QuestProgress(
+                playerId,
+                questId,
+                last.status,
+                last.currentCount,
+                last.requiredCount,
+                last.sourceEventId,
+                stream.maxOf { it.createdAtUnixMs },
+            )
         val projection = projections.getOrPut(playerId) { mutableListOf() }
         projection.removeIf { it.questId == questId }
         projection += rebuilt
@@ -409,8 +428,7 @@ class QuestStore(private val topology: SampleTopology) : AutoCloseable {
         return copyProjection(playerId)
     }
 
-    @Synchronized
-    fun events(): List<StoredQuestEvent> = events.toList()
+    @Synchronized fun events(): List<StoredQuestEvent> = events.toList()
 
     override fun close() {
         gameplay.close()
@@ -437,10 +455,11 @@ class QuestStore(private val topology: SampleTopology) : AutoCloseable {
                 eventIdsByIdempotency["$playerId:$idempotencyKey"] = sourceEventId
             }
         }
-        projections[playerId] = stored
-            .groupBy { it.questId }
-            .map { (questId, stream) -> fold(playerId, questId, stream) }
-            .toMutableList()
+        projections[playerId] =
+            stored
+                .groupBy { it.questId }
+                .map { (questId, stream) -> fold(playerId, questId, stream) }
+                .toMutableList()
     }
 
     private fun fold(
@@ -453,29 +472,24 @@ class QuestStore(private val topology: SampleTopology) : AutoCloseable {
         var status = QuestStatuses.InProgress
         var lastEventId: String? = null
         var updatedAt = 0L
-        stream.sortedBy { it.version }.forEach { event ->
-            required = event.requiredCount
-            when (event.eventType) {
-                QuestProgressedEvent::class.java.simpleName -> current = event.currentCount
-                QuestProgressReconciledEvent::class.java.simpleName -> {
-                    current = event.currentCount
-                    status = event.status
+        stream
+            .sortedBy { it.version }
+            .forEach { event ->
+                required = event.requiredCount
+                when (event.eventType) {
+                    QuestProgressedEvent::class.java.simpleName -> current = event.currentCount
+                    QuestProgressReconciledEvent::class.java.simpleName -> {
+                        current = event.currentCount
+                        status = event.status
+                    }
+                    QuestCompletedEvent::class.java.simpleName -> current = maxOf(current, required)
+                    QuestRewardGrantedEvent::class.java.simpleName ->
+                        status = QuestStatuses.RewardGranted
                 }
-                QuestCompletedEvent::class.java.simpleName -> current = maxOf(current, required)
-                QuestRewardGrantedEvent::class.java.simpleName -> status = QuestStatuses.RewardGranted
+                lastEventId = event.sourceEventId
+                updatedAt = maxOf(updatedAt, event.createdAtUnixMs)
             }
-            lastEventId = event.sourceEventId
-            updatedAt = maxOf(updatedAt, event.createdAtUnixMs)
-        }
-        return QuestProgress(
-            playerId,
-            questId,
-            status,
-            current,
-            required,
-            lastEventId,
-            updatedAt,
-        )
+        return QuestProgress(playerId, questId, status, current, required, lastEventId, updatedAt)
     }
 }
 
@@ -488,11 +502,42 @@ private class QuestDomain {
         val updated = current.toMutableList()
         when {
             event.type == "kill" && event.decodePayload().value == "wolf" ->
-                applyCounter(event, updated, stored, progress, completed, QuestIds.FirstHunt, 3, event.decodePayload().count, now, nextVersion)
+                applyCounter(
+                    event,
+                    updated,
+                    stored,
+                    progress,
+                    completed,
+                    QuestIds.FirstHunt,
+                    3,
+                    event.decodePayload().count,
+                    now,
+                    nextVersion,
+                )
             event.type == "collect" && event.decodePayload().value == "healing-herb" ->
-                applyCounter(event, updated, stored, progress, completed, QuestIds.HerbGathering, 5, event.decodePayload().count, now, nextVersion)
+                applyCounter(
+                    event,
+                    updated,
+                    stored,
+                    progress,
+                    completed,
+                    QuestIds.HerbGathering,
+                    5,
+                    event.decodePayload().count,
+                    now,
+                    nextVersion,
+                )
             event.type == "feature" && event.decodePayload().value == "auction" ->
-                completeOnce(event, updated, stored, completed, QuestIds.OpenAuction, 1, now, nextVersion)
+                completeOnce(
+                    event,
+                    updated,
+                    stored,
+                    completed,
+                    QuestIds.OpenAuction,
+                    1,
+                    now,
+                    nextVersion,
+                )
         }
         return QuestDecision(updated, stored, progress, completed)
     }
@@ -511,52 +556,60 @@ private class QuestDomain {
     ) {
         val previous = projection.firstOrNull { it.questId == questId }
         val current = minOf(required, (previous?.currentCount ?: 0) + delta)
-        val status = if (current >= required) QuestStatuses.RewardGranted else QuestStatuses.InProgress
-        val next = QuestProgress(event.playerId, questId, status, current, required, event.eventId, now)
+        val status =
+            if (current >= required) QuestStatuses.RewardGranted else QuestStatuses.InProgress
+        val next =
+            QuestProgress(event.playerId, questId, status, current, required, event.eventId, now)
         projection.removeIf { it.questId == questId }
         projection += next
         if (previous == null || previous.currentCount != current) {
-            stored += StoredQuestEvent(
-                "${event.eventId}:progress",
-                event.eventId,
-                event.playerId,
-                questId,
-                QuestProgressedEvent::class.java.simpleName,
-                next.currentCount,
-                next.requiredCount,
-                next.status,
-                nextVersion,
-                now,
-            )
+            stored +=
+                StoredQuestEvent(
+                    "${event.eventId}:progress",
+                    event.eventId,
+                    event.playerId,
+                    questId,
+                    QuestProgressedEvent::class.java.simpleName,
+                    next.currentCount,
+                    next.requiredCount,
+                    next.status,
+                    nextVersion,
+                    now,
+                )
             if (event.decodePayload().publish) {
                 progressNotifications += QuestProgressNotify(event.playerId, null, next)
             }
         }
-        if ((previous == null || previous.status != QuestStatuses.RewardGranted) && status == QuestStatuses.RewardGranted) {
-            stored += StoredQuestEvent(
-                "${event.eventId}:completed",
-                event.eventId,
-                event.playerId,
-                questId,
-                QuestCompletedEvent::class.java.simpleName,
-                next.currentCount,
-                next.requiredCount,
-                next.status,
-                nextVersion + 1,
-                now,
-            )
-            stored += StoredQuestEvent(
-                "${event.eventId}:reward",
-                event.eventId,
-                event.playerId,
-                questId,
-                QuestRewardGrantedEvent::class.java.simpleName,
-                next.currentCount,
-                next.requiredCount,
-                next.status,
-                nextVersion + 2,
-                now,
-            )
+        if (
+            (previous == null || previous.status != QuestStatuses.RewardGranted) &&
+                status == QuestStatuses.RewardGranted
+        ) {
+            stored +=
+                StoredQuestEvent(
+                    "${event.eventId}:completed",
+                    event.eventId,
+                    event.playerId,
+                    questId,
+                    QuestCompletedEvent::class.java.simpleName,
+                    next.currentCount,
+                    next.requiredCount,
+                    next.status,
+                    nextVersion + 1,
+                    now,
+                )
+            stored +=
+                StoredQuestEvent(
+                    "${event.eventId}:reward",
+                    event.eventId,
+                    event.playerId,
+                    questId,
+                    QuestRewardGrantedEvent::class.java.simpleName,
+                    next.currentCount,
+                    next.requiredCount,
+                    next.status,
+                    nextVersion + 2,
+                    now,
+                )
             if (event.decodePayload().publish) {
                 completedNotifications += QuestCompletedNotify(event.playerId, null, next, true)
             }
@@ -577,33 +630,44 @@ private class QuestDomain {
         if (previous?.status == QuestStatuses.RewardGranted) {
             return
         }
-        val next = QuestProgress(event.playerId, questId, QuestStatuses.RewardGranted, required, required, event.eventId, now)
+        val next =
+            QuestProgress(
+                event.playerId,
+                questId,
+                QuestStatuses.RewardGranted,
+                required,
+                required,
+                event.eventId,
+                now,
+            )
         projection.removeIf { it.questId == questId }
         projection += next
-        stored += StoredQuestEvent(
-            "${event.eventId}:completed",
-            event.eventId,
-            event.playerId,
-            questId,
-            QuestCompletedEvent::class.java.simpleName,
-            next.currentCount,
-            next.requiredCount,
-            next.status,
-            nextVersion,
-            now,
-        )
-        stored += StoredQuestEvent(
-            "${event.eventId}:reward",
-            event.eventId,
-            event.playerId,
-            questId,
-            QuestRewardGrantedEvent::class.java.simpleName,
-            next.currentCount,
-            next.requiredCount,
-            next.status,
-            nextVersion + 1,
-            now,
-        )
+        stored +=
+            StoredQuestEvent(
+                "${event.eventId}:completed",
+                event.eventId,
+                event.playerId,
+                questId,
+                QuestCompletedEvent::class.java.simpleName,
+                next.currentCount,
+                next.requiredCount,
+                next.status,
+                nextVersion,
+                now,
+            )
+        stored +=
+            StoredQuestEvent(
+                "${event.eventId}:reward",
+                event.eventId,
+                event.playerId,
+                questId,
+                QuestRewardGrantedEvent::class.java.simpleName,
+                next.currentCount,
+                next.requiredCount,
+                next.status,
+                nextVersion + 1,
+                now,
+            )
         if (event.decodePayload().publish) {
             completedNotifications += QuestCompletedNotify(event.playerId, null, next, true)
         }

@@ -17,8 +17,8 @@ public record SampleTopology(String sessionAStreamEndpoint, String sessionBStrea
             throw new IllegalStateException("Could not load Bingo client config.", error);
         }
         return new SampleTopology(
-            required(properties, "sessionAStreamEndpoint"),
-            required(properties, "sessionBStreamEndpoint"));
+                required(properties, "sessionAStreamEndpoint"),
+                required(properties, "sessionBStreamEndpoint"));
     }
 
     private static String required(Properties properties, String name) {

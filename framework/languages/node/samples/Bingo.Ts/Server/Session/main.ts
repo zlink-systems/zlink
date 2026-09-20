@@ -14,11 +14,13 @@ async function bootstrap(): Promise<void> {
     abortOnError: false
   });
   const config = app.get<BingoSampleConfig>(BINGO_SAMPLE_CONFIG);
-  process.stdout.write(`${JSON.stringify({
-    event: 'ready',
-    endpoint: config.sessionEndpoint,
-    stream: BingoSession.name
-  })}\n`);
+  process.stdout.write(
+    `${JSON.stringify({
+      event: 'ready',
+      endpoint: config.sessionEndpoint,
+      stream: BingoSession.name
+    })}\n`
+  );
 
   try {
     await waitForShutdown({ keepAlive: true });
@@ -32,6 +34,5 @@ bootstrap().catch((error: unknown) => {
   process.exitCode = 1;
 });
 
-export {};enableFlowFileLogging('session');
-
-
+export {};
+enableFlowFileLogging('session');

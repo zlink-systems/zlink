@@ -11,37 +11,42 @@ internal sealed class QuestEventProcessor(
     IGameApiSnapshotClient snapshots,
     IQuestProgressNotifier notifications,
     QuestProcessorIdentity identity,
-    ILogger<QuestEventProcessor> logger)
+    ILogger<QuestEventProcessor> logger
+)
 {
     public string MissionName => identity.MissionName;
 
     public async ValueTask ProcessAsync(
         GameplayFact gameplayFact,
         int? replayGeneration,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken
+    )
     {
-        var definition = gameplayFact.EventType == "SnapshotKillCount"
-            ? QuestCatalog.All.First(candidate => candidate.QuestId == "first-hunt")
-            : QuestCatalog.Match(gameplayFact);
-        if (definition is null) return;
+        var definition =
+            gameplayFact.EventType == "SnapshotKillCount"
+                ? QuestCatalog.All.First(candidate => candidate.QuestId == "first-hunt")
+                : QuestCatalog.Match(gameplayFact);
+        if (definition is null)
+            return;
 
         // --8<-- [start:doc-gq-process]
         var stream = await store.ReadQuestStreamAsync(
             gameplayFact.PlayerId,
             definition.QuestId,
-            cancellationToken);
+            cancellationToken
+        );
         var aggregate = QuestProgressAggregate.Rehydrate(definition, stream);
         if (replayGeneration is { } generation)
             logger.LogInformation(
                 "gamequest-mission replayed player={PlayerId} generation={Generation}",
                 gameplayFact.PlayerId,
-                generation);
+                generation
+            );
         var decision = aggregate.Decide(gameplayFact);
-        if (decision is null) return;
-        if (!await store.AppendAndProjectAsync(
-                decision.State,
-                decision.Events,
-                cancellationToken)) return;
+        if (decision is null)
+            return;
+        if (!await store.AppendAndProjectAsync(decision.State, decision.Events, cancellationToken))
+            return;
         // --8<-- [end:doc-gq-process]
 
         var projection = await store.ReadProjectionAsync(gameplayFact.PlayerId, cancellationToken);
@@ -52,7 +57,8 @@ internal sealed class QuestEventProcessor(
             gameplayFact.PlayerId,
             projection,
             completedQuestId,
-            cancellationToken);
+            cancellationToken
+        );
 
         logger.LogInformation(
             "gamequest-mission processed player={PlayerId} quest={QuestId} source={SourceEventId} events={EventCount} notified={Notified}",
@@ -60,18 +66,21 @@ internal sealed class QuestEventProcessor(
             definition.QuestId,
             gameplayFact.EventId,
             decision.Events.Count,
-            notified);
+            notified
+        );
         if (decision.Events.OfType<QuestProgressReconciled>().Any())
             logger.LogInformation(
                 "gamequest-mission reconciled player={PlayerId} quest={QuestId}",
                 gameplayFact.PlayerId,
-                definition.QuestId);
+                definition.QuestId
+            );
     }
 
     public async ValueTask<QuestProgressState[]> SyncAsync(
         string playerId,
         int? replayGeneration,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken
+    )
     {
         // --8<-- [start:doc-gq-sync]
         var snapshot = await snapshots.ReadSnapshotAsync(playerId, cancellationToken);
@@ -84,9 +93,11 @@ internal sealed class QuestEventProcessor(
                     "kills",
                     snapshot.KillCount,
                     "api-a",
-                    DateTimeOffset.UtcNow.ToUnixTimeMilliseconds()),
+                    DateTimeOffset.UtcNow.ToUnixTimeMilliseconds()
+                ),
                 replayGeneration,
-                cancellationToken);
+                cancellationToken
+            );
 
         return await store.ReadProjectionAsync(playerId, cancellationToken);
         // --8<-- [end:doc-gq-sync]
@@ -96,23 +107,27 @@ internal sealed class QuestEventProcessor(
         string playerId,
         IReadOnlyList<QuestProgressState> projection,
         string? completedQuestId,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken
+    )
     {
         var result = await notifications.NotifyAsync(
             playerId,
             projection,
             completedQuestId,
-            cancellationToken);
+            cancellationToken
+        );
         if (result.FailureStatus is not null)
             logger.LogWarning(
                 "gamequest mission projection kept while stream notify failed. player={PlayerId} status={StatusCode}",
                 playerId,
-                result.FailureStatus);
+                result.FailureStatus
+            );
         else if (result.UnavailableError is not null)
             logger.LogWarning(
                 result.UnavailableError,
                 "gamequest mission projection kept while stream notify endpoint was unavailable. player={PlayerId}",
-                playerId);
+                playerId
+            );
 
         return result.Delivered;
     }
@@ -122,24 +137,28 @@ internal interface IQuestStore
 {
     ValueTask<QuestProgressState[]> ReadProjectionAsync(
         string playerId,
-        CancellationToken cancellationToken);
+        CancellationToken cancellationToken
+    );
 
     ValueTask<QuestDomainEvent[]> ReadQuestStreamAsync(
         string playerId,
         string questId,
-        CancellationToken cancellationToken);
+        CancellationToken cancellationToken
+    );
 
     ValueTask<bool> AppendAndProjectAsync(
         QuestProgressState projection,
         IReadOnlyList<QuestDomainEvent> events,
-        CancellationToken cancellationToken);
+        CancellationToken cancellationToken
+    );
 }
 
 internal interface IGameApiSnapshotClient
 {
     ValueTask<GameplaySnapshot> ReadSnapshotAsync(
         string playerId,
-        CancellationToken cancellationToken);
+        CancellationToken cancellationToken
+    );
 }
 
 internal interface IQuestProgressNotifier
@@ -148,10 +167,12 @@ internal interface IQuestProgressNotifier
         string playerId,
         IReadOnlyList<QuestProgressState> projection,
         string? completedQuestId,
-        CancellationToken cancellationToken);
+        CancellationToken cancellationToken
+    );
 }
 
 internal sealed record QuestProgressNotifyResult(
     bool Delivered,
     int? FailureStatus,
-    Exception? UnavailableError);
+    Exception? UnavailableError
+);

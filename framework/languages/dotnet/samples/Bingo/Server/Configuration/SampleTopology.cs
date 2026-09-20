@@ -8,36 +8,49 @@ public static class SampleConfigurationLoader
     {
         var settings = Load(args);
         settings.ValidateCommon();
-        return settings.ToRuntime(new SampleApiNode(
-            settings.Require(nameof(settings.MeshEndpoint), settings.MeshEndpoint),
-            settings.Require(
-                nameof(settings.MatchmakingMeshEndpoint),
-                settings.MatchmakingMeshEndpoint)));
+        return settings.ToRuntime(
+            new SampleApiNode(
+                settings.Require(nameof(settings.MeshEndpoint), settings.MeshEndpoint),
+                settings.Require(
+                    nameof(settings.MatchmakingMeshEndpoint),
+                    settings.MatchmakingMeshEndpoint
+                )
+            )
+        );
     }
 
     public static SampleRuntimeConfiguration<SampleMatchmakingNode> LoadMatchmaking(string[] args)
     {
         var settings = Load(args);
         settings.ValidateCommon(allowSingleNodeName: true);
-        return settings.ToRuntime(new SampleMatchmakingNode(
-            settings.Require(nameof(settings.MeshEndpoint), settings.MeshEndpoint)));
+        return settings.ToRuntime(
+            new SampleMatchmakingNode(
+                settings.Require(nameof(settings.MeshEndpoint), settings.MeshEndpoint)
+            )
+        );
     }
 
     public static SampleRuntimeConfiguration<SamplePlayNode> LoadPlay(string[] args)
     {
         var settings = Load(args);
         settings.ValidateCommon();
-        return settings.ToRuntime(new SamplePlayNode(
-            settings.Require(nameof(settings.MeshEndpoint), settings.MeshEndpoint)));
+        return settings.ToRuntime(
+            new SamplePlayNode(
+                settings.Require(nameof(settings.MeshEndpoint), settings.MeshEndpoint)
+            )
+        );
     }
 
     public static SampleRuntimeConfiguration<SampleSessionNode> LoadSession(string[] args)
     {
         var settings = Load(args);
         settings.ValidateCommon();
-        return settings.ToRuntime(new SampleSessionNode(
-            settings.Require(nameof(settings.MeshEndpoint), settings.MeshEndpoint),
-            settings.Require(nameof(settings.StreamEndpoint), settings.StreamEndpoint)));
+        return settings.ToRuntime(
+            new SampleSessionNode(
+                settings.Require(nameof(settings.MeshEndpoint), settings.MeshEndpoint),
+                settings.Require(nameof(settings.StreamEndpoint), settings.StreamEndpoint)
+            )
+        );
     }
 
     private static SampleConfiguration Load(string[] args)
@@ -46,11 +59,11 @@ public static class SampleConfigurationLoader
             throw new ArgumentException("Usage: --config PATH");
 
         return new ConfigurationBuilder()
-                   .AddJsonFile(Path.GetFullPath(args[1]), optional: false, reloadOnChange: false)
-                   .Build()
-                   .GetRequiredSection("Sample")
-                   .Get<SampleConfiguration>()
-               ?? throw new InvalidOperationException("Bingo Sample configuration is empty.");
+                .AddJsonFile(Path.GetFullPath(args[1]), optional: false, reloadOnChange: false)
+                .Build()
+                .GetRequiredSection("Sample")
+                .Get<SampleConfiguration>()
+            ?? throw new InvalidOperationException("Bingo Sample configuration is empty.");
     }
 }
 
@@ -59,7 +72,8 @@ public sealed record SampleRuntimeConfiguration<TNode>(
     string NodeName,
     string LogDirectory,
     string RedisEndpoint,
-    string RedisKeyPrefix);
+    string RedisKeyPrefix
+);
 
 public sealed class SampleConfiguration
 {
@@ -95,18 +109,15 @@ public sealed class SampleConfiguration
             NodeName,
             LogDirectory,
             RedisEndpoint,
-            RedisKeyPrefix);
+            RedisKeyPrefix
+        );
     }
 }
 
-public sealed record SampleApiNode(
-    string PlayMeshEndpoint,
-    string MatchmakingMeshEndpoint);
+public sealed record SampleApiNode(string PlayMeshEndpoint, string MatchmakingMeshEndpoint);
 
 public sealed record SampleMatchmakingNode(string MeshEndpoint);
 
 public sealed record SamplePlayNode(string MeshEndpoint);
 
-public sealed record SampleSessionNode(
-    string MeshEndpoint,
-    string StreamEndpoint);
+public sealed record SampleSessionNode(string MeshEndpoint, string StreamEndpoint);

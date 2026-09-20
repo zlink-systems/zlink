@@ -33,7 +33,7 @@ public sealed class ZoneState(string zoneId)
             _residents[playerId] = resident with
             {
                 Position = new PlayerPosition(x, y),
-                IsBot = isBot
+                IsBot = isBot,
             };
     }
 
@@ -46,7 +46,8 @@ public sealed class ZoneState(string zoneId)
     /// </summary>
     public void ApplyBorderSnapshot(string fromZoneId, long tick, IReadOnlyList<PlayerView> players)
     {
-        if (_adjacent.TryGetValue(fromZoneId, out var current) && tick <= current.Tick) return;
+        if (_adjacent.TryGetValue(fromZoneId, out var current) && tick <= current.Tick)
+            return;
 
         _adjacent[fromZoneId] = new BorderSnapshot(tick, Tick, players);
     }
@@ -58,11 +59,14 @@ public sealed class ZoneState(string zoneId)
     public void ExpireStaleSnapshots()
     {
         var expired = _adjacent
-            .Where(entry => Tick - entry.Value.ReceivedAtTick >= ZoneWorldSpec.BorderSnapshotExpiryTicks)
+            .Where(entry =>
+                Tick - entry.Value.ReceivedAtTick >= ZoneWorldSpec.BorderSnapshotExpiryTicks
+            )
             .Select(entry => entry.Key)
             .ToArray();
 
-        foreach (var zoneId in expired) _adjacent.Remove(zoneId);
+        foreach (var zoneId in expired)
+            _adjacent.Remove(zoneId);
     }
 
     /// <summary>
@@ -82,22 +86,27 @@ public sealed class ZoneState(string zoneId)
         foreach (var resident in _residents.Values)
             merged[resident.PlayerId] = resident.ToView(ZoneId);
 
-        return merged.Values
-            .OrderBy(player => player.PlayerId, Utf8StringComparer.Instance)
+        return merged
+            .Values.OrderBy(player => player.PlayerId, Utf8StringComparer.Instance)
             .ToArray();
     }
 
     /// <summary>The residents standing close enough to the shared edge to be visible from
     /// <paramref name="toZoneId"/> (§4.1).</summary>
     public IReadOnlyList<PlayerView> BorderBandFor(string toZoneId) =>
-        _residents.Values
-            .Where(resident => World.InBorderBand(
-                resident.Position.X, resident.Position.Y, ZoneId, toZoneId))
+        _residents
+            .Values.Where(resident =>
+                World.InBorderBand(resident.Position.X, resident.Position.Y, ZoneId, toZoneId)
+            )
             .Select(resident => resident.ToView(ZoneId))
             .OrderBy(player => player.PlayerId, Utf8StringComparer.Instance)
             .ToArray();
 
-    private sealed record BorderSnapshot(long Tick, long ReceivedAtTick, IReadOnlyList<PlayerView> Players);
+    private sealed record BorderSnapshot(
+        long Tick,
+        long ReceivedAtTick,
+        IReadOnlyList<PlayerView> Players
+    );
 }
 
 internal sealed class Utf8StringComparer : IComparer<string>
@@ -106,16 +115,20 @@ internal sealed class Utf8StringComparer : IComparer<string>
 
     public int Compare(string? left, string? right)
     {
-        if (ReferenceEquals(left, right)) return 0;
-        if (left is null) return -1;
-        if (right is null) return 1;
-        return Encoding.UTF8.GetBytes(left).AsSpan()
+        if (ReferenceEquals(left, right))
+            return 0;
+        if (left is null)
+            return -1;
+        if (right is null)
+            return 1;
+        return Encoding
+            .UTF8.GetBytes(left)
+            .AsSpan()
             .SequenceCompareTo(Encoding.UTF8.GetBytes(right));
     }
 }
 
 public readonly record struct ResidentPlayer(string PlayerId, PlayerPosition Position, bool IsBot)
 {
-    public PlayerView ToView(string zoneId) =>
-        new(PlayerId, Position.X, Position.Y, zoneId, IsBot);
+    public PlayerView ToView(string zoneId) => new(PlayerId, Position.X, Position.Y, zoneId, IsBot);
 }

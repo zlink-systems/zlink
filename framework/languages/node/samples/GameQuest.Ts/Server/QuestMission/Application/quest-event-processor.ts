@@ -33,7 +33,12 @@ class QuestEventProcessor {
   // --8<-- [start:doc-gq-process]
   process(event: GameplayEventEnvelope, aggregate: PlayerQuestAggregate): QuestProcessingResult {
     const decision = QuestDomain.decide(event, aggregate);
-    const result = this.commit(event.playerId, decision.events, decision.changedQuestIds, decision.completedQuestIds);
+    const result = this.commit(
+      event.playerId,
+      decision.events,
+      decision.changedQuestIds,
+      decision.completedQuestIds
+    );
     for (const questId of decision.changedQuestIds) {
       console.error(`gamequest-mission processed player=${event.playerId} quest=${questId}`);
     }
@@ -52,16 +57,26 @@ class QuestEventProcessor {
     return this.readModel.readProjection(playerId);
   }
 
-  syncProgress(request: SyncQuestProgressReq, aggregate: PlayerQuestAggregate): QuestProcessingResult & SyncQuestProgressRes {
+  syncProgress(
+    request: SyncQuestProgressReq,
+    aggregate: PlayerQuestAggregate
+  ): QuestProcessingResult & SyncQuestProgressRes {
     // --8<-- [start:doc-gq-sync]
     // Contract §7.3: read the GameplayStateStore snapshot as the authoritative fact
     // and let QuestDomain (the single owner of the First Hunt target) compare it
     // against the current fold.
     const snapshot = this.gameplay.readGameplaySnapshot(request.playerId);
     const decision = QuestDomain.reconcileFirstHunt(request.playerId, snapshot, aggregate);
-    const result = this.commit(request.playerId, decision.events, decision.changedQuestIds, decision.completedQuestIds);
+    const result = this.commit(
+      request.playerId,
+      decision.events,
+      decision.changedQuestIds,
+      decision.completedQuestIds
+    );
     if (decision.events.some((event) => event.type === 'QuestReconciled')) {
-      console.error(`gamequest-mission reconciled player=${request.playerId} quest=${QuestIds.FirstHunt}`);
+      console.error(
+        `gamequest-mission reconciled player=${request.playerId} quest=${QuestIds.FirstHunt}`
+      );
     }
     return { ...result, updatedQuests: result.projection };
     // --8<-- [end:doc-gq-sync]

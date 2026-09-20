@@ -1,6 +1,5 @@
 package systems.zlink.samples.kotlin.tictactoe.server.api
 
-
 import java.net.URI
 import kotlinx.coroutines.Dispatchers
 import systems.zlink.contracts.core.RoutingId
@@ -20,12 +19,11 @@ object ApiServer {
         ZLinkFrameworkConfigurer { options ->
             SampleLogging.configure(settings, "api")
             options.useCoroutineHandlers(Dispatchers.Default)
-            options.configureDispatch {
-                messageFlow(ZLinkMessageFlowLogMode.NORMAL)
-            }
+            options.configureDispatch { messageFlow(ZLinkMessageFlowLogMode.NORMAL) }
             options.configureLocations()
             val apiEndpoint = URI.create(settings.apiChannelEndpoint)
-            options.addClientServerChannel(SampleNames.ApiChannel)
+            options
+                .addClientServerChannel(SampleNames.ApiChannel)
                 .server()
                 .setBindHost(apiEndpoint.host)
                 .listen(apiEndpoint.port)
@@ -36,16 +34,16 @@ object ApiServer {
                     AuthenticatePlayerRes::class.java,
                 )
             val mesh = options.addRouteMesh(SampleNames.SpotMesh)
-            mesh.setRoutingId(RoutingId.from("tictactoe-api-${settings.nodeId}"))
+            mesh
+                .setRoutingId(RoutingId.from("tictactoe-api-${settings.nodeId}"))
                 .listen(settings.routeEndpoint)
             mesh.objects().client()
             // --8<-- [start:doc-manual-peer-connect]
             settings.spotEndpoints.forEachIndexed { index, endpoint ->
                 val playNodeId = if (index == 0) "play-a" else "play-b"
-                mesh.peerConnections().connect(
-                    RoutingId.from("tictactoe-play-$playNodeId"),
-                    endpoint,
-                )
+                mesh
+                    .peerConnections()
+                    .connect(RoutingId.from("tictactoe-play-$playNodeId"), endpoint)
             }
             // --8<-- [end:doc-manual-peer-connect]
         }

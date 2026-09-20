@@ -36,7 +36,9 @@ function startGameApiServer(
         sendJson(response, 200, gameplayState.readGameplaySnapshot(body.playerId));
         return;
       }
-      const deleteMatch = request.url?.match(/^\/self-check\/projection\/([^/]+)\/([^/]+)\/delete$/);
+      const deleteMatch = request.url?.match(
+        /^\/self-check\/projection\/([^/]+)\/([^/]+)\/delete$/
+      );
       if (request.method === 'POST' && deleteMatch !== undefined && deleteMatch !== null) {
         const playerId = decodeURIComponent(deleteMatch[1]);
         const questId = decodeURIComponent(deleteMatch[2]);
@@ -49,7 +51,9 @@ function startGameApiServer(
         sendJson(response, 200, deleted);
         return;
       }
-      const rebuildMatch = request.url?.match(/^\/self-check\/projection\/([^/]+)\/([^/]+)\/rebuild$/);
+      const rebuildMatch = request.url?.match(
+        /^\/self-check\/projection\/([^/]+)\/([^/]+)\/rebuild$/
+      );
       if (request.method === 'POST' && rebuildMatch !== undefined && rebuildMatch !== null) {
         const playerId = decodeURIComponent(rebuildMatch[1]);
         const questId = decodeURIComponent(rebuildMatch[2]);
@@ -62,14 +66,20 @@ function startGameApiServer(
         sendJson(response, 200, rebuilt);
         return;
       }
-      const missedMatch = request.url?.match(/^\/self-check\/gameplay\/kill-without-publish\/([^/]+)$/);
+      const missedMatch = request.url?.match(
+        /^\/self-check\/gameplay\/kill-without-publish\/([^/]+)$/
+      );
       if (request.method === 'POST' && missedMatch !== undefined && missedMatch !== null) {
         gameplayState.killWithoutPublish(decodeURIComponent(missedMatch[1]));
         sendJson(response, 200, { accepted: true });
         return;
       }
       if (request.method === 'POST' && request.url === '/self-check/assert') {
-        sendJson(response, 200, selfCheck.assertServerEvidence() satisfies GameQuestServerAssertRes);
+        sendJson(
+          response,
+          200,
+          selfCheck.assertServerEvidence() satisfies GameQuestServerAssertRes
+        );
         return;
       }
       sendJson(response, 404, { error: 'not-found' });

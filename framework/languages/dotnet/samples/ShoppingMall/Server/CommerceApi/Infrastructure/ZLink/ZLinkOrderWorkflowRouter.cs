@@ -5,12 +5,12 @@ using Zlink.Framework.Contracts.Spots;
 
 namespace ShoppingMall.Server.CommerceApi.Infrastructure.ZLink;
 
-internal sealed class ZLinkOrderWorkflowRouter(
-    IZLinkSpotClient spots) : IOrderWorkflowRouter
+internal sealed class ZLinkOrderWorkflowRouter(IZLinkSpotClient spots) : IOrderWorkflowRouter
 {
     public async ValueTask<OrderState> StartAsync(
         StartOrderWorkflowReq command,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken
+    )
     {
         var response = await Request(command.OrderId, command)
             .Async<StartOrderWorkflowRes>(cancellationToken);
@@ -19,7 +19,8 @@ internal sealed class ZLinkOrderWorkflowRouter(
 
     public async ValueTask<OrderState> ContinueAsync(
         ContinueOrderWorkflowReq command,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken
+    )
     {
         var response = await Request(command.OrderId, command)
             .Async<ContinueOrderWorkflowRes>(cancellationToken);
@@ -28,7 +29,8 @@ internal sealed class ZLinkOrderWorkflowRouter(
 
     public async ValueTask<OrderState> RebuildProjectionAsync(
         RebuildOrderProjectionReq command,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken
+    )
     {
         var response = await Request(command.OrderId, command)
             .Async<RebuildOrderProjectionRes>(cancellationToken);
@@ -37,20 +39,21 @@ internal sealed class ZLinkOrderWorkflowRouter(
 
     public async ValueTask<OrderState> PrepareInventoryReservedCheckpointAsync(
         StartOrderWorkflowReq command,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken
+    )
     {
         var response = await Request(
                 command.OrderId,
-                new PrepareInventoryReservedCheckpointReq(command))
+                new PrepareInventoryReservedCheckpointReq(command)
+            )
             .Async<StartOrderWorkflowRes>(cancellationToken);
         return response.State;
     }
 
     // --8<-- [start:doc-sm-api-request]
-    private IZLinkSpotRequestCall Request<TMessage>(
-        string orderId,
-        TMessage command) =>
-        spots.RequestToSpot(orderId, command)
+    private IZLinkSpotRequestCall Request<TMessage>(string orderId, TMessage command) =>
+        spots
+            .RequestToSpot(orderId, command)
             // The first command cold-activates the order owner. Existing
             // orders use the authority already published for this SpotId.
             .InstanceSpot(SampleNames.OrderWorkflowSpotType)

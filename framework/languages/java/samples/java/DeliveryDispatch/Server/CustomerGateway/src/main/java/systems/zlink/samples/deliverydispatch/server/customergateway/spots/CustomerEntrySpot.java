@@ -1,12 +1,13 @@
 package systems.zlink.samples.deliverydispatch.server.customergateway.spots;
 
 import systems.zlink.framework.messaging.ZLinkMessage;
+import systems.zlink.framework.spots.ZLinkActorCreateResponse;
 import systems.zlink.framework.spots.ZLinkEntrySpot;
 import systems.zlink.framework.spots.ZLinkEntrySpotContext;
-import systems.zlink.framework.spots.ZLinkActorCreateResponse;
 import systems.zlink.samples.deliverydispatch.server.customergateway.CustomerActor;
 import systems.zlink.samples.deliverydispatch.server.customergateway.CustomerActorDirectory;
 import systems.zlink.samples.deliverydispatch.shared.contracts.Messages;
+
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionStage;
 
@@ -14,9 +15,7 @@ public final class CustomerEntrySpot implements ZLinkEntrySpot<CustomerActor> {
     private final ZLinkEntrySpotContext context;
     private final CustomerActorDirectory customers;
 
-    public CustomerEntrySpot(
-        ZLinkEntrySpotContext context,
-        CustomerActorDirectory customers) {
+    public CustomerEntrySpot(ZLinkEntrySpotContext context, CustomerActorDirectory customers) {
         this.context = context;
         this.customers = customers;
     }
@@ -28,8 +27,7 @@ public final class CustomerEntrySpot implements ZLinkEntrySpot<CustomerActor> {
 
     @Override
     public CompletionStage<ZLinkActorCreateResponse> onCreateActor(
-        CustomerActor actor,
-        ZLinkMessage createRequest) {
+            CustomerActor actor, ZLinkMessage createRequest) {
         customers.register(actor);
         return CompletableFuture.completedFuture(ZLinkActorCreateResponse.accept());
     }
@@ -47,8 +45,7 @@ public final class CustomerEntrySpot implements ZLinkEntrySpot<CustomerActor> {
     }
 
     public Messages.SubscribeDeliveryRes subscribe(
-        CustomerActor actor,
-        Messages.SubscribeDeliveryReq request) {
+            CustomerActor actor, Messages.SubscribeDeliveryReq request) {
         customers.subscribe(actor.actorId(), request.deliveryId());
         return new Messages.SubscribeDeliveryRes(request.deliveryId());
     }

@@ -26,35 +26,44 @@ public sealed class GameClient(IZlinkStreamConnector connector, string playerId)
     public static async ValueTask<GameClient> ConnectAsync(
         ClientOptions options,
         string playerId,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken
+    )
     {
-        var connector = ZlinkStreamConnectorFactory.Create(new ZlinkStreamConnectorOptions
-        {
-            Endpoint = new Uri(options.GatewayEndpoint),
-            ConnectTimeout = TimeSpan.FromSeconds(10),
-            RequestTimeout = TimeSpan.FromSeconds(10),
-            DispatchMode = ZlinkStreamDispatchMode.Immediate
-        });
+        var connector = ZlinkStreamConnectorFactory.Create(
+            new ZlinkStreamConnectorOptions
+            {
+                Endpoint = new Uri(options.GatewayEndpoint),
+                ConnectTimeout = TimeSpan.FromSeconds(10),
+                RequestTimeout = TimeSpan.FromSeconds(10),
+                DispatchMode = ZlinkStreamDispatchMode.Immediate,
+            }
+        );
 
         if (options.StreamTrace)
         {
-            _ = connector.OnErrorReceived((error, _) =>
-            {
-                Console.Error.WriteLine(
-                    "stream-trace error player={0} code={1} message={2}",
-                    playerId,
-                    error.Code,
-                    error.Message);
-                return ValueTask.CompletedTask;
-            });
-            _ = connector.OnDisconnected((disconnected, _) =>
-            {
-                Console.Error.WriteLine(
-                    "stream-trace disconnected player={0} reason={1}",
-                    playerId,
-                    disconnected.CloseReason);
-                return ValueTask.CompletedTask;
-            });
+            _ = connector.OnErrorReceived(
+                (error, _) =>
+                {
+                    Console.Error.WriteLine(
+                        "stream-trace error player={0} code={1} message={2}",
+                        playerId,
+                        error.Code,
+                        error.Message
+                    );
+                    return ValueTask.CompletedTask;
+                }
+            );
+            _ = connector.OnDisconnected(
+                (disconnected, _) =>
+                {
+                    Console.Error.WriteLine(
+                        "stream-trace disconnected player={0} reason={1}",
+                        playerId,
+                        disconnected.CloseReason
+                    );
+                    return ValueTask.CompletedTask;
+                }
+            );
         }
 
         await connector.Connect.Async(cancellationToken);
@@ -63,7 +72,8 @@ public sealed class GameClient(IZlinkStreamConnector connector, string playerId)
 
     public async ValueTask<JoinWorldRes> JoinWorldAsync(CancellationToken cancellationToken)
     {
-        var completed = Connector.WaitFor<JoinWorldRes>()
+        var completed = Connector
+            .WaitFor<JoinWorldRes>()
             .Where(message => message.Payload.PlayerId == PlayerId)
             .Timeout(TimeSpan.FromSeconds(30))
             .Async(cancellationToken);
@@ -80,21 +90,30 @@ public sealed class GameClient(IZlinkStreamConnector connector, string playerId)
     public IReadOnlyList<(int X, int Y)> PlanWalkWithinZone(int targetX, int targetY)
     {
         if (ZoneKey(Position.X, Position.Y) != ZoneKey(targetX, targetY))
-            throw new ScenarioFailure("A zone boundary requires an explicit ZoneChangedNotify wait.");
+            throw new ScenarioFailure(
+                "A zone boundary requires an explicit ZoneChangedNotify wait."
+            );
 
         var steps = new List<(int X, int Y)>();
         var (x, y) = Position;
         while (x != targetX || y != targetY)
         {
-            var nextX = x + Math.Clamp(
-                targetX - x,
-                -ZoneWorldSpec.MaxStepPerAxis,
-                ZoneWorldSpec.MaxStepPerAxis);
-            var nextY = y + Math.Clamp(
-                targetY - y,
-                -ZoneWorldSpec.MaxStepPerAxis,
-                ZoneWorldSpec.MaxStepPerAxis);
-            if (CrossesBoth(x, y, nextX, nextY)) nextY = y;
+            var nextX =
+                x
+                + Math.Clamp(
+                    targetX - x,
+                    -ZoneWorldSpec.MaxStepPerAxis,
+                    ZoneWorldSpec.MaxStepPerAxis
+                );
+            var nextY =
+                y
+                + Math.Clamp(
+                    targetY - y,
+                    -ZoneWorldSpec.MaxStepPerAxis,
+                    ZoneWorldSpec.MaxStepPerAxis
+                );
+            if (CrossesBoth(x, y, nextX, nextY))
+                nextY = y;
             steps.Add((nextX, nextY));
             (x, y) = (nextX, nextY);
         }
@@ -123,15 +142,20 @@ public sealed class OpsClient(IZlinkStreamConnector connector) : IAsyncDisposabl
 {
     public IZlinkStreamConnector Connector { get; } = connector;
 
-    public static async ValueTask<OpsClient> ConnectAsync(string endpoint, CancellationToken cancellationToken)
+    public static async ValueTask<OpsClient> ConnectAsync(
+        string endpoint,
+        CancellationToken cancellationToken
+    )
     {
-        var connector = ZlinkStreamConnectorFactory.Create(new ZlinkStreamConnectorOptions
-        {
-            Endpoint = new Uri(endpoint),
-            ConnectTimeout = TimeSpan.FromSeconds(10),
-            RequestTimeout = TimeSpan.FromSeconds(10),
-            DispatchMode = ZlinkStreamDispatchMode.Immediate
-        });
+        var connector = ZlinkStreamConnectorFactory.Create(
+            new ZlinkStreamConnectorOptions
+            {
+                Endpoint = new Uri(endpoint),
+                ConnectTimeout = TimeSpan.FromSeconds(10),
+                RequestTimeout = TimeSpan.FromSeconds(10),
+                DispatchMode = ZlinkStreamDispatchMode.Immediate,
+            }
+        );
         await connector.Connect.Async(cancellationToken);
         return new OpsClient(connector);
     }
@@ -139,18 +163,27 @@ public sealed class OpsClient(IZlinkStreamConnector connector) : IAsyncDisposabl
     public ValueTask<WatchNodesRes> WatchNodesAsync(CancellationToken cancellationToken) =>
         Connector.Request(new WatchNodesReq()).Async<WatchNodesRes>(cancellationToken);
 
-    public ValueTask<AnnounceWorldRes> AnnounceAsync(string text, CancellationToken cancellationToken) =>
-        Connector.Request(new AnnounceWorldReq(text)).Async<AnnounceWorldRes>(cancellationToken);
+    public ValueTask<AnnounceWorldRes> AnnounceAsync(
+        string text,
+        CancellationToken cancellationToken
+    ) => Connector.Request(new AnnounceWorldReq(text)).Async<AnnounceWorldRes>(cancellationToken);
 
     public ValueTask<SetMaintenanceRes> SetMaintenanceAsync(
         string nodeId,
         bool enabled,
-        CancellationToken cancellationToken) =>
-        Connector.Request(new SetMaintenanceReq(nodeId, enabled))
+        CancellationToken cancellationToken
+    ) =>
+        Connector
+            .Request(new SetMaintenanceReq(nodeId, enabled))
             .Async<SetMaintenanceRes>(cancellationToken);
 
-    public ValueTask<NodeDiagnosticsRes> DiagnoseAsync(string nodeId, CancellationToken cancellationToken) =>
-        Connector.Request(new NodeDiagnosticsReq(nodeId)).Async<NodeDiagnosticsRes>(cancellationToken);
+    public ValueTask<NodeDiagnosticsRes> DiagnoseAsync(
+        string nodeId,
+        CancellationToken cancellationToken
+    ) =>
+        Connector
+            .Request(new NodeDiagnosticsReq(nodeId))
+            .Async<NodeDiagnosticsRes>(cancellationToken);
 
     public ValueTask DisposeAsync() => Connector.DisposeAsync();
 }
@@ -163,15 +196,18 @@ public sealed class RelocationProbeClient(IZlinkStreamConnector connector) : IAs
 {
     public static async ValueTask<RelocationProbeClient> ConnectAsync(
         string endpoint,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken
+    )
     {
-        var connector = ZlinkStreamConnectorFactory.Create(new ZlinkStreamConnectorOptions
-        {
-            Endpoint = new Uri(endpoint),
-            ConnectTimeout = TimeSpan.FromSeconds(10),
-            RequestTimeout = TimeSpan.FromSeconds(10),
-            DispatchMode = ZlinkStreamDispatchMode.Immediate
-        });
+        var connector = ZlinkStreamConnectorFactory.Create(
+            new ZlinkStreamConnectorOptions
+            {
+                Endpoint = new Uri(endpoint),
+                ConnectTimeout = TimeSpan.FromSeconds(10),
+                RequestTimeout = TimeSpan.FromSeconds(10),
+                DispatchMode = ZlinkStreamDispatchMode.Immediate,
+            }
+        );
         await connector.Connect.Async(cancellationToken);
         return new RelocationProbeClient(connector);
     }
@@ -181,37 +217,41 @@ public sealed class RelocationProbeClient(IZlinkStreamConnector connector) : IAs
 
     public ValueTask<ActorLocationProbeRes> FindActorAsync(
         string actorId,
-        CancellationToken cancellationToken) =>
-        connector.Request(new ActorLocationProbeReq(actorId))
+        CancellationToken cancellationToken
+    ) =>
+        connector
+            .Request(new ActorLocationProbeReq(actorId))
             .Async<ActorLocationProbeRes>(cancellationToken);
 
     public ValueTask<FreshActorProbeRes> CreateFreshActorAsync(
         string actorId,
-        CancellationToken cancellationToken) =>
-        connector.Request(new FreshActorProbeReq(actorId))
+        CancellationToken cancellationToken
+    ) =>
+        connector
+            .Request(new FreshActorProbeReq(actorId))
             .Async<FreshActorProbeRes>(cancellationToken);
 
     public ValueTask<MessageFollowProbeRes> PrimeMessageFollowRouteAsync(
         string actorId,
-        CancellationToken cancellationToken) =>
-        connector.Request(new MessageFollowProbeReq(
-                actorId,
-                $"prime-{actorId}",
-                "route-prime"u8.ToArray()))
+        CancellationToken cancellationToken
+    ) =>
+        connector
+            .Request(
+                new MessageFollowProbeReq(actorId, $"prime-{actorId}", "route-prime"u8.ToArray())
+            )
             .Async<MessageFollowProbeRes>(cancellationToken);
 
-    public ValueTask SendMessageFollowProbeAsync(
-        string actorId,
-        string probeId,
-        byte[] payload) =>
+    public ValueTask SendMessageFollowProbeAsync(string actorId, string probeId, byte[] payload) =>
         connector.Send(new MessageFollowProbeMsg(actorId, probeId, payload)).Async();
 
     public ValueTask<MessageFollowProbeRes> RequestMessageFollowProbeAsync(
         string actorId,
         string probeId,
         byte[] payload,
-        CancellationToken cancellationToken) =>
-        connector.Request(new MessageFollowProbeReq(actorId, probeId, payload))
+        CancellationToken cancellationToken
+    ) =>
+        connector
+            .Request(new MessageFollowProbeReq(actorId, probeId, payload))
             .Async<MessageFollowProbeRes>(cancellationToken);
 
     public ValueTask DisposeAsync() => connector.DisposeAsync();
@@ -221,12 +261,14 @@ public sealed record ClientOptions(
     string GatewayEndpoint,
     string OpsEndpoint,
     bool StreamTrace,
-    string? FaultArmFile)
+    string? FaultArmFile
+)
 {
     public static ClientOptions From(ZoneWorldClientSettings settings) =>
         new(
             settings.GatewayEndpoint,
             settings.OpsEndpoint,
             settings.StreamTrace,
-            settings.FaultArmFile);
+            settings.FaultArmFile
+        );
 }

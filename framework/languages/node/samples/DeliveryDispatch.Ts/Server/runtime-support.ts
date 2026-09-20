@@ -1,4 +1,8 @@
-import { ZLinkPeerState, type ZLinkRouteMeshRuntime, type ZLinkRouteMeshStatus } from '@zlink-systems/framework';
+import {
+  ZLinkPeerState,
+  type ZLinkRouteMeshRuntime,
+  type ZLinkRouteMeshStatus
+} from '@zlink-systems/framework';
 
 function waitForShutdown(): Promise<void> {
   return new Promise((resolve) => {
@@ -27,7 +31,10 @@ function observeDeliveryRouteReadiness(
     }
     for (const target of actorRouteTargets) {
       if (reportedActorRoutes.has(target)) continue;
-      if (!status.peers.some((peer) => peer.nodeRid === target && peer.state === ZLinkPeerState.Ready)) continue;
+      if (
+        !status.peers.some((peer) => peer.nodeRid === target && peer.state === ZLinkPeerState.Ready)
+      )
+        continue;
       reportedActorRoutes.add(target);
       console.log(`deliverydispatch-ready kind=actor-route node=${nodeId} target=${target}`);
     }
@@ -36,7 +43,10 @@ function observeDeliveryRouteReadiness(
     report(runtime.snapshot(meshName));
     for await (const observed of runtime.observe(meshName, 64)) report(observed.status);
   })().catch((error: unknown) => {
-    console.error(`deliverydispatch readiness observer failed node=${nodeId} mesh=${meshName}`, error);
+    console.error(
+      `deliverydispatch readiness observer failed node=${nodeId} mesh=${meshName}`,
+      error
+    );
   });
 }
 
@@ -45,7 +55,8 @@ async function closeNestRuntime(container: { close(): Promise<void> }): Promise<
     await container.close();
   } catch (error) {
     const candidate = error as { name?: string; code?: number };
-    if (candidate.name === 'CloseError' && [0, 401, 403, 404].includes(candidate.code ?? -1)) return;
+    if (candidate.name === 'CloseError' && [0, 401, 403, 404].includes(candidate.code ?? -1))
+      return;
     throw error;
   }
 }

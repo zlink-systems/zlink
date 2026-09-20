@@ -1,10 +1,9 @@
 package systems.zlink.samples.kotlin.supportchat.server.support.infrastructure.zlink.actors
 
-
-import systems.zlink.framework.actors.ZLinkActorJoinOperationId
 import com.fasterxml.jackson.module.kotlin.jacksonObjectMapper
 import java.util.concurrent.CompletableFuture
 import java.util.concurrent.CompletionStage
+import systems.zlink.framework.actors.ZLinkActorJoinOperationId
 import systems.zlink.framework.actors.ZLinkActorRelocationAdapter
 import systems.zlink.framework.actors.ZLinkRelocationCancellation
 
@@ -12,18 +11,19 @@ class SupportUserActorRelocationAdapter : ZLinkActorRelocationAdapter<SupportUse
     override fun capture(
         actor: SupportUserActor,
         cancellation: ZLinkRelocationCancellation,
-    ): CompletionStage<ByteArray> = CompletableFuture.completedFuture(
-        json.writeValueAsBytes(
-            TransferState(
-                actor.displayName,
-                actor.role,
-                actor.participantId,
-                actor.conversationId,
-                actor.pendingConversationId(),
-                actor.completedJoinOperations(),
-            ),
-        ),
-    )
+    ): CompletionStage<ByteArray> =
+        CompletableFuture.completedFuture(
+            json.writeValueAsBytes(
+                TransferState(
+                    actor.displayName,
+                    actor.role,
+                    actor.participantId,
+                    actor.conversationId,
+                    actor.pendingConversationId(),
+                    actor.completedJoinOperations(),
+                )
+            )
+        )
 
     override fun restore(
         actor: SupportUserActor,
@@ -50,7 +50,6 @@ class SupportUserActorRelocationAdapter : ZLinkActorRelocationAdapter<SupportUse
         val participantId: String,
         val conversationId: String,
         val pendingConversationId: String,
-        val completedJoinOperations:
-            Set<ZLinkActorJoinOperationId>,
+        val completedJoinOperations: Set<ZLinkActorJoinOperationId>,
     )
 }

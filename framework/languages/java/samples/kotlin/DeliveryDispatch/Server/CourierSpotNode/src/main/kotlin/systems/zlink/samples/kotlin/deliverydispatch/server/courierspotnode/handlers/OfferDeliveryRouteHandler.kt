@@ -20,14 +20,12 @@ class OfferDeliveryRouteHandler(
     private val actors: ZLinkActorManager,
     private val actorClient: ZLinkActorClient,
 ) : ZLinkSpotPacketHandler<CourierEntrySpot, OfferDeliveryMsg> {
-    override fun handle(
-        spot: CourierEntrySpot,
-        message: OfferDeliveryMsg,
-    ): CompletionStage<Void> =
+    override fun handle(spot: CourierEntrySpot, message: OfferDeliveryMsg): CompletionStage<Void> =
         actors.find(message.courierId).thenAccept { found ->
-            val actorRef = found.orElseThrow {
-                IllegalStateException("Courier actor is not bound: ${message.courierId}")
-            }
+            val actorRef =
+                found.orElseThrow {
+                    IllegalStateException("Courier actor is not bound: ${message.courierId}")
+                }
             actorClient.sendToActor(actorRef.actorId, message).submit()
         }
 }

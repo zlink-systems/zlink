@@ -23,19 +23,22 @@ internal static class Program
             customer2,
             reconnectingAgent,
             reconnectingCustomer,
-            waitingCustomer);
+            waitingCustomer
+        );
 
         Console.WriteLine("supportchat=completed");
     }
 
     private static IZlinkStreamConnector CreateClient(string streamEndpoint)
     {
-        return ZlinkStreamConnectorFactory.Create(new ZlinkStreamConnectorOptions
-        {
-            Endpoint = new Uri(streamEndpoint),
-            ConnectTimeout = SampleNames.ConnectTimeout,
-            RequestTimeout = SampleNames.RequestTimeout,
-            DispatchMode = ZlinkStreamDispatchMode.Immediate
-        });
+        return ZlinkStreamConnectorFactory.Create(
+            new ZlinkStreamConnectorOptions
+            {
+                Endpoint = new Uri(streamEndpoint),
+                ConnectTimeout = SampleNames.ConnectTimeout,
+                RequestTimeout = SampleNames.RequestTimeout,
+                DispatchMode = ZlinkStreamDispatchMode.Immediate,
+            }
+        );
     }
 }

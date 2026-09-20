@@ -1,4 +1,5 @@
 package systems.zlink.samples.tictactoe.client;
+
 import java.time.Duration;
 
 public final class TicTacToeSampleDefaults {
@@ -9,6 +10,5 @@ public final class TicTacToeSampleDefaults {
     public static final String ObserverActorId = "observer";
     public static final Duration RequestTimeout = Duration.ofSeconds(10);
 
-    private TicTacToeSampleDefaults() {
-    }
+    private TicTacToeSampleDefaults() {}
 }

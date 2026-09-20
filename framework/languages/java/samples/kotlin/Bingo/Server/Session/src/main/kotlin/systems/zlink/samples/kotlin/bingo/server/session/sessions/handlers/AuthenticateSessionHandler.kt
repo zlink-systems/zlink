@@ -5,8 +5,8 @@ import systems.zlink.framework.actors.ActorRef
 import systems.zlink.framework.actors.ZLinkActorCreateResult
 import systems.zlink.framework.actors.ZLinkActorManager
 import systems.zlink.framework.channels.ZLinkRouteClient
-import systems.zlink.framework.kotlin.kotlin
 import systems.zlink.framework.kotlin.ZLinkSuspendingTypedSessionPacketHandler
+import systems.zlink.framework.kotlin.kotlin
 import systems.zlink.framework.streams.ZLinkSessionContext
 import systems.zlink.framework.streams.ZLinkSessionDispatchContext
 import systems.zlink.samples.kotlin.bingo.server.configuration.SampleNames
@@ -35,45 +35,43 @@ class AuthenticateSessionHandler(
         }
 
         // --8<-- [start:doc-bingo-session-auth]
-        val authenticated = routes
-            .requestToChannel(
-                SampleNames.ApiChannel,
-                AuthenticatePlayerReq(request.accessToken),
-            )
-            .timeout(SampleTimings.RequestTimeout)
-            .submit(AuthenticatePlayerRes::class.java)
-            .await()
-        if (!authenticated.accepted ||
-            authenticated.actorId.isBlank() ||
-            authenticated.displayName.isBlank()
+        val authenticated =
+            routes
+                .requestToChannel(
+                    SampleNames.ApiChannel,
+                    AuthenticatePlayerReq(request.accessToken),
+                )
+                .timeout(SampleTimings.RequestTimeout)
+                .submit(AuthenticatePlayerRes::class.java)
+                .await()
+        if (
+            !authenticated.accepted ||
+                authenticated.actorId.isBlank() ||
+                authenticated.displayName.isBlank()
         ) {
-            throw IllegalStateException(
-                authenticated.reason ?: "Player authentication failed.",
-            )
+            throw IllegalStateException(authenticated.reason ?: "Player authentication failed.")
         }
-        val actor = actors.kotlin().getOrCreate(
-            authenticated.actorId,
-            SampleNames.PlayerActorType,
-        )
-            .request(EnsurePlayerActorReq(authenticated.actorId, authenticated.displayName))
-            .await()
+        val actor =
+            actors
+                .kotlin()
+                .getOrCreate(authenticated.actorId, SampleNames.PlayerActorType)
+                .request(EnsurePlayerActorReq(authenticated.actorId, authenticated.displayName))
+                .await()
         // --8<-- [end:doc-bingo-session-auth]
         // --8<-- [start:doc-bingo-session-bind]
         context.actors().bind(requireActor(actor)).await()
-        context.client()
-            .reply(
-                AuthenticateRes(
-                    authenticated.actorId,
-                    authenticated.displayName,
-                ),
-            )
+        context
+            .client()
+            .reply(AuthenticateRes(authenticated.actorId, authenticated.displayName))
             .submit()
         // --8<-- [end:doc-bingo-session-bind]
     }
 
-    private fun requireActor(result: ZLinkActorCreateResult): ActorRef = when (result) {
-        is ZLinkActorCreateResult.Existing -> result.actor
-        is ZLinkActorCreateResult.Created -> result.actor
-        is ZLinkActorCreateResult.Rejected -> throw IllegalStateException("Player actor creation was rejected.")
-    }
+    private fun requireActor(result: ZLinkActorCreateResult): ActorRef =
+        when (result) {
+            is ZLinkActorCreateResult.Existing -> result.actor
+            is ZLinkActorCreateResult.Created -> result.actor
+            is ZLinkActorCreateResult.Rejected ->
+                throw IllegalStateException("Player actor creation was rejected.")
+        }
 }

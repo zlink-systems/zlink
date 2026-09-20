@@ -1,23 +1,28 @@
-using Zlink.Framework.Contracts.Handlers;
 using Microsoft.Extensions.Logging;
 using SupportChat.Server.Configuration;
 using SupportChat.Server.Support.Infrastructure.ZLink.Actors;
 using SupportChat.Shared.Contracts;
 using Zlink.Framework.Contracts.Actors;
+using Zlink.Framework.Contracts.Handlers;
 using Zlink.Framework.Contracts.Spots;
 
 namespace SupportChat.Server.Support.Infrastructure.ZLink.Spots.EntrySpot.Handlers;
 
-internal sealed class OpenConversationActorHandler(
-    ILogger<OpenConversationActorHandler> logger)
-    : IZLinkEntrySpotActorRequestHandler<SupportEntrySpot, SupportUserActor, OpenConversationReq, OpenConversationRes>
+internal sealed class OpenConversationActorHandler(ILogger<OpenConversationActorHandler> logger)
+    : IZLinkEntrySpotActorRequestHandler<
+        SupportEntrySpot,
+        SupportUserActor,
+        OpenConversationReq,
+        OpenConversationRes
+    >
 {
     public async ValueTask<OpenConversationRes> HandleAsync(
         SupportEntrySpot entrySpot,
         SupportUserActor actor,
         IZLinkMessageContext context,
         OpenConversationReq message,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken
+    )
     {
         if (!string.Equals(actor.Role, SupportChatRoles.Customer, StringComparison.Ordinal))
             throw new InvalidOperationException("Only customer actors can open a conversation.");
@@ -25,31 +30,34 @@ internal sealed class OpenConversationActorHandler(
         logger.LogInformation(
             "support entry open: request actor={ActorId} subject={Subject}",
             actor.ActorId,
-            message.Subject);
+            message.Subject
+        );
 
         // The API server allocates the conversation; this handler then joins the
         // customer. Agent assignment happens inside the ConversationSpot when the
         // customer joins, so it can reserve and later release the agent's capacity.
         // --8<-- [start:doc-sc-open-actor]
-        var opened = await entrySpot.Context.Outbound.RequestToChannel(
+        var opened = await entrySpot
+            .Context.Outbound.RequestToChannel(
                 SampleNames.ApiChannel,
-                new OpenConversationApiReq(
-                    actor.ParticipantId,
-                    actor.DisplayName,
-                    message.Subject))
+                new OpenConversationApiReq(actor.ParticipantId, actor.DisplayName, message.Subject)
+            )
             .Async<OpenConversationApiRes>(cancellationToken);
 
         actor.TrackDeferredJoin(opened.State.ConversationId, notifyBoundSession: false);
-        actor.Context.JoinSpot(
+        actor
+            .Context.JoinSpot(
                 opened.State.ConversationId,
-                new JoinConversationReq(actor.ParticipantId, actor.Role, actor.DisplayName))
+                new JoinConversationReq(actor.ParticipantId, actor.Role, actor.DisplayName)
+            )
             .Defer();
         // --8<-- [end:doc-sc-open-actor]
 
         logger.LogInformation(
             "support entry open: completed conversation={ConversationId} status={Status}",
             opened.State.ConversationId,
-            opened.State.Status);
+            opened.State.Status
+        );
         return new OpenConversationRes(opened.State.ConversationId, opened.State);
     }
 }

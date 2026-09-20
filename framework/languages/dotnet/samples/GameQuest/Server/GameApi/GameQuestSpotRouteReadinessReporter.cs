@@ -9,7 +9,8 @@ internal sealed record GameQuestSpotRouteReadiness(string NodeId, string MeshNam
 internal sealed class GameQuestSpotRouteReadinessReporter(
     IEnumerable<GameQuestSpotRouteReadiness> readiness,
     IZLinkRouteMeshRuntime routeMesh,
-    ILogger<GameQuestSpotRouteReadinessReporter> logger) : IHostedService
+    ILogger<GameQuestSpotRouteReadinessReporter> logger
+) : IHostedService
 {
     private readonly List<GameQuestSpotRouteReadiness> pending = readiness.ToList();
     private CancellationTokenSource? stopping;
@@ -24,15 +25,14 @@ internal sealed class GameQuestSpotRouteReadinessReporter(
 
     public async Task StopAsync(CancellationToken cancellationToken)
     {
-        if (stopping is null || reporting is null) return;
+        if (stopping is null || reporting is null)
+            return;
         await stopping.CancelAsync();
         try
         {
             await reporting.WaitAsync(cancellationToken);
         }
-        catch (OperationCanceledException) when (stopping.IsCancellationRequested)
-        {
-        }
+        catch (OperationCanceledException) when (stopping.IsCancellationRequested) { }
         finally
         {
             stopping.Dispose();
@@ -49,7 +49,10 @@ internal sealed class GameQuestSpotRouteReadinessReporter(
                 try
                 {
                     var status = routeMesh.GetStatus(report.MeshName);
-                    if (!status.IsReady || !status.Peers.Any(peer => peer.State == ZLinkPeerState.Ready))
+                    if (
+                        !status.IsReady
+                        || !status.Peers.Any(peer => peer.State == ZLinkPeerState.Ready)
+                    )
                         continue;
                 }
                 catch (InvalidOperationException)
@@ -61,7 +64,8 @@ internal sealed class GameQuestSpotRouteReadinessReporter(
                 logger.LogInformation(
                     "gamequest-ready kind=spot-route node={NodeId} mesh={MeshName}",
                     report.NodeId,
-                    report.MeshName);
+                    report.MeshName
+                );
                 pending.RemoveAt(index);
             }
 

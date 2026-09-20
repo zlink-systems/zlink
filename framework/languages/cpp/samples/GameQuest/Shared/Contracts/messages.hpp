@@ -237,8 +237,10 @@ struct server_assertion_res_t
 
 inline void to_json (nlohmann::json &json, const kill_monster_req_t &value)
 {
-    json = {{"playerId", value.player_id}, {"monsterId", value.monster_id},
-            {"areaId", value.area_id}, {"idempotencyKey", value.idempotency_key}};
+    json = {{"playerId", value.player_id},
+            {"monsterId", value.monster_id},
+            {"areaId", value.area_id},
+            {"idempotencyKey", value.idempotency_key}};
 }
 inline void from_json (const nlohmann::json &json, kill_monster_req_t &value)
 {
@@ -257,8 +259,10 @@ inline void from_json (const nlohmann::json &json, kill_monster_res_t &value)
 }
 inline void to_json (nlohmann::json &json, const collect_item_req_t &value)
 {
-    json = {{"playerId", value.player_id}, {"itemId", value.item_id},
-            {"count", value.count}, {"idempotencyKey", value.idempotency_key}};
+    json = {{"playerId", value.player_id},
+            {"itemId", value.item_id},
+            {"count", value.count},
+            {"idempotencyKey", value.idempotency_key}};
 }
 inline void from_json (const nlohmann::json &json, collect_item_req_t &value)
 {
@@ -269,7 +273,8 @@ inline void from_json (const nlohmann::json &json, collect_item_req_t &value)
 }
 inline void to_json (nlohmann::json &json, const enter_area_req_t &value)
 {
-    json = {{"playerId", value.player_id}, {"areaId", value.area_id},
+    json = {{"playerId", value.player_id},
+            {"areaId", value.area_id},
             {"idempotencyKey", value.idempotency_key}};
 }
 inline void from_json (const nlohmann::json &json, enter_area_req_t &value)
@@ -288,15 +293,16 @@ inline void from_json (const nlohmann::json &json, join_session_req_t &value)
 }
 inline void to_json (nlohmann::json &json, const stored_quest_event_t &value)
 {
-    json = {{"eventId", value.event_id},
-            {"playerId", value.player_id},
-            {"questId", value.quest_id},
-            {"type", value.type},
-            {"payload", value.payload},
-            {"sourceEventId", value.source_event_id ? nlohmann::json (*value.source_event_id)
-                                                       : nlohmann::json (nullptr)},
-            {"version", value.version},
-            {"createdAtUnixMs", value.created_at_unix_ms}};
+    json = {
+      {"eventId", value.event_id},
+      {"playerId", value.player_id},
+      {"questId", value.quest_id},
+      {"type", value.type},
+      {"payload", value.payload},
+      {"sourceEventId",
+       value.source_event_id ? nlohmann::json (*value.source_event_id) : nlohmann::json (nullptr)},
+      {"version", value.version},
+      {"createdAtUnixMs", value.created_at_unix_ms}};
 }
 inline void from_json (const nlohmann::json &json, stored_quest_event_t &value)
 {
@@ -315,12 +321,14 @@ inline void from_json (const nlohmann::json &json, stored_quest_event_t &value)
 }
 inline void to_json (nlohmann::json &json, const quest_progress_t &value)
 {
-    json = {{"playerId", value.player_id}, {"questId", value.quest_id},
-            {"status", value.status}, {"currentCount", value.current_count},
+    json = {{"playerId", value.player_id},
+            {"questId", value.quest_id},
+            {"status", value.status},
+            {"currentCount", value.current_count},
             {"requiredCount", value.required_count},
-            {"lastSourceEventId", value.last_source_event_id
-                                      ? nlohmann::json (*value.last_source_event_id)
-                                      : nlohmann::json (nullptr)},
+            {"lastSourceEventId",
+             value.last_source_event_id ? nlohmann::json (*value.last_source_event_id)
+                                        : nlohmann::json (nullptr)},
             {"version", value.version},
             {"updatedAtUnixMs", value.updated_at_unix_ms}};
 }
@@ -459,9 +467,8 @@ inline void from_json (const nlohmann::json &json, notify_quest_progress_msg_t &
 }
 inline void to_json (nlohmann::json &json, const projection_admin_req_t &value)
 {
-    json = {{"playerId", value.player_id},
-            {"questId", value.quest_id},
-            {"operation", value.operation}};
+    json = {
+      {"playerId", value.player_id}, {"questId", value.quest_id}, {"operation", value.operation}};
 }
 inline void from_json (const nlohmann::json &json, projection_admin_req_t &value)
 {
@@ -499,7 +506,9 @@ inline void to_json (nlohmann::json &json, const server_assertion_req_t &)
 {
     json = nlohmann::json::object ();
 }
-inline void from_json (const nlohmann::json &, server_assertion_req_t &) {}
+inline void from_json (const nlohmann::json &, server_assertion_req_t &)
+{
+}
 inline void to_json (nlohmann::json &json, const server_assertion_res_t &value)
 {
     json = {{"passed", value.passed}, {"evidence", value.evidence}};

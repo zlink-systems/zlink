@@ -17,24 +17,35 @@ data class SampleTopology(
     val redisKeyPrefix: String? = null,
     val storeDirectory: String? = null,
 ) {
-    fun role(): Role = Role(
-        required(instanceId, "instanceId"),
-        required(httpEndpoint, "httpEndpoint"),
-        required(logDirectory, "logDirectory"),
-        required(channelEndpoint, "channelEndpoint"),
-        required(storeDirectory, "storeDirectory"),
-    )
+    fun role(): Role =
+        Role(
+            required(instanceId, "instanceId"),
+            required(httpEndpoint, "httpEndpoint"),
+            required(logDirectory, "logDirectory"),
+            required(channelEndpoint, "channelEndpoint"),
+            required(storeDirectory, "storeDirectory"),
+        )
 
-    fun location(): Location = Location(
-        required(redisEndpoint, "redisEndpoint"),
-        required(redisKeyPrefix, "redisKeyPrefix"),
-    )
+    fun location(): Location =
+        Location(
+            required(redisEndpoint, "redisEndpoint"),
+            required(redisKeyPrefix, "redisKeyPrefix"),
+        )
 
     fun requiredStoreDirectory(): String = required(storeDirectory, "storeDirectory")
 
     fun failedPlaceholder(orderId: String): OrderState =
-        OrderState(orderId, OrderStatuses.Failed, null, null, null, "order does not exist", null, null,
-            System.currentTimeMillis())
+        OrderState(
+            orderId,
+            OrderStatuses.Failed,
+            null,
+            null,
+            null,
+            "order does not exist",
+            null,
+            null,
+            System.currentTimeMillis(),
+        )
 
     data class Role(
         val instanceId: String,
@@ -68,7 +79,7 @@ object SampleLocationStore {
             ZLinkRedisLocationOptions()
                 .setConnectionString(location.redisEndpoint)
                 .setKeyPrefix("${location.redisKeyPrefix}locations:")
-                .setCommandTimeout(Duration.ofMillis(500)),
+                .setCommandTimeout(Duration.ofMillis(500))
         )
     }
 }

@@ -3,7 +3,7 @@ const DECIMAL_FACTOR = 10n ** DECIMAL_SCALE;
 
 // Below 2^45 major units, every two-decimal value has a unique IEEE-754
 // representation that can be recovered after a JSON number parse.
-const MAX_DECIMAL_MINOR_UNITS = ((2n ** 45n) * DECIMAL_FACTOR) - 1n;
+const MAX_DECIMAL_MINOR_UNITS = 2n ** 45n * DECIMAL_FACTOR - 1n;
 
 type DecimalAmountInput = DecimalAmount | number;
 declare const decimalWireNumberBrand: unique symbol;
@@ -27,8 +27,10 @@ class DecimalAmount {
       throw new TypeError('Decimal amount must be a non-negative JSON number.');
     }
     const roundedMinorUnits = Math.round(value * Number(DECIMAL_FACTOR));
-    if (!Number.isSafeInteger(roundedMinorUnits)
-      || roundedMinorUnits / Number(DECIMAL_FACTOR) !== value) {
+    if (
+      !Number.isSafeInteger(roundedMinorUnits) ||
+      roundedMinorUnits / Number(DECIMAL_FACTOR) !== value
+    ) {
       throw new RangeError('Decimal amount must have at most two fractional digits.');
     }
     return DecimalAmount.fromMinorUnits(BigInt(roundedMinorUnits));

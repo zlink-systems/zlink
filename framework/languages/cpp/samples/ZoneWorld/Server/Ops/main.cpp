@@ -43,8 +43,12 @@ class ops_console_registry_t
 
     fw::task_t<void> publish (const node_view_t &node)
     {
-        co_await send (node_status_notify_t{node.node_id, node.registered, node.connected,
-                                            node.maintenance, node.zones, node.player_count});
+        co_await send (node_status_notify_t{node.node_id,
+                                            node.registered,
+                                            node.connected,
+                                            node.maintenance,
+                                            node.zones,
+                                            node.player_count});
     }
 
     fw::task_t<void> publish_alert (const node_alert_notify_t &alert) { co_await send (alert); }
@@ -118,8 +122,12 @@ class ops_state_t
         _node_by_rid[source_rid] = report.node_id;
         _last_report[report.node_id] = std::chrono::steady_clock::now ();
         auto &node = _nodes[report.node_id];
-        node = {report.node_id,     true,         _live_rids.contains (source_rid),
-                report.maintenance, report.zones, report.player_count};
+        node = {report.node_id,
+                true,
+                _live_rids.contains (source_rid),
+                report.maintenance,
+                report.zones,
+                report.player_count};
         std::sort (node.zones.begin (), node.zones.end ());
         return node;
     }
@@ -205,7 +213,10 @@ class ops_state_t
                         const auto target_rid = _rid_by_node.find (target_id);
                         if (source_rid == _rid_by_node.end () || target_rid == _rid_by_node.end ())
                             continue;
-                        return {source_zone, target_zone, source_rid->second, target_rid->second,
+                        return {source_zone,
+                                target_zone,
+                                source_rid->second,
+                                target_rid->second,
                                 std::nullopt};
                     }
                 }
@@ -279,7 +290,8 @@ class ops_monitor_service_t final : public fw::hosted_service_t
         // --8<-- [start:doc-zw-observe-peers]
         auto &runtime = services.get_required<fw::route_mesh_runtime_t> ();
         _observation = runtime.observe (
-          names_t::mesh, 64,
+          names_t::mesh,
+          64,
           [this] (const fw::observed_status_t<fw::mesh_node_snapshot_t> &observed) {
               apply_snapshot (observed.status);
           });
@@ -343,7 +355,6 @@ class ops_monitor_service_t final : public fw::hosted_service_t
 class ops_session_t final : public fw::packet_stream_session_t
 {
   public:
-
     ops_session_t (ops_state_t &state,
                    ops_console_registry_t &consoles,
                    fw::publisher_t &publisher,
@@ -387,7 +398,8 @@ class ops_session_t final : public fw::packet_stream_session_t
             const auto request = payload.parse_json<announce_world_req_t> ();
             const auto id = "announce-" + std::to_string (++_announcement);
             co_await _publisher
-              .publish (names_t::broadcast_channel, names_t::announce_topic,
+              .publish (names_t::broadcast_channel,
+                        names_t::announce_topic,
                         world_announce_event_t{id, request.text})
               .async ();
             stream.reply_packet (zlink::message_t::from_json (announce_world_res_t{id})).async ();
@@ -405,7 +417,8 @@ class ops_session_t final : public fw::packet_stream_session_t
                                        .async<apply_node_maintenance_res_t> ();
                 // --8<-- [start:doc-zw-ops-publish]
                 co_await _publisher
-                  .publish (names_t::broadcast_channel, names_t::maintenance_topic,
+                  .publish (names_t::broadcast_channel,
+                            names_t::maintenance_topic,
                             node_maintenance_changed_event_t{request.node_id, request.enabled})
                   .async ();
                 // --8<-- [end:doc-zw-ops-publish]
@@ -439,9 +452,12 @@ class ops_session_t final : public fw::packet_stream_session_t
                     .timeout (std::chrono::seconds (10))
                     .async<get_node_diagnostics_res_t> ();
                 stream
-                  .reply_packet (zlink::message_t::from_json (
-                    node_diagnostics_res_t{result.node_id, result.zones, result.player_count,
-                                           result.maintenance, std::nullopt}))
+                  .reply_packet (
+                    zlink::message_t::from_json (node_diagnostics_res_t{result.node_id,
+                                                                        result.zones,
+                                                                        result.player_count,
+                                                                        result.maintenance,
+                                                                        std::nullopt}))
                   .async ();
             }
             catch (const fw::framework_exception_t &) {

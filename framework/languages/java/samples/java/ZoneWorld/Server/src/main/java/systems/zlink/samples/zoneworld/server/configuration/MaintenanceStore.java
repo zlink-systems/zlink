@@ -3,6 +3,7 @@ package systems.zlink.samples.zoneworld.server.configuration;
 import io.lettuce.core.RedisClient;
 import io.lettuce.core.api.StatefulRedisConnection;
 import io.lettuce.core.api.sync.RedisCommands;
+
 public final class MaintenanceStore implements AutoCloseable {
     private final RedisClient client;
     private final StatefulRedisConnection<String, String> connection;
@@ -10,9 +11,7 @@ public final class MaintenanceStore implements AutoCloseable {
     private final String keyPrefix;
 
     public MaintenanceStore(String endpoint, String keyPrefix) {
-        String redisUri = endpoint.contains("://")
-            ? endpoint
-            : "redis://" + endpoint;
+        String redisUri = endpoint.contains("://") ? endpoint : "redis://" + endpoint;
         client = RedisClient.create(redisUri);
         connection = client.connect();
         redis = connection.sync();

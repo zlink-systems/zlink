@@ -1,9 +1,9 @@
 package systems.zlink.samples.kotlin.tictactoe.server.play.infrastructure.zlink.spots.tictactoegamespot.handlers
 
 import org.slf4j.LoggerFactory
+import systems.zlink.framework.ZLinkMessageContext
 import systems.zlink.framework.handlers.ZLinkHandlerGroup
 import systems.zlink.framework.handlers.ZLinkSpotActorSend
-import systems.zlink.framework.ZLinkMessageContext
 import systems.zlink.samples.kotlin.tictactoe.server.configuration.SampleNames
 import systems.zlink.samples.kotlin.tictactoe.server.play.infrastructure.zlink.actors.PlayActor
 import systems.zlink.samples.kotlin.tictactoe.server.play.infrastructure.zlink.spots.tictactoegamespot.TicTacToeGame
@@ -24,10 +24,7 @@ class PlayActorLeaveGameHandler {
             message.roomId,
         )
         spot.leaveGame(actor, message.roomId)
-        logger.info(
-            "tictactoe-lifecycle leave-completed actor={}",
-            actor.actorId,
-        )
+        logger.info("tictactoe-lifecycle leave-completed actor={}", actor.actorId)
     }
 
     private companion object {

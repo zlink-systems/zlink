@@ -9,7 +9,8 @@ internal sealed class TicTacToeGameTimerHandler : IZLinkSpotTimerHandler<TicTacT
     public ValueTask HandleAsync(
         TicTacToeGame spot,
         ZLinkTimerTick tick,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken
+    )
     {
         _ = tick;
         return spot.TickAsync(cancellationToken);

@@ -13,14 +13,13 @@ import systems.zlink.samples.kotlin.deliverydispatch.shared.contracts.AssignDeli
  * handler is the only path that hands it to the in-process work queue.
  */
 @ZLinkHandlerGroup(SampleNames.DispatchChannel)
-class AssignDeliveryHandler(
-    private val queue: DispatchWorkQueue,
-) : ZLinkSuspendingSendHandler<AssignDeliveryMsg> {
+class AssignDeliveryHandler(private val queue: DispatchWorkQueue) :
+    ZLinkSuspendingSendHandler<AssignDeliveryMsg> {
     override suspend fun handle(message: AssignDeliveryMsg, context: ZLinkMessageContext) {
         queue.enqueue(message)
         println(
             "deliverydispatch dispatch-channel: enqueued delivery=${message.deliveryId} " +
-                "customer=${message.customerId}",
+                "customer=${message.customerId}"
         )
     }
 }

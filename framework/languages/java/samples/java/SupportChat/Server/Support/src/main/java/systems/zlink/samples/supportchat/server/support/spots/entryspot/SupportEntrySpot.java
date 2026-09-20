@@ -1,16 +1,17 @@
 package systems.zlink.samples.supportchat.server.support.spots.entryspot;
-import java.util.concurrent.CompletableFuture;
-import java.util.concurrent.CompletionStage;
 
 import systems.zlink.framework.messaging.ZLinkMessage;
+import systems.zlink.framework.spots.ZLinkActorCreateResponse;
 import systems.zlink.framework.spots.ZLinkEntrySpot;
 import systems.zlink.framework.spots.ZLinkEntrySpotContext;
-import systems.zlink.framework.spots.ZLinkActorCreateResponse;
-import systems.zlink.samples.supportchat.server.support.actors.SupportUserActor;
-import systems.zlink.samples.supportchat.server.support.actors.SupportActorDirectory;
-import systems.zlink.samples.supportchat.server.support.application.AgentAssignmentService;
 import systems.zlink.samples.supportchat.server.configuration.SampleNames;
+import systems.zlink.samples.supportchat.server.support.actors.SupportActorDirectory;
+import systems.zlink.samples.supportchat.server.support.actors.SupportUserActor;
+import systems.zlink.samples.supportchat.server.support.application.AgentAssignmentService;
 import systems.zlink.samples.supportchat.shared.contracts.Messages;
+
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CompletionStage;
 
 public final class SupportEntrySpot implements ZLinkEntrySpot<SupportUserActor> {
     private final ZLinkEntrySpotContext context;
@@ -18,9 +19,9 @@ public final class SupportEntrySpot implements ZLinkEntrySpot<SupportUserActor> 
     private final AgentAssignmentService assignment;
 
     public SupportEntrySpot(
-        ZLinkEntrySpotContext context,
-        SupportActorDirectory directory,
-        AgentAssignmentService assignment) {
+            ZLinkEntrySpotContext context,
+            SupportActorDirectory directory,
+            AgentAssignmentService assignment) {
         this.context = context;
         this.directory = directory;
         this.assignment = assignment;
@@ -33,14 +34,12 @@ public final class SupportEntrySpot implements ZLinkEntrySpot<SupportUserActor> 
 
     @Override
     public CompletionStage<ZLinkActorCreateResponse> onCreateActor(
-        SupportUserActor actor,
-        ZLinkMessage createRequest) {
+            SupportUserActor actor, ZLinkMessage createRequest) {
         Messages.EnsureSupportUserActorReq request =
-            createRequest.decode(Messages.EnsureSupportUserActorReq.class);
+                createRequest.decode(Messages.EnsureSupportUserActorReq.class);
         actor.setIdentity(request.displayName(), request.role(), request.participantId());
         directory.remember(actor);
-        return CompletableFuture.completedFuture(
-            ZLinkActorCreateResponse.accept());
+        return CompletableFuture.completedFuture(ZLinkActorCreateResponse.accept());
     }
 
     @Override

@@ -14,9 +14,7 @@ namespace ZoneWorld.Server.ZoneNode.Infrastructure.ZLink.Spots.Handlers;
 /// A human's move request, relayed from the client's session to its actor (§2.1).
 /// </summary>
 [ZLinkSpotActorSendHandler(nameof(MoveMsg))]
-internal sealed class PlayerMoveHandler(
-    PlayerMovement movement,
-    ILogger<PlayerMoveHandler> logger)
+internal sealed class PlayerMoveHandler(PlayerMovement movement, ILogger<PlayerMoveHandler> logger)
     : IZLinkSpotActorSendHandler<ZoneSpot, PlayerActor, MoveMsg>
 {
     public ValueTask HandleAsync(
@@ -24,14 +22,16 @@ internal sealed class PlayerMoveHandler(
         PlayerActor actor,
         IZLinkMessageContext context,
         MoveMsg message,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken
+    )
     {
         logger.LogInformation(
             "player move handler entered. player={PlayerId}, zone={ZoneId}, target=({X},{Y})",
             actor.ActorId,
             spot.ZoneId,
             message.X,
-            message.Y);
+            message.Y
+        );
         return movement.MoveAsync(spot, actor, message.X, message.Y, cancellationToken);
     }
 }
@@ -50,11 +50,13 @@ internal sealed class PlayerBotTickHandler(PlayerMovement movement)
         PlayerActor actor,
         IZLinkMessageContext context,
         BotTickMsg message,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken
+    )
     {
         _ = context;
         _ = message;
-        if (!actor.IsBot) return;
+        if (!actor.IsBot)
+            return;
 
         var target = BotPatrolPolicy.NextStep(actor.Position, actor.DirX, actor.DirY);
         await movement.MoveAsync(spot, actor, target.X, target.Y, cancellationToken);
@@ -74,8 +76,8 @@ internal sealed class PlayerCrashRelocationProbeHandler(PlayerMovement movement)
         PlayerActor actor,
         IZLinkMessageContext context,
         CrashRelocationProbeMsg message,
-        CancellationToken cancellationToken) =>
-        movement.CrashProbeAsync(spot, actor, message.X, message.Y, cancellationToken);
+        CancellationToken cancellationToken
+    ) => movement.CrashProbeAsync(spot, actor, message.X, message.Y, cancellationToken);
 }
 
 /// <summary>
@@ -91,15 +93,18 @@ internal sealed class PlayerZoneStateDeliveryHandler(ILogger<PlayerZoneStateDeli
         PlayerActor actor,
         IZLinkMessageContext context,
         DeliverZoneStateMsg message,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken
+    )
     {
-        if (actor.IsBot) return;
+        if (actor.IsBot)
+            return;
         var ownView = message.Players.FirstOrDefault(player =>
-            string.Equals(player.PlayerId, actor.ActorId, StringComparison.Ordinal));
+            string.Equals(player.PlayerId, actor.ActorId, StringComparison.Ordinal)
+        );
         logger.LogInformation(
             "zone state delivery handler entered. player={PlayerId}, zone={ZoneId}, "
-            + "tick={Tick}, players={PlayerCount}, own_view={OwnViewPlayerId}@({OwnViewX},{OwnViewY})/"
-            + "{OwnViewZoneId}",
+                + "tick={Tick}, players={PlayerCount}, own_view={OwnViewPlayerId}@({OwnViewX},{OwnViewY})/"
+                + "{OwnViewZoneId}",
             actor.ActorId,
             message.ZoneId,
             message.Tick,
@@ -107,16 +112,20 @@ internal sealed class PlayerZoneStateDeliveryHandler(ILogger<PlayerZoneStateDeli
             ownView?.PlayerId ?? "<missing>",
             ownView?.X,
             ownView?.Y,
-            ownView?.ZoneId ?? "<missing>");
+            ownView?.ZoneId ?? "<missing>"
+        );
         // --8<-- [start:doc-zw-state-push]
-        await actor.Context.BoundSession
-            .Send(new ZoneStateNotify(message.ZoneId, message.Tick, message.Players))
+        await actor
+            .Context.BoundSession.Send(
+                new ZoneStateNotify(message.ZoneId, message.Tick, message.Players)
+            )
             .Async(cancellationToken);
         // --8<-- [end:doc-zw-state-push]
         logger.LogInformation(
             "zone state delivery handler completed. player={PlayerId}, zone={ZoneId}",
             actor.ActorId,
-            message.ZoneId);
+            message.ZoneId
+        );
     }
 }
 
@@ -132,11 +141,13 @@ internal sealed class PlayerZoneChangedDeliveryHandler
         PlayerActor actor,
         IZLinkMessageContext context,
         DeliverZoneChangedMsg message,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken
+    )
     {
-        if (actor.IsBot) return;
-        await actor.Context.BoundSession
-            .Send(new ZoneChangedNotify(message.PlayerId, message.ZoneId))
+        if (actor.IsBot)
+            return;
+        await actor
+            .Context.BoundSession.Send(new ZoneChangedNotify(message.PlayerId, message.ZoneId))
             .Async(cancellationToken);
     }
 }
@@ -154,11 +165,15 @@ internal sealed class PlayerWorldAnnouncementDeliveryHandler
         PlayerActor actor,
         IZLinkMessageContext context,
         DeliverWorldAnnounceMsg message,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken
+    )
     {
-        if (actor.IsBot) return;
-        await actor.Context.BoundSession
-            .Send(new WorldAnnounceNotify(message.AnnouncementId, message.Text))
+        if (actor.IsBot)
+            return;
+        await actor
+            .Context.BoundSession.Send(
+                new WorldAnnounceNotify(message.AnnouncementId, message.Text)
+            )
             .Async(cancellationToken);
     }
 }
@@ -169,52 +184,58 @@ internal sealed class PlayerWorldAnnouncementDeliveryHandler
 /// </summary>
 [ZLinkSpotActorRequestHandler(nameof(MessageFollowProbeReq))]
 internal sealed class PlayerMessageFollowProbeHandler(
-    ILogger<PlayerMessageFollowProbeHandler> logger)
+    ILogger<PlayerMessageFollowProbeHandler> logger
+)
     : IZLinkSpotActorRequestHandler<
         ZoneSpot,
         PlayerActor,
         MessageFollowProbeReq,
-        MessageFollowProbeRes>
+        MessageFollowProbeRes
+    >
 {
     public ValueTask<MessageFollowProbeRes> HandleAsync(
         ZoneSpot spot,
         PlayerActor actor,
         IZLinkMessageContext context,
         MessageFollowProbeReq request,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken
+    )
     {
         logger.LogInformation(
             "message-follow probe handled. actor={ActorId}, probe={ProbeId}, payload={Payload}",
             actor.ActorId,
             request.ProbeId,
-            Convert.ToHexString(request.Payload));
+            Convert.ToHexString(request.Payload)
+        );
         return ValueTask.FromResult(new MessageFollowProbeRes(request.ProbeId, request.Payload));
     }
 
-/// <summary>
-/// Handles the one-way half of the runner-only Message Follow probe. The application records
-/// the operation because a one-way send has no reply that could prove target execution.
-/// </summary>
-[ZLinkSpotActorSendHandler(nameof(MessageFollowProbeMsg))]
-internal sealed class PlayerMessageFollowProbeSendHandler(
-    ILogger<PlayerMessageFollowProbeSendHandler> logger)
-    : IZLinkSpotActorSendHandler<ZoneSpot, PlayerActor, MessageFollowProbeMsg>
-{
-    public ValueTask HandleAsync(
-        ZoneSpot spot,
-        PlayerActor actor,
-        IZLinkMessageContext context,
-        MessageFollowProbeMsg message,
-        CancellationToken cancellationToken)
+    /// <summary>
+    /// Handles the one-way half of the runner-only Message Follow probe. The application records
+    /// the operation because a one-way send has no reply that could prove target execution.
+    /// </summary>
+    [ZLinkSpotActorSendHandler(nameof(MessageFollowProbeMsg))]
+    internal sealed class PlayerMessageFollowProbeSendHandler(
+        ILogger<PlayerMessageFollowProbeSendHandler> logger
+    ) : IZLinkSpotActorSendHandler<ZoneSpot, PlayerActor, MessageFollowProbeMsg>
     {
-        logger.LogInformation(
-            "message-follow probe one-way handled. actor={ActorId}, probe={ProbeId}, payload={Payload}",
-            actor.ActorId,
-            message.ProbeId,
-            Convert.ToHexString(message.Payload));
-        return ValueTask.CompletedTask;
+        public ValueTask HandleAsync(
+            ZoneSpot spot,
+            PlayerActor actor,
+            IZLinkMessageContext context,
+            MessageFollowProbeMsg message,
+            CancellationToken cancellationToken
+        )
+        {
+            logger.LogInformation(
+                "message-follow probe one-way handled. actor={ActorId}, probe={ProbeId}, payload={Payload}",
+                actor.ActorId,
+                message.ProbeId,
+                Convert.ToHexString(message.Payload)
+            );
+            return ValueTask.CompletedTask;
+        }
     }
-}
 }
 
 /// <summary>
@@ -225,29 +246,32 @@ internal sealed class PlayerMessageFollowProbeSendHandler(
 internal sealed class PlayerMovement(
     MoveUseCase moves,
     IZLinkSpotClient spots,
-    ILogger<PlayerMovement> logger)
+    ILogger<PlayerMovement> logger
+)
 {
     public ValueTask CrashProbeAsync(
         ZoneSpot spot,
         PlayerActor actor,
         int toX,
         int toY,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken
+    )
     {
-        if (moves.Decide(actor.Position, toX, toY) is not MoveDecision.Accepted
-            {
-                ZoneChanged: true,
-                To: var target
-            })
+        if (
+            moves.Decide(actor.Position, toX, toY)
+            is not MoveDecision.Accepted { ZoneChanged: true, To: var target }
+        )
             throw new InvalidOperationException(
-                "The G4 crash probe must be one legal cross-zone move.");
+                "The G4 crash probe must be one legal cross-zone move."
+            );
 
         return ChangeZoneAsync(
             actor,
             target,
             PlayerJoinPurpose.CrashBoundaryProbe,
             crashBoundaryProbe: true,
-            cancellationToken);
+            cancellationToken
+        );
     }
 
     public async ValueTask MoveAsync(
@@ -255,7 +279,8 @@ internal sealed class PlayerMovement(
         PlayerActor actor,
         int toX,
         int toY,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken
+    )
     {
         // --8<-- [start:doc-zw-move]
         switch (moves.Decide(actor.Position, toX, toY))
@@ -269,11 +294,8 @@ internal sealed class PlayerMovement(
                 await spots
                     .SendToSpot(
                         spot.ZoneId,
-                        new UpdatePositionMsg(
-                            actor.ActorId,
-                            stayed.To.X,
-                            stayed.To.Y,
-                            actor.IsBot))
+                        new UpdatePositionMsg(actor.ActorId, stayed.To.X, stayed.To.Y, actor.IsBot)
+                    )
                     .Async(cancellationToken);
                 return;
 
@@ -283,7 +305,8 @@ internal sealed class PlayerMovement(
                     accepted.To,
                     PlayerJoinPurpose.ZoneChange,
                     crashBoundaryProbe: false,
-                    cancellationToken);
+                    cancellationToken
+                );
                 return;
         }
         // --8<-- [end:doc-zw-move]
@@ -300,13 +323,14 @@ internal sealed class PlayerMovement(
         PlayerPosition to,
         PlayerJoinPurpose purpose,
         bool crashBoundaryProbe,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken
+    )
     {
         cancellationToken.ThrowIfCancellationRequested();
         // --8<-- [start:doc-zw-zone-change]
         actor.TrackDeferredJoin(to, purpose);
-        actor.Context
-            .JoinSpot(
+        actor
+            .Context.JoinSpot(
                 to.ZoneId,
                 new EnterZoneReq(
                     actor.ActorId,
@@ -315,14 +339,17 @@ internal sealed class PlayerMovement(
                     actor.IsBot,
                     InitialEntry: false,
                     FromZoneId: actor.ZoneId,
-                    CrashBoundaryProbe: crashBoundaryProbe))
+                    CrashBoundaryProbe: crashBoundaryProbe
+                )
+            )
             .Defer();
         // --8<-- [end:doc-zw-zone-change]
 
         logger.LogInformation(
             "zone change scheduled. player={PlayerId}, zone={ZoneId}",
             actor.ActorId,
-            to.ZoneId);
+            to.ZoneId
+        );
         return ValueTask.CompletedTask;
     }
 
@@ -333,7 +360,8 @@ internal sealed class PlayerMovement(
     private async ValueTask RejectAsync(
         PlayerActor actor,
         string reason,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken
+    )
     {
         if (actor.IsBot)
         {
@@ -341,8 +369,10 @@ internal sealed class PlayerMovement(
             return;
         }
 
-        await actor.Context.BoundSession
-            .Send(new MoveRejectedNotify(reason, actor.Position.X, actor.Position.Y))
+        await actor
+            .Context.BoundSession.Send(
+                new MoveRejectedNotify(reason, actor.Position.X, actor.Position.Y)
+            )
             .Async(cancellationToken);
     }
 }

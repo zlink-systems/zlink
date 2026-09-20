@@ -2,7 +2,6 @@ import type { ZLinkInstanceSpot, ZLinkInstanceSpotContext } from '@zlink-systems
 
 class OrderWorkflowSpot implements ZLinkInstanceSpot {
   readonly context!: ZLinkInstanceSpotContext;
-
 }
 
 export { OrderWorkflowSpot };

@@ -12,10 +12,8 @@ import systems.zlink.samples.kotlin.deliverydispatch.shared.contracts.OfferDeliv
  * and the only thing the actor has to remember in between is which attempt the offer belonged to,
  * so the decision can be paired with it.
  */
-class CourierActor(
-    private val id: String,
-    private val actorContext: ZLinkActorContext,
-) : ZLinkActor {
+class CourierActor(private val id: String, private val actorContext: ZLinkActorContext) :
+    ZLinkActor {
     private val offeredAttempts = mutableMapOf<String, Int>()
 
     fun actorId(): String = id
@@ -25,20 +23,20 @@ class CourierActor(
     // --8<-- [start:doc-dd-offer-push]
     /** Pushes the offer and returns. The courier takes as long as it takes. */
     fun offer(offer: OfferDeliveryMsg) {
-        synchronized(offeredAttempts) {
-            offeredAttempts[offer.deliveryId] = offer.attempt
-        }
-        actorContext.boundSession()
+        synchronized(offeredAttempts) { offeredAttempts[offer.deliveryId] = offer.attempt }
+        actorContext
+            .boundSession()
             .send(
                 OfferDeliveryNotify(
                     courierId = offer.courierId,
                     deliveryId = offer.deliveryId,
                     pickupAddress = offer.pickupAddress,
                     dropoffAddress = offer.dropoffAddress,
-                ),
+                )
             )
             .submit()
     }
+
     // --8<-- [end:doc-dd-offer-push]
 
     /**

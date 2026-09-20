@@ -11,13 +11,15 @@ public static class BingoMetricsRegistration
     {
         services.AddSingleton<BingoMetricsListener>();
         services.AddSingleton<IHostedService>(static provider =>
-            provider.GetRequiredService<BingoMetricsListener>());
+            provider.GetRequiredService<BingoMetricsListener>()
+        );
         return services;
     }
 }
 
-public sealed class BingoMetricsListener(
-    ILogger<BingoMetricsListener> logger) : IHostedService, IDisposable
+public sealed class BingoMetricsListener(ILogger<BingoMetricsListener> logger)
+    : IHostedService,
+        IDisposable
 {
     // The framework exposes diagnostics through the standard .NET meter.
     // It does not add a zlink-specific public monitoring interface.
@@ -47,16 +49,15 @@ public sealed class BingoMetricsListener(
 
     public async Task StopAsync(CancellationToken cancellationToken)
     {
-        if (_stop is null) return;
+        if (_stop is null)
+            return;
         await _stop.CancelAsync().ConfigureAwait(false);
         if (_poll is not null)
             try
             {
                 await _poll.WaitAsync(cancellationToken).ConfigureAwait(false);
             }
-            catch (OperationCanceledException) when (_stop.IsCancellationRequested)
-            {
-            }
+            catch (OperationCanceledException) when (_stop.IsCancellationRequested) { }
     }
 
     public void Dispose()
@@ -70,40 +71,48 @@ public sealed class BingoMetricsListener(
     {
         try
         {
-            while (_observableTimer is not null
-                   && await _observableTimer.WaitForNextTickAsync(cancellationToken).ConfigureAwait(false))
+            while (
+                _observableTimer is not null
+                && await _observableTimer
+                    .WaitForNextTickAsync(cancellationToken)
+                    .ConfigureAwait(false)
+            )
                 _listener.RecordObservableInstruments();
         }
-        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
-        {
-        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested) { }
     }
 
     private void LogLong(
         Instrument instrument,
         long value,
         ReadOnlySpan<KeyValuePair<string, object?>> tags,
-        object? state) => Log(instrument, value, tags);
+        object? state
+    ) => Log(instrument, value, tags);
 
     private void LogDouble(
         Instrument instrument,
         double value,
         ReadOnlySpan<KeyValuePair<string, object?>> tags,
-        object? state) => Log(instrument, value, tags);
+        object? state
+    ) => Log(instrument, value, tags);
 
     private void Log<T>(
         Instrument instrument,
         T value,
-        ReadOnlySpan<KeyValuePair<string, object?>> tags)
+        ReadOnlySpan<KeyValuePair<string, object?>> tags
+    )
     {
-        if (!logger.IsEnabled(LogLevel.Information)) return;
+        if (!logger.IsEnabled(LogLevel.Information))
+            return;
         var attributes = string.Join(
             ",",
-            tags.ToArray().Select(static tag => $"{tag.Key}={tag.Value}"));
+            tags.ToArray().Select(static tag => $"{tag.Key}={tag.Value}")
+        );
         logger.LogInformation(
             "zlink metric name={MetricName} value={MetricValue} tags={MetricTags}",
             instrument.Name,
             value,
-            attributes);
+            attributes
+        );
     }
 }

@@ -51,7 +51,9 @@ const InitialRoomId = 'tictactoe-room';
 class TicTacToeGameSpot implements ZLinkSpot<PlayActor> {
   readonly context!: ZLinkSpotContext<PlayActor, TicTacToeGameSpot>;
   private roomId = InitialRoomId;
-  private match: TicTacToeMatchType<GameParticipant> = new TicTacToeMatch<GameParticipant>(InitialRoomId);
+  private match: TicTacToeMatchType<GameParticipant> = new TicTacToeMatch<GameParticipant>(
+    InitialRoomId
+  );
   private readonly pendingJoins = new Map<string, TicTacToeGameJoinReq>();
   private readonly actors = new Map<string, PlayActor>();
   private gameTick?: ZLinkTimer;
@@ -130,14 +132,16 @@ class TicTacToeGameSpot implements ZLinkSpot<PlayActor> {
         if (existing.actorId === actorId) {
           continue;
         }
-        await existing.push(playerJoinedNotify(
-          this.roomId,
-          actorId,
-          request.player.displayName,
-          request.player.level,
-          joined.mark,
-          state
-        ));
+        await existing.push(
+          playerJoinedNotify(
+            this.roomId,
+            actorId,
+            request.player.displayName,
+            request.player.level,
+            joined.mark,
+            state
+          )
+        );
       }
     }
     console.log(`game spot: actor joined. actor=${actorId} roomId=${this.roomId}`);
@@ -147,7 +151,10 @@ class TicTacToeGameSpot implements ZLinkSpot<PlayActor> {
   async onLeaveActor(actor: PlayActor): Promise<void> {
     this.requireMatch().players.delete(actor.actorId);
     this.actors.delete(actor.actorId);
-    if (this.requireMatch().players.size === 0 && isTerminal(this.requireMatch().snapshot().status)) {
+    if (
+      this.requireMatch().players.size === 0 &&
+      isTerminal(this.requireMatch().snapshot().status)
+    ) {
       await this.context.close();
     }
   }
@@ -202,8 +209,16 @@ class TicTacToeGameSpot implements ZLinkSpot<PlayActor> {
     return this.requireMatch().snapshot();
   }
 
-  private async publishWinMilestone(actorId: string, before: GameState, after: GameState): Promise<void> {
-    if (before.status === GameStatus.Won || after.status !== GameStatus.Won || after.winner !== actorId) {
+  private async publishWinMilestone(
+    actorId: string,
+    before: GameState,
+    after: GameState
+  ): Promise<void> {
+    if (
+      before.status === GameStatus.Won ||
+      after.status !== GameStatus.Won ||
+      after.winner !== actorId
+    ) {
       return;
     }
     const participant = this.requireMatch().players.get(actorId)?.player;
@@ -230,7 +245,9 @@ class TicTacToeGameSpot implements ZLinkSpot<PlayActor> {
       throw new Error(`Join player '${request.player.actorId}' does not match actor '${actorId}'.`);
     }
     if (request.player.level < this.requiredLevel) {
-      throw new Error(`Player level ${request.player.level} is below required level ${this.requiredLevel}.`);
+      throw new Error(
+        `Player level ${request.player.level} is below required level ${this.requiredLevel}.`
+      );
     }
     const result = this.requireMatch().joinPlayer({
       actorId,
@@ -249,7 +266,10 @@ class TicTacToeGameSpot implements ZLinkSpot<PlayActor> {
     return actorId;
   }
 
-  private async notifyActor(actorId: string, payload: ConstructorParameters<typeof DeliverPlayNotificationMsg>[0]): Promise<void> {
+  private async notifyActor(
+    actorId: string,
+    payload: ConstructorParameters<typeof DeliverPlayNotificationMsg>[0]
+  ): Promise<void> {
     const actor = this.actors.get(actorId);
     if (actor === undefined) {
       throw new Error(`TicTacToe actor '${actorId}' has no room membership reference.`);
@@ -267,9 +287,9 @@ class TicTacToeGameSpot implements ZLinkSpot<PlayActor> {
 }
 
 function isTerminal(status: GameStatus): boolean {
-  return status === GameStatus.Won
-    || status === GameStatus.Draw
-    || status === GameStatus.TurnTimedOut;
+  return (
+    status === GameStatus.Won || status === GameStatus.Draw || status === GameStatus.TurnTimedOut
+  );
 }
 
 export { TicTacToeGameSpot };

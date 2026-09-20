@@ -2,6 +2,7 @@ package systems.zlink.samples.zoneworld.server.configuration;
 
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentMap;
+
 public final class NodeMaintenanceState {
     private final ConcurrentMap<String, Boolean> states = new ConcurrentHashMap<>();
 
@@ -14,7 +15,6 @@ public final class NodeMaintenanceState {
     }
 
     public boolean rejectsArrival(String ownNodeId, String targetZoneId, String sourceZoneId) {
-        return isUnderMaintenance(ownNodeId)
-            && !targetZoneId.equals(sourceZoneId);
+        return isUnderMaintenance(ownNodeId) && !targetZoneId.equals(sourceZoneId);
     }
 }

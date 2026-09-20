@@ -24,11 +24,7 @@ using framework::message_t;
 class authenticate_play_session_handler_t
 {
   public:
-
-    explicit authenticate_play_session_handler_t (channel_client_t &client) :
-        _client (client)
-    {
-    }
+    explicit authenticate_play_session_handler_t (channel_client_t &client) : _client (client) {}
 
     bool can_handle (const session_message_context_t &dispatch) const
     {
@@ -53,8 +49,7 @@ class authenticate_play_session_handler_t
          * PlayerInfo를 actor 생성 payload로 실어 보낸다(별도 EnsurePlayerActor 계약 없음). */
         const auto &player = authenticated.player;
         auto located = actors.get_or_create (
-          sample_names_t::actor_type, player.actor_id,
-          player_actor_create_req_t{player});
+          sample_names_t::actor_type, player.actor_id, player_actor_create_req_t{player});
         if (!located) {
             co_return result_t<session_actor_t>::failure (framework_error_kind_t::internal_failure,
                                                           "Player actor could not be located.");
@@ -64,12 +59,12 @@ class authenticate_play_session_handler_t
         bool first_player_x_binding = false;
         {
             std::lock_guard lock (bound_actors_mutex);
-            first_player_x_binding = actor.actor_id () == "player-x"
+            first_player_x_binding =
+              actor.actor_id () == "player-x"
               && bound_actors.insert (std::string (actor.actor_id ())).second;
         }
         if (first_player_x_binding) {
-            std::cout << "tictactoe-lifecycle actor-bound actor=" << actor.actor_id ()
-                      << std::endl;
+            std::cout << "tictactoe-lifecycle actor-bound actor=" << actor.actor_id () << std::endl;
         }
 
         const auto reply_payload = authenticate_res_t{player};

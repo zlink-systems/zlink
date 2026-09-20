@@ -25,21 +25,28 @@ async function waitForRouteMeshReady(
   const signal = AbortSignal.timeout(30_000);
   const ready = (): boolean => {
     const status = runtime.snapshot(meshName);
-    return status.isReady
-      && status.readyPeerCount > 0
-      && (!requiresPlacement || status.placement.isAvailable);
+    return (
+      status.isReady &&
+      status.readyPeerCount > 0 &&
+      (!requiresPlacement || status.placement.isAvailable)
+    );
   };
   if (ready()) return;
   try {
     for await (const observed of runtime.observe(meshName, 64, signal)) {
-      if (observed.status.isReady
-        && observed.status.readyPeerCount > 0
-        && (!requiresPlacement || observed.status.placement.isAvailable)) return;
+      if (
+        observed.status.isReady &&
+        observed.status.readyPeerCount > 0 &&
+        (!requiresPlacement || observed.status.placement.isAvailable)
+      )
+        return;
     }
   } catch (error: unknown) {
     if (!signal.aborted) throw error;
   }
-  throw new Error(`TicTacToe RouteMesh '${meshName}' did not become ready before startup deadline.`);
+  throw new Error(
+    `TicTacToe RouteMesh '${meshName}' did not become ready before startup deadline.`
+  );
 }
 
 export { closeNestRuntime, waitForRouteMeshReady, waitForShutdown };

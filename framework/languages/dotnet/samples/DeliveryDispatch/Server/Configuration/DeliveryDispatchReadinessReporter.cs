@@ -7,7 +7,7 @@ namespace DeliveryDispatch.Server.Configuration;
 public enum DeliveryDispatchReadyKind
 {
     Route,
-    ActorRoute
+    ActorRoute,
 }
 
 public sealed record DeliveryDispatchReadiness(
@@ -15,7 +15,8 @@ public sealed record DeliveryDispatchReadiness(
     string NodeId,
     string MeshName,
     int RequiredReadyPeers,
-    string? TargetNodeId = null);
+    string? TargetNodeId = null
+);
 
 /// <summary>
 /// Reports sample-owned readiness evidence from the public route-mesh status surface.  It never
@@ -24,7 +25,8 @@ public sealed record DeliveryDispatchReadiness(
 public sealed class DeliveryDispatchReadinessReporter(
     IEnumerable<DeliveryDispatchReadiness> readiness,
     IZLinkRouteMeshRuntime routeMesh,
-    ILogger<DeliveryDispatchReadinessReporter> logger) : IHostedService
+    ILogger<DeliveryDispatchReadinessReporter> logger
+) : IHostedService
 {
     private readonly List<DeliveryDispatchReadiness> pending = readiness.ToList();
     private CancellationTokenSource? stopping;
@@ -39,16 +41,15 @@ public sealed class DeliveryDispatchReadinessReporter(
 
     public async Task StopAsync(CancellationToken cancellationToken)
     {
-        if (stopping is null || reporting is null) return;
+        if (stopping is null || reporting is null)
+            return;
 
         await stopping.CancelAsync();
         try
         {
             await reporting.WaitAsync(cancellationToken);
         }
-        catch (OperationCanceledException) when (stopping.IsCancellationRequested)
-        {
-        }
+        catch (OperationCanceledException) when (stopping.IsCancellationRequested) { }
         finally
         {
             stopping.Dispose();
@@ -65,9 +66,11 @@ public sealed class DeliveryDispatchReadinessReporter(
                 try
                 {
                     var status = routeMesh.GetStatus(report.MeshName);
-                    if (!status.IsReady
+                    if (
+                        !status.IsReady
                         || status.Peers.Count(peer => peer.State == ZLinkPeerState.Ready)
-                        < report.RequiredReadyPeers)
+                            < report.RequiredReadyPeers
+                    )
                     {
                         continue;
                     }
@@ -82,14 +85,16 @@ public sealed class DeliveryDispatchReadinessReporter(
                 {
                     logger.LogInformation(
                         "deliverydispatch-ready kind=route node={NodeId}",
-                        report.NodeId);
+                        report.NodeId
+                    );
                 }
                 else
                 {
                     logger.LogInformation(
                         "deliverydispatch-ready kind=actor-route node={NodeId} target={TargetNodeId}",
                         report.NodeId,
-                        report.TargetNodeId);
+                        report.TargetNodeId
+                    );
                 }
 
                 pending.RemoveAt(index);

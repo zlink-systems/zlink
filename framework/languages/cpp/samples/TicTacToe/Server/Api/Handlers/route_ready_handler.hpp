@@ -17,31 +17,25 @@ using namespace framework;
 class route_ready_handler_t
 {
   public:
-    explicit route_ready_handler_t (route_mesh_runtime_t &runtime) :
-        _runtime (runtime)
-    {
-    }
+    explicit route_ready_handler_t (route_mesh_runtime_t &runtime) : _runtime (runtime) {}
 
     http_response_t handle (const http_request_t &request)
     {
         const auto found = request.query_values.find ("targetRid");
         if (found == request.query_values.end () || found->second.empty ())
-            return {.status = 400,
-                    .body = R"({"error":"targetRid is required"})"};
+            return {.status = 400, .body = R"({"error":"targetRid is required"})"};
 
         const auto snapshot = _runtime.snapshot (sample_names_t::game_spot_node);
         for (const auto &peer : snapshot.peers) {
-            if (peer.node_rid.to_string () == found->second
-                && peer.state == peer_state_t::ready)
-                return {.body = nlohmann::json{{"ready", true},
-                                               {"targetRid", found->second}}
-                                  .dump ()};
+            if (peer.node_rid.to_string () == found->second && peer.state == peer_state_t::ready)
+                return {.body =
+                          nlohmann::json{{"ready", true}, {"targetRid", found->second}}.dump ()};
         }
 
         nlohmann::json peers = nlohmann::json::array ();
         for (const auto &peer : snapshot.peers)
-            peers.push_back ({{"rid", peer.node_rid.to_string ()},
-                              {"state", static_cast<int> (peer.state)}});
+            peers.push_back (
+              {{"rid", peer.node_rid.to_string ()}, {"state", static_cast<int> (peer.state)}});
         return {.status = 503,
                 .body = nlohmann::json{{"ready", false},
                                        {"targetRid", found->second},

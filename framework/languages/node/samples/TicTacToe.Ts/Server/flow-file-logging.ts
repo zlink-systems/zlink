@@ -19,15 +19,16 @@ class FlowFileExporter implements LogRecordExporter {
 
   export(records: ReadableLogRecord[], done: (result: ExportResult) => void): void {
     const lines = records
-      .map((record) => JSON.stringify({
-        ts: new Date().toISOString(),
-        event: typeof record.body === 'string' ? record.body : String(record.body),
-        severity: record.severityText,
-        ...record.attributes
-      }))
+      .map((record) =>
+        JSON.stringify({
+          ts: new Date().toISOString(),
+          event: typeof record.body === 'string' ? record.body : String(record.body),
+          severity: record.severityText,
+          ...record.attributes
+        })
+      )
       .join('\n');
-    fs.appendFile(this.filePath, `${lines}\n`, () =>
-      done({ code: ExportResultCode.SUCCESS }));
+    fs.appendFile(this.filePath, `${lines}\n`, () => done({ code: ExportResultCode.SUCCESS }));
   }
 
   forceFlush(): Promise<void> {
@@ -44,9 +45,9 @@ function enableFlowFileLogging(role: string): void {
   if (flagIndex < 0 || !Object.hasOwn(process.argv, flagIndex + 1)) return;
   const configPath = process.argv[flagIndex + 1]!;
   try {
-    const document = JSON.parse(
-      fs.readFileSync(configPath, 'utf8')
-    ) as { sample?: { logDir?: string } };
+    const document = JSON.parse(fs.readFileSync(configPath, 'utf8')) as {
+      sample?: { logDir?: string };
+    };
     const logDir = document.sample?.logDir;
     if (logDir === undefined) return;
     fs.mkdirSync(logDir, { recursive: true });

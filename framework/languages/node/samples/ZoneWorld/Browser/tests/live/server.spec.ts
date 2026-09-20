@@ -1,7 +1,9 @@
 import { expect, test } from '@playwright/test';
 import { writeFile } from 'node:fs/promises';
 
-test('one browser socket keeps authoritative state across an Ops-observed owner boundary', async ({ page }) => {
+test('one browser socket keeps authoritative state across an Ops-observed owner boundary', async ({
+  page
+}) => {
   await page.goto('/game.html');
   await page.getByLabel('Player ID').fill(`browser-${Date.now()}`);
   await page.getByRole('button', { name: 'Enter world' }).click();
@@ -69,7 +71,10 @@ test('operations page receives node loss through server push', async ({ page }, 
   await page.goto('/ops.html');
   await page.getByRole('button', { name: 'Connect console' }).click();
   const lifecycleNodeId = testInfo.config.metadata.lifecycleNodeId;
-  test.skip(typeof lifecycleNodeId !== 'string', 'the language runner selects the lifecycle node from Ops');
+  test.skip(
+    typeof lifecycleNodeId !== 'string',
+    'the language runner selects the lifecycle node from Ops'
+  );
   const lifecycleNode = page.getByTestId(`node-${lifecycleNodeId as string}`);
   await expect(lifecycleNode.getByTestId('registered-state')).toHaveAttribute('data-on', 'true');
   await expect(lifecycleNode.getByTestId('connected-state')).toHaveAttribute('data-on', 'true');
@@ -78,6 +83,10 @@ test('operations page receives node loss through server push', async ({ page }, 
 
   // Registered is report-owned: it becomes false after the documented 15-second report TTL.
   // Connected is runtime-event-owned and may become false earlier.
-  await expect(lifecycleNode.getByTestId('connected-state')).toHaveAttribute('data-on', 'false', { timeout: 20_000 });
-  await expect(lifecycleNode.getByTestId('registered-state')).toHaveAttribute('data-on', 'false', { timeout: 20_000 });
+  await expect(lifecycleNode.getByTestId('connected-state')).toHaveAttribute('data-on', 'false', {
+    timeout: 20_000
+  });
+  await expect(lifecycleNode.getByTestId('registered-state')).toHaveAttribute('data-on', 'false', {
+    timeout: 20_000
+  });
 });

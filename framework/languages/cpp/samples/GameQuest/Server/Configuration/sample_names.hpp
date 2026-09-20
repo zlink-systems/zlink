@@ -9,8 +9,7 @@ namespace zlink::samples::gamequest
 struct sample_names_t
 {
     static constexpr const char *quest_owner_channel = "gamequest.quest.owner";
-    static constexpr const char *quest_spot_route_channel_prefix =
-      "gamequest.quest.spot.route.";
+    static constexpr const char *quest_spot_route_channel_prefix = "gamequest.quest.spot.route.";
     static constexpr const char *quest_spot_discovery = "gamequest.quest.spot";
     static constexpr const char *quest_spot_route = "gamequest.quest.spot.route";
     static constexpr const char *player_quest_spot = "gamequest.player.quest";

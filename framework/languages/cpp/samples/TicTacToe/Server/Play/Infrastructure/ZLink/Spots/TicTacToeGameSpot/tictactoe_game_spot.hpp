@@ -41,10 +41,7 @@ class tictactoe_game_spot_t : public spot_t<player_actor_t>
     game_notification_publisher_t publisher{actors};
 
   public:
-    explicit tictactoe_game_spot_t (spot_context_t context) :
-        _context (std::move (context))
-    {
-    }
+    explicit tictactoe_game_spot_t (spot_context_t context) : _context (std::move (context)) {}
 
     spot_context_t &context () noexcept override { return _context; }
     const spot_context_t &context () const noexcept override { return _context; }
@@ -71,23 +68,19 @@ class tictactoe_game_spot_t : public spot_t<player_actor_t>
     task_t<void> on_initialize () override
     {
         using namespace std::chrono_literals;
-        _game_timer =
-          _context.add_timer<tictactoe_game_timer_handler_t> ("game-tick", 1s);
+        _game_timer = _context.add_timer<tictactoe_game_timer_handler_t> ("game-tick", 1s);
         co_return;
     }
     // --8<-- [end:doc-ttt-timer-register]
 
-    task_t<void> on_closing (
-      const spot_closing_context_t &,
-      std::stop_token) override
+    task_t<void> on_closing (const spot_closing_context_t &, std::stop_token) override
     {
         co_await _game_timer.cancel ();
         co_return;
     }
 
-    task_t<spot_actor_join_result_t>
-    on_actor_join (std::string_view actor_id,
-                   const message_t &request_message) override
+    task_t<spot_actor_join_result_t> on_actor_join (std::string_view actor_id,
+                                                    const message_t &request_message) override
     {
         auto request = request_message.decode<tictactoe_game_join_req_t> ();
         if (request.player.actor_id.empty ()
@@ -96,8 +89,7 @@ class tictactoe_game_spot_t : public spot_t<player_actor_t>
         }
         auto response = match ().evaluate_join (std::string (actor_id), request.room_id);
         _pending_joins[std::string (actor_id)] = request;
-        co_return spot_actor_join_result_t::accept (
-          std::move (response));
+        co_return spot_actor_join_result_t::accept (std::move (response));
     }
 
     task_t<place_mark_res_t> place_mark (const player_actor_t &actor,
@@ -126,14 +118,13 @@ class tictactoe_game_spot_t : public spot_t<player_actor_t>
         (void) match ().join (actor.actor_id, request.room_id);
         actors[actor.actor_id] = &actor;
         const auto &state = match ().snapshot ();
-        player_joined_notify_t notify{
-            state.room_id,
-            actor.actor_id,
-            players[actor.actor_id].display_name,
-            players[actor.actor_id].level,
-            actor.actor_id == state.x_actor_id ? tictactoe_marks_t::x : tictactoe_marks_t::o,
-            state
-        };
+        player_joined_notify_t notify{state.room_id,
+                                      actor.actor_id,
+                                      players[actor.actor_id].display_name,
+                                      players[actor.actor_id].level,
+                                      actor.actor_id == state.x_actor_id ? tictactoe_marks_t::x
+                                                                         : tictactoe_marks_t::o,
+                                      state};
         co_await publisher.publish (notify, actor.actor_id);
 
         game_state_notify_t state_notify{state};
@@ -176,9 +167,7 @@ class tictactoe_game_spot_t : public spot_t<player_actor_t>
         return *_match;
     }
 
-    task_t<void>
-    publish_win_milestone (const player_actor_t &actor,
-                           const tictactoe_state_t &state)
+    task_t<void> publish_win_milestone (const player_actor_t &actor, const tictactoe_state_t &state)
     {
         if (state.status != tictactoe_status_t::won || state.winner != actor.actor_id) {
             co_return;
@@ -191,8 +180,7 @@ class tictactoe_game_spot_t : public spot_t<player_actor_t>
             const auto milestone_event = player_win_milestone_event_t{
               state.room_id, player.actor_id, player.display_name, player.wins};
             // --8<-- [start:doc-multicast-publish]
-            co_await _context
-              .publish (sample_names_t::player_milestone_topic, milestone_event)
+            co_await _context.publish (sample_names_t::player_milestone_topic, milestone_event)
               .async ();
             // --8<-- [end:doc-multicast-publish]
         }

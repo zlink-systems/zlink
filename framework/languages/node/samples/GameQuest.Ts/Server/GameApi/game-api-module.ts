@@ -1,9 +1,15 @@
 import { ZLinkModule, zlinkFramework, zlinkModule } from '@zlink-systems/nestjs';
 import { SampleNames } from '../../Shared/Configuration/sample-names';
-import { createGameQuestLocationStore, gameQuestLocationOptions } from '../Configuration/location-store';
+import {
+  createGameQuestLocationStore,
+  gameQuestLocationOptions
+} from '../Configuration/location-store';
 import { createGameQuestRelocationStore } from '../Configuration/relocation-store';
 import { GAMEQUEST_INSTANCE_ID, GAMEQUEST_LOCATION_STORE } from '../Configuration/tokens';
-import { GAMEQUEST_SAMPLE_CONFIG, createGameQuestConfigurationModule } from '../Configuration/sample-config';
+import {
+  GAMEQUEST_SAMPLE_CONFIG,
+  createGameQuestConfigurationModule
+} from '../Configuration/sample-config';
 import { GameplayActionService } from './Application/gameplay-action-service';
 import { GameplayEventPublisher } from './Infrastructure/ZLink/gameplay-event-publisher';
 import { GameQuestEntrySpot } from './Infrastructure/ZLink/gamequest-entry-spot';
@@ -27,7 +33,8 @@ class GameQuestPlayerActorFactory implements ZLinkActorFactory {
 function createGameApiModule(instanceId: 'api-a' | 'api-b') {
   class GameApiModule {}
   const streamEndpointKey = instanceId === 'api-a' ? 'apiAStreamEndpoint' : 'apiBStreamEndpoint';
-  const actorSpotEndpointKey = instanceId === 'api-a' ? 'apiAActorSpotEndpoint' : 'apiBActorSpotEndpoint';
+  const actorSpotEndpointKey =
+    instanceId === 'api-a' ? 'apiAActorSpotEndpoint' : 'apiBActorSpotEndpoint';
   const configuration = createGameQuestConfigurationModule([
     streamEndpointKey,
     actorSpotEndpointKey,
@@ -46,17 +53,18 @@ function createGameApiModule(instanceId: 'api-a' | 'api-b') {
         inject: [GAMEQUEST_SAMPLE_CONFIG],
         useFactory: (config: GameQuestServerConfig) => {
           const builder = zlinkFramework();
-          builder.configureDispatch()
-            .messageFlow('normal');
+          builder.configureDispatch().messageFlow('normal');
           builder.addLocationStore(createGameQuestLocationStore(config));
           builder.addRelocationStore(createGameQuestRelocationStore(config));
           gameQuestLocationOptions(builder.configureLocations());
           // --8<-- [start:doc-gq-api-register]
-          builder.addStreamNode(SampleNames.playerStreamNode)
+          builder
+            .addStreamNode(SampleNames.playerStreamNode)
             .enableActorDispatch()
             .bind(config[streamEndpointKey])
             .registerSession(GameQuestSessionFactory);
-          const mesh = builder.addRouteMesh(SampleNames.playerQuestSpotMesh)
+          const mesh = builder
+            .addRouteMesh(SampleNames.playerQuestSpotMesh)
             .listen(config[actorSpotEndpointKey])
             .setRoutingIdPrefix('gamequest-api');
           const objectServer = mesh.objects().server();
@@ -90,8 +98,11 @@ function createGameApiModule(instanceId: 'api-a' | 'api-b') {
       },
       {
         provide: GameQuestSelfCheckStore,
-        useFactory: (gameplay: GameplayStateStore, events: QuestEventStore, readModel: QuestReadModelStore) =>
-          new GameQuestSelfCheckStore(gameplay, events, readModel),
+        useFactory: (
+          gameplay: GameplayStateStore,
+          events: QuestEventStore,
+          readModel: QuestReadModelStore
+        ) => new GameQuestSelfCheckStore(gameplay, events, readModel),
         inject: [GameplayStateStore, QuestEventStore, QuestReadModelStore]
       },
       {

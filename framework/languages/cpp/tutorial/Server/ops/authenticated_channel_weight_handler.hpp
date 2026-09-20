@@ -19,8 +19,8 @@ class authenticated_channel_weight_handler_t
     {
         const auto authorization = find_header (request, "authorization");
         if (!authorization || *authorization != expected_authorization)
-            return fw::http_response_t{401, ""}.header (
-              "www-authenticate", "Basic realm=\"tutorial-admin\"");
+            return fw::http_response_t{401, ""}.header ("www-authenticate",
+                                                        "Basic realm=\"tutorial-admin\"");
 
         return _weight.handle (request);
     }

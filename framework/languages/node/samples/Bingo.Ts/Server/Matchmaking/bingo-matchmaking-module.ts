@@ -1,6 +1,9 @@
 import { ZLinkModule, zlinkFramework, zlinkModule } from '@zlink-systems/nestjs';
 import { bingoFrameworkProtobuf } from '../../Shared/Contracts/protobuf-framework-codec';
-import { BINGO_SAMPLE_CONFIG, createBingoConfigurationModule } from '../Configuration/sample-config';
+import {
+  BINGO_SAMPLE_CONFIG,
+  createBingoConfigurationModule
+} from '../Configuration/sample-config';
 import { SampleNames } from '../Configuration/sample-names';
 import { bingoLocationOptions, createBingoLocationStore } from '../Configuration/location-store';
 import { createBingoRelocationStore } from '../Configuration/relocation-store';
@@ -12,7 +15,11 @@ import type { BingoSampleConfig } from '../Configuration/sample-config';
 function createBingoMatchmakingModule() {
   class BingoMatchmakingModule {}
   const configuration = createBingoConfigurationModule([
-    'matchmakingEndpoint', 'nodeId', 'redisEndpoint', 'redisKeyPrefix', 'logDir'
+    'matchmakingEndpoint',
+    'nodeId',
+    'redisEndpoint',
+    'redisKeyPrefix',
+    'logDir'
   ]);
   zlinkModule(__dirname, {
     imports: [
@@ -22,20 +29,19 @@ function createBingoMatchmakingModule() {
         inject: [BINGO_SAMPLE_CONFIG],
         useFactory: (config: BingoSampleConfig) => {
           const builder = zlinkFramework();
-          builder.configureDispatch()
-            .messageFlow('normal');
+          builder.configureDispatch().messageFlow('normal');
           builder.addLocationStore(createBingoLocationStore(config));
           builder.addRelocationStore(createBingoRelocationStore(config));
           bingoLocationOptions(builder.configureLocations());
           builder.codecs().use(bingoFrameworkProtobuf);
-          builder.addRouteMesh(SampleNames.matchmakingMeshName)
+          builder
+            .addRouteMesh(SampleNames.matchmakingMeshName)
             .setRoutingIdPrefix('matchmaking')
             .listen(config.matchmakingEndpoint)
-            .objects().server()
-            .addInstanceSpotFactory(
-              SampleNames.matchmakerSpotType,
-              BingoMatchmaker,
-              (factory) => factory.recreateOnRelocation()
+            .objects()
+            .server()
+            .addInstanceSpotFactory(SampleNames.matchmakerSpotType, BingoMatchmaker, (factory) =>
+              factory.recreateOnRelocation()
             );
           return builder.build();
         }

@@ -1,16 +1,17 @@
 package systems.zlink.samples.kotlin.deliverydispatch.server.customergateway.spots.handlers
 
-import systems.zlink.framework.kotlin.ZLinkSuspendingEntrySpotActorSendHandler
 import systems.zlink.framework.ZLinkMessageContext
+import systems.zlink.framework.kotlin.ZLinkSuspendingEntrySpotActorSendHandler
 import systems.zlink.samples.kotlin.deliverydispatch.server.customergateway.CustomerActor
 import systems.zlink.samples.kotlin.deliverydispatch.server.customergateway.spots.CustomerEntrySpot
 import systems.zlink.samples.kotlin.deliverydispatch.shared.contracts.DeliveryStatusNotify
 import systems.zlink.samples.kotlin.deliverydispatch.shared.contracts.DeliveryStatusUpdatedMsg
 
-class DeliveryStatusUpdatedHandler : ZLinkSuspendingEntrySpotActorSendHandler<
-    CustomerEntrySpot,
-    CustomerActor,
-    DeliveryStatusUpdatedMsg,
+class DeliveryStatusUpdatedHandler :
+    ZLinkSuspendingEntrySpotActorSendHandler<
+        CustomerEntrySpot,
+        CustomerActor,
+        DeliveryStatusUpdatedMsg,
     > {
     // --8<-- [start:doc-dd-customer-push]
     override suspend fun handle(
@@ -25,12 +26,12 @@ class DeliveryStatusUpdatedHandler : ZLinkSuspendingEntrySpotActorSendHandler<
                 status = message.status,
                 courierId = message.courierId,
                 occurredAt = message.occurredAt,
-            ),
+            )
         )
         if (message.status.name == "Delivered") {
             println(
                 "deliverydispatch-customer pushed status=Delivered " +
-                    "delivery=${message.deliveryId}",
+                    "delivery=${message.deliveryId}"
             )
         }
     }

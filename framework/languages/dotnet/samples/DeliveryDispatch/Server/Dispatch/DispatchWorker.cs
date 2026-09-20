@@ -13,7 +13,8 @@ internal sealed record DeliveryOffer(
     AssignDeliveryMsg Request,
     int CandidateIndex,
     int Attempt,
-    DateTimeOffset Deadline);
+    DateTimeOffset Deadline
+);
 
 /// <summary>
 /// The offers Dispatch is waiting on. This is the whole of the waiting: no blocked thread, no
@@ -53,9 +54,11 @@ internal sealed class DeliveryOfferStore
     {
         lock (_gate)
         {
-            if (!_offers.TryGetValue(deliveryId, out var offer)
+            if (
+                !_offers.TryGetValue(deliveryId, out var offer)
                 || offer.Settled
-                || offer.Attempt != attempt)
+                || offer.Attempt != attempt
+            )
             {
                 return null;
             }
@@ -74,7 +77,8 @@ internal sealed class DeliveryOfferStore
             var expired = new List<DeliveryOffer>();
             foreach (var offer in _offers.Values)
             {
-                if (offer.Settled || offer.Deadline > now) continue;
+                if (offer.Settled || offer.Deadline > now)
+                    continue;
 
                 offer.Settled = true;
                 expired.Add(offer.Snapshot());
@@ -125,22 +129,33 @@ internal sealed class DispatchWorker(
     CourierSelectionPolicy couriers,
     CourierOfferPort courierOffers,
     DeliveryStatusPublisher statusPublisher,
-    ILogger<DispatchWorker> logger)
+    ILogger<DispatchWorker> logger
+)
 {
     // --8<-- [start:doc-dd-offer-start]
     /// <summary>The first offer. Records it, sends it, and returns — nobody is left waiting.</summary>
-    public async ValueTask StartAsync(AssignDeliveryMsg request, CancellationToken cancellationToken)
+    public async ValueTask StartAsync(
+        AssignDeliveryMsg request,
+        CancellationToken cancellationToken
+    )
     {
         logger.LogInformation(
             "deliverydispatch dispatch: assign delivery={DeliveryId} customer={CustomerId}",
             request.DeliveryId,
-            request.CustomerId);
+            request.CustomerId
+        );
 
         var courierId = couriers.Candidates[0];
-        await statusPublisher.PublishAsync(request, DeliveryStatus.Assigned, courierId, cancellationToken);
+        await statusPublisher.PublishAsync(
+            request,
+            DeliveryStatus.Assigned,
+            courierId,
+            cancellationToken
+        );
         var attempt = offers.Offer(request, 0, SampleTimings.CourierDecisionTimeout);
         await courierOffers.OfferAsync(request, courierId, attempt, cancellationToken);
     }
+
     // --8<-- [end:doc-dd-offer-start]
 
     /// <summary>A decision arrived. Accepted carries the delivery through; refused reassigns.</summary>
@@ -148,12 +163,18 @@ internal sealed class DispatchWorker(
         DeliveryOffer offer,
         bool accepted,
         string? reason,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken
+    )
     {
         var courierId = couriers.Candidates[offer.CandidateIndex];
         if (accepted)
         {
-            await statusPublisher.PublishAsync(offer.Request, DeliveryStatus.Accepted, courierId, cancellationToken);
+            await statusPublisher.PublishAsync(
+                offer.Request,
+                DeliveryStatus.Accepted,
+                courierId,
+                cancellationToken
+            );
             // The sample contract includes pickup only on direct acceptance. A reassigned
             // delivery transitions from Accepted directly to Delivered.
             if (offer.CandidateIndex == 0)
@@ -162,9 +183,15 @@ internal sealed class DispatchWorker(
                     offer.Request,
                     DeliveryStatus.PickedUp,
                     courierId,
-                    cancellationToken);
+                    cancellationToken
+                );
             }
-            await statusPublisher.PublishAsync(offer.Request, DeliveryStatus.Delivered, courierId, cancellationToken);
+            await statusPublisher.PublishAsync(
+                offer.Request,
+                DeliveryStatus.Delivered,
+                courierId,
+                cancellationToken
+            );
             offers.Close(offer.Request.DeliveryId);
             return;
         }
@@ -173,7 +200,8 @@ internal sealed class DispatchWorker(
             "deliverydispatch dispatch: courier={CourierId} did not take delivery={DeliveryId} ({Reason})",
             courierId,
             offer.Request.DeliveryId,
-            reason ?? "refused");
+            reason ?? "refused"
+        );
         await ReassignAsync(offer, cancellationToken);
     }
 
@@ -192,16 +220,23 @@ internal sealed class DispatchWorker(
                 offer.Request,
                 DeliveryStatus.Failed,
                 couriers.Candidates[^1],
-                cancellationToken);
+                cancellationToken
+            );
             offers.Close(offer.Request.DeliveryId);
             logger.LogWarning(
                 "deliverydispatch-dispatch failed delivery={DeliveryId} reason=candidates-exhausted",
-                offer.Request.DeliveryId);
+                offer.Request.DeliveryId
+            );
             return;
         }
 
         var courierId = couriers.Candidates[nextIndex];
-        await statusPublisher.PublishAsync(offer.Request, DeliveryStatus.Reassigned, courierId, cancellationToken);
+        await statusPublisher.PublishAsync(
+            offer.Request,
+            DeliveryStatus.Reassigned,
+            courierId,
+            cancellationToken
+        );
         var attempt = offers.Offer(offer.Request, nextIndex, SampleTimings.CourierDecisionTimeout);
         await courierOffers.OfferAsync(offer.Request, courierId, attempt, cancellationToken);
     }
@@ -212,8 +247,8 @@ internal sealed class DispatchWorker(
 internal sealed class DispatchQueuePump(
     DispatchWorkQueue queue,
     DispatchWorker worker,
-    ILogger<DispatchQueuePump> logger)
-    : BackgroundService
+    ILogger<DispatchQueuePump> logger
+) : BackgroundService
 {
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
@@ -228,7 +263,8 @@ internal sealed class DispatchQueuePump(
                 logger.LogError(
                     error,
                     "deliverydispatch dispatch: could not start delivery={DeliveryId}",
-                    request.DeliveryId);
+                    request.DeliveryId
+                );
             }
         }
     }
@@ -241,8 +277,8 @@ internal sealed class DispatchQueuePump(
 internal sealed class OfferDeadlineSweeper(
     DeliveryOfferStore offers,
     DispatchWorker worker,
-    ILogger<OfferDeadlineSweeper> logger)
-    : BackgroundService
+    ILogger<OfferDeadlineSweeper> logger
+) : BackgroundService
 {
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
@@ -256,7 +292,8 @@ internal sealed class OfferDeadlineSweeper(
                 logger.LogInformation(
                     "deliverydispatch dispatch: offer expired delivery={DeliveryId} attempt={Attempt}",
                     offer.Request.DeliveryId,
-                    offer.Attempt);
+                    offer.Attempt
+                );
                 try
                 {
                     await worker.ReassignAsync(offer, stoppingToken);
@@ -267,7 +304,8 @@ internal sealed class OfferDeadlineSweeper(
                     logger.LogError(
                         error,
                         "deliverydispatch dispatch: reassign failed delivery={DeliveryId}",
-                        offer.Request.DeliveryId);
+                        offer.Request.DeliveryId
+                    );
                 }
             }
             // --8<-- [end:doc-dd-sweeper]

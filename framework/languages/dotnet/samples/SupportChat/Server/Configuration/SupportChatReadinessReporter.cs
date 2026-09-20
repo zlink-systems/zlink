@@ -9,19 +9,21 @@ public enum SupportChatReadyKind
 {
     Public,
     Stream,
-    SpotRoute
+    SpotRoute,
 }
 
 public sealed record SupportChatReadiness(
     SupportChatReadyKind Kind,
     string NodeId,
-    string? MeshName = null);
+    string? MeshName = null
+);
 
 public sealed class SupportChatReadinessReporter(
     IEnumerable<SupportChatReadiness> readiness,
     IHostApplicationLifetime applicationLifetime,
     IZLinkRouteMeshRuntime routeMesh,
-    ILogger<SupportChatReadinessReporter> logger) : IHostedService
+    ILogger<SupportChatReadinessReporter> logger
+) : IHostedService
 {
     private readonly List<SupportChatReadiness> pending = readiness.ToList();
     private CancellationTokenSource? stopping;
@@ -36,15 +38,14 @@ public sealed class SupportChatReadinessReporter(
 
     public async Task StopAsync(CancellationToken cancellationToken)
     {
-        if (stopping is null || reporting is null) return;
+        if (stopping is null || reporting is null)
+            return;
         await stopping.CancelAsync();
         try
         {
             await reporting.WaitAsync(cancellationToken);
         }
-        catch (OperationCanceledException) when (stopping.IsCancellationRequested)
-        {
-        }
+        catch (OperationCanceledException) when (stopping.IsCancellationRequested) { }
         finally
         {
             stopping.Dispose();
@@ -53,9 +54,12 @@ public sealed class SupportChatReadinessReporter(
 
     private async Task ReportAsync(CancellationToken cancellationToken)
     {
-        var applicationStarted = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
-        using var registration = applicationLifetime.ApplicationStarted.Register(
-            () => applicationStarted.TrySetResult());
+        var applicationStarted = new TaskCompletionSource(
+            TaskCreationOptions.RunContinuationsAsynchronously
+        );
+        using var registration = applicationLifetime.ApplicationStarted.Register(() =>
+            applicationStarted.TrySetResult()
+        );
         await applicationStarted.Task.WaitAsync(cancellationToken);
 
         while (pending.Count > 0)
@@ -65,7 +69,8 @@ public sealed class SupportChatReadinessReporter(
                 var report = pending[index];
                 try
                 {
-                    if (!IsReady(report)) continue;
+                    if (!IsReady(report))
+                        continue;
                 }
                 catch (InvalidOperationException)
                 {
@@ -105,7 +110,8 @@ public sealed class SupportChatReadinessReporter(
                 logger.LogInformation(
                     "supportchat-ready kind=spot-route node={NodeId} mesh={MeshName}",
                     report.NodeId,
-                    report.MeshName);
+                    report.MeshName
+                );
                 break;
         }
     }

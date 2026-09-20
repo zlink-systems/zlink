@@ -11,7 +11,10 @@ import systems.zlink.samples.kotlin.bingo.shared.contracts.GetPlayerRecordRes
 @ZLinkHandlerGroup(SampleNames.ApiChannel)
 class GetPlayerRecordHandler(private val records: BingoPlayerRecordStore) :
     ZLinkSuspendingRequestHandler<GetPlayerRecordReq, GetPlayerRecordRes> {
-    override suspend fun handle(request: GetPlayerRecordReq, context: ZLinkMessageContext): GetPlayerRecordRes {
+    override suspend fun handle(
+        request: GetPlayerRecordReq,
+        context: ZLinkMessageContext,
+    ): GetPlayerRecordRes {
         val record = records.get(request.actorId)
         return GetPlayerRecordRes(record.actorId, record.wins, record.losses)
     }

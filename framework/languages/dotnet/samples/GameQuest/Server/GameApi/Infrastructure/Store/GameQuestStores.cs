@@ -24,7 +24,8 @@ internal sealed class GameQuestStore : IGameplayEventStore, IQuestSessionStore, 
 
     public async ValueTask<GameplayEvent> GetOrAddGameplayEventAsync(
         GameplayEvent candidate,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken
+    )
     {
         var path = Key("gameplay-events");
         var stored = await UpdateAsync(
@@ -34,21 +35,29 @@ internal sealed class GameQuestStore : IGameplayEventStore, IQuestSessionStore, 
             {
                 var existing = events.FirstOrDefault(e =>
                     string.Equals(e.PlayerId, candidate.PlayerId, StringComparison.Ordinal)
-                    && string.Equals(e.IdempotencyKey, candidate.IdempotencyKey, StringComparison.Ordinal));
-                if (existing is not null) return existing;
+                    && string.Equals(
+                        e.IdempotencyKey,
+                        candidate.IdempotencyKey,
+                        StringComparison.Ordinal
+                    )
+                );
+                if (existing is not null)
+                    return existing;
 
                 var contract = ToContract(candidate);
                 events.Add(contract);
                 return contract;
             },
-            cancellationToken);
+            cancellationToken
+        );
         return ToDomain(stored);
     }
 
     public async ValueTask AddUnpublishedKillAsync(
         string playerId,
         int count,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken
+    )
     {
         var path = Key("unpublished-kills");
         await UpdateAsync(
@@ -59,58 +68,70 @@ internal sealed class GameQuestStore : IGameplayEventStore, IQuestSessionStore, 
                 kills[playerId] = kills.GetValueOrDefault(playerId) + count;
                 return 0;
             },
-            cancellationToken);
+            cancellationToken
+        );
     }
 
     public async ValueTask<int> GetSnapshotKillCountAsync(
         string playerId,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken
+    )
     {
         var events = await ReadAsync<List<StoredGameplayEvent>>(
             Key("gameplay-events"),
             [],
-            cancellationToken);
+            cancellationToken
+        );
         var unpublished = await ReadAsync<Dictionary<string, int>>(
             Key("unpublished-kills"),
             new Dictionary<string, int>(StringComparer.Ordinal),
-            cancellationToken);
+            cancellationToken
+        );
         return events
-                   .Where(e => e.PlayerId == playerId && e.EventType == "MonsterKilled")
-                   .Sum(e => e.Count)
-               + unpublished.GetValueOrDefault(playerId);
+                .Where(e => e.PlayerId == playerId && e.EventType == "MonsterKilled")
+                .Sum(e => e.Count) + unpublished.GetValueOrDefault(playerId);
     }
 
     public async ValueTask<GameplaySnapshotData> ReadSnapshotAsync(
         string playerId,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken
+    )
     {
         var events = await ReadAsync<List<StoredGameplayEvent>>(
             Key("gameplay-events"),
             [],
-            cancellationToken);
+            cancellationToken
+        );
         var unpublishedKills = await ReadAsync<Dictionary<string, int>>(
             Key("unpublished-kills"),
             new Dictionary<string, int>(StringComparer.Ordinal),
-            cancellationToken);
+            cancellationToken
+        );
 
         return new GameplaySnapshotData(
             playerId,
-            events.Where(e => e.PlayerId == playerId && e.EventType == "MonsterKilled").Sum(e => e.Count)
-            + unpublishedKills.GetValueOrDefault(playerId),
-            events.Where(e => e.PlayerId == playerId).Select(e => e.CreatedAtUnixMs).DefaultIfEmpty(0).Max()
-            + unpublishedKills.GetValueOrDefault(playerId));
+            events
+                .Where(e => e.PlayerId == playerId && e.EventType == "MonsterKilled")
+                .Sum(e => e.Count) + unpublishedKills.GetValueOrDefault(playerId),
+            events
+                .Where(e => e.PlayerId == playerId)
+                .Select(e => e.CreatedAtUnixMs)
+                .DefaultIfEmpty(0)
+                .Max() + unpublishedKills.GetValueOrDefault(playerId)
+        );
     }
 
     public async ValueTask<QuestProgress[]> ReadProjectionAsync(
         string playerId,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken
+    )
     {
         var all = await ReadAsync<List<QuestProgress>>(
             Key("quest-projection"),
             [],
-            cancellationToken);
-        return all
-            .Where(progress => progress.PlayerId == playerId)
+            cancellationToken
+        );
+        return all.Where(progress => progress.PlayerId == playerId)
             .OrderBy(progress => progress.QuestId, StringComparer.Ordinal)
             .ToArray();
     }
@@ -118,7 +139,8 @@ internal sealed class GameQuestStore : IGameplayEventStore, IQuestSessionStore, 
     public async ValueTask DeleteProjectionAsync(
         string playerId,
         string questId,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken
+    )
     {
         await UpdateAsync(
             Key("quest-projection"),
@@ -126,17 +148,19 @@ internal sealed class GameQuestStore : IGameplayEventStore, IQuestSessionStore, 
             projection =>
             {
                 projection.RemoveAll(progress =>
-                    progress.PlayerId == playerId
-                    && progress.QuestId == questId);
+                    progress.PlayerId == playerId && progress.QuestId == questId
+                );
                 return true;
             },
-            cancellationToken);
+            cancellationToken
+        );
     }
 
     public async ValueTask<QuestProgress> RebuildProjectionAsync(
         string playerId,
         string questId,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken
+    )
     {
         var events = await ReadQuestEventsAsync(cancellationToken);
         var stream = events
@@ -144,7 +168,9 @@ internal sealed class GameQuestStore : IGameplayEventStore, IQuestSessionStore, 
             .OrderBy(e => e.Version)
             .ToArray();
         if (stream.Length == 0)
-            throw new InvalidOperationException($"Quest stream was not found for {playerId}/{questId}.");
+            throw new InvalidOperationException(
+                $"Quest stream was not found for {playerId}/{questId}."
+            );
 
         var currentCount = 0;
         var requiredCount = 1;
@@ -157,12 +183,14 @@ internal sealed class GameQuestStore : IGameplayEventStore, IQuestSessionStore, 
             if (@event.Type is nameof(QuestProgressedEvent) or nameof(QuestReconciled))
             {
                 currentCount = root.GetProperty("CurrentCount").GetInt32();
-                if (root.TryGetProperty("RequiredCount", out var required)) requiredCount = required.GetInt32();
+                if (root.TryGetProperty("RequiredCount", out var required))
+                    requiredCount = required.GetInt32();
             }
 
             if (@event.Type == nameof(QuestCompletedEvent))
                 status = QuestStatuses.Completed;
-            else if (@event.Type == nameof(QuestRewardGrantedEvent)) status = QuestStatuses.RewardGranted;
+            else if (@event.Type == nameof(QuestRewardGrantedEvent))
+                status = QuestStatuses.RewardGranted;
 
             lastEventId = @event.SourceEventId;
             updatedAtUnixMs = Math.Max(updatedAtUnixMs, @event.CreatedAtUnixMs);
@@ -176,28 +204,33 @@ internal sealed class GameQuestStore : IGameplayEventStore, IQuestSessionStore, 
             requiredCount,
             lastEventId,
             stream[^1].Version,
-            updatedAtUnixMs);
+            updatedAtUnixMs
+        );
         await UpdateAsync(
             Key("quest-projection"),
             new List<QuestProgress>(),
             projection =>
             {
                 projection.RemoveAll(progress =>
-                    progress.PlayerId == playerId
-                    && progress.QuestId == questId);
+                    progress.PlayerId == playerId && progress.QuestId == questId
+                );
                 projection.Add(rebuilt);
                 return true;
             },
-            cancellationToken);
+            cancellationToken
+        );
         return rebuilt;
     }
 
-    public async ValueTask<StoredQuestEvent[]> ReadQuestEventsAsync(CancellationToken cancellationToken)
+    public async ValueTask<StoredQuestEvent[]> ReadQuestEventsAsync(
+        CancellationToken cancellationToken
+    )
     {
         var events = await ReadAsync<List<StoredQuestEvent>>(
             Key("quest-events"),
             [],
-            cancellationToken);
+            cancellationToken
+        );
         return events
             .OrderBy(e => e.PlayerId, StringComparer.Ordinal)
             .ThenBy(e => e.QuestId, StringComparer.Ordinal)
@@ -205,27 +238,30 @@ internal sealed class GameQuestStore : IGameplayEventStore, IQuestSessionStore, 
             .ToArray();
     }
 
-    public async ValueTask<Dictionary<string, int>> ReadOwnerRehydrateEvidenceAsync(CancellationToken cancellationToken)
+    public async ValueTask<Dictionary<string, int>> ReadOwnerRehydrateEvidenceAsync(
+        CancellationToken cancellationToken
+    )
     {
         return await ReadAsync<Dictionary<string, int>>(
             Key("owner-rehydrates"),
             new Dictionary<string, int>(StringComparer.Ordinal),
-            cancellationToken);
+            cancellationToken
+        );
     }
 
     private async ValueTask<TResult> UpdateAsync<T, TResult>(
         string key,
         T fallback,
         Func<T, TResult> update,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken
+    )
     {
-        return await _redis.UpdateAsync(key, fallback, update, cancellationToken).ConfigureAwait(false);
+        return await _redis
+            .UpdateAsync(key, fallback, update, cancellationToken)
+            .ConfigureAwait(false);
     }
 
-    private ValueTask<T> ReadAsync<T>(
-        string key,
-        T fallback,
-        CancellationToken cancellationToken)
+    private ValueTask<T> ReadAsync<T>(string key, T fallback, CancellationToken cancellationToken)
     {
         return _redis.ReadAsync(key, fallback, cancellationToken);
     }
@@ -242,7 +278,8 @@ internal sealed class GameQuestStore : IGameplayEventStore, IQuestSessionStore, 
             gameplayEvent.Value,
             gameplayEvent.Count,
             gameplayEvent.SourceApi,
-            gameplayEvent.CreatedAtUnixMs);
+            gameplayEvent.CreatedAtUnixMs
+        );
     }
 
     private static GameplayEvent ToDomain(StoredGameplayEvent contract)
@@ -255,7 +292,8 @@ internal sealed class GameQuestStore : IGameplayEventStore, IQuestSessionStore, 
             contract.Value,
             contract.Count,
             contract.SourceApi,
-            contract.CreatedAtUnixMs);
+            contract.CreatedAtUnixMs
+        );
     }
 
     private sealed record StoredGameplayEvent(
@@ -266,10 +304,8 @@ internal sealed class GameQuestStore : IGameplayEventStore, IQuestSessionStore, 
         string Value,
         int Count,
         string SourceApi,
-        long CreatedAtUnixMs);
+        long CreatedAtUnixMs
+    );
 }
 
-internal sealed record GameplaySnapshotData(
-    string PlayerId,
-    int KillCount,
-    long SnapshotVersion);
+internal sealed record GameplaySnapshotData(string PlayerId, int KillCount, long SnapshotVersion);

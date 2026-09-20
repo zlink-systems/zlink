@@ -12,18 +12,21 @@ namespace ZoneWorld.Server.ZoneNode.Infrastructure.ZLink.Monitoring;
 /// <summary>Sends this node's reports to Ops over <c>zoneworld.report</c>.</summary>
 internal sealed class OpsReportAdapter(
     IZLinkRouteClient channels,
-    NodeMaintenancePolicy maintenance) : IOpsReportPort
+    NodeMaintenancePolicy maintenance
+) : IOpsReportPort
 {
     public async ValueTask ReportSpotEventAsync(
         string kind,
         string detail,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken
+    )
     {
         var message = new ReportSpotEventMsg(
             maintenance.OwnNodeId,
             kind,
             detail,
-            DateTimeOffset.UtcNow.ToString("O"));
+            DateTimeOffset.UtcNow.ToString("O")
+        );
 
         // The report channel is an application-owned one-way endpoint. A node can
         // start its timer before Ops has finished discovering that endpoint, so
@@ -40,8 +43,10 @@ internal sealed class OpsReportAdapter(
                 return;
             }
             catch (ZLinkFrameworkException error)
-                when (error.Kind is ZLinkFrameworkErrorKind.NotFound
-                    or ZLinkFrameworkErrorKind.Unavailable)
+                when (error.Kind
+                        is ZLinkFrameworkErrorKind.NotFound
+                            or ZLinkFrameworkErrorKind.Unavailable
+                )
             {
                 if (attempt == maxAttempts - 1)
                 {
@@ -59,14 +64,18 @@ internal sealed class OpsReportAdapter(
         IReadOnlyList<string> zones,
         int playerCount,
         bool maintenanceEnabled,
-        CancellationToken cancellationToken) =>
+        CancellationToken cancellationToken
+    ) =>
         await channels
-            .SendToChannel(ZoneWorldNames.ReportChannel,
+            .SendToChannel(
+                ZoneWorldNames.ReportChannel,
                 new ReportNodeStatusMsg(
                     maintenance.OwnNodeId,
                     zones,
                     playerCount,
-                    maintenanceEnabled))
+                    maintenanceEnabled
+                )
+            )
             .Async(cancellationToken);
 }
 
@@ -75,7 +84,8 @@ internal sealed class NodeStatusReporter(
     IOpsReportPort ops,
     NodeMaintenancePolicy maintenance,
     NodePlayerCensus census,
-    ILogger<NodeStatusReporter> logger) : BackgroundService
+    ILogger<NodeStatusReporter> logger
+) : BackgroundService
 {
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
@@ -83,9 +93,11 @@ internal sealed class NodeStatusReporter(
         logger.LogInformation(
             "zone node status reporter ready. node={NodeId} mesh={MeshName}",
             maintenance.OwnNodeId,
-            ZoneWorldNames.MeshName);
+            ZoneWorldNames.MeshName
+        );
         using var timer = new PeriodicTimer(
-            TimeSpan.FromMilliseconds(ZoneWorldSpec.NodeStatusReportPeriodMs));
+            TimeSpan.FromMilliseconds(ZoneWorldSpec.NodeStatusReportPeriodMs)
+        );
         var firstReport = true;
 
         while (await timer.WaitForNextTickAsync(stoppingToken))
@@ -96,18 +108,24 @@ internal sealed class NodeStatusReporter(
                     census.ZoneIds,
                     census.TotalPlayers,
                     maintenance.IsOwnNodeUnderMaintenance,
-                    stoppingToken);
+                    stoppingToken
+                );
                 if (firstReport)
                 {
                     firstReport = false;
                     logger.LogInformation(
                         "node status report submitted. node={NodeId}",
-                        maintenance.OwnNodeId);
+                        maintenance.OwnNodeId
+                    );
                 }
             }
             catch (Exception error)
             {
-                logger.LogWarning(error, "node status report failed. node={NodeId}", maintenance.OwnNodeId);
+                logger.LogWarning(
+                    error,
+                    "node status report failed. node={NodeId}",
+                    maintenance.OwnNodeId
+                );
             }
         }
     }

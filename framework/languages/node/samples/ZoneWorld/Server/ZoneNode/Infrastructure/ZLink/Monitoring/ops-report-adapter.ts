@@ -19,25 +19,22 @@ class OpsReportAdapter {
   ) {}
 
   async reportNodeStatus(): Promise<void> {
-    await this.channels.sendToChannel(
-      ZoneWorldNames.reportChannel,
-      new ReportNodeStatusMsg(
-        this.state.nodeId,
-        [...this.state.zones()],
-        this.state.playerCount(),
-        this.state.ownMaintenance()
+    await this.channels
+      .sendToChannel(
+        ZoneWorldNames.reportChannel,
+        new ReportNodeStatusMsg(
+          this.state.nodeId,
+          [...this.state.zones()],
+          this.state.playerCount(),
+          this.state.ownMaintenance()
+        )
       )
-    ).submit();
+      .submit();
     console.log(`node status submitted node=${this.state.nodeId}`);
   }
 
   async reportSpotEvent(nodeId: string, kind: string, detail: string): Promise<void> {
-    const message = new ReportSpotEventMsg(
-      nodeId,
-      kind,
-      detail,
-      new Date().toISOString()
-    );
+    const message = new ReportSpotEventMsg(nodeId, kind, detail, new Date().toISOString());
 
     // The node may start its timer before Ops has finished opening the report
     // endpoint. Retry only that bounded readiness failure; the original timer
@@ -46,9 +43,7 @@ class OpsReportAdapter {
     for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
       try {
         console.log(`spot event report submit node=${nodeId} attempt=${attempt + 1}`);
-        await this.channels
-          .sendToChannel(ZoneWorldNames.reportChannel, message)
-          .submit();
+        await this.channels.sendToChannel(ZoneWorldNames.reportChannel, message).submit();
         console.log(`spot event report submitted node=${nodeId}`);
         return;
       } catch (error) {
@@ -64,9 +59,11 @@ class OpsReportAdapter {
 }
 
 function isReportReadinessFailure(error: unknown): boolean {
-  return error instanceof ZLinkFrameworkException
-    && (error.kind === ZLinkFrameworkErrorKind.NotFound
-      || error.kind === ZLinkFrameworkErrorKind.Unavailable);
+  return (
+    error instanceof ZLinkFrameworkException &&
+    (error.kind === ZLinkFrameworkErrorKind.NotFound ||
+      error.kind === ZLinkFrameworkErrorKind.Unavailable)
+  );
 }
 
 export { OpsReportAdapter };

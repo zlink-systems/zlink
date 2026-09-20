@@ -1,9 +1,22 @@
 import { Inject, Injectable, type OnModuleDestroy, type OnModuleInit } from '@nestjs/common';
-import { ZLINK_ACTOR_CLIENT, ZLINK_ACTOR_MANAGER, ZLINK_CHANNEL_CLIENT } from '@zlink-systems/nestjs';
+import {
+  ZLINK_ACTOR_CLIENT,
+  ZLINK_ACTOR_MANAGER,
+  ZLINK_CHANNEL_CLIENT
+} from '@zlink-systems/nestjs';
 import { SampleNames, SampleTimings } from '../../Shared/Configuration/sample-names';
-import { deliveryStatusChanged, ensureCourierActor, offerDelivery } from '../../Shared/Contracts/messages';
+import {
+  deliveryStatusChanged,
+  ensureCourierActor,
+  offerDelivery
+} from '../../Shared/Contracts/messages';
 import { DeliveryOfferStore } from './delivery-offer-store';
-import type { ActorRef, ZLinkActorClient, ZLinkActorManager, ZLinkChannelClient } from '@zlink-systems/framework';
+import type {
+  ActorRef,
+  ZLinkActorClient,
+  ZLinkActorManager,
+  ZLinkChannelClient
+} from '@zlink-systems/framework';
 import type {
   AssignDeliveryMsg,
   DeliveryStatusChangedReq,
@@ -26,7 +39,10 @@ class DispatchWorker implements OnModuleInit, OnModuleDestroy {
   ) {}
 
   onModuleInit(): void {
-    this.sweepTimer = setInterval(() => this.schedule(() => this.sweepExpiredOffers()), SampleTimings.offerSweepInterval);
+    this.sweepTimer = setInterval(
+      () => this.schedule(() => this.sweepExpiredOffers()),
+      SampleTimings.offerSweepInterval
+    );
     this.sweepTimer.unref();
     this.schedule(() => this.sweepExpiredOffers());
   }
@@ -45,7 +61,9 @@ class DispatchWorker implements OnModuleInit, OnModuleDestroy {
 
   private schedule(operation: () => Promise<void>): void {
     this.operations = this.operations.then(operation).catch((error: unknown) => {
-      console.error(`deliverydispatch dispatch: ${error instanceof Error ? error.message : String(error)}`);
+      console.error(
+        `deliverydispatch dispatch: ${error instanceof Error ? error.message : String(error)}`
+      );
     });
   }
 
@@ -54,20 +72,26 @@ class DispatchWorker implements OnModuleInit, OnModuleDestroy {
     if (attempt < 1 || attempt > courierCandidates.length) {
       const previous = this.offers.get(request.deliveryId);
       if (previous !== undefined) this.saveStatus(previous, 'Failed');
-      await this.publishStatus(deliveryStatusChanged(request.deliveryId, request.customerId, 'Failed'));
-      console.log(`deliverydispatch-dispatch failed delivery=${request.deliveryId} reason=candidates-exhausted`);
+      await this.publishStatus(
+        deliveryStatusChanged(request.deliveryId, request.customerId, 'Failed')
+      );
+      console.log(
+        `deliverydispatch-dispatch failed delivery=${request.deliveryId} reason=candidates-exhausted`
+      );
       return;
     }
     // --8<-- [start:doc-dd-offer-start]
     const courierId = courierCandidates[attempt - 1];
 
     const actor = await this.findOrEnsureActor(courierId);
-    await this.publishStatus(deliveryStatusChanged(
-      request.deliveryId,
-      request.customerId,
-      attempt === 1 ? 'Assigned' : 'Reassigned',
-      courierId
-    ));
+    await this.publishStatus(
+      deliveryStatusChanged(
+        request.deliveryId,
+        request.customerId,
+        attempt === 1 ? 'Assigned' : 'Reassigned',
+        courierId
+      )
+    );
     const offer: DeliveryOffer = {
       deliveryId: request.deliveryId,
       customerId: request.customerId,
@@ -80,10 +104,18 @@ class DispatchWorker implements OnModuleInit, OnModuleDestroy {
     };
     this.offers.save(offer);
     // --8<-- [start:doc-dd-offer-send]
-    await this.actors.sendToActor(
-      actor.actorId,
-      offerDelivery(courierId, request.deliveryId, attempt, request.pickupAddress, request.dropoffAddress)
-    ).submit();
+    await this.actors
+      .sendToActor(
+        actor.actorId,
+        offerDelivery(
+          courierId,
+          request.deliveryId,
+          attempt,
+          request.pickupAddress,
+          request.dropoffAddress
+        )
+      )
+      .submit();
     // --8<-- [end:doc-dd-offer-send]
     // --8<-- [end:doc-dd-offer-start]
   }
@@ -99,8 +131,8 @@ class DispatchWorker implements OnModuleInit, OnModuleDestroy {
       current.courierId !== result.courierId
     ) {
       console.log(
-        `deliverydispatch-dispatch stale-decision-ignored delivery=${result.deliveryId} `
-        + `courier=${result.courierId} attempt=${result.attempt}`
+        `deliverydispatch-dispatch stale-decision-ignored delivery=${result.deliveryId} ` +
+          `courier=${result.courierId} attempt=${result.attempt}`
       );
       return;
     }
@@ -144,20 +176,14 @@ class DispatchWorker implements OnModuleInit, OnModuleDestroy {
 
   private async continueAcceptedDelivery(offer: DeliveryOffer): Promise<void> {
     for (const status of ['Accepted', 'PickedUp', 'Delivered'] as const) {
-      await this.publishStatus(deliveryStatusChanged(
-        offer.deliveryId,
-        offer.customerId,
-        status,
-        offer.courierId
-      ));
+      await this.publishStatus(
+        deliveryStatusChanged(offer.deliveryId, offer.customerId, status, offer.courierId)
+      );
     }
   }
 
   private async publishStatus(status: DeliveryStatusChangedReq): Promise<void> {
-    await this.channels.requestToChannel(
-      SampleNames.trackingChannel,
-      status
-    ).submit();
+    await this.channels.requestToChannel(SampleNames.trackingChannel, status).submit();
   }
 }
 

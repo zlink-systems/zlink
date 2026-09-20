@@ -311,8 +311,8 @@ inline void set_optional (nlohmann::json &json, const char *name, const std::opt
     }
 }
 
-inline std::optional<std::string>
-json_optional_string (const nlohmann::json &json, const char *name)
+inline std::optional<std::string> json_optional_string (const nlohmann::json &json,
+                                                        const char *name)
 {
     if (!json.contains (name) || json.at (name).is_null ()) {
         return std::nullopt;
@@ -320,8 +320,7 @@ json_optional_string (const nlohmann::json &json, const char *name)
     return json.at (name).get<std::string> ();
 }
 
-inline std::optional<std::int64_t>
-json_optional_i64 (const nlohmann::json &json, const char *name)
+inline std::optional<std::int64_t> json_optional_i64 (const nlohmann::json &json, const char *name)
 {
     if (!json.contains (name) || json.at (name).is_null ()) {
         return std::nullopt;
@@ -371,13 +370,15 @@ inline void from_json (const nlohmann::json &json, conversation_state_t &value)
     value.idle_deadline_unix_ms = json_optional_i64 (json, "idleDeadlineUnixMs");
 }
 
-#define SUPPORTCHAT_JSON_STRING_REQ(type, field_name, json_name) \
-inline void to_json (nlohmann::json &json, const type &value) { \
-    json = {{json_name, value.field_name}}; \
-} \
-inline void from_json (const nlohmann::json &json, type &value) { \
-    value.field_name = json.value (json_name, ""); \
-}
+#define SUPPORTCHAT_JSON_STRING_REQ(type, field_name, json_name)                                   \
+    inline void to_json (nlohmann::json &json, const type &value)                                  \
+    {                                                                                              \
+        json = {{json_name, value.field_name}};                                                    \
+    }                                                                                              \
+    inline void from_json (const nlohmann::json &json, type &value)                                \
+    {                                                                                              \
+        value.field_name = json.value (json_name, "");                                             \
+    }
 
 SUPPORTCHAT_JSON_STRING_REQ (authenticate_req_t, access_token, "accessToken")
 SUPPORTCHAT_JSON_STRING_REQ (authenticate_user_req_t, access_token, "accessToken")
@@ -395,9 +396,7 @@ SUPPORTCHAT_JSON_STRING_REQ (send_chat_message_req_t, text, "text")
 
 inline void to_json (nlohmann::json &json, const authenticate_res_t &value)
 {
-    json = {{"actorId", value.actor_id},
-            {"displayName", value.display_name},
-            {"role", value.role}};
+    json = {{"actorId", value.actor_id}, {"displayName", value.display_name}, {"role", value.role}};
 }
 
 inline void from_json (const nlohmann::json &json, authenticate_res_t &value)
@@ -517,9 +516,7 @@ inline void from_json (const nlohmann::json &json, ensure_agent_conversation_req
 
 inline void to_json (nlohmann::json &json, const ensure_agent_conversation_res_t &value)
 {
-    json = {{"actor", value.actor},
-            {"scheduled", value.scheduled},
-            {"state", value.state}};
+    json = {{"actor", value.actor}, {"scheduled", value.scheduled}, {"state", value.state}};
 }
 
 inline void from_json (const nlohmann::json &json, ensure_agent_conversation_res_t &value)
@@ -585,14 +582,12 @@ inline void from_json (const nlohmann::json &json, join_conversation_res_t &valu
     value.state = json.value ("state", conversation_state_t{});
 }
 
-inline void to_json (nlohmann::json &json,
-                     const join_conversation_failed_notify_t &value)
+inline void to_json (nlohmann::json &json, const join_conversation_failed_notify_t &value)
 {
     json = {{"conversationId", value.conversation_id}, {"error", value.error}};
 }
 
-inline void from_json (const nlohmann::json &json,
-                       join_conversation_failed_notify_t &value)
+inline void from_json (const nlohmann::json &json, join_conversation_failed_notify_t &value)
 {
     value.conversation_id = json.value ("conversationId", "");
     value.error = json.value ("error", "");
@@ -642,14 +637,16 @@ inline void from_json (const nlohmann::json &json, close_conversation_res_t &val
 
 /* 공통 sample spec §12: notify wire shape는 `{ConversationId, State}`다. state를 루트로
  * 펼치지 않는다. */
-#define SUPPORTCHAT_NOTIFY_JSON(type) \
-inline void to_json (nlohmann::json &json, const type &value) { \
-    json = {{"conversationId", value.conversation_id}, {"state", value.state}}; \
-} \
-inline void from_json (const nlohmann::json &json, type &value) { \
-    value.conversation_id = json.value ("conversationId", ""); \
-    value.state = json.value ("state", conversation_state_t{}); \
-}
+#define SUPPORTCHAT_NOTIFY_JSON(type)                                                              \
+    inline void to_json (nlohmann::json &json, const type &value)                                  \
+    {                                                                                              \
+        json = {{"conversationId", value.conversation_id}, {"state", value.state}};                \
+    }                                                                                              \
+    inline void from_json (const nlohmann::json &json, type &value)                                \
+    {                                                                                              \
+        value.conversation_id = json.value ("conversationId", "");                                 \
+        value.state = json.value ("state", conversation_state_t{});                                \
+    }
 
 SUPPORTCHAT_NOTIFY_JSON (conversation_assigned_notify_t)
 SUPPORTCHAT_NOTIFY_JSON (conversation_idle_notify_t)

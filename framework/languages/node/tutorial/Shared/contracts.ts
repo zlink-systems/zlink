@@ -49,7 +49,10 @@ export class OpenRoom {
 
 // One-way: the caller does not wait for the room to record the line.
 export class PostChat {
-  constructor(readonly playerId: string, readonly text: string) {}
+  constructor(
+    readonly playerId: string,
+    readonly text: string
+  ) {}
 }
 
 export class GetRoomState {}

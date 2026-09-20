@@ -1,8 +1,7 @@
 package systems.zlink.samples.deliverydispatch.server.configuration;
 
 public final class SampleNames {
-    private SampleNames() {
-    }
+    private SampleNames() {}
 
     public static final String CourierChannel = "deliverydispatch.courier";
 
@@ -12,6 +11,7 @@ public final class SampleNames {
      * (common sample spec section 7.4).
      */
     public static final String DispatchChannel = "deliverydispatch.dispatch";
+
     public static final String TrackingChannel = "deliverydispatch.tracking";
     public static final String CustomerSpotDiscovery = "delivery-customers";
     public static final String CourierSpotDiscovery = "delivery-couriers";

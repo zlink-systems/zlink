@@ -75,8 +75,9 @@ class bingo_game_t
     static bingo_player_state_t &find_player (std::vector<bingo_player_state_t> &players,
                                               const std::string &actor_id)
     {
-        auto player = std::find_if (players.begin (), players.end (),
-                                    [&] (const auto &entry) { return entry.actor_id == actor_id; });
+        auto player = std::find_if (players.begin (), players.end (), [&] (const auto &entry) {
+            return entry.actor_id == actor_id;
+        });
         if (player == players.end ()) {
             throw std::runtime_error ("bingo player is not in the room");
         }

@@ -1,12 +1,11 @@
-using Zlink.Framework.Contracts.Streams;
 using DeliveryDispatch.Shared.Contracts;
 using Microsoft.Extensions.Logging;
+using Zlink.Framework.Contracts.Streams;
 
 namespace DeliveryDispatch.Server.CourierSession;
 
-internal sealed class CourierSession(
-    IZLinkSessionContext context,
-    ILogger<CourierSession> logger) : IZLinkSession
+internal sealed class CourierSession(IZLinkSessionContext context, ILogger<CourierSession> logger)
+    : IZLinkSession
 {
     public IZLinkSessionContext Context { get; } = context;
 
@@ -14,7 +13,8 @@ internal sealed class CourierSession(
     {
         logger.LogInformation(
             "deliverydispatch courier-session: connected session={SessionId}",
-            Context.SessionId);
+            Context.SessionId
+        );
         return ValueTask.CompletedTask;
     }
 
@@ -26,27 +26,28 @@ internal sealed class CourierSession(
         }
     }
 
-    public ValueTask OnErrorAsync(
-        ZLinkStreamError error,
-        CancellationToken cancellationToken)
+    public ValueTask OnErrorAsync(ZLinkStreamError error, CancellationToken cancellationToken)
     {
         logger.LogError(
             "deliverydispatch courier-session: stream error code={Code} message={Message} session={SessionId}",
             error.Error,
             error.Message,
-            Context.SessionId);
+            Context.SessionId
+        );
         return ValueTask.CompletedTask;
     }
 
     public async ValueTask OnDispatchAsync(
         ZLinkSessionDispatchContext dispatch,
         Zlink.Framework.Contracts.Messaging.ZLinkMessage payload,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken
+    )
     {
         logger.LogInformation(
             "deliverydispatch courier-session: dispatch packet={PacketName} session={SessionId}",
             dispatch.PacketName,
-            Context.SessionId);
+            Context.SessionId
+        );
         if (await Context.Handlers.TryHandleAsync(dispatch, payload, cancellationToken))
         {
             return;
@@ -56,7 +57,9 @@ internal sealed class CourierSession(
         var actor = Context.Actors.Find(decision.CourierId);
         if (actor is null)
         {
-            throw new InvalidOperationException($"Courier actor is not bound: {decision.CourierId}");
+            throw new InvalidOperationException(
+                $"Courier actor is not bound: {decision.CourierId}"
+            );
         }
 
         await actor.RelayAsync(payload, cancellationToken);

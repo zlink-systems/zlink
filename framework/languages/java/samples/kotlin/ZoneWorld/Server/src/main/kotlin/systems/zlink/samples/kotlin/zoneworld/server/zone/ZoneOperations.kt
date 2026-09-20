@@ -26,6 +26,7 @@ import systems.zlink.samples.kotlin.zoneworld.server.configuration.SampleTopolog
 import systems.zlink.samples.kotlin.zoneworld.shared.Messages
 import systems.zlink.samples.kotlin.zoneworld.shared.ZoneWorldNames
 import systems.zlink.samples.kotlin.zoneworld.shared.ZoneWorldSpec
+
 class ZoneBootstrap(
     private val topology: SampleTopology,
     private val spots: ZLinkSpotManager,
@@ -42,7 +43,9 @@ class ZoneBootstrap(
     // the maintenance-change report are the only other senders.
     private fun ready() {
         reporter.reportNow().exceptionally { null }.toCompletableFuture().join()
-        println("topology=ready node=${topology.nodeValue()} zones=${census.zoneIds().joinToString(",")}")
+        println(
+            "topology=ready node=${topology.nodeValue()} zones=${census.zoneIds().joinToString(",")}"
+        )
     }
 
     override fun run(args: ApplicationArguments) {
@@ -72,29 +75,48 @@ class ZoneBootstrap(
             val adjacentOrder = mutableListOf<String>()
             claimed.forEach { zone ->
                 ZoneWorldSpec.adjacentZones(zone).forEach { adjacent ->
-                    if (adjacent !in claimed && adjacent !in adjacentOrder) adjacentOrder += adjacent
+                    if (adjacent !in claimed && adjacent !in adjacentOrder)
+                        adjacentOrder += adjacent
                 }
             }
-            val fallbackOrder = ZoneWorldSpec.zones().filter { it !in claimed && it !in adjacentOrder }
+            val fallbackOrder =
+                ZoneWorldSpec.zones().filter { it !in claimed && it !in adjacentOrder }
             var claimedChanged = false
             var adjacentSettling = false
             for (zone in adjacentOrder) {
-                if (census.zoneIds() != claimed) { claimedChanged = true; break }
-                val result = runCatching {
-                    spots.getOrCreate(zone, ZoneWorldNames.ZONE_SPOT_TYPE)
-                        .inMesh(ZoneWorldNames.MESH).submit().toCompletableFuture().join()
+                if (census.zoneIds() != claimed) {
+                    claimedChanged = true
+                    break
                 }
-                if (result.isFailure ||
-                    census.zoneIds() == claimed && result.getOrNull()?.state() == ZLinkSpotCreateState.CREATED
-                ) adjacentSettling = true
-                if (census.zoneIds() != claimed) { claimedChanged = true; break }
+                val result = runCatching {
+                    spots
+                        .getOrCreate(zone, ZoneWorldNames.ZONE_SPOT_TYPE)
+                        .inMesh(ZoneWorldNames.MESH)
+                        .submit()
+                        .toCompletableFuture()
+                        .join()
+                }
+                if (
+                    result.isFailure ||
+                        census.zoneIds() == claimed &&
+                            result.getOrNull()?.state() == ZLinkSpotCreateState.CREATED
+                )
+                    adjacentSettling = true
+                if (census.zoneIds() != claimed) {
+                    claimedChanged = true
+                    break
+                }
             }
             if (!claimedChanged && !adjacentSettling) {
                 for (zone in fallbackOrder) {
                     if (census.zoneIds() != claimed) break
                     runCatching {
-                        spots.getOrCreate(zone, ZoneWorldNames.ZONE_SPOT_TYPE)
-                            .inMesh(ZoneWorldNames.MESH).submit().toCompletableFuture().join()
+                        spots
+                            .getOrCreate(zone, ZoneWorldNames.ZONE_SPOT_TYPE)
+                            .inMesh(ZoneWorldNames.MESH)
+                            .submit()
+                            .toCompletableFuture()
+                            .join()
                     }
                     if (census.zoneIds() != claimed) break
                 }
@@ -103,23 +125,38 @@ class ZoneBootstrap(
                 "Zone Spot capacity did not settle. node=${topology.nodeValue()} zones=${census.zoneIds()}"
             }
             CompletableFuture.runAsync(
-                {}, CompletableFuture.delayedExecutor(250, TimeUnit.MILLISECONDS),
-            ).join()
+                    {},
+                    CompletableFuture.delayedExecutor(250, TimeUnit.MILLISECONDS),
+                )
+                .join()
         }
         if (!topology.botsDisabled()) {
-            ZoneWorldSpec.bots().filter { ZoneWorldSpec.zoneOf(it.x, it.y) in census.zoneIds() }.forEach { bot ->
-                val result = actors.getOrCreate(bot.id, ZoneWorldNames.PLAYER_ACTOR_TYPE)
-                    .inMesh(ZoneWorldNames.MESH).request(ZLinkMessage.empty()).submit()
-                    .toCompletableFuture().join()
-                if (result is systems.zlink.framework.actors.ZLinkActorCreateResult.Created) {
-                    actorClient.requestToActor(
-                        result.actor().actorId,
-                        Messages.EnterWorldReq(bot.x, bot.y, true, bot.dirX, bot.dirY),
-                    ).submit(Messages.EnterWorldRes::class.java).toCompletableFuture().join()
+            ZoneWorldSpec.bots()
+                .filter { ZoneWorldSpec.zoneOf(it.x, it.y) in census.zoneIds() }
+                .forEach { bot ->
+                    val result =
+                        actors
+                            .getOrCreate(bot.id, ZoneWorldNames.PLAYER_ACTOR_TYPE)
+                            .inMesh(ZoneWorldNames.MESH)
+                            .request(ZLinkMessage.empty())
+                            .submit()
+                            .toCompletableFuture()
+                            .join()
+                    if (result is systems.zlink.framework.actors.ZLinkActorCreateResult.Created) {
+                        actorClient
+                            .requestToActor(
+                                result.actor().actorId,
+                                Messages.EnterWorldReq(bot.x, bot.y, true, bot.dirX, bot.dirY),
+                            )
+                            .submit(Messages.EnterWorldRes::class.java)
+                            .toCompletableFuture()
+                            .join()
+                    }
+                    println(
+                        "bot spawned. bot=${bot.id}, zone=${ZoneWorldSpec.zoneOf(bot.x, bot.y)}, " +
+                            "start=(${bot.x},${bot.y}), dir=(${bot.dirX},${bot.dirY})"
+                    )
                 }
-                println("bot spawned. bot=${bot.id}, zone=${ZoneWorldSpec.zoneOf(bot.x, bot.y)}, " +
-                    "start=(${bot.x},${bot.y}), dir=(${bot.dirX},${bot.dirY})")
-            }
         }
         ready()
     }
@@ -135,49 +172,65 @@ class ZoneStatusReporter(
     private var scheduler: ScheduledExecutorService? = null
     private var running = false
 
-    override fun start() = synchronized(lifecycleLock) {
-        if (running) return@synchronized
-        val createdScheduler = Executors.newSingleThreadScheduledExecutor { runnable ->
-            Thread(runnable, "zoneworld-status-${topology.nodeValue()}").apply { isDaemon = true }
+    override fun start() =
+        synchronized(lifecycleLock) {
+            if (running) return@synchronized
+            val createdScheduler =
+                Executors.newSingleThreadScheduledExecutor { runnable ->
+                    Thread(runnable, "zoneworld-status-${topology.nodeValue()}").apply {
+                        isDaemon = true
+                    }
+                }
+            scheduler = createdScheduler
+            running = true
+            createdScheduler.scheduleAtFixedRate(
+                ::report,
+                ZoneWorldSpec.NODE_STATUS_REPORT_PERIOD_MS,
+                ZoneWorldSpec.NODE_STATUS_REPORT_PERIOD_MS,
+                TimeUnit.MILLISECONDS,
+            )
         }
-        scheduler = createdScheduler
-        running = true
-        createdScheduler.scheduleAtFixedRate(
-            ::report, ZoneWorldSpec.NODE_STATUS_REPORT_PERIOD_MS, ZoneWorldSpec.NODE_STATUS_REPORT_PERIOD_MS, TimeUnit.MILLISECONDS,
-        )
-    }
 
     fun reportNow(): CompletionStage<Void> = report()
 
-    private fun report(): CompletionStage<Void> = synchronized(lifecycleLock) {
-        if (!running) return@synchronized CompletableFuture.completedFuture(null)
-        try {
-            return@synchronized routes.sendToChannel(
-                ZoneWorldNames.REPORT_CHANNEL,
-                Messages.ReportNodeStatusMsg(
-                    topology.nodeValue(), census.zoneIds(),
-                    census.total(), maintenance.isUnderMaintenance(topology.nodeValue()),
-                ),
-            ).submit().whenComplete { _, error ->
-                if (error != null) {
-                    println("report failed node=${topology.nodeValue()} detail=${error.message}")
-                } else {
-                    println("node status report submitted. node=${topology.nodeValue()}")
-                }
+    private fun report(): CompletionStage<Void> =
+        synchronized(lifecycleLock) {
+            if (!running) return@synchronized CompletableFuture.completedFuture(null)
+            try {
+                return@synchronized routes
+                    .sendToChannel(
+                        ZoneWorldNames.REPORT_CHANNEL,
+                        Messages.ReportNodeStatusMsg(
+                            topology.nodeValue(),
+                            census.zoneIds(),
+                            census.total(),
+                            maintenance.isUnderMaintenance(topology.nodeValue()),
+                        ),
+                    )
+                    .submit()
+                    .whenComplete { _, error ->
+                        if (error != null) {
+                            println(
+                                "report failed node=${topology.nodeValue()} detail=${error.message}"
+                            )
+                        } else {
+                            println("node status report submitted. node=${topology.nodeValue()}")
+                        }
+                    }
+            } catch (error: RuntimeException) {
+                // A fixed-rate task is cancelled when an invocation escapes. Ops
+                // can start after a Zone node, so retain the periodic retry.
+                println("report failed node=${topology.nodeValue()} detail=${error.message}")
+                return@synchronized CompletableFuture.completedFuture(null)
             }
-        } catch (error: RuntimeException) {
-            // A fixed-rate task is cancelled when an invocation escapes. Ops
-            // can start after a Zone node, so retain the periodic retry.
-            println("report failed node=${topology.nodeValue()} detail=${error.message}")
-            return@synchronized CompletableFuture.completedFuture(null)
         }
-    }
 
-    override fun stop() = synchronized(lifecycleLock) {
-        running = false
-        scheduler?.shutdownNow()
-        scheduler = null
-    }
+    override fun stop() =
+        synchronized(lifecycleLock) {
+            running = false
+            scheduler?.shutdownNow()
+            scheduler = null
+        }
 
     override fun stop(callback: Runnable) {
         try {
@@ -188,20 +241,32 @@ class ZoneStatusReporter(
     }
 
     override fun isRunning() = synchronized(lifecycleLock) { running }
+
     override fun getPhase() = 1
+
     override fun close() = stop()
 }
 
 @ZLinkHandlerGroup(ZoneWorldNames.OPS_HANDLER_GROUP)
-class ReportNodeStatusHandler(private val registry: NodeRegistry) : ZLinkRouteSendHandler<Messages.ReportNodeStatusMsg> {
-    override fun handle(message: Messages.ReportNodeStatusMsg, context: ZLinkRouteMessageContext): CompletionStage<Void> {
-        registry.report(message, context.sourceNodeRid().toString()); return CompletableFuture.completedFuture(null)
+class ReportNodeStatusHandler(private val registry: NodeRegistry) :
+    ZLinkRouteSendHandler<Messages.ReportNodeStatusMsg> {
+    override fun handle(
+        message: Messages.ReportNodeStatusMsg,
+        context: ZLinkRouteMessageContext,
+    ): CompletionStage<Void> {
+        registry.report(message, context.sourceNodeRid().toString())
+        return CompletableFuture.completedFuture(null)
     }
 }
 
 @ZLinkHandlerGroup(ZoneWorldNames.OPS_HANDLER_GROUP)
-class ReportSpotEventHandler(private val registry: NodeRegistry) : ZLinkSendHandler<Messages.ReportSpotEventMsg> {
-    override fun handle(message: Messages.ReportSpotEventMsg, context: ZLinkMessageContext): CompletionStage<Void> {
-        registry.alert(message); return CompletableFuture.completedFuture(null)
+class ReportSpotEventHandler(private val registry: NodeRegistry) :
+    ZLinkSendHandler<Messages.ReportSpotEventMsg> {
+    override fun handle(
+        message: Messages.ReportSpotEventMsg,
+        context: ZLinkMessageContext,
+    ): CompletionStage<Void> {
+        registry.alert(message)
+        return CompletableFuture.completedFuture(null)
     }
 }

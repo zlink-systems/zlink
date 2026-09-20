@@ -38,13 +38,12 @@ class decimal_t
         }
         const auto point = value.find ('.');
         auto integral = std::string (value.substr (0, point));
-        auto fractional = point == std::string_view::npos
-                            ? std::string{}
-                            : std::string (value.substr (point + 1));
+        auto fractional =
+          point == std::string_view::npos ? std::string{} : std::string (value.substr (point + 1));
         if (integral.empty () || (point != std::string_view::npos && fractional.empty ())
-            || !std::all_of (integral.begin (), integral.end (), [] (unsigned char ch) {
-                   return std::isdigit (ch) != 0;
-               })
+            || !std::all_of (integral.begin (),
+                             integral.end (),
+                             [] (unsigned char ch) { return std::isdigit (ch) != 0; })
             || !std::all_of (fractional.begin (), fractional.end (), [] (unsigned char ch) {
                    return std::isdigit (ch) != 0;
                })) {
@@ -83,17 +82,14 @@ inline void from_json (const nlohmann::json &json, decimal_t &value)
     value = decimal_t (json.dump ());
 }
 
-inline decimal_t json_decimal (const nlohmann::json &json,
-                               const char *camel,
-                               const char *snake)
+inline decimal_t json_decimal (const nlohmann::json &json, const char *camel, const char *snake)
 {
     const auto name = json.contains (camel) ? camel : snake;
     return json.contains (name) ? json.at (name).get<decimal_t> () : decimal_t{};
 }
 
-inline std::optional<decimal_t> json_nullable_decimal (const nlohmann::json &json,
-                                                       const char *camel,
-                                                       const char *snake)
+inline std::optional<decimal_t>
+json_nullable_decimal (const nlohmann::json &json, const char *camel, const char *snake)
 {
     const auto name = json.contains (camel) ? camel : snake;
     if (!json.contains (name) || json.at (name).is_null ()) {
@@ -340,20 +336,18 @@ struct server_assertion_res_t
     std::vector<std::string> evidence;
 };
 
-inline std::string json_string (const nlohmann::json &json,
-                                const char *camel,
-                                const char *snake)
+inline std::string json_string (const nlohmann::json &json, const char *camel, const char *snake)
 {
     return json.contains (camel) ? json.value (camel, std::string{})
                                  : json.value (snake, std::string{});
 }
 
-inline std::optional<std::string> json_nullable_string (const nlohmann::json &json,
-                                                        const char *camel,
-                                                        const char *snake)
+inline std::optional<std::string>
+json_nullable_string (const nlohmann::json &json, const char *camel, const char *snake)
 {
     const auto read = [&json] (const char *name) -> std::optional<std::string> {
-        if (!json.contains (name) || json[name].is_null ()) return std::nullopt;
+        if (!json.contains (name) || json[name].is_null ())
+            return std::nullopt;
         return json.value (name, std::string{});
     };
     return json.contains (camel) ? read (camel) : read (snake);
@@ -472,20 +466,19 @@ inline void from_json (const nlohmann::json &json, get_order_state_req_t &value)
 
 inline void to_json (nlohmann::json &json, const order_state_t &value)
 {
-    json = {{"orderId", value.order_id},
-            {"status", value.status},
-            {"shippingAddressId", value.shipping_address_id
-                                      ? nlohmann::json (*value.shipping_address_id)
-                                      : nlohmann::json (nullptr)},
-            {"reservationId", value.reservation_id ? nlohmann::json (*value.reservation_id)
-                                                     : nlohmann::json (nullptr)},
-            {"paymentId", value.payment_id ? nlohmann::json (*value.payment_id)
-                                             : nlohmann::json (nullptr)},
-            {"reason", value.reason ? nlohmann::json (*value.reason)
-                                      : nlohmann::json (nullptr)},
-            {"currency", value.currency ? nlohmann::json (*value.currency)
-                                          : nlohmann::json (nullptr)},
-            {"updatedAtUnixMs", value.updated_at_unix_ms}};
+    json = {
+      {"orderId", value.order_id},
+      {"status", value.status},
+      {"shippingAddressId",
+       value.shipping_address_id ? nlohmann::json (*value.shipping_address_id)
+                                 : nlohmann::json (nullptr)},
+      {"reservationId",
+       value.reservation_id ? nlohmann::json (*value.reservation_id) : nlohmann::json (nullptr)},
+      {"paymentId",
+       value.payment_id ? nlohmann::json (*value.payment_id) : nlohmann::json (nullptr)},
+      {"reason", value.reason ? nlohmann::json (*value.reason) : nlohmann::json (nullptr)},
+      {"currency", value.currency ? nlohmann::json (*value.currency) : nlohmann::json (nullptr)},
+      {"updatedAtUnixMs", value.updated_at_unix_ms}};
     json["amount"] = value.amount ? nlohmann::json (*value.amount) : nlohmann::json (nullptr);
 }
 
@@ -493,8 +486,8 @@ inline void from_json (const nlohmann::json &json, order_state_t &value)
 {
     value.order_id = json_string (json, "orderId", "order_id");
     value.status = json.value ("status", "");
-    value.shipping_address_id = json_nullable_string (json, "shippingAddressId",
-      "shipping_address_id");
+    value.shipping_address_id =
+      json_nullable_string (json, "shippingAddressId", "shipping_address_id");
     value.reservation_id = json_nullable_string (json, "reservationId", "reservation_id");
     value.payment_id = json_nullable_string (json, "paymentId", "payment_id");
     value.reason = json_nullable_string (json, "reason", "reason");
@@ -604,8 +597,7 @@ inline void from_json (const nlohmann::json &json, rebuild_order_projection_res_
 
 inline void to_json (nlohmann::json &json, const pending_mapping_req_t &value)
 {
-    json = {{"idempotencyKey", value.idempotency_key},
-            {"orderId", value.order_id}};
+    json = {{"idempotencyKey", value.idempotency_key}, {"orderId", value.order_id}};
 }
 
 inline void from_json (const nlohmann::json &json, pending_mapping_req_t &value)

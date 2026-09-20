@@ -7,10 +7,7 @@ import {
 } from '../../../../Shared/Contracts/messages';
 import { GameQuestEntrySpot } from './gamequest-entry-spot';
 import { GameQuestPlayerActor } from './gamequest-player-actor';
-import type {
-  ZLinkEntrySpotActorSendHandler,
-  ZLinkMessageContext
-} from '@zlink-systems/framework';
+import type { ZLinkEntrySpotActorSendHandler, ZLinkMessageContext } from '@zlink-systems/framework';
 
 // --8<-- [start:doc-gq-progress-push]
 @zlinkEntrySpotActorSendHandler({
@@ -18,8 +15,11 @@ import type {
   entrySpot: () => GameQuestEntrySpot,
   packetName: PacketNames.deliverQuestNotificationMsg
 })
-class DeliverQuestNotificationHandler
-  implements ZLinkEntrySpotActorSendHandler<GameQuestEntrySpot, GameQuestPlayerActor, DeliverQuestNotificationMsg> {
+class DeliverQuestNotificationHandler implements ZLinkEntrySpotActorSendHandler<
+  GameQuestEntrySpot,
+  GameQuestPlayerActor,
+  DeliverQuestNotificationMsg
+> {
   async handle(
     _spot: GameQuestEntrySpot,
     actor: GameQuestPlayerActor,
@@ -27,11 +27,9 @@ class DeliverQuestNotificationHandler
     message: DeliverQuestNotificationMsg
   ): Promise<void> {
     if (message.packetName === PacketNames.questCompletedNotify) {
-      await actor.push(new QuestCompletedNotify(
-        message.playerId,
-        message.progress,
-        message.rewardGranted ?? false
-      ));
+      await actor.push(
+        new QuestCompletedNotify(message.playerId, message.progress, message.rewardGranted ?? false)
+      );
       return;
     }
     if (message.packetName !== PacketNames.questProgressNotify) {

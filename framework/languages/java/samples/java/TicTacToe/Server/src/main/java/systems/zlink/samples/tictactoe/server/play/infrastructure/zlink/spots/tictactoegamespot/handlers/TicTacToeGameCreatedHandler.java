@@ -6,9 +6,7 @@ import systems.zlink.samples.tictactoe.server.play.infrastructure.zlink.spots.ti
 import systems.zlink.samples.tictactoe.shared.contracts.TicTacToeGameCreateReq;
 
 public final class TicTacToeGameCreatedHandler {
-    public ZLinkSpotCreateResponse handle(
-        TicTacToeGame game,
-        ZLinkMessage request) {
+    public ZLinkSpotCreateResponse handle(TicTacToeGame game, ZLinkMessage request) {
         game.markCreated(request.decode(TicTacToeGameCreateReq.class));
         return ZLinkSpotCreateResponse.accept();
     }

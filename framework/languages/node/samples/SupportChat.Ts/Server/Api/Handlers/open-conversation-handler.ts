@@ -13,7 +13,10 @@ import type {
 } from '../../../Shared/Contracts/messages';
 
 @zlinkRequestHandler('api', PacketNames.openConversationApiReq)
-class OpenConversationHandler implements ZLinkRequestHandler<OpenConversationApiReq, OpenConversationApiRes> {
+class OpenConversationHandler implements ZLinkRequestHandler<
+  OpenConversationApiReq,
+  OpenConversationApiRes
+> {
   constructor(@Inject(ZLINK_SPOT_MANAGER) private readonly spots: ZLinkSpotManager) {}
 
   async handle(request: OpenConversationApiReq): Promise<OpenConversationApiRes> {
@@ -21,11 +24,13 @@ class OpenConversationHandler implements ZLinkRequestHandler<OpenConversationApi
     const created = await this.spots
       .create(SampleNames.conversationSpotType)
       .inMesh(SampleNames.meshName)
-      .request(new ConversationCreateReq(
-        request.customerActorId,
-        request.customerDisplayName,
-        request.subject
-      ))
+      .request(
+        new ConversationCreateReq(
+          request.customerActorId,
+          request.customerDisplayName,
+          request.subject
+        )
+      )
       .submit();
     // --8<-- [end:doc-sc-api-open]
     return {

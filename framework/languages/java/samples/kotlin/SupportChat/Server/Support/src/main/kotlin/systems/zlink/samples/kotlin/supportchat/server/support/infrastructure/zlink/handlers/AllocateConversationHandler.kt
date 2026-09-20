@@ -11,9 +11,8 @@ import systems.zlink.samples.kotlin.supportchat.shared.contracts.AllocateConvers
 import systems.zlink.samples.kotlin.supportchat.shared.contracts.AllocateConversationRes
 
 @ZLinkHandlerGroup(SampleNames.SupportChannel)
-class AllocateConversationHandler(
-    private val allocator: SupportConversationAllocator,
-) : ZLinkSuspendingRequestHandler<AllocateConversationReq, AllocateConversationRes> {
+class AllocateConversationHandler(private val allocator: SupportConversationAllocator) :
+    ZLinkSuspendingRequestHandler<AllocateConversationReq, AllocateConversationRes> {
     override suspend fun handle(
         request: AllocateConversationReq,
         context: ZLinkMessageContext,
@@ -23,11 +22,12 @@ class AllocateConversationHandler(
             request.customerActorId,
             request.subject,
         )
-        val conversationId = allocator.allocate(
-            request.customerActorId,
-            request.customerDisplayName,
-            request.subject,
-        )
+        val conversationId =
+            allocator.allocate(
+                request.customerActorId,
+                request.customerDisplayName,
+                request.subject,
+            )
         logger.info("support allocate: created conversation={}", conversationId)
         return AllocateConversationRes(conversationId, ConversationStatuses.WaitingForAgent)
     }

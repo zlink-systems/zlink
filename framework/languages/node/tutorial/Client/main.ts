@@ -59,10 +59,12 @@ import { withZLinkErrorResponse, type HttpResult } from './zlink-error-response'
         // --8<-- [start:location-store-client]
         // Rooms are looked up by whoever calls them, so a node that hosts none
         // still needs the store, pointed at the same prefix.
-        builder.addLocationStore(new ZLinkRedisLocationStore({
-          url: 'redis://127.0.0.1:6379',
-          keyPrefix: 'zlink-tutorial-node:location'
-        }));
+        builder.addLocationStore(
+          new ZLinkRedisLocationStore({
+            url: 'redis://127.0.0.1:6379',
+            keyPrefix: 'zlink-tutorial-node:location'
+          })
+        );
         // --8<-- [end:location-store-client]
 
         // --8<-- [start:channel-client-register]
@@ -73,25 +75,21 @@ import { withZLinkErrorResponse, type HttpResult } from './zlink-error-response'
           .setAdvertiseHost('127.0.0.1');
 
         // client() means this node exposes no handler for the channel; it only calls.
-        mesh
-          .channel(TutorialNames.profileChannel)
-          .client();
+        mesh.channel(TutorialNames.profileChannel).client();
 
         // A mesh peer connection, not a channel one. The mesh picks a node that
         // serves the channel from among the peers it learns this way, so a channel
         // call never names a node. The routing id names which node is expected at
         // that endpoint. The node-direct call below reaches that node either way
         // here -- see README, "what differs from the .NET tutorial".
-        mesh.peerConnections().connect(
-          TutorialNames.serverRoutingId,
-          'tcp://127.0.0.1:7701'
-        );
+        mesh.peerConnections().connect(TutorialNames.serverRoutingId, 'tcp://127.0.0.1:7701');
         // --8<-- [end:channel-client-register]
 
         // --8<-- [start:clientserver-client-register]
         // Here the caller decides who answers: the server it dialed. Mesh peers play
         // no part in the choice.
-        builder.addClientServerChannel(TutorialNames.ticketingChannel)
+        builder
+          .addClientServerChannel(TutorialNames.ticketingChannel)
           .client()
           .connect('tcp://127.0.0.1:7711');
         // --8<-- [end:clientserver-client-register]
@@ -101,7 +99,8 @@ import { withZLinkErrorResponse, type HttpResult } from './zlink-error-response'
         // no change here. With a Location Store registered the publisher also has
         // to say which identity it publishes under, because the store keeps a row
         // per publisher; without one the routing id can be left out.
-        builder.addFanoutChannel(TutorialNames.broadcastChannel)
+        builder
+          .addFanoutChannel(TutorialNames.broadcastChannel)
           .setRoutingIdPrefix('game-client-broadcast')
           .enablePublisher('tcp://127.0.0.1:7712');
         // --8<-- [end:fanout-publish-register]
@@ -160,29 +159,20 @@ function registerRoutes(
   players: ZLinkActorClient
 ): void {
   // --8<-- [start:channel-request-call]
-  map(
-    'GET',
-    /^\/players\/([^/]+)\/profile$/,
-    async ([playerId]) => {
-      // The target is a channel name. Which node answers is decided at call time.
-      const profile = await route
-        .requestToChannel(
-          TutorialNames.profileChannel,
-          new GetPlayerProfile(playerId)
-        )
-        .submit<PlayerProfile>();
+  map('GET', /^\/players\/([^/]+)\/profile$/, async ([playerId]) => {
+    // The target is a channel name. Which node answers is decided at call time.
+    const profile = await route
+      .requestToChannel(TutorialNames.profileChannel, new GetPlayerProfile(playerId))
+      .submit<PlayerProfile>();
 
-      return ok(profile);
-    }
-  );
+    return ok(profile);
+  });
   // --8<-- [end:channel-request-call]
 
   // --8<-- [start:channel-send-call]
   map('POST', /^\/players\/([^/]+)\/logins$/, async ([playerId]) => {
     // Returns as soon as the message is sent, with no reply to wait for.
-    await route
-      .sendToChannel(TutorialNames.profileChannel, new RecordLogin(playerId))
-      .submit();
+    await route.sendToChannel(TutorialNames.profileChannel, new RecordLogin(playerId)).submit();
 
     return accepted();
   });
@@ -231,7 +221,7 @@ function registerRoutes(
     const request = JSON.parse(body) as { title: string };
 
     const created = await rooms
-      .create(TutorialNames.gameRoomType)   // Picks the factory and the candidate nodes.
+      .create(TutorialNames.gameRoomType) // Picks the factory and the candidate nodes.
       .inMesh(TutorialNames.mesh)
       .request(new OpenRoom(request.title)) // Reaches the room's create callback.
       .submit();
@@ -247,9 +237,7 @@ function registerRoutes(
     const message = JSON.parse(body) as { playerId: string; text: string };
 
     // The id is enough; the Framework resolves where the room currently runs.
-    await spots
-      .sendToSpot(roomId, new PostChat(message.playerId, message.text))
-      .submit();
+    await spots.sendToSpot(roomId, new PostChat(message.playerId, message.text)).submit();
 
     return accepted();
   });
@@ -275,8 +263,7 @@ function registerRoutes(
     // this id brings the queue into being and
     // is then handled by it.
     const status = await spots
-      .requestToSpot(
-        mode, new JoinMatchQueue(request.playerId))
+      .requestToSpot(mode, new JoinMatchQueue(request.playerId))
       .instanceSpot(TutorialNames.matchQueueType)
       .inMesh(TutorialNames.mesh)
       .timeout(3000)
@@ -292,9 +279,7 @@ function registerRoutes(
   map('GET', /^\/locations\/rooms\/([^/]+)$/, async ([roomId]) => {
     const room = await rooms.find(roomId);
 
-    return room === undefined
-      ? { status: 404 }
-      : ok({ spotId: room.spotId, node: room.nodeRid });
+    return room === undefined ? { status: 404 } : ok({ spotId: room.spotId, node: room.nodeRid });
   });
 
   map('GET', /^\/locations\/players\/([^/]+)$/, async ([playerId]) => {
@@ -370,9 +355,7 @@ function registerRoutes(
       .filter((line) => line.length > 0)
       .map((line) => JSON.parse(line) as { playerId: string; text: string });
     for (const message of messages) {
-      await spots
-        .sendToSpot(roomId, new PostChat(message.playerId, message.text))
-        .submit();
+      await spots.sendToSpot(roomId, new PostChat(message.playerId, message.text)).submit();
     }
     return ok({ imported: messages.length });
   });
@@ -396,12 +379,9 @@ function startHttpServer(): http.Server {
       }
       const params = matched.match.slice(1).map((value) => decodeURIComponent(value));
       // The error mapping sits here, ahead of every route registered above.
-      withZLinkErrorResponse(() => matched.candidate
-        .handle(
-          params,
-          Buffer.concat(chunks).toString('utf8'),
-          request.headers
-        ))
+      withZLinkErrorResponse(() =>
+        matched.candidate.handle(params, Buffer.concat(chunks).toString('utf8'), request.headers)
+      )
         .then(async (result) => {
           const extended = result as TutorialHttpResult;
           if (extended.body === undefined) {
@@ -448,9 +428,11 @@ function startHttpServer(): http.Server {
             return;
           }
           response.writeHead(500, { 'content-type': 'application/json' });
-          response.end(JSON.stringify({
-            error: error instanceof Error ? error.message : String(error)
-          }));
+          response.end(
+            JSON.stringify({
+              error: error instanceof Error ? error.message : String(error)
+            })
+          );
         });
     });
   });
@@ -459,7 +441,9 @@ function startHttpServer(): http.Server {
 }
 
 async function main(): Promise<void> {
-  const app = await NestFactory.createApplicationContext(ClientModule, { logger: ['error', 'warn', 'log'] });
+  const app = await NestFactory.createApplicationContext(ClientModule, {
+    logger: ['error', 'warn', 'log']
+  });
   registerRoutes(
     app.get<ZLinkRouteClient>(ZLINK_ROUTE_CLIENT, { strict: false }),
     app.get<ZLinkChannelClient>(ZLINK_CHANNEL_CLIENT, { strict: false }),

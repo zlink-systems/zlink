@@ -121,6 +121,10 @@ def check_marker_span(path: Path, name: str) -> str | None:
     마커 이름이 존재하고 경로가 풀려도 구간 자체가 빈 채로 렌더될 수 있다.
     end 마커를 여는 중괄호와 같은 줄에서 닫히는 생성자(`) {}`) 뒤에 두면 class가
     열린 채로 잘려 문법이 깨진 코드가 나간다. 실제로 겪은 회귀다.
+
+    한 줄짜리 구간은 정상이다. 포매터가 100열 안의 체인을 한 줄로 합치므로
+    (doc/principal/dev/source-formatting.ko.md) `client.create(...).timeout(...).build()`
+    같은 발췌는 한 줄이 된다. 잡아야 할 것은 빈 구간과 안 맞는 중괄호다.
     """
     lines = path.read_text(encoding="utf-8").splitlines()
     start = end = None
@@ -134,8 +138,8 @@ def check_marker_span(path: Path, name: str) -> str | None:
     if end <= start:
         return f"마커 '{name}'의 end가 start보다 앞이다"
     body = [l for l in lines[start + 1:end] if l.strip()]
-    if len(body) < 2:
-        return f"마커 '{name}' 구간이 {len(body)}줄이다"
+    if not body:
+        return f"마커 '{name}' 구간이 비어 있다"
     depth = sum(l.count("{") - l.count("}") for l in body)
     if depth != 0:
         return f"마커 '{name}' 구간의 중괄호가 {depth:+d}로 안 맞는다"

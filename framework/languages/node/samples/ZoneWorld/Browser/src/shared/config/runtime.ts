@@ -9,10 +9,10 @@ export async function loadClientEndpoints(): Promise<ClientEndpoints> {
     throw new Error(`Unable to load /config.json: HTTP ${response.status}`);
   }
 
-  const value = await response.json() as Partial<ClientEndpoints>;
+  const value = (await response.json()) as Partial<ClientEndpoints>;
   return {
     gateway: requireWebSocketEndpoint(value.gateway, 'gateway'),
-    ops: requireWebSocketEndpoint(value.ops, 'ops'),
+    ops: requireWebSocketEndpoint(value.ops, 'ops')
   };
 }
 

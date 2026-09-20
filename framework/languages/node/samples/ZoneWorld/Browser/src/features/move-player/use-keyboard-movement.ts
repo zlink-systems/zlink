@@ -1,11 +1,17 @@
 import { useLayoutEffect } from 'preact/hooks';
 
-export function useKeyboardMovement(move: (dx: number, dy: number) => void, enabled: boolean): void {
+export function useKeyboardMovement(
+  move: (dx: number, dy: number) => void,
+  enabled: boolean
+): void {
   useLayoutEffect(() => {
     if (!enabled) return undefined;
     const onKey = (event: KeyboardEvent) => {
       const vectors: Partial<Record<string, readonly [number, number]>> = {
-        ArrowLeft: [-5, 0], ArrowRight: [5, 0], ArrowUp: [0, -5], ArrowDown: [0, 5],
+        ArrowLeft: [-5, 0],
+        ArrowRight: [5, 0],
+        ArrowUp: [0, -5],
+        ArrowDown: [0, 5]
       };
       const vector = vectors[event.key];
       if (vector === undefined) return;

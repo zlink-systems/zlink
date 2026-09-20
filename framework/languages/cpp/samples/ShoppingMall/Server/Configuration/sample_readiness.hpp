@@ -42,11 +42,13 @@ class shoppingmall_object_route_readiness_service_t final : public framework::ho
 {
   public:
     shoppingmall_object_route_readiness_service_t (std::string mesh_name,
-                                                    std::string node_name,
-                                                    std::string target_rid,
-                                                    std::string target_node_name) :
-        _mesh_name (std::move (mesh_name)), _node_name (std::move (node_name)),
-        _target_rid (std::move (target_rid)), _target_node_name (std::move (target_node_name))
+                                                   std::string node_name,
+                                                   std::string target_rid,
+                                                   std::string target_node_name) :
+        _mesh_name (std::move (mesh_name)),
+        _node_name (std::move (node_name)),
+        _target_rid (std::move (target_rid)),
+        _target_node_name (std::move (target_node_name))
     {
     }
 
@@ -56,20 +58,29 @@ class shoppingmall_object_route_readiness_service_t final : public framework::ho
         _state = state;
         auto &runtime = services.get_required<framework::route_mesh_runtime_t> ();
         _observation = runtime.observe (
-          _mesh_name, 64,
-          [state, node_name = _node_name, target_rid = _target_rid,
+          _mesh_name,
+          64,
+          [state,
+           node_name = _node_name,
+           target_rid = _target_rid,
            target_node_name = _target_node_name] (
             const framework::observed_status_t<framework::mesh_node_snapshot_t> &observed) {
               report_if_ready (state, node_name, target_rid, target_node_name, observed.status);
           });
         /* A peer can become Ready while the observer is installed.  Poll the
          * same passive snapshot to close that registration race. */
-        _worker = std::thread ([state, runtime = &runtime, mesh_name = _mesh_name,
-                                node_name = _node_name, target_rid = _target_rid,
+        _worker = std::thread ([state,
+                                runtime = &runtime,
+                                mesh_name = _mesh_name,
+                                node_name = _node_name,
+                                target_rid = _target_rid,
                                 target_node_name = _target_node_name] () mutable {
             while (!state->stopping.load (std::memory_order_acquire)) {
                 try {
-                    report_if_ready (state, node_name, target_rid, target_node_name,
+                    report_if_ready (state,
+                                     node_name,
+                                     target_rid,
+                                     target_node_name,
                                      runtime->snapshot (mesh_name));
                 }
                 catch (...) {

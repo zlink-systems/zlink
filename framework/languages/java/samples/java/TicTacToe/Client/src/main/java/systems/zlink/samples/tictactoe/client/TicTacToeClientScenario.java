@@ -1,15 +1,5 @@
 package systems.zlink.samples.tictactoe.client;
 
-import java.net.URI;
-import java.nio.file.FileSystems;
-import java.nio.file.Files;
-import java.nio.file.Path;
-import java.nio.file.StandardWatchEventKinds;
-import java.nio.file.WatchKey;
-import java.nio.file.WatchService;
-import java.time.Duration;
-import java.util.concurrent.CompletableFuture;
-import java.util.concurrent.atomic.AtomicInteger;
 import systems.zlink.httpclient.ZLinkHttpClient;
 import systems.zlink.samples.tictactoe.shared.contracts.AuthenticateReq;
 import systems.zlink.samples.tictactoe.shared.contracts.AuthenticateRes;
@@ -29,25 +19,34 @@ import systems.zlink.stream.connector.ZLinkStreamConnector;
 import systems.zlink.stream.connector.ZLinkStreamConnectorFactory;
 import systems.zlink.stream.connector.ZLinkStreamConnectorOptions;
 import systems.zlink.stream.connector.ZLinkStreamDispatchMode;
-import systems.zlink.stream.connector.ZLinkStreamMessageKind;
+
+import java.net.URI;
+import java.nio.file.FileSystems;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.nio.file.StandardWatchEventKinds;
+import java.nio.file.WatchKey;
+import java.nio.file.WatchService;
+import java.time.Duration;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.atomic.AtomicInteger;
 
 public final class TicTacToeClientScenario {
     public void run(TicTacToeClientOptions options) throws Exception {
         CreateGameHttpRes game;
         try (ZLinkHttpClient api = ZLinkHttpClient.create(options.apiUrl()).build()) {
-            game = api.post("/games")
-                .body(new CreateGameHttpReq(options.gameName()))
-                .submit(CreateGameHttpRes.class)
-                .toCompletableFuture().join()
-                .body();
+            game =
+                    api.post("/games")
+                            .body(new CreateGameHttpReq(options.gameName()))
+                            .submit(CreateGameHttpRes.class)
+                            .toCompletableFuture()
+                            .join()
+                            .body();
         }
         ensure(game.playEndpoints().size() >= 2);
-        ZLinkStreamConnector host = playerConnector(
-            game.playEndpoints().get(0), "host");
-        ZLinkStreamConnector guest = playerConnector(
-            game.playEndpoints().get(1), "guest");
-        ZLinkStreamConnector observer = playerConnector(
-            game.playEndpoints().get(1), "observer");
+        ZLinkStreamConnector host = playerConnector(game.playEndpoints().get(0), "host");
+        ZLinkStreamConnector guest = playerConnector(game.playEndpoints().get(1), "guest");
+        ZLinkStreamConnector observer = playerConnector(game.playEndpoints().get(1), "observer");
         ZLinkStreamConnector reconnectedHost = null;
         boolean hostClosed = false;
 
@@ -61,177 +60,257 @@ public final class TicTacToeClientScenario {
             ensure(options.gameName().equals(game.gameName()));
             ensure(game.requiredLevel() == 3);
 
-            AuthenticateRes hostAuth = host
-                .request(new AuthenticateReq(options.xActorId()))
-                .submit(AuthenticateRes.class).toCompletableFuture().join();
+            AuthenticateRes hostAuth =
+                    host.request(new AuthenticateReq(options.xActorId()))
+                            .submit(AuthenticateRes.class)
+                            .toCompletableFuture()
+                            .join();
             ensure(options.xActorId().equals(hostAuth.player().actorId()));
             ensure(hostAuth.player().wins() == 99);
 
-            AuthenticateRes guestAuth = guest
-                .request(new AuthenticateReq(options.oActorId()))
-                .submit(AuthenticateRes.class).toCompletableFuture().join();
+            AuthenticateRes guestAuth =
+                    guest.request(new AuthenticateReq(options.oActorId()))
+                            .submit(AuthenticateRes.class)
+                            .toCompletableFuture()
+                            .join();
             ensure(options.oActorId().equals(guestAuth.player().actorId()));
             ensure(!guestAuth.player().actorId().equals(hostAuth.player().actorId()));
 
-            AuthenticateRes observerAuth = observer
-                .request(new AuthenticateReq(options.observerActorId()))
-                .submit(AuthenticateRes.class).toCompletableFuture().join();
+            AuthenticateRes observerAuth =
+                    observer.request(new AuthenticateReq(options.observerActorId()))
+                            .submit(AuthenticateRes.class)
+                            .toCompletableFuture()
+                            .join();
             ensure(options.observerActorId().equals(observerAuth.player().actorId()));
-            ObserveMilestoneRes subscribed = observer
-                .request(new ObserveMilestoneReq())
-                .submit(ObserveMilestoneRes.class).toCompletableFuture().join();
+            ObserveMilestoneRes subscribed =
+                    observer.request(new ObserveMilestoneReq())
+                            .submit(ObserveMilestoneRes.class)
+                            .toCompletableFuture()
+                            .join();
             ensure(subscribed.subscribed());
-            System.out.println("observer-subscription=verified subscribed=" + subscribed.subscribed());
+            System.out.println(
+                    "observer-subscription=verified subscribed=" + subscribed.subscribed());
 
             AtomicInteger hostOwnJoinNotifications = new AtomicInteger();
-            host.on(PlayerJoinedNotify.class, message -> {
-                if (options.xActorId().equals(message.payload().actorId())) {
-                    hostOwnJoinNotifications.incrementAndGet();
-                }
-                return CompletableFuture.completedFuture(null);
-            });
+            host.on(
+                    PlayerJoinedNotify.class,
+                    message -> {
+                        if (options.xActorId().equals(message.payload().actorId())) {
+                            hostOwnJoinNotifications.incrementAndGet();
+                        }
+                        return CompletableFuture.completedFuture(null);
+                    });
             AtomicInteger guestOwnJoinNotifications = new AtomicInteger();
-            guest.on(PlayerJoinedNotify.class, message -> {
-                if (options.oActorId().equals(message.payload().actorId())) {
-                    guestOwnJoinNotifications.incrementAndGet();
-                }
-                return CompletableFuture.completedFuture(null);
-            });
+            guest.on(
+                    PlayerJoinedNotify.class,
+                    message -> {
+                        if (options.oActorId().equals(message.payload().actorId())) {
+                            guestOwnJoinNotifications.incrementAndGet();
+                        }
+                        return CompletableFuture.completedFuture(null);
+                    });
 
-            var hostJoinCompletion = host.waitFor(JoinGameNotify.class)
-                .submit(JoinGameNotify.class);
-            host.send(new JoinGameMsg(game.roomId())).submit()
-                .toCompletableFuture().join();
-            JoinGameNotify hostJoin = hostJoinCompletion
-                .toCompletableFuture().join().payload();
+            var hostJoinCompletion =
+                    host.waitFor(JoinGameNotify.class).submit(JoinGameNotify.class);
+            host.send(new JoinGameMsg(game.roomId())).submit().toCompletableFuture().join();
+            JoinGameNotify hostJoin = hostJoinCompletion.toCompletableFuture().join().payload();
             ensure(hostJoin.state().roomId().equals(game.roomId()));
             ensure("WaitingForPlayers".equals(hostJoin.state().status()));
             ensure(options.xActorId().equals(hostJoin.state().xActorId()));
 
-            var hostSawGuestJoin = host
-                .waitFor(PlayerJoinedNotify.class)
-                .where(PlayerJoinedNotify.class,
-                    message -> options.oActorId().equals(message.payload().actorId()))
-                .submit(PlayerJoinedNotify.class);
-            var hostSawGameStart = host
-                .waitFor(GameStateNotify.class)
-                .where(GameStateNotify.class,
-                    message -> "InProgress".equals(message.payload().state().status())
-                        && options.oActorId().equals(message.payload().state().oActorId()))
-                .submit(GameStateNotify.class);
+            var hostSawGuestJoin =
+                    host.waitFor(PlayerJoinedNotify.class)
+                            .where(
+                                    PlayerJoinedNotify.class,
+                                    message ->
+                                            options.oActorId().equals(message.payload().actorId()))
+                            .submit(PlayerJoinedNotify.class);
+            var hostSawGameStart =
+                    host.waitFor(GameStateNotify.class)
+                            .where(
+                                    GameStateNotify.class,
+                                    message ->
+                                            "InProgress".equals(message.payload().state().status())
+                                                    && options.oActorId()
+                                                            .equals(
+                                                                    message.payload()
+                                                                            .state()
+                                                                            .oActorId()))
+                            .submit(GameStateNotify.class);
 
-            var guestJoinCompletion = guest.waitFor(JoinGameNotify.class)
-                .submit(JoinGameNotify.class);
-            guest.send(new JoinGameMsg(game.roomId())).submit()
-                .toCompletableFuture().join();
-            JoinGameNotify guestJoin = guestJoinCompletion
-                .toCompletableFuture().join().payload();
+            var guestJoinCompletion =
+                    guest.waitFor(JoinGameNotify.class).submit(JoinGameNotify.class);
+            guest.send(new JoinGameMsg(game.roomId())).submit().toCompletableFuture().join();
+            JoinGameNotify guestJoin = guestJoinCompletion.toCompletableFuture().join().payload();
             ensure(guestJoin.state().roomId().equals(game.roomId()));
             ensure("InProgress".equals(guestJoin.state().status()));
             ensure(options.oActorId().equals(guestJoin.state().oActorId()));
 
-            PlayerJoinedNotify guestJoinNotify = hostSawGuestJoin.toCompletableFuture().join().payload();
+            PlayerJoinedNotify guestJoinNotify =
+                    hostSawGuestJoin.toCompletableFuture().join().payload();
             ensure("O".equals(guestJoinNotify.mark()));
             ensure("InProgress".equals(guestJoinNotify.state().status()));
 
             GameStateNotify gameStart = hostSawGameStart.toCompletableFuture().join().payload();
             ensure("X".equals(gameStart.state().nextTurn()));
 
-            var guestSawHostMove1 = guest
-                .waitFor(GameStateNotify.class)
-                .where(GameStateNotify.class,
-                    message -> options.xActorId().equals(message.payload().state().lastMoveActorId())
-                        && Integer.valueOf(0).equals(message.payload().state().lastMoveCell()))
-                .submit(GameStateNotify.class);
-            PlaceMarkRes hostMove1 = host
-                .request(new PlaceMarkReq(0))
-                .submit(PlaceMarkRes.class).toCompletableFuture().join();
+            var guestSawHostMove1 =
+                    guest.waitFor(GameStateNotify.class)
+                            .where(
+                                    GameStateNotify.class,
+                                    message ->
+                                            options.xActorId()
+                                                            .equals(
+                                                                    message.payload()
+                                                                            .state()
+                                                                            .lastMoveActorId())
+                                                    && Integer.valueOf(0)
+                                                            .equals(
+                                                                    message.payload()
+                                                                            .state()
+                                                                            .lastMoveCell()))
+                            .submit(GameStateNotify.class);
+            PlaceMarkRes hostMove1 =
+                    host.request(new PlaceMarkReq(0))
+                            .submit(PlaceMarkRes.class)
+                            .toCompletableFuture()
+                            .join();
             ensure("X........".equals(hostMove1.state().board()));
             ensure("O".equals(hostMove1.state().nextTurn()));
             ensure(options.xActorId().equals(hostMove1.state().lastMoveActorId()));
             ensure(Integer.valueOf(0).equals(hostMove1.state().lastMoveCell()));
 
-            GameStateNotify hostMove1Notify = guestSawHostMove1.toCompletableFuture().join().payload();
+            GameStateNotify hostMove1Notify =
+                    guestSawHostMove1.toCompletableFuture().join().payload();
             ensure(hostMove1Notify.state().board().equals(hostMove1.state().board()));
             ensure("O".equals(hostMove1Notify.state().nextTurn()));
             ensure(options.xActorId().equals(hostMove1Notify.state().lastMoveActorId()));
             ensure(Integer.valueOf(0).equals(hostMove1Notify.state().lastMoveCell()));
 
-            var hostSawGuestMove1 = host
-                .waitFor(GameStateNotify.class)
-                .where(GameStateNotify.class,
-                    message -> options.oActorId().equals(message.payload().state().lastMoveActorId())
-                        && Integer.valueOf(3).equals(message.payload().state().lastMoveCell()))
-                .submit(GameStateNotify.class);
-            PlaceMarkRes guestMove1 = guest
-                .request(new PlaceMarkReq(3))
-                .submit(PlaceMarkRes.class).toCompletableFuture().join();
+            var hostSawGuestMove1 =
+                    host.waitFor(GameStateNotify.class)
+                            .where(
+                                    GameStateNotify.class,
+                                    message ->
+                                            options.oActorId()
+                                                            .equals(
+                                                                    message.payload()
+                                                                            .state()
+                                                                            .lastMoveActorId())
+                                                    && Integer.valueOf(3)
+                                                            .equals(
+                                                                    message.payload()
+                                                                            .state()
+                                                                            .lastMoveCell()))
+                            .submit(GameStateNotify.class);
+            PlaceMarkRes guestMove1 =
+                    guest.request(new PlaceMarkReq(3))
+                            .submit(PlaceMarkRes.class)
+                            .toCompletableFuture()
+                            .join();
             ensure("X..O.....".equals(guestMove1.state().board()));
             ensure("X".equals(guestMove1.state().nextTurn()));
             ensure(options.oActorId().equals(guestMove1.state().lastMoveActorId()));
             ensure(Integer.valueOf(3).equals(guestMove1.state().lastMoveCell()));
 
-            GameStateNotify guestMove1Notify = hostSawGuestMove1.toCompletableFuture().join().payload();
+            GameStateNotify guestMove1Notify =
+                    hostSawGuestMove1.toCompletableFuture().join().payload();
             ensure(guestMove1Notify.state().board().equals(guestMove1.state().board()));
             ensure("X".equals(guestMove1Notify.state().nextTurn()));
             ensure(options.oActorId().equals(guestMove1Notify.state().lastMoveActorId()));
             ensure(Integer.valueOf(3).equals(guestMove1Notify.state().lastMoveCell()));
 
-            var guestSawHostMove2 = guest
-                .waitFor(GameStateNotify.class)
-                .where(GameStateNotify.class,
-                    message -> options.xActorId().equals(message.payload().state().lastMoveActorId())
-                        && Integer.valueOf(1).equals(message.payload().state().lastMoveCell()))
-                .submit(GameStateNotify.class);
-            PlaceMarkRes hostMove2 = host
-                .request(new PlaceMarkReq(1))
-                .submit(PlaceMarkRes.class).toCompletableFuture().join();
+            var guestSawHostMove2 =
+                    guest.waitFor(GameStateNotify.class)
+                            .where(
+                                    GameStateNotify.class,
+                                    message ->
+                                            options.xActorId()
+                                                            .equals(
+                                                                    message.payload()
+                                                                            .state()
+                                                                            .lastMoveActorId())
+                                                    && Integer.valueOf(1)
+                                                            .equals(
+                                                                    message.payload()
+                                                                            .state()
+                                                                            .lastMoveCell()))
+                            .submit(GameStateNotify.class);
+            PlaceMarkRes hostMove2 =
+                    host.request(new PlaceMarkReq(1))
+                            .submit(PlaceMarkRes.class)
+                            .toCompletableFuture()
+                            .join();
             ensure("XX.O.....".equals(hostMove2.state().board()));
             ensure("O".equals(hostMove2.state().nextTurn()));
             ensure(options.xActorId().equals(hostMove2.state().lastMoveActorId()));
             ensure(Integer.valueOf(1).equals(hostMove2.state().lastMoveCell()));
 
-            GameStateNotify hostMove2Notify = guestSawHostMove2.toCompletableFuture().join().payload();
+            GameStateNotify hostMove2Notify =
+                    guestSawHostMove2.toCompletableFuture().join().payload();
             ensure(hostMove2Notify.state().board().equals(hostMove2.state().board()));
             ensure("O".equals(hostMove2Notify.state().nextTurn()));
             ensure(options.xActorId().equals(hostMove2Notify.state().lastMoveActorId()));
             ensure(Integer.valueOf(1).equals(hostMove2Notify.state().lastMoveCell()));
 
-            var hostSawGuestMove2 = host
-                .waitFor(GameStateNotify.class)
-                .where(GameStateNotify.class,
-                    message -> options.oActorId().equals(message.payload().state().lastMoveActorId())
-                        && Integer.valueOf(4).equals(message.payload().state().lastMoveCell()))
-                .submit(GameStateNotify.class);
-            PlaceMarkRes guestMove2 = guest
-                .request(new PlaceMarkReq(4))
-                .submit(PlaceMarkRes.class).toCompletableFuture().join();
+            var hostSawGuestMove2 =
+                    host.waitFor(GameStateNotify.class)
+                            .where(
+                                    GameStateNotify.class,
+                                    message ->
+                                            options.oActorId()
+                                                            .equals(
+                                                                    message.payload()
+                                                                            .state()
+                                                                            .lastMoveActorId())
+                                                    && Integer.valueOf(4)
+                                                            .equals(
+                                                                    message.payload()
+                                                                            .state()
+                                                                            .lastMoveCell()))
+                            .submit(GameStateNotify.class);
+            PlaceMarkRes guestMove2 =
+                    guest.request(new PlaceMarkReq(4))
+                            .submit(PlaceMarkRes.class)
+                            .toCompletableFuture()
+                            .join();
             ensure("XX.OO....".equals(guestMove2.state().board()));
             ensure("X".equals(guestMove2.state().nextTurn()));
             ensure(options.oActorId().equals(guestMove2.state().lastMoveActorId()));
             ensure(Integer.valueOf(4).equals(guestMove2.state().lastMoveCell()));
 
-            GameStateNotify guestMove2Notify = hostSawGuestMove2.toCompletableFuture().join().payload();
+            GameStateNotify guestMove2Notify =
+                    hostSawGuestMove2.toCompletableFuture().join().payload();
             ensure(guestMove2Notify.state().board().equals(guestMove2.state().board()));
             ensure("X".equals(guestMove2Notify.state().nextTurn()));
             ensure(options.oActorId().equals(guestMove2Notify.state().lastMoveActorId()));
             ensure(Integer.valueOf(4).equals(guestMove2Notify.state().lastMoveCell()));
 
-            var guestSawHostWin = guest
-                .waitFor(GameStateNotify.class)
-                .where(GameStateNotify.class,
-                    message -> "Won".equals(message.payload().state().status())
-                        && options.xActorId().equals(message.payload().state().winner()))
-                .submit(GameStateNotify.class);
-            var observerSawMilestone = observer
-                .waitFor(WinMilestoneNotify.class)
-                .where(WinMilestoneNotify.class,
-                    message -> options.xActorId().equals(message.payload().actorId())
-                        && message.payload().wins() == 100)
-                .submit(WinMilestoneNotify.class);
-            PlaceMarkRes hostWin = host
-                .request(new PlaceMarkReq(2))
-                .submit(PlaceMarkRes.class).toCompletableFuture().join();
+            var guestSawHostWin =
+                    guest.waitFor(GameStateNotify.class)
+                            .where(
+                                    GameStateNotify.class,
+                                    message ->
+                                            "Won".equals(message.payload().state().status())
+                                                    && options.xActorId()
+                                                            .equals(
+                                                                    message.payload()
+                                                                            .state()
+                                                                            .winner()))
+                            .submit(GameStateNotify.class);
+            var observerSawMilestone =
+                    observer.waitFor(WinMilestoneNotify.class)
+                            .where(
+                                    WinMilestoneNotify.class,
+                                    message ->
+                                            options.xActorId().equals(message.payload().actorId())
+                                                    && message.payload().wins() == 100)
+                            .submit(WinMilestoneNotify.class);
+            PlaceMarkRes hostWin =
+                    host.request(new PlaceMarkReq(2))
+                            .submit(PlaceMarkRes.class)
+                            .toCompletableFuture()
+                            .join();
             ensure("XXXOO....".equals(hostWin.state().board()));
             ensure("Won".equals(hostWin.state().status()));
             ensure(options.xActorId().equals(hostWin.state().winner()));
@@ -241,48 +320,64 @@ public final class TicTacToeClientScenario {
             ensure("Won".equals(hostWinNotify.state().status()));
             ensure(options.xActorId().equals(hostWinNotify.state().winner()));
 
-            WinMilestoneNotify milestone = observerSawMilestone.toCompletableFuture().join().payload();
+            WinMilestoneNotify milestone =
+                    observerSawMilestone.toCompletableFuture().join().payload();
             ensure(milestone.wins() == 100);
             ensure(hostOwnJoinNotifications.get() == 0);
             ensure(guestOwnJoinNotifications.get() == 0);
-            System.out.println("observer-win-milestone=verified actor="
-                + milestone.actorId()
-                + " wins=" + milestone.wins());
+            System.out.println(
+                    "observer-win-milestone=verified actor="
+                            + milestone.actorId()
+                            + " wins="
+                            + milestone.wins());
 
             // Closing this connector removes the session binding. A distinct
             // connector must authenticate and bind the existing Actor again.
             host.close().submit().toCompletableFuture().join();
             hostClosed = true;
-            reconnectedHost = playerConnector(
-                game.playEndpoints().get(0), "reconnected-host");
+            reconnectedHost = playerConnector(game.playEndpoints().get(0), "reconnected-host");
             reconnectedHost.connect().submit().toCompletableFuture().join();
-            AuthenticateRes reconnectedAuth = reconnectedHost
-                .request(new AuthenticateReq(options.xActorId()))
-                .submit(AuthenticateRes.class).toCompletableFuture().join();
+            AuthenticateRes reconnectedAuth =
+                    reconnectedHost
+                            .request(new AuthenticateReq(options.xActorId()))
+                            .submit(AuthenticateRes.class)
+                            .toCompletableFuture()
+                            .join();
             ensure(reconnectedAuth.player().equals(hostAuth.player()));
 
             // JoinGameMsg stays one-way on reconnect. Register the public
             // wait before send so a fast current-session push cannot be missed.
-            var reconnectedJoinCompletion = reconnectedHost
-                .waitFor(JoinGameNotify.class)
-                .where(JoinGameNotify.class,
-                    message -> game.roomId().equals(message.payload().state().roomId()))
-                .submit(JoinGameNotify.class);
-            reconnectedHost.send(new JoinGameMsg(game.roomId()))
-                .submit().toCompletableFuture().join();
-            JoinGameNotify reconnectedJoin = reconnectedJoinCompletion
-                .toCompletableFuture().join().payload();
+            var reconnectedJoinCompletion =
+                    reconnectedHost
+                            .waitFor(JoinGameNotify.class)
+                            .where(
+                                    JoinGameNotify.class,
+                                    message ->
+                                            game.roomId()
+                                                    .equals(message.payload().state().roomId()))
+                            .submit(JoinGameNotify.class);
+            reconnectedHost
+                    .send(new JoinGameMsg(game.roomId()))
+                    .submit()
+                    .toCompletableFuture()
+                    .join();
+            JoinGameNotify reconnectedJoin =
+                    reconnectedJoinCompletion.toCompletableFuture().join().payload();
             ensure(reconnectedJoin.state().equals(hostWin.state()));
-            System.out.println("reconnected-game-state=verified actor="
-                + reconnectedAuth.player().actorId()
-                + " room=" + game.roomId());
+            System.out.println(
+                    "reconnected-game-state=verified actor="
+                            + reconnectedAuth.player().actorId()
+                            + " room="
+                            + game.roomId());
 
             // LeaveGameMsg is one-way. Keep the connectors open until the runner
             // confirms the separate leave and Entry Spot destroy lifecycle evidence.
-            reconnectedHost.send(new LeaveGameMsg(game.roomId()))
-                .submit().toCompletableFuture().join();
-            guest.send(new LeaveGameMsg(game.roomId()))
-                .submit().toCompletableFuture().join();
+            reconnectedHost
+                    .send(new LeaveGameMsg(game.roomId()))
+                    .submit()
+                    .toCompletableFuture()
+                    .join();
+            guest.send(new LeaveGameMsg(game.roomId())).submit().toCompletableFuture().join();
             waitForLifecycleCompletion(options.lifecycleCompletionFile());
         } finally {
             if (!hostClosed) {
@@ -311,12 +406,15 @@ public final class TicTacToeClientScenario {
 
             long remainingNanos;
             while ((remainingNanos = deadlineNanos - System.nanoTime()) > 0) {
-                WatchKey key = watcher.poll(remainingNanos, java.util.concurrent.TimeUnit.NANOSECONDS);
+                WatchKey key =
+                        watcher.poll(remainingNanos, java.util.concurrent.TimeUnit.NANOSECONDS);
                 if (key == null) {
                     break;
                 }
-                boolean completionCreated = key.pollEvents().stream()
-                    .anyMatch(event -> releaseFile.getFileName().equals(event.context()));
+                boolean completionCreated =
+                        key.pollEvents().stream()
+                                .anyMatch(
+                                        event -> releaseFile.getFileName().equals(event.context()));
                 boolean valid = key.reset();
                 if ((completionCreated || !valid) && Files.exists(releaseFile)) {
                     return;
@@ -330,21 +428,23 @@ public final class TicTacToeClientScenario {
     }
 
     private static ZLinkStreamConnector playerConnector(String endpoint, String role) {
-        ZLinkStreamConnector connector = ZLinkStreamConnectorFactory.create(new ZLinkStreamConnectorOptions(
-            URI.create(endpoint),
-            ZLinkStreamDispatchMode.IMMEDIATE,
-            TicTacToeSampleDefaults.RequestTimeout,
-            2,
-            Duration.ofSeconds(5),
-            64 * 1024,
-            false,
-            Duration.ofSeconds(1),
-            TicTacToeSampleDefaults.RequestTimeout.plusSeconds(5),
-            true,
-            Duration.ofMillis(250),
-            Duration.ofSeconds(5),
-            2.0,
-            null));
+        ZLinkStreamConnector connector =
+                ZLinkStreamConnectorFactory.create(
+                        new ZLinkStreamConnectorOptions(
+                                URI.create(endpoint),
+                                ZLinkStreamDispatchMode.IMMEDIATE,
+                                TicTacToeSampleDefaults.RequestTimeout,
+                                2,
+                                Duration.ofSeconds(5),
+                                64 * 1024,
+                                false,
+                                Duration.ofSeconds(1),
+                                TicTacToeSampleDefaults.RequestTimeout.plusSeconds(5),
+                                true,
+                                Duration.ofMillis(250),
+                                Duration.ofSeconds(5),
+                                2.0,
+                                null));
         return connector;
     }
 

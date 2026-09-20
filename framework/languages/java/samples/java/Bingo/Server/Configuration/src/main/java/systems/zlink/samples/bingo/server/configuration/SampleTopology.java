@@ -4,24 +4,24 @@ import org.springframework.boot.context.properties.ConfigurationProperties;
 
 @ConfigurationProperties("sample")
 public record SampleTopology(
-    String apiAChannelEndpoint,
-    String apiBChannelEndpoint,
-    String apiAMeshEndpoint,
-    String apiBMeshEndpoint,
-    String sessionARouterEndpoint,
-    String sessionBRouterEndpoint,
-    String playASpotRouterEndpoint,
-    String playBSpotRouterEndpoint,
-    String apiMatchmakingRouterEndpoint,
-    String matchmakingRouterEndpoint,
-    String sessionAStreamEndpoint,
-    String sessionBStreamEndpoint,
-    String redisEndpoint,
-    String redisKeyPrefix,
-    String apiNode,
-    String playNode,
-    String sessionNode,
-    String logDirectory) {
+        String apiAChannelEndpoint,
+        String apiBChannelEndpoint,
+        String apiAMeshEndpoint,
+        String apiBMeshEndpoint,
+        String sessionARouterEndpoint,
+        String sessionBRouterEndpoint,
+        String playASpotRouterEndpoint,
+        String playBSpotRouterEndpoint,
+        String apiMatchmakingRouterEndpoint,
+        String matchmakingRouterEndpoint,
+        String sessionAStreamEndpoint,
+        String sessionBStreamEndpoint,
+        String redisEndpoint,
+        String redisKeyPrefix,
+        String apiNode,
+        String playNode,
+        String sessionNode,
+        String logDirectory) {
 
     public SampleTopology {
         apiAChannelEndpoint = value(apiAChannelEndpoint, "tcp://127.0.0.1:47103");
@@ -32,10 +32,8 @@ public record SampleTopology(
         sessionBRouterEndpoint = value(sessionBRouterEndpoint, "tcp://127.0.0.1:47120");
         playASpotRouterEndpoint = value(playASpotRouterEndpoint, "tcp://127.0.0.1:47111");
         playBSpotRouterEndpoint = value(playBSpotRouterEndpoint, "tcp://127.0.0.1:47122");
-        apiMatchmakingRouterEndpoint = value(
-            apiMatchmakingRouterEndpoint, "tcp://127.0.0.1:47127");
-        matchmakingRouterEndpoint = value(
-            matchmakingRouterEndpoint, "tcp://127.0.0.1:47128");
+        apiMatchmakingRouterEndpoint = value(apiMatchmakingRouterEndpoint, "tcp://127.0.0.1:47127");
+        matchmakingRouterEndpoint = value(matchmakingRouterEndpoint, "tcp://127.0.0.1:47128");
         sessionAStreamEndpoint = value(sessionAStreamEndpoint, "tcp://127.0.0.1:47114");
         sessionBStreamEndpoint = value(sessionBStreamEndpoint, "tcp://127.0.0.1:47125");
         redisEndpoint = required(redisEndpoint, "redisEndpoint");

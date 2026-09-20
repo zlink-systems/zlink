@@ -20,8 +20,11 @@ import {
 import { TicTacToeGameSpot } from '../tictactoe-game-spot';
 
 @Injectable()
-class PlayActorCurrentGameStateHandler
-  implements ZLinkSpotActorSendHandler<TicTacToeGameSpot, PlayActor, JoinGameMsg> {
+class PlayActorCurrentGameStateHandler implements ZLinkSpotActorSendHandler<
+  TicTacToeGameSpot,
+  PlayActor,
+  JoinGameMsg
+> {
   @ZLinkSpotActorSend(PacketNames.joinGameMsg)
   async handle(
     spot: TicTacToeGameSpot,
@@ -33,10 +36,12 @@ class PlayActorCurrentGameStateHandler
     try {
       state = spot.currentState(actor.actorId, message.roomId);
     } catch (error) {
-      await actor.push(new JoinGameFailedNotify(
-        message.roomId,
-        error instanceof Error ? error.message : String(error)
-      ));
+      await actor.push(
+        new JoinGameFailedNotify(
+          message.roomId,
+          error instanceof Error ? error.message : String(error)
+        )
+      );
       return;
     }
     await actor.push(joinGameNotify(state));
@@ -45,8 +50,12 @@ class PlayActorCurrentGameStateHandler
 
 @Injectable()
 // --8<-- [start:doc-actor-packet-handler]
-class PlayActorPlaceMarkHandler
-  implements ZLinkSpotActorRequestHandler<TicTacToeGameSpot, PlayActor, PlaceMarkReq, PlaceMarkRes> {
+class PlayActorPlaceMarkHandler implements ZLinkSpotActorRequestHandler<
+  TicTacToeGameSpot,
+  PlayActor,
+  PlaceMarkReq,
+  PlaceMarkRes
+> {
   @ZLinkSpotActorRequest(PacketNames.placeMarkReq)
   async handle(
     spot: TicTacToeGameSpot,

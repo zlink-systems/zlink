@@ -1,18 +1,18 @@
 package systems.zlink.samples.kotlin.supportchat.server.support.infrastructure.zlink.spots.conversationspot
 
 import java.time.Duration
-import org.slf4j.LoggerFactory
 import kotlinx.coroutines.future.await
+import org.slf4j.LoggerFactory
 import systems.zlink.framework.kotlin.ZLinkSuspendingSpot
 import systems.zlink.framework.messaging.ZLinkMessage
 import systems.zlink.framework.spots.ZLinkSpotActorJoinResult
-import systems.zlink.framework.spots.ZLinkSpotContext
 import systems.zlink.framework.spots.ZLinkSpotClosingContext
+import systems.zlink.framework.spots.ZLinkSpotContext
 import systems.zlink.framework.spots.ZLinkSpotCreateResponse
 import systems.zlink.framework.spots.ZLinkTimer
+import systems.zlink.samples.kotlin.supportchat.server.configuration.ConversationStatuses
 import systems.zlink.samples.kotlin.supportchat.server.configuration.SampleTimings
 import systems.zlink.samples.kotlin.supportchat.server.configuration.SupportChatRoles
-import systems.zlink.samples.kotlin.supportchat.server.configuration.ConversationStatuses
 import systems.zlink.samples.kotlin.supportchat.server.support.application.AgentAssignmentService
 import systems.zlink.samples.kotlin.supportchat.server.support.domain.Conversation
 import systems.zlink.samples.kotlin.supportchat.server.support.domain.ConversationChange
@@ -45,18 +45,20 @@ class ConversationSpot(
     override suspend fun onCreateSuspending(request: ZLinkMessage): ZLinkSpotCreateResponse {
         val create = request.decode(ConversationCreateReq::class.java)
         val conversationId = context.spotId()
-        conversation = Conversation(
-            conversationId = conversationId,
-            subject = create.subject,
-            customerActorId = create.customerActorId,
-            customerDisplayName = create.customerDisplayName,
-            createdAtUnixMs = create.createdAtUnixMs,
-            policy = ConversationPolicy(
-                SampleTimings.IdleTimeout,
-                SampleTimings.CloseGraceTimeout,
-                500,
-            ),
-        )
+        conversation =
+            Conversation(
+                conversationId = conversationId,
+                subject = create.subject,
+                customerActorId = create.customerActorId,
+                customerDisplayName = create.customerDisplayName,
+                createdAtUnixMs = create.createdAtUnixMs,
+                policy =
+                    ConversationPolicy(
+                        SampleTimings.IdleTimeout,
+                        SampleTimings.CloseGraceTimeout,
+                        500,
+                    ),
+            )
         logger.info("supportchat-conversation created conversation={}", conversationId)
         logger.info(
             "supportchat-conversation status={} conversation={}",
@@ -67,12 +69,15 @@ class ConversationSpot(
     }
 
     override suspend fun onInitializeSuspending() {
-        idleTimer = context.addTimer(
-            "conversation-idle",
-            Duration.ofMillis(200),
-            ConversationIdleTimerHandler::class.java,
-            null,
-        ).await()
+        idleTimer =
+            context
+                .addTimer(
+                    "conversation-idle",
+                    Duration.ofMillis(200),
+                    ConversationIdleTimerHandler::class.java,
+                    null,
+                )
+                .await()
     }
 
     override suspend fun onClosingSuspending(context: ZLinkSpotClosingContext) {
@@ -90,7 +95,7 @@ class ConversationSpot(
             JoinConversationRes(
                 scheduled = false,
                 state = ConversationContracts.toState(conversation.snapshot()),
-            ),
+            )
         )
     }
 
@@ -131,6 +136,7 @@ class ConversationSpot(
         val change = conversation?.markIdle(System.currentTimeMillis()) ?: return
         publishChange(change)
     }
+
     // --8<-- [end:doc-sc-idle-timer]
 
     fun refreshMembership(actor: SupportUserActor): JoinConversationRes {
@@ -147,11 +153,17 @@ class ConversationSpot(
         )
     }
 
-    suspend fun sendMessage(actor: SupportUserActor, request: SendChatMessageReq): SendChatMessageRes {
-        val change = requireConversation().sendMessage(actor.participantId, request.text, System.currentTimeMillis())
+    suspend fun sendMessage(
+        actor: SupportUserActor,
+        request: SendChatMessageReq,
+    ): SendChatMessageRes {
+        val change =
+            requireConversation()
+                .sendMessage(actor.participantId, request.text, System.currentTimeMillis())
         publishChange(change)
-        val message = change.events.single { it.kind == ConversationEventKind.MessageAppended }.message
-            ?: error("Message event was not created.")
+        val message =
+            change.events.single { it.kind == ConversationEventKind.MessageAppended }.message
+                ?: error("Message event was not created.")
         return SendChatMessageRes(
             ConversationContracts.toMessage(message),
             ConversationContracts.toState(change.state),
@@ -162,7 +174,10 @@ class ConversationSpot(
         publishChange(requireConversation().setTyping(actor.participantId, message.isTyping))
     }
 
-    suspend fun close(actor: SupportUserActor, request: CloseConversationReq): CloseConversationRes {
+    suspend fun close(
+        actor: SupportUserActor,
+        request: CloseConversationReq,
+    ): CloseConversationRes {
         val change = requireConversation().close(actor.participantId, request.reason)
         publishChange(change)
         return CloseConversationRes(ConversationContracts.toState(change.state))
@@ -182,11 +197,17 @@ class ConversationSpot(
             assigned.rosterActorId,
         )
     }
+
     // --8<-- [end:doc-sc-assign]
 
     private fun joinAgent(agent: SupportUserActor): ConversationChange {
         val conversation = requireConversation()
-        val change = conversation.joinAgent(agent.participantId, agent.displayName, System.currentTimeMillis())
+        val change =
+            conversation.joinAgent(
+                agent.participantId,
+                agent.displayName,
+                System.currentTimeMillis(),
+            )
         agent.joinConversation(conversation.conversationId)
         actors[agent.participantId] = directory.get(agent.participantId).actor
         return change

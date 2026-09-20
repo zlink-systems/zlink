@@ -37,11 +37,17 @@ async function bootstrapShoppingMall(role: ShoppingMallRole): Promise<void> {
   });
   const config = app.get<ShoppingMallServerConfig>(SHOPPINGMALL_SAMPLE_CONFIG);
   const endpoint = endpointForRole(role, config);
-  const routeMeshRuntime = app.get<ZLinkRouteMeshRuntime>(ZLINK_ROUTE_MESH_RUNTIME, { strict: false });
+  const routeMeshRuntime = app.get<ZLinkRouteMeshRuntime>(ZLINK_ROUTE_MESH_RUNTIME, {
+    strict: false
+  });
   if (!workflow) {
     await waitForObjectRouteReadiness(routeMeshRuntime);
-    process.stdout.write(`shoppingmall-ready kind=object-route node=${role} target=${SampleNames.workflowA}\n`);
-    process.stdout.write(`shoppingmall-ready kind=object-route node=${role} target=${SampleNames.workflowB}\n`);
+    process.stdout.write(
+      `shoppingmall-ready kind=object-route node=${role} target=${SampleNames.workflowA}\n`
+    );
+    process.stdout.write(
+      `shoppingmall-ready kind=object-route node=${role} target=${SampleNames.workflowB}\n`
+    );
   }
   const listenUrl = new URL(endpoint);
   const server = workflow
@@ -51,13 +57,13 @@ async function bootstrapShoppingMall(role: ShoppingMallRole): Promise<void> {
         frameworkRuntime: app.get<ZLinkFrameworkRuntime>(ZLINK_FRAMEWORK_RUNTIME, { strict: false })
       })
     : createCommerceApiServer(
-      endpoint,
-      role,
-      app.get(OrderStore, { strict: false }),
-      app.get(StartOrderUseCase, { strict: false }),
-      app.get(OrderWorkflowRouterPort, { strict: false }),
-      routeMeshRuntime
-    );
+        endpoint,
+        role,
+        app.get(OrderStore, { strict: false }),
+        app.get(StartOrderUseCase, { strict: false }),
+        app.get(OrderWorkflowRouterPort, { strict: false }),
+        routeMeshRuntime
+      );
 
   await new Promise<void>((resolve, reject) => {
     server.once('error', reject);
@@ -73,11 +79,15 @@ async function bootstrapShoppingMall(role: ShoppingMallRole): Promise<void> {
   await app.close();
 }
 
-function createHealthServer(roleName: string, baseEndpoint: string, dependencies: {
-  locations: ZLinkLocationRuntimeQuery;
-  routeMeshRuntime: ZLinkRouteMeshRuntime;
-  frameworkRuntime: ZLinkFrameworkRuntime;
-}): http.Server {
+function createHealthServer(
+  roleName: string,
+  baseEndpoint: string,
+  dependencies: {
+    locations: ZLinkLocationRuntimeQuery;
+    routeMeshRuntime: ZLinkRouteMeshRuntime;
+    frameworkRuntime: ZLinkFrameworkRuntime;
+  }
+): http.Server {
   return http.createServer(async (request, response) => {
     const url = new URL(request.url ?? '/', baseEndpoint);
     if (request.method === 'GET' && url.pathname === '/health') {
@@ -86,19 +96,29 @@ function createHealthServer(roleName: string, baseEndpoint: string, dependencies
         const mesh = dependencies.routeMeshRuntime.snapshot(SampleNames.orderWorkflowSpotMesh);
         const ready = status.storeHealthy && mesh.isReady && mesh.placement.isAvailable;
         response.writeHead(ready ? 200 : 503, { 'content-type': 'application/json' });
-        response.end(JSON.stringify({
-          ok: ready,
-          role: roleName,
-          routeMesh: {
-            isReady: mesh.isReady,
-            placementAvailable: mesh.placement.isAvailable,
-            readyPeerCount: mesh.readyPeerCount
-          }
-        }));
+        response.end(
+          JSON.stringify({
+            ok: ready,
+            role: roleName,
+            routeMesh: {
+              isReady: mesh.isReady,
+              placementAvailable: mesh.placement.isAvailable,
+              readyPeerCount: mesh.readyPeerCount
+            }
+          })
+        );
       } catch (error) {
-        console.error(`shoppingmall ${roleName} health probe failed: ${error instanceof Error ? error.message : String(error)}`);
+        console.error(
+          `shoppingmall ${roleName} health probe failed: ${error instanceof Error ? error.message : String(error)}`
+        );
         response.writeHead(503, { 'content-type': 'application/json' });
-        response.end(JSON.stringify({ ok: false, role: roleName, error: error instanceof Error ? error.message : String(error) }));
+        response.end(
+          JSON.stringify({
+            ok: false,
+            role: roleName,
+            error: error instanceof Error ? error.message : String(error)
+          })
+        );
       }
       return;
     }
@@ -108,17 +128,26 @@ function createHealthServer(roleName: string, baseEndpoint: string, dependencies
           mode: ZLinkFrameworkRelocationMode.PlannedMaintenance,
           deadlineMs: 30_000
         });
-        sendJson(response, result.outcome === ZLinkFrameworkRelocationOutcome.Relocated ? 200 : 409, {
-          outcome: result.outcome === ZLinkFrameworkRelocationOutcome.Relocated ? 'relocated' : 'blocked',
-          reason: result.reason
-        });
+        sendJson(
+          response,
+          result.outcome === ZLinkFrameworkRelocationOutcome.Relocated ? 200 : 409,
+          {
+            outcome:
+              result.outcome === ZLinkFrameworkRelocationOutcome.Relocated
+                ? 'relocated'
+                : 'blocked',
+            reason: result.reason
+          }
+        );
       } catch (error) {
         sendJson(response, 500, { error: error instanceof Error ? error.message : String(error) });
       }
       return;
     }
     response.writeHead(404, { 'content-type': 'application/json' });
-    response.end(JSON.stringify({ error: `No route for ${request.method ?? 'GET'} ${url.pathname}` }));
+    response.end(
+      JSON.stringify({ error: `No route for ${request.method ?? 'GET'} ${url.pathname}` })
+    );
   });
 }
 
@@ -128,7 +157,9 @@ async function waitForObjectRouteReadiness(runtime: ZLinkRouteMeshRuntime): Prom
     if (mesh.isReady && mesh.readyPeerCount >= 2) return;
     await new Promise<void>((resolve) => setTimeout(resolve, 100));
   }
-  throw new Error(`ShoppingMall RouteMesh '${SampleNames.orderWorkflowSpotMesh}' did not discover both Workflow nodes.`);
+  throw new Error(
+    `ShoppingMall RouteMesh '${SampleNames.orderWorkflowSpotMesh}' did not discover both Workflow nodes.`
+  );
 }
 
 function endpointForRole(role: ShoppingMallRole, config: ShoppingMallServerConfig): string {

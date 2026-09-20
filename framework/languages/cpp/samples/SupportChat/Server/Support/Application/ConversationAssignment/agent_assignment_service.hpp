@@ -39,10 +39,10 @@ class agent_availability_directory_t
 
     std::optional<available_agent_t> assign ()
     {
-        const auto available = std::find_if (_order.begin (), _order.end (), [this] (const auto &id)
-          {
-            return _agents.find (id)->second.active_conversations < _capacity;
-        });
+        const auto available =
+          std::find_if (_order.begin (), _order.end (), [this] (const auto &id) {
+              return _agents.find (id)->second.active_conversations < _capacity;
+          });
         if (available == _order.end ()) {
             return std::nullopt;
         }
@@ -82,9 +82,7 @@ class agent_assignment_service_t
     {
     }
 
-    void set_available (const std::string &actor_id,
-                        std::string display_name,
-                        bool available)
+    void set_available (const std::string &actor_id, std::string display_name, bool available)
     {
         int active_conversations = 0;
         for (const auto &[_, reserved_actor_id] : _reservations) {
@@ -92,8 +90,8 @@ class agent_assignment_service_t
                 ++active_conversations;
             }
         }
-        _directory.set_available (actor_id, std::move (display_name), available,
-                                  active_conversations);
+        _directory.set_available (
+          actor_id, std::move (display_name), available, active_conversations);
     }
 
     std::optional<available_agent_t> assign_for_conversation (const std::string &conversation_id)

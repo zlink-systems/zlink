@@ -16,24 +16,60 @@ object QuestStatuses {
     const val RewardGranted = "RewardGranted"
 }
 
-data class KillMonsterReq(val playerId: String, val monsterId: String, val areaId: String?, val idempotencyKey: String)
+data class KillMonsterReq(
+    val playerId: String,
+    val monsterId: String,
+    val areaId: String?,
+    val idempotencyKey: String,
+)
+
 data class KillMonsterRes(val eventId: String)
-data class CollectItemMsg(val playerId: String, val itemId: String, val count: Int, val idempotencyKey: String)
-data class CompleteMissionReq(val playerId: String, val missionId: String, val idempotencyKey: String)
+
+data class CollectItemMsg(
+    val playerId: String,
+    val itemId: String,
+    val count: Int,
+    val idempotencyKey: String,
+)
+
+data class CompleteMissionReq(
+    val playerId: String,
+    val missionId: String,
+    val idempotencyKey: String,
+)
+
 data class CompleteMissionRes(val eventId: String)
+
 data class EnterAreaMsg(val playerId: String, val areaId: String, val idempotencyKey: String)
-data class UnlockFeatureReq(val playerId: String, val featureId: String, val idempotencyKey: String)
+
+data class UnlockFeatureReq(
+    val playerId: String,
+    val featureId: String,
+    val idempotencyKey: String,
+)
+
 data class UnlockFeatureRes(val eventId: String)
+
 data class JoinSessionReq(val playerId: String)
+
 data class JoinSessionRes(val activeQuests: List<QuestProgress>)
+
 data class GetQuestProgressReq(val playerId: String)
+
 data class GetQuestProgressRes(val activeQuests: List<QuestProgress>)
+
 data class DeleteQuestProjectionReq(val playerId: String, val questId: String)
+
 data class DeleteQuestProjectionRes(val deleted: Boolean)
+
 data class RebuildQuestProjectionReq(val playerId: String, val questId: String, val count: Int)
+
 data class SyncQuestProgressReq(val playerId: String)
+
 data class SyncQuestProgressRes(val updatedQuests: List<QuestProgress>)
+
 data class GetGameplaySnapshotReq(val playerId: String)
+
 data class GetGameplaySnapshotRes(
     val playerId: String,
     val killCounts: List<KillCountSnapshot>,
@@ -45,8 +81,15 @@ data class GetGameplaySnapshotRes(
 )
 
 data class KillCountSnapshot(val monsterId: String, val areaId: String?, val count: Int)
+
 data class ItemCountSnapshot(val itemId: String, val count: Int)
-data class QuestProgressNotify(val playerId: String, val targetConnectionId: String?, val progress: QuestProgress)
+
+data class QuestProgressNotify(
+    val playerId: String,
+    val targetConnectionId: String?,
+    val progress: QuestProgress,
+)
+
 data class QuestCompletedNotify(
     val playerId: String,
     val targetConnectionId: String?,
@@ -84,13 +127,16 @@ data class GameplayMsg(
             sourceApi: String,
             occurredAtUnixMs: Long,
             publish: Boolean,
-        ): GameplayMsg = GameplayMsg(
-            eventId,
-            playerId,
-            type,
-            GameplayPayload.encode(GameplayPayload(idempotencyKey, value, count, sourceApi, publish)),
-            occurredAtUnixMs,
-        )
+        ): GameplayMsg =
+            GameplayMsg(
+                eventId,
+                playerId,
+                type,
+                GameplayPayload.encode(
+                    GameplayPayload(idempotencyKey, value, count, sourceApi, publish)
+                ),
+                occurredAtUnixMs,
+            )
     }
 }
 
@@ -128,8 +174,11 @@ data class GameplayPayload(
 }
 
 class QuestProgressedEvent
+
 class QuestCompletedEvent
+
 class QuestRewardGrantedEvent
+
 class QuestProgressReconciledEvent
 
 data class StoredQuestEvent(

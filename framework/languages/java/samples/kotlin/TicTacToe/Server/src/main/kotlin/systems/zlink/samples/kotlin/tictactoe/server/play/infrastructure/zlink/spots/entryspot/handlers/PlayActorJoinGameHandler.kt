@@ -20,7 +20,8 @@ class PlayActorJoinGameHandler {
         request: JoinGameMsg,
     ) {
         actor.trackDeferredJoin(request.roomId)
-        actor.context()
+        actor
+            .context()
             .joinSpot(request.roomId, TicTacToeGameJoinReq(request.roomId, actor.requirePlayer()))
             .timeout(SampleNames.RequestTimeout)
             .defer()

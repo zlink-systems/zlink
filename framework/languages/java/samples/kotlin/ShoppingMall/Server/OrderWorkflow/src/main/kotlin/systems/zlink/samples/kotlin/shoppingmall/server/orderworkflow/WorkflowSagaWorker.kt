@@ -10,8 +10,8 @@ import systems.zlink.samples.kotlin.shoppingmall.shared.contracts.RunOrderWorkfl
 
 /**
  * Drives the asynchronous part of the checkout saga. Workflow handlers reply to
- * `StartOrderWorkflowReq` as soon as the `Created` projection exists; this
- * worker then advances inventory, payment, and confirmation in the background.
+ * `StartOrderWorkflowReq` as soon as the `Created` projection exists; this worker then advances
+ * inventory, payment, and confirmation in the background.
  */
 @Component
 class WorkflowSagaWorker(
@@ -24,10 +24,11 @@ class WorkflowSagaWorker(
     @PostConstruct
     fun start() {
         running.set(true)
-        worker = Thread({ pump() }, "shoppingmall-workflow-saga-worker").apply {
-            isDaemon = true
-            start()
-        }
+        worker =
+            Thread({ pump() }, "shoppingmall-workflow-saga-worker").apply {
+                isDaemon = true
+                start()
+            }
     }
 
     @PreDestroy
@@ -48,7 +49,8 @@ class WorkflowSagaWorker(
                     return
                 } ?: return
             try {
-                routes.sendToSpot(orderId, RunOrderWorkflowMsg(orderId))
+                routes
+                    .sendToSpot(orderId, RunOrderWorkflowMsg(orderId))
                     .instanceSpot(SampleNames.OrderWorkflowSpotType)
                     .inMesh(SampleNames.OrderWorkflowMesh)
                     .submit()
@@ -56,7 +58,9 @@ class WorkflowSagaWorker(
                     .join()
                 System.err.println("shoppingmall order: advanced order=$orderId")
             } catch (error: RuntimeException) {
-                System.err.println("shoppingmall order: saga failed order=$orderId error=${error.message}")
+                System.err.println(
+                    "shoppingmall order: saga failed order=$orderId error=${error.message}"
+                )
             }
         }
     }

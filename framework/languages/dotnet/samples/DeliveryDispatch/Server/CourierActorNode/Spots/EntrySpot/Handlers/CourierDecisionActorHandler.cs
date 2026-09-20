@@ -1,8 +1,8 @@
-using Zlink.Framework.Contracts.Handlers;
 using DeliveryDispatch.Server.Configuration;
 using DeliveryDispatch.Shared.Contracts;
 using Microsoft.Extensions.Logging;
 using Zlink.Framework.Contracts.Channels;
+using Zlink.Framework.Contracts.Handlers;
 using Zlink.Framework.Contracts.Spots;
 
 namespace DeliveryDispatch.Server.CourierActorNode.Spots.EntrySpot.Handlers;
@@ -14,15 +14,16 @@ namespace DeliveryDispatch.Server.CourierActorNode.Spots.EntrySpot.Handlers;
 /// </summary>
 internal sealed class CourierDecisionActorHandler(
     IZLinkRouteClient channels,
-    ILogger<CourierDecisionActorHandler> logger)
-    : IZLinkEntrySpotActorSendHandler<CourierEntrySpot, CourierActor, CourierDecisionMsg>
+    ILogger<CourierDecisionActorHandler> logger
+) : IZLinkEntrySpotActorSendHandler<CourierEntrySpot, CourierActor, CourierDecisionMsg>
 {
     public async ValueTask HandleAsync(
         CourierEntrySpot entrySpot,
         CourierActor actor,
         IZLinkMessageContext context,
         CourierDecisionMsg message,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken
+    )
     {
         // --8<-- [start:doc-dd-decision-send]
         var attempt = actor.TakeOfferedAttempt(message.DeliveryId);
@@ -31,18 +32,22 @@ internal sealed class CourierDecisionActorHandler(
             logger.LogWarning(
                 "deliverydispatch courier-actor: decision for an unknown offer delivery={DeliveryId} courier={CourierId}",
                 message.DeliveryId,
-                actor.ActorId);
+                actor.ActorId
+            );
             return;
         }
 
         await channels
-            .SendToChannel(SampleNames.DispatchChannel,
+            .SendToChannel(
+                SampleNames.DispatchChannel,
                 new OfferDeliveryResultMsg(
                     message.DeliveryId,
                     message.CourierId,
                     attempt.Value,
                     message.Accepted,
-                    message.Reason))
+                    message.Reason
+                )
+            )
             .Async(cancellationToken);
         // --8<-- [end:doc-dd-decision-send]
 
@@ -51,6 +56,7 @@ internal sealed class CourierDecisionActorHandler(
             message.DeliveryId,
             actor.ActorId,
             attempt.Value,
-            message.Accepted);
+            message.Accepted
+        );
     }
 }

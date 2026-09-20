@@ -156,8 +156,11 @@ class courier_offer_port_t
         }
         co_await _actors
           .send (actor->actor_id (),
-                 offer_delivery_msg_t{courier_id, delivery.delivery_id, attempt,
-                                      delivery.pickup_address, delivery.dropoff_address})
+                 offer_delivery_msg_t{courier_id,
+                                      delivery.delivery_id,
+                                      attempt,
+                                      delivery.pickup_address,
+                                      delivery.dropoff_address})
           .async ();
     }
     // --8<-- [end:doc-dd-offer-send]
@@ -176,8 +179,8 @@ class delivery_status_publisher_t
                           const std::string &status,
                           const std::string &courier_id)
     {
-        delivery_status_changed_req_t changed{delivery.delivery_id, delivery.customer_id, status,
-                                              courier_id, now_unix_ms ()};
+        delivery_status_changed_req_t changed{
+          delivery.delivery_id, delivery.customer_id, status, courier_id, now_unix_ms ()};
         (void) co_await _channels.request (sample_names_t::tracking_route_channel, changed)
           .async<delivery_status_changed_res_t> ();
     }
@@ -218,8 +221,8 @@ class dispatch_worker_t
         if (accepted) {
             co_await _statuses.publish (offer.request, delivery_status_t::accepted, courier_id);
             if (offer.candidate_index == 0) {
-                co_await _statuses.publish (offer.request, delivery_status_t::picked_up,
-                                            courier_id);
+                co_await _statuses.publish (
+                  offer.request, delivery_status_t::picked_up, courier_id);
             }
             co_await _statuses.publish (offer.request, delivery_status_t::delivered, courier_id);
             _state.close (offer.request.delivery_id);
@@ -237,8 +240,8 @@ class dispatch_worker_t
     {
         const auto next_index = offer.candidate_index + 1;
         if (next_index >= _couriers.candidates ().size ()) {
-            co_await _statuses.publish (offer.request, delivery_status_t::failed,
-                                        _couriers.candidates ().back ());
+            co_await _statuses.publish (
+              offer.request, delivery_status_t::failed, _couriers.candidates ().back ());
             _state.close (offer.request.delivery_id);
             std::cerr << "deliverydispatch-dispatch failed delivery=" << offer.request.delivery_id
                       << " reason=candidates-exhausted\n";
@@ -265,7 +268,9 @@ inline dispatch_worker_t make_worker (dispatch_state_t &state,
                                       actor_client_t &actors,
                                       channel_client_t &channels)
 {
-    return dispatch_worker_t (state, couriers, courier_offer_port_t (directory, actors),
+    return dispatch_worker_t (state,
+                              couriers,
+                              courier_offer_port_t (directory, actors),
                               delivery_status_publisher_t (channels));
 }
 
@@ -347,10 +352,12 @@ class offer_deadline_sweeper_t final : public hosted_service_t
     task_t<void> start (service_provider_t &services) override
     {
         _state = &services.get_required<dispatch_state_t> ();
-        _worker = std::make_unique<dispatch_worker_t> (make_worker (
-          *_state, services.get_required<courier_selection_policy_t> (),
-          services.get_required<actor_directory_t> (), services.get_required<actor_client_t> (),
-          services.get_required<channel_client_t> ()));
+        _worker = std::make_unique<dispatch_worker_t> (
+          make_worker (*_state,
+                       services.get_required<courier_selection_policy_t> (),
+                       services.get_required<actor_directory_t> (),
+                       services.get_required<actor_client_t> (),
+                       services.get_required<channel_client_t> ()));
         _running.store (true);
         _thread = std::thread ([this] { run (); });
         co_return;
@@ -469,8 +476,10 @@ class create_delivery_http_handler_t
          * 확인하고, 진행 상태는 Tracking 기록과 고객 stream push로 전달된다. */
         _channels
           .send (sample_names_t::dispatch_route_channel,
-                 assign_delivery_msg_t{request.delivery_id, request.customer_id,
-                                       request.pickup_address, request.dropoff_address})
+                 assign_delivery_msg_t{request.delivery_id,
+                                       request.customer_id,
+                                       request.pickup_address,
+                                       request.dropoff_address})
           .async ();
         std::cerr << "deliverydispatch api: created delivery=" << request.delivery_id << "\n";
         return create_delivery_res_t{request.delivery_id};
@@ -494,14 +503,16 @@ class server_assertion_http_handler_t
     {
         std::cerr << "deliverydispatch api: assert successful=" << request.successful_delivery_id
                   << " reassigned=" << request.reassigned_delivery_id << "\n";
-        const auto success =
-          _evidence.has_sequence (request.successful_delivery_id,
-                                  {delivery_status_t::assigned, delivery_status_t::accepted,
-                                   delivery_status_t::picked_up, delivery_status_t::delivered});
-        const auto reassigned =
-          _evidence.has_sequence (request.reassigned_delivery_id,
-                                  {delivery_status_t::assigned, delivery_status_t::reassigned,
-                                   delivery_status_t::accepted, delivery_status_t::delivered});
+        const auto success = _evidence.has_sequence (request.successful_delivery_id,
+                                                     {delivery_status_t::assigned,
+                                                      delivery_status_t::accepted,
+                                                      delivery_status_t::picked_up,
+                                                      delivery_status_t::delivered});
+        const auto reassigned = _evidence.has_sequence (request.reassigned_delivery_id,
+                                                        {delivery_status_t::assigned,
+                                                         delivery_status_t::reassigned,
+                                                         delivery_status_t::accepted,
+                                                         delivery_status_t::delivered});
         return {success && reassigned, _evidence.read_lines ()};
     }
 
@@ -557,14 +568,17 @@ int main (int argc, char **argv)
       .map_post<server_assertion_http_handler_t> ("/self-check/assert");
     app.add_hosted_service (std::make_unique<offer_deadline_sweeper_t> ());
     app.add_hosted_service (std::make_unique<route_readiness_service_t> (
-      sample_names_t::dispatch_node, sample_names_t::courier_actor_discovery,
+      sample_names_t::dispatch_node,
+      sample_names_t::courier_actor_discovery,
       std::vector<std::string>{sample_names_t::courier_actor_instance_1,
                                sample_names_t::courier_actor_instance_2}));
-    app.add_hosted_service (std::make_unique<actor_route_readiness_service_t> (
-      sample_names_t::courier_actor_discovery, sample_names_t::courier_actor_instance_1,
-      sample_names_t::courier_actor_instance_1));
-    app.add_hosted_service (std::make_unique<actor_route_readiness_service_t> (
-      sample_names_t::courier_actor_discovery, sample_names_t::courier_actor_instance_2,
-      sample_names_t::courier_actor_instance_2));
+    app.add_hosted_service (
+      std::make_unique<actor_route_readiness_service_t> (sample_names_t::courier_actor_discovery,
+                                                         sample_names_t::courier_actor_instance_1,
+                                                         sample_names_t::courier_actor_instance_1));
+    app.add_hosted_service (
+      std::make_unique<actor_route_readiness_service_t> (sample_names_t::courier_actor_discovery,
+                                                         sample_names_t::courier_actor_instance_2,
+                                                         sample_names_t::courier_actor_instance_2));
     return app.run (argc, argv);
 }

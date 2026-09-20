@@ -17,7 +17,11 @@ class BingoGame {
     this.winners = [];
   }
 
-  static restore(drawDeck: number[], drawnNumbers: readonly number[], winners: readonly string[]): BingoGame {
+  static restore(
+    drawDeck: number[],
+    drawnNumbers: readonly number[],
+    winners: readonly string[]
+  ): BingoGame {
     const game = new BingoGame(drawDeck.filter((number) => !drawnNumbers.includes(number)));
     game.drawnNumbers.push(...drawnNumbers);
     game.winners.push(...winners);
@@ -32,13 +36,17 @@ class BingoGame {
   }
 
   canDraw(players: BingoPlayerGameState[], requiredPlayers: number): boolean {
-    return players.length === requiredPlayers
-      && players.every((player) => player.card !== null)
-      && this.winners.length === 0
-      && this.drawDeck.length > 0;
+    return (
+      players.length === requiredPlayers &&
+      players.every((player) => player.card !== null) &&
+      this.winners.length === 0 &&
+      this.drawDeck.length > 0
+    );
   }
 
-  drawNext(players: BingoPlayerGameState[]): { number: number; drawSeq: number; finished: boolean } | null {
+  drawNext(
+    players: BingoPlayerGameState[]
+  ): { number: number; drawSeq: number; finished: boolean } | null {
     if (this.drawDeck.length === 0 || this.winners.length > 0) {
       return null;
     }
@@ -50,9 +58,7 @@ class BingoGame {
     for (const player of players) {
       const card = player.card;
       if (card === null) {
-        throw new Error(
-          `Actor '${player.actorId}' has no Bingo card for the current round.`
-        );
+        throw new Error(`Actor '${player.actorId}' has no Bingo card for the current round.`);
       }
       const lines = card.mark(number);
       if (lines > 0 && !this.winners.includes(player.actorId)) {

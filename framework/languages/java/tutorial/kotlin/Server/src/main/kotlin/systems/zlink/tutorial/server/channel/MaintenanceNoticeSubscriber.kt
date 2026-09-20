@@ -15,10 +15,7 @@ class MaintenanceNoticeSubscriber : ZLinkSuspendingPublishHandler<MaintenanceNot
 
     private val log = LoggerFactory.getLogger(MaintenanceNoticeSubscriber::class.java)
 
-    override suspend fun handle(
-        message: MaintenanceNotice,
-        context: ZLinkPublishMessageContext,
-    ) {
+    override suspend fun handle(message: MaintenanceNotice, context: ZLinkPublishMessageContext) {
         log.info("maintenance notice: {}", message.message)
     }
 }

@@ -6,11 +6,10 @@ public sealed record SampleTopology(
     string RedisEndpoint,
     string RedisKeyPrefix,
     string MeshEndpoint,
-    string StreamEndpoint)
+    string StreamEndpoint
+)
 {
-    public SampleSessionNode PrimarySession => new(
-        MeshEndpoint,
-        StreamEndpoint);
+    public SampleSessionNode PrimarySession => new(MeshEndpoint, StreamEndpoint);
 
     public static SampleRuntimeConfiguration LoadApi(string[] args) => Load(args, "api");
 
@@ -22,18 +21,20 @@ public sealed record SampleTopology(
     {
         if (args.Length != 2 || args[0] != "--config")
             throw new ArgumentException("Usage: --config PATH");
-        var settings = new ConfigurationBuilder()
-                           .AddJsonFile(Path.GetFullPath(args[1]), optional: false, reloadOnChange: false)
-                           .Build()
-                           .GetRequiredSection("Sample")
-                           .Get<SampleConfiguration>()
-                       ?? throw new InvalidOperationException("SupportChat Sample configuration is empty.");
+        var settings =
+            new ConfigurationBuilder()
+                .AddJsonFile(Path.GetFullPath(args[1]), optional: false, reloadOnChange: false)
+                .Build()
+                .GetRequiredSection("Sample")
+                .Get<SampleConfiguration>()
+            ?? throw new InvalidOperationException("SupportChat Sample configuration is empty.");
         settings.Validate(role);
         var topology = new SampleTopology(
             settings.RedisEndpoint,
             settings.RedisKeyPrefix,
             settings.MeshEndpoint,
-            settings.StreamEndpoint);
+            settings.StreamEndpoint
+        );
         return new SampleRuntimeConfiguration(topology, settings.LogDirectory);
     }
 }
@@ -75,6 +76,4 @@ public sealed class SampleConfiguration
     }
 }
 
-public sealed record SampleSessionNode(
-    string MeshEndpoint,
-    string StreamEndpoint);
+public sealed record SampleSessionNode(string MeshEndpoint, string StreamEndpoint);

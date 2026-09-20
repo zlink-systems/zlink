@@ -108,7 +108,6 @@ struct sample_topology_t
     {
         return api_name == "api-b" ? api_b_spot_route_endpoint : api_a_spot_route_endpoint;
     }
-
 };
 
 } // namespace zlink::samples::gamequest

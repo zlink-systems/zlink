@@ -3,10 +3,7 @@ import { BingoRoomSpot } from '../bingo-room-spot';
 import { PlayerActor } from '../../../Actors/player-actor';
 import { PacketNames } from '../../../../../../../Shared/Contracts/messages';
 import { StopObservingBingoEventsRes } from '../../../../../../../Shared/Contracts/bingo-messages.generated';
-import type {
-  ZLinkMessageContext,
-  ZLinkSpotActorRequestHandler
-} from '@zlink-systems/framework';
+import type { ZLinkMessageContext, ZLinkSpotActorRequestHandler } from '@zlink-systems/framework';
 import type { StopObservingBingoEventsReq } from '../../../../../../../Shared/Contracts/messages';
 
 @zlinkSpotActorRequestHandler({
@@ -14,8 +11,12 @@ import type { StopObservingBingoEventsReq } from '../../../../../../../Shared/Co
   spot: () => BingoRoomSpot,
   packetName: PacketNames.stopObservingBingoEventsReq
 })
-class StopObservingBingoEventsHandler
-  implements ZLinkSpotActorRequestHandler<BingoRoomSpot, PlayerActor, StopObservingBingoEventsReq, StopObservingBingoEventsRes> {
+class StopObservingBingoEventsHandler implements ZLinkSpotActorRequestHandler<
+  BingoRoomSpot,
+  PlayerActor,
+  StopObservingBingoEventsReq,
+  StopObservingBingoEventsRes
+> {
   async handle(
     spot: BingoRoomSpot,
     actor: PlayerActor,

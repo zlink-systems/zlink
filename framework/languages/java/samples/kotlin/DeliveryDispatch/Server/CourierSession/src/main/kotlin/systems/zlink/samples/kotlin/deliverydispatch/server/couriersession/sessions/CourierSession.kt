@@ -4,9 +4,9 @@ import systems.zlink.framework.actors.ActorRef
 import systems.zlink.framework.actors.ActorRefSnapshot
 import systems.zlink.framework.actors.ZLinkActorCreateResult
 import systems.zlink.framework.actors.ZLinkActorManager
+import systems.zlink.framework.kotlin.ZLinkSuspendingSession
 import systems.zlink.framework.kotlin.await
 import systems.zlink.framework.kotlin.kotlin
-import systems.zlink.framework.kotlin.ZLinkSuspendingSession
 import systems.zlink.framework.messaging.ZLinkMessage
 import systems.zlink.framework.streams.ZLinkSessionContext
 import systems.zlink.framework.streams.ZLinkSessionDispatchContext
@@ -25,17 +25,18 @@ class CourierSession(
 ) : ZLinkSuspendingSession() {
     override fun context(): ZLinkSessionContext = sessionContext
 
-    override suspend fun onConnectedSuspending() {
-    }
+    override suspend fun onConnectedSuspending() {}
 
     override suspend fun onDisconnectedSuspending() {
         for (actor in sessionContext.actors().bound()) actor.notifyDisconnected().await()
     }
 
-    override suspend fun onErrorSuspending(error: ZLinkStreamError) {
-    }
+    override suspend fun onErrorSuspending(error: ZLinkStreamError) {}
 
-    override suspend fun onDispatchSuspending(dispatch: ZLinkSessionDispatchContext, payload: ZLinkMessage) {
+    override suspend fun onDispatchSuspending(
+        dispatch: ZLinkSessionDispatchContext,
+        payload: ZLinkMessage,
+    ) {
         if (dispatch.packetName() == "BindCourierSessionReq") {
             handleBindCourierSessionReq(dispatch, payload)
             return
@@ -45,40 +46,54 @@ class CourierSession(
             return
         }
         val decision = payload.decode(CourierDecisionMsg::class.java)
-        val actor = sessionContext.actors().find(decision.courierId)
-            .orElseThrow { IllegalStateException("Courier actor is not bound: ${decision.courierId}") }
+        val actor =
+            sessionContext.actors().find(decision.courierId).orElseThrow {
+                IllegalStateException("Courier actor is not bound: ${decision.courierId}")
+            }
         actor.relay(dispatch, payload).await()
     }
 
     // --8<-- [start:doc-dd-session-bind]
-    private suspend fun handleBindCourierSessionReq(dispatch: ZLinkSessionDispatchContext, payload: ZLinkMessage) {
+    private suspend fun handleBindCourierSessionReq(
+        dispatch: ZLinkSessionDispatchContext,
+        payload: ZLinkMessage,
+    ) {
         val request = payload.decode(BindCourierSessionReq::class.java)
         val actorRef = findOrEnsureActor(request.courierId)
-        val actor = sessionContext.actors().find(actorRef.actorId).orElse(null)
-            ?: sessionContext.actors().bind(actorRef).await()
+        val actor =
+            sessionContext.actors().find(actorRef.actorId).orElse(null)
+                ?: sessionContext.actors().bind(actorRef).await()
         val snapshot = ActorRefSnapshot.from(actorRef)
-        actor.relay(
+        actor
+            .relay(
                 dispatch,
                 ZLinkMessage.of(
                     BindCourierSessionReq(
                         courierId = request.courierId,
                         actor = snapshot,
                         sessionRoute = sessionContext.sessionId(),
-                    ),
+                    )
                 ),
-            ).await()
-        sessionContext.client()
+            )
+            .await()
+        sessionContext
+            .client()
             .reply(BindCourierSessionRes(request.courierId, snapshot, sessionContext.sessionId()))
             .submit()
         println("deliverydispatch-courier bound courier=${request.courierId}")
     }
+
     // --8<-- [end:doc-dd-session-bind]
 
     private suspend fun findOrEnsureActor(courierId: String): ActorRef =
-        when (val result = actors.kotlin().getOrCreate(
-            courierId,
-            SampleNames.CourierActorType,
-        ).request(EnsureCourierActorReq(courierId)).await()) {
+        when (
+            val result =
+                actors
+                    .kotlin()
+                    .getOrCreate(courierId, SampleNames.CourierActorType)
+                    .request(EnsureCourierActorReq(courierId))
+                    .await()
+        ) {
             is ZLinkActorCreateResult.Existing -> result.actor
             is ZLinkActorCreateResult.Created -> result.actor
             is ZLinkActorCreateResult.Rejected ->

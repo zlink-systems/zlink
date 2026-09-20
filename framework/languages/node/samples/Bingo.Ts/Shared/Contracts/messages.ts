@@ -77,12 +77,16 @@ export enum BingoRoomStatus {
 export type NumberDrawnNotify = BingoNumberDrawnNotify;
 export type StateEnvelope = BingoGameStartedNotify | BingoGameEndedNotify;
 
-function actorDisplayName(actorId: string): string { return actorId.replace('player-', 'Player '); }
+function actorDisplayName(actorId: string): string {
+  return actorId.replace('player-', 'Player ');
+}
 function deterministicCard(actorId: string): number[] {
-  return {
-    [BingoSamplePlayers.player1]: [1, 2, 3, 4, 0, 6, 7, 8, 9],
-    [BingoSamplePlayers.player2]: [10, 11, 12, 13, 0, 14, 15, 1, 2]
-  }[actorId] ?? [1, 3, 5, 7, 0, 9, 11, 13, 15];
+  return (
+    {
+      [BingoSamplePlayers.player1]: [1, 2, 3, 4, 0, 6, 7, 8, 9],
+      [BingoSamplePlayers.player2]: [10, 11, 12, 13, 0, 14, 15, 1, 2]
+    }[actorId] ?? [1, 3, 5, 7, 0, 9, 11, 13, 15]
+  );
 }
 
 export {
@@ -125,5 +129,5 @@ export {
   SubmitBingoCardReq,
   SubmitBingoCardRes,
   actorDisplayName,
-  deterministicCard,
+  deterministicCard
 };

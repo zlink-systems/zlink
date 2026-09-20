@@ -1,8 +1,5 @@
 import { Injectable } from '@nestjs/common';
-import {
-  DeliverPlayNotificationEntryHandler,
-  PlayActor
-} from '../../Actors/play-actor';
+import { DeliverPlayNotificationEntryHandler, PlayActor } from '../../Actors/play-actor';
 import { MilestoneObserverRegistry } from './entry-spot-registries';
 import { PlayActorJoinGameHandler } from './Handlers/play-actor-join-game-handler';
 import { PlayActorObserveMilestoneHandler } from './Handlers/play-actor-observe-milestone-handler';
@@ -24,9 +21,7 @@ import {
 class PlayEntrySpot implements ZLinkEntrySpot<PlayActor> {
   readonly context!: ZLinkEntrySpotContext<PlayActor>;
 
-  constructor(
-    private readonly milestoneObservers: MilestoneObserverRegistry
-  ) {}
+  constructor(private readonly milestoneObservers: MilestoneObserverRegistry) {}
 
   configure(): void {
     // send: JoinGameMsg starts the deferred Room Spot join.
@@ -57,7 +52,10 @@ class PlayEntrySpot implements ZLinkEntrySpot<PlayActor> {
     this.milestoneObservers.remove(actor.actorId);
   }
 
-  async onCreateActor(actor: PlayActor, createRequest: ZLinkMessage): Promise<ZLinkActorCreateResponse> {
+  async onCreateActor(
+    actor: PlayActor,
+    createRequest: ZLinkMessage
+  ): Promise<ZLinkActorCreateResponse> {
     const { player } = createRequest.decode(PlayerActorCreateReq);
     actor.displayName = player.displayName;
     actor.level = player.level;
@@ -80,16 +78,17 @@ class PlayEntrySpot implements ZLinkEntrySpot<PlayActor> {
   }
 
   scheduleDestroy(actor: PlayActor): void {
-    void this.context.runIoWorker(async () => true).submit().then(async () => {
-      console.log(`entry spot: actor destroy started. actor=${actor.actorId}`);
-      await this.context.destroyActor(actor);
-      console.log(`tictactoe-lifecycle actor-destroy-complete actor=${actor.actorId}`);
-    });
+    void this.context
+      .runIoWorker(async () => true)
+      .submit()
+      .then(async () => {
+        console.log(`entry spot: actor destroy started. actor=${actor.actorId}`);
+        await this.context.destroyActor(actor);
+        console.log(`tictactoe-lifecycle actor-destroy-complete actor=${actor.actorId}`);
+      });
   }
   // --8<-- [end:doc-ttt-entry-destroy]
 }
 // --8<-- [end:doc-entry-spot]
 
-export {
-  PlayEntrySpot
-};
+export { PlayEntrySpot };

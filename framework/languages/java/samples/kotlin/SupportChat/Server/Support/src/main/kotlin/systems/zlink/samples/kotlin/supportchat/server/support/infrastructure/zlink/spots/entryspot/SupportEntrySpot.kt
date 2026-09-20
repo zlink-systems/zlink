@@ -1,11 +1,11 @@
 package systems.zlink.samples.kotlin.supportchat.server.support.infrastructure.zlink.spots.entryspot
 
-import systems.zlink.framework.kotlin.await
-import systems.zlink.framework.kotlin.ZLinkSuspendingEntrySpot
 import systems.zlink.framework.actors.ZLinkActorManager
+import systems.zlink.framework.kotlin.ZLinkSuspendingEntrySpot
+import systems.zlink.framework.kotlin.await
 import systems.zlink.framework.messaging.ZLinkMessage
-import systems.zlink.framework.spots.ZLinkEntrySpotContext
 import systems.zlink.framework.spots.ZLinkActorCreateResponse
+import systems.zlink.framework.spots.ZLinkEntrySpotContext
 import systems.zlink.samples.kotlin.supportchat.server.configuration.SupportChatRoles
 import systems.zlink.samples.kotlin.supportchat.server.support.application.AgentAssignmentService
 import systems.zlink.samples.kotlin.supportchat.server.support.infrastructure.zlink.actors.SupportActorDirectory
@@ -24,17 +24,18 @@ class SupportEntrySpot(
     ): ZLinkActorCreateResponse {
         val request = createRequest.decode(EnsureSupportUserActorReq::class.java)
         actor.setIdentity(request.displayName, request.role, request.participantId)
-        val actorRef = actorManager.find(actor.actorId).await().orElse(null)
-            ?: throw IllegalStateException("Support actor ref is not available. actor=${actor.actorId}")
+        val actorRef =
+            actorManager.find(actor.actorId).await().orElse(null)
+                ?: throw IllegalStateException(
+                    "Support actor ref is not available. actor=${actor.actorId}"
+                )
         directory.addOrUpdate(actor, actorRef)
         return ZLinkActorCreateResponse.accept()
     }
 
-    override suspend fun onJoinedActorSuspending(actor: SupportUserActor) {
-    }
+    override suspend fun onJoinedActorSuspending(actor: SupportUserActor) {}
 
-    override suspend fun onLeaveActorSuspending(actor: SupportUserActor) {
-    }
+    override suspend fun onLeaveActorSuspending(actor: SupportUserActor) {}
 
     // --8<-- [start:doc-sc-agent-disconnect]
     override suspend fun onDisconnectActorSuspending(actor: SupportUserActor) {

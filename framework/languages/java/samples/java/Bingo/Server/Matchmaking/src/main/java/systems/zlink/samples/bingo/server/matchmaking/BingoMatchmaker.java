@@ -1,11 +1,12 @@
 package systems.zlink.samples.bingo.server.matchmaking;
-import java.util.concurrent.CompletionStage;
+
+import systems.zlink.framework.spots.ZLinkInstanceSpot;
+import systems.zlink.framework.spots.ZLinkInstanceSpotContext;
 
 import java.time.Duration;
 import java.time.Instant;
+import java.util.concurrent.CompletionStage;
 import java.util.concurrent.atomic.AtomicInteger;
-import systems.zlink.framework.spots.ZLinkInstanceSpot;
-import systems.zlink.framework.spots.ZLinkInstanceSpotContext;
 
 public final class BingoMatchmaker implements ZLinkInstanceSpot {
     private static final Duration IDLE_CHECK_PERIOD = Duration.ofSeconds(5);
@@ -26,11 +27,11 @@ public final class BingoMatchmaker implements ZLinkInstanceSpot {
     @Override
     public CompletionStage<Void> onInitialize() {
         return context.addTimer(
-                "matchmaker-idle-close",
-                IDLE_CHECK_PERIOD,
-                BingoMatchmakerIdleTimerHandler.class,
-                null)
-            .thenApply(ignored -> null);
+                        "matchmaker-idle-close",
+                        IDLE_CHECK_PERIOD,
+                        BingoMatchmakerIdleTimerHandler.class,
+                        null)
+                .thenApply(ignored -> null);
     }
 
     void beginRequest() {
@@ -46,7 +47,7 @@ public final class BingoMatchmaker implements ZLinkInstanceSpot {
     // --8<-- [start:doc-bingo-matchmaker-idle]
     void closeIfIdle() {
         if (inFlight.get() == 0
-            && Duration.between(lastActivity, Instant.now()).compareTo(IDLE_CLOSE_AFTER) >= 0) {
+                && Duration.between(lastActivity, Instant.now()).compareTo(IDLE_CLOSE_AFTER) >= 0) {
             context.close();
         }
     }

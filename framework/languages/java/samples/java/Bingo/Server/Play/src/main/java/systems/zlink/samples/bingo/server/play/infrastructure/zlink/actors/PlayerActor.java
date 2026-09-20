@@ -1,8 +1,5 @@
 package systems.zlink.samples.bingo.server.play.infrastructure.zlink.actors;
-import java.util.HashSet;
-import java.util.Set;
-import java.util.concurrent.CompletableFuture;
-import java.util.concurrent.CompletionStage;
+
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -12,6 +9,11 @@ import systems.zlink.framework.actors.ZLinkActorJoinCompletion;
 import systems.zlink.framework.actors.ZLinkActorJoinOperationId;
 import systems.zlink.samples.bingo.shared.contracts.Messages;
 
+import java.util.HashSet;
+import java.util.Set;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CompletionStage;
+
 public final class PlayerActor implements ZLinkActor {
     private static final Logger logger = LoggerFactory.getLogger(PlayerActor.class);
 
@@ -20,8 +22,7 @@ public final class PlayerActor implements ZLinkActor {
     private String displayName;
     private String roomId = "";
     private String pendingRoomId;
-    private final Set<ZLinkActorJoinOperationId>
-        completedJoinOperations = new HashSet<>();
+    private final Set<ZLinkActorJoinOperationId> completedJoinOperations = new HashSet<>();
     private boolean destroyAfterEntrySpotJoin;
     private boolean disconnected;
 
@@ -60,14 +61,13 @@ public final class PlayerActor implements ZLinkActor {
     }
 
     @Override
-    public CompletionStage<Void> onJoinCompleted(
-        ZLinkActorJoinCompletion completion) {
-        ZLinkActorJoinOperationId operationId = completion
-            instanceof ZLinkActorJoinCompletion.Accepted accepted
-                ? accepted.operationId()
-                : completion instanceof ZLinkActorJoinCompletion.Rejected rejected
-                    ? rejected.operationId()
-                    : ((ZLinkActorJoinCompletion.Failed) completion).operationId();
+    public CompletionStage<Void> onJoinCompleted(ZLinkActorJoinCompletion completion) {
+        ZLinkActorJoinOperationId operationId =
+                completion instanceof ZLinkActorJoinCompletion.Accepted accepted
+                        ? accepted.operationId()
+                        : completion instanceof ZLinkActorJoinCompletion.Rejected rejected
+                                ? rejected.operationId()
+                                : ((ZLinkActorJoinCompletion.Failed) completion).operationId();
         if (!completedJoinOperations.add(operationId)) {
             return CompletableFuture.completedFuture(null);
         }
@@ -78,8 +78,7 @@ public final class PlayerActor implements ZLinkActor {
             return CompletableFuture.completedFuture(null);
         }
 
-        Messages.BingoRoomJoinRes joined = accepted.reply()
-            .decode(Messages.BingoRoomJoinRes.class);
+        Messages.BingoRoomJoinRes joined = accepted.reply().decode(Messages.BingoRoomJoinRes.class);
         if (matchedRoomId == null || matchedRoomId.isBlank()) {
             matchedRoomId = joined.getState().getRoomId();
         }
@@ -110,9 +109,7 @@ public final class PlayerActor implements ZLinkActor {
 
     // --8<-- [start:doc-bingo-bound-push]
     public CompletionStage<Void> push(Object message) {
-        return context.boundSession()
-            .send(message)
-            .submit();
+        return context.boundSession().send(message).submit();
     }
     // --8<-- [end:doc-bingo-bound-push]
 }

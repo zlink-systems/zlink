@@ -7,12 +7,12 @@ import java.nio.file.Path;
 import java.util.Properties;
 
 public record GameQuestClientOptions(
-    String apiAStreamEndpoint,
-    String apiBStreamEndpoint,
-    String apiAHttpEndpoint,
-    String apiBHttpEndpoint,
-    String scenario,
-    String ownerUnavailableReleaseFile) {
+        String apiAStreamEndpoint,
+        String apiBStreamEndpoint,
+        String apiAHttpEndpoint,
+        String apiBHttpEndpoint,
+        String scenario,
+        String ownerUnavailableReleaseFile) {
 
     public static GameQuestClientOptions load(String[] args) throws IOException {
         if (args.length != 2 || !"--config".equals(args[0]) || args[1].isBlank()) {
@@ -23,12 +23,12 @@ public record GameQuestClientOptions(
             properties.load(reader);
         }
         return new GameQuestClientOptions(
-            required(properties, "sample.apiAStreamEndpoint"),
-            required(properties, "sample.apiBStreamEndpoint"),
-            required(properties, "sample.apiAHttpEndpoint"),
-            required(properties, "sample.apiBHttpEndpoint"),
-            properties.getProperty("sample.scenario", "full"),
-            properties.getProperty("sample.ownerUnavailableReleaseFile", ""));
+                required(properties, "sample.apiAStreamEndpoint"),
+                required(properties, "sample.apiBStreamEndpoint"),
+                required(properties, "sample.apiAHttpEndpoint"),
+                required(properties, "sample.apiBHttpEndpoint"),
+                properties.getProperty("sample.scenario", "full"),
+                properties.getProperty("sample.ownerUnavailableReleaseFile", ""));
     }
 
     private static String required(Properties properties, String name) {

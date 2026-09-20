@@ -1,34 +1,33 @@
 package systems.zlink.samples.bingo.server.session;
 
+import io.micrometer.core.instrument.MeterRegistry;
+
 import org.springframework.boot.autoconfigure.SpringBootApplication;
 import org.springframework.boot.context.properties.EnableConfigurationProperties;
 import org.springframework.context.annotation.Bean;
+
+import systems.zlink.framework.codecs.protobuf.ZLinkProtobufCodec;
 import systems.zlink.framework.configuration.ZLinkMeshNodeBuilder;
 import systems.zlink.framework.configuration.ZLinkMessageFlowLogMode;
+import systems.zlink.framework.locations.redis.ZLinkRedisLocationStore;
+import systems.zlink.framework.monitoring.ZLinkRouteMeshRuntime;
 import systems.zlink.framework.spring.EnableZLinkFramework;
 import systems.zlink.framework.spring.ZLinkFrameworkConfigurer;
-import systems.zlink.framework.codecs.protobuf.ZLinkProtobufCodec;
-import systems.zlink.framework.locations.redis.ZLinkRedisLocationStore;
-import systems.zlink.samples.bingo.server.configuration.SampleLocationStore;
-import systems.zlink.samples.bingo.server.configuration.SampleApplication;
+import systems.zlink.samples.bingo.server.configuration.BingoMetricsReporter;
 import systems.zlink.samples.bingo.server.configuration.BingoReadinessReporter;
-import systems.zlink.samples.bingo.server.session.sessions.BingoSession;
+import systems.zlink.samples.bingo.server.configuration.SampleApplication;
+import systems.zlink.samples.bingo.server.configuration.SampleLocationStore;
 import systems.zlink.samples.bingo.server.configuration.SampleNames;
 import systems.zlink.samples.bingo.server.configuration.SampleTopology;
-import systems.zlink.samples.bingo.server.configuration.BingoMetricsReporter;
-import io.micrometer.core.instrument.MeterRegistry;
-import systems.zlink.framework.monitoring.ZLinkRouteMeshRuntime;
-
-
+import systems.zlink.samples.bingo.server.session.sessions.BingoSession;
 
 @EnableZLinkFramework
 @EnableConfigurationProperties(SampleTopology.class)
 @SpringBootApplication(
-    proxyBeanMethods = false,
-    scanBasePackageClasses = SessionServerApplication.class)
+        proxyBeanMethods = false,
+        scanBasePackageClasses = SessionServerApplication.class)
 public final class SessionServerApplication {
-    private SessionServerApplication() {
-    }
+    private SessionServerApplication() {}
 
     public static AutoCloseable run(String configPath) {
         return SampleApplication.start(SessionServerApplication.class, configPath)::close;
@@ -38,21 +37,19 @@ public final class SessionServerApplication {
     ZLinkFrameworkConfigurer sessionFramework(SampleTopology topology) {
         return options -> {
             options.addHandlersFromPackageOf(SessionServerApplication.class);
-            options.configureDispatch()
-                .messageFlow(ZLinkMessageFlowLogMode.NORMAL);
+            options.configureDispatch().messageFlow(ZLinkMessageFlowLogMode.NORMAL);
             options.codecs().use(ZLinkProtobufCodec.defaultCodec());
             options.configureLocations();
             // --8<-- [start:doc-bingo-session-register]
             ZLinkMeshNodeBuilder node = options.addRouteMesh(SampleNames.Mesh);
-            node.listen(topology.selectedSessionRouterEndpoint())
-                .setRoutingIdPrefix("session");
+            node.listen(topology.selectedSessionRouterEndpoint()).setRoutingIdPrefix("session");
             node.objects().client();
             options.addClientServerChannel(SampleNames.ApiChannel).client();
             node.channelName(SampleNames.RoomSpotDiscovery).client();
             options.addStreamNode(SampleNames.StreamNode)
-                .bind(topology.selectedStreamEndpoint())
-                .enableActorDispatch()
-                .registerSession(BingoSession.class);
+                    .bind(topology.selectedStreamEndpoint())
+                    .enableActorDispatch()
+                    .registerSession(BingoSession.class);
             // --8<-- [end:doc-bingo-session-register]
         };
     }
@@ -69,8 +66,7 @@ public final class SessionServerApplication {
 
     @Bean(destroyMethod = "close")
     BingoReadinessReporter bingoReadinessReporter(
-        SampleTopology topology,
-        ZLinkRouteMeshRuntime meshes) {
+            SampleTopology topology, ZLinkRouteMeshRuntime meshes) {
         return BingoReadinessReporter.session(topology, meshes);
     }
 }

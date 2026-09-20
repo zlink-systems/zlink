@@ -8,10 +8,7 @@ import systems.zlink.samples.kotlin.bingo.shared.contracts.marks
 import systems.zlink.samples.kotlin.bingo.shared.contracts.players
 import systems.zlink.samples.kotlin.bingo.shared.contracts.winners
 
-class BingoRoomGame(
-    private val roomId: String,
-    private val settings: BingoRoomSettings,
-) {
+class BingoRoomGame(private val roomId: String, private val settings: BingoRoomSettings) {
     private val players = mutableListOf<BingoRoomPlayer>()
     private val drawDeck = ArrayDeque<Int>()
     private val drawnNumbers = mutableListOf<Int>()
@@ -24,12 +21,7 @@ class BingoRoomGame(
         }
     }
 
-    fun join(
-        actorId: String,
-        displayName: String,
-        wins: Int,
-        losses: Int,
-    ): Change {
+    fun join(actorId: String, displayName: String, wins: Int, losses: Int): Change {
         val existing = player(actorId)
         if (existing != null) {
             return Change(snapshot(), emptyList(), false)
@@ -62,15 +54,13 @@ class BingoRoomGame(
         if (status != WaitingForPlayers || players.size >= settings.requiredPlayers) {
             throw IllegalStateException("Room $roomId cannot accept more players.")
         }
-        val previewPlayers = players + BingoRoomPlayer(actorId, displayName, players.size, null, 0, 0)
+        val previewPlayers =
+            players + BingoRoomPlayer(actorId, displayName, players.size, null, 0, 0)
         val previewStatus = if (previewPlayers.size == settings.requiredPlayers) Running else status
         return snapshot(previewPlayers, previewStatus)
     }
 
-    fun submitCard(
-        actorId: String,
-        submittedCard: List<Int>,
-    ): Change {
+    fun submitCard(actorId: String, submittedCard: List<Int>): Change {
         val index = playerIndex(actorId)
         if (status != Running) {
             throw IllegalStateException("bingo card can be submitted only after the room starts")
@@ -79,14 +69,15 @@ class BingoRoomGame(
         if (current.card != null) {
             throw IllegalStateException("bingo card was already submitted")
         }
-        players[index] = BingoRoomPlayer(
-            current.actorId,
-            current.displayName,
-            current.seat,
-            BingoCard.from(submittedCard),
-            current.wins,
-            current.losses,
-        )
+        players[index] =
+            BingoRoomPlayer(
+                current.actorId,
+                current.displayName,
+                current.seat,
+                BingoCard.from(submittedCard),
+                current.wins,
+                current.losses,
+            )
         return Change(snapshot(), emptyList(), allCardsSubmitted())
     }
 
@@ -114,10 +105,11 @@ class BingoRoomGame(
 
         val state = snapshot()
         val events = numberDrawnEvents(state, number).toMutableList()
-        events += eventsForAll(
-            if (status == Finished) BingoRoomEventKind.GAME_ENDED else BingoRoomEventKind.STATE,
-            state,
-        )
+        events +=
+            eventsForAll(
+                if (status == Finished) BingoRoomEventKind.GAME_ENDED else BingoRoomEventKind.STATE,
+                state,
+            )
         return Change(state, events, false)
     }
 
@@ -177,10 +169,7 @@ class BingoRoomGame(
             )
         }
 
-    private fun numberDrawnEvents(
-        state: BingoRoomState,
-        number: Int,
-    ): List<BingoRoomEvent> =
+    private fun numberDrawnEvents(state: BingoRoomState, number: Int): List<BingoRoomEvent> =
         players.map { player ->
             BingoRoomEvent(
                 BingoRoomEventKind.NUMBER_DRAWN,
@@ -199,16 +188,7 @@ class BingoRoomGame(
         state: BingoRoomState,
     ): List<BingoRoomEvent> =
         players.map { player ->
-            BingoRoomEvent(
-                kind,
-                player.actorId,
-                state,
-                null,
-                null,
-                -1,
-                false,
-                0,
-            )
+            BingoRoomEvent(kind, player.actorId, state, null, null, -1, false, 0)
         }
 
     data class Change(
@@ -226,22 +206,26 @@ class BingoRoomGame(
             roomId: String,
             settings: BingoRoomSettings,
             state: BingoRoomState,
-        ): BingoRoomGame = BingoRoomGame(roomId, settings).also { game ->
-            game.status = state.status
-            game.drawnNumbers += state.drawnNumbers
-            game.drawDeck.removeAll(state.drawnNumbers.toSet())
-            game.winners += state.winners
-            state.players.forEach { player ->
-                game.players += BingoRoomPlayer(
-                    actorId = player.actorId,
-                    displayName = player.displayName,
-                    seat = player.seat,
-                    card = player.card.takeIf { it.isNotEmpty() }
-                        ?.let { BingoCard.restore(it, player.marks) },
-                    wins = player.wins,
-                    losses = player.losses,
-                )
+        ): BingoRoomGame =
+            BingoRoomGame(roomId, settings).also { game ->
+                game.status = state.status
+                game.drawnNumbers += state.drawnNumbers
+                game.drawDeck.removeAll(state.drawnNumbers.toSet())
+                game.winners += state.winners
+                state.players.forEach { player ->
+                    game.players +=
+                        BingoRoomPlayer(
+                            actorId = player.actorId,
+                            displayName = player.displayName,
+                            seat = player.seat,
+                            card =
+                                player.card
+                                    .takeIf { it.isNotEmpty() }
+                                    ?.let { BingoCard.restore(it, player.marks) },
+                            wins = player.wins,
+                            losses = player.losses,
+                        )
+                }
             }
-        }
     }
 }

@@ -10,13 +10,15 @@ import { SHOPPINGMALL_ROLE } from '../../../../../order-workflow-tokens';
 import { OrderWorkflowSpot } from '../order-workflow-spot';
 
 @Injectable()
-@zlinkSpotPacketHandler({ spot: () => OrderWorkflowSpot, packetName: 'VerifyExpectedVersionFenceReq' })
-class VerifyExpectedVersionFenceHandler
-  implements ZLinkSpotRequestHandler<
-    OrderWorkflowSpot,
-    VerifyExpectedVersionFenceReq,
-    VerifyExpectedVersionFenceRes
-  > {
+@zlinkSpotPacketHandler({
+  spot: () => OrderWorkflowSpot,
+  packetName: 'VerifyExpectedVersionFenceReq'
+})
+class VerifyExpectedVersionFenceHandler implements ZLinkSpotRequestHandler<
+  OrderWorkflowSpot,
+  VerifyExpectedVersionFenceReq,
+  VerifyExpectedVersionFenceRes
+> {
   constructor(
     private readonly workflow: OrderWorkflowService,
     @Inject(SHOPPINGMALL_ROLE) private readonly role: string

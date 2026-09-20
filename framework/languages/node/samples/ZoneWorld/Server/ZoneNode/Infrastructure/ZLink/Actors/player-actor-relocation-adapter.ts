@@ -16,16 +16,18 @@ type PlayerTransferState = {
 class PlayerActorRelocationAdapter implements ZLinkActorRelocationAdapter<PlayerActor> {
   // --8<-- [start:doc-zw-actor-capture]
   async capture(actor: PlayerActor): Promise<Uint8Array> {
-    return new TextEncoder().encode(JSON.stringify({
-      x: actor.x,
-      y: actor.y,
-      zoneId: actor.zoneId,
-      isBot: actor.isBot,
-      dirX: actor.dirX,
-      dirY: actor.dirY,
-      pendingJoin: actor.pendingJoin(),
-      processedJoinOperations: actor.captureProcessedJoinOperations()
-    } satisfies PlayerTransferState));
+    return new TextEncoder().encode(
+      JSON.stringify({
+        x: actor.x,
+        y: actor.y,
+        zoneId: actor.zoneId,
+        isBot: actor.isBot,
+        dirX: actor.dirX,
+        dirY: actor.dirY,
+        pendingJoin: actor.pendingJoin(),
+        processedJoinOperations: actor.captureProcessedJoinOperations()
+      } satisfies PlayerTransferState)
+    );
   }
   // --8<-- [end:doc-zw-actor-capture]
 

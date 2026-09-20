@@ -1,6 +1,9 @@
 import { ZLinkModule, zlinkFramework, zlinkModule } from '@zlink-systems/nestjs';
 import { SampleNames } from '../Configuration/sample-names';
-import { createSupportChatLocationStore, supportChatLocationOptions } from '../Configuration/location-store';
+import {
+  createSupportChatLocationStore,
+  supportChatLocationOptions
+} from '../Configuration/location-store';
 import { AgentAssignmentService } from './Application/ConversationAssignment/agent-assignment-service';
 import { AgentAvailabilityDirectory } from './Application/ConversationAssignment/agent-availability-directory';
 import { SupportConversationAllocator } from './Application/ConversationAssignment/support-conversation-allocator';
@@ -9,7 +12,10 @@ import { SupportUserActorFactory } from './Infrastructure/ZLink/Actors/support-u
 import { ConversationSpot } from './Infrastructure/ZLink/Spots/ConversationSpot/conversation-spot';
 import { SupportNotificationPublisher } from './Infrastructure/ZLink/Spots/ConversationSpot/Notifications/support-notification-publisher';
 import { SupportEntrySpot } from './Infrastructure/ZLink/Spots/EntrySpot/support-entry-spot';
-import { SUPPORT_CHAT_CONFIG, createSupportChatConfigurationModule } from '../Configuration/sample-config';
+import {
+  SUPPORT_CHAT_CONFIG,
+  createSupportChatConfigurationModule
+} from '../Configuration/sample-config';
 import type { SupportChatServerConfig } from '../Configuration/sample-config';
 
 function createSupportChatSupportModule() {
@@ -29,13 +35,14 @@ function createSupportChatSupportModule() {
         inject: [SUPPORT_CHAT_CONFIG],
         useFactory: (config: SupportChatServerConfig) => {
           const builder = zlinkFramework();
-          builder.configureDispatch()
-            .messageFlow('normal');
+          builder.configureDispatch().messageFlow('normal');
           builder.addLocationStore(createSupportChatLocationStore(config));
           supportChatLocationOptions(builder.configureLocations());
           // --8<-- [start:doc-sc-support-register]
-          const mesh = builder.addRouteMesh(SampleNames.conversationSpotMesh)
-              .listen(config.supportSpotEndpoint).setRoutingIdPrefix('support-owner');
+          const mesh = builder
+            .addRouteMesh(SampleNames.conversationSpotMesh)
+            .listen(config.supportSpotEndpoint)
+            .setRoutingIdPrefix('support-owner');
           const objectServer = mesh.objects().server();
           objectServer.addEntrySpot(SupportEntrySpot);
           objectServer.addSpotFactory(

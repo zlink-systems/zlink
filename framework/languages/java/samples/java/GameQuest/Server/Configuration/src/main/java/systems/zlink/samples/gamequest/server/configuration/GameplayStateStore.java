@@ -3,8 +3,10 @@ package systems.zlink.samples.gamequest.server.configuration;
 import io.lettuce.core.RedisClient;
 import io.lettuce.core.api.StatefulRedisConnection;
 import io.lettuce.core.api.sync.RedisCommands;
-import java.util.List;
+
 import systems.zlink.samples.gamequest.shared.contracts.Messages;
+
+import java.util.List;
 
 public final class GameplayStateStore implements AutoCloseable {
     private final RedisClient client;
@@ -30,8 +32,7 @@ public final class GameplayStateStore implements AutoCloseable {
             case "mission" -> redis.sadd(missionsKey(event.playerId()), event.value());
             case "feature" -> redis.sadd(featuresKey(event.playerId()), event.value());
             case "area" -> redis.sadd(areasKey(event.playerId()), event.value());
-            default -> {
-            }
+            default -> {}
         }
     }
 
@@ -48,23 +49,31 @@ public final class GameplayStateStore implements AutoCloseable {
     }
 
     public Messages.GetGameplaySnapshotRes snapshot(String playerId) {
-        List<Messages.KillCountSnapshot> kills = redis.hgetall(killsKey(playerId)).entrySet().stream()
-            .map(entry -> new Messages.KillCountSnapshot(
-                entry.getKey(), null, count(entry.getValue())))
-            .toList();
-        List<Messages.ItemCountSnapshot> items = redis.hgetall(itemsKey(playerId)).entrySet().stream()
-            .map(entry -> new Messages.ItemCountSnapshot(entry.getKey(), count(entry.getValue())))
-            .toList();
+        List<Messages.KillCountSnapshot> kills =
+                redis.hgetall(killsKey(playerId)).entrySet().stream()
+                        .map(
+                                entry ->
+                                        new Messages.KillCountSnapshot(
+                                                entry.getKey(), null, count(entry.getValue())))
+                        .toList();
+        List<Messages.ItemCountSnapshot> items =
+                redis.hgetall(itemsKey(playerId)).entrySet().stream()
+                        .map(
+                                entry ->
+                                        new Messages.ItemCountSnapshot(
+                                                entry.getKey(), count(entry.getValue())))
+                        .toList();
         List<String> missions = redis.smembers(missionsKey(playerId)).stream().sorted().toList();
         List<String> features = redis.smembers(featuresKey(playerId)).stream().sorted().toList();
         List<String> areas = redis.smembers(areasKey(playerId)).stream().sorted().toList();
-        long snapshotVersion = kills.stream().mapToLong(Messages.KillCountSnapshot::count).sum()
-            + items.stream().mapToLong(Messages.ItemCountSnapshot::count).sum()
-            + missions.size()
-            + features.size()
-            + areas.size();
+        long snapshotVersion =
+                kills.stream().mapToLong(Messages.KillCountSnapshot::count).sum()
+                        + items.stream().mapToLong(Messages.ItemCountSnapshot::count).sum()
+                        + missions.size()
+                        + features.size()
+                        + areas.size();
         return new Messages.GetGameplaySnapshotRes(
-            playerId, kills, items, missions, features, areas, snapshotVersion);
+                playerId, kills, items, missions, features, areas, snapshotVersion);
     }
 
     @Override

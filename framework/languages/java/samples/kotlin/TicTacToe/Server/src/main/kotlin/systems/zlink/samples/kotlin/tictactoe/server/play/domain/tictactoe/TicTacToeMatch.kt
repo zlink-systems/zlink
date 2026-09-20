@@ -4,10 +4,7 @@ import java.time.Duration
 import java.time.Instant
 import systems.zlink.samples.kotlin.tictactoe.shared.contracts.GameState
 
-class TicTacToeMatch(
-    private val roomId: String,
-    private val turnTimeout: Duration,
-) {
+class TicTacToeMatch(private val roomId: String, private val turnTimeout: Duration) {
     private val board = TicTacToeBoard()
     private val players = linkedMapOf<String, String>()
     private var status = "WaitingForPlayers"
@@ -23,11 +20,12 @@ class TicTacToeMatch(
             return JoinChange(snapshot(), existingMark, isNewPlayer = false)
         }
 
-        val mark = when (players.size) {
-            0 -> "X"
-            1 -> "O"
-            else -> throw IllegalStateException("tic-tac-toe game already has two players")
-        }
+        val mark =
+            when (players.size) {
+                0 -> "X"
+                1 -> "O"
+                else -> throw IllegalStateException("tic-tac-toe game already has two players")
+            }
 
         players[actorId] = mark
         if (players.size == 2 && status == "WaitingForPlayers") {
@@ -45,17 +43,22 @@ class TicTacToeMatch(
         check(players.size < 2) { "tic-tac-toe game already has two players" }
 
         val mark = if (players.isEmpty()) "X" else "O"
-        val state = GameState(
-            roomId = roomId,
-            board = board.snapshot(),
-            status = if (players.size == 1) "InProgress" else status,
-            winner = winner,
-            nextTurn = nextTurn,
-            xActorId = if (mark == "X") actorId else players.entries.firstOrNull { it.value == "X" }?.key,
-            oActorId = if (mark == "O") actorId else players.entries.firstOrNull { it.value == "O" }?.key,
-            lastMoveActorId = lastMoveActorId,
-            lastMoveCell = lastMoveCell,
-        )
+        val state =
+            GameState(
+                roomId = roomId,
+                board = board.snapshot(),
+                status = if (players.size == 1) "InProgress" else status,
+                winner = winner,
+                nextTurn = nextTurn,
+                xActorId =
+                    if (mark == "X") actorId
+                    else players.entries.firstOrNull { it.value == "X" }?.key,
+                oActorId =
+                    if (mark == "O") actorId
+                    else players.entries.firstOrNull { it.value == "O" }?.key,
+                lastMoveActorId = lastMoveActorId,
+                lastMoveCell = lastMoveCell,
+            )
         return JoinChange(state, mark, isNewPlayer = true)
     }
 
@@ -128,21 +131,11 @@ class TicTacToeMatch(
         turnDeadline = now.plus(turnTimeout)
     }
 
-    data class JoinChange(
-        val state: GameState,
-        val mark: String,
-        val isNewPlayer: Boolean,
-    )
+    data class JoinChange(val state: GameState, val mark: String, val isNewPlayer: Boolean)
 
-    data class MoveChange(
-        val before: GameState,
-        val after: GameState,
-    )
+    data class MoveChange(val before: GameState, val after: GameState)
 
-    data class TickChange(
-        val state: GameState,
-        val changed: Boolean,
-    )
+    data class TickChange(val state: GameState, val changed: Boolean)
 }
 
 private class TicTacToeBoard {
@@ -165,15 +158,16 @@ private class TicTacToeBoard {
     }
 
     private companion object {
-        private val WinningLines = arrayOf(
-            intArrayOf(0, 1, 2),
-            intArrayOf(3, 4, 5),
-            intArrayOf(6, 7, 8),
-            intArrayOf(0, 3, 6),
-            intArrayOf(1, 4, 7),
-            intArrayOf(2, 5, 8),
-            intArrayOf(0, 4, 8),
-            intArrayOf(2, 4, 6),
-        )
+        private val WinningLines =
+            arrayOf(
+                intArrayOf(0, 1, 2),
+                intArrayOf(3, 4, 5),
+                intArrayOf(6, 7, 8),
+                intArrayOf(0, 3, 6),
+                intArrayOf(1, 4, 7),
+                intArrayOf(2, 5, 8),
+                intArrayOf(0, 4, 8),
+                intArrayOf(2, 4, 6),
+            )
     }
 }

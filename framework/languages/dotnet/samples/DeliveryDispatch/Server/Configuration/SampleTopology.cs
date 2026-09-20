@@ -29,7 +29,14 @@ public sealed class SampleTopologyOptions
         var courierSession = role == "courier-session";
         var courierNode1 = role == SampleNames.CourierNode1;
         var courierNode2 = role == SampleNames.CourierNode2;
-        if (!dispatch && !tracking && !customer && !courierSession && !courierNode1 && !courierNode2)
+        if (
+            !dispatch
+            && !tracking
+            && !customer
+            && !courierSession
+            && !courierNode1
+            && !courierNode2
+        )
             throw new InvalidOperationException($"Unknown DeliveryDispatch server role '{role}'.");
         return new SampleTopology(
             Required(RedisEndpoint, nameof(RedisEndpoint)),
@@ -38,7 +45,8 @@ public sealed class SampleTopologyOptions
             Required(MeshEndpoint, nameof(MeshEndpoint)),
             Select(customer, CustomerStreamEndpoint, nameof(CustomerStreamEndpoint)),
             Select(courierSession, CourierStreamEndpoint, nameof(CourierStreamEndpoint)),
-            courierNode1 || courierNode2);
+            courierNode1 || courierNode2
+        );
     }
 
     private static string Select(bool required, string value, string name) =>
@@ -60,4 +68,5 @@ public sealed record SampleTopology(
     string MeshEndpoint,
     string CustomerStreamEndpoint,
     string CourierStreamEndpoint,
-    bool CourierActorNode);
+    bool CourierActorNode
+);

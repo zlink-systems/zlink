@@ -192,6 +192,10 @@ Log 한 줄은 진단 자료일 뿐 업무 성공을 대신하지 않는다. Pub
 한 언어에서 같은 의미를 구현할 수 없으면 sample 흐름을 그 언어에 맞게 약화하지 않는다. 누락된
 public API와 사용자가 체감하는 차이를 feature map 또는 구현 차이 문서에 기록한다.
 
+소스의 줄바꿈은 손으로 맞추지 않는다. 가이드가 발췌하는 tutorial·sample 소스는
+[소스 줄바꿈 규칙과 포매터](../dev/source-formatting.ko.md)의 `scripts/format/format.sh` 출력이
+그대로 문서의 모양이 된다.
+
 ### 3.9 작성 후 contract review
 
 초안을 완성한 뒤에는 [작성 후 contract review](#8-작성-후-contract-review)를 반드시 수행한다.

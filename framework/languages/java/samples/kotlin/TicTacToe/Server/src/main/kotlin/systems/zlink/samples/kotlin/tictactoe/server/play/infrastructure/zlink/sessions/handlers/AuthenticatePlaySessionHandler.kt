@@ -2,12 +2,12 @@ package systems.zlink.samples.kotlin.tictactoe.server.play.infrastructure.zlink.
 
 import kotlinx.coroutines.future.await
 import org.slf4j.LoggerFactory
-import systems.zlink.framework.actors.ZLinkActorManager
 import systems.zlink.framework.actors.ActorRef
 import systems.zlink.framework.actors.ZLinkActorCreateResult
+import systems.zlink.framework.actors.ZLinkActorManager
 import systems.zlink.framework.channels.ZLinkClient
-import systems.zlink.framework.kotlin.kotlin
 import systems.zlink.framework.kotlin.ZLinkSuspendingTypedSessionPacketHandler
+import systems.zlink.framework.kotlin.kotlin
 import systems.zlink.framework.streams.ZLinkSessionContext
 import systems.zlink.framework.streams.ZLinkSessionDispatchContext
 import systems.zlink.samples.kotlin.tictactoe.server.configuration.SampleNames
@@ -32,16 +32,22 @@ class AuthenticatePlaySessionHandler(
         request: AuthenticateReq,
     ) {
         require(request.accessToken.isNotBlank()) { "access token is required" }
-        val authenticated = channels
-            .requestToChannel(SampleNames.ApiChannel, AuthenticatePlayerReq(request.accessToken))
-            .timeout(SampleNames.RequestTimeout)
-            .submit(AuthenticatePlayerRes::class.java)
-            .await()
+        val authenticated =
+            channels
+                .requestToChannel(
+                    SampleNames.ApiChannel,
+                    AuthenticatePlayerReq(request.accessToken),
+                )
+                .timeout(SampleNames.RequestTimeout)
+                .submit(AuthenticatePlayerRes::class.java)
+                .await()
         // --8<-- [start:doc-ttt-session-bind]
-        val playActor = actors.kotlin().getOrCreate(
-            authenticated.player.actorId,
-            SampleNames.PlayActor,
-        ).request(PlayerActorCreateReq(authenticated.player)).await()
+        val playActor =
+            actors
+                .kotlin()
+                .getOrCreate(authenticated.player.actorId, SampleNames.PlayActor)
+                .request(PlayerActorCreateReq(authenticated.player))
+                .await()
         val resolvedActor = requireActor(playActor)
         val boundActor = context.actors().bind(requireActor(playActor)).await()
         // --8<-- [end:doc-ttt-session-bind]
@@ -49,22 +55,18 @@ class AuthenticatePlaySessionHandler(
             "Bound ActorRef does not match the resolved ActorRef for '${authenticated.player.actorId}'."
         }
         if (playActor is ZLinkActorCreateResult.Existing) {
-            logger.info(
-                "tictactoe-lifecycle actor-bound actor={}",
-                boundActor.actorId(),
-            )
+            logger.info("tictactoe-lifecycle actor-bound actor={}", boundActor.actorId())
         }
-        context.client()
-            .reply(AuthenticateRes(authenticated.player))
-            .submit()
-            .await()
+        context.client().reply(AuthenticateRes(authenticated.player)).submit().await()
     }
 
-    private fun requireActor(result: ZLinkActorCreateResult): ActorRef = when (result) {
-        is ZLinkActorCreateResult.Existing -> result.actor
-        is ZLinkActorCreateResult.Created -> result.actor
-        is ZLinkActorCreateResult.Rejected -> throw IllegalStateException("Play actor creation was rejected.")
-    }
+    private fun requireActor(result: ZLinkActorCreateResult): ActorRef =
+        when (result) {
+            is ZLinkActorCreateResult.Existing -> result.actor
+            is ZLinkActorCreateResult.Created -> result.actor
+            is ZLinkActorCreateResult.Rejected ->
+                throw IllegalStateException("Play actor creation was rejected.")
+        }
 
     private companion object {
         val logger = LoggerFactory.getLogger(AuthenticatePlaySessionHandler::class.java)

@@ -7,17 +7,17 @@ import systems.zlink.samples.kotlin.bingo.server.play.infrastructure.zlink.spots
 import systems.zlink.samples.kotlin.bingo.shared.contracts.StopObservingBingoEventsReq
 import systems.zlink.samples.kotlin.bingo.shared.contracts.StopObservingBingoEventsRes
 
-class StopObservingBingoEventsHandler : ZLinkSuspendingSpotActorRequestHandler<
-    BingoRoomSpot,
-    PlayerActor,
-    StopObservingBingoEventsReq,
-    StopObservingBingoEventsRes,
+class StopObservingBingoEventsHandler :
+    ZLinkSuspendingSpotActorRequestHandler<
+        BingoRoomSpot,
+        PlayerActor,
+        StopObservingBingoEventsReq,
+        StopObservingBingoEventsRes,
     > {
     override suspend fun handle(
         spot: BingoRoomSpot,
         actor: PlayerActor,
         context: ZLinkMessageContext,
         request: StopObservingBingoEventsReq,
-    ): StopObservingBingoEventsRes =
-        spot.stopObserving(actor, request)
+    ): StopObservingBingoEventsRes = spot.stopObserving(actor, request)
 }

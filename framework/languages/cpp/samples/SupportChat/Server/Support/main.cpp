@@ -205,9 +205,12 @@ class support_user_actor_relocation_adapter_t final
   public:
     task_t<std::vector<std::byte>> capture (support_user_actor_t &actor, std::stop_token) override
     {
-        const auto message = zlink::message_t::from_json (support_user_actor_relocation_state_t{
-          actor.display_name, actor.role, actor.participant_id, actor.current_conversation_id,
-          actor.completed_join_operations ()});
+        const auto message = zlink::message_t::from_json (
+          support_user_actor_relocation_state_t{actor.display_name,
+                                                actor.role,
+                                                actor.participant_id,
+                                                actor.current_conversation_id,
+                                                actor.completed_join_operations ()});
         co_return std::vector<std::byte> (message.bytes ().begin (), message.bytes ().end ());
     }
 
@@ -275,8 +278,10 @@ class supportchat_conversation_runtime_t
         if (found == _actors.end ()) {
             return std::nullopt;
         }
-        return actor_profile_t{found->second.actor_id, found->second.display_name,
-                               found->second.role, found->second.participant_id};
+        return actor_profile_t{found->second.actor_id,
+                               found->second.display_name,
+                               found->second.role,
+                               found->second.participant_id};
     }
 
     std::optional<support_user_actor_t *> actor_for (const std::string &participant_id) const
@@ -393,8 +398,7 @@ class conversation_spot_t : public spot_t<support_user_actor_t>
         std::cout << "supportchat-conversation created conversation=" << state.conversation_id
                   << std::endl;
         report_status (state);
-        co_return spot_create_response_t::accept (
-          conversation_create_res_t{state});
+        co_return spot_create_response_t::accept (conversation_create_res_t{state});
     }
 
     task_t<spot_actor_join_result_t>
@@ -520,10 +524,10 @@ class conversation_spot_t : public spot_t<support_user_actor_t>
             std::cout << "supportchat-conversation agent-joined conversation="
                       << joined.conversation_id << " agent=" << actor.participant_id << std::endl;
             report_status (joined.state);
-            co_await broadcast (participant_joined_notify_t{joined.conversation_id,
-                                                            actor.participant_id, actor.role,
-                                                            joined.state},
-                                participant_joined_notify_t::packet_name);
+            co_await broadcast (
+              participant_joined_notify_t{
+                joined.conversation_id, actor.participant_id, actor.role, joined.state},
+              participant_joined_notify_t::packet_name);
             co_return join_conversation_res_t{false, joined.state};
         }
 
@@ -728,8 +732,8 @@ class support_entry_spot_t : public entry_spot_t<support_user_actor_t>
             throw framework_exception_t (framework_error_kind_t::rejected,
                                          "only agent actors can set availability");
         }
-        return _runtime.set_agent_available (actor.actor_id, actor.display_name,
-                                             request.is_available);
+        return _runtime.set_agent_available (
+          actor.actor_id, actor.display_name, request.is_available);
     }
     // --8<-- [end:doc-sc-set-available]
 
@@ -757,8 +761,8 @@ class support_entry_spot_t : public entry_spot_t<support_user_actor_t>
         }
         auto allocated = co_await _channels
                            .request ("supportchat.api",
-                                     open_conversation_api_req_t{actor.actor_id, actor.display_name,
-                                                                 request.subject})
+                                     open_conversation_api_req_t{
+                                       actor.actor_id, actor.display_name, request.subject})
                            .async<open_conversation_api_res_t> ();
         const auto conversation_id = allocated.state.conversation_id;
         auto scheduled = actor.schedule_conversation_join (conversation_id, false);
@@ -776,8 +780,8 @@ class support_entry_spot_t : public entry_spot_t<support_user_actor_t>
             actor.participant_id = actor.actor_id;
         }
         _actors[actor.actor_id] = &actor;
-        _runtime.remember_actor (actor.actor_id, actor.display_name, actor.role,
-                                 actor.participant_id);
+        _runtime.remember_actor (
+          actor.actor_id, actor.display_name, actor.role, actor.participant_id);
         _runtime.remember_live_actor (actor);
     }
 
@@ -869,8 +873,8 @@ class ensure_agent_conversation_handler_t
         if (already_exists) {
             joined = co_await _actor_client
                        .request (actor->actor_id (),
-                                 join_conversation_req_t{request.roster_actor_id, role_t::agent,
-                                                         request.display_name})
+                                 join_conversation_req_t{
+                                   request.roster_actor_id, role_t::agent, request.display_name})
                        .async<join_conversation_res_t> ();
         } else {
             joined = co_await _actor_client
@@ -878,8 +882,8 @@ class ensure_agent_conversation_handler_t
                                  schedule_conversation_join_req_t{request.conversation_id})
                        .async<join_conversation_res_t> ();
         }
-        co_return ensure_agent_conversation_res_t{actor_location_t::from (*actor), joined.scheduled,
-                                                  joined.state};
+        co_return ensure_agent_conversation_res_t{
+          actor_location_t::from (*actor), joined.scheduled, joined.state};
     }
 
   private:
@@ -922,9 +926,7 @@ int main (int argc, char **argv)
       .group ("supportchat-support")
       .add<ensure_support_user_actor_handler_t> ()
       .add<ensure_agent_conversation_handler_t> ();
-    options.http ()
-      .listen (topology.support_http_url)
-      .map_health ("/health");
+    options.http ().listen (topology.support_http_url).map_health ("/health");
     // --8<-- [start:doc-sc-support-register]
     auto support_spot = options.add_route_mesh (sample_names_t::mesh);
     support_spot.set_routing_id (

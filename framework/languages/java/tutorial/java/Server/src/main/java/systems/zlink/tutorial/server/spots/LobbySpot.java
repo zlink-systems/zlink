@@ -1,12 +1,13 @@
 package systems.zlink.tutorial.server.spots;
 
-import java.util.concurrent.CompletableFuture;
-import java.util.concurrent.CompletionStage;
 import systems.zlink.framework.spots.ZLinkEntrySpot;
 import systems.zlink.framework.spots.ZLinkEntrySpotContext;
 import systems.zlink.tutorial.server.actors.ChangeNicknameHandler;
 import systems.zlink.tutorial.server.actors.GetPlayerHandler;
 import systems.zlink.tutorial.server.actors.Player;
+
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CompletionStage;
 
 // --8<-- [start:entry-spot]
 // Every new player lands here before joining a room, and returns here after

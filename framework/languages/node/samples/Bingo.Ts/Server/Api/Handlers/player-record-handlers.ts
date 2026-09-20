@@ -5,10 +5,7 @@ import {
   ReportBingoResultRes
 } from '../../../Shared/Contracts/bingo-messages.generated';
 import { PacketNames } from '../../../Shared/Contracts/messages';
-import type {
-  GetPlayerRecordReq,
-  ReportBingoResultReq
-} from '../../../Shared/Contracts/messages';
+import type { GetPlayerRecordReq, ReportBingoResultReq } from '../../../Shared/Contracts/messages';
 import type { ZLinkRequestHandler } from '@zlink-systems/framework';
 
 type PlayerRecord = { readonly wins: number; readonly losses: number };
@@ -32,22 +29,34 @@ class BingoPlayerRecordStore {
 }
 
 @zlinkRequestHandler('api', PacketNames.getPlayerRecordReq)
-class GetPlayerRecordHandler implements ZLinkRequestHandler<GetPlayerRecordReq, GetPlayerRecordRes> {
+class GetPlayerRecordHandler implements ZLinkRequestHandler<
+  GetPlayerRecordReq,
+  GetPlayerRecordRes
+> {
   constructor(private readonly records: BingoPlayerRecordStore) {}
 
   async handle(request: GetPlayerRecordReq): Promise<GetPlayerRecordRes> {
-    return new GetPlayerRecordRes({ actorId: request.actorId, ...this.records.get(request.actorId) });
+    return new GetPlayerRecordRes({
+      actorId: request.actorId,
+      ...this.records.get(request.actorId)
+    });
   }
 }
 
 @zlinkRequestHandler('api', PacketNames.reportBingoResultReq)
-class ReportBingoResultHandler implements ZLinkRequestHandler<ReportBingoResultReq, ReportBingoResultRes> {
+class ReportBingoResultHandler implements ZLinkRequestHandler<
+  ReportBingoResultReq,
+  ReportBingoResultRes
+> {
   constructor(private readonly records: BingoPlayerRecordStore) {}
 
   async handle(request: ReportBingoResultReq): Promise<ReportBingoResultRes> {
     void request.roomId;
     void request.finalDrawSeq;
-    return new ReportBingoResultRes({ actorId: request.actorId, ...this.records.report(request.actorId, request.won) });
+    return new ReportBingoResultRes({
+      actorId: request.actorId,
+      ...this.records.report(request.actorId, request.won)
+    });
   }
 }
 

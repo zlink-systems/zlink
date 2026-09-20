@@ -41,20 +41,30 @@ class StartOrderWorkflowReq {
 
 @ZLinkPacket(PacketNames.continueOrderWorkflowReq)
 class ContinueOrderWorkflowReq {
-  constructor(readonly orderId: string, readonly sourceCommandId: string) {}
+  constructor(
+    readonly orderId: string,
+    readonly sourceCommandId: string
+  ) {}
 }
 
 @ZLinkPacket(PacketNames.rebuildOrderProjectionReq)
 class RebuildOrderProjectionReq {
-  constructor(readonly orderId: string, readonly sourceCommandId: string) {}
+  constructor(
+    readonly orderId: string,
+    readonly sourceCommandId: string
+  ) {}
 }
 
 interface StartOrderRes {
   state: OrderState;
 }
 
-interface StartOrderWorkflowRes { state: OrderState; }
-interface GetOrderStateRes { state: OrderState; }
+interface StartOrderWorkflowRes {
+  state: OrderState;
+}
+interface GetOrderStateRes {
+  state: OrderState;
+}
 
 interface OrderState {
   orderId: string;
@@ -68,8 +78,12 @@ interface OrderState {
   updatedAtUnixMs: number;
 }
 
-interface ContinueOrderWorkflowRes { state: OrderState; }
-interface RebuildOrderProjectionRes { state: OrderState; }
+interface ContinueOrderWorkflowRes {
+  state: OrderState;
+}
+interface RebuildOrderProjectionRes {
+  state: OrderState;
+}
 interface ServerAssertionReq {
   successfulOrderId: string;
   pendingRecoveredOrderId: string;
@@ -94,7 +108,7 @@ const OrderStatuses = {
   Failed: 'Failed'
 } as const;
 
-type OrderStatus = typeof OrderStatuses[keyof typeof OrderStatuses];
+type OrderStatus = (typeof OrderStatuses)[keyof typeof OrderStatuses];
 
 export {
   ContinueOrderWorkflowReq,
@@ -102,7 +116,7 @@ export {
   OrderStatuses,
   PacketNames,
   RebuildOrderProjectionReq,
-  StartOrderWorkflowReq,
+  StartOrderWorkflowReq
 };
 export type {
   ContinueOrderWorkflowRes,

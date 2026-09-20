@@ -54,7 +54,9 @@ async function bootstrap(): Promise<void> {
     state.restore(await maintenance.readAll());
     console.log(`maintenance restored node=${node.nodeId} enabled=${state.ownMaintenance()}`);
     if (node.waitForPlacementPeer === true) {
-      const routeMeshRuntime = app.get<ZLinkRouteMeshRuntime>(ZLINK_ROUTE_MESH_RUNTIME, { strict: false });
+      const routeMeshRuntime = app.get<ZLinkRouteMeshRuntime>(ZLINK_ROUTE_MESH_RUNTIME, {
+        strict: false
+      });
       await waitForPlacementPeer(routeMeshRuntime, ZoneWorldNames.zoneMesh);
     }
     if (node.allowEmptyZoneSet === true) {
@@ -64,7 +66,7 @@ async function bootstrap(): Promise<void> {
         app,
         state,
         node.zoneCapacity,
-        node.bootstrapZones ?? Object.values(ZoneIds),
+        node.bootstrapZones ?? Object.values(ZoneIds)
       );
     }
     const zones = state.zones();
@@ -75,11 +77,7 @@ async function bootstrap(): Promise<void> {
     // placement. The weight change must not remove the only eligible target
     // for those actors.
     if (node.placementWeightAfterZoneCreation !== undefined) {
-      await updatePlacementWeight(
-        app,
-        node.nodeId,
-        node.placementWeightAfterZoneCreation
-      );
+      await updatePlacementWeight(app, node.nodeId, node.placementWeightAfterZoneCreation);
     }
     if (node.disableBots !== true) {
       console.log(`bot-start=ready node=${node.nodeId}`);
@@ -97,7 +95,9 @@ async function bootstrap(): Promise<void> {
         // Ops may start after this node; the periodic report retries through the public channel.
       }
     };
-    statusTimer = setInterval(() => { void report(); }, ZoneWorldSpec.nodeStatusReportPeriodMs);
+    statusTimer = setInterval(() => {
+      void report();
+    }, ZoneWorldSpec.nodeStatusReportPeriodMs);
     await report();
     console.log(`topology=ready node=${node.nodeId} zones=${zones.join(',')}`);
   } else {
@@ -154,7 +154,10 @@ async function waitForBotStart(signalPath: string | undefined): Promise<void> {
   while (!fs.existsSync(signalPath)) await delay(50);
 }
 
-async function waitForPlacementPeer(runtime: ZLinkRouteMeshRuntime, meshName: string): Promise<void> {
+async function waitForPlacementPeer(
+  runtime: ZLinkRouteMeshRuntime,
+  meshName: string
+): Promise<void> {
   while (!runtime.isReady(meshName) || runtime.snapshot(meshName).readyPeerCount < 1) {
     await delay(50);
   }
@@ -165,15 +168,13 @@ async function updatePlacementWeight(
   nodeId: string,
   weight: number
 ): Promise<void> {
-  const options = app.get<ZLinkRouteMeshRuntimeOptions>(
-    ZLINK_ROUTE_MESH_RUNTIME_OPTIONS,
-    { strict: false }
-  );
+  const options = app.get<ZLinkRouteMeshRuntimeOptions>(ZLINK_ROUTE_MESH_RUNTIME_OPTIONS, {
+    strict: false
+  });
   options.mesh(ZoneWorldNames.zoneMesh).placementWeight = weight;
-  const locations = app.get<ZLinkLocationRuntimeQuery>(
-    ZLINK_LOCATION_RUNTIME_QUERY,
-    { strict: false }
-  );
+  const locations = app.get<ZLinkLocationRuntimeQuery>(ZLINK_LOCATION_RUNTIME_QUERY, {
+    strict: false
+  });
   const deadline = Date.now() + 10_000;
   for (;;) {
     const descriptors = await locations.listMeshNodeDescriptors(ZoneWorldNames.zoneMesh);
@@ -188,11 +189,14 @@ async function updatePlacementWeight(
   }
 }
 
-async function spawnBots(app: { get<T>(token: unknown, options?: { strict: boolean }): T }, zones: readonly string[]): Promise<void> {
+async function spawnBots(
+  app: { get<T>(token: unknown, options?: { strict: boolean }): T },
+  zones: readonly string[]
+): Promise<void> {
   const manager = app.get<ZLinkActorManager>(ZLINK_ACTOR_MANAGER, { strict: false });
   const client = app.get<ZLinkActorClient>(ZLINK_ACTOR_CLIENT, { strict: false });
   for (const route of botRoutes.filter((candidate) => zones.includes(candidate.zoneId))) {
-    if (await manager.find(route.playerId) !== undefined) continue;
+    if ((await manager.find(route.playerId)) !== undefined) continue;
     const result = await manager
       .getOrCreate(route.playerId, ZoneWorldNames.playerActorType)
       .inMesh(ZoneWorldNames.zoneMesh)
@@ -201,11 +205,15 @@ async function spawnBots(app: { get<T>(token: unknown, options?: { strict: boole
       throw new Error(`Bot actor '${route.playerId}' creation was rejected.`);
     }
     const actor = result.actor;
-    const entered = await client.requestToActor(
-      actor.actorId,
-      new EnterWorldReq(route.x, route.y, true, route.dirX, route.dirY)
-    ).timeout(10_000).submit<EnterWorldRes>();
-    if (entered.error !== null) throw new Error(`Bot '${route.playerId}' could not enter the world: ${entered.error}.`);
+    const entered = await client
+      .requestToActor(
+        actor.actorId,
+        new EnterWorldReq(route.x, route.y, true, route.dirX, route.dirY)
+      )
+      .timeout(10_000)
+      .submit<EnterWorldRes>();
+    if (entered.error !== null)
+      throw new Error(`Bot '${route.playerId}' could not enter the world: ${entered.error}.`);
     console.log(`bot spawned bot=${route.playerId} zone=${route.zoneId}`);
   }
 }
@@ -222,7 +230,11 @@ async function ensureZones(
     const claimOrder: string[] = [];
     for (const zoneId of claimed) {
       for (const adjacent of adjacentZones(zoneId as ZoneId)) {
-        if (candidates.includes(adjacent) && !claimed.includes(adjacent) && !claimOrder.includes(adjacent)) {
+        if (
+          candidates.includes(adjacent) &&
+          !claimed.includes(adjacent) &&
+          !claimOrder.includes(adjacent)
+        ) {
           claimOrder.push(adjacent);
         }
       }
@@ -236,7 +248,10 @@ async function ensureZones(
           .submit();
         console.log(`zone spot create zone=${zoneId} state=${result.state}`);
       } catch (error) {
-        if (!(error instanceof Error) || !/capacity|eligible User Spot placement target/i.test(error.message)) {
+        if (
+          !(error instanceof Error) ||
+          !/capacity|eligible User Spot placement target/i.test(error.message)
+        ) {
           throw error;
         }
       }

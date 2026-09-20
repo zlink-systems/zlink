@@ -15,19 +15,13 @@ import systems.zlink.tutorial.shared.PlayerProfile
 // CompletionStage, which a suspend fun cannot override. The group annotation is
 // what ties this class to the channel -- see HandlerGroups.kt.
 @ZLinkHandlerGroup(HandlerGroups.PROFILE)
-class GetPlayerProfileHandler :
-    ZLinkSuspendingRequestHandler<
-        GetPlayerProfile, PlayerProfile> {
+class GetPlayerProfileHandler : ZLinkSuspendingRequestHandler<GetPlayerProfile, PlayerProfile> {
 
     override suspend fun handle(
         request: GetPlayerProfile,
         context: ZLinkMessageContext,
     ): PlayerProfile {
-        return PlayerProfile(
-            request.playerId,
-            nickname = "rookie",
-            level = 1,
-        )
+        return PlayerProfile(request.playerId, nickname = "rookie", level = 1)
     }
 }
 // --8<-- [end:channel-request-handler]

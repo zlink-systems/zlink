@@ -8,16 +8,11 @@
 namespace zlink::samples::bingo
 {
 
-struct player_actor_factory_t final
-    : framework::actor_factory_t<player_actor_t>
+struct player_actor_factory_t final : framework::actor_factory_t<player_actor_t>
 {
-    player_actor_t create (std::string actor_id) const
-    {
-        return create (std::move (actor_id), {});
-    }
+    player_actor_t create (std::string actor_id) const { return create (std::move (actor_id), {}); }
 
-    player_actor_t create (std::string actor_id,
-                           std::string display_name) const
+    player_actor_t create (std::string actor_id, std::string display_name) const
     {
         if (display_name.empty ()) {
             display_name = actor_id;
@@ -28,9 +23,8 @@ struct player_actor_factory_t final
         return player;
     }
 
-    framework::task_t<std::shared_ptr<player_actor_t>>
-    create (actor_context_t context,
-            std::stop_token) override
+    framework::task_t<std::shared_ptr<player_actor_t>> create (actor_context_t context,
+                                                               std::stop_token) override
     {
         auto actor = std::make_shared<player_actor_t> (
           create (std::string (context.actor_ref ().actor_id ().value ()), {}));

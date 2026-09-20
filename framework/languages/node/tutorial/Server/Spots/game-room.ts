@@ -9,7 +9,13 @@ import type {
   ZLinkSpotPacketHandler,
   ZLinkSpotRequestHandler
 } from '@zlink-systems/framework';
-import { PacketNames, type GetRoomState, type OpenRoom, type PostChat, type RoomState } from '../../Shared/contracts';
+import {
+  PacketNames,
+  type GetRoomState,
+  type OpenRoom,
+  type PostChat,
+  type RoomState
+} from '../../Shared/contracts';
 
 // --8<-- [start:spot-class]
 // A room owns its own state and is addressed by a global SpotId. Messages sent
@@ -28,9 +34,7 @@ class GameRoom implements ZLinkSpot {
 
   // Runs before the room accepts any message. Rejecting here means the create
   // call fails and no room exists. Omit this method to accept every request.
-  async onCreate(
-    request: ZLinkMessage
-  ): Promise<ZLinkSpotCreateResponse> {
+  async onCreate(request: ZLinkMessage): Promise<ZLinkSpotCreateResponse> {
     const body = request.decode<OpenRoom>();
     this.title = body.title;
     return { accepted: true };
@@ -49,8 +53,7 @@ class GameRoom implements ZLinkSpot {
 
   // No actor ever joins this room, so the three membership callbacks below say
   // so and do nothing else.
-  async onActorJoin():
-      Promise<ZLinkSpotActorJoinResult> {
+  async onActorJoin(): Promise<ZLinkSpotActorJoinResult> {
     return { accepted: false };
   }
 
@@ -68,15 +71,9 @@ class GameRoom implements ZLinkSpot {
   spot: () => GameRoom,
   packetName: PacketNames.postChat
 })
-class PostChatHandler
-  implements ZLinkSpotPacketHandler<
-    GameRoom, PostChat> {
-  async handle(
-    room: GameRoom,
-    message: PostChat
-  ): Promise<void> {
-    const line =
-      `${message.playerId}: ${message.text}`;
+class PostChatHandler implements ZLinkSpotPacketHandler<GameRoom, PostChat> {
+  async handle(room: GameRoom, message: PostChat): Promise<void> {
+    const line = `${message.playerId}: ${message.text}`;
     room.append(line);
   }
 }
@@ -86,12 +83,8 @@ class PostChatHandler
   spot: () => GameRoom,
   packetName: PacketNames.getRoomState
 })
-class GetRoomStateHandler
-  implements ZLinkSpotRequestHandler<
-    GameRoom, GetRoomState, RoomState> {
-  async handle(
-    room: GameRoom
-  ): Promise<RoomState> {
+class GetRoomStateHandler implements ZLinkSpotRequestHandler<GameRoom, GetRoomState, RoomState> {
+  async handle(room: GameRoom): Promise<RoomState> {
     return room.state();
   }
 }

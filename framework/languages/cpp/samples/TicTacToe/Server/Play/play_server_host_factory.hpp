@@ -40,8 +40,7 @@ class play_server_host_factory_t
         options.configure_dispatch ().message_flow (message_flow_log_mode_t::normal);
         options.services ().add_singleton<sample_topology_t> (
           std::make_unique<sample_topology_t> (topology));
-        options.services ().add_scoped<authenticate_play_session_handler_t,
-                                        channel_client_t> ();
+        options.services ().add_scoped<authenticate_play_session_handler_t, channel_client_t> ();
         options.add_location_store<redis::redis_location_store_t> ()
           .set_connection_string (topology.redis_endpoint)
           .set_key_prefix (topology.redis_key_prefix + "location:");
@@ -77,7 +76,8 @@ class play_server_host_factory_t
           .register_session<play_session_t> ();
         // --8<-- [end:doc-ttt-play-register]
         app.add_hosted_service (std::make_unique<play_route_readiness_service_t> (
-          sample_names_t::game_spot_node, "play-" + topology.play_node,
+          sample_names_t::game_spot_node,
+          "play-" + topology.play_node,
           topology.play_node == "a" ? sample_names_t::play_b_rid : sample_names_t::play_a_rid));
         return app;
     }

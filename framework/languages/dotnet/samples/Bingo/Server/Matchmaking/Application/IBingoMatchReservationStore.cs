@@ -6,5 +6,6 @@ internal interface IBingoMatchReservationStore
 {
     ValueTask<ReserveBingoRoomRes> ReserveAsync(
         ReserveBingoRoomReq request,
-        CancellationToken cancellationToken);
+        CancellationToken cancellationToken
+    );
 }

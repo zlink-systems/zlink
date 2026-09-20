@@ -9,9 +9,8 @@ import systems.zlink.samples.kotlin.shoppingmall.shared.contracts.ContinueOrderW
 
 /** Self-check hook that relays explicit recovery to the workflow owner. */
 @ZLinkHandlerGroup("commerce")
-class ContinueWorkflowHandler(
-    private val workflows: OrderWorkflowRouter,
-) : ZLinkSuspendingRequestHandler<ContinueOrderWorkflowReq, ContinueOrderWorkflowRes> {
+class ContinueWorkflowHandler(private val workflows: OrderWorkflowRouter) :
+    ZLinkSuspendingRequestHandler<ContinueOrderWorkflowReq, ContinueOrderWorkflowRes> {
     override suspend fun handle(
         request: ContinueOrderWorkflowReq,
         context: ZLinkMessageContext,

@@ -24,7 +24,6 @@ inline constexpr const char *conversation_id_metadata_key = "ConversationId";
 class supportchat_session_t final : public packet_stream_session_t
 {
   public:
-
     supportchat_session_t (channel_client_t &channels, session_actor_manager_t &actors) :
         _channels (channels), _actors (actors)
     {
@@ -60,12 +59,13 @@ class supportchat_session_t final : public packet_stream_session_t
                 throw framework_exception_t (framework_error_kind_t::rejected,
                                              verified.reason.value_or ("AuthenticationRejected"));
             }
-            const authenticate_res_t authenticated{*verified.actor_id, *verified.display_name,
-                                                   *verified.role};
+            const authenticate_res_t authenticated{
+              *verified.actor_id, *verified.display_name, *verified.role};
             // --8<-- [start:doc-sc-session-auth]
-            auto ensure =
-              ensure_support_user_actor_req_t{authenticated.actor_id, authenticated.display_name,
-                                              authenticated.role, authenticated.actor_id};
+            auto ensure = ensure_support_user_actor_req_t{authenticated.actor_id,
+                                                          authenticated.display_name,
+                                                          authenticated.role,
+                                                          authenticated.actor_id};
             auto ensured = co_await _channels.request ("supportchat.support", ensure)
                              .async<ensure_support_user_actor_res_t> ();
             auto actor_ref = ensured.actor.to_actor_ref (sample_names_t::mesh);
@@ -124,7 +124,8 @@ class supportchat_session_t final : public packet_stream_session_t
                                 zlink::message_t::from_json (join_conversation_req_t{}))
                 .async ();
             co_return ensure_agent_conversation_res_t{
-              actor_location_t::from (actor.ref ()), false,
+              actor_location_t::from (actor.ref ()),
+              false,
               refreshed.parse_json<join_conversation_res_t> ().state};
         }
 
@@ -236,7 +237,7 @@ int main (int argc, char **argv)
       .register_session<supportchat_session_t> ();
     // --8<-- [end:doc-sc-session-register]
     app.add_hosted_service (std::make_unique<sample_readiness_service_t> ("stream", "session"));
-    app.add_hosted_service (std::make_unique<spot_route_readiness_service_t> (
-      sample_names_t::mesh, "session"));
+    app.add_hosted_service (
+      std::make_unique<spot_route_readiness_service_t> (sample_names_t::mesh, "session"));
     return app.run (argc, argv);
 }

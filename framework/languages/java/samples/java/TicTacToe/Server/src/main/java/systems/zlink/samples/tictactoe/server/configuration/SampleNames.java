@@ -1,4 +1,5 @@
 package systems.zlink.samples.tictactoe.server.configuration;
+
 import java.time.Duration;
 
 public final class SampleNames {
@@ -11,7 +12,5 @@ public final class SampleNames {
     public static final int RequiredLevel = 3;
     public static final Duration RequestTimeout = Duration.ofSeconds(5);
 
-    private SampleNames() {
-    }
-
+    private SampleNames() {}
 }

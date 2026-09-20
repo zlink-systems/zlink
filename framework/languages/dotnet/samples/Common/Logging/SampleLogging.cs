@@ -14,14 +14,15 @@ public static class SampleLogging
             options.SingleLine = true;
             options.TimestampFormat = "HH:mm:ss.fff ";
         });
-        logging.AddProvider(new SampleFileLoggerProvider(Path.Combine(logDirectory, $"{role}.log")));
+        logging.AddProvider(
+            new SampleFileLoggerProvider(Path.Combine(logDirectory, $"{role}.log"))
+        );
     }
 
     public static ILoggerFactory CreateFactory(string logDirectory, string role)
     {
         return LoggerFactory.Create(logging => Configure(logging, logDirectory, role));
     }
-
 }
 
 internal sealed class SampleFileLoggerProvider : ILoggerProvider
@@ -33,23 +34,24 @@ internal sealed class SampleFileLoggerProvider : ILoggerProvider
     public SampleFileLoggerProvider(string path)
     {
         var directory = Path.GetDirectoryName(path);
-        if (!string.IsNullOrWhiteSpace(directory)) Directory.CreateDirectory(directory);
+        if (!string.IsNullOrWhiteSpace(directory))
+            Directory.CreateDirectory(directory);
 
-        _writer = new StreamWriter(new FileStream(
-            path,
-            FileMode.Append,
-            FileAccess.Write,
-            FileShare.ReadWrite))
+        _writer = new StreamWriter(
+            new FileStream(path, FileMode.Append, FileAccess.Write, FileShare.ReadWrite)
+        )
         {
-            AutoFlush = true
+            AutoFlush = true,
         };
     }
 
     public ILogger CreateLogger(string categoryName)
     {
-        return _loggers.GetOrAdd(categoryName, static (category, provider) =>
-                new SampleFileLogger(category, provider),
-            this);
+        return _loggers.GetOrAdd(
+            categoryName,
+            static (category, provider) => new SampleFileLogger(category, provider),
+            this
+        );
     }
 
     public void Dispose()
@@ -65,7 +67,8 @@ internal sealed class SampleFileLoggerProvider : ILoggerProvider
         LogLevel level,
         EventId eventId,
         string message,
-        Exception? exception)
+        Exception? exception
+    )
     {
         lock (_gate)
         {
@@ -83,13 +86,13 @@ internal sealed class SampleFileLoggerProvider : ILoggerProvider
 
             _writer.Write(": ");
             _writer.WriteLine(message);
-            if (exception is not null) _writer.WriteLine(exception);
+            if (exception is not null)
+                _writer.WriteLine(exception);
         }
     }
 
-    private sealed class SampleFileLogger(
-        string category,
-        SampleFileLoggerProvider provider) : ILogger
+    private sealed class SampleFileLogger(string category, SampleFileLoggerProvider provider)
+        : ILogger
     {
         public IDisposable? BeginScope<TState>(TState state)
             where TState : notnull
@@ -108,9 +111,11 @@ internal sealed class SampleFileLoggerProvider : ILoggerProvider
             EventId eventId,
             TState state,
             Exception? exception,
-            Func<TState, Exception?, string> formatter)
+            Func<TState, Exception?, string> formatter
+        )
         {
-            if (!IsEnabled(logLevel)) return;
+            if (!IsEnabled(logLevel))
+                return;
 
             provider.Write(category, logLevel, eventId, formatter(state, exception), exception);
         }

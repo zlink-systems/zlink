@@ -1,9 +1,8 @@
 package systems.zlink.samples.kotlin.shoppingmall.server.orderworkflow.domain
 
 /**
- * Order aggregate rebuilt from the event stream. Owns the status state machine,
- * command dedupe, and compensation rules. Knows nothing about framework,
- * transport, or store implementation.
+ * Order aggregate rebuilt from the event stream. Owns the status state machine, command dedupe, and
+ * compensation rules. Knows nothing about framework, transport, or store implementation.
  */
 class OrderAggregate private constructor(private val orderId: String) {
     private val processedCommands = HashSet<String>()
@@ -15,10 +14,7 @@ class OrderAggregate private constructor(private val orderId: String) {
     private var lines: List<OrderLine> = emptyList()
 
     companion object {
-        fun rehydrate(
-            orderId: String,
-            stored: List<StoredOrderEvent>,
-        ): OrderAggregate {
+        fun rehydrate(orderId: String, stored: List<StoredOrderEvent>): OrderAggregate {
             val aggregate = OrderAggregate(orderId)
             for (event in stored) {
                 aggregate.apply(event)
@@ -53,8 +49,7 @@ class OrderAggregate private constructor(private val orderId: String) {
 
     fun hasStarted(): Boolean = status != null
 
-    fun isTerminal(): Boolean =
-        status == OrderStatus.Confirmed || status == OrderStatus.Failed
+    fun isTerminal(): Boolean = status == OrderStatus.Confirmed || status == OrderStatus.Failed
 
     fun status(): String? = status
 
@@ -85,7 +80,7 @@ class OrderAggregate private constructor(private val orderId: String) {
                 command.amount,
                 command.currency,
                 now,
-            ),
+            )
         )
     }
 

@@ -1,68 +1,118 @@
 package systems.zlink.samples.kotlin.shoppingmall.server.commerceapi.handlers
 
 import systems.zlink.framework.ZLinkMessageContext
-import systems.zlink.framework.kotlin.ZLinkSuspendingRequestHandler
 import systems.zlink.framework.handlers.ZLinkHandlerGroup
+import systems.zlink.framework.kotlin.ZLinkSuspendingRequestHandler
 import systems.zlink.samples.kotlin.shoppingmall.server.configuration.CommerceStore
 import systems.zlink.samples.kotlin.shoppingmall.server.configuration.CommerceStore.StoreEvidence
 import systems.zlink.samples.kotlin.shoppingmall.shared.contracts.ServerAssertionReq
 import systems.zlink.samples.kotlin.shoppingmall.shared.contracts.ServerAssertionRes
 
 /**
- * Server-side assertion of the event-sourced evidence: per-order event
- * sequences, compensation counts, and idempotency started count.
+ * Server-side assertion of the event-sourced evidence: per-order event sequences, compensation
+ * counts, and idempotency started count.
  */
 @ZLinkHandlerGroup("commerce")
-class ServerAssertionHandler(
-    private val store: CommerceStore,
-) : ZLinkSuspendingRequestHandler<ServerAssertionReq, ServerAssertionRes> {
+class ServerAssertionHandler(private val store: CommerceStore) :
+    ZLinkSuspendingRequestHandler<ServerAssertionReq, ServerAssertionRes> {
     override suspend fun handle(
         request: ServerAssertionReq,
         context: ZLinkMessageContext,
     ): ServerAssertionRes = assert(request)
 
     suspend fun assert(request: ServerAssertionReq): ServerAssertionRes {
-        val orderIds = listOf(
-            request.successfulOrderId,
-            request.pendingRecoveredOrderId,
-            request.concurrentOrderId,
-            request.resumedOrderId,
-            request.inventoryFailureOrderId,
-            request.paymentFailureOrderId,
-            request.scaleOutOrderId,
-        )
+        val orderIds =
+            listOf(
+                request.successfulOrderId,
+                request.pendingRecoveredOrderId,
+                request.concurrentOrderId,
+                request.resumedOrderId,
+                request.inventoryFailureOrderId,
+                request.paymentFailureOrderId,
+                request.scaleOutOrderId,
+            )
         val evidence = store.evidence(orderIds)
         val lines = mutableListOf<String>()
         var passed = true
 
-        passed = check(lines, evidence, request.successfulOrderId, listOf(
-            "OrderStartedEvent", "InventoryReservedEvent",
-            "PaymentAuthorizedEvent", "OrderConfirmedEvent",
-        )) && passed
-        passed = startsWith(lines, evidence, request.pendingRecoveredOrderId, listOf(
-            "OrderStartedEvent",
-        )) && passed
-        passed = check(lines, evidence, request.concurrentOrderId, listOf(
-            "OrderStartedEvent", "InventoryReservedEvent",
-            "PaymentAuthorizedEvent", "OrderConfirmedEvent",
-        )) && passed
-        passed = check(lines, evidence, request.resumedOrderId, listOf(
-            "OrderStartedEvent", "InventoryReservedEvent",
-            "PaymentAuthorizedEvent", "OrderConfirmedEvent",
-        )) && passed
-        passed = check(lines, evidence, request.inventoryFailureOrderId, listOf(
-            "OrderStartedEvent", "InventoryReservationFailedEvent", "OrderFailedEvent",
-        )) && passed
-        passed = check(lines, evidence, request.paymentFailureOrderId, listOf(
-            "OrderStartedEvent", "InventoryReservedEvent", "PaymentFailedEvent",
-            "InventoryReleasedEvent", "OrderFailedEvent",
-        )) && passed
-        passed = check(lines, evidence, request.scaleOutOrderId, listOf(
-            "OrderStartedEvent", "InventoryReservedEvent",
-            "PaymentAuthorizedEvent", "OrderConfirmedEvent",
-        )) && passed
+        passed =
+            check(
+                lines,
+                evidence,
+                request.successfulOrderId,
+                listOf(
+                    "OrderStartedEvent",
+                    "InventoryReservedEvent",
+                    "PaymentAuthorizedEvent",
+                    "OrderConfirmedEvent",
+                ),
+            ) && passed
+        passed =
+            startsWith(
+                lines,
+                evidence,
+                request.pendingRecoveredOrderId,
+                listOf("OrderStartedEvent"),
+            ) && passed
+        passed =
+            check(
+                lines,
+                evidence,
+                request.concurrentOrderId,
+                listOf(
+                    "OrderStartedEvent",
+                    "InventoryReservedEvent",
+                    "PaymentAuthorizedEvent",
+                    "OrderConfirmedEvent",
+                ),
+            ) && passed
+        passed =
+            check(
+                lines,
+                evidence,
+                request.resumedOrderId,
+                listOf(
+                    "OrderStartedEvent",
+                    "InventoryReservedEvent",
+                    "PaymentAuthorizedEvent",
+                    "OrderConfirmedEvent",
+                ),
+            ) && passed
+        passed =
+            check(
+                lines,
+                evidence,
+                request.inventoryFailureOrderId,
+                listOf("OrderStartedEvent", "InventoryReservationFailedEvent", "OrderFailedEvent"),
+            ) && passed
+        passed =
+            check(
+                lines,
+                evidence,
+                request.paymentFailureOrderId,
+                listOf(
+                    "OrderStartedEvent",
+                    "InventoryReservedEvent",
+                    "PaymentFailedEvent",
+                    "InventoryReleasedEvent",
+                    "OrderFailedEvent",
+                ),
+            ) && passed
+        passed =
+            check(
+                lines,
+                evidence,
+                request.scaleOutOrderId,
+                listOf(
+                    "OrderStartedEvent",
+                    "InventoryReservedEvent",
+                    "PaymentAuthorizedEvent",
+                    "OrderConfirmedEvent",
+                ),
+            ) && passed
 
-        val compensation = evidence.releasedReservationCount >= 1 && evidence.paymentFailureCount >= 1
+        val compensation =
+            evidence.releasedReservationCount >= 1 && evidence.paymentFailureCount >= 1
         val startedCount = evidence.startedIdempotencyCount >= 8
         lines.add("releasedReservationCount=${evidence.releasedReservationCount}")
         lines.add("paymentFailureCount=${evidence.paymentFailureCount}")
@@ -70,7 +120,9 @@ class ServerAssertionHandler(
         passed = compensation && startedCount && passed
 
         orderIds.forEach { orderId ->
-            println("shoppingmall-evidence order=$orderId events=${evidence.eventsByOrder[orderId]?.size ?: 0}")
+            println(
+                "shoppingmall-evidence order=$orderId events=${evidence.eventsByOrder[orderId]?.size ?: 0}"
+            )
         }
         return ServerAssertionRes(passed, lines)
     }

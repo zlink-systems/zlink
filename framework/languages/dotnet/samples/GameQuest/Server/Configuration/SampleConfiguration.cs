@@ -13,7 +13,6 @@ public static class SampleNames
     public const string CompletedPacket = nameof(QuestCompletedNotify);
 
     public static readonly TimeSpan RequestTimeout = TimeSpan.FromSeconds(10);
-
 }
 
 public static class QuestIds
@@ -41,22 +40,25 @@ public sealed record GameQuestTopology(
     string GameApiAMeshEndpoint,
     string GameApiBMeshEndpoint,
     string MissionAMeshEndpoint,
-    string MissionBMeshEndpoint)
+    string MissionBMeshEndpoint
+)
 {
     public static GameQuestRuntimeConfiguration LoadGameApi(string[] args) => Load(args, "api");
 
-    public static GameQuestRuntimeConfiguration LoadQuestMission(string[] args) => Load(args, "mission");
+    public static GameQuestRuntimeConfiguration LoadQuestMission(string[] args) =>
+        Load(args, "mission");
 
     private static GameQuestRuntimeConfiguration Load(string[] args, string role)
     {
         if (args.Length != 2 || args[0] != "--config")
             throw new ArgumentException("Usage: --config PATH");
-        var settings = new ConfigurationBuilder()
-                           .AddJsonFile(Path.GetFullPath(args[1]), optional: false, reloadOnChange: false)
-                           .Build()
-                           .GetRequiredSection("Sample")
-                           .Get<GameQuestConfiguration>()
-                       ?? throw new InvalidOperationException("GameQuest Sample configuration is empty.");
+        var settings =
+            new ConfigurationBuilder()
+                .AddJsonFile(Path.GetFullPath(args[1]), optional: false, reloadOnChange: false)
+                .Build()
+                .GetRequiredSection("Sample")
+                .Get<GameQuestConfiguration>()
+            ?? throw new InvalidOperationException("GameQuest Sample configuration is empty.");
         settings.Validate(role);
         var topology = new GameQuestTopology(
             settings.RedisEndpoint,
@@ -68,15 +70,21 @@ public sealed record GameQuestTopology(
             settings.GameApiAMeshEndpoint,
             settings.GameApiBMeshEndpoint,
             settings.MissionAMeshEndpoint,
-            settings.MissionBMeshEndpoint);
-        var streamBindEndpoint = string.Equals(settings.InstanceName, "api-b", StringComparison.Ordinal)
+            settings.MissionBMeshEndpoint
+        );
+        var streamBindEndpoint = string.Equals(
+            settings.InstanceName,
+            "api-b",
+            StringComparison.Ordinal
+        )
             ? settings.GameApiBStreamBindEndpoint
             : settings.GameApiAStreamBindEndpoint;
         return new GameQuestRuntimeConfiguration(
             topology,
             settings.InstanceName,
             settings.LogDirectory,
-            streamBindEndpoint);
+            streamBindEndpoint
+        );
     }
 
     public QuestMissionInstanceTopology ForQuestMission(string missionName)
@@ -106,7 +114,8 @@ public sealed record GameQuestRuntimeConfiguration(
     GameQuestTopology Topology,
     string InstanceName,
     string LogDirectory,
-    string StreamBindEndpoint);
+    string StreamBindEndpoint
+);
 
 public sealed class GameQuestConfiguration
 {
@@ -134,21 +143,31 @@ public sealed class GameQuestConfiguration
         var isB = InstanceName.EndsWith("-b", StringComparison.Ordinal);
         if (role == "api")
         {
-            Require(isB ? GameApiBHttpBaseUrl : GameApiAHttpBaseUrl,
-                isB ? nameof(GameApiBHttpBaseUrl) : nameof(GameApiAHttpBaseUrl));
-            Require(isB ? GameApiBStreamBindEndpoint : GameApiAStreamBindEndpoint,
-                isB ? nameof(GameApiBStreamBindEndpoint) : nameof(GameApiAStreamBindEndpoint));
-            Require(isB ? GameApiBMeshEndpoint : GameApiAMeshEndpoint,
-                isB ? nameof(GameApiBMeshEndpoint) : nameof(GameApiAMeshEndpoint));
+            Require(
+                isB ? GameApiBHttpBaseUrl : GameApiAHttpBaseUrl,
+                isB ? nameof(GameApiBHttpBaseUrl) : nameof(GameApiAHttpBaseUrl)
+            );
+            Require(
+                isB ? GameApiBStreamBindEndpoint : GameApiAStreamBindEndpoint,
+                isB ? nameof(GameApiBStreamBindEndpoint) : nameof(GameApiAStreamBindEndpoint)
+            );
+            Require(
+                isB ? GameApiBMeshEndpoint : GameApiAMeshEndpoint,
+                isB ? nameof(GameApiBMeshEndpoint) : nameof(GameApiAMeshEndpoint)
+            );
             return;
         }
         if (role != "mission")
             throw new InvalidOperationException($"Unknown GameQuest role '{role}'.");
         Require(GameApiAHttpBaseUrl, nameof(GameApiAHttpBaseUrl));
-        Require(isB ? MissionBHttpBaseUrl : MissionAHttpBaseUrl,
-            isB ? nameof(MissionBHttpBaseUrl) : nameof(MissionAHttpBaseUrl));
-        Require(isB ? MissionBMeshEndpoint : MissionAMeshEndpoint,
-            isB ? nameof(MissionBMeshEndpoint) : nameof(MissionAMeshEndpoint));
+        Require(
+            isB ? MissionBHttpBaseUrl : MissionAHttpBaseUrl,
+            isB ? nameof(MissionBHttpBaseUrl) : nameof(MissionAHttpBaseUrl)
+        );
+        Require(
+            isB ? MissionBMeshEndpoint : MissionAMeshEndpoint,
+            isB ? nameof(MissionBMeshEndpoint) : nameof(MissionAMeshEndpoint)
+        );
     }
 
     private static void Require(string value, string name)
@@ -158,6 +177,4 @@ public sealed class GameQuestConfiguration
     }
 }
 
-public sealed record QuestMissionInstanceTopology(
-    string MissionName,
-    string MeshEndpoint);
+public sealed record QuestMissionInstanceTopology(string MissionName, string MeshEndpoint);

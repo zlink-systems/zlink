@@ -12,16 +12,27 @@ import type { ZLinkMessageContext } from '@zlink-systems/framework';
 })
 class CustomerStatusHandler {
   // --8<-- [start:doc-dd-customer-push]
-  async handle(_spot: CustomerEntrySpot, actor: CustomerActor, _context: ZLinkMessageContext, message: DeliveryStatusUpdatedMsg): Promise<void> {
+  async handle(
+    _spot: CustomerEntrySpot,
+    actor: CustomerActor,
+    _context: ZLinkMessageContext,
+    message: DeliveryStatusUpdatedMsg
+  ): Promise<void> {
     if (!actor.accepts(message.deliveryId)) return;
-    await actor.context.boundSession.send(new DeliveryStatusNotify(
-      message.deliveryId,
-      message.status,
-      message.occurredAtUnixMs,
-      message.courierId
-    )).submit();
+    await actor.context.boundSession
+      .send(
+        new DeliveryStatusNotify(
+          message.deliveryId,
+          message.status,
+          message.occurredAtUnixMs,
+          message.courierId
+        )
+      )
+      .submit();
     if (message.status === 'Delivered') {
-      console.log(`deliverydispatch-customer pushed status=Delivered delivery=${message.deliveryId}`);
+      console.log(
+        `deliverydispatch-customer pushed status=Delivered delivery=${message.deliveryId}`
+      );
     }
   }
   // --8<-- [end:doc-dd-customer-push]

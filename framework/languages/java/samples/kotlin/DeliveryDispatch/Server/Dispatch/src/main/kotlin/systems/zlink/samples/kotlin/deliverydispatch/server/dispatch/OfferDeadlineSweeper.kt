@@ -2,7 +2,6 @@ package systems.zlink.samples.kotlin.deliverydispatch.server.dispatch
 
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.delay
@@ -38,7 +37,7 @@ class OfferDeadlineSweeper(
         for (offer in offers.takeExpired()) {
             println(
                 "deliverydispatch dispatch: offer expired delivery=${offer.request.deliveryId} " +
-                    "attempt=${offer.attempt}",
+                    "attempt=${offer.attempt}"
             )
             try {
                 worker.reassign(offer)
@@ -46,7 +45,7 @@ class OfferDeadlineSweeper(
                 // The sweeper comes back next tick; one failed reassign must not stop it.
                 System.err.println(
                     "deliverydispatch dispatch: reassign failed " +
-                        "delivery=${offer.request.deliveryId}: ${error.message}",
+                        "delivery=${offer.request.deliveryId}: ${error.message}"
                 )
             }
         }

@@ -1,39 +1,73 @@
 package systems.zlink.samples.kotlin.bingo.shared.contracts
 
 typealias AuthenticateReq = Messages.AuthenticateReq
+
 typealias AuthenticateRes = Messages.AuthenticateRes
+
 typealias AuthenticatePlayerReq = Messages.AuthenticatePlayerReq
+
 typealias AuthenticatePlayerRes = Messages.AuthenticatePlayerRes
+
 typealias GetPlayerRecordReq = Messages.GetPlayerRecordReq
+
 typealias GetPlayerRecordRes = Messages.GetPlayerRecordRes
+
 typealias ReportBingoResultReq = Messages.ReportBingoResultReq
+
 typealias ReportBingoResultRes = Messages.ReportBingoResultRes
+
 typealias EnsurePlayerActorReq = Messages.EnsurePlayerActorReq
+
 typealias EnsurePlayerActorRes = Messages.EnsurePlayerActorRes
+
 typealias MatchBingoReq = Messages.MatchBingoReq
+
 typealias MatchBingoRes = Messages.MatchBingoRes
+
 typealias MatchBingoApiReq = Messages.MatchBingoApiReq
+
 typealias MatchBingoApiRes = Messages.MatchBingoApiRes
+
 typealias ReserveBingoRoomReq = Messages.ReserveBingoRoomReq
+
 typealias ReserveBingoRoomRes = Messages.ReserveBingoRoomRes
+
 typealias BingoRoomSettingsPayload = Messages.BingoRoomSettingsPayload
+
 typealias BingoRoomCreateReq = Messages.BingoRoomCreateReq
+
 typealias BingoRoomJoinReq = Messages.BingoRoomJoinReq
+
 typealias BingoRoomJoinRes = Messages.BingoRoomJoinRes
+
 typealias SubmitBingoCardReq = Messages.SubmitBingoCardReq
+
 typealias SubmitBingoCardRes = Messages.SubmitBingoCardRes
+
 typealias ObserveBingoEventsReq = Messages.ObserveBingoEventsReq
+
 typealias ObserveBingoEventsRes = Messages.ObserveBingoEventsRes
+
 typealias StopObservingBingoEventsReq = Messages.StopObservingBingoEventsReq
+
 typealias StopObservingBingoEventsRes = Messages.StopObservingBingoEventsRes
+
 typealias PlayerJoinedNotify = Messages.PlayerJoinedNotify
+
 typealias BingoGameStartedNotify = Messages.BingoGameStartedNotify
+
 typealias BingoNumberDrawnNotify = Messages.BingoNumberDrawnNotify
+
 typealias BingoStateNotify = Messages.BingoStateNotify
+
 typealias BingoGameEndedNotify = Messages.BingoGameEndedNotify
+
 typealias BingoRewardAnnouncedNotify = Messages.BingoRewardAnnouncedNotify
+
 typealias BingoRewardAcquiredEvent = Messages.BingoRewardAcquiredEvent
+
 typealias BingoRoomState = Messages.BingoRoomState
+
 typealias BingoPlayerState = Messages.BingoPlayerState
 
 val SubmitBingoCardReq.card: List<Int>
@@ -55,23 +89,13 @@ val BingoPlayerState.marks: List<Boolean>
     get() = marksList
 
 fun AuthenticateReq(accessToken: String): AuthenticateReq =
-    Messages.AuthenticateReq.newBuilder()
-        .setAccessToken(accessToken)
-        .build()
+    Messages.AuthenticateReq.newBuilder().setAccessToken(accessToken).build()
 
-fun AuthenticateRes(
-    actorId: String,
-    displayName: String,
-): AuthenticateRes =
-    Messages.AuthenticateRes.newBuilder()
-        .setActorId(actorId)
-        .setDisplayName(displayName)
-        .build()
+fun AuthenticateRes(actorId: String, displayName: String): AuthenticateRes =
+    Messages.AuthenticateRes.newBuilder().setActorId(actorId).setDisplayName(displayName).build()
 
 fun AuthenticatePlayerReq(accessToken: String): AuthenticatePlayerReq =
-    Messages.AuthenticatePlayerReq.newBuilder()
-        .setAccessToken(accessToken)
-        .build()
+    Messages.AuthenticatePlayerReq.newBuilder().setAccessToken(accessToken).build()
 
 fun AuthenticatePlayerRes(
     accepted: Boolean,
@@ -95,7 +119,10 @@ fun GetPlayerRecordReq(actorId: String): GetPlayerRecordReq =
 
 fun GetPlayerRecordRes(actorId: String, wins: Int, losses: Int): GetPlayerRecordRes =
     Messages.GetPlayerRecordRes.newBuilder()
-        .setActorId(actorId).setWins(wins).setLosses(losses).build()
+        .setActorId(actorId)
+        .setWins(wins)
+        .setLosses(losses)
+        .build()
 
 fun ReportBingoResultReq(
     roomId: String,
@@ -104,50 +131,35 @@ fun ReportBingoResultReq(
     finalDrawSeq: Int,
 ): ReportBingoResultReq =
     Messages.ReportBingoResultReq.newBuilder()
-        .setRoomId(roomId).setActorId(actorId).setWon(won)
-        .setFinalDrawSeq(finalDrawSeq).build()
+        .setRoomId(roomId)
+        .setActorId(actorId)
+        .setWon(won)
+        .setFinalDrawSeq(finalDrawSeq)
+        .build()
 
 fun ReportBingoResultRes(actorId: String, wins: Int, losses: Int): ReportBingoResultRes =
     Messages.ReportBingoResultRes.newBuilder()
-        .setActorId(actorId).setWins(wins).setLosses(losses).build()
+        .setActorId(actorId)
+        .setWins(wins)
+        .setLosses(losses)
+        .build()
 
-fun EnsurePlayerActorReq(
-    actorId: String,
-    displayName: String,
-): EnsurePlayerActorReq =
+fun EnsurePlayerActorReq(actorId: String, displayName: String): EnsurePlayerActorReq =
     Messages.EnsurePlayerActorReq.newBuilder()
         .setActorId(actorId)
         .setDisplayName(displayName)
         .build()
 
-fun EnsurePlayerActorRes(
-    actorId: String,
-    actorType: String,
-): EnsurePlayerActorRes =
-    Messages.EnsurePlayerActorRes.newBuilder()
-        .setActorId(actorId)
-        .setActorType(actorType)
-        .build()
+fun EnsurePlayerActorRes(actorId: String, actorType: String): EnsurePlayerActorRes =
+    Messages.EnsurePlayerActorRes.newBuilder().setActorId(actorId).setActorType(actorType).build()
 
 fun MatchBingoReq(mode: String): MatchBingoReq =
-    Messages.MatchBingoReq.newBuilder()
-        .setMode(mode)
-        .build()
+    Messages.MatchBingoReq.newBuilder().setMode(mode).build()
 
-fun MatchBingoRes(
-    roomId: String,
-    state: BingoRoomState,
-): MatchBingoRes =
-    Messages.MatchBingoRes.newBuilder()
-        .setRoomId(roomId)
-        .setState(state)
-        .build()
+fun MatchBingoRes(roomId: String, state: BingoRoomState): MatchBingoRes =
+    Messages.MatchBingoRes.newBuilder().setRoomId(roomId).setState(state).build()
 
-fun MatchBingoApiReq(
-    actorId: String,
-    displayName: String,
-    mode: String,
-): MatchBingoApiReq =
+fun MatchBingoApiReq(actorId: String, displayName: String, mode: String): MatchBingoApiReq =
     Messages.MatchBingoApiReq.newBuilder()
         .setActorId(actorId)
         .setDisplayName(displayName)
@@ -155,29 +167,17 @@ fun MatchBingoApiReq(
         .build()
 
 fun MatchBingoApiRes(roomId: String): MatchBingoApiRes =
-    Messages.MatchBingoApiRes.newBuilder()
-        .setRoomId(roomId)
-        .build()
+    Messages.MatchBingoApiRes.newBuilder().setRoomId(roomId).build()
 
-fun ReserveBingoRoomReq(
-    actorId: String,
-    mode: String,
-    levelBucket: String,
-): ReserveBingoRoomReq =
+fun ReserveBingoRoomReq(actorId: String, mode: String, levelBucket: String): ReserveBingoRoomReq =
     Messages.ReserveBingoRoomReq.newBuilder()
         .setActorId(actorId)
         .setMode(mode)
         .setLevelBucket(levelBucket)
         .build()
 
-fun ReserveBingoRoomRes(
-    roomId: String,
-    settings: BingoRoomSettingsPayload,
-): ReserveBingoRoomRes =
-    Messages.ReserveBingoRoomRes.newBuilder()
-        .setRoomId(roomId)
-        .setSettings(settings)
-        .build()
+fun ReserveBingoRoomRes(roomId: String, settings: BingoRoomSettingsPayload): ReserveBingoRoomRes =
+    Messages.ReserveBingoRoomRes.newBuilder().setRoomId(roomId).setSettings(settings).build()
 
 fun BingoRoomSettingsPayload(
     mode: String,
@@ -197,9 +197,7 @@ fun BingoRoomSettingsPayload(
         .build()
 
 fun BingoRoomCreateReq(settings: BingoRoomSettingsPayload): BingoRoomCreateReq =
-    Messages.BingoRoomCreateReq.newBuilder()
-        .setSettings(settings)
-        .build()
+    Messages.BingoRoomCreateReq.newBuilder().setSettings(settings).build()
 
 fun BingoRoomJoinReq(
     roomId: String,
@@ -215,47 +213,25 @@ fun BingoRoomJoinReq(
         .build()
 
 fun BingoRoomJoinRes(state: BingoRoomState): BingoRoomJoinRes =
-    Messages.BingoRoomJoinRes.newBuilder()
-        .setState(state)
-        .build()
+    Messages.BingoRoomJoinRes.newBuilder().setState(state).build()
 
-fun SubmitBingoCardReq(
-    roomId: String,
-    card: List<Int>,
-): SubmitBingoCardReq =
-    Messages.SubmitBingoCardReq.newBuilder()
-        .setRoomId(roomId)
-        .addAllCard(card)
-        .build()
+fun SubmitBingoCardReq(roomId: String, card: List<Int>): SubmitBingoCardReq =
+    Messages.SubmitBingoCardReq.newBuilder().setRoomId(roomId).addAllCard(card).build()
 
 fun SubmitBingoCardRes(state: BingoRoomState): SubmitBingoCardRes =
-    Messages.SubmitBingoCardRes.newBuilder()
-        .setState(state)
-        .build()
+    Messages.SubmitBingoCardRes.newBuilder().setState(state).build()
 
 fun ObserveBingoEventsReq(roomId: String): ObserveBingoEventsReq =
-    Messages.ObserveBingoEventsReq.newBuilder()
-        .setRoomId(roomId)
-        .build()
+    Messages.ObserveBingoEventsReq.newBuilder().setRoomId(roomId).build()
 
-fun ObserveBingoEventsRes(
-    subscribed: Boolean,
-): ObserveBingoEventsRes =
-    Messages.ObserveBingoEventsRes.newBuilder()
-        .setSubscribed(subscribed)
-        .build()
+fun ObserveBingoEventsRes(subscribed: Boolean): ObserveBingoEventsRes =
+    Messages.ObserveBingoEventsRes.newBuilder().setSubscribed(subscribed).build()
 
 fun StopObservingBingoEventsReq(roomId: String): StopObservingBingoEventsReq =
-    Messages.StopObservingBingoEventsReq.newBuilder()
-        .setRoomId(roomId)
-        .build()
+    Messages.StopObservingBingoEventsReq.newBuilder().setRoomId(roomId).build()
 
-fun StopObservingBingoEventsRes(
-    stopped: Boolean,
-): StopObservingBingoEventsRes =
-    Messages.StopObservingBingoEventsRes.newBuilder()
-        .setStopped(stopped)
-        .build()
+fun StopObservingBingoEventsRes(stopped: Boolean): StopObservingBingoEventsRes =
+    Messages.StopObservingBingoEventsRes.newBuilder().setStopped(stopped).build()
 
 fun PlayerJoinedNotify(
     roomId: String,
@@ -275,9 +251,7 @@ fun PlayerJoinedNotify(
         .build()
 
 fun BingoGameStartedNotify(state: BingoRoomState): BingoGameStartedNotify =
-    Messages.BingoGameStartedNotify.newBuilder()
-        .setState(state)
-        .build()
+    Messages.BingoGameStartedNotify.newBuilder().setState(state).build()
 
 fun BingoNumberDrawnNotify(
     roomId: String,
@@ -293,14 +267,10 @@ fun BingoNumberDrawnNotify(
         .build()
 
 fun BingoStateNotify(state: BingoRoomState): BingoStateNotify =
-    Messages.BingoStateNotify.newBuilder()
-        .setState(state)
-        .build()
+    Messages.BingoStateNotify.newBuilder().setState(state).build()
 
 fun BingoGameEndedNotify(state: BingoRoomState): BingoGameEndedNotify =
-    Messages.BingoGameEndedNotify.newBuilder()
-        .setState(state)
-        .build()
+    Messages.BingoGameEndedNotify.newBuilder().setState(state).build()
 
 fun BingoRewardAnnouncedNotify(
     roomId: String,

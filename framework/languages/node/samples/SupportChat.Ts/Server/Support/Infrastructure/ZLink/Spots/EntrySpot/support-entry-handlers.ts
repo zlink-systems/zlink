@@ -1,8 +1,5 @@
 import { Inject } from '@nestjs/common';
-import {
-  ZLINK_CHANNEL_CLIENT,
-  zlinkEntrySpotActorRequestHandler
-} from '@zlink-systems/nestjs';
+import { ZLINK_CHANNEL_CLIENT, zlinkEntrySpotActorRequestHandler } from '@zlink-systems/nestjs';
 import { AgentAvailabilityDirectory } from '../../../../Application/ConversationAssignment/agent-availability-directory';
 import { SampleNames, SampleTimings } from '../../../../../Configuration/sample-names';
 import {
@@ -10,10 +7,7 @@ import {
   SupportChatRoles,
   openConversationApi
 } from '../../../../../../Shared/Contracts/messages';
-import {
-  JoinSupportConversation,
-  SupportUserActor
-} from '../../Actors/support-user-actor';
+import { JoinSupportConversation, SupportUserActor } from '../../Actors/support-user-actor';
 import { SupportActorDirectory } from '../../Actors/support-actor-directory';
 import { SupportEntrySpot } from './support-entry-spot';
 import type {
@@ -36,14 +30,24 @@ import type {
   entrySpot: () => SupportEntrySpot,
   packetName: PacketNames.setAgentAvailableReq
 })
-class SetAgentAvailableHandler implements ZLinkEntrySpotActorRequestHandler<SupportEntrySpot, SupportUserActor, SetAgentAvailableReq, SetAgentAvailableRes> {
+class SetAgentAvailableHandler implements ZLinkEntrySpotActorRequestHandler<
+  SupportEntrySpot,
+  SupportUserActor,
+  SetAgentAvailableReq,
+  SetAgentAvailableRes
+> {
   constructor(
     private readonly availability: AgentAvailabilityDirectory,
     private readonly directory: SupportActorDirectory
   ) {}
 
   // --8<-- [start:doc-sc-set-available]
-  async handle(_spot: SupportEntrySpot, actor: SupportUserActor, _context: ZLinkMessageContext, request: SetAgentAvailableReq): Promise<SetAgentAvailableRes> {
+  async handle(
+    _spot: SupportEntrySpot,
+    actor: SupportUserActor,
+    _context: ZLinkMessageContext,
+    request: SetAgentAvailableReq
+  ): Promise<SetAgentAvailableRes> {
     const identity = requireIdentity(this.directory, actor.actorId);
     if (identity.role !== SupportChatRoles.Agent || identity.actorId !== identity.participantId) {
       throw new Error('Customer actor must not set agent availability.');
@@ -58,7 +62,12 @@ class SetAgentAvailableHandler implements ZLinkEntrySpotActorRequestHandler<Supp
   entrySpot: () => SupportEntrySpot,
   packetName: PacketNames.joinConversationReq
 })
-class JoinConversationAtEntryHandler implements ZLinkEntrySpotActorRequestHandler<SupportEntrySpot, SupportUserActor, JoinConversationReq, JoinConversationRes> {
+class JoinConversationAtEntryHandler implements ZLinkEntrySpotActorRequestHandler<
+  SupportEntrySpot,
+  SupportUserActor,
+  JoinConversationReq,
+  JoinConversationRes
+> {
   constructor(private readonly directory: SupportActorDirectory) {}
 
   async handle(
@@ -72,12 +81,14 @@ class JoinConversationAtEntryHandler implements ZLinkEntrySpotActorRequestHandle
       throw new Error('Conversation metadata is required for JoinConversationReq.');
     }
     const identity = requireIdentity(this.directory, actor.actorId);
-    return actor.scheduleConversationJoin(new JoinSupportConversation(
-      conversationId,
-      identity.participantId,
-      identity.role,
-      identity.displayName
-    ));
+    return actor.scheduleConversationJoin(
+      new JoinSupportConversation(
+        conversationId,
+        identity.participantId,
+        identity.role,
+        identity.displayName
+      )
+    );
   }
 }
 
@@ -86,13 +97,23 @@ class JoinConversationAtEntryHandler implements ZLinkEntrySpotActorRequestHandle
   entrySpot: () => SupportEntrySpot,
   packetName: PacketNames.openConversationReq
 })
-class OpenConversationActorHandler implements ZLinkEntrySpotActorRequestHandler<SupportEntrySpot, SupportUserActor, OpenConversationReq, OpenConversationRes> {
+class OpenConversationActorHandler implements ZLinkEntrySpotActorRequestHandler<
+  SupportEntrySpot,
+  SupportUserActor,
+  OpenConversationReq,
+  OpenConversationRes
+> {
   constructor(
     @Inject(ZLINK_CHANNEL_CLIENT) private readonly channels: ZLinkChannelClient,
     private readonly directory: SupportActorDirectory
   ) {}
 
-  async handle(_spot: SupportEntrySpot, actor: SupportUserActor, _context: ZLinkMessageContext, request: OpenConversationReq): Promise<OpenConversationRes> {
+  async handle(
+    _spot: SupportEntrySpot,
+    actor: SupportUserActor,
+    _context: ZLinkMessageContext,
+    request: OpenConversationReq
+  ): Promise<OpenConversationRes> {
     const identity = requireIdentity(this.directory, actor.actorId);
     if (identity.role !== SupportChatRoles.Customer) {
       throw new Error('Only a customer can open a support conversation.');
@@ -105,12 +126,14 @@ class OpenConversationActorHandler implements ZLinkEntrySpotActorRequestHandler<
       )
       .timeout(SampleTimings.requestTimeout)
       .submit<OpenConversationApiRes>();
-    actor.scheduleConversationJoin(new JoinSupportConversation(
-      opened.conversationId,
-      identity.participantId,
-      identity.role,
-      identity.displayName
-    ));
+    actor.scheduleConversationJoin(
+      new JoinSupportConversation(
+        opened.conversationId,
+        identity.participantId,
+        identity.role,
+        identity.displayName
+      )
+    );
     // --8<-- [end:doc-sc-open-actor]
     return {
       conversationId: opened.conversationId,
@@ -131,8 +154,4 @@ function requireIdentity(directory: SupportActorDirectory, actorId: string) {
   return identity;
 }
 
-export {
-  JoinConversationAtEntryHandler,
-  SetAgentAvailableHandler,
-  OpenConversationActorHandler
-};
+export { JoinConversationAtEntryHandler, SetAgentAvailableHandler, OpenConversationActorHandler };

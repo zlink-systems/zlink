@@ -6,8 +6,10 @@ import type { IssueSessionTicket, SessionTicket } from '../../Shared/contracts';
 // A ClientServer channel handler is written exactly like a RouteMesh one. Only
 // the way the caller reaches it differs.
 @Injectable()
-export class IssueSessionTicketHandler
-implements ZLinkRequestHandler<IssueSessionTicket, SessionTicket> {
+export class IssueSessionTicketHandler implements ZLinkRequestHandler<
+  IssueSessionTicket,
+  SessionTicket
+> {
   async handle(request: IssueSessionTicket, context: ZLinkMessageContext): Promise<SessionTicket> {
     void context;
     return { value: `ticket-${request.playerId}` };

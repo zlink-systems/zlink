@@ -32,10 +32,7 @@ class ChangeNicknameHandler :
         // on an HTTP path with no bound connection, where push ends with InvalidOperation.
         // Rename is already complete, so only that failure is discarded.
         try {
-            actor.context().boundSession()
-                .send(NicknameChanged(actor.nickname))
-                .submit()
-                .await()
+            actor.context().boundSession().send(NicknameChanged(actor.nickname)).submit().await()
         } catch (error: ZLinkFrameworkException) {
             if (error.kind() != ZLinkFrameworkErrorKind.INVALID_OPERATION) {
                 throw error

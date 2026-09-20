@@ -20,5 +20,4 @@ class ZoneEntrySpot implements ZLinkEntrySpot<PlayerActor> {
   async onDisconnectActor(_actor: PlayerActor): Promise<void> {}
 }
 
-
 export { ZoneEntrySpot };

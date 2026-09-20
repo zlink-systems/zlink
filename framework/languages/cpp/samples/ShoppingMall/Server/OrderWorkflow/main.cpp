@@ -67,9 +67,8 @@ class order_workflow_spot_t : public instance_spot_t
     {
         _order_id = _context.spot_id ();
         _store.update ([&] (nlohmann::json &state) {
-            state["testHooks"]["activeWorkflowSpots"][_order_id] =
-              nlohmann::json{{"node", _instance.instance_id},
-                             {"generation", _context.object_generation ()}};
+            state["testHooks"]["activeWorkflowSpots"][_order_id] = nlohmann::json{
+              {"node", _instance.instance_id}, {"generation", _context.object_generation ()}};
         });
         co_return;
     }
@@ -86,11 +85,14 @@ class order_workflow_spot_t : public instance_spot_t
     task_t<start_order_workflow_res_t> start (const start_order_workflow_req_t &request)
     {
         auto state = _store.update ([&] (nlohmann::json &json) {
-            return run_workflow (json, request.order_id, source_command_id (request), &request,
+            return run_workflow (json,
+                                 request.order_id,
+                                 source_command_id (request),
+                                 &request,
                                  /*max_steps=*/1);
         });
-        std::cerr << "shoppingmall-order started order=" << state.order_id
-                  << " spot=" << _order_id << "\n";
+        std::cerr << "shoppingmall-order started order=" << state.order_id << " spot=" << _order_id
+                  << "\n";
         if (state.status != order_status_t::confirmed && state.status != order_status_t::failed) {
             schedule_continue (state.order_id);
         }
@@ -240,13 +242,20 @@ class planned_relocation_workflow_spot_t final : public spot_t<actor_t>
     {
         const auto fixture_id = std::string (_context.spot_id ());
         constexpr std::string_view prefix{"shoppingmall.planned-relocation:"};
-        if (!fixture_id.starts_with (prefix)) co_return;
+        if (!fixture_id.starts_with (prefix))
+            co_return;
         const auto order_id = fixture_id.substr (prefix.size ());
-        enum class initialization_role_t { ignored, source, target };
+        enum class initialization_role_t
+        {
+            ignored,
+            source,
+            target
+        };
         const auto role = _store.update ([&] (nlohmann::json &state) {
             auto &planned = state["testHooks"]["plannedRelocation"];
             const auto found = planned.find (order_id);
-            if (found == planned.end ()) return initialization_role_t::ignored;
+            if (found == planned.end ())
+                return initialization_role_t::ignored;
             if (found->value ("fixtureGeneration", std::uint64_t{}) == 0) {
                 (*found)["sourceNode"] = _instance.instance_id;
                 (*found)["fixtureGeneration"] = _context.object_generation ();
@@ -255,8 +264,7 @@ class planned_relocation_workflow_spot_t final : public spot_t<actor_t>
             if (found->value ("sourceNode", std::string{}) == _instance.instance_id) {
                 return initialization_role_t::ignored;
             }
-            if (found->value ("fixtureGeneration", std::uint64_t{})
-                  != _context.object_generation ()
+            if (found->value ("fixtureGeneration", std::uint64_t{}) != _context.object_generation ()
                 || found->value ("replayed", false)) {
                 return initialization_role_t::ignored;
             }
@@ -272,7 +280,10 @@ class planned_relocation_workflow_spot_t final : public spot_t<actor_t>
             std::cerr << "shoppingmall-order replayed order=" << order_id
                       << " generation=" << _context.object_generation () << "\n";
             _store.update ([&] (nlohmann::json &state) {
-                return run_workflow (state, order_id, "continue:planned-relocation", nullptr,
+                return run_workflow (state,
+                                     order_id,
+                                     "continue:planned-relocation",
+                                     nullptr,
                                      /*max_steps=*/16);
             });
         }
@@ -284,8 +295,8 @@ class planned_relocation_workflow_spot_t final : public spot_t<actor_t>
     {
         const auto fixture_id = std::string (_context.spot_id ());
         constexpr std::string_view prefix{"shoppingmall.planned-relocation:"};
-        const auto order_id = fixture_id.starts_with (prefix) ? fixture_id.substr (prefix.size ())
-                                                              : std::string{};
+        const auto order_id =
+          fixture_id.starts_with (prefix) ? fixture_id.substr (prefix.size ()) : std::string{};
         const auto ready = !order_id.empty () && _store.read ([&] (const nlohmann::json &state) {
             const auto planned = state["testHooks"]["plannedRelocation"].find (order_id);
             return planned != state["testHooks"]["plannedRelocation"].end ()
@@ -327,8 +338,8 @@ class planned_relocation_workflow_spot_t final : public spot_t<actor_t>
     zlink::framework::timer_t _readiness_timer;
 };
 
-void planned_relocation_readiness_timer_handler_t::handle (
-  planned_relocation_workflow_spot_t &spot, const timer_tick_t &) const
+void planned_relocation_readiness_timer_handler_t::handle (planned_relocation_workflow_spot_t &spot,
+                                                           const timer_tick_t &) const
 {
     spot.check_relocation_readiness ();
 }
@@ -366,18 +377,18 @@ class planned_relocation_handler_t
                              {"replayed", false}};
             return fixture;
         });
-        if (fixture_id.empty ()) co_return planned_relocation_res_t{};
+        if (fixture_id.empty ())
+            co_return planned_relocation_res_t{};
         try {
             const auto created =
-              co_await _spots.get_or_create (spot_id_t (fixture_id),
-                                             "shoppingmall.planned.relocation.workflow")
+              co_await _spots
+                .get_or_create (spot_id_t (fixture_id), "shoppingmall.planned.relocation.workflow")
                 .async ();
-            co_return planned_relocation_res_t{
-              true, created.spot.object_generation ()};
+            co_return planned_relocation_res_t{true, created.spot.object_generation ()};
         }
         catch (const framework_exception_t &error) {
-            throw framework_exception_t (
-              error.kind (), "planned relocation workflow fixture was not created");
+            throw framework_exception_t (error.kind (),
+                                         "planned relocation workflow fixture was not created");
         }
     }
 
@@ -431,12 +442,13 @@ class planned_relocation_service_t final : public hosted_service_t
                     return std::string{};
                 });
                 if (!fixture_id.empty ()) {
-                    const auto peer_deadline = std::chrono::steady_clock::now ()
-                                               + std::chrono::seconds (5);
-                    while (!_stopping.load (std::memory_order_acquire)
-                           && _mesh->snapshot (sample_names_t::order_workflow_channel)
-                                  .ready_peer_count == 0
-                           && std::chrono::steady_clock::now () < peer_deadline) {
+                    const auto peer_deadline =
+                      std::chrono::steady_clock::now () + std::chrono::seconds (5);
+                    while (
+                      !_stopping.load (std::memory_order_acquire)
+                      && _mesh->snapshot (sample_names_t::order_workflow_channel).ready_peer_count
+                           == 0
+                      && std::chrono::steady_clock::now () < peer_deadline) {
                         std::this_thread::sleep_for (std::chrono::milliseconds (1));
                     }
                     if (_mesh->snapshot (sample_names_t::order_workflow_channel).ready_peer_count
@@ -446,12 +458,11 @@ class planned_relocation_service_t final : public hosted_service_t
                           "planned relocation has no admitted workflow peer");
                     }
                     auto operation = _app.relocate ({.mode = relocation_mode_t::planned_maintenance,
-                                                      .deadline = std::chrono::seconds (15)});
-                    const auto readiness_deadline = std::chrono::steady_clock::now ()
-                                                    + std::chrono::seconds (5);
+                                                     .deadline = std::chrono::seconds (15)});
+                    const auto readiness_deadline =
+                      std::chrono::steady_clock::now () + std::chrono::seconds (5);
                     while (!_stopping.load (std::memory_order_acquire)
-                           && _runtime->status ().state
-                                != framework_runtime_state_t::relocating
+                           && _runtime->status ().state != framework_runtime_state_t::relocating
                            && std::chrono::steady_clock::now () < readiness_deadline) {
                         std::this_thread::sleep_for (std::chrono::milliseconds (1));
                     }
@@ -478,8 +489,7 @@ class planned_relocation_service_t final : public hosted_service_t
                     };
                     auto completion = std::make_shared<completion_t> ();
                     observe_task_completion (
-                      operation,
-                      [completion] (const result_t<relocation_result_t> &result) {
+                      operation, [completion] (const result_t<relocation_result_t> &result) {
                           std::exception_ptr error;
                           try {
                               (void) result.value ();
@@ -555,10 +565,12 @@ int main (int argc, char **argv)
       .listen (instance.route_endpoint);
     workflow_route.objects ()
       .server ()
-      .add_instance_spot_factory<order_workflow_spot_t, sample_topology_t,
+      .add_instance_spot_factory<order_workflow_spot_t,
+                                 sample_topology_t,
                                  workflow_instance_topology_t> (sample_names_t::order_workflow_spot)
       .recreate_on_relocation ()
-      .add_spot_factory<planned_relocation_workflow_spot_t, sample_topology_t,
+      .add_spot_factory<planned_relocation_workflow_spot_t,
+                        sample_topology_t,
                         workflow_instance_topology_t> ("shoppingmall.planned.relocation.workflow")
       .set_execution_mode (user_spot_execution_mode_t::spot_wide)
       .set_relocation_coordination_mode (spot_relocation_coordination_mode_t::application_signaled)
@@ -568,7 +580,7 @@ int main (int argc, char **argv)
       .listen (instance.http_url)
       .map_health ("/health")
       .map_post<planned_relocation_handler_t> ("/self-check/relocation");
-    app.add_hosted_service (std::make_unique<planned_relocation_service_t> (
-      app, topology, instance.instance_id));
+    app.add_hosted_service (
+      std::make_unique<planned_relocation_service_t> (app, topology, instance.instance_id));
     return app.run (argc, argv);
 }

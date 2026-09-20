@@ -23,10 +23,7 @@ class match_queue_t : public fw::instance_spot_t
 
     const fw::instance_spot_context_t &context () const noexcept override { return _context; }
 
-    void configure () override
-    {
-        _context.handlers ().add_handler<&match_queue_t::join> ();
-    }
+    void configure () override { _context.handlers ().add_handler<&match_queue_t::join> (); }
 
     int waiting () const { return static_cast<int> (_waiting.size ()); }
 

@@ -17,9 +17,12 @@ internal sealed class SupportChatSession(
     IZLinkSessionContext context,
     IZLinkRouteClient channels,
     IZLinkActorManager actors,
-    ILogger<SupportChatSession> logger) : IZLinkSession
+    ILogger<SupportChatSession> logger
+) : IZLinkSession
 {
-    private readonly Dictionary<string, IZLinkSessionActor> _conversationActors = new(StringComparer.Ordinal);
+    private readonly Dictionary<string, IZLinkSessionActor> _conversationActors = new(
+        StringComparer.Ordinal
+    );
     private IZLinkSessionActor? _identityActor;
     private string _identityActorId = string.Empty;
     private string _identityDisplayName = string.Empty;
@@ -27,7 +30,8 @@ internal sealed class SupportChatSession(
 
     public IZLinkSessionContext Context { get; } = context;
 
-    public ValueTask OnConnectedAsync(CancellationToken cancellationToken) => ValueTask.CompletedTask;
+    public ValueTask OnConnectedAsync(CancellationToken cancellationToken) =>
+        ValueTask.CompletedTask;
 
     public async ValueTask OnDisconnectedAsync(CancellationToken cancellationToken)
     {
@@ -46,7 +50,8 @@ internal sealed class SupportChatSession(
     public async ValueTask OnDispatchAsync(
         ZLinkSessionDispatchContext dispatch,
         ZLinkMessage payload,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken
+    )
     {
         switch (dispatch.PacketName)
         {
@@ -61,20 +66,28 @@ internal sealed class SupportChatSession(
                 return;
         }
     }
+
     // --8<-- [end:doc-sc-session-dispatch]
 
-    private async ValueTask AuthenticateAsync(ZLinkMessage payload, CancellationToken cancellationToken)
+    private async ValueTask AuthenticateAsync(
+        ZLinkMessage payload,
+        CancellationToken cancellationToken
+    )
     {
         var request = payload.Decode<AuthenticateReq>();
-        var authenticated = await channels.RequestToChannel(SampleNames.ApiChannel,
-                new AuthenticateUserReq(request.AccessToken))
+        var authenticated = await channels
+            .RequestToChannel(SampleNames.ApiChannel, new AuthenticateUserReq(request.AccessToken))
             .Async<AuthenticateUserRes>(cancellationToken);
 
-        if (!authenticated.Accepted
+        if (
+            !authenticated.Accepted
             || string.IsNullOrWhiteSpace(authenticated.ActorId)
             || string.IsNullOrWhiteSpace(authenticated.DisplayName)
-            || string.IsNullOrWhiteSpace(authenticated.Role))
-            throw new InvalidOperationException(authenticated.Reason ?? "SupportChat authentication failed.");
+            || string.IsNullOrWhiteSpace(authenticated.Role)
+        )
+            throw new InvalidOperationException(
+                authenticated.Reason ?? "SupportChat authentication failed."
+            );
 
         // --8<-- [start:doc-sc-session-auth]
         // The identity actor's ParticipantId is its own ActorId (customer id or roster id).
@@ -84,28 +97,33 @@ internal sealed class SupportChatSession(
                 authenticated.ActorId,
                 authenticated.DisplayName,
                 authenticated.Role,
-                authenticated.ActorId),
-            cancellationToken);
+                authenticated.ActorId
+            ),
+            cancellationToken
+        );
 
-        _identityActor = await Context.Actors.BindOrGetAsync(
-            actor,
-            cancellationToken);
+        _identityActor = await Context.Actors.BindOrGetAsync(actor, cancellationToken);
         _identityActorId = authenticated.ActorId;
         _identityDisplayName = authenticated.DisplayName;
         _identityRole = authenticated.Role;
         // --8<-- [end:doc-sc-session-auth]
 
-        await Context.Client.Reply(new AuthenticateRes(
-                authenticated.ActorId,
-                authenticated.DisplayName,
-                authenticated.Role))
+        await Context
+            .Client.Reply(
+                new AuthenticateRes(
+                    authenticated.ActorId,
+                    authenticated.DisplayName,
+                    authenticated.Role
+                )
+            )
             .Async(cancellationToken);
     }
 
     private async ValueTask JoinConversationAsync(
         ZLinkSessionDispatchContext dispatch,
         ZLinkMessage payload,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken
+    )
     {
         // A customer's identity actor is itself the conversation participant, so a
         // customer join just refreshes state on the bound identity actor.
@@ -133,46 +151,55 @@ internal sealed class SupportChatSession(
                 conversationActorId,
                 _identityDisplayName,
                 SupportChatRoles.Agent,
-                _identityActorId),
-            cancellationToken);
+                _identityActorId
+            ),
+            cancellationToken
+        );
 
         _conversationActors[conversationId] = await Context.Actors.BindOrGetAsync(
             actor,
-            cancellationToken);
-        await _conversationActors[conversationId].RelayAsync(
-            payload,
-            cancellationToken);
+            cancellationToken
+        );
+        await _conversationActors[conversationId].RelayAsync(payload, cancellationToken);
         // --8<-- [end:doc-sc-agent-join]
         logger.LogInformation(
             "session: agent conversation join submitted. roster={RosterActorId}, conversation={ConversationId}",
             _identityActorId,
-            conversationId);
+            conversationId
+        );
     }
 
     // --8<-- [start:doc-sc-metadata-relay]
     private async ValueTask RelayConversationPacketAsync(
         ZLinkSessionDispatchContext dispatch,
         ZLinkMessage payload,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken
+    )
     {
         var conversationId = dispatch.Metadata.Find(SampleNames.ConversationIdMetadataKey);
-        var target = conversationId is not null && _conversationActors.TryGetValue(conversationId, out var conversationActor)
-            ? conversationActor
-            : RequireIdentityActor();
+        var target =
+            conversationId is not null
+            && _conversationActors.TryGetValue(conversationId, out var conversationActor)
+                ? conversationActor
+                : RequireIdentityActor();
         await target.RelayAsync(payload, cancellationToken);
     }
+
     // --8<-- [end:doc-sc-metadata-relay]
 
     private IZLinkSessionActor RequireIdentityActor()
     {
         return _identityActor
-               ?? throw new InvalidOperationException("Client must authenticate before sending conversation packets.");
+            ?? throw new InvalidOperationException(
+                "Client must authenticate before sending conversation packets."
+            );
     }
 
     private async ValueTask<ActorRef> GetOrCreateActorAsync(
         string actorId,
         SupportUserActorCreateReq createRequest,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken
+    )
     {
         return await actors
             .GetOrCreate(actorId, SampleNames.SupportActorType)
@@ -183,9 +210,11 @@ internal sealed class SupportChatSession(
             ZLinkActorCreateResult.Existing value => value.Actor,
             ZLinkActorCreateResult.Created value => value.Actor,
             ZLinkActorCreateResult.Rejected => throw new InvalidOperationException(
-                $"Support Actor '{actorId}' creation was rejected."),
+                $"Support Actor '{actorId}' creation was rejected."
+            ),
             _ => throw new InvalidOperationException(
-                $"Support Actor '{actorId}' returned an unknown creation result.")
+                $"Support Actor '{actorId}' returned an unknown creation result."
+            ),
         };
     }
 
@@ -194,10 +223,11 @@ internal sealed class SupportChatSession(
         var conversationId = dispatch.Metadata.Find(SampleNames.ConversationIdMetadataKey);
         if (conversationId is null)
         {
-            throw new InvalidOperationException("Conversation packet is missing the ConversationId metadata.");
+            throw new InvalidOperationException(
+                "Conversation packet is missing the ConversationId metadata."
+            );
         }
 
         return conversationId;
     }
-
 }

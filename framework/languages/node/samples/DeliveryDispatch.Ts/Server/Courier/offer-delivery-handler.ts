@@ -1,11 +1,15 @@
-import { zlinkEntrySpotActorRequestHandler, zlinkEntrySpotActorSendHandler } from '@zlink-systems/nestjs';
 import {
-  PacketNames
-} from '../../Shared/Contracts/messages';
+  zlinkEntrySpotActorRequestHandler,
+  zlinkEntrySpotActorSendHandler
+} from '@zlink-systems/nestjs';
+import { PacketNames } from '../../Shared/Contracts/messages';
+import type { ZLinkMessageContext } from '@zlink-systems/framework';
 import type {
-  ZLinkMessageContext
-} from '@zlink-systems/framework';
-import type { BindCourierSessionReq, BindCourierSessionRes, CourierDecisionMsg, OfferDeliveryMsg } from '../../Shared/Contracts/messages';
+  BindCourierSessionReq,
+  BindCourierSessionRes,
+  CourierDecisionMsg,
+  OfferDeliveryMsg
+} from '../../Shared/Contracts/messages';
 import { CourierActor } from './courier-actor';
 import { CourierEntrySpot } from './courier-entry-spot';
 
@@ -15,7 +19,12 @@ import { CourierEntrySpot } from './courier-entry-spot';
   packetName: PacketNames.offerDelivery
 })
 class CourierActorOfferHandler {
-  async handle(_spot: CourierEntrySpot, actor: CourierActor, _context: ZLinkMessageContext, request: OfferDeliveryMsg): Promise<void> {
+  async handle(
+    _spot: CourierEntrySpot,
+    actor: CourierActor,
+    _context: ZLinkMessageContext,
+    request: OfferDeliveryMsg
+  ): Promise<void> {
     await actor.offer(request);
   }
 }
@@ -42,13 +51,14 @@ class CourierActorSessionBindHandler {
   packetName: PacketNames.courierDecision
 })
 class CourierActorDecisionHandler {
-  async handle(_spot: CourierEntrySpot, actor: CourierActor, _context: ZLinkMessageContext, decision: CourierDecisionMsg): Promise<void> {
+  async handle(
+    _spot: CourierEntrySpot,
+    actor: CourierActor,
+    _context: ZLinkMessageContext,
+    decision: CourierDecisionMsg
+  ): Promise<void> {
     await actor.decide(decision);
   }
 }
 
-export {
-  CourierActorOfferHandler,
-  CourierActorSessionBindHandler,
-  CourierActorDecisionHandler
-};
+export { CourierActorOfferHandler, CourierActorSessionBindHandler, CourierActorDecisionHandler };

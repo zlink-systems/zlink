@@ -5,8 +5,7 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 
 public final class SampleLogging {
-    private SampleLogging() {
-    }
+    private SampleLogging() {}
 
     public static void configure(SampleLogSettings settings, String role) {
         try {
@@ -17,5 +16,4 @@ public final class SampleLogging {
             throw new IllegalStateException("Failed to initialize sample log files.", ex);
         }
     }
-
 }
