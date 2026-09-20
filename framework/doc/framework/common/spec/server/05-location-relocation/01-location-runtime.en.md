@@ -389,8 +389,8 @@ generation isn't created for a nonexistent record.
 ### 3.4 How Different Languages Read and Write the Same Redis Record
 
 MeshNode descriptor, owner lease, ClientServer server descriptor, fanout publisher
-descriptor, and authority record (§4, §3.2, §3.3) must be written to Redis through the
-same storage scheme regardless of language, so a runtime in one language can read a
+descriptor, authority record (§4, §3.2, §3.3), and creation terminal (§7) must be written to
+Redis through the same storage scheme regardless of language, so a runtime in one language can read a
 record another language wrote. This storage scheme is defined by the
 [Location Store provider's official Redis implementation](02-location-store-redis.en.md#8-official-redis-provider--counter-issuance),
 which the Framework calls an "opaque record." For each record, the Framework builds a
@@ -408,9 +408,12 @@ descriptor's and fanout publisher descriptor's key, is called a
 | ClientServer server descriptor | `client-server\0{ChannelName}\0{hex(RoutingId)}` |
 | Fanout publisher descriptor | `fanout-publisher\0{ChannelName}\0{hex(RoutingId)}` |
 | Authority | `authority\0{actor \| spot}\0{Id}` |
+| Creation terminal | `creation-terminal\0{hex(SourceNodeRid)}\0{SourceHostGeneration}\0{hex(OperationId)}` |
 
-`{hex(RoutingId)}` is the lowercase hex representation of the RoutingId's raw bytes.
-`{MeshName}`, `{ChannelName}`, `{OwnerId}`, and the authority's `{Id}` (the global ActorId
+`{hex(RoutingId)}` and `{hex(SourceNodeRid)}` are the lowercase hex representation of each
+identifier's raw bytes. `{SourceHostGeneration}` is a decimal with no sign and no leading
+zero, and `{hex(OperationId)}` is the 32-digit representation, in the same form, of the
+128-bit `OperationId` laid out as 16 big-endian bytes. `{MeshName}`, `{ChannelName}`, `{OwnerId}`, and the authority's `{Id}` (the global ActorId
 or SpotId, §3.3) are UTF-8 bytes concatenated as-is, without a length prefix — only the
 `\0` bytes in the preimage fix the boundary between values, so `MeshName`, `ChannelName`,
 and `Id` themselves must not contain a `\0` byte (§3.3 already imposes this constraint on
@@ -422,8 +425,10 @@ exactly one authority row (§3.3). The
 [store record golden fixture](../../../../../../runtime/protocol/golden/store-record-v1.json)
 pins the key-derivation vectors for this preimage shape.
 
-Each record's value is a canonical JSON value the provider stores and compares only as
-bytes, without interpreting its meaning. It includes at least the following fields.
+The provider stores and compares each record's value only as bytes, without interpreting
+its meaning. A creation terminal's value is the `creation-operation-terminal-v1` bytes as
+they are (§7). Every other record's value is a canonical JSON value that includes at least
+the following fields.
 
 | Field | Meaning |
 |---|---|
@@ -911,7 +916,8 @@ exists before creation.
 
 | Stored final result | Contract |
 |---|---|
-| Format | Uses `creation-operation-terminal-v1` and SHA-256. Network correlation and reply route aren't stored. |
+| Format | `creation-operation-terminal-v1`. Network correlation and reply route aren't stored. |
+| Storage | One opaque record, `creation-terminal` in §3.4. No companion meta/payload key exists. |
 | Size | At most 1,048,576 bytes. |
 | Retention | Up to 5 minutes after the original deadline. Uses the Store time the provider returned. |
 | Re-response | Only the same request can be read. The response is freshly built with the current connection's correlation and reply route. |

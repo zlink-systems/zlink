@@ -266,7 +266,7 @@ The payload is stored as a Redis raw-bytes `STRING`. The Redis key is
 provider specifies at registration and `{reference}` is the §3 reference the Framework issues
 before `Put`. This key format uses a separately versioned domain tag (`zlink-relocation-v1`),
 independent of
-[the Location Store's opaque record](02-location-store-redis.en.md#9-the-official-redis-provider--5-record-opaque-storage-format) —
+[the Location Store's opaque record](02-location-store-redis.en.md#9-the-official-redis-provider--opaque-storage-format) —
 so the two Stores' key spaces don't overlap even when they share the same Redis deployment. The
 braces around `{zlink-relocation-v1}` are the same kind of Redis Cluster hashtag as the Location
 Store's `{zlink-location-v3}` — the same design that pins the opaque record's

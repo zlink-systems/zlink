@@ -245,7 +245,7 @@ operation timeout으로 제한한다.
 Payload는 Redis raw-bytes `STRING`으로 저장한다. Redis key는
 `{prefix}:{zlink-relocation-v1}:blob:{reference}`이며, `{prefix}`는 provider가 등록 시
 지정하는 key namespace, `{reference}`는 Framework가 `Put` 전에 발급한 §3의 reference다. 이
-key 형식은 [Location Store의 opaque record](02-location-store-redis.ko.md#9-공식-redis-provider--5-record-opaque-저장-형식)와
+key 형식은 [Location Store의 opaque record](02-location-store-redis.ko.md#9-공식-redis-provider--opaque-저장-형식)와
 독립적으로 버전을 매긴 별도 domain tag(`zlink-relocation-v1`)를 사용한다 — 두 Store가 같은
 Redis deployment를 공유해도 key 공간이 겹치지 않는다. `{zlink-relocation-v1}`을 감싼 중괄호도
 Location Store의 `{zlink-location-v3}`와 같은 이유의 Redis Cluster hashtag다 — Location

@@ -356,8 +356,8 @@ Key와 배치 정보는 Framework 내부 데이터에 다시 넣지 않는다. P
 ### 3.4 여러 언어가 같은 Redis record를 읽고 쓰는 방법
 
 MeshNode descriptor, owner lease, ClientServer server descriptor, fanout publisher
-descriptor와 authority record(§4, §3.2, §3.3)는 언어가 달라도 같은 저장 방식을 통해 Redis에
-기록해야 다른 언어의 runtime이 그 record를 읽을 수 있다. 이 저장 방식을
+descriptor, authority record(§4, §3.2, §3.3)와 creation terminal(§7)은 언어가 달라도 같은
+저장 방식을 통해 Redis에 기록해야 다른 언어의 runtime이 그 record를 읽을 수 있다. 이 저장 방식을
 [Location Store provider의 공식 Redis 구현](02-location-store-redis.ko.md#8-공식-redis-provider--counter-발급)이
 정의하며, Framework는 이를 "opaque record"라고 부른다. 각 record마다 byte 그대로 고정한
 문자열("logical key preimage")을 만들고, 이 preimage의 SHA-256 hash를 소문자 16진수로
@@ -372,8 +372,11 @@ publisher descriptor의 key가 참조하는, message를 보낼 Channel 범위를
 | ClientServer server descriptor | `client-server\0{ChannelName}\0{hex(RoutingId)}` |
 | Fanout publisher descriptor | `fanout-publisher\0{ChannelName}\0{hex(RoutingId)}` |
 | Authority | `authority\0{actor \| spot}\0{Id}` |
+| Creation terminal | `creation-terminal\0{hex(SourceNodeRid)}\0{SourceHostGeneration}\0{hex(OperationId)}` |
 
-`{hex(RoutingId)}`는 RoutingId의 raw bytes를 소문자 16진수로 표기한 값이다. `{MeshName}`,
+`{hex(RoutingId)}`와 `{hex(SourceNodeRid)}`는 각 식별자의 raw bytes를 소문자 16진수로 표기한
+값이다. `{SourceHostGeneration}`은 부호와 선행 0이 없는 10진수이고, `{hex(OperationId)}`는
+128-bit `OperationId`를 big-endian 16 bytes로 두고 같은 방식으로 표기한 32자리다. `{MeshName}`,
 `{ChannelName}`, `{OwnerId}`와 authority의 `{Id}`(전역 ActorId 또는 SpotId, §3.3)는 UTF-8
 bytes를 그대로 이어 붙이며 길이 접두사를 붙이지 않는다 — preimage 안의 `\0` byte만으로 값의
 경계를 고정하므로, `MeshName`·`ChannelName`·`Id` 자체에는 `\0` byte를 허용하지 않는다(§3.3이
@@ -384,8 +387,9 @@ bytes를 그대로 이어 붙이며 길이 접두사를 붙이지 않는다 — 
 존재한다(§3.3). [Store record golden fixture](../../../../../../runtime/protocol/golden/store-record-v1.json)가
 이 preimage 구조의 key 파생 벡터를 고정한다.
 
-각 record의 value는 provider가 의미를 해석하지 않고 bytes로만 저장·비교하는 canonical JSON
-값이다. 최소한 다음 field를 포함한다.
+각 record의 value는 provider가 의미를 해석하지 않고 bytes로만 저장·비교한다. Creation
+terminal의 value는 `creation-operation-terminal-v1` bytes 그대로다(§7). 나머지 record의 value는
+canonical JSON 값이며 최소한 다음 field를 포함한다.
 
 | Field | 의미 |
 |---|---|
@@ -822,7 +826,8 @@ RID, source host 실행 세대와 128-bit `OperationId`를 요청 식별자로 �
 
 | 저장한 최종 결과 | 계약 |
 |---|---|
-| 형식 | `creation-operation-terminal-v1`과 SHA-256을 사용한다. Network correlation과 reply route는 저장하지 않는다. |
+| 형식 | `creation-operation-terminal-v1`이다. Network correlation과 reply route는 저장하지 않는다. |
+| 저장 위치 | §3.4의 opaque record `creation-terminal` 하나에 둔다. meta·payload를 나눈 보조 key를 두지 않는다. |
 | 크기 | 최대 1,048,576 bytes다. |
 | 보관 기한 | 최초 deadline에서 5분 뒤까지다. Provider가 반환한 Store 시각을 사용한다. |
 | 재응답 | 같은 요청만 읽을 수 있다. 현재 connection의 correlation과 reply route로 응답을 새로 만든다. |

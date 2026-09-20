@@ -217,14 +217,15 @@ physical opaque key를 flush한다: `zlink:v11:counter:object`,
 mapping으로 literal마다 physical key를 다시 계산하며 record나 scan prefix에서 추측하지
 않는다.
 
-## 9. 공식 Redis provider — 5-record opaque 저장 형식
+## 9. 공식 Redis provider — opaque 저장 형식
 
 Automatic discovery에서 message를 보내거나 받는 runtime node인
 [MeshNode](../00-foundation/02-glossary.ko.md#meshnode)가 자신의 identity와 접속 정보를 다른 node에 알리기 위해
 게시하는 [MeshNode descriptor](../00-foundation/02-glossary.ko.md#meshnode-descriptor), owner lease,
 ClientServer server descriptor, fanout publisher
-descriptor와 authority record는 언어가 달라도 같은 opaque record 표현을 사용해야 한다 —
-그래야 한 언어가 사용한 record를 다른 언어가 읽을 수 있다. 이 다섯 record는 다음 저장 방식을
+descriptor, authority record와 creation terminal은 언어가 달라도 같은 opaque record 표현을
+사용해야 한다 — 그래야 한 언어가 사용한 record를 다른 언어가 읽을 수 있다. 이 여섯 record는
+다음 저장 방식을
 **반드시** 따른다.
 
 Redis key는 `{prefix}:{zlink-location-v3}:opaque:{sha256hex(preimage)}`이며, `{prefix}`는
@@ -232,7 +233,7 @@ provider가 등록 시 지정하는 key namespace, `preimage`는
 [Location runtime §3.4](01-location-runtime.ko.md#34-여러-언어가-같은-redis-record를-읽고-쓰는-방법)가
 정하는 record별 logical key preimage다(주의 — 이 `sha256hex(preimage)`는 §8의
 `sha256hex(logicalKey)`와 다른 입력을 사용한다. Counter는 짧은 literal logical key를 그대로
-해시하고, 이 다섯 record는 record별로 구성한 preimage 문자열을 해시한다).
+해시하고, 이 여섯 record는 record별로 구성한 preimage 문자열을 해시한다).
 
 `{zlink-location-v3}`을 감싼 중괄호는 Redis Cluster hashtag다 — `Put`이 record·sequence
 counter·index를 같은 script 안에서 함께 바꾸므로(§4), 이 domain 전체를 하나의 hash slot에
@@ -273,7 +274,7 @@ deployment에서 서로 다른 key namespace를 사용할 수도 있고 물리�
 Correctness는 connection 공유나 cross-store
 Redis transaction에 의존하지 않는다.
 
-**여기까지가 MUST-level 공개 계약이다.** 위 다섯 record와 그 opaque record 표현을 제외하면,
+**여기까지가 MUST-level 공개 계약이다.** 위 여섯 record와 그 opaque record 표현을 제외하면,
 다음 항목은 Redis provider가 자유롭게 고르는 implementation detail이며 public contract가
 아니다 — 문서가 코드와 어긋나면 문서를 코드에 맞춘다.
 
@@ -308,10 +309,10 @@ golden fixture로 검증하는 key·value byte — 만으로 다음을 확인한
 
 **공식 Redis provider의 key·byte 형식**
 
-- MeshNode descriptor, owner lease, ClientServer server descriptor와 fanout publisher
-  descriptor는 store record golden fixture(`framework/runtime/protocol/golden/store-record-v1.json`)의
-  key 파생 벡터(preimage → SHA-256 → 전체 key 문자열)와 value byte 벡터(tombstone·만료
-  variant 포함)를 그대로 소비하는 conformance test로 검증한다.
+- §9의 여섯 record는 store record golden fixture(`framework/runtime/protocol/golden/store-record-v1.json`)의
+  key 파생 벡터(preimage → SHA-256 → 전체 key 문자열)를, 그중 canonical JSON value를 갖는 다섯
+  record는 value byte 벡터(tombstone·만료 variant 포함)도 그대로 소비하는 conformance test로
+  검증한다. Creation terminal의 value byte 형식은 service-wire schema가 소유한다.
 - 인식하지 못하는 format tag나 `recordVersion`은 명시적으로 실패하며, 옛 key·value 형식을
   읽어 새 opaque record로 변환하는 하위 호환 경로가 없다.
 
