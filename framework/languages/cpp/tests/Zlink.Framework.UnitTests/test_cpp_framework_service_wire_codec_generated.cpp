@@ -22,11 +22,26 @@ struct outcome {
     codec::error_code error{codec::error_code::ok};
 };
 
-codec::decoder_context_t maximum_decoder_context()
+codec::codec_context_t maximum_codec_context()
 {
-    codec::decoder_context_t context{};
-    context.effectiveCompleteMessageBytesMinusActualEnvelopeOverhead = 4294966774ull;
-    context.effectiveCompleteMessageBytes = 4294967295ull;
+    codec::codec_context_t context{};
+    context.effectiveCompleteMessageBytesMinusActualEnvelopeOverhead = 4294966774ll;
+    context.effectiveCompleteMessageBytes = 4294967295ll;
+    return context;
+}
+
+codec::codec_context_t operation_context(const nlohmann::json& item)
+{
+    codec::codec_context_t context{};
+    if (!item.contains("context"))
+        return context;
+    const auto& values = item.at("context");
+    if (values.contains("effectiveCompleteMessageBytesMinusActualEnvelopeOverhead"))
+        context.effectiveCompleteMessageBytesMinusActualEnvelopeOverhead =
+          values.at("effectiveCompleteMessageBytesMinusActualEnvelopeOverhead").get<std::int64_t>();
+    if (values.contains("effectiveCompleteMessageBytes"))
+        context.effectiveCompleteMessageBytes =
+          values.at("effectiveCompleteMessageBytes").get<std::int64_t>();
     return context;
 }
 
@@ -115,15 +130,15 @@ outcome exact_frames(Result decoded, Encode encode, const std::vector<std::vecto
 outcome command(
   std::uint8_t id,
   const std::vector<std::vector<std::uint8_t>>& frames,
-  const codec::decoder_context_t& context)
+  const codec::codec_context_t& context)
 {
     switch (id) {
         case 16:
-            return exact_frames(codec::decode_nodeSend_16_frames(frames, context), codec::encode_nodeSend_16_frames, frames);
+            return exact_frames(codec::decode_nodeSend_16_frames(frames, context), [&](const auto& value) { return codec::encode_nodeSend_16_frames(value, context); }, frames);
         case 24:
-            return exact_frames(codec::decode_actorSend_24_frames(frames, context), codec::encode_actorSend_24_frames, frames);
+            return exact_frames(codec::decode_actorSend_24_frames(frames, context), [&](const auto& value) { return codec::encode_actorSend_24_frames(value, context); }, frames);
         case 28:
-            return exact_frames(codec::decode_actorJoin_28_frames(frames, context), codec::encode_actorJoin_28_frames, frames);
+            return exact_frames(codec::decode_actorJoin_28_frames(frames, context), [&](const auto& value) { return codec::encode_actorJoin_28_frames(value, context); }, frames);
         case 47:
             return exact_frames(codec::decode_userSpotCreate_47_frames(frames), codec::encode_userSpotCreate_47_frames, frames);
         case 48:
@@ -138,26 +153,26 @@ outcome command(
 outcome type(
   std::string_view name,
   const std::vector<std::uint8_t>& input,
-  const codec::decoder_context_t& context)
+  const codec::codec_context_t& context)
 {
     if (name == "authority-payload-v1")
         return exact(codec::decode_durable_authority_payload_v1(input), codec::encode_durable_authority_payload_v1, input);
     if (name == "instance-activation-recovery-v1")
-        return exact(codec::decode_durable_instance_activation_recovery_v1(input, context), codec::encode_durable_instance_activation_recovery_v1, input);
+        return exact(codec::decode_durable_instance_activation_recovery_v1(input, context), [&](const auto& value) { return codec::encode_durable_instance_activation_recovery_v1(value, context); }, input);
     if (name == "relocation-data-chunk-v1")
         return exact(codec::decode_durable_relocation_data_chunk_v1(input), codec::encode_durable_relocation_data_chunk_v1, input);
     if (name == "relocation-manifest-v1")
         return exact(codec::decode_durable_relocation_manifest_v1(input), codec::encode_durable_relocation_manifest_v1, input);
     if (name == "relocation-envelope-v1")
-        return exact(codec::decode_relocation_envelope_v1(input, context), codec::encode_relocation_envelope_v1, input);
+        return exact(codec::decode_relocation_envelope_v1(input, context), [&](const auto& value) { return codec::encode_relocation_envelope_v1(value, context); }, input);
     if (name == "descriptor-extension")
         return exact(codec::decode_descriptor_extension(input), codec::encode_descriptor_extension, input);
     if (name == "text8")
         return exact(codec::decode_text8(input), codec::encode_text8, input);
     if (name == "application-payload-bytes")
-        return exact(codec::decode_application_payload_bytes(input, context), codec::encode_application_payload_bytes, input);
+        return exact(codec::decode_application_payload_bytes(input, context), [&](const auto& value) { return codec::encode_application_payload_bytes(value, context); }, input);
     if (name == "application-payload-envelope-v1")
-        return exact(codec::decode_application_payload_envelope_v1(input, context), codec::encode_application_payload_envelope_v1, input);
+        return exact(codec::decode_application_payload_envelope_v1(input, context), [&](const auto& value) { return codec::encode_application_payload_envelope_v1(value, context); }, input);
     return {false, codec::error_code::header};
 }
 
@@ -190,7 +205,40 @@ bool pilot_oracle(
     }
 }
 
-outcome operation_case(const nlohmann::json& item)
+outcome negotiated_case(
+  const nlohmann::json& item,
+  std::string_view direction,
+  const std::vector<std::uint8_t>& input)
+{
+    const auto context = operation_context(item);
+    const auto maximum = maximum_codec_context();
+    const auto name = item.at("surface").at("type").get<std::string>();
+    if (name == "application-payload-bytes") {
+        if (direction == "decode") {
+            const auto result = codec::decode_application_payload_bytes(input, context);
+            return {static_cast<bool>(result), result.error};
+        }
+        const auto decoded = codec::decode_application_payload_bytes(input, maximum);
+        if (!decoded)
+            return {false, decoded.error};
+        const auto encoded = codec::encode_application_payload_bytes(decoded.value, context);
+        return {encoded && encoded.value == input, encoded ? codec::error_code::ok : encoded.error};
+    }
+    if (name == "application-payload-envelope-v1") {
+        if (direction == "decode") {
+            const auto result = codec::decode_application_payload_envelope_v1(input, context);
+            return {static_cast<bool>(result), result.error};
+        }
+        const auto decoded = codec::decode_application_payload_envelope_v1(input, maximum);
+        if (!decoded)
+            return {false, decoded.error};
+        const auto encoded = codec::encode_application_payload_envelope_v1(decoded.value, context);
+        return {encoded && encoded.value == input, encoded ? codec::error_code::ok : encoded.error};
+    }
+    return {false, codec::error_code::header};
+}
+
+outcome operation_case(const nlohmann::json& item, std::string_view direction)
 {
     if (item.at("operation") == "runtime-predicate") {
         codec::reply_20_t value{};
@@ -201,16 +249,9 @@ outcome operation_case(const nlohmann::json& item)
     }
     const auto frames = bytes(nlohmann::json::object(), item);
     const auto& surface = item.at("surface");
-    auto context = maximum_decoder_context();
-    if (item.contains("decodeContext")) {
-        const auto& values = item.at("decodeContext");
-        if (values.contains("effectiveCompleteMessageBytesMinusActualEnvelopeOverhead"))
-            context.effectiveCompleteMessageBytesMinusActualEnvelopeOverhead =
-              values.at("effectiveCompleteMessageBytesMinusActualEnvelopeOverhead").get<std::uint64_t>();
-        if (values.contains("effectiveCompleteMessageBytes"))
-            context.effectiveCompleteMessageBytes =
-              values.at("effectiveCompleteMessageBytes").get<std::uint64_t>();
-    }
+    if (item.at("operation") == "negotiated-bound")
+        return negotiated_case(item, direction, frames.front());
+    const auto context = maximum_codec_context();
     if (surface.at("format") == "command")
         return command(surface.at("commandId").get<std::uint8_t>(), frames, context);
     return frames.size() == 1
@@ -226,7 +267,7 @@ int main()
     const auto index = load_json(indexPath);
     const auto protocolRoot = indexPath.parent_path().parent_path().parent_path();
     bool passed = true;
-    const auto context = maximum_decoder_context();
+    const auto context = maximum_codec_context();
 
     for (const auto& entry : index.at("fixtures")) {
         const auto fixture = load_json(protocolRoot / entry.at("goldenFixture").get<std::string>());
@@ -261,14 +302,21 @@ int main()
     }
 
     for (const auto& item : index.at("operationCases")) {
-        const auto result = operation_case(item);
-        const auto expected = item.at("expect") == "accept";
-        if (result.accepted != expected) {
-            std::cerr << "operation-case:" << item.at("name").get<std::string>()
-                      << ": operation=" << item.at("operation").get<std::string>()
-                      << ", expected " << (expected ? "accept" : "reject")
-                      << ", error-code=" << static_cast<int>(result.error) << '\n';
-            passed = false;
+        const auto directions = item.contains("directions")
+          ? item.at("directions")
+          : nlohmann::json::array({"round-trip"});
+        for (const auto& directionValue : directions) {
+            const auto direction = directionValue.get<std::string>();
+            const auto result = operation_case(item, direction);
+            const auto expected = item.at("expect") == "accept";
+            if (result.accepted != expected) {
+                std::cerr << "operation-case:" << item.at("name").get<std::string>()
+                          << ": operation=" << item.at("operation").get<std::string>()
+                          << ", direction=" << direction
+                          << ", expected " << (expected ? "accept" : "reject")
+                          << ", error-code=" << static_cast<int>(result.error) << '\n';
+                passed = false;
+            }
         }
     }
     return passed ? 0 : 1;
