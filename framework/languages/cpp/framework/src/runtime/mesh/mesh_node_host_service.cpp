@@ -2148,12 +2148,7 @@ task_t<void> mesh_node_host_service_t::start (service_provider_t &services)
             descriptor.lifecycle_generation = status.lifecycle_generation ();
             descriptor.descriptor_revision = 1;
             descriptor.endpoint = status.local_endpoint ();
-            if (registration->spot_state->snapshot.entry_spot_name) {
-                const auto entry = registration->spot_state->spot_ids_by_name.find (
-                  *registration->spot_state->snapshot.entry_spot_name);
-                if (entry != registration->spot_state->spot_ids_by_name.end ())
-                    descriptor.entry_spot_id = entry->second;
-            }
+            descriptor.entry_spot_id = node->native_node ().entry_spot ().spot_id ();
             descriptor.channel_weights = node->channel_weights ();
             descriptor.object_role = registration->object_role;
             descriptor.placement_weight = node->placement_weight ();

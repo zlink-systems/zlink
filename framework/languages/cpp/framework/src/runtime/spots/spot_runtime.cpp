@@ -6400,12 +6400,10 @@ actor_context_t spot_node_runtime_t::default_actor_context ()
 std::optional<spot_id_t> spot_node_runtime_t::resolve_entry_spot_id () const
 {
     return _state->lane.run ([&] () -> std::optional<spot_id_t> {
-        if (!_state->snapshot.entry_spot_name)
+        const auto node = _state->native_node.lock ();
+        if (!node)
             return std::nullopt;
-        const auto entry_id = _state->spot_ids_by_name.find (*_state->snapshot.entry_spot_name);
-        if (entry_id == _state->spot_ids_by_name.end ())
-            return std::nullopt;
-        return entry_id->second;
+        return spot_id_t (node->entry_spot ().spot_id ());
     }).get ();
 }
 
