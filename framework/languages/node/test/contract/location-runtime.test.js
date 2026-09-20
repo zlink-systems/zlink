@@ -258,6 +258,80 @@ test('location runtime claims on the next heartbeat after startup Store recovery
   await runtime.stop();
 });
 
+test('location runtime installs the same late-committed lease after heartbeat Conflict', async () => {
+  const store = new internal.ZLinkInMemoryLocationStore();
+  const timers = [];
+  let claimCalls = 0;
+  let commitFirstClaim;
+  let releaseCalls = 0;
+  const leaseStore = {
+    async claimOwnerLease(ownerId, leaseTtlMs, signal) {
+      claimCalls += 1;
+      if (claimCalls === 1) {
+        return await new Promise(resolve => {
+          commitFirstClaim = async () => resolve(
+            await store.claimOwnerLease(ownerId, leaseTtlMs)
+          );
+        });
+      }
+      return await store.claimOwnerLease(ownerId, leaseTtlMs, signal);
+    },
+    readOwnerLease: store.readOwnerLease.bind(store),
+    renewOwnerLease: store.renewOwnerLease.bind(store),
+    async releaseOwnerLease(token, signal) {
+      releaseCalls += 1;
+      return await store.releaseOwnerLease(token, signal);
+    }
+  };
+  const runtime = runtimeFor(store, {
+    ownerId: 'owner-late-conflict',
+    ownerLeaseStore: leaseStore,
+    timers,
+    locationOptions: {
+      ownerLeaseRenewIntervalMs: 20,
+      ownerLeaseRenewTimeoutMs: 5
+    }
+  });
+  const keepAlive = setTimeout(() => {}, 100);
+
+  await runtime.start(rid('node-late-conflict'));
+  assert.equal(runtime.currentOwnerToken, undefined);
+  await commitFirstClaim();
+  timers.shift().callback();
+  await waitForCondition(() => runtime.ownerLeaseUsable);
+
+  assert.equal(claimCalls, 2);
+  assert.equal(runtime.currentOwnerToken?.ownerId, 'owner-late-conflict');
+  assert.equal(runtime.currentOwnerToken?.leaseGeneration, 1n);
+  assert.equal(releaseCalls, 0);
+  await runtime.stop();
+  clearTimeout(keepAlive);
+});
+
+test('location runtime bounds non-cooperative claim and confirmation read by one renew deadline', async () => {
+  const store = new internal.ZLinkInMemoryLocationStore();
+  const leaseStore = {
+    async claimOwnerLease() { return await new Promise(() => {}); },
+    async readOwnerLease() { return await new Promise(() => {}); },
+    renewOwnerLease: store.renewOwnerLease.bind(store),
+    releaseOwnerLease: store.releaseOwnerLease.bind(store)
+  };
+  const runtime = runtimeFor(store, {
+    ownerLeaseStore: leaseStore,
+    locationOptions: { ownerLeaseRenewTimeoutMs: 5 }
+  });
+  const startedAt = performance.now();
+  const keepAlive = setTimeout(() => {}, 100);
+
+  await runtime.start(rid('node-non-cooperative'));
+
+  assert.ok(performance.now() - startedAt < 100);
+  assert.equal(runtime.ownerLeaseUsable, false);
+  leaseStore.readOwnerLease = store.readOwnerLease.bind(store);
+  await runtime.stop();
+  clearTimeout(keepAlive);
+});
+
 test('location runtime fails startup for terminal owner lease claim results', async () => {
   for (const kind of ['conflict', 'generationExhausted']) {
     const store = new internal.ZLinkInMemoryLocationStore();
@@ -324,6 +398,41 @@ test('location runtime releases a claim confirmed after startup cancellation wit
   assert.equal(runtime.currentOwnerToken, undefined);
   assert.equal(timers.length, 0);
   assert.deepEqual(await store.readOwnerLease('owner-startup-cancel'), { kind: 'missing' });
+});
+
+test('location runtime preserves cancellation when confirmed-claim release does not respond', async () => {
+  const store = new internal.ZLinkInMemoryLocationStore();
+  const controller = new AbortController();
+  let claimStarted;
+  const leaseStore = {
+    async claimOwnerLease(ownerId, leaseTtlMs, signal) {
+      claimStarted?.();
+      await new Promise((_resolve, reject) => {
+        signal.addEventListener('abort', async () => {
+          await store.claimOwnerLease(ownerId, leaseTtlMs);
+          reject(signal.reason);
+        }, { once: true });
+      });
+    },
+    readOwnerLease: store.readOwnerLease.bind(store),
+    renewOwnerLease: store.renewOwnerLease.bind(store),
+    async releaseOwnerLease() { return await new Promise(() => {}); }
+  };
+  const runtime = runtimeFor(store, {
+    ownerId: 'owner-cancel-release-failure',
+    ownerLeaseStore: leaseStore,
+    locationOptions: { ownerLeaseRenewTimeoutMs: 20 }
+  });
+  const started = new Promise(resolve => { claimStarted = resolve; });
+  const keepAlive = setTimeout(() => {}, 100);
+  const starting = runtime.start(rid('node-cancel-release-failure'), controller.signal);
+  await started;
+  controller.abort();
+
+  await assert.rejects(starting, error => error?.name === 'AbortError');
+  assert.match(runtime.lastError, /Owner lease renewal exceeded/u);
+  assert.equal(runtime.currentOwnerToken, undefined);
+  clearTimeout(keepAlive);
 });
 
 test('location runtime records a stop-race claim release failure', async () => {
@@ -3012,6 +3121,16 @@ function runtimeFor(store, options = {}) {
     }),
     clearTimer: options.clearTimer ?? (() => {})
   });
+}
+
+async function waitForCondition(predicate, timeoutMs = 200) {
+  const deadline = performance.now() + timeoutMs;
+  while (!await predicate()) {
+    if (performance.now() >= deadline) {
+      throw new Error('condition was not met before timeout');
+    }
+    await new Promise(resolve => setTimeout(resolve, 1));
+  }
 }
 
 function authorityReserveRequest(globalId, descriptor, owner) {

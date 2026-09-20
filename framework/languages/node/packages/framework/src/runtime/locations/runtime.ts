@@ -207,6 +207,11 @@ export class ZLinkLocationRuntime implements ZLinkLocationRuntimeQuery {
     return this.ownerToken;
   }
 
+  closeOwnerLeaseAdmission(error: unknown): void {
+    this.ownerLeaseDeadlineMs = undefined;
+    this.recordFailure(errorMessage(error), 'owner_lease_recovery');
+  }
+
   async reclaimOwnerAuthorities(signal?: AbortSignal): Promise<void> {
     const owner = this.ownerToken;
     if (owner === undefined) {
@@ -425,11 +430,13 @@ export class ZLinkLocationRuntime implements ZLinkLocationRuntimeQuery {
 
   private async claimFreshOwnerLease(signal?: AbortSignal): Promise<boolean> {
     const claimStartedAtMs = this.monotonicNowMs();
+    const timeoutDeadline = performance.now() + this.options.ownerLeaseRenewTimeoutMs;
     let claim: Awaited<ReturnType<ZLinkOwnerLeaseStore['claimOwnerLease']>>;
     try {
-      claim = await this.claimOwnerLeaseWithConfirmation(signal);
+      claim = await this.claimOwnerLeaseWithConfirmation(timeoutDeadline, signal);
     } catch (error) {
       if (signal?.aborted === true) throw error;
+      if (error instanceof ZLinkOwnerLeaseClaimError) throw error;
       this.recordOwnerLeaseRenewFailure();
       this.recordFailure(errorMessage(error), 'owner_lease_claim');
       return false;
@@ -445,7 +452,13 @@ export class ZLinkLocationRuntime implements ZLinkLocationRuntimeQuery {
         // stop() may have completed while the Store claim was in flight. Do
         // not install a token into a stopped runtime or leave an orphan lease.
         try {
-          await this.stores.ownerLeaseStore.releaseOwnerLease(claim.token);
+          await withTimeout(
+            releaseSignal => this.stores.ownerLeaseStore.releaseOwnerLease(
+              claim.token,
+              releaseSignal
+            ),
+            remainingTimeoutMs(timeoutDeadline)
+          );
         } catch (error) {
           this.recordFailure(errorMessage(error), 'owner_lease_release');
         }
@@ -479,44 +492,72 @@ export class ZLinkLocationRuntime implements ZLinkLocationRuntimeQuery {
   }
 
   private async claimOwnerLeaseWithConfirmation(
+    timeoutDeadline: number,
     signal?: AbortSignal
   ): Promise<Awaited<ReturnType<ZLinkOwnerLeaseStore['claimOwnerLease']>>> {
     signal?.throwIfAborted();
-    const timeoutDeadline = performance.now() + this.options.ownerLeaseRenewTimeoutMs;
+    let claim: Awaited<ReturnType<ZLinkOwnerLeaseStore['claimOwnerLease']>>;
     try {
-      return await withTimeout(
+      claim = await withTimeout(
         (claimSignal) => this.stores.ownerLeaseStore.claimOwnerLease(
           this.ownerId,
           this.options.ownerLeaseTtlMs,
           claimSignal
         ),
-        Math.max(0, timeoutDeadline - performance.now()),
+        remainingTimeoutMs(timeoutDeadline),
         signal
       );
     } catch (error) {
-      let confirmed: Awaited<ReturnType<ZLinkOwnerLeaseStore['readOwnerLease']>>;
-      try {
-        confirmed = await withTimeout(
-          (readSignal) => this.stores.ownerLeaseStore.readOwnerLease(this.ownerId, readSignal),
-          Math.max(0, timeoutDeadline - performance.now())
-        );
-      } catch {
-        throw error;
-      }
-      if (confirmed.kind !== 'found') {
-        throw error;
-      }
-      if (signal?.aborted === true) {
-        await this.stores.ownerLeaseStore.releaseOwnerLease(confirmed.token);
-        throw error;
-      }
-      return {
-        kind: 'claimed',
-        token: confirmed.token,
-        leaseExpiresAt: confirmed.leaseExpiresAt,
-        storeNow: confirmed.storeNow
-      };
+      const confirmed = await this.confirmOwnerLease(error, timeoutDeadline, signal);
+      if (confirmed !== undefined) return confirmed;
+      throw error;
     }
+    if (claim.kind !== 'conflict') return claim;
+    const conflict = new ZLinkOwnerLeaseClaimError(claim.kind);
+    return await this.confirmOwnerLease(conflict, timeoutDeadline, signal) ?? claim;
+  }
+
+  private async confirmOwnerLease(
+    originalError: unknown,
+    timeoutDeadline: number,
+    signal?: AbortSignal
+  ): Promise<Extract<Awaited<ReturnType<ZLinkOwnerLeaseStore['claimOwnerLease']>>, { kind: 'claimed' }> | undefined> {
+    let confirmed: Awaited<ReturnType<ZLinkOwnerLeaseStore['readOwnerLease']>>;
+    try {
+      confirmed = await withTimeout(
+        readSignal => this.stores.ownerLeaseStore.readOwnerLease(this.ownerId, readSignal),
+        remainingTimeoutMs(timeoutDeadline)
+      );
+    } catch (confirmationError) {
+      this.recordFailure(
+        errorMessage(confirmationError),
+        'owner_lease_claim_confirmation'
+      );
+      throw originalError;
+    }
+    if (confirmed.kind !== 'found' || confirmed.token.ownerId !== this.ownerId) {
+      throw originalError;
+    }
+    if (signal?.aborted === true) {
+      try {
+        await withTimeout(
+          releaseSignal => this.stores.ownerLeaseStore.releaseOwnerLease(
+            confirmed.token,
+            releaseSignal
+          ),
+          remainingTimeoutMs(timeoutDeadline)
+        );
+      } catch (releaseError) {
+        this.recordFailure(errorMessage(releaseError), 'owner_lease_release');
+      }
+      throw originalError;
+    }
+    return {
+      kind: 'claimed',
+      token: confirmed.token,
+      leaseExpiresAt: confirmed.leaseExpiresAt,
+      storeNow: confirmed.storeNow
+    };
   }
 
   private setOwnerLeaseDeadline(
@@ -1132,6 +1173,7 @@ async function withTimeout<T>(
     ? timeoutController.signal
     : AbortSignal.any([signal, timeoutController.signal]);
   let timeout: ReturnType<typeof setTimeout> | undefined;
+  let abort: (() => void) | undefined;
   const deadline = new Promise<never>((_resolve, reject) => {
     timeout = setTimeout(() => {
       const error = new Error(`Owner lease renewal exceeded ${timeoutMs}ms.`);
@@ -1140,11 +1182,27 @@ async function withTimeout<T>(
     }, timeoutMs);
     timeout.unref();
   });
+  const cancellation = signal === undefined
+    ? undefined
+    : new Promise<never>((_resolve, reject) => {
+        abort = () => reject(signal.reason);
+        signal.addEventListener('abort', abort, { once: true });
+      });
   try {
-    return await Promise.race([action(operationSignal), deadline]);
+    signal?.throwIfAborted();
+    return await Promise.race(
+      cancellation === undefined
+        ? [action(operationSignal), deadline]
+        : [action(operationSignal), deadline, cancellation]
+    );
   } finally {
     if (timeout !== undefined) clearTimeout(timeout);
+    if (abort !== undefined) signal?.removeEventListener('abort', abort);
   }
+}
+
+function remainingTimeoutMs(timeoutDeadline: number): number {
+  return Math.max(0, timeoutDeadline - performance.now());
 }
 
 function errorMessage(error: unknown): string {

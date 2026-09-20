@@ -344,6 +344,36 @@ test('framework host publishes every local descriptor after degraded startup rec
   }
 });
 
+test('framework host retries recovery publication after the first owner lease publication fails', async () => {
+  const scenario = recoverableHostScenario();
+  let publicationAttempts = 0;
+  try {
+    await scenario.runtime.start();
+    const publish = scenario.runtime.spotNodeRuntime.publishMeshNodeState
+      .bind(scenario.runtime.spotNodeRuntime);
+    scenario.runtime.spotNodeRuntime.publishMeshNodeState = async (...args) => {
+      publicationAttempts += 1;
+      if (publicationAttempts === 1) {
+        throw new Error('first recovery publication failed');
+      }
+      return await publish(...args);
+    };
+
+    scenario.recover();
+    await waitForCondition(() => publicationAttempts >= 1
+      && !scenario.runtime.locationOwner.currentRuntime.ownerLeaseUsable);
+    await waitForCondition(async () =>
+      (await scenario.store.listMeshNodes('play')).items.length === 1
+    );
+
+    assert.ok(publicationAttempts >= 3);
+    assert.equal(scenario.runtime.locationOwner.currentRuntime.ownerLeaseUsable, true);
+  } finally {
+    scenario.recover();
+    await scenario.runtime.stop();
+  }
+});
+
 test('degraded host rejects object messages and timers until owner lease recovery', async () => {
   const scenario = recoverableHostScenario();
   let actorMessages = 0;

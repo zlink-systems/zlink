@@ -1537,6 +1537,7 @@ export class ZLinkFrameworkRuntimeHost implements
       if (!this.ownerAdmissionOpen()) return;
       void this.resumeOwnerLeaseOwnedWork(runtime, spotNodeRuntime, channelRuntime)
         .catch(error => {
+          runtime.closeOwnerLeaseAdmission(error);
           this.runtimeOrPreStartErrorSink.reportRuntimeTaskException(
             'owner lease recovery',
             error
