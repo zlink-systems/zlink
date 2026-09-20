@@ -753,6 +753,13 @@ void mesh_node_runtime_t::start ()
                 throw configuration_error (
                   "MeshNode send timeout must be between 1 and INT_MAX milliseconds");
             }
+            if (_state->socket.receive_timeout
+                && (_state->socket.receive_timeout->count () <= 0
+                    || _state->socket.receive_timeout->count ()
+                         > std::numeric_limits<int>::max ())) {
+                throw configuration_error (
+                  "MeshNode receive timeout must be between 1 and INT_MAX milliseconds");
+            }
 
             std::vector<runtime::mesh::service_channel_descriptor_t> channels;
             channels.reserve (_state->channels.size ());
@@ -783,6 +790,7 @@ void mesh_node_runtime_t::start ()
                                    : runtime::mesh::service_object_role_t::none,
                   .placement_weight = _state->placement_weight},
                 _state->advertise_host,
+                _state->socket.receive_timeout,
                 _state->auto_hwm_profile, _state->application_jobs},
               spot_snapshot.entry_spot_name.value_or ("entry"),
               std::move (stable_types),
