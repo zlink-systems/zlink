@@ -51,9 +51,9 @@ public sealed class GeneratedServiceWireCommandCodecConformanceTests
                 () => ExerciseOperation(vector)));
         }
 
-        Assert.Equal(100, cases.Count);
+        Assert.Equal(101, cases.Count);
         var operationCases = index.RootElement.GetProperty("operationCases").EnumerateArray().ToArray();
-        Assert.Equal(28, operationCases.Count(item => item.GetProperty("expect").GetString() == "accept"));
+        Assert.Equal(29, operationCases.Count(item => item.GetProperty("expect").GetString() == "accept"));
         Assert.Equal(49, operationCases.Count(item => item.GetProperty("expect").GetString() == "reject"));
         Assert.Equal(25, operationCases.Select(item => item.GetProperty("operation").GetString()).Distinct().Count());
         foreach (var operation in operationCases.GroupBy(item => item.GetProperty("operation").GetString()!))
@@ -258,8 +258,12 @@ public sealed class GeneratedServiceWireCommandCodecConformanceTests
         if (type == "aggregate-participant-vector") return AggregateParticipants(input);
         if (type == "sorted-text8-vector") return new ServiceWireCodec.SortedText8Vector(
             input.EnumerateArray().Select(item => new ServiceWireCodec.Text8(item.GetString()!)).ToArray());
-        if (type == "application-payload-bytes") return new ServiceWireCodec.ApplicationPayloadBytes(
-            Enumerable.Repeat((byte)input.GetProperty("repeatByte").GetInt32(), input.GetProperty("count").GetInt32()).ToArray());
+        if (type == "application-payload-bytes")
+        {
+            var bytes = GC.AllocateUninitializedArray<byte>(input.GetProperty("count").GetInt32());
+            bytes.AsSpan().Fill((byte)input.GetProperty("repeatByte").GetInt32());
+            return new ServiceWireCodec.ApplicationPayloadBytes(bytes);
+        }
         throw new ConformanceHarnessException($"operation input {name}");
     }
 
@@ -322,15 +326,23 @@ public sealed class GeneratedServiceWireCommandCodecConformanceTests
             return chunks.EnumerateArray().SelectMany(item => Convert.FromHexString(item.GetString()!)).ToArray();
         if (vector.TryGetProperty("byteRecipe", out var recipe))
         {
-            using var stream = new MemoryStream(recipe.GetProperty("encodedBytes").GetInt32());
+            var result = GC.AllocateUninitializedArray<byte>(recipe.GetProperty("encodedBytes").GetInt32());
+            var offset = 0;
             foreach (var segment in recipe.GetProperty("segments").EnumerateArray())
-                if (segment.TryGetProperty("hex", out var hex)) stream.Write(Convert.FromHexString(hex.GetString()!));
+                if (segment.TryGetProperty("hex", out var hex))
+                {
+                    var bytes = Convert.FromHexString(hex.GetString()!);
+                    bytes.CopyTo(result, offset);
+                    offset += bytes.Length;
+                }
                 else
                 {
-                    var bytes = Enumerable.Repeat((byte)segment.GetProperty("repeatByte").GetInt32(), segment.GetProperty("count").GetInt32()).ToArray();
-                    stream.Write(bytes);
+                    var count = segment.GetProperty("count").GetInt32();
+                    result.AsSpan(offset, count).Fill((byte)segment.GetProperty("repeatByte").GetInt32());
+                    offset += count;
                 }
-            return stream.ToArray();
+            Assert.Equal(result.Length, offset);
+            return result;
         }
         return Convert.FromHexString(vector.GetProperty("hex").GetString()!);
     }

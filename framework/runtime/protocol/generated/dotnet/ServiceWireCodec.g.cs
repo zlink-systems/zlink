@@ -756,7 +756,7 @@ internal static class ServiceWireCodec
     internal sealed record RelocationState52(byte Flags,RelocationId Relocation,NonzeroU64 TargetAttemptGeneration,RelocationCoordinatorFence Coordinator,RelocationRole SenderRole,RelocationObjectIdentity Object,U32 ChunkOrdinal,DurableBlob ChunkData);
 
     internal sealed record RelocationFailed53(byte Flags,RelocationId Relocation,NonzeroU64 TargetAttemptGeneration,RelocationCoordinatorFence Coordinator,RelocationTargetFence Target,RelocationObjectIdentity Object,RelocationRole SenderRole,FrameworkErrorCode FailureCode);
-    private sealed class Reader(byte[] b){private int p;internal int Remaining=>b.Length-p;private void N(int n){if(n<0||Remaining<n)throw new EndOfStreamException("truncated");}internal byte U8(){N(1);return b[p++];}internal ushort U16(){N(2);var v=BinaryPrimitives.ReadUInt16BigEndian(b.AsSpan(p));p+=2;return v;}internal uint U32(){N(4);var v=BinaryPrimitives.ReadUInt32BigEndian(b.AsSpan(p));p+=4;return v;}internal ulong U64(){N(8);var v=BinaryPrimitives.ReadUInt64BigEndian(b.AsSpan(p));p+=8;return v;}internal long I64(){N(8);var v=BinaryPrimitives.ReadInt64BigEndian(b.AsSpan(p));p+=8;return v;}internal byte[] Bytes(int n){N(n);var v=b.AsSpan(p,n).ToArray();p+=n;return v;}internal Reader Slice(int n)=>new(Bytes(n));internal void End(string n){if(Remaining!=0)throw Error(n+": trailing");}} private sealed class Writer{private readonly MemoryStream s=new();internal long Length=>s.Length;internal void U8(byte v)=>s.WriteByte(v);internal void U16(ushort v){Span<byte>x=stackalloc byte[2];BinaryPrimitives.WriteUInt16BigEndian(x,v);s.Write(x);}internal void U32(uint v){Span<byte>x=stackalloc byte[4];BinaryPrimitives.WriteUInt32BigEndian(x,v);s.Write(x);}internal void U64(ulong v){Span<byte>x=stackalloc byte[8];BinaryPrimitives.WriteUInt64BigEndian(x,v);s.Write(x);}internal void I64(long v){Span<byte>x=stackalloc byte[8];BinaryPrimitives.WriteInt64BigEndian(x,v);s.Write(x);}internal void Bytes(byte[]v)=>s.Write(v);internal byte[]ToArray()=>s.ToArray();} private static readonly UTF8Encoding Utf8=new(false,true);private static InvalidDataException Error(string m)=>new(m);private static int CompareBytes(byte[]a,byte[]b){var n=Math.Min(a.Length,b.Length);for(var i=0;i<n;i++){var c=a[i].CompareTo(b[i]);if(c!=0)return c;}return a.Length.CompareTo(b.Length);}private static string AuthorityComponent(string value){var bytes=Utf8.GetBytes(value);var result=new StringBuilder().Append(bytes.Length).Append(':');foreach(var b in bytes){if((b>=(byte)'A'&&b<=(byte)'Z')||(b>=(byte)'a'&&b<=(byte)'z')||(b>=(byte)'0'&&b<=(byte)'9')||b is (byte)'-' or (byte)'.' or (byte)'_' or (byte)'~')result.Append((char)b);else result.Append('%').Append(b.ToString("X2"));}return result.ToString();}private static uint Crc32C(ReadOnlySpan<byte>b){var c=uint.MaxValue;foreach(var v in b){c^=v;for(var i=0;i<8;i++)c=(c>>1)^(0x82f63b78u&(uint)-(int)(c&1));}return~c;}
+    private sealed class Reader(byte[] b){private int p;internal int Remaining=>b.Length-p;private void N(int n){if(n<0||Remaining<n)throw new EndOfStreamException("truncated");}internal byte U8(){N(1);return b[p++];}internal ushort U16(){N(2);var v=BinaryPrimitives.ReadUInt16BigEndian(b.AsSpan(p));p+=2;return v;}internal uint U32(){N(4);var v=BinaryPrimitives.ReadUInt32BigEndian(b.AsSpan(p));p+=4;return v;}internal ulong U64(){N(8);var v=BinaryPrimitives.ReadUInt64BigEndian(b.AsSpan(p));p+=8;return v;}internal long I64(){N(8);var v=BinaryPrimitives.ReadInt64BigEndian(b.AsSpan(p));p+=8;return v;}internal byte[] Bytes(int n){N(n);var v=b.AsSpan(p,n).ToArray();p+=n;return v;}internal Reader Slice(int n)=>new(Bytes(n));internal void End(string n){if(Remaining!=0)throw Error(n+": trailing");}} private sealed class Writer{private readonly List<byte[]>chunks=[];private long length;internal long Length=>length;private void Add(byte[]v){chunks.Add(v);length=checked(length+v.LongLength);}internal void U8(byte v)=>Add([v]);internal void U16(ushort v){var x=new byte[2];BinaryPrimitives.WriteUInt16BigEndian(x,v);Add(x);}internal void U32(uint v){var x=new byte[4];BinaryPrimitives.WriteUInt32BigEndian(x,v);Add(x);}internal void U64(ulong v){var x=new byte[8];BinaryPrimitives.WriteUInt64BigEndian(x,v);Add(x);}internal void I64(long v){var x=new byte[8];BinaryPrimitives.WriteInt64BigEndian(x,v);Add(x);}internal void Bytes(byte[]v)=>Add(v);internal byte[]ToArray(){if(length>int.MaxValue)throw Capacity("writer capacity");var result=GC.AllocateUninitializedArray<byte>((int)length);var offset=0;foreach(var chunk in chunks){chunk.CopyTo(result,offset);offset+=chunk.Length;}return result;}} private sealed class CapacityException(string message):Exception(message);private static CapacityException Capacity(string m)=>new(m);private static readonly UTF8Encoding Utf8=new(false,true);private static InvalidDataException Error(string m)=>new(m);private static int CompareBytes(byte[]a,byte[]b){var n=Math.Min(a.Length,b.Length);for(var i=0;i<n;i++){var c=a[i].CompareTo(b[i]);if(c!=0)return c;}return a.Length.CompareTo(b.Length);}private static string AuthorityComponent(string value){var bytes=Utf8.GetBytes(value);var result=new StringBuilder().Append(bytes.Length).Append(':');foreach(var b in bytes){if((b>=(byte)'A'&&b<=(byte)'Z')||(b>=(byte)'a'&&b<=(byte)'z')||(b>=(byte)'0'&&b<=(byte)'9')||b is (byte)'-' or (byte)'.' or (byte)'_' or (byte)'~')result.Append((char)b);else result.Append('%').Append(b.ToString("X2"));}return result.ToString();}private static uint Crc32C(ReadOnlySpan<byte>b){var c=uint.MaxValue;foreach(var v in b){c^=v;for(var i=0;i<8;i++)c=(c>>1)^(0x82f63b78u&(uint)-(int)(c&1));}return~c;}
     internal static void ValidateTerminalFailure(RequestTerminalResult result, FrameworkErrorCode failure){if(!ServiceWireConstants.ValidTerminalFailure((uint)result,(uint)failure))throw Error("terminal failure integrity");}
     internal static U8 DecodeU8(byte[] bytes, DecodeContext context) { var reader = new Reader(bytes); var value = ReadU8(reader, context); reader.End("u8"); return value; }
     internal static byte[] EncodeU8(U8 value, DecodeContext context) { var writer = new Writer(); WriteU8(writer, value, context); return writer.ToArray(); }
@@ -915,15 +915,18 @@ internal static class ServiceWireCodec
     internal static byte[] EncodeRid(Rid value, DecodeContext context) { var writer = new Writer(); WriteRid(writer, value, context); return writer.ToArray(); }
     private static Rid ReadRid(Reader reader, DecodeContext context)
     {
-        var length = checked((int)ReadU8(reader, context).Value);
-        if ((ulong)length < 1UL || (ulong)length > 255UL) throw Error("rid: length");
+        var encodedLength = (ulong)ReadU8(reader, context).Value;
+        if (encodedLength > 2147483647UL) throw Capacity("rid: capacity");
+        if (encodedLength < 1UL || encodedLength > 255UL) throw Error("rid: length");
+        var length = checked((int)encodedLength);
         var bytes = reader.Bytes(length);
         return new(bytes);
     }
     private static void WriteRid(Writer writer, Rid value, DecodeContext context)
     {
         var bytes = value.Value ?? Array.Empty<byte>();
-        if ((ulong)bytes.Length < 1UL || (ulong)bytes.Length > 255UL) throw Error("rid: length");
+        if ((ulong)bytes.LongLength > 2147483647UL) throw Capacity("rid: capacity");
+        if ((ulong)bytes.LongLength < 1UL || (ulong)bytes.LongLength > 255UL) throw Error("rid: length");
         WriteU8(writer, new U8(checked((byte)bytes.Length)), context);
         writer.Bytes(bytes);
     }
@@ -932,8 +935,10 @@ internal static class ServiceWireCodec
     internal static byte[] EncodeOptionalRid(OptionalRid value, DecodeContext context) { var writer = new Writer(); WriteOptionalRid(writer, value, context); return writer.ToArray(); }
     private static OptionalRid ReadOptionalRid(Reader reader, DecodeContext context)
     {
-        var length = checked((int)ReadU8(reader, context).Value);
-        if ((ulong)length < 0UL || (ulong)length > 255UL) throw Error("optional-rid: length");
+        var encodedLength = (ulong)ReadU8(reader, context).Value;
+        if (encodedLength > 2147483647UL) throw Capacity("optional-rid: capacity");
+        if (encodedLength < 0UL || encodedLength > 255UL) throw Error("optional-rid: length");
+        var length = checked((int)encodedLength);
         var bytes = reader.Bytes(length);
         if (length == 0) return new(null);
         return new(bytes);
@@ -941,7 +946,8 @@ internal static class ServiceWireCodec
     private static void WriteOptionalRid(Writer writer, OptionalRid value, DecodeContext context)
     {
         var bytes = value.Value ?? Array.Empty<byte>();
-        if ((ulong)bytes.Length < 0UL || (ulong)bytes.Length > 255UL) throw Error("optional-rid: length");
+        if ((ulong)bytes.LongLength > 2147483647UL) throw Capacity("optional-rid: capacity");
+        if ((ulong)bytes.LongLength < 0UL || (ulong)bytes.LongLength > 255UL) throw Error("optional-rid: length");
         WriteU8(writer, new U8(checked((byte)bytes.Length)), context);
         writer.Bytes(bytes);
     }
@@ -950,8 +956,10 @@ internal static class ServiceWireCodec
     internal static byte[] EncodeText8(Text8 value, DecodeContext context) { var writer = new Writer(); WriteText8(writer, value, context); return writer.ToArray(); }
     private static Text8 ReadText8(Reader reader, DecodeContext context)
     {
-        var length = checked((int)ReadU8(reader, context).Value);
-        if ((ulong)length < 1UL || (ulong)length > 255UL) throw Error("text8: length");
+        var encodedLength = (ulong)ReadU8(reader, context).Value;
+        if (encodedLength > 2147483647UL) throw Capacity("text8: capacity");
+        if (encodedLength < 1UL || encodedLength > 255UL) throw Error("text8: length");
+        var length = checked((int)encodedLength);
         var bytes = reader.Bytes(length);
         if (bytes.Contains((byte)0)) throw Error("text8: NUL");
         return new(Utf8.GetString(bytes));
@@ -960,7 +968,8 @@ internal static class ServiceWireCodec
     {
         var bytes = value.Value is null ? Array.Empty<byte>() : Utf8.GetBytes(value.Value);
         if (bytes.Contains((byte)0)) throw Error("text8: NUL");
-        if ((ulong)bytes.Length < 1UL || (ulong)bytes.Length > 255UL) throw Error("text8: length");
+        if ((ulong)bytes.LongLength > 2147483647UL) throw Capacity("text8: capacity");
+        if ((ulong)bytes.LongLength < 1UL || (ulong)bytes.LongLength > 255UL) throw Error("text8: length");
         WriteU8(writer, new U8(checked((byte)bytes.Length)), context);
         writer.Bytes(bytes);
     }
@@ -969,8 +978,10 @@ internal static class ServiceWireCodec
     internal static byte[] EncodeOptionalText8(OptionalText8 value, DecodeContext context) { var writer = new Writer(); WriteOptionalText8(writer, value, context); return writer.ToArray(); }
     private static OptionalText8 ReadOptionalText8(Reader reader, DecodeContext context)
     {
-        var length = checked((int)ReadU8(reader, context).Value);
-        if ((ulong)length < 0UL || (ulong)length > 255UL) throw Error("optional-text8: length");
+        var encodedLength = (ulong)ReadU8(reader, context).Value;
+        if (encodedLength > 2147483647UL) throw Capacity("optional-text8: capacity");
+        if (encodedLength < 0UL || encodedLength > 255UL) throw Error("optional-text8: length");
+        var length = checked((int)encodedLength);
         var bytes = reader.Bytes(length);
         if (length == 0) return new(null);
         if (bytes.Contains((byte)0)) throw Error("optional-text8: NUL");
@@ -980,7 +991,8 @@ internal static class ServiceWireCodec
     {
         var bytes = value.Value is null ? Array.Empty<byte>() : Utf8.GetBytes(value.Value);
         if (bytes.Contains((byte)0)) throw Error("optional-text8: NUL");
-        if ((ulong)bytes.Length < 0UL || (ulong)bytes.Length > 255UL) throw Error("optional-text8: length");
+        if ((ulong)bytes.LongLength > 2147483647UL) throw Capacity("optional-text8: capacity");
+        if ((ulong)bytes.LongLength < 0UL || (ulong)bytes.LongLength > 255UL) throw Error("optional-text8: length");
         WriteU8(writer, new U8(checked((byte)bytes.Length)), context);
         writer.Bytes(bytes);
     }
@@ -989,15 +1001,18 @@ internal static class ServiceWireCodec
     internal static byte[] EncodeSha256Bytes(Sha256Bytes value, DecodeContext context) { var writer = new Writer(); WriteSha256Bytes(writer, value, context); return writer.ToArray(); }
     private static Sha256Bytes ReadSha256Bytes(Reader reader, DecodeContext context)
     {
-        var length = checked((int)ReadU8(reader, context).Value);
-        if ((ulong)length < 32UL || (ulong)length > 32UL) throw Error("sha256-bytes: length");
+        var encodedLength = (ulong)ReadU8(reader, context).Value;
+        if (encodedLength > 2147483647UL) throw Capacity("sha256-bytes: capacity");
+        if (encodedLength < 32UL || encodedLength > 32UL) throw Error("sha256-bytes: length");
+        var length = checked((int)encodedLength);
         var bytes = reader.Bytes(length);
         return new(bytes);
     }
     private static void WriteSha256Bytes(Writer writer, Sha256Bytes value, DecodeContext context)
     {
         var bytes = value.Value ?? Array.Empty<byte>();
-        if ((ulong)bytes.Length < 32UL || (ulong)bytes.Length > 32UL) throw Error("sha256-bytes: length");
+        if ((ulong)bytes.LongLength > 2147483647UL) throw Capacity("sha256-bytes: capacity");
+        if ((ulong)bytes.LongLength < 32UL || (ulong)bytes.LongLength > 32UL) throw Error("sha256-bytes: length");
         WriteU8(writer, new U8(checked((byte)bytes.Length)), context);
         writer.Bytes(bytes);
     }
@@ -1020,8 +1035,10 @@ internal static class ServiceWireCodec
     internal static byte[] EncodeText16(Text16 value, DecodeContext context) { var writer = new Writer(); WriteText16(writer, value, context); return writer.ToArray(); }
     private static Text16 ReadText16(Reader reader, DecodeContext context)
     {
-        var length = checked((int)ReadU16(reader, context).Value);
-        if ((ulong)length < 0UL || (ulong)length > 65535UL) throw Error("text16: length");
+        var encodedLength = (ulong)ReadU16(reader, context).Value;
+        if (encodedLength > 2147483647UL) throw Capacity("text16: capacity");
+        if (encodedLength < 0UL || encodedLength > 65535UL) throw Error("text16: length");
+        var length = checked((int)encodedLength);
         var bytes = reader.Bytes(length);
         if (bytes.Contains((byte)0)) throw Error("text16: NUL");
         return new(Utf8.GetString(bytes));
@@ -1030,7 +1047,8 @@ internal static class ServiceWireCodec
     {
         var bytes = value.Value is null ? Array.Empty<byte>() : Utf8.GetBytes(value.Value);
         if (bytes.Contains((byte)0)) throw Error("text16: NUL");
-        if ((ulong)bytes.Length < 0UL || (ulong)bytes.Length > 65535UL) throw Error("text16: length");
+        if ((ulong)bytes.LongLength > 2147483647UL) throw Capacity("text16: capacity");
+        if ((ulong)bytes.LongLength < 0UL || (ulong)bytes.LongLength > 65535UL) throw Error("text16: length");
         WriteU16(writer, new U16(checked((ushort)bytes.Length)), context);
         writer.Bytes(bytes);
     }
@@ -1039,8 +1057,10 @@ internal static class ServiceWireCodec
     internal static byte[] EncodeNonemptyText16(NonemptyText16 value, DecodeContext context) { var writer = new Writer(); WriteNonemptyText16(writer, value, context); return writer.ToArray(); }
     private static NonemptyText16 ReadNonemptyText16(Reader reader, DecodeContext context)
     {
-        var length = checked((int)ReadU16(reader, context).Value);
-        if ((ulong)length < 1UL || (ulong)length > 65535UL) throw Error("nonempty-text16: length");
+        var encodedLength = (ulong)ReadU16(reader, context).Value;
+        if (encodedLength > 2147483647UL) throw Capacity("nonempty-text16: capacity");
+        if (encodedLength < 1UL || encodedLength > 65535UL) throw Error("nonempty-text16: length");
+        var length = checked((int)encodedLength);
         var bytes = reader.Bytes(length);
         if (bytes.Contains((byte)0)) throw Error("nonempty-text16: NUL");
         return new(Utf8.GetString(bytes));
@@ -1049,7 +1069,8 @@ internal static class ServiceWireCodec
     {
         var bytes = value.Value is null ? Array.Empty<byte>() : Utf8.GetBytes(value.Value);
         if (bytes.Contains((byte)0)) throw Error("nonempty-text16: NUL");
-        if ((ulong)bytes.Length < 1UL || (ulong)bytes.Length > 65535UL) throw Error("nonempty-text16: length");
+        if ((ulong)bytes.LongLength > 2147483647UL) throw Capacity("nonempty-text16: capacity");
+        if ((ulong)bytes.LongLength < 1UL || (ulong)bytes.LongLength > 65535UL) throw Error("nonempty-text16: length");
         WriteU16(writer, new U16(checked((ushort)bytes.Length)), context);
         writer.Bytes(bytes);
     }
@@ -1058,8 +1079,10 @@ internal static class ServiceWireCodec
     internal static byte[] EncodeEndpoint(Endpoint value, DecodeContext context) { var writer = new Writer(); WriteEndpoint(writer, value, context); return writer.ToArray(); }
     private static Endpoint ReadEndpoint(Reader reader, DecodeContext context)
     {
-        var length = checked((int)ReadU16(reader, context).Value);
-        if ((ulong)length < 1UL || (ulong)length > 4096UL) throw Error("endpoint: length");
+        var encodedLength = (ulong)ReadU16(reader, context).Value;
+        if (encodedLength > 2147483647UL) throw Capacity("endpoint: capacity");
+        if (encodedLength < 1UL || encodedLength > 4096UL) throw Error("endpoint: length");
+        var length = checked((int)encodedLength);
         var bytes = reader.Bytes(length);
         if (bytes.Contains((byte)0)) throw Error("endpoint: NUL");
         return new(Utf8.GetString(bytes));
@@ -1068,7 +1091,8 @@ internal static class ServiceWireCodec
     {
         var bytes = value.Value is null ? Array.Empty<byte>() : Utf8.GetBytes(value.Value);
         if (bytes.Contains((byte)0)) throw Error("endpoint: NUL");
-        if ((ulong)bytes.Length < 1UL || (ulong)bytes.Length > 4096UL) throw Error("endpoint: length");
+        if ((ulong)bytes.LongLength > 2147483647UL) throw Capacity("endpoint: capacity");
+        if ((ulong)bytes.LongLength < 1UL || (ulong)bytes.LongLength > 4096UL) throw Error("endpoint: length");
         WriteU16(writer, new U16(checked((ushort)bytes.Length)), context);
         writer.Bytes(bytes);
     }
@@ -1077,15 +1101,18 @@ internal static class ServiceWireCodec
     internal static byte[] EncodeBlob16(Blob16 value, DecodeContext context) { var writer = new Writer(); WriteBlob16(writer, value, context); return writer.ToArray(); }
     private static Blob16 ReadBlob16(Reader reader, DecodeContext context)
     {
-        var length = checked((int)ReadU16(reader, context).Value);
-        if ((ulong)length < 0UL || (ulong)length > 65535UL) throw Error("blob16: length");
+        var encodedLength = (ulong)ReadU16(reader, context).Value;
+        if (encodedLength > 2147483647UL) throw Capacity("blob16: capacity");
+        if (encodedLength < 0UL || encodedLength > 65535UL) throw Error("blob16: length");
+        var length = checked((int)encodedLength);
         var bytes = reader.Bytes(length);
         return new(bytes);
     }
     private static void WriteBlob16(Writer writer, Blob16 value, DecodeContext context)
     {
         var bytes = value.Value ?? Array.Empty<byte>();
-        if ((ulong)bytes.Length < 0UL || (ulong)bytes.Length > 65535UL) throw Error("blob16: length");
+        if ((ulong)bytes.LongLength > 2147483647UL) throw Capacity("blob16: capacity");
+        if ((ulong)bytes.LongLength < 0UL || (ulong)bytes.LongLength > 65535UL) throw Error("blob16: length");
         WriteU16(writer, new U16(checked((ushort)bytes.Length)), context);
         writer.Bytes(bytes);
     }
@@ -1094,15 +1121,18 @@ internal static class ServiceWireCodec
     internal static byte[] EncodeNonemptyBlob16(NonemptyBlob16 value, DecodeContext context) { var writer = new Writer(); WriteNonemptyBlob16(writer, value, context); return writer.ToArray(); }
     private static NonemptyBlob16 ReadNonemptyBlob16(Reader reader, DecodeContext context)
     {
-        var length = checked((int)ReadU16(reader, context).Value);
-        if ((ulong)length < 1UL || (ulong)length > 65535UL) throw Error("nonempty-blob16: length");
+        var encodedLength = (ulong)ReadU16(reader, context).Value;
+        if (encodedLength > 2147483647UL) throw Capacity("nonempty-blob16: capacity");
+        if (encodedLength < 1UL || encodedLength > 65535UL) throw Error("nonempty-blob16: length");
+        var length = checked((int)encodedLength);
         var bytes = reader.Bytes(length);
         return new(bytes);
     }
     private static void WriteNonemptyBlob16(Writer writer, NonemptyBlob16 value, DecodeContext context)
     {
         var bytes = value.Value ?? Array.Empty<byte>();
-        if ((ulong)bytes.Length < 1UL || (ulong)bytes.Length > 65535UL) throw Error("nonempty-blob16: length");
+        if ((ulong)bytes.LongLength > 2147483647UL) throw Capacity("nonempty-blob16: capacity");
+        if ((ulong)bytes.LongLength < 1UL || (ulong)bytes.LongLength > 65535UL) throw Error("nonempty-blob16: length");
         WriteU16(writer, new U16(checked((ushort)bytes.Length)), context);
         writer.Bytes(bytes);
     }
@@ -1111,8 +1141,10 @@ internal static class ServiceWireCodec
     internal static byte[] EncodePacketName(PacketName value, DecodeContext context) { var writer = new Writer(); WritePacketName(writer, value, context); return writer.ToArray(); }
     private static PacketName ReadPacketName(Reader reader, DecodeContext context)
     {
-        var length = checked((int)ReadU8(reader, context).Value);
-        if ((ulong)length < 1UL || (ulong)length > 255UL) throw Error("packet-name: length");
+        var encodedLength = (ulong)ReadU8(reader, context).Value;
+        if (encodedLength > 2147483647UL) throw Capacity("packet-name: capacity");
+        if (encodedLength < 1UL || encodedLength > 255UL) throw Error("packet-name: length");
+        var length = checked((int)encodedLength);
         var bytes = reader.Bytes(length);
         if (bytes.Contains((byte)0)) throw Error("packet-name: NUL");
         return new(Utf8.GetString(bytes));
@@ -1121,7 +1153,8 @@ internal static class ServiceWireCodec
     {
         var bytes = value.Value is null ? Array.Empty<byte>() : Utf8.GetBytes(value.Value);
         if (bytes.Contains((byte)0)) throw Error("packet-name: NUL");
-        if ((ulong)bytes.Length < 1UL || (ulong)bytes.Length > 255UL) throw Error("packet-name: length");
+        if ((ulong)bytes.LongLength > 2147483647UL) throw Capacity("packet-name: capacity");
+        if ((ulong)bytes.LongLength < 1UL || (ulong)bytes.LongLength > 255UL) throw Error("packet-name: length");
         WriteU8(writer, new U8(checked((byte)bytes.Length)), context);
         writer.Bytes(bytes);
     }
@@ -1130,8 +1163,10 @@ internal static class ServiceWireCodec
     internal static byte[] EncodeContentType(ContentType value, DecodeContext context) { var writer = new Writer(); WriteContentType(writer, value, context); return writer.ToArray(); }
     private static ContentType ReadContentType(Reader reader, DecodeContext context)
     {
-        var length = checked((int)ReadU8(reader, context).Value);
-        if ((ulong)length < 1UL || (ulong)length > 255UL) throw Error("content-type: length");
+        var encodedLength = (ulong)ReadU8(reader, context).Value;
+        if (encodedLength > 2147483647UL) throw Capacity("content-type: capacity");
+        if (encodedLength < 1UL || encodedLength > 255UL) throw Error("content-type: length");
+        var length = checked((int)encodedLength);
         var bytes = reader.Bytes(length);
         if (bytes.Contains((byte)0)) throw Error("content-type: NUL");
         return new(Utf8.GetString(bytes));
@@ -1140,7 +1175,8 @@ internal static class ServiceWireCodec
     {
         var bytes = value.Value is null ? Array.Empty<byte>() : Utf8.GetBytes(value.Value);
         if (bytes.Contains((byte)0)) throw Error("content-type: NUL");
-        if ((ulong)bytes.Length < 1UL || (ulong)bytes.Length > 255UL) throw Error("content-type: length");
+        if ((ulong)bytes.LongLength > 2147483647UL) throw Capacity("content-type: capacity");
+        if ((ulong)bytes.LongLength < 1UL || (ulong)bytes.LongLength > 255UL) throw Error("content-type: length");
         WriteU8(writer, new U8(checked((byte)bytes.Length)), context);
         writer.Bytes(bytes);
     }
@@ -1150,8 +1186,10 @@ internal static class ServiceWireCodec
     private static ApplicationPayloadBytes ReadApplicationPayloadBytes(Reader reader, DecodeContext context)
     {
         var negotiatedMaximum = context.EffectiveCompleteMessageBytesMinusActualEnvelopeOverhead ?? throw Error("missing context effectiveCompleteMessageBytesMinusActualEnvelopeOverhead");
-        var length = checked((int)ReadU32(reader, context).Value);
-        if ((ulong)length < 0UL || (ulong)length > 4294966774UL) throw Error("application-payload-bytes: length");
+        var encodedLength = (ulong)ReadU32(reader, context).Value;
+        if (encodedLength > 2147483647UL) throw Capacity("application-payload-bytes: capacity");
+        if (encodedLength < 0UL || encodedLength > 4294966774UL) throw Error("application-payload-bytes: length");
+        var length = checked((int)encodedLength);
         var bytes = reader.Bytes(length);
         if (negotiatedMaximum < 0 || negotiatedMaximum > 4294966774L || (ulong)(bytes.LongLength) > (ulong)negotiatedMaximum) throw Error("application-payload-bytes: negotiated bound"); return new(bytes);
     }
@@ -1159,7 +1197,8 @@ internal static class ServiceWireCodec
     {
         var negotiatedMaximum = context.EffectiveCompleteMessageBytesMinusActualEnvelopeOverhead ?? throw Error("missing context effectiveCompleteMessageBytesMinusActualEnvelopeOverhead");
         var bytes = value.Value ?? Array.Empty<byte>();
-        if ((ulong)bytes.Length < 0UL || (ulong)bytes.Length > 4294966774UL) throw Error("application-payload-bytes: length");
+        if ((ulong)bytes.LongLength > 2147483647UL) throw Capacity("application-payload-bytes: capacity");
+        if ((ulong)bytes.LongLength < 0UL || (ulong)bytes.LongLength > 4294966774UL) throw Error("application-payload-bytes: length");
         WriteU32(writer, new U32(checked((uint)bytes.Length)), context);
         writer.Bytes(bytes);
         if (negotiatedMaximum < 0 || negotiatedMaximum > 4294966774L || (ulong)(bytes.LongLength) > (ulong)negotiatedMaximum) throw Error("application-payload-bytes: negotiated bound");
@@ -1202,8 +1241,10 @@ internal static class ServiceWireCodec
     internal static byte[] EncodeMetadataValue(MetadataValue value, DecodeContext context) { var writer = new Writer(); WriteMetadataValue(writer, value, context); return writer.ToArray(); }
     private static MetadataValue ReadMetadataValue(Reader reader, DecodeContext context)
     {
-        var length = checked((int)ReadU16(reader, context).Value);
-        if ((ulong)length < 0UL || (ulong)length > 1024UL) throw Error("metadata-value: length");
+        var encodedLength = (ulong)ReadU16(reader, context).Value;
+        if (encodedLength > 2147483647UL) throw Capacity("metadata-value: capacity");
+        if (encodedLength < 0UL || encodedLength > 1024UL) throw Error("metadata-value: length");
+        var length = checked((int)encodedLength);
         var bytes = reader.Bytes(length);
         if (bytes.Contains((byte)0)) throw Error("metadata-value: NUL");
         return new(Utf8.GetString(bytes));
@@ -1212,7 +1253,8 @@ internal static class ServiceWireCodec
     {
         var bytes = value.Value is null ? Array.Empty<byte>() : Utf8.GetBytes(value.Value);
         if (bytes.Contains((byte)0)) throw Error("metadata-value: NUL");
-        if ((ulong)bytes.Length < 0UL || (ulong)bytes.Length > 1024UL) throw Error("metadata-value: length");
+        if ((ulong)bytes.LongLength > 2147483647UL) throw Capacity("metadata-value: capacity");
+        if ((ulong)bytes.LongLength < 0UL || (ulong)bytes.LongLength > 1024UL) throw Error("metadata-value: length");
         WriteU16(writer, new U16(checked((ushort)bytes.Length)), context);
         writer.Bytes(bytes);
     }
@@ -2577,15 +2619,18 @@ internal static class ServiceWireCodec
     internal static byte[] EncodeAggregateParticipantMutationBytes(AggregateParticipantMutationBytes value, DecodeContext context) { var writer = new Writer(); WriteAggregateParticipantMutationBytes(writer, value, context); return writer.ToArray(); }
     private static AggregateParticipantMutationBytes ReadAggregateParticipantMutationBytes(Reader reader, DecodeContext context)
     {
-        var length = checked((int)ReadU32(reader, context).Value);
-        if ((ulong)length < 1UL || (ulong)length > 1048576UL) throw Error("aggregate-participant-mutation-bytes: length");
+        var encodedLength = (ulong)ReadU32(reader, context).Value;
+        if (encodedLength > 2147483647UL) throw Capacity("aggregate-participant-mutation-bytes: capacity");
+        if (encodedLength < 1UL || encodedLength > 1048576UL) throw Error("aggregate-participant-mutation-bytes: length");
+        var length = checked((int)encodedLength);
         var bytes = reader.Bytes(length);
         return new(bytes);
     }
     private static void WriteAggregateParticipantMutationBytes(Writer writer, AggregateParticipantMutationBytes value, DecodeContext context)
     {
         var bytes = value.Value ?? Array.Empty<byte>();
-        if ((ulong)bytes.Length < 1UL || (ulong)bytes.Length > 1048576UL) throw Error("aggregate-participant-mutation-bytes: length");
+        if ((ulong)bytes.LongLength > 2147483647UL) throw Capacity("aggregate-participant-mutation-bytes: capacity");
+        if ((ulong)bytes.LongLength < 1UL || (ulong)bytes.LongLength > 1048576UL) throw Error("aggregate-participant-mutation-bytes: length");
         WriteU32(writer, new U32(checked((uint)bytes.Length)), context);
         writer.Bytes(bytes);
     }
@@ -3200,8 +3245,10 @@ internal static class ServiceWireCodec
     internal static byte[] EncodeCreationContentReference(CreationContentReference value, DecodeContext context) { var writer = new Writer(); WriteCreationContentReference(writer, value, context); return writer.ToArray(); }
     private static CreationContentReference ReadCreationContentReference(Reader reader, DecodeContext context)
     {
-        var length = checked((int)ReadU16(reader, context).Value);
-        if ((ulong)length < 1UL || (ulong)length > 4096UL) throw Error("creation-content-reference: length");
+        var encodedLength = (ulong)ReadU16(reader, context).Value;
+        if (encodedLength > 2147483647UL) throw Capacity("creation-content-reference: capacity");
+        if (encodedLength < 1UL || encodedLength > 4096UL) throw Error("creation-content-reference: length");
+        var length = checked((int)encodedLength);
         var bytes = reader.Bytes(length);
         if (bytes.Contains((byte)0)) throw Error("creation-content-reference: NUL");
         return new(Utf8.GetString(bytes));
@@ -3210,7 +3257,8 @@ internal static class ServiceWireCodec
     {
         var bytes = value.Value is null ? Array.Empty<byte>() : Utf8.GetBytes(value.Value);
         if (bytes.Contains((byte)0)) throw Error("creation-content-reference: NUL");
-        if ((ulong)bytes.Length < 1UL || (ulong)bytes.Length > 4096UL) throw Error("creation-content-reference: length");
+        if ((ulong)bytes.LongLength > 2147483647UL) throw Capacity("creation-content-reference: capacity");
+        if ((ulong)bytes.LongLength < 1UL || (ulong)bytes.LongLength > 4096UL) throw Error("creation-content-reference: length");
         WriteU16(writer, new U16(checked((ushort)bytes.Length)), context);
         writer.Bytes(bytes);
     }
@@ -3219,8 +3267,10 @@ internal static class ServiceWireCodec
     internal static byte[] EncodeRelocationReference(RelocationReference value, DecodeContext context) { var writer = new Writer(); WriteRelocationReference(writer, value, context); return writer.ToArray(); }
     private static RelocationReference ReadRelocationReference(Reader reader, DecodeContext context)
     {
-        var length = checked((int)ReadU16(reader, context).Value);
-        if ((ulong)length < 1UL || (ulong)length > 4096UL) throw Error("relocation-reference: length");
+        var encodedLength = (ulong)ReadU16(reader, context).Value;
+        if (encodedLength > 2147483647UL) throw Capacity("relocation-reference: capacity");
+        if (encodedLength < 1UL || encodedLength > 4096UL) throw Error("relocation-reference: length");
+        var length = checked((int)encodedLength);
         var bytes = reader.Bytes(length);
         if (bytes.Contains((byte)0)) throw Error("relocation-reference: NUL");
         return new(Utf8.GetString(bytes));
@@ -3229,7 +3279,8 @@ internal static class ServiceWireCodec
     {
         var bytes = value.Value is null ? Array.Empty<byte>() : Utf8.GetBytes(value.Value);
         if (bytes.Contains((byte)0)) throw Error("relocation-reference: NUL");
-        if ((ulong)bytes.Length < 1UL || (ulong)bytes.Length > 4096UL) throw Error("relocation-reference: length");
+        if ((ulong)bytes.LongLength > 2147483647UL) throw Capacity("relocation-reference: capacity");
+        if ((ulong)bytes.LongLength < 1UL || (ulong)bytes.LongLength > 4096UL) throw Error("relocation-reference: length");
         WriteU16(writer, new U16(checked((ushort)bytes.Length)), context);
         writer.Bytes(bytes);
     }
@@ -3238,8 +3289,10 @@ internal static class ServiceWireCodec
     internal static byte[] EncodeAuthorityStoreVersion(AuthorityStoreVersion value, DecodeContext context) { var writer = new Writer(); WriteAuthorityStoreVersion(writer, value, context); return writer.ToArray(); }
     private static AuthorityStoreVersion ReadAuthorityStoreVersion(Reader reader, DecodeContext context)
     {
-        var length = checked((int)ReadU16(reader, context).Value);
-        if ((ulong)length < 1UL || (ulong)length > 4096UL) throw Error("authority-store-version: length");
+        var encodedLength = (ulong)ReadU16(reader, context).Value;
+        if (encodedLength > 2147483647UL) throw Capacity("authority-store-version: capacity");
+        if (encodedLength < 1UL || encodedLength > 4096UL) throw Error("authority-store-version: length");
+        var length = checked((int)encodedLength);
         var bytes = reader.Bytes(length);
         if (bytes.Contains((byte)0)) throw Error("authority-store-version: NUL");
         return new(Utf8.GetString(bytes));
@@ -3248,7 +3301,8 @@ internal static class ServiceWireCodec
     {
         var bytes = value.Value is null ? Array.Empty<byte>() : Utf8.GetBytes(value.Value);
         if (bytes.Contains((byte)0)) throw Error("authority-store-version: NUL");
-        if ((ulong)bytes.Length < 1UL || (ulong)bytes.Length > 4096UL) throw Error("authority-store-version: length");
+        if ((ulong)bytes.LongLength > 2147483647UL) throw Capacity("authority-store-version: capacity");
+        if ((ulong)bytes.LongLength < 1UL || (ulong)bytes.LongLength > 4096UL) throw Error("authority-store-version: length");
         WriteU16(writer, new U16(checked((ushort)bytes.Length)), context);
         writer.Bytes(bytes);
     }
@@ -5396,15 +5450,18 @@ internal static class ServiceWireCodec
     internal static byte[] EncodeDurableBlob(DurableBlob value, DecodeContext context) { var writer = new Writer(); WriteDurableBlob(writer, value, context); return writer.ToArray(); }
     private static DurableBlob ReadDurableBlob(Reader reader, DecodeContext context)
     {
-        var length = checked((int)ReadU32(reader, context).Value);
-        if ((ulong)length < 0UL || (ulong)length > 67108864UL) throw Error("durable-blob: length");
+        var encodedLength = (ulong)ReadU32(reader, context).Value;
+        if (encodedLength > 2147483647UL) throw Capacity("durable-blob: capacity");
+        if (encodedLength < 0UL || encodedLength > 67108864UL) throw Error("durable-blob: length");
+        var length = checked((int)encodedLength);
         var bytes = reader.Bytes(length);
         return new(bytes);
     }
     private static void WriteDurableBlob(Writer writer, DurableBlob value, DecodeContext context)
     {
         var bytes = value.Value ?? Array.Empty<byte>();
-        if ((ulong)bytes.Length < 0UL || (ulong)bytes.Length > 67108864UL) throw Error("durable-blob: length");
+        if ((ulong)bytes.LongLength > 2147483647UL) throw Capacity("durable-blob: capacity");
+        if ((ulong)bytes.LongLength < 0UL || (ulong)bytes.LongLength > 67108864UL) throw Error("durable-blob: length");
         WriteU32(writer, new U32(checked((uint)bytes.Length)), context);
         writer.Bytes(bytes);
     }
@@ -5413,15 +5470,18 @@ internal static class ServiceWireCodec
     internal static byte[] EncodeDurableStateBlob(DurableStateBlob value, DecodeContext context) { var writer = new Writer(); WriteDurableStateBlob(writer, value, context); return writer.ToArray(); }
     private static DurableStateBlob ReadDurableStateBlob(Reader reader, DecodeContext context)
     {
-        var length = checked((int)ReadU64(reader, context).Value);
-        if ((ulong)length < 0UL || (ulong)length > 67108864UL) throw Error("durable-state-blob: length");
+        var encodedLength = (ulong)ReadU64(reader, context).Value;
+        if (encodedLength > 2147483647UL) throw Capacity("durable-state-blob: capacity");
+        if (encodedLength < 0UL || encodedLength > 67108864UL) throw Error("durable-state-blob: length");
+        var length = checked((int)encodedLength);
         var bytes = reader.Bytes(length);
         return new(bytes);
     }
     private static void WriteDurableStateBlob(Writer writer, DurableStateBlob value, DecodeContext context)
     {
         var bytes = value.Value ?? Array.Empty<byte>();
-        if ((ulong)bytes.Length < 0UL || (ulong)bytes.Length > 67108864UL) throw Error("durable-state-blob: length");
+        if ((ulong)bytes.LongLength > 2147483647UL) throw Capacity("durable-state-blob: capacity");
+        if ((ulong)bytes.LongLength < 0UL || (ulong)bytes.LongLength > 67108864UL) throw Error("durable-state-blob: length");
         WriteU64(writer, new U64(checked((ulong)bytes.Length)), context);
         writer.Bytes(bytes);
     }
