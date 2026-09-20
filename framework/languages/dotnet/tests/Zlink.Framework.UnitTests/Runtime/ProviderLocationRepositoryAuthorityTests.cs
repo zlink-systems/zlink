@@ -498,8 +498,11 @@ public sealed class ProviderLocationRepositoryAuthorityTests
         var request = Reservation("actor:shared", descriptor, owner);
         var reserved = Assert.IsType<ZLinkObjectReserveResult.Reserved>(
             await source.ReserveAsync(request));
+        Assert.Empty(await ScanKeysAsync(
+            provider,
+            "zlink:v11:creation-reservation:"));
         var committed = Assert.IsType<ZLinkObjectCommitResult.Committed>(
-            await source.CommitAsync(
+            await target.CommitAsync(
                 reserved.Reservation,
                 new byte[] { 0x22 }));
         var observed = Assert.IsType<ZLinkAuthorityReadResult.Found>(

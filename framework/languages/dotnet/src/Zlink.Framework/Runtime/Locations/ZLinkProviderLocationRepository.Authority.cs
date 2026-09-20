@@ -11,7 +11,6 @@ namespace Zlink.Framework.Runtime.Locations;
 internal sealed partial class ZLinkProviderLocationRepository
 {
     private const string AuthorityPrefix = Prefix + "authority:";
-    private const string ReservationPrefix = Prefix + "creation-reservation:";
     private const string TerminalPrefix = Prefix + "creation-terminal:";
     private const string AggregatePrefix = Prefix + "aggregate:";
     private static readonly TimeSpan AmbiguousReconciliationTimeout =
@@ -497,15 +496,6 @@ internal sealed partial class ZLinkProviderLocationRepository
                 request.CreationIntentReference,
                 request.CreationIntentHash.ToArray(),
                 request.CreationIntentEncodedSize));
-        var reservation = new ReservationRecord(
-            request.Key,
-            objectGeneration,
-            authorityOwnerGeneration,
-            reservationId,
-            request.TargetDescriptor,
-            request.TargetNodeLifecycleGeneration,
-            request.TargetOwner,
-            ReservationStatus.Reserved);
         var nextCapacity = capacity.Record.Clone();
         ApplyCapacity(nextCapacity, allocation, pendingDelta: 1);
         var metaKey = AuthorityMetaKey(request.Key);
@@ -517,16 +507,10 @@ internal sealed partial class ZLinkProviderLocationRepository
                     target.DescriptorCondition,
                     target.OwnerCondition,
                     capacity.Condition,
-                    authorityCounter.Condition,
-                    new ZLinkStoreCondition.Missing(
-                        ReservationKey(reservationId))
+                    authorityCounter.Condition
                 ],
                 [
                     new ZLinkStoreMutation.Put(metaKey, Encode(meta), null),
-                    new ZLinkStoreMutation.Put(
-                        ReservationKey(reservationId),
-                        Encode(reservation),
-                        null),
                     new ZLinkStoreMutation.Put(
                         capacity.Key,
                         Encode(nextCapacity),
@@ -649,30 +633,8 @@ internal sealed partial class ZLinkProviderLocationRepository
             .ConfigureAwait(false);
         var nextCapacity = capacity.Record.Clone();
         conditions.Add(capacity.Condition);
-        if (current.Meta.ReservedCreation is not { } reservation)
+        if (current.Meta.ReservedCreation is null)
             return StaleAuthorityReclaimResult.RecoveryRequired;
-        var storedReservation = await ReadRecordAsync<ReservationRecord>(
-                ReservationKey(reservation.ReservationId),
-                cancellationToken)
-            .ConfigureAwait(false);
-        if (storedReservation is null
-            || storedReservation.Record.Status != ReservationStatus.Reserved
-            || storedReservation.Record.Key != current.Key
-            || storedReservation.Record.ObjectGeneration
-            != current.Snapshot.ObjectGeneration
-            || storedReservation.Record.AuthorityOwnerGeneration
-            != current.Snapshot.AuthorityOwnerGeneration)
-            return StaleAuthorityReclaimResult.RecoveryRequired;
-        conditions.Add(new ZLinkStoreCondition.Version(
-            ReservationKey(reservation.ReservationId),
-            storedReservation.Version));
-        mutations.Add(new ZLinkStoreMutation.Put(
-            ReservationKey(reservation.ReservationId),
-            Encode(storedReservation.Record with
-            {
-                Status = ReservationStatus.Aborted
-            }),
-            null));
         ApplyCapacity(
             nextCapacity,
             current.Snapshot.Allocation,
@@ -745,11 +707,7 @@ internal sealed partial class ZLinkProviderLocationRepository
                 reservation.Key,
                 cancellationToken)
             .ConfigureAwait(false);
-        var storedReservation = await ReadRecordAsync<ReservationRecord>(
-                ReservationKey(reservation.ReservationVersion),
-                cancellationToken)
-            .ConfigureAwait(false);
-        if (!MatchesReservation(current, storedReservation, reservation))
+        if (!MatchesReservation(current, reservation))
             return new ZLinkObjectCreationCompleteResult.Stale();
         if (publication.ExpiresAt <= current!.Snapshot.StoreNow)
             throw new ArgumentOutOfRangeException(
@@ -805,28 +763,13 @@ internal sealed partial class ZLinkProviderLocationRepository
             new ZLinkStoreCondition.Version(
                 AuthorityMetaKey(reservation.Key),
                 current.Version),
-            new ZLinkStoreCondition.Version(
-                ReservationKey(reservation.ReservationVersion),
-                storedReservation!.Version),
             new ZLinkStoreCondition.Missing(terminalKey),
             target.DescriptorCondition,
             target.OwnerCondition,
             capacity.Condition
         };
-        var reservationRecord = storedReservation.Record with
-        {
-            Status = state == ZLinkCreationTerminalState.Created
-                ? ReservationStatus.Created
-                : state == ZLinkCreationTerminalState.Rejected
-                    ? ReservationStatus.Rejected
-                    : ReservationStatus.Failed
-        };
         var mutations = new List<ZLinkStoreMutation>
         {
-            new ZLinkStoreMutation.Put(
-                ReservationKey(reservation.ReservationVersion),
-                Encode(reservationRecord),
-                null),
             new ZLinkStoreMutation.Put(
                 terminalKey,
                 Encode(terminalMeta),
@@ -881,14 +824,8 @@ internal sealed partial class ZLinkProviderLocationRepository
                         reservation.Key,
                         cancellationToken)
                     .ConfigureAwait(false);
-                var unchangedReservation =
-                    await ReadRecordAsync<ReservationRecord>(
-                            ReservationKey(reservation.ReservationVersion),
-                            cancellationToken)
-                        .ConfigureAwait(false);
                 if (MatchesReservation(
                         unchangedAuthority,
-                        unchangedReservation,
                         reservation))
                 {
                     await DelayCounterRetryAsync(
@@ -950,13 +887,7 @@ internal sealed partial class ZLinkProviderLocationRepository
                 reservation.Key,
                 cancellationToken)
             .ConfigureAwait(false);
-        var storedReservation = await ReadRecordAsync<ReservationRecord>(
-                ReservationKey(reservation.ReservationVersion),
-                cancellationToken)
-            .ConfigureAwait(false);
-        if (storedReservation?.Record.Status == ReservationStatus.Aborted)
-            return new ZLinkObjectAbortResult.AlreadyAborted();
-        if (!MatchesReservation(current, storedReservation, reservation))
+        if (!MatchesReservation(current, reservation))
             return new ZLinkObjectAbortResult.Stale();
         var capacity = await ReadCapacityAsync(
                 reservation.TargetDescriptor,
@@ -970,21 +901,11 @@ internal sealed partial class ZLinkProviderLocationRepository
                     new ZLinkStoreCondition.Version(
                         AuthorityMetaKey(reservation.Key),
                         current.Version),
-                    new ZLinkStoreCondition.Version(
-                        ReservationKey(reservation.ReservationVersion),
-                        storedReservation!.Version),
                     capacity.Condition
                 ],
                 [
                     new ZLinkStoreMutation.Delete(
                         AuthorityMetaKey(reservation.Key)),
-                    new ZLinkStoreMutation.Put(
-                        ReservationKey(reservation.ReservationVersion),
-                        Encode(storedReservation.Record with
-                        {
-                            Status = ReservationStatus.Aborted
-                        }),
-                        null),
                     new ZLinkStoreMutation.Put(
                         capacity.Key,
                         Encode(nextCapacity),
@@ -3956,16 +3877,12 @@ internal sealed partial class ZLinkProviderLocationRepository
                 reservation.Key,
                 cancellationToken)
             .ConfigureAwait(false);
-        var storedReservation = await ReadRecordAsync<ReservationRecord>(
-                ReservationKey(reservation.ReservationVersion),
-                cancellationToken)
-            .ConfigureAwait(false);
-        if (storedReservation?.Record.Status == ReservationStatus.Created)
-            return current is null
-                ? new ZLinkObjectCommitResult.Stale()
-                : new ZLinkObjectCommitResult.AlreadyCommitted(current.Snapshot);
-        if (!MatchesReservation(current, storedReservation, reservation))
+        if (current is null)
             return new ZLinkObjectCommitResult.Stale();
+        if (!MatchesReservation(current, reservation))
+            return current.Meta.ReservedCreation is null
+                ? new ZLinkObjectCommitResult.AlreadyCommitted(current.Snapshot)
+                : new ZLinkObjectCommitResult.Stale();
         var target = await ReadEligibleTargetAsync(
                 reservation.TargetDescriptor,
                 reservation.TargetNodeLifecycleGeneration,
@@ -4001,9 +3918,6 @@ internal sealed partial class ZLinkProviderLocationRepository
                     new ZLinkStoreCondition.Version(
                         AuthorityMetaKey(reservation.Key),
                         current.Version),
-                    new ZLinkStoreCondition.Version(
-                        ReservationKey(reservation.ReservationVersion),
-                        storedReservation!.Version),
                     target.DescriptorCondition,
                     target.OwnerCondition,
                     capacity.Condition
@@ -4012,13 +3926,6 @@ internal sealed partial class ZLinkProviderLocationRepository
                     new ZLinkStoreMutation.Put(
                         AuthorityMetaKey(reservation.Key),
                         Encode(meta),
-                        null),
-                    new ZLinkStoreMutation.Put(
-                        ReservationKey(reservation.ReservationVersion),
-                        Encode(storedReservation.Record with
-                        {
-                            Status = ReservationStatus.Created
-                        }),
                         null),
                     new ZLinkStoreMutation.Put(
                         capacity.Key,
@@ -4036,20 +3943,12 @@ internal sealed partial class ZLinkProviderLocationRepository
                         reservation.Key,
                         cancellationToken)
                     .ConfigureAwait(false);
-                var unchangedReservation =
-                    await ReadRecordAsync<ReservationRecord>(
-                            ReservationKey(reservation.ReservationVersion),
-                            cancellationToken)
-                        .ConfigureAwait(false);
-                if (unchangedReservation?.Record.Status
-                    == ReservationStatus.Created)
-                    return unchangedAuthority is null
-                        ? new ZLinkObjectCommitResult.Stale()
-                        : new ZLinkObjectCommitResult.AlreadyCommitted(
-                            unchangedAuthority.Snapshot);
+                if (unchangedAuthority is not null
+                    && unchangedAuthority.Meta.ReservedCreation is null)
+                    return new ZLinkObjectCommitResult.AlreadyCommitted(
+                        unchangedAuthority.Snapshot);
                 if (MatchesReservation(
                         unchangedAuthority,
-                        unchangedReservation,
                         reservation))
                 {
                     await DelayCounterRetryAsync(
@@ -4545,21 +4444,20 @@ internal sealed partial class ZLinkProviderLocationRepository
 
     private static bool MatchesReservation(
         StoredAuthority? current,
-        StoredRecord<ReservationRecord>? stored,
         ZLinkObjectReservation reservation) =>
         current is not null
-        && stored is not null
-        && stored.Record.Status == ReservationStatus.Reserved
-        && stored.Record.Key == reservation.Key
-        && stored.Record.ObjectGeneration == reservation.ObjectGeneration
-        && stored.Record.AuthorityOwnerGeneration
-        == reservation.AuthorityOwnerGeneration
-        && stored.Record.ReservationId == reservation.ReservationVersion
-        && stored.Record.TargetDescriptor == reservation.TargetDescriptor
-        && stored.Record.TargetLifecycleGeneration
-        == reservation.TargetNodeLifecycleGeneration
-        && stored.Record.TargetOwner == reservation.TargetOwner
         && current.Version.Value == reservation.StoreVersion
+        && current.Meta.ReservedCreation is { } pendingCreation
+        && pendingCreation.ReservationId == reservation.ReservationVersion
+        && current.Snapshot.ObjectGeneration == reservation.ObjectGeneration
+        && current.Snapshot.AuthorityOwnerGeneration
+        == reservation.AuthorityOwnerGeneration
+        && current.Snapshot.Allocation.Descriptor == reservation.TargetDescriptor
+        && current.Snapshot.Allocation.DescriptorLifecycleGeneration
+        == reservation.TargetNodeLifecycleGeneration
+        && current.Snapshot.OwnerId == reservation.TargetOwner.OwnerId
+        && current.Snapshot.OwnerLeaseGeneration
+        == reservation.TargetOwner.LeaseGeneration
         && current.Snapshot.Allocation.State
         == ZLinkPlacementAllocationState.Reserved;
 
@@ -5076,9 +4974,6 @@ internal sealed partial class ZLinkProviderLocationRepository
         };
     }
 
-    private static ZLinkStoreKey ReservationKey(string reservationId) =>
-        Key($"{ReservationPrefix}{EncodeSegment(reservationId)}");
-
     private static ZLinkStoreKey TerminalKey(
         ZLinkCreationOperationId operation) =>
         Key($"{TerminalPrefix}meta:{CreationOperationSegment(operation)}");
@@ -5221,16 +5116,6 @@ internal sealed partial class ZLinkProviderLocationRepository
         AuthorityMeta Meta,
         ZLinkStoreVersion Version,
         ZLinkAuthoritySnapshot Snapshot);
-
-    private sealed record ReservationRecord(
-        ZLinkAuthorityKey Key,
-        ulong ObjectGeneration,
-        ulong AuthorityOwnerGeneration,
-        string ReservationId,
-        ZLinkMeshNodeDescriptorKey TargetDescriptor,
-        ulong TargetLifecycleGeneration,
-        ZLinkLocationOwnerToken TargetOwner,
-        ReservationStatus Status);
 
     private sealed record TerminalMeta(
         ZLinkCreationTerminalRecord Record,
@@ -5457,15 +5342,6 @@ internal sealed partial class ZLinkProviderLocationRepository
     }
 
     private readonly record struct CapacityCount(int Active, int Pending);
-
-    private enum ReservationStatus
-    {
-        Reserved = 1,
-        Created = 2,
-        Rejected = 3,
-        Failed = 4,
-        Aborted = 5
-    }
 
     private enum StaleAuthorityReclaimResult
     {
