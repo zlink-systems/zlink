@@ -132,6 +132,13 @@ export class ZLinkOwnerCleanupError extends Error {
   }
 }
 
+export class ZLinkOwnerLeaseClaimError extends Error {
+  constructor(readonly kind: 'conflict' | 'generationExhausted') {
+    super(`Owner lease claim failed with '${kind}'.`);
+    this.name = 'ZLinkOwnerLeaseClaimError';
+  }
+}
+
 export class ZLinkLocationRuntime implements ZLinkLocationRuntimeQuery {
   readonly ownerId: string;
   private readonly options: Required<ZLinkLocationOptionOverrides>;
@@ -163,9 +170,9 @@ export class ZLinkLocationRuntime implements ZLinkLocationRuntimeQuery {
   lastError?: string;
 
   get ownerLeaseUsable(): boolean {
-    return this.ownerLeaseHealthy
-      && (this.ownerLeaseDeadlineMs === undefined
-        || this.monotonicNowMs() < this.ownerLeaseDeadlineMs);
+    return this.ownerToken !== undefined
+      && this.ownerLeaseDeadlineMs !== undefined
+      && this.monotonicNowMs() < this.ownerLeaseDeadlineMs;
   }
 
   constructor(runtimeOptions: ZLinkLocationRuntimeOptions) {
@@ -366,6 +373,7 @@ export class ZLinkLocationRuntime implements ZLinkLocationRuntimeQuery {
       return await this.claimFreshOwnerLease(signal);
     }
 
+    const wasOwnerLeaseUsable = this.ownerLeaseUsable;
     try {
       const renewStartedAtMs = this.monotonicNowMs();
       const result = await withTimeout(
@@ -402,7 +410,9 @@ export class ZLinkLocationRuntime implements ZLinkLocationRuntimeQuery {
         result.storeNow
       );
       this.lastError = undefined;
-      for (const handler of this.ownerLeaseRenewedHandlers) handler(result);
+      if (!wasOwnerLeaseUsable) {
+        for (const handler of this.ownerLeaseRenewedHandlers) handler(result);
+      }
       return true;
     } catch (error) {
       if (signal?.aborted === true) throw error;
@@ -426,7 +436,7 @@ export class ZLinkLocationRuntime implements ZLinkLocationRuntimeQuery {
     }
     const claimCompletedAtMs = this.monotonicNowMs();
     if (claim.kind !== 'claimed') {
-      const error = new Error(`Owner lease claim failed with '${claim.kind}'.`);
+      const error = new ZLinkOwnerLeaseClaimError(claim.kind);
       this.recordFailure(error.message, 'owner_lease_claim');
       throw error;
     }
@@ -434,7 +444,11 @@ export class ZLinkLocationRuntime implements ZLinkLocationRuntimeQuery {
       if (!this.started) {
         // stop() may have completed while the Store claim was in flight. Do
         // not install a token into a stopped runtime or leave an orphan lease.
-        await this.stores.ownerLeaseStore.releaseOwnerLease(claim.token).catch(() => undefined);
+        try {
+          await this.stores.ownerLeaseStore.releaseOwnerLease(claim.token);
+        } catch (error) {
+          this.recordFailure(errorMessage(error), 'owner_lease_release');
+        }
         return false;
       }
       this.lastOwnerToken = this.ownerToken;

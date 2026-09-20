@@ -274,7 +274,8 @@ test('location runtime fails startup for terminal owner lease claim results', as
 
     await assert.rejects(
       runtime.start(rid(`node-startup-${kind}`)),
-      new RegExp(`Owner lease claim failed with '${kind}'`)
+      error => error instanceof internal.ZLinkOwnerLeaseClaimError
+        && error.kind === kind
     );
     assert.equal(runtime.isStarted, false);
     assert.equal(runtime.currentOwnerToken, undefined);
@@ -323,6 +324,39 @@ test('location runtime releases a claim confirmed after startup cancellation wit
   assert.equal(runtime.currentOwnerToken, undefined);
   assert.equal(timers.length, 0);
   assert.deepEqual(await store.readOwnerLease('owner-startup-cancel'), { kind: 'missing' });
+});
+
+test('location runtime records a stop-race claim release failure', async () => {
+  const store = new internal.ZLinkInMemoryLocationStore();
+  let claimStarted;
+  let completeClaim;
+  const leaseStore = {
+    async claimOwnerLease() {
+      claimStarted?.();
+      return await new Promise(resolve => { completeClaim = resolve; });
+    },
+    readOwnerLease: store.readOwnerLease.bind(store),
+    renewOwnerLease: store.renewOwnerLease.bind(store),
+    async releaseOwnerLease() { throw new Error('release transport unavailable'); }
+  };
+  const runtime = runtimeFor(store, {
+    ownerId: 'owner-stop-race-release-failure',
+    ownerLeaseStore: leaseStore
+  });
+  const started = new Promise(resolve => { claimStarted = resolve; });
+  const starting = runtime.start(rid('node-stop-race-release-failure'));
+  await started;
+  await runtime.stop();
+  completeClaim({
+    kind: 'claimed',
+    token: { ownerId: 'owner-stop-race-release-failure', leaseGeneration: 1n },
+    leaseExpiresAt: new Date(30_000),
+    storeNow: new Date(0)
+  });
+  await starting;
+
+  assert.equal(runtime.currentOwnerToken, undefined);
+  assert.match(runtime.lastError, /release transport unavailable/u);
 });
 
 test('location runtime reclaims immediately after the Store rejects a stale owner token', async () => {
