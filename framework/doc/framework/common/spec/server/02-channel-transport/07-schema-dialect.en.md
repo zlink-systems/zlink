@@ -248,7 +248,7 @@ frame — such as the typed payload envelope — use it.
 | `bodyLengthType`, `bodyLengthCovers` | a length prefix before the selected case and its coverage (`selected-case`). A union without them places the case directly, with no length prefix |
 | `cases` | a list of `{ "when": { discriminator: value, … }, "fields": [...], "constraints": [...] }`. Every discriminator is assigned exactly once. `constraints` is optional and applies the same kinds as a struct's `constraints` (§4.5) to that case's fields |
 | `otherwise` | when no case matches — `protocol-error` (reject) or an explicit field list `{ "fields": [...] }` (the current schema uses only the empty list) |
-| `trailingBytes` | `forbidden` |
+| `maximumEncodedBytes`, `trailingBytes` | as for `struct` (§4.5) |
 | `presence`, `release` | literals stating when the union appears and when it is released. No effect on layout |
 
 The layout is the `source: wire` discriminators, the body length (if declared), then the fields of

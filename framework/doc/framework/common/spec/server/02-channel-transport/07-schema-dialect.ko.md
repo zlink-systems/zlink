@@ -232,7 +232,7 @@ field로 정해지므로 typed payload envelope처럼 다른 frame에 실리는 
 | `bodyLengthType`, `bodyLengthCovers` | 선택한 case 앞에 오는 길이 prefix와 그 범위(`selected-case`). 없는 union은 길이 prefix 없이 case가 바로 온다 |
 | `cases` | `{ "when": { discriminator: value, … }, "fields": [...], "constraints": [...] }` 목록. 모든 discriminator를 정확히 한 번씩 배정한다. `constraints`는 선택이며 struct의 `constraints`(§4.5)와 같은 종류를 그 case의 field에 적용한다 |
 | `otherwise` | 어느 case에도 맞지 않을 때 — `protocol-error`(거부) 또는 명시적 field 목록 `{ "fields": [...] }`(현재 schema는 빈 목록만 쓴다) |
-| `trailingBytes` | `forbidden` |
+| `maximumEncodedBytes`, `trailingBytes` | `struct`와 같다(§4.5) |
 | `presence`, `release` | 나타나는 조건과 해제 조건을 적은 literal. 배치에 영향이 없다 |
 
 배치는 `source: wire`인 discriminator, (선언했으면) body length, 선택한 case의 fields 순서다.
