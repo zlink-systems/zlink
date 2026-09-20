@@ -2450,9 +2450,14 @@ function decodeGoldenBody(formatName, bytes) {
     const hasActivationRecovery = reader.u8();
     const activationBody = new FixtureReader(reader.bytesOf(reader.u32()));
     if (hasActivationRecovery === 1) {
+      const referenceUtf8Fixture = activationBody.text16();
+      const sha256Length = activationBody.u8();
+      if (sha256Length !== 32) {
+        throw new Error("authority activation recovery SHA-256 must contain exactly 32 bytes");
+      }
       decoded.activationRecoveryState = {
-        referenceUtf8Fixture: activationBody.text8(),
-        sha256Hex: activationBody.bytesOf(32).toString("hex"),
+        referenceUtf8Fixture,
+        sha256Hex: activationBody.bytesOf(sha256Length).toString("hex"),
         encodedSize: activationBody.u32(),
         inboxSequence: activationBody.u64(),
         replayCursor: activationBody.u64(),
@@ -2806,8 +2811,13 @@ function encodeGoldenBody(formatName, decoded) {
     writer.u8(decoded.relocationState === null ? 0 : 1).u32(bytes.length).raw(bytes);
     const activation = new FixtureWriter();
     if (decoded.activationRecoveryState !== null) {
-      activation.text8(decoded.activationRecoveryState.referenceUtf8Fixture)
-        .raw(Buffer.from(decoded.activationRecoveryState.sha256Hex, "hex"))
+      const sha256 = Buffer.from(decoded.activationRecoveryState.sha256Hex, "hex");
+      if (sha256.length !== 32) {
+        throw new Error("authority activation recovery SHA-256 must contain exactly 32 bytes");
+      }
+      activation.text16(decoded.activationRecoveryState.referenceUtf8Fixture)
+        .u8(sha256.length)
+        .raw(sha256)
         .u32(decoded.activationRecoveryState.encodedSize)
         .u64(decoded.activationRecoveryState.inboxSequence)
         .u64(decoded.activationRecoveryState.replayCursor);
@@ -7721,10 +7731,30 @@ function runGoldenFixtureSelfTests(schema, schemaPath) {
         }],
         ["legacy four-field activation pointer", (candidate) => {
           const bytes = Buffer.from(candidate.encodedHex, "hex");
-          const body = bytes.subarray(11, bytes.length - 4 - 8);
-          const header = Buffer.from(bytes.subarray(0, 11));
-          header.writeUInt32BE(body.length, 7);
-          const withoutChecksum = Buffer.concat([header, body]);
+          const bodyEnd = bytes.length - 4;
+          const body = new FixtureReader(bytes.subarray(11, bodyEnd));
+          body.u8();
+          decodeAuthorityObject(body);
+          body.text8();
+          body.u64();
+          body.text8();
+          body.text8();
+          body.u64();
+          body.u8();
+          body.bytesOf(body.u32());
+          if (body.u8() !== 1) {
+            throw new Error("authority fixture must contain an activation recovery pointer");
+          }
+          const activationLengthOffset = 11 + body.offset;
+          const activationLength = body.u32();
+          body.bytesOf(activationLength);
+          body.end();
+          if (activationLength < 8) {
+            throw new Error("authority fixture activation recovery pointer is too short");
+          }
+          const withoutChecksum = Buffer.from(bytes.subarray(0, bodyEnd - 8));
+          withoutChecksum.writeUInt32BE(bytes.readUInt32BE(7) - 8, 7);
+          withoutChecksum.writeUInt32BE(activationLength - 8, activationLengthOffset);
           const checksum = Buffer.alloc(4);
           checksum.writeUInt32BE(crc32c(withoutChecksum));
           candidate.encodedHex = Buffer.concat([withoutChecksum, checksum]).toString("hex");
