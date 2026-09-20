@@ -378,6 +378,23 @@ public sealed class LocationRuntimeTests
     }
 
     [Fact]
+    public async Task Startup_ClaimConflict_RemainsAnErrorWhenConfirmationReadTimesOut()
+    {
+        var store = new ConflictWithNonCooperativeReadStore();
+        var runtime = new ZLinkLocationRuntime(
+            new ZLinkLocationOptions
+            {
+                OwnerLeaseRenewTimeout = TimeSpan.FromMilliseconds(25)
+            },
+            store);
+
+        await Assert.ThrowsAsync<ZLinkOwnerLeaseClaimRejectedException>(() =>
+            runtime.StartAsync(RoutingId.From("conflict-read-timeout-node")).AsTask()
+                .WaitAsync(TimeSpan.FromSeconds(1)));
+        Assert.Equal(1, store.ReadCalls);
+    }
+
+    [Fact]
     public async Task Startup_ClaimGenerationExhausted_IsAnError()
     {
         var runtime = new ZLinkLocationRuntime(
@@ -707,6 +724,31 @@ public sealed class LocationRuntimeTests
             CancellationToken cancellationToken = default) =>
             ValueTask.FromResult<ZLinkOwnerLeaseReadResult>(
                 new ZLinkOwnerLeaseReadResult.Missing());
+    }
+
+    private sealed class ConflictWithNonCooperativeReadStore
+        : ZLinkLocationStoreTestDouble
+    {
+        private readonly TaskCompletionSource<ZLinkOwnerLeaseReadResult> _read =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
+        private int _readCalls;
+
+        public int ReadCalls => Volatile.Read(ref _readCalls);
+
+        public override ValueTask<ZLinkOwnerLeaseClaimResult> ClaimOwnerLeaseAsync(
+            string ownerId,
+            TimeSpan leaseTtl,
+            CancellationToken cancellationToken = default) =>
+            ValueTask.FromResult<ZLinkOwnerLeaseClaimResult>(
+                new ZLinkOwnerLeaseClaimResult.Conflict());
+
+        public override ValueTask<ZLinkOwnerLeaseReadResult> ReadOwnerLeaseAsync(
+            string ownerId,
+            CancellationToken cancellationToken = default)
+        {
+            Interlocked.Increment(ref _readCalls);
+            return new ValueTask<ZLinkOwnerLeaseReadResult>(_read.Task);
+        }
     }
 
     private sealed class CancelAfterCommittedClaimStore(IZLinkLocationRepository inner)

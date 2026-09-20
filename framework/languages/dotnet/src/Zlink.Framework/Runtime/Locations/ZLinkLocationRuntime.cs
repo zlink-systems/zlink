@@ -604,6 +604,8 @@ internal sealed class ZLinkLocationRuntime : IAsyncDisposable
                     claimFailure = exception;
                     continue;
                 }
+                if (rejectedClaim is not null)
+                    throw new ZLinkOwnerLeaseClaimRejectedException(rejectedClaim);
 
                 RecordLeaseFailure(
                     $"Owner lease renewal timeout after {_options.OwnerLeaseRenewTimeout}.");
