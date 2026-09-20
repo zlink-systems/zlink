@@ -31,6 +31,8 @@
                  Link="Runtime/Protocol/ServiceWireConstants.g.cs"/>
         <Compile Include="../../../../runtime/protocol/generated/dotnet/ServiceWirePilotCodec.g.cs"
                  Link="Runtime/Protocol/ServiceWirePilotCodec.g.cs"/>
+        <Compile Include="../../../../runtime/protocol/generated/dotnet/ServiceWireCodec.g.cs"
+                 Link="Runtime/Protocol/ServiceWireCodec.g.cs"/>
     </ItemGroup>
 
     <Target Name="PinStreamConnectorPackageDependency"

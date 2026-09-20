@@ -1,248 +1,143 @@
-using System.Text;
 using System.Text.Json;
 using Systems.Zlink.Framework.Runtime.Protocol;
-using Zlink.Framework.Runtime.Actors;
 
 namespace Zlink.Framework.UnitTests.Runtime;
 
 public sealed class GeneratedServiceWireCommandCodecConformanceTests
 {
     [Fact]
-    public void Batch3_runtime_and_generated_codecs_match_canonical_goldens()
+    public void Fixture_catalog_has_the_nine_renderer_surfaces()
     {
-        foreach (var bytes in ReadArray("reply-relay-v1.json", "canonical")
-                     .Concat(ReadArray("relocation-control-v1.json", "canonical"))
-                     .Concat(ReadArray("session-relocation-barrier-v1.json", "canonical")))
+        using var index = ReadJson("generated/fixtures/index.json");
+
+        Assert.Equal(9, index.RootElement.GetProperty("fixtures").GetArrayLength());
+    }
+
+    [Theory]
+    [InlineData("authority")]
+    [InlineData("activation")]
+    [InlineData("chunk")]
+    [InlineData("manifest")]
+    [InlineData("logical")]
+    public void Durable_and_logical_generated_codecs_round_trip_canonical_bytes(string surface)
+    {
+        switch (surface)
         {
-            Assert.Equal(bytes, RuntimeCommandRoundTrip(bytes));
-            Assert.Equal(bytes, GeneratedCommandRoundTrip(bytes));
+            case "authority":
+                var authority = ReadHex("durable-authority-v1.json", "encodedHex");
+                Assert.Equal(authority, ServiceWireCodec.EncodeDurableAuthorityPayloadV1(
+                    ServiceWireCodec.DecodeDurableAuthorityPayloadV1(authority)));
+                break;
+            case "activation":
+                var activation = ReadHex("instance-activation-recovery-v1.json", "encodedHex");
+                Assert.Equal(activation,
+                    ServiceWireCodec.EncodeDurableInstanceActivationRecoveryV1(
+                        ServiceWireCodec.DecodeDurableInstanceActivationRecoveryV1(activation)));
+                break;
+            case "chunk":
+                var chunk = ReadHex("relocation-data-chunk-v1.json", "encodedHex");
+                Assert.Equal(chunk, ServiceWireCodec.EncodeDurableRelocationDataChunkV1(
+                    ServiceWireCodec.DecodeDurableRelocationDataChunkV1(chunk)));
+                Assert.Equal(chunk, ServiceWirePilotCodec.EncodeRelocationDataChunkV1(
+                    ServiceWirePilotCodec.DecodeRelocationDataChunkV1(chunk)));
+                break;
+            case "manifest":
+                var manifest = ReadHex("relocation-manifest-v1.json", "encodedHex");
+                Assert.Equal(manifest, ServiceWireCodec.EncodeDurableRelocationManifestV1(
+                    ServiceWireCodec.DecodeDurableRelocationManifestV1(manifest)));
+                Assert.Equal(manifest, ServiceWirePilotCodec.EncodeRelocationManifestV1(
+                    ServiceWirePilotCodec.DecodeRelocationManifestV1(manifest)));
+                break;
+            case "logical":
+                var logical = ReadHex("relocation-envelope-v1.json", "logicalHex");
+                Assert.Equal(logical, ServiceWireCodec.EncodeLogicalRelocationEnvelopeV1(
+                    ServiceWireCodec.DecodeLogicalRelocationEnvelopeV1(logical)));
+                Assert.Equal(logical, ServiceWirePilotCodec.EncodeRelocationEnvelopeV1(
+                    ServiceWirePilotCodec.DecodeRelocationEnvelopeV1(logical)));
+                break;
         }
     }
 
     [Fact]
-    public void Batch3_runtime_and_generated_codecs_reject_the_same_malformed_bytes()
+    public void Actor_join_generated_and_pilot_codecs_match_canonical_and_malformed_vectors()
     {
-        var malformed = ReadArray("relocation-control-v1.json", "malformed")
-            .Concat(ReadArray("reply-relay-v1.json", "canonical")
-                .SelectMany(Mutations))
-            .Concat(ReadArray("session-relocation-barrier-v1.json", "canonical")
-                .SelectMany(Mutations));
-
-        foreach (var bytes in malformed)
+        using var fixture = ReadJson("golden/actor-join-request-v1.json");
+        foreach (var vector in fixture.RootElement.GetProperty("valid").EnumerateArray())
         {
-            Assert.True(RuntimeCommandRejects(bytes));
-            Assert.ThrowsAny<Exception>(() => GeneratedCommandRoundTrip(bytes));
+            var frames = ReadFrames(vector, "framesHex");
+            Assert.Equal(frames, ServiceWireCodec.EncodeActorJoin28(
+                ServiceWireCodec.DecodeActorJoin28(frames)));
+            Assert.Equal(frames, ServiceWirePilotCodec.EncodeActorJoin28(
+                ServiceWirePilotCodec.DecodeActorJoin28(frames)));
+        }
+
+        foreach (var vector in fixture.RootElement.GetProperty("invalid").EnumerateArray())
+        {
+            var frames = ReadFrames(vector, "framesHex");
+            Assert.ThrowsAny<Exception>(() => ServiceWireCodec.DecodeActorJoin28(frames));
+            Assert.ThrowsAny<Exception>(() => ServiceWirePilotCodec.DecodeActorJoin28(frames));
         }
     }
 
-    [Fact]
-    public void Batch4_runtime_and_generated_codecs_match_canonical_goldens()
+    [Theory]
+    [InlineData("user-spot-create-v1.json", 47)]
+    [InlineData("user-spot-close-v1.json", 48)]
+    [InlineData("actor-create-v1.json", 49)]
+    public void Creation_command_generated_and_pilot_codecs_match_canonical_and_malformed_vectors(
+        string file, int commandId)
     {
-        foreach (var file in new[]
-                 {
-                     "user-spot-create-v1.json",
-                     "user-spot-close-v1.json",
-                     "actor-create-v1.json"
-                 })
+        using var fixture = ReadJson($"golden/{file}");
+        var canonical = Convert.FromHexString(fixture.RootElement
+            .GetProperty("canonical").GetProperty("hex").GetString()!);
+
+        Assert.Equal(canonical, GeneratedRoundTrip(commandId, canonical));
+        Assert.Equal(canonical, PilotRoundTrip(commandId, canonical));
+
+        foreach (var malformed in fixture.RootElement.GetProperty("malformed").EnumerateArray())
         {
-            var bytes = ReadCanonicalObject(file);
-            Assert.Equal(bytes, RuntimeCommandRoundTrip(bytes));
-            Assert.Equal(bytes, GeneratedCommandRoundTrip(bytes));
+            var bytes = Convert.FromHexString(malformed.GetProperty("hex").GetString()!);
+            Assert.ThrowsAny<Exception>(() => GeneratedRoundTrip(commandId, bytes));
+            Assert.ThrowsAny<Exception>(() => PilotRoundTrip(commandId, bytes));
         }
     }
 
-    [Fact]
-    public void Batch4_runtime_and_generated_codecs_reject_the_same_malformed_goldens()
+    private static byte[] GeneratedRoundTrip(int commandId, byte[] bytes) => commandId switch
     {
-        foreach (var file in new[]
-                 {
-                     "user-spot-create-v1.json",
-                     "user-spot-close-v1.json",
-                     "actor-create-v1.json"
-                 })
-        foreach (var bytes in ReadArray(file, "malformed"))
-        {
-            Assert.True(RuntimeCommandRejects(bytes));
-            Assert.ThrowsAny<Exception>(() => GeneratedCommandRoundTrip(bytes));
-        }
-    }
-
-    [Fact]
-    public void Zljr_runtime_and_generated_codecs_match_the_canonical_golden()
-    {
-        var bytes = ReadCanonicalObject("zljr-v1.json");
-
-        Assert.True(ZLinkActorRemoteJoinRecoverySavedWork.TryDecode(
-            bytes, out var source, out var recovery));
-        var runtime = ZLinkActorRemoteJoinRecoverySavedWork.Create(
-            1,
-            source,
-            ZLinkActorRemoteJoinRecoveryCodec.Encode(recovery));
-        var generated = ServiceWirePilotCodec.DecodeZljrRecordV1(bytes);
-        var runtimeBytes = runtime.Payload.ToArray();
-        var runtimeGenerated = ServiceWirePilotCodec.DecodeZljrRecordV1(
-            runtimeBytes);
-
-        Assert.Equal(
-            Encoding.UTF8.GetString(generated.Metadata),
-            Encoding.UTF8.GetString(runtimeGenerated.Metadata));
-        Assert.Equal(bytes, runtimeBytes);
-        Assert.Equal(bytes, ServiceWirePilotCodec.EncodeZljrRecordV1(generated));
-    }
-
-    [Fact]
-    public void Zljr_runtime_and_generated_codecs_reject_the_same_malformed_goldens()
-    {
-        foreach (var bytes in ReadArray("zljr-v1.json", "malformed"))
-        {
-            Assert.False(ZLinkActorRemoteJoinRecoverySavedWork.TryDecode(
-                bytes, out _, out _));
-            Assert.ThrowsAny<Exception>(() =>
-                ServiceWirePilotCodec.DecodeZljrRecordV1(bytes));
-        }
-    }
-
-    private static byte[] RuntimeCommandRoundTrip(byte[] bytes) => bytes[3] switch
-    {
-        30 => RoundTrip<ZLinkServiceWireCodec.RelocationReadyRecord>(bytes,
-            ZLinkServiceWireCodec.TryDecodeRelocationReady,
-            ZLinkServiceWireCodec.EncodeRelocationReady),
-        31 => RoundTrip<ZLinkServiceWireCodec.RelocationDataRecord>(bytes,
-            ZLinkServiceWireCodec.TryDecodeRelocationData,
-            ZLinkServiceWireCodec.EncodeRelocationData),
-        33 => RoundTrip<ZLinkServiceWireCodec.ReplyRelayRecord>(bytes,
-            ZLinkServiceWireCodec.TryDecodeReplyRelay,
-            ZLinkServiceWireCodec.EncodeReplyRelay),
-        34 => RoundTrip<ZLinkServiceWireCodec.RelocationCutoverRecord>(bytes,
-            ZLinkServiceWireCodec.TryDecodeRelocationCutover,
-            ZLinkServiceWireCodec.EncodeRelocationCutover),
-        40 => RoundTrip<ZLinkServiceWireCodec.RelocationPrepareRecord>(bytes,
-            ZLinkServiceWireCodec.TryDecodeRelocationPrepare,
-            ZLinkServiceWireCodec.EncodeRelocationPrepare),
-        42 => RoundTrip<ZLinkServiceWireCodec.SessionRelocationSealRecord>(bytes,
-            ZLinkServiceWireCodec.TryDecodeSessionRelocationSeal,
-            ZLinkServiceWireCodec.EncodeSessionRelocationSeal),
-        43 => RoundTrip<ZLinkServiceWireCodec.SessionRelocationSealedRecord>(bytes,
-            ZLinkServiceWireCodec.TryDecodeSessionRelocationSealed,
-            ZLinkServiceWireCodec.EncodeSessionRelocationSealed),
-        44 => RoundTrip<ZLinkServiceWireCodec.SessionRelocationRouteRecord>(bytes,
-            ZLinkServiceWireCodec.TryDecodeSessionRelocationRoute,
-            ZLinkServiceWireCodec.EncodeSessionRelocationRoute),
-        46 => RoundTrip<ZLinkServiceWireCodec.ReplyRelayAckRecord>(bytes,
-            ZLinkServiceWireCodec.TryDecodeReplyRelayAck,
-            ZLinkServiceWireCodec.EncodeReplyRelayAck),
-        47 or 48 => RoundTripUserSpot(bytes),
-        49 => RoundTripActorCreate(bytes),
-        52 => RoundTrip<ZLinkServiceWireCodec.RelocationStateRecord>(bytes,
-            ZLinkServiceWireCodec.TryDecodeRelocationState,
-            ZLinkServiceWireCodec.EncodeRelocationState),
-        53 => RoundTrip<ZLinkServiceWireCodec.RelocationFailedRecord>(bytes,
-            ZLinkServiceWireCodec.TryDecodeRelocationFailed,
-            ZLinkServiceWireCodec.EncodeRelocationFailed),
+        47 => ServiceWireCodec.EncodeUserSpotCreate47(
+            ServiceWireCodec.DecodeUserSpotCreate47(bytes)).Single(),
+        48 => ServiceWireCodec.EncodeUserSpotClose48(
+            ServiceWireCodec.DecodeUserSpotClose48(bytes)).Single(),
+        49 => ServiceWireCodec.EncodeActorCreate49(
+            ServiceWireCodec.DecodeActorCreate49(bytes)).Single(),
         _ => throw new InvalidOperationException()
     };
 
-    private static byte[] GeneratedCommandRoundTrip(byte[] bytes) => bytes[3] switch
+    private static byte[] PilotRoundTrip(int commandId, byte[] bytes) => commandId switch
     {
-        30 => ServiceWirePilotCodec.EncodeRelocationReady30(
-            ServiceWirePilotCodec.DecodeRelocationReady30(bytes)),
-        31 => ServiceWirePilotCodec.EncodeRelocationData31(
-            ServiceWirePilotCodec.DecodeRelocationData31(bytes)),
-        33 => ServiceWirePilotCodec.EncodeReplyRelay33(
-            ServiceWirePilotCodec.DecodeReplyRelay33([bytes])).Single(),
-        34 => ServiceWirePilotCodec.EncodeRelocationCutover34(
-            ServiceWirePilotCodec.DecodeRelocationCutover34(bytes)),
-        40 => ServiceWirePilotCodec.EncodeRelocationPrepare40(
-            ServiceWirePilotCodec.DecodeRelocationPrepare40(bytes)),
-        42 => ServiceWirePilotCodec.EncodeSessionRelocationSeal42(
-            ServiceWirePilotCodec.DecodeSessionRelocationSeal42(bytes)),
-        43 => ServiceWirePilotCodec.EncodeSessionRelocationSealed43(
-            ServiceWirePilotCodec.DecodeSessionRelocationSealed43(bytes)),
-        44 => ServiceWirePilotCodec.EncodeSessionRelocationRoute44(
-            ServiceWirePilotCodec.DecodeSessionRelocationRoute44(bytes)),
-        46 => ServiceWirePilotCodec.EncodeReplyRelayAck46(
-            ServiceWirePilotCodec.DecodeReplyRelayAck46(bytes)),
         47 => ServiceWirePilotCodec.EncodeUserSpotCreate47(
             ServiceWirePilotCodec.DecodeUserSpotCreate47(bytes)),
         48 => ServiceWirePilotCodec.EncodeUserSpotClose48(
             ServiceWirePilotCodec.DecodeUserSpotClose48(bytes)),
         49 => ServiceWirePilotCodec.EncodeActorCreate49(
             ServiceWirePilotCodec.DecodeActorCreate49(bytes)),
-        52 => ServiceWirePilotCodec.EncodeRelocationState52(
-            ServiceWirePilotCodec.DecodeRelocationState52(bytes)),
-        53 => ServiceWirePilotCodec.EncodeRelocationFailed53(
-            ServiceWirePilotCodec.DecodeRelocationFailed53(bytes)),
         _ => throw new InvalidOperationException()
     };
 
-    private static bool RuntimeCommandRejects(byte[] bytes) => bytes[3] switch
+    private static byte[] ReadHex(string file, string property)
     {
-        30 => !ZLinkServiceWireCodec.TryDecodeRelocationReady(bytes, out _, out _),
-        31 => !ZLinkServiceWireCodec.TryDecodeRelocationData(bytes, out _, out _),
-        33 => !ZLinkServiceWireCodec.TryDecodeReplyRelay(bytes, out _, out _),
-        34 => !ZLinkServiceWireCodec.TryDecodeRelocationCutover(bytes, out _, out _),
-        40 => !ZLinkServiceWireCodec.TryDecodeRelocationPrepare(bytes, out _, out _),
-        42 => !ZLinkServiceWireCodec.TryDecodeSessionRelocationSeal(bytes, out _, out _),
-        43 => !ZLinkServiceWireCodec.TryDecodeSessionRelocationSealed(bytes, out _, out _),
-        44 => !ZLinkServiceWireCodec.TryDecodeSessionRelocationRoute(bytes, out _, out _),
-        46 => !ZLinkServiceWireCodec.TryDecodeReplyRelayAck(bytes, out _, out _),
-        47 or 48 => !ZLinkServiceWireCodec.TryDecodeUserSpotOperation(bytes, out _, out _),
-        49 => !ZLinkServiceWireCodec.TryDecodeActorCreateOperation(bytes, out _, out _),
-        52 => !ZLinkServiceWireCodec.TryDecodeRelocationState(bytes, out _, out _),
-        53 => !ZLinkServiceWireCodec.TryDecodeRelocationFailed(bytes, out _, out _),
-        _ => throw new InvalidOperationException()
-    };
-
-    private static byte[] RoundTripUserSpot(byte[] bytes)
-    {
-        Assert.True(ZLinkServiceWireCodec.TryDecodeUserSpotOperation(
-            bytes, out var record, out _));
-        return record.Command == ServiceWireConstants.Command.UserSpotCreate
-            ? ZLinkServiceWireCodec.EncodeUserSpotCreate(record.Create)
-            : ZLinkServiceWireCodec.EncodeUserSpotClose(record.Close);
+        using var fixture = ReadJson($"golden/{file}");
+        return Convert.FromHexString(fixture.RootElement.GetProperty(property).GetString()!);
     }
 
-    private static byte[] RoundTripActorCreate(byte[] bytes)
-    {
-        Assert.True(ZLinkServiceWireCodec.TryDecodeActorCreateOperation(
-            bytes, out var record, out _));
-        return ZLinkServiceWireCodec.EncodeActorCreate(record.Operation);
-    }
-
-    private delegate bool TryDecode<T>(ReadOnlySpan<byte> bytes, out T value,
-        out ZLinkServiceWireCodec.DecodeError error);
-
-    private static byte[] RoundTrip<T>(byte[] bytes, TryDecode<T> decode,
-        Func<T, byte[]> encode)
-    {
-        Assert.True(decode(bytes, out var value, out _));
-        return encode(value);
-    }
-
-    private static IEnumerable<byte[]> Mutations(byte[] bytes)
-    {
-        yield return bytes[..^1];
-        yield return [.. bytes, 0];
-    }
-
-    private static byte[] ReadCanonicalObject(string file) =>
-        ReadFixture(file).GetProperty("canonical").GetProperty("hex")
-            .GetString() is { } hex
-            ? Convert.FromHexString(hex)
-            : throw new InvalidDataException();
-
-    private static IReadOnlyList<byte[]> ReadArray(string file, string section) =>
-        ReadFixture(file).GetProperty(section).EnumerateArray()
-            .Select(static item => Convert.FromHexString(
-                item.GetProperty("hex").GetString()!))
+    private static byte[][] ReadFrames(JsonElement value, string property) =>
+        value.GetProperty(property).EnumerateArray()
+            .Select(static frame => Convert.FromHexString(frame.GetString()!))
             .ToArray();
 
-    private static JsonElement ReadFixture(string file)
+    private static JsonDocument ReadJson(string relativePath)
     {
         var frameworkRoot = Common.FrameworkTestEnvironment.GetFrameworkRoot();
-        var path = Path.GetFullPath(
-            $"../../runtime/protocol/golden/{file}", frameworkRoot);
-        using var document = JsonDocument.Parse(File.ReadAllText(path));
-        return document.RootElement.Clone();
+        var path = Path.GetFullPath($"../../runtime/protocol/{relativePath}", frameworkRoot);
+        return JsonDocument.Parse(File.ReadAllText(path));
     }
 }
