@@ -2,7 +2,7 @@
 /* eslint-disable */
 
 export type ServiceWireRuntimePredicate = (terminalResult: number, failureCode: number) => boolean;
-export type ServiceWireDecoderContext = Readonly<{ originalOperationKind?: MeshOperationKind; durableRelocationPresent?: boolean; applicationSnapshotPresent?: boolean; runtimePredicates: Readonly<Record<string, ServiceWireRuntimePredicate>> }>;
+export type ServiceWireDecoderContext = Readonly<{ originalOperationKind?: MeshOperationKind; durableRelocationPresent?: boolean; applicationSnapshotPresent?: boolean; readonly effectiveCompleteMessageBytesMinusActualEnvelopeOverhead?: number | bigint; readonly effectiveCompleteMessageBytes?: number | bigint; runtimePredicates: Readonly<Record<string, ServiceWireRuntimePredicate>> }>;
 function fail(message: string): never { throw new RangeError(message); }
 function numeric(value: unknown): bigint { return typeof value === "bigint" ? value : BigInt(value as number); }
 function same(left: unknown, right: unknown): boolean { return typeof left === "bigint" || typeof right === "bigint" ? numeric(left) === numeric(right) : left === right; }
@@ -174,7 +174,7 @@ export type Rid = Uint8Array;
 
 function readRid(reader: Reader, context: ServiceWireDecoderContext, enclosing: any, flags: number): Rid {
   void context; void enclosing; void flags;
-  const length = Number(readU8(reader, context, enclosing, flags));  if (length < 1 || length > 255) fail("rid length"); return reader.take(length);
+  const length = Number(readU8(reader, context, enclosing, flags));  if (length < 1 || length > 255) fail("rid length");  return reader.take(length);
 }
 function writeRid(input: Rid, writer: Writer, context: ServiceWireDecoderContext, enclosing: any, flags: number): void {
   void context; void enclosing; void flags; const value: any = input;
@@ -187,7 +187,7 @@ export type OptionalRid = Uint8Array | null;
 
 function readOptionalRid(reader: Reader, context: ServiceWireDecoderContext, enclosing: any, flags: number): OptionalRid {
   void context; void enclosing; void flags;
-  const length = Number(readU8(reader, context, enclosing, flags)); if (length === 0) return null; if (length < 0 || length > 255) fail("optional-rid length"); return reader.take(length);
+  const length = Number(readU8(reader, context, enclosing, flags)); if (length === 0) return null; if (length < 0 || length > 255) fail("optional-rid length");  return reader.take(length);
 }
 function writeOptionalRid(input: OptionalRid, writer: Writer, context: ServiceWireDecoderContext, enclosing: any, flags: number): void {
   void context; void enclosing; void flags; const value: any = input;
@@ -200,7 +200,7 @@ export type Text8 = string;
 
 function readText8(reader: Reader, context: ServiceWireDecoderContext, enclosing: any, flags: number): Text8 {
   void context; void enclosing; void flags;
-  const length = Number(readU8(reader, context, enclosing, flags));  if (length < 1 || length > 255) fail("text8 length"); const bytes = reader.take(length); if (bytes.includes(0)) fail("text8 NUL"); return decodeUtf8(bytes, "text8");
+  const length = Number(readU8(reader, context, enclosing, flags));  if (length < 1 || length > 255) fail("text8 length");  const bytes = reader.take(length); if (bytes.includes(0)) fail("text8 NUL"); return decodeUtf8(bytes, "text8");
 }
 function writeText8(input: Text8, writer: Writer, context: ServiceWireDecoderContext, enclosing: any, flags: number): void {
   void context; void enclosing; void flags; const value: any = input;
@@ -213,7 +213,7 @@ export type OptionalText8 = string | null;
 
 function readOptionalText8(reader: Reader, context: ServiceWireDecoderContext, enclosing: any, flags: number): OptionalText8 {
   void context; void enclosing; void flags;
-  const length = Number(readU8(reader, context, enclosing, flags)); if (length === 0) return null; if (length < 0 || length > 255) fail("optional-text8 length"); const bytes = reader.take(length); if (bytes.includes(0)) fail("optional-text8 NUL"); return decodeUtf8(bytes, "optional-text8");
+  const length = Number(readU8(reader, context, enclosing, flags)); if (length === 0) return null; if (length < 0 || length > 255) fail("optional-text8 length");  const bytes = reader.take(length); if (bytes.includes(0)) fail("optional-text8 NUL"); return decodeUtf8(bytes, "optional-text8");
 }
 function writeOptionalText8(input: OptionalText8, writer: Writer, context: ServiceWireDecoderContext, enclosing: any, flags: number): void {
   void context; void enclosing; void flags; const value: any = input;
@@ -226,7 +226,7 @@ export type Sha256Bytes = Uint8Array;
 
 function readSha256Bytes(reader: Reader, context: ServiceWireDecoderContext, enclosing: any, flags: number): Sha256Bytes {
   void context; void enclosing; void flags;
-  const length = Number(readU8(reader, context, enclosing, flags));  if (length < 32 || length > 32) fail("sha256-bytes length"); return reader.take(length);
+  const length = Number(readU8(reader, context, enclosing, flags));  if (length < 32 || length > 32) fail("sha256-bytes length");  return reader.take(length);
 }
 function writeSha256Bytes(input: Sha256Bytes, writer: Writer, context: ServiceWireDecoderContext, enclosing: any, flags: number): void {
   void context; void enclosing; void flags; const value: any = input;
@@ -252,7 +252,7 @@ export type Text16 = string;
 
 function readText16(reader: Reader, context: ServiceWireDecoderContext, enclosing: any, flags: number): Text16 {
   void context; void enclosing; void flags;
-  const length = Number(readU16(reader, context, enclosing, flags));  if (length < 0 || length > 65535) fail("text16 length"); const bytes = reader.take(length); if (bytes.includes(0)) fail("text16 NUL"); return decodeUtf8(bytes, "text16");
+  const length = Number(readU16(reader, context, enclosing, flags));  if (length < 0 || length > 65535) fail("text16 length");  const bytes = reader.take(length); if (bytes.includes(0)) fail("text16 NUL"); return decodeUtf8(bytes, "text16");
 }
 function writeText16(input: Text16, writer: Writer, context: ServiceWireDecoderContext, enclosing: any, flags: number): void {
   void context; void enclosing; void flags; const value: any = input;
@@ -265,7 +265,7 @@ export type NonemptyText16 = string;
 
 function readNonemptyText16(reader: Reader, context: ServiceWireDecoderContext, enclosing: any, flags: number): NonemptyText16 {
   void context; void enclosing; void flags;
-  const length = Number(readU16(reader, context, enclosing, flags));  if (length < 1 || length > 65535) fail("nonempty-text16 length"); const bytes = reader.take(length); if (bytes.includes(0)) fail("nonempty-text16 NUL"); return decodeUtf8(bytes, "nonempty-text16");
+  const length = Number(readU16(reader, context, enclosing, flags));  if (length < 1 || length > 65535) fail("nonempty-text16 length");  const bytes = reader.take(length); if (bytes.includes(0)) fail("nonempty-text16 NUL"); return decodeUtf8(bytes, "nonempty-text16");
 }
 function writeNonemptyText16(input: NonemptyText16, writer: Writer, context: ServiceWireDecoderContext, enclosing: any, flags: number): void {
   void context; void enclosing; void flags; const value: any = input;
@@ -278,7 +278,7 @@ export type Endpoint = string;
 
 function readEndpoint(reader: Reader, context: ServiceWireDecoderContext, enclosing: any, flags: number): Endpoint {
   void context; void enclosing; void flags;
-  const length = Number(readU16(reader, context, enclosing, flags));  if (length < 1 || length > 4096) fail("endpoint length"); const bytes = reader.take(length); if (bytes.includes(0)) fail("endpoint NUL"); return decodeUtf8(bytes, "endpoint");
+  const length = Number(readU16(reader, context, enclosing, flags));  if (length < 1 || length > 4096) fail("endpoint length");  const bytes = reader.take(length); if (bytes.includes(0)) fail("endpoint NUL"); return decodeUtf8(bytes, "endpoint");
 }
 function writeEndpoint(input: Endpoint, writer: Writer, context: ServiceWireDecoderContext, enclosing: any, flags: number): void {
   void context; void enclosing; void flags; const value: any = input;
@@ -291,7 +291,7 @@ export type Blob16 = Uint8Array;
 
 function readBlob16(reader: Reader, context: ServiceWireDecoderContext, enclosing: any, flags: number): Blob16 {
   void context; void enclosing; void flags;
-  const length = Number(readU16(reader, context, enclosing, flags));  if (length < 0 || length > 65535) fail("blob16 length"); return reader.take(length);
+  const length = Number(readU16(reader, context, enclosing, flags));  if (length < 0 || length > 65535) fail("blob16 length");  return reader.take(length);
 }
 function writeBlob16(input: Blob16, writer: Writer, context: ServiceWireDecoderContext, enclosing: any, flags: number): void {
   void context; void enclosing; void flags; const value: any = input;
@@ -304,7 +304,7 @@ export type NonemptyBlob16 = Uint8Array;
 
 function readNonemptyBlob16(reader: Reader, context: ServiceWireDecoderContext, enclosing: any, flags: number): NonemptyBlob16 {
   void context; void enclosing; void flags;
-  const length = Number(readU16(reader, context, enclosing, flags));  if (length < 1 || length > 65535) fail("nonempty-blob16 length"); return reader.take(length);
+  const length = Number(readU16(reader, context, enclosing, flags));  if (length < 1 || length > 65535) fail("nonempty-blob16 length");  return reader.take(length);
 }
 function writeNonemptyBlob16(input: NonemptyBlob16, writer: Writer, context: ServiceWireDecoderContext, enclosing: any, flags: number): void {
   void context; void enclosing; void flags; const value: any = input;
@@ -317,7 +317,7 @@ export type PacketName = string;
 
 function readPacketName(reader: Reader, context: ServiceWireDecoderContext, enclosing: any, flags: number): PacketName {
   void context; void enclosing; void flags;
-  const length = Number(readU8(reader, context, enclosing, flags));  if (length < 1 || length > 255) fail("packet-name length"); const bytes = reader.take(length); if (bytes.includes(0)) fail("packet-name NUL"); return decodeUtf8(bytes, "packet-name");
+  const length = Number(readU8(reader, context, enclosing, flags));  if (length < 1 || length > 255) fail("packet-name length");  const bytes = reader.take(length); if (bytes.includes(0)) fail("packet-name NUL"); return decodeUtf8(bytes, "packet-name");
 }
 function writePacketName(input: PacketName, writer: Writer, context: ServiceWireDecoderContext, enclosing: any, flags: number): void {
   void context; void enclosing; void flags; const value: any = input;
@@ -330,7 +330,7 @@ export type ContentType = string;
 
 function readContentType(reader: Reader, context: ServiceWireDecoderContext, enclosing: any, flags: number): ContentType {
   void context; void enclosing; void flags;
-  const length = Number(readU8(reader, context, enclosing, flags));  if (length < 1 || length > 255) fail("content-type length"); const bytes = reader.take(length); if (bytes.includes(0)) fail("content-type NUL"); return decodeUtf8(bytes, "content-type");
+  const length = Number(readU8(reader, context, enclosing, flags));  if (length < 1 || length > 255) fail("content-type length");  const bytes = reader.take(length); if (bytes.includes(0)) fail("content-type NUL"); return decodeUtf8(bytes, "content-type");
 }
 function writeContentType(input: ContentType, writer: Writer, context: ServiceWireDecoderContext, enclosing: any, flags: number): void {
   void context; void enclosing; void flags; const value: any = input;
@@ -343,7 +343,7 @@ export type ApplicationPayloadBytes = Uint8Array;
 
 function readApplicationPayloadBytes(reader: Reader, context: ServiceWireDecoderContext, enclosing: any, flags: number): ApplicationPayloadBytes {
   void context; void enclosing; void flags;
-  const length = Number(readU32(reader, context, enclosing, flags));  if (length < 0 || length > 4294966774) fail("application-payload-bytes length"); return reader.take(length);
+  const length = Number(readU32(reader, context, enclosing, flags));  if (length < 0 || length > 4294966774) fail("application-payload-bytes length"); const negotiatedMaximum = numeric(requireContext(context, "effectiveCompleteMessageBytesMinusActualEnvelopeOverhead")); if (negotiatedMaximum < 0n || negotiatedMaximum > 4294966774n || BigInt(length) > negotiatedMaximum) fail("application-payload-bytes negotiated maximum"); return reader.take(length);
 }
 function writeApplicationPayloadBytes(input: ApplicationPayloadBytes, writer: Writer, context: ServiceWireDecoderContext, enclosing: any, flags: number): void {
   void context; void enclosing; void flags; const value: any = input;
@@ -356,7 +356,7 @@ export type ApplicationPayloadEnvelopeV1 = { readonly packetName: PacketName; re
 
 function readApplicationPayloadEnvelopeV1(reader: Reader, context: ServiceWireDecoderContext, enclosing: any, flags: number): ApplicationPayloadEnvelopeV1 {
   void context; void enclosing; void flags;
-  const version = readU8(reader, context, enclosing, flags); if (!same(version, 1)) fail("application-payload-envelope-v1 version"); const length = Number(readU32(reader, context, enclosing, flags)); if (length > 4294967295) fail("application-payload-envelope-v1 maximum"); const body = reader.bounded(length); const value: any = {};
+  const encodedStart = reader.offset; const version = readU8(reader, context, enclosing, flags); if (!same(version, 1)) fail("application-payload-envelope-v1 version"); const length = Number(readU32(reader, context, enclosing, flags)); if (length > 4294967295) fail("application-payload-envelope-v1 maximum"); const body = reader.bounded(length); const value: any = {};
   value["packetName"] = readPacketName(body, context, value, flags);
 
 
@@ -367,6 +367,7 @@ function readApplicationPayloadEnvelopeV1(reader: Reader, context: ServiceWireDe
 
 
   body.done("application-payload-envelope-v1");
+  const negotiatedMaximum = numeric(requireContext(context, "effectiveCompleteMessageBytes")); if (negotiatedMaximum < 0n || negotiatedMaximum > 4294967295n || BigInt(reader.offset - encodedStart) > negotiatedMaximum) fail("application-payload-envelope-v1 negotiated maximum");
 
 
   return value;
@@ -397,7 +398,7 @@ export type MetadataValue = string;
 
 function readMetadataValue(reader: Reader, context: ServiceWireDecoderContext, enclosing: any, flags: number): MetadataValue {
   void context; void enclosing; void flags;
-  const length = Number(readU16(reader, context, enclosing, flags));  if (length < 0 || length > 1024) fail("metadata-value length"); const bytes = reader.take(length); if (bytes.includes(0)) fail("metadata-value NUL"); return decodeUtf8(bytes, "metadata-value");
+  const length = Number(readU16(reader, context, enclosing, flags));  if (length < 0 || length > 1024) fail("metadata-value length");  const bytes = reader.take(length); if (bytes.includes(0)) fail("metadata-value NUL"); return decodeUtf8(bytes, "metadata-value");
 }
 function writeMetadataValue(input: MetadataValue, writer: Writer, context: ServiceWireDecoderContext, enclosing: any, flags: number): void {
   void context; void enclosing; void flags; const value: any = input;
@@ -773,6 +774,7 @@ function readActorJoinReplyTail(reader: Reader, context: ServiceWireDecoderConte
   } else fail("actor-join-reply-tail discriminator");
   body.done("actor-join-reply-tail");
 
+
   return value;
 }
 function writeActorJoinReplyTail(input: ActorJoinReplyTail, writer: Writer, context: ServiceWireDecoderContext, enclosing: any, flags: number): void {
@@ -800,6 +802,7 @@ function writeActorJoinReplyTail(input: ActorJoinReplyTail, writer: Writer, cont
     writeOptionalSpotRef(value["spot"], body, context, value, flags);
   } else fail("actor-join-reply-tail discriminator");
   const bytes = body.result(); writeU16(bytes.length, writer, context, enclosing, flags); writer.put(bytes);
+
 }
 export function decodeActorJoinReplyTail(bytes: Uint8Array, context: ServiceWireDecoderContext): ActorJoinReplyTail { const reader = new Reader(bytes); const value = readActorJoinReplyTail(reader, context, {}, 0); reader.done("actor-join-reply-tail"); return value; }
 export function encodeActorJoinReplyTail(value: ActorJoinReplyTail, context: ServiceWireDecoderContext): Uint8Array { const writer = new Writer(); writeActorJoinReplyTail(value, writer, context, {}, 0); return writer.result(); }
@@ -1554,6 +1557,7 @@ function readActorCreateTerminal(reader: Reader, context: ServiceWireDecoderCont
   } else fail("actor-create-terminal discriminator");
   body.done("actor-create-terminal");
 
+
   return value;
 }
 function writeActorCreateTerminal(input: ActorCreateTerminal, writer: Writer, context: ServiceWireDecoderContext, enclosing: any, flags: number): void {
@@ -1575,6 +1579,7 @@ function writeActorCreateTerminal(input: ActorCreateTerminal, writer: Writer, co
 
   } else fail("actor-create-terminal discriminator");
   const bytes = body.result(); writeU16(bytes.length, writer, context, enclosing, flags); writer.put(bytes);
+
 }
 export function decodeActorCreateTerminal(bytes: Uint8Array, context: ServiceWireDecoderContext): ActorCreateTerminal { const reader = new Reader(bytes); const value = readActorCreateTerminal(reader, context, {}, 0); reader.done("actor-create-terminal"); return value; }
 export function encodeActorCreateTerminal(value: ActorCreateTerminal, context: ServiceWireDecoderContext): Uint8Array { const writer = new Writer(); writeActorCreateTerminal(value, writer, context, {}, 0); return writer.result(); }
@@ -1607,6 +1612,7 @@ function readCreationOperationTerminalV1(reader: Reader, context: ServiceWireDec
 
   }
   body.done("creation-operation-terminal-v1");
+
   if (same(value["terminalResult"], "ok") && !(same(value["failureCode"], "none") && same(value["hasCreation"], "true"))) fail("creation-operation-terminal-v1 terminal-success-shape");
   if (!same(value["terminalResult"], "ok") && !(same(value["hasCreation"], "false") && same(value["hasApplicationPayload"], "false"))) fail("creation-operation-terminal-v1 terminal-failure-shape");
   if (same(value["creation"]["createResult"], "existing") && !(same(value["hasApplicationPayload"], "false"))) fail("creation-operation-terminal-v1 existing-has-no-application-payload");
@@ -1669,6 +1675,7 @@ function readOptionalSpotRef(reader: Reader, context: ServiceWireDecoderContext,
   } else fail("optional-spot-ref discriminator");
   body.done("optional-spot-ref");
 
+
   return value;
 }
 function writeOptionalSpotRef(input: OptionalSpotRef, writer: Writer, context: ServiceWireDecoderContext, enclosing: any, flags: number): void {
@@ -1685,6 +1692,7 @@ function writeOptionalSpotRef(input: OptionalSpotRef, writer: Writer, context: S
     writeSpotRef(value["spot"], body, context, value, flags);
   } else fail("optional-spot-ref discriminator");
   const bytes = body.result(); writeU16(bytes.length, writer, context, enclosing, flags); writer.put(bytes);
+
 }
 export function decodeOptionalSpotRef(bytes: Uint8Array, context: ServiceWireDecoderContext): OptionalSpotRef { const reader = new Reader(bytes); const value = readOptionalSpotRef(reader, context, {}, 0); reader.done("optional-spot-ref"); return value; }
 export function encodeOptionalSpotRef(value: OptionalSpotRef, context: ServiceWireDecoderContext): Uint8Array { const writer = new Writer(); writeOptionalSpotRef(value, writer, context, {}, 0); return writer.result(); }
@@ -1729,6 +1737,7 @@ function readOptionalSpotMembership(reader: Reader, context: ServiceWireDecoderC
   } else fail("optional-spot-membership discriminator");
   body.done("optional-spot-membership");
 
+
   return value;
 }
 function writeOptionalSpotMembership(input: OptionalSpotMembership, writer: Writer, context: ServiceWireDecoderContext, enclosing: any, flags: number): void {
@@ -1745,6 +1754,7 @@ function writeOptionalSpotMembership(input: OptionalSpotMembership, writer: Writ
     writeSpotMembership(value["membership"], body, context, value, flags);
   } else fail("optional-spot-membership discriminator");
   const bytes = body.result(); writeU16(bytes.length, writer, context, enclosing, flags); writer.put(bytes);
+
 }
 export function decodeOptionalSpotMembership(bytes: Uint8Array, context: ServiceWireDecoderContext): OptionalSpotMembership { const reader = new Reader(bytes); const value = readOptionalSpotMembership(reader, context, {}, 0); reader.done("optional-spot-membership"); return value; }
 export function encodeOptionalSpotMembership(value: OptionalSpotMembership, context: ServiceWireDecoderContext): Uint8Array { const writer = new Writer(); writeOptionalSpotMembership(value, writer, context, {}, 0); return writer.result(); }
@@ -1767,6 +1777,7 @@ function readBoundSessionBindingTransition(reader: Reader, context: ServiceWireD
   } else fail("bound-session-binding-transition discriminator");
   body.done("bound-session-binding-transition");
 
+
   return value;
 }
 function writeBoundSessionBindingTransition(input: BoundSessionBindingTransition, writer: Writer, context: ServiceWireDecoderContext, enclosing: any, flags: number): void {
@@ -1786,6 +1797,7 @@ function writeBoundSessionBindingTransition(input: BoundSessionBindingTransition
     writeNonzeroU64(numeric(value["retiredBindingGeneration"]), body, context, value, flags);
   } else fail("bound-session-binding-transition discriminator");
   const bytes = body.result(); writeU16(bytes.length, writer, context, enclosing, flags); writer.put(bytes);
+
 }
 export function decodeBoundSessionBindingTransition(bytes: Uint8Array, context: ServiceWireDecoderContext): BoundSessionBindingTransition { const reader = new Reader(bytes); const value = readBoundSessionBindingTransition(reader, context, {}, 0); reader.done("bound-session-binding-transition"); return value; }
 export function encodeBoundSessionBindingTransition(value: BoundSessionBindingTransition, context: ServiceWireDecoderContext): Uint8Array { const writer = new Writer(); writeBoundSessionBindingTransition(value, writer, context, {}, 0); return writer.result(); }
@@ -1876,6 +1888,7 @@ function readSessionRelocationRouteUpdate(reader: Reader, context: ServiceWireDe
   } else fail("session-relocation-route-update discriminator");
   body.done("session-relocation-route-update");
 
+
   return value;
 }
 function writeSessionRelocationRouteUpdate(input: SessionRelocationRouteUpdate, writer: Writer, context: ServiceWireDecoderContext, enclosing: any, flags: number): void {
@@ -1907,6 +1920,7 @@ function writeSessionRelocationRouteUpdate(input: SessionRelocationRouteUpdate, 
     writeNonzeroU64(numeric(value["currentAuthorityOwnerGeneration"]), body, context, value, flags);
   } else fail("session-relocation-route-update discriminator");
   const bytes = body.result(); writeU16(bytes.length, writer, context, enclosing, flags); writer.put(bytes);
+
 }
 export function decodeSessionRelocationRouteUpdate(bytes: Uint8Array, context: ServiceWireDecoderContext): SessionRelocationRouteUpdate { const reader = new Reader(bytes); const value = readSessionRelocationRouteUpdate(reader, context, {}, 0); reader.done("session-relocation-route-update"); return value; }
 export function encodeSessionRelocationRouteUpdate(value: SessionRelocationRouteUpdate, context: ServiceWireDecoderContext): Uint8Array { const writer = new Writer(); writeSessionRelocationRouteUpdate(value, writer, context, {}, 0); return writer.result(); }
@@ -1933,6 +1947,7 @@ function readObjectCreationKey(reader: Reader, context: ServiceWireDecoderContex
   } else fail("object-creation-key discriminator");
   body.done("object-creation-key");
 
+
   return value;
 }
 function writeObjectCreationKey(input: ObjectCreationKey, writer: Writer, context: ServiceWireDecoderContext, enclosing: any, flags: number): void {
@@ -1957,6 +1972,7 @@ function writeObjectCreationKey(input: ObjectCreationKey, writer: Writer, contex
     writeText8(value["spotId"], body, context, value, flags);
   } else fail("object-creation-key discriminator");
   const bytes = body.result(); writeU16(bytes.length, writer, context, enclosing, flags); writer.put(bytes);
+
 }
 export function decodeObjectCreationKey(bytes: Uint8Array, context: ServiceWireDecoderContext): ObjectCreationKey { const reader = new Reader(bytes); const value = readObjectCreationKey(reader, context, {}, 0); reader.done("object-creation-key"); return value; }
 export function encodeObjectCreationKey(value: ObjectCreationKey, context: ServiceWireDecoderContext): Uint8Array { const writer = new Writer(); writeObjectCreationKey(value, writer, context, {}, 0); return writer.result(); }
@@ -1985,6 +2001,7 @@ function readObjectCreationIntentV1(reader: Reader, context: ServiceWireDecoderC
 
 
   body.done("object-creation-intent-v1");
+
 
 
   return value;
@@ -2370,7 +2387,7 @@ export type GenericObjectReservationV1 = { readonly operationKind: "reserve"; re
 
 function readGenericObjectReservationV1(reader: Reader, context: ServiceWireDecoderContext, enclosing: any, flags: number): GenericObjectReservationV1 {
   void context; void enclosing; void flags;
-  const value: any = {};
+  const encodedStart = reader.offset; const value: any = {};
   value["operationKind"] = readGenericReservationOperationKind(reader, context, enclosing, flags);
   const body = reader.bounded(Number(readU32(reader, context, enclosing, flags)));
   if (same(value["operationKind"], "reserve")) {
@@ -2402,11 +2419,13 @@ function readGenericObjectReservationV1(reader: Reader, context: ServiceWireDeco
 
   } else fail("generic-object-reservation-v1 discriminator");
   body.done("generic-object-reservation-v1");
+  if (reader.offset - encodedStart > 1048576) fail("generic-object-reservation-v1 maximum");
 
   return value;
 }
 function writeGenericObjectReservationV1(input: GenericObjectReservationV1, writer: Writer, context: ServiceWireDecoderContext, enclosing: any, flags: number): void {
   void context; void enclosing; void flags; const value: any = input;
+  const encodedStart = writer.length;
 
   writeGenericReservationOperationKind(value["operationKind"], writer, context, enclosing, flags);
   const body = new Writer();
@@ -2447,6 +2466,7 @@ function writeGenericObjectReservationV1(input: GenericObjectReservationV1, writ
     writeObjectReservationFence(value["fence"], body, context, value, flags);
   } else fail("generic-object-reservation-v1 discriminator");
   const bytes = body.result(); writeU32(bytes.length, writer, context, enclosing, flags); writer.put(bytes);
+  if (writer.length - encodedStart > 1048576) fail("generic-object-reservation-v1 maximum");
 }
 export function decodeGenericObjectReservationV1(bytes: Uint8Array, context: ServiceWireDecoderContext): GenericObjectReservationV1 { const reader = new Reader(bytes); const value = readGenericObjectReservationV1(reader, context, {}, 0); reader.done("generic-object-reservation-v1"); return value; }
 export function encodeGenericObjectReservationV1(value: GenericObjectReservationV1, context: ServiceWireDecoderContext): Uint8Array { const writer = new Writer(); writeGenericObjectReservationV1(value, writer, context, {}, 0); return writer.result(); }
@@ -2486,7 +2506,7 @@ export type AggregateParticipantMutationBytes = Uint8Array;
 
 function readAggregateParticipantMutationBytes(reader: Reader, context: ServiceWireDecoderContext, enclosing: any, flags: number): AggregateParticipantMutationBytes {
   void context; void enclosing; void flags;
-  const length = Number(readU32(reader, context, enclosing, flags));  if (length < 1 || length > 1048576) fail("aggregate-participant-mutation-bytes length"); return reader.take(length);
+  const length = Number(readU32(reader, context, enclosing, flags));  if (length < 1 || length > 1048576) fail("aggregate-participant-mutation-bytes length");  return reader.take(length);
 }
 function writeAggregateParticipantMutationBytes(input: AggregateParticipantMutationBytes, writer: Writer, context: ServiceWireDecoderContext, enclosing: any, flags: number): void {
   void context; void enclosing; void flags; const value: any = input;
@@ -2573,6 +2593,7 @@ function readMaintenanceAggregateV1(reader: Reader, context: ServiceWireDecoderC
 
 
   body.done("maintenance-aggregate-v1");
+
 
 
   return value;
@@ -2734,6 +2755,7 @@ function readUserSpotCloseFenceV1(reader: Reader, context: ServiceWireDecoderCon
   body.done("user-spot-close-fence-v1");
 
 
+
   return value;
 }
 function writeUserSpotCloseFenceV1(input: UserSpotCloseFenceV1, writer: Writer, context: ServiceWireDecoderContext, enclosing: any, flags: number): void {
@@ -2784,6 +2806,7 @@ function readMessageFollowRoute(reader: Reader, context: ServiceWireDecoderConte
   } else fail("message-follow-route discriminator");
   body.done("message-follow-route");
 
+
   return value;
 }
 function writeMessageFollowRoute(input: MessageFollowRoute, writer: Writer, context: ServiceWireDecoderContext, enclosing: any, flags: number): void {
@@ -2803,6 +2826,7 @@ function writeMessageFollowRoute(input: MessageFollowRoute, writer: Writer, cont
     writeSpotRouteFence(value["spot"], body, context, value, flags);
   } else fail("message-follow-route discriminator");
   const bytes = body.result(); writeU16(bytes.length, writer, context, enclosing, flags); writer.put(bytes);
+
 }
 export function decodeMessageFollowRoute(bytes: Uint8Array, context: ServiceWireDecoderContext): MessageFollowRoute { const reader = new Reader(bytes); const value = readMessageFollowRoute(reader, context, {}, 0); reader.done("message-follow-route"); return value; }
 export function encodeMessageFollowRoute(value: MessageFollowRoute, context: ServiceWireDecoderContext): Uint8Array { const writer = new Writer(); writeMessageFollowRoute(value, writer, context, {}, 0); return writer.result(); }
@@ -2834,6 +2858,7 @@ function readMessageFollowRouteV1(reader: Reader, context: ServiceWireDecoderCon
 
 
   body.done("message-follow-route-v1");
+
 
 
   return value;
@@ -2910,6 +2935,7 @@ function readRelocationObjectIdentity(reader: Reader, context: ServiceWireDecode
   } else fail("relocation-object-identity discriminator");
   body.done("relocation-object-identity");
 
+
   return value;
 }
 function writeRelocationObjectIdentity(input: RelocationObjectIdentity, writer: Writer, context: ServiceWireDecoderContext, enclosing: any, flags: number): void {
@@ -2950,6 +2976,7 @@ function writeRelocationObjectIdentity(input: RelocationObjectIdentity, writer: 
     writeNonzeroU64(numeric(value["objectGeneration"]), body, context, value, flags);
   } else fail("relocation-object-identity discriminator");
   const bytes = body.result(); writeU16(bytes.length, writer, context, enclosing, flags); writer.put(bytes);
+
 }
 export function decodeRelocationObjectIdentity(bytes: Uint8Array, context: ServiceWireDecoderContext): RelocationObjectIdentity { const reader = new Reader(bytes); const value = readRelocationObjectIdentity(reader, context, {}, 0); reader.done("relocation-object-identity"); return value; }
 export function encodeRelocationObjectIdentity(value: RelocationObjectIdentity, context: ServiceWireDecoderContext): Uint8Array { const writer = new Writer(); writeRelocationObjectIdentity(value, writer, context, {}, 0); return writer.result(); }
@@ -3044,6 +3071,7 @@ function readInstanceAuthorityIdentity(reader: Reader, context: ServiceWireDecod
   } else fail("instance-authority-identity discriminator");
   body.done("instance-authority-identity");
 
+
   return value;
 }
 function writeInstanceAuthorityIdentity(input: InstanceAuthorityIdentity, writer: Writer, context: ServiceWireDecoderContext, enclosing: any, flags: number): void {
@@ -3089,6 +3117,7 @@ function writeInstanceAuthorityIdentity(input: InstanceAuthorityIdentity, writer
     writeText8(value["spotId"], body, context, value, flags);
   } else fail("instance-authority-identity discriminator");
   const bytes = body.result(); writeU16(bytes.length, writer, context, enclosing, flags); writer.put(bytes);
+
 }
 export function decodeInstanceAuthorityIdentity(bytes: Uint8Array, context: ServiceWireDecoderContext): InstanceAuthorityIdentity { const reader = new Reader(bytes); const value = readInstanceAuthorityIdentity(reader, context, {}, 0); reader.done("instance-authority-identity"); return value; }
 export function encodeInstanceAuthorityIdentity(value: InstanceAuthorityIdentity, context: ServiceWireDecoderContext): Uint8Array { const writer = new Writer(); writeInstanceAuthorityIdentity(value, writer, context, {}, 0); return writer.result(); }
@@ -3126,6 +3155,7 @@ function readSpotAuthorityIdentity(reader: Reader, context: ServiceWireDecoderCo
 
   } else fail("spot-authority-identity discriminator");
   body.done("spot-authority-identity");
+
 
   return value;
 }
@@ -3167,6 +3197,7 @@ function writeSpotAuthorityIdentity(input: SpotAuthorityIdentity, writer: Writer
     writeInstanceAuthorityIdentity(value["instance"], body, context, value, flags);
   } else fail("spot-authority-identity discriminator");
   const bytes = body.result(); writeU16(bytes.length, writer, context, enclosing, flags); writer.put(bytes);
+
 }
 export function decodeSpotAuthorityIdentity(bytes: Uint8Array, context: ServiceWireDecoderContext): SpotAuthorityIdentity { const reader = new Reader(bytes); const value = readSpotAuthorityIdentity(reader, context, {}, 0); reader.done("spot-authority-identity"); return value; }
 export function encodeSpotAuthorityIdentity(value: SpotAuthorityIdentity, context: ServiceWireDecoderContext): Uint8Array { const writer = new Writer(); writeSpotAuthorityIdentity(value, writer, context, {}, 0); return writer.result(); }
@@ -3189,6 +3220,7 @@ function readAuthorityObjectIdentity(reader: Reader, context: ServiceWireDecoder
   } else fail("authority-object-identity discriminator");
   body.done("authority-object-identity");
 
+
   return value;
 }
 function writeAuthorityObjectIdentity(input: AuthorityObjectIdentity, writer: Writer, context: ServiceWireDecoderContext, enclosing: any, flags: number): void {
@@ -3208,6 +3240,7 @@ function writeAuthorityObjectIdentity(input: AuthorityObjectIdentity, writer: Wr
     writeSpotAuthorityIdentity(value["spot"], body, context, value, flags);
   } else fail("authority-object-identity discriminator");
   const bytes = body.result(); writeU16(bytes.length, writer, context, enclosing, flags); writer.put(bytes);
+
 }
 export function decodeAuthorityObjectIdentity(bytes: Uint8Array, context: ServiceWireDecoderContext): AuthorityObjectIdentity { const reader = new Reader(bytes); const value = readAuthorityObjectIdentity(reader, context, {}, 0); reader.done("authority-object-identity"); return value; }
 export function encodeAuthorityObjectIdentity(value: AuthorityObjectIdentity, context: ServiceWireDecoderContext): Uint8Array { const writer = new Writer(); writeAuthorityObjectIdentity(value, writer, context, {}, 0); return writer.result(); }
@@ -3278,7 +3311,7 @@ export type CreationContentReference = string;
 
 function readCreationContentReference(reader: Reader, context: ServiceWireDecoderContext, enclosing: any, flags: number): CreationContentReference {
   void context; void enclosing; void flags;
-  const length = Number(readU16(reader, context, enclosing, flags));  if (length < 1 || length > 4096) fail("creation-content-reference length"); const bytes = reader.take(length); if (bytes.includes(0)) fail("creation-content-reference NUL"); return decodeUtf8(bytes, "creation-content-reference");
+  const length = Number(readU16(reader, context, enclosing, flags));  if (length < 1 || length > 4096) fail("creation-content-reference length");  const bytes = reader.take(length); if (bytes.includes(0)) fail("creation-content-reference NUL"); return decodeUtf8(bytes, "creation-content-reference");
 }
 function writeCreationContentReference(input: CreationContentReference, writer: Writer, context: ServiceWireDecoderContext, enclosing: any, flags: number): void {
   void context; void enclosing; void flags; const value: any = input;
@@ -3291,7 +3324,7 @@ export type RelocationReference = string;
 
 function readRelocationReference(reader: Reader, context: ServiceWireDecoderContext, enclosing: any, flags: number): RelocationReference {
   void context; void enclosing; void flags;
-  const length = Number(readU16(reader, context, enclosing, flags));  if (length < 1 || length > 4096) fail("relocation-reference length"); const bytes = reader.take(length); if (bytes.includes(0)) fail("relocation-reference NUL"); return decodeUtf8(bytes, "relocation-reference");
+  const length = Number(readU16(reader, context, enclosing, flags));  if (length < 1 || length > 4096) fail("relocation-reference length");  const bytes = reader.take(length); if (bytes.includes(0)) fail("relocation-reference NUL"); return decodeUtf8(bytes, "relocation-reference");
 }
 function writeRelocationReference(input: RelocationReference, writer: Writer, context: ServiceWireDecoderContext, enclosing: any, flags: number): void {
   void context; void enclosing; void flags; const value: any = input;
@@ -3304,7 +3337,7 @@ export type AuthorityStoreVersion = string;
 
 function readAuthorityStoreVersion(reader: Reader, context: ServiceWireDecoderContext, enclosing: any, flags: number): AuthorityStoreVersion {
   void context; void enclosing; void flags;
-  const length = Number(readU16(reader, context, enclosing, flags));  if (length < 1 || length > 4096) fail("authority-store-version length"); const bytes = reader.take(length); if (bytes.includes(0)) fail("authority-store-version NUL"); return decodeUtf8(bytes, "authority-store-version");
+  const length = Number(readU16(reader, context, enclosing, flags));  if (length < 1 || length > 4096) fail("authority-store-version length");  const bytes = reader.take(length); if (bytes.includes(0)) fail("authority-store-version NUL"); return decodeUtf8(bytes, "authority-store-version");
 }
 function writeAuthorityStoreVersion(input: AuthorityStoreVersion, writer: Writer, context: ServiceWireDecoderContext, enclosing: any, flags: number): void {
   void context; void enclosing; void flags; const value: any = input;
@@ -4027,6 +4060,7 @@ function readClientServerAdmission(reader: Reader, context: ServiceWireDecoderCo
   } else fail("client-server-admission discriminator");
   body.done("client-server-admission");
 
+
   return value;
 }
 function writeClientServerAdmission(input: ClientServerAdmission, writer: Writer, context: ServiceWireDecoderContext, enclosing: any, flags: number): void {
@@ -4094,6 +4128,7 @@ function writeClientServerAdmission(input: ClientServerAdmission, writer: Writer
     writeEndpoint(value["advertisedEndpoint"], body, context, value, flags);
   } else fail("client-server-admission discriminator");
   const bytes = body.result(); writeU16(bytes.length, writer, context, enclosing, flags); writer.put(bytes);
+
 }
 export function decodeClientServerAdmission(bytes: Uint8Array, context: ServiceWireDecoderContext): ClientServerAdmission { const reader = new Reader(bytes); const value = readClientServerAdmission(reader, context, {}, 0); reader.done("client-server-admission"); return value; }
 export function encodeClientServerAdmission(value: ClientServerAdmission, context: ServiceWireDecoderContext): Uint8Array { const writer = new Writer(); writeClientServerAdmission(value, writer, context, {}, 0); return writer.result(); }
@@ -4102,7 +4137,7 @@ export type ServiceAdmission = { readonly topologyKind: "routeMesh"; readonly ro
 
 function readServiceAdmission(reader: Reader, context: ServiceWireDecoderContext, enclosing: any, flags: number): ServiceAdmission {
   void context; void enclosing; void flags;
-  const value: any = {};
+  const encodedStart = reader.offset; const value: any = {};
   value["topologyKind"] = readServiceTopologyKind(reader, context, enclosing, flags);
   const body = reader.bounded(Number(readU32(reader, context, enclosing, flags)));
   if (same(value["topologyKind"], "routeMesh")) {
@@ -4115,11 +4150,13 @@ function readServiceAdmission(reader: Reader, context: ServiceWireDecoderContext
 
   } else fail("service-admission discriminator");
   body.done("service-admission");
+  if (reader.offset - encodedStart > 1048576) fail("service-admission maximum");
 
   return value;
 }
 function writeServiceAdmission(input: ServiceAdmission, writer: Writer, context: ServiceWireDecoderContext, enclosing: any, flags: number): void {
   void context; void enclosing; void flags; const value: any = input;
+  const encodedStart = writer.length;
 
   writeServiceTopologyKind(value["topologyKind"], writer, context, enclosing, flags);
   const body = new Writer();
@@ -4135,6 +4172,7 @@ function writeServiceAdmission(input: ServiceAdmission, writer: Writer, context:
     writeClientServerAdmission(value["clientServer"], body, context, value, flags);
   } else fail("service-admission discriminator");
   const bytes = body.result(); writeU32(bytes.length, writer, context, enclosing, flags); writer.put(bytes);
+  if (writer.length - encodedStart > 1048576) fail("service-admission maximum");
 }
 export function decodeServiceAdmission(bytes: Uint8Array, context: ServiceWireDecoderContext): ServiceAdmission { const reader = new Reader(bytes); const value = readServiceAdmission(reader, context, {}, 0); reader.done("service-admission"); return value; }
 export function encodeServiceAdmission(value: ServiceAdmission, context: ServiceWireDecoderContext): Uint8Array { const writer = new Writer(); writeServiceAdmission(value, writer, context, {}, 0); return writer.result(); }
@@ -4155,6 +4193,7 @@ function readInstanceReplyRoute(reader: Reader, context: ServiceWireDecoderConte
   } else fail("instance-reply-route discriminator");
 
 
+
   return value;
 }
 function writeInstanceReplyRoute(input: InstanceReplyRoute, writer: Writer, context: ServiceWireDecoderContext, enclosing: any, flags: number): void {
@@ -4170,6 +4209,7 @@ function writeInstanceReplyRoute(input: InstanceReplyRoute, writer: Writer, cont
 
     writeNonzeroU64(numeric(value["replyRouteId"]), body, context, value, flags);
   } else fail("instance-reply-route discriminator");
+
 
 }
 export function decodeInstanceReplyRoute(bytes: Uint8Array, context: ServiceWireDecoderContext): InstanceReplyRoute { const reader = new Reader(bytes); const value = readInstanceReplyRoute(reader, context, {}, 0); reader.done("instance-reply-route"); return value; }
@@ -4193,6 +4233,7 @@ function readColdActivationReplyContext(reader: Reader, context: ServiceWireDeco
   } else fail("cold-activation-reply-context discriminator");
   body.done("cold-activation-reply-context");
 
+
   return value;
 }
 function writeColdActivationReplyContext(input: ColdActivationReplyContext, writer: Writer, context: ServiceWireDecoderContext, enclosing: any, flags: number): void {
@@ -4212,6 +4253,7 @@ function writeColdActivationReplyContext(input: ColdActivationReplyContext, writ
     writeAuthorityGenerationFence(value["authority"], body, context, value, flags);
   } else fail("cold-activation-reply-context discriminator");
   const bytes = body.result(); writeU16(bytes.length, writer, context, enclosing, flags); writer.put(bytes);
+
 }
 export function decodeColdActivationReplyContext(bytes: Uint8Array, context: ServiceWireDecoderContext): ColdActivationReplyContext { const reader = new Reader(bytes); const value = readColdActivationReplyContext(reader, context, {}, 0); reader.done("cold-activation-reply-context"); return value; }
 export function encodeColdActivationReplyContext(value: ColdActivationReplyContext, context: ServiceWireDecoderContext): Uint8Array { const writer = new Writer(); writeColdActivationReplyContext(value, writer, context, {}, 0); return writer.result(); }
@@ -4245,6 +4287,7 @@ function readReplyRelayContext(reader: Reader, context: ServiceWireDecoderContex
 
   } else fail("reply-relay-context discriminator");
   body.done("reply-relay-context");
+
 
   return value;
 }
@@ -4281,6 +4324,7 @@ function writeReplyRelayContext(input: ReplyRelayContext, writer: Writer, contex
     writeNonzeroU64(numeric(value["sequence"]), body, context, value, flags);
   } else fail("reply-relay-context discriminator");
   const bytes = body.result(); writeU16(bytes.length, writer, context, enclosing, flags); writer.put(bytes);
+
 }
 export function decodeReplyRelayContext(bytes: Uint8Array, context: ServiceWireDecoderContext): ReplyRelayContext { const reader = new Reader(bytes); const value = readReplyRelayContext(reader, context, {}, 0); reader.done("reply-relay-context"); return value; }
 export function encodeReplyRelayContext(value: ReplyRelayContext, context: ServiceWireDecoderContext): Uint8Array { const writer = new Writer(); writeReplyRelayContext(value, writer, context, {}, 0); return writer.result(); }
@@ -4317,6 +4361,7 @@ function readSendReadyDestination(reader: Reader, context: ServiceWireDecoderCon
 
   } else fail("send-ready-destination discriminator");
   body.done("send-ready-destination");
+
 
   return value;
 }
@@ -4356,6 +4401,7 @@ function writeSendReadyDestination(input: SendReadyDestination, writer: Writer, 
     writeNonzeroU64(numeric(value["bindingGeneration"]), body, context, value, flags);
   } else fail("send-ready-destination discriminator");
   const bytes = body.result(); writeU16(bytes.length, writer, context, enclosing, flags); writer.put(bytes);
+
 }
 export function decodeSendReadyDestination(bytes: Uint8Array, context: ServiceWireDecoderContext): SendReadyDestination { const reader = new Reader(bytes); const value = readSendReadyDestination(reader, context, {}, 0); reader.done("send-ready-destination"); return value; }
 export function encodeSendReadyDestination(value: SendReadyDestination, context: ServiceWireDecoderContext): Uint8Array { const writer = new Writer(); writeSendReadyDestination(value, writer, context, {}, 0); return writer.result(); }
@@ -4407,6 +4453,7 @@ function readOptionalActorMembershipSnapshot(reader: Reader, context: ServiceWir
   } else fail("optional-actor-membership-snapshot discriminator");
   body.done("optional-actor-membership-snapshot");
 
+
   return value;
 }
 function writeOptionalActorMembershipSnapshot(input: OptionalActorMembershipSnapshot, writer: Writer, context: ServiceWireDecoderContext, enclosing: any, flags: number): void {
@@ -4423,6 +4470,7 @@ function writeOptionalActorMembershipSnapshot(input: OptionalActorMembershipSnap
     writeActorMembershipSnapshot(value["snapshot"], body, context, value, flags);
   } else fail("optional-actor-membership-snapshot discriminator");
   const bytes = body.result(); writeU16(bytes.length, writer, context, enclosing, flags); writer.put(bytes);
+
 }
 export function decodeOptionalActorMembershipSnapshot(bytes: Uint8Array, context: ServiceWireDecoderContext): OptionalActorMembershipSnapshot { const reader = new Reader(bytes); const value = readOptionalActorMembershipSnapshot(reader, context, {}, 0); reader.done("optional-actor-membership-snapshot"); return value; }
 export function encodeOptionalActorMembershipSnapshot(value: OptionalActorMembershipSnapshot, context: ServiceWireDecoderContext): Uint8Array { const writer = new Writer(); writeOptionalActorMembershipSnapshot(value, writer, context, {}, 0); return writer.result(); }
@@ -4462,6 +4510,7 @@ function readActorControlData(reader: Reader, context: ServiceWireDecoderContext
 
   } else fail("actor-control-data discriminator");
   body.done("actor-control-data");
+
 
   return value;
 }
@@ -4505,6 +4554,7 @@ function writeActorControlData(input: ActorControlData, writer: Writer, context:
     writeActorMembershipSnapshot(value["previous"], body, context, value, flags);
   } else fail("actor-control-data discriminator");
   const bytes = body.result(); writeU16(bytes.length, writer, context, enclosing, flags); writer.put(bytes);
+
 }
 export function decodeActorControlData(bytes: Uint8Array, context: ServiceWireDecoderContext): ActorControlData { const reader = new Reader(bytes); const value = readActorControlData(reader, context, {}, 0); reader.done("actor-control-data"); return value; }
 export function encodeActorControlData(value: ActorControlData, context: ServiceWireDecoderContext): Uint8Array { const writer = new Writer(); writeActorControlData(value, writer, context, {}, 0); return writer.result(); }
@@ -4623,6 +4673,7 @@ function readRequestSpecificTail(reader: Reader, context: ServiceWireDecoderCont
   }
 
 
+
   return value;
 }
 function writeRequestSpecificTail(input: RequestSpecificTail, writer: Writer, context: ServiceWireDecoderContext, enclosing: any, flags: number): void {
@@ -4687,6 +4738,7 @@ function writeRequestSpecificTail(input: RequestSpecificTail, writer: Writer, co
   } else {
 
   }
+
 
 }
 export function decodeRequestSpecificTail(bytes: Uint8Array, context: ServiceWireDecoderContext): RequestSpecificTail { const reader = new Reader(bytes); const value = readRequestSpecificTail(reader, context, {}, 0); reader.done("request-specific-tail"); return value; }
@@ -4800,6 +4852,7 @@ function readFrozenRecordBody(reader: Reader, context: ServiceWireDecoderContext
 
 
   } else fail("frozen-record-body discriminator");
+
 
   if (same(value["recordKind"], "completion") && !(runtimePredicate(context, "service-wire-constants.valid-terminal-failure", enumWireRequestTerminalResult(value["terminalResult"]), enumWireFrameworkErrorCode(value["failureCode"])))) fail("frozen-record-body runtime predicate");
   return value;
@@ -4939,6 +4992,7 @@ function writeFrozenRecordBody(input: FrozenRecordBody, writer: Writer, context:
     writeApplicationPayloadEnvelopeV1(value["payload"], body, context, value, flags);
   } else fail("frozen-record-body discriminator");
 
+
 }
 export function decodeFrozenRecordBody(bytes: Uint8Array, context: ServiceWireDecoderContext): FrozenRecordBody { const reader = new Reader(bytes); const value = readFrozenRecordBody(reader, context, {}, 0); reader.done("frozen-record-body"); return value; }
 export function encodeFrozenRecordBody(value: FrozenRecordBody, context: ServiceWireDecoderContext): Uint8Array { const writer = new Writer(); writeFrozenRecordBody(value, writer, context, {}, 0); return writer.result(); }
@@ -5022,6 +5076,7 @@ function readFrozenSourceIdentity(reader: Reader, context: ServiceWireDecoderCon
 
   } else fail("frozen-source-identity discriminator");
   body.done("frozen-source-identity");
+
 
   return value;
 }
@@ -5124,6 +5179,7 @@ function writeFrozenSourceIdentity(input: FrozenSourceIdentity, writer: Writer, 
     writeNonzeroU64(numeric(value["sourceSessionSequence"]), body, context, value, flags);
   } else fail("frozen-source-identity discriminator");
   const bytes = body.result(); writeU16(bytes.length, writer, context, enclosing, flags); writer.put(bytes);
+
 }
 export function decodeFrozenSourceIdentity(bytes: Uint8Array, context: ServiceWireDecoderContext): FrozenSourceIdentity { const reader = new Reader(bytes); const value = readFrozenSourceIdentity(reader, context, {}, 0); reader.done("frozen-source-identity"); return value; }
 export function encodeFrozenSourceIdentity(value: FrozenSourceIdentity, context: ServiceWireDecoderContext): Uint8Array { const writer = new Writer(); writeFrozenSourceIdentity(value, writer, context, {}, 0); return writer.result(); }
@@ -5159,6 +5215,7 @@ function readFrozenReplyRoute(reader: Reader, context: ServiceWireDecoderContext
 
   }
   body.done("frozen-reply-route");
+
 
   return value;
 }
@@ -5196,6 +5253,7 @@ function writeFrozenReplyRoute(input: FrozenReplyRoute, writer: Writer, context:
 
   }
   const bytes = body.result(); writeU16(bytes.length, writer, context, enclosing, flags); writer.put(bytes);
+
 }
 export function decodeFrozenReplyRoute(bytes: Uint8Array, context: ServiceWireDecoderContext): FrozenReplyRoute { const reader = new Reader(bytes); const value = readFrozenReplyRoute(reader, context, {}, 0); reader.done("frozen-reply-route"); return value; }
 export function encodeFrozenReplyRoute(value: FrozenReplyRoute, context: ServiceWireDecoderContext): Uint8Array { const writer = new Writer(); writeFrozenReplyRoute(value, writer, context, {}, 0); return writer.result(); }
@@ -5322,6 +5380,7 @@ function readInstanceRouteV1(reader: Reader, context: ServiceWireDecoderContext,
   } else fail("instance-route-v1 discriminator");
   body.done("instance-route-v1");
 
+
   return value;
 }
 function writeInstanceRouteV1(input: InstanceRouteV1, writer: Writer, context: ServiceWireDecoderContext, enclosing: any, flags: number): void {
@@ -5377,6 +5436,7 @@ function writeInstanceRouteV1(input: InstanceRouteV1, writer: Writer, context: S
     writeNonzeroU64(numeric(value["deadlineUnixMs"]), body, context, value, flags);
   } else fail("instance-route-v1 discriminator");
   const bytes = body.result(); writeU16(bytes.length, writer, context, enclosing, flags); writer.put(bytes);
+
 }
 export function decodeInstanceRouteV1(bytes: Uint8Array, context: ServiceWireDecoderContext): InstanceRouteV1 { const reader = new Reader(bytes); const value = readInstanceRouteV1(reader, context, {}, 0); reader.done("instance-route-v1"); return value; }
 export function encodeInstanceRouteV1(value: InstanceRouteV1, context: ServiceWireDecoderContext): Uint8Array { const writer = new Writer(); writeInstanceRouteV1(value, writer, context, {}, 0); return writer.result(); }
@@ -5400,6 +5460,7 @@ function readRelocationRootPointer(reader: Reader, context: ServiceWireDecoderCo
   } else fail("relocation-root-pointer discriminator");
   body.done("relocation-root-pointer");
 
+
   return value;
 }
 function writeRelocationRootPointer(input: RelocationRootPointer, writer: Writer, context: ServiceWireDecoderContext, enclosing: any, flags: number): void {
@@ -5420,6 +5481,7 @@ function writeRelocationRootPointer(input: RelocationRootPointer, writer: Writer
     writeU32(value["checksumCrc32c"], body, context, value, flags);
   } else fail("relocation-root-pointer discriminator");
   const bytes = body.result(); writeU16(bytes.length, writer, context, enclosing, flags); writer.put(bytes);
+
 }
 export function decodeRelocationRootPointer(bytes: Uint8Array, context: ServiceWireDecoderContext): RelocationRootPointer { const reader = new Reader(bytes); const value = readRelocationRootPointer(reader, context, {}, 0); reader.done("relocation-root-pointer"); return value; }
 export function encodeRelocationRootPointer(value: RelocationRootPointer, context: ServiceWireDecoderContext): Uint8Array { const writer = new Writer(); writeRelocationRootPointer(value, writer, context, {}, 0); return writer.result(); }
@@ -5428,7 +5490,7 @@ export type AuthorityRelocationState = { readonly hasRelocation: "false" } | { r
 
 function readAuthorityRelocationState(reader: Reader, context: ServiceWireDecoderContext, enclosing: any, flags: number): AuthorityRelocationState {
   void context; void enclosing; void flags;
-  const value: any = {};
+  const encodedStart = reader.offset; const value: any = {};
   value["hasRelocation"] = readBool8(reader, context, enclosing, flags);
   const body = reader.bounded(Number(readU32(reader, context, enclosing, flags)));
   if (same(value["hasRelocation"], "false")) {
@@ -5499,11 +5561,13 @@ function readAuthorityRelocationState(reader: Reader, context: ServiceWireDecode
 
   } else fail("authority-relocation-state discriminator");
   body.done("authority-relocation-state");
+  if (reader.offset - encodedStart > 1048576) fail("authority-relocation-state maximum");
 
   return value;
 }
 function writeAuthorityRelocationState(input: AuthorityRelocationState, writer: Writer, context: ServiceWireDecoderContext, enclosing: any, flags: number): void {
   void context; void enclosing; void flags; const value: any = input;
+  const encodedStart = writer.length;
 
   writeBool8(value["hasRelocation"], writer, context, enclosing, flags);
   const body = new Writer();
@@ -5596,6 +5660,7 @@ function writeAuthorityRelocationState(input: AuthorityRelocationState, writer: 
     writeSourceCleanupState(value["sourceCleanupState"], body, context, value, flags);
   } else fail("authority-relocation-state discriminator");
   const bytes = body.result(); writeU32(bytes.length, writer, context, enclosing, flags); writer.put(bytes);
+  if (writer.length - encodedStart > 1048576) fail("authority-relocation-state maximum");
 }
 export function decodeAuthorityRelocationState(bytes: Uint8Array, context: ServiceWireDecoderContext): AuthorityRelocationState { const reader = new Reader(bytes); const value = readAuthorityRelocationState(reader, context, {}, 0); reader.done("authority-relocation-state"); return value; }
 export function encodeAuthorityRelocationState(value: AuthorityRelocationState, context: ServiceWireDecoderContext): Uint8Array { const writer = new Writer(); writeAuthorityRelocationState(value, writer, context, {}, 0); return writer.result(); }
@@ -5625,8 +5690,10 @@ function readAuthorityActivationRecoveryState(reader: Reader, context: ServiceWi
     value["replayCursor"] = readU64(body, context, value, flags);
 
 
+    if (numeric(value["replayCursor"]) > numeric(value["inboxSequence"])) fail("types.authority-activation-recovery-state.cases.{\"hasActivationRecovery\":\"true\"} field order");
   } else fail("authority-activation-recovery-state discriminator");
   body.done("authority-activation-recovery-state");
+
 
   return value;
 }
@@ -5658,8 +5725,10 @@ function writeAuthorityActivationRecoveryState(input: AuthorityActivationRecover
 
 
     writeU64(numeric(value["replayCursor"]), body, context, value, flags);
+    if (numeric(value["replayCursor"]) > numeric(value["inboxSequence"])) fail("types.authority-activation-recovery-state.cases.{\"hasActivationRecovery\":\"true\"} field order");
   } else fail("authority-activation-recovery-state discriminator");
   const bytes = body.result(); writeU32(bytes.length, writer, context, enclosing, flags); writer.put(bytes);
+
 }
 export function decodeAuthorityActivationRecoveryState(bytes: Uint8Array, context: ServiceWireDecoderContext): AuthorityActivationRecoveryState { const reader = new Reader(bytes); const value = readAuthorityActivationRecoveryState(reader, context, {}, 0); reader.done("authority-activation-recovery-state"); return value; }
 export function encodeAuthorityActivationRecoveryState(value: AuthorityActivationRecoveryState, context: ServiceWireDecoderContext): Uint8Array { const writer = new Writer(); writeAuthorityActivationRecoveryState(value, writer, context, {}, 0); return writer.result(); }
@@ -5805,7 +5874,7 @@ export type DurableBlob = Uint8Array;
 
 function readDurableBlob(reader: Reader, context: ServiceWireDecoderContext, enclosing: any, flags: number): DurableBlob {
   void context; void enclosing; void flags;
-  const length = Number(readU32(reader, context, enclosing, flags));  if (length < 0 || length > 67108864) fail("durable-blob length"); return reader.take(length);
+  const length = Number(readU32(reader, context, enclosing, flags));  if (length < 0 || length > 67108864) fail("durable-blob length");  return reader.take(length);
 }
 function writeDurableBlob(input: DurableBlob, writer: Writer, context: ServiceWireDecoderContext, enclosing: any, flags: number): void {
   void context; void enclosing; void flags; const value: any = input;
@@ -5818,7 +5887,7 @@ export type DurableStateBlob = Uint8Array;
 
 function readDurableStateBlob(reader: Reader, context: ServiceWireDecoderContext, enclosing: any, flags: number): DurableStateBlob {
   void context; void enclosing; void flags;
-  const length = Number(readU64(reader, context, enclosing, flags));  if (length < 0 || length > 67108864) fail("durable-state-blob length"); return reader.take(length);
+  const length = Number(readU64(reader, context, enclosing, flags));  if (length < 0 || length > 67108864) fail("durable-state-blob length");  return reader.take(length);
 }
 function writeDurableStateBlob(input: DurableStateBlob, writer: Writer, context: ServiceWireDecoderContext, enclosing: any, flags: number): void {
   void context; void enclosing; void flags; const value: any = input;
@@ -5978,7 +6047,7 @@ export type RelocationApplicationState = { readonly hasState: "false" } | { read
 
 function readRelocationApplicationState(reader: Reader, context: ServiceWireDecoderContext, enclosing: any, flags: number): RelocationApplicationState {
   void context; void enclosing; void flags;
-  const value: any = {};
+  const encodedStart = reader.offset; const value: any = {};
   value["hasState"] = readBool8(reader, context, enclosing, flags);
   const body = reader.bounded(Number(readU64(reader, context, enclosing, flags)));
   if (same(value["hasState"], "false")) {
@@ -5989,11 +6058,13 @@ function readRelocationApplicationState(reader: Reader, context: ServiceWireDeco
 
   } else fail("relocation-application-state discriminator");
   body.done("relocation-application-state");
+  if (reader.offset - encodedStart > 274877906944) fail("relocation-application-state maximum");
 
   return value;
 }
 function writeRelocationApplicationState(input: RelocationApplicationState, writer: Writer, context: ServiceWireDecoderContext, enclosing: any, flags: number): void {
   void context; void enclosing; void flags; const value: any = input;
+  const encodedStart = writer.length;
 
   writeBool8(value["hasState"], writer, context, enclosing, flags);
   const body = new Writer();
@@ -6006,6 +6077,7 @@ function writeRelocationApplicationState(input: RelocationApplicationState, writ
     writeDurableStateBlob(value["payload"], body, context, value, flags);
   } else fail("relocation-application-state discriminator");
   const bytes = body.result(); writeU64(numeric(bytes.length), writer, context, enclosing, flags); writer.put(bytes);
+  if (writer.length - encodedStart > 274877906944) fail("relocation-application-state maximum");
 }
 export function decodeRelocationApplicationState(bytes: Uint8Array, context: ServiceWireDecoderContext): RelocationApplicationState { const reader = new Reader(bytes); const value = readRelocationApplicationState(reader, context, {}, 0); reader.done("relocation-application-state"); return value; }
 export function encodeRelocationApplicationState(value: RelocationApplicationState, context: ServiceWireDecoderContext): Uint8Array { const writer = new Writer(); writeRelocationApplicationState(value, writer, context, {}, 0); return writer.result(); }

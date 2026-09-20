@@ -35,6 +35,8 @@ const catalog = JSON.parse(fs.readFileSync(
   'utf8'
 ));
 const context = {
+  effectiveCompleteMessageBytes: 4294967295,
+  effectiveCompleteMessageBytesMinusActualEnvelopeOverhead: 4294966774,
   runtimePredicates: {
     'service-wire-constants.valid-terminal-failure': constants.isValidServiceWireTerminalFailure
   }
@@ -129,7 +131,7 @@ test('generated TypeScript codec consumes every indexed conformance case', () =>
   assert.equal(catalog.fixtures.length, 9);
   assert.equal(catalog.fixtures.reduce((count, fixture) => count + fixture.canonical.length, 0), 11);
   assert.equal(catalog.fixtures.reduce((count, fixture) => count + fixture.malformed.length, 0), 12);
-  assert.equal(catalog.operationCases.length, 12);
+  assert.equal(catalog.operationCases.length, 16);
 
   for (const item of indexedCases()) {
     const operation = item.kind === 'operation' ? item.entry.operation : item.kind;
@@ -172,23 +174,24 @@ test('generated TypeScript codec consumes every indexed conformance case', () =>
     }
 
     const entry = item.entry;
+    const decodeContext = { ...context, ...entry.decodeContext };
     const action = () => {
       if (entry.surface.format === 'type') {
         const [decode] = typeCodecs.get(entry.surface.type);
-        return decode(Buffer.from(entry.hex, 'hex'), context);
+        return decode(Buffer.from(entry.hex, 'hex'), decodeContext);
       }
       if (entry.surface.format === 'semantic') {
-        return codec.validateReplyCommandRuntimePredicates(entry.input, context);
+        return codec.validateReplyCommandRuntimePredicates(entry.input, decodeContext);
       }
       if (entry.surface.format === 'command') {
         const [decode] = commands.get(entry.surface.commandId);
-        return decode(entry.framesHex.map((hex) => Buffer.from(hex, 'hex')), context);
+        return decode(entry.framesHex.map((hex) => Buffer.from(hex, 'hex')), decodeContext);
       }
       if (entry.surface.format === 'relocation-envelope-v1') {
-        return codec.decodeRelocationEnvelopeV1LogicalStream(Buffer.from(entry.hex, 'hex'), context);
+        return codec.decodeRelocationEnvelopeV1LogicalStream(Buffer.from(entry.hex, 'hex'), decodeContext);
       }
       const [decode] = durable.get(entry.surface.format);
-      return decode(Buffer.from(entry.hex, 'hex'), context);
+      return decode(Buffer.from(entry.hex, 'hex'), decodeContext);
     };
     if (entry.expect === 'reject') assert.throws(action, undefined, label);
     else assert.doesNotThrow(action, label);
