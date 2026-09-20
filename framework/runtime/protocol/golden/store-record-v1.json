@@ -55,6 +55,20 @@
       "preimageHex": "617574686f726974790073706f7400726f6f6d3a31",
       "sha256Hex": "85883711be9358294d4b878df17330df09f34e5706b926a4b56b6ba5db23c51a",
       "redisKey": "app1:{zlink-location-v3}:opaque:85883711be9358294d4b878df17330df09f34e5706b926a4b56b6ba5db23c51a"
+    },
+    {
+      "record": "creation-terminal",
+      "preimagePrintable": "creation-terminal\\u000001020304\\u00007\\u0000000000000000002a0000000000000001",
+      "preimageHex": "6372656174696f6e2d7465726d696e616c0030313032303330340037003030303030303030303030303030326130303030303030303030303030303031",
+      "sha256Hex": "8cf62444954aeae82a91bb2939e437a39acafa8ee2e66b5a9fe833d048c8fa91",
+      "redisKey": "app1:{zlink-location-v3}:opaque:8cf62444954aeae82a91bb2939e437a39acafa8ee2e66b5a9fe833d048c8fa91",
+      "components": {
+        "sourceNodeRidHex": "01020304",
+        "sourceHostGeneration": "7",
+        "operationIdHigh": "42",
+        "operationIdLow": "1"
+      },
+      "value": "creation-operation-terminal-v1 bytes as-is (21-location-runtime.md#7); no companion key"
     }
   ],
   "counterVectors": {

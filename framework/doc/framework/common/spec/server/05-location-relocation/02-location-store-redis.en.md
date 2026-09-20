@@ -36,7 +36,7 @@ non-Redis provider — must satisfy; if the code disagrees, the code is fixed.
 §8~§9 are the implementation contract that fixes the Redis key layout and
 data type the official Redis provider itself uses. Within §8~§9, the part
 that Redis providers in different languages must be able to read from each
-other — the counter-issuance key, and the opaque storage format for the five
+other — the counter-issuance key, and the opaque storage format for the six
 records — is a **MUST-level public contract**, and if the code disagrees, the
 code is fixed; a non-Redis provider doesn't need to follow this part. The
 rest — implementation detail the Redis provider chooses internally, such as
@@ -261,16 +261,17 @@ computed as SHA-256 of these retired logical literals:
 literal with the mapping above; do not guess it from a record or scan
 prefix.
 
-## 9. The Official Redis Provider — 5-Record Opaque Storage Format
+## 9. The Official Redis Provider — Opaque Storage Format
 
 A [MeshNode](../00-foundation/02-glossary.en.md#meshnode) — a runtime node that
 sends or receives messages — publishes a
 [MeshNode descriptor](../00-foundation/02-glossary.en.md#meshnode-descriptor)
 for automatic discovery so other nodes can find its identity and connection
 information. That descriptor, an owner lease, a ClientServer server descriptor,
-a fanout publisher descriptor, and an authority record must use the same
-opaque record representation regardless of language — otherwise a record one
-language writes can't be read by another. These five records **must** follow
+a fanout publisher descriptor, an authority record, and a creation terminal
+must use the same opaque record representation regardless of language —
+otherwise a record one language writes can't be read by another. These six
+records **must** follow
 this storage scheme.
 
 The Redis key is `{prefix}:{zlink-location-v3}:opaque:{sha256hex(preimage)}`,
@@ -279,7 +280,7 @@ and `preimage` is the per-record logical key preimage defined by
 [Location Runtime §3.4](01-location-runtime.en.md#34-how-different-languages-read-and-write-the-same-redis-record)
 (note — this `sha256hex(preimage)` uses different input than §8's
 `sha256hex(logicalKey)`: the counter hashes the short literal logical key
-as-is, while these five records hash a preimage string built per record).
+as-is, while these six records hash a preimage string built per record).
 
 The braces around `{zlink-location-v3}` are a Redis Cluster hashtag —
 because `Put` changes the record, sequence counter, and index together in
@@ -327,7 +328,7 @@ different key namespaces on the same Redis deployment, or be physically
 separated. Correctness doesn't
 depend on connection sharing or a cross-store Redis transaction.
 
-**This is the end of the MUST-level public contract.** Outside these five
+**This is the end of the MUST-level public contract.** Outside these six
 records and their opaque record representation, the following items are
 implementation details the Redis provider chooses freely, and aren't part
 of the public contract — if the document disagrees with the code, the
@@ -370,9 +371,8 @@ record golden fixture. Each item maps to one test.
 
 **Official Redis Provider's Key/Byte Format**
 
-- The MeshNode descriptor, owner lease, ClientServer server descriptor, and
-  fanout publisher descriptor are verified by a conformance test that
-  consumes the store record golden fixture's
+- The six records of §9 are verified by a conformance test that consumes
+  the store record golden fixture's
   (`framework/runtime/protocol/golden/store-record-v1.json`) key-derivation
   vectors (preimage → SHA-256 → full key string) and value byte vectors
   (including tombstone and expired variants) as-is.
