@@ -117,7 +117,13 @@ function declaration(type) {
 function conditionExpression(condition, values, flags, flagBits) {
   if (!condition) return "true";
   return condition.all.map((atom) => {
-    if (atom.kind === "fieldPresent") return `${values.get(atom.operand.name)} != null`;
+    if (atom.kind === "fieldPresent") {
+      if (atom.presence?.internal?.absent !== null || atom.presence?.internal?.present !== "non-null") {
+        throw new Error(`unsupported field presence ${atom.operand.name}`);
+      }
+      const value = values.get(atom.operand.name);
+      return `${value} != null && ${value}.value() != null`;
+    }
     if (atom.kind === "fieldEquals") {
       const variable = values.get(atom.operand.name);
       const expected = atom.value;
@@ -255,20 +261,56 @@ function vectorConstraintCode(type, op, itemReference, listExpression) {
   const constraints = op.constraints ?? [];
   if (constraints.length === 0) return "";
   const itemType = refType(itemReference);
-  const paths = (constraint) => constraint.fields ?? (constraint.field ? [constraint.field] : []);
-  const key = (constraint, variable, writer) => {
-    const selected = paths(constraint);
-    if (selected.length === 0) {
-      return `${encoderCall(itemReference, variable, writer, "c", "flags", new Map(), globalTypeByName)};`;
+  const source = (source, variable) => source.kind === "item" ? variable
+    : source.path.split(".").reduce((value, part) => `${value}.${fieldName(part)}()`, variable);
+  const sourceType = (source) => {
+    let target = globalTypeByName.get(referenceOf(itemReference).$ref);
+    if (source.kind === "item") return target;
+    for (const part of source.path.split(".")) {
+      const field = (primaryOperation(target).fields ?? []).find((candidate) => candidate.name === part);
+      if (!field) throw new Error(`${type.name}: unknown constraint field ${source.path}`);
+      target = globalTypeByName.get(referenceOf(field).$ref);
     }
-    return selected.map((entry) => {
-      const field = fieldName(entry.path);
-      const itemTypeOwner = globalTypeByName.get(referenceOf(itemReference).$ref);
-      const itemOp = primaryOperation(itemTypeOwner);
-      const fieldOp = (itemOp.fields ?? []).find((candidate) => candidate.name === entry.path);
-      if (!fieldOp) throw new Error(`${type.name}: unknown constraint field ${entry.path}`);
-      return `${encoderCall(fieldOp, `${variable}.${field}()`, writer, "c", "flags", new Map(), globalTypeByName)};`;
-    }).join(" ");
+    return target;
+  };
+  const tuplePart = (part, variable, writer) => {
+    const value = source(part.source, variable);
+    if (part.kind === "utf-8-bytes") {
+      if (part.lengthPrefix !== "excluded") throw new Error(`${type.name}: unsupported UTF-8 key`);
+      return `${writer}.bytes(strictBytes(${value}.value()));`;
+    }
+    if (["wire-value", "unsigned-wire-value"].includes(part.kind)) {
+      if (part.byteOrder !== "big-endian") throw new Error(`${type.name}: unsupported wire key order`);
+      const target = sourceType(part.source), targetOp = primaryOperation(target);
+      const actual = targetOp.op === "enum" ? `${value}.wire` : `${value}.value()`;
+      return `${writer}.uint(${integerWidth(part.encoding)},${actual});`;
+    }
+    throw new Error(`${type.name}: unsupported tuple key ${part.kind}`);
+  };
+  const canonicalKey = (key, variable, writer) => {
+    const format = key.format;
+    if (format.encoding !== "canonical-ascii-utf8" || format.componentLayout !== "decimal-raw-byte-length-colon-percent-encoded-bytes"
+        || format.decimalLength !== "base10-no-leading-zero" || format.escaping !== "rfc3986-unreserved-literal-otherwise-uppercase-percent-hex"
+        || format.unicodeNormalization !== "none") throw new Error(`${type.name}: unsupported canonical authority key`);
+    const value = source(key.source, variable);
+    const target = sourceType(key.source);
+    const variants = Object.entries(key.variants).map(([variantName, variant]) => {
+      const selected = caseInfo(target).find((entry) => Object.values(entry.discriminator ?? {}).includes(variantName));
+      const discriminator = format.kindDiscriminators.find((entry) => entry.objectKind === variant.objectKind);
+      if (!selected || !discriminator) throw new Error(`${type.name}: incomplete canonical authority key variant`);
+      const components = variant.components.map((path) => path.split(".")
+        .reduce((result, part) => `${result}.${fieldName(part)}()`, "variant") + ".value()");
+      return `if(${value} instanceof ${selected.name} variant)canonicalAuthorityKey(${writer},${javaString(format.prefix)},${javaString(discriminator.wire)},${javaString(format.separator)},${components.join(",")});`;
+    });
+    return `${variants.join("else ")}else throw error(${javaString(type.name + " authority key variant")});`;
+  };
+  const key = (constraint, variable, writer) => {
+    if (constraint.key.kind === "tuple") return constraint.key.parts
+      .map((part) => tuplePart(part, variable, writer)).join("");
+    if (constraint.key.kind === "canonical-authority-key-bytes") {
+      return canonicalKey(constraint.key, variable, writer);
+    }
+    throw new Error(`${type.name}: unsupported constraint key ${constraint.key.kind}`);
   };
   return constraints.map((constraint, index) => {
     if (!["sorted", "unique"].includes(constraint.kind)) {
@@ -298,10 +340,11 @@ function negotiatedBound(type, measured, application, value) {
   }).join("");
 }
 
-function encodedLimit(type, expression) {
+function encodedLimit(type, expression, application) {
   const limits = type.operations.filter((entry) => entry.op === "encoded-limit");
   return limits.map((limit) => {
-    if (limit.boundary !== "complete-value" || limit.trailingBytes !== "forbidden") {
+    if (limit.measured !== "complete-encoded-value" || limit.exceeded !== "protocol-error"
+        || !limit.applications.includes(application)) {
       throw new Error(`${type.name}: unsupported encoded-limit syntax`);
     }
     return `require((long)${expression}<=${longLiteral(limit.maximumEncodedBytes)},${javaString(type.name + " encoded limit")});`;
@@ -321,9 +364,17 @@ function codecMethods(type, typeByName, flagBits) {
     const absent = op.zeroLengthMeaning === "absent";
     const readValue = isText ? `strictText(r.bytes(length), ${javaString(type.name)})` : "r.bytes(length)";
     const bytes = isText ? "strictBytes(value.value())" : "value.value()";
-    const maximum = Math.min(op.maximumBytes, 2147483647);
+    if (op.encodeCapacity?.throughMaximumBytes !== op.maximumBytes
+        || op.encodeCapacity?.implementationLimitBelowMaximum !== "forbidden") {
+      throw new Error(`${type.name}: unsupported encode capacity`);
+    }
+    const maximum = longLiteral(op.maximumBytes);
     const textValidation = type.operations.find((entry) => entry.op === "text-validation");
     if (isText && !textValidation) throw new Error(`${type.name}: missing text-validation operation`);
+    if (isText && (textValidation.encoding !== "utf-8" || textValidation.malformed !== "protocol-error"
+        || textValidation.nul !== "forbidden" || textValidation.decode.bom !== "preserve"
+        || textValidation.decode.overlong !== "protocol-error" || textValidation.decode.surrogateCodePoint !== "protocol-error"
+        || textValidation.encode.loneSurrogate !== "protocol-error")) throw new Error(`${type.name}: unsupported text validation`);
     const decodeBound = negotiatedBound(type, "content-bytes", "decode", "length");
     const encodeBound = negotiatedBound(type, "content-bytes", "encode", "bytes.length");
     return `  private static ${name} decode${name}(Reader r, DecoderContext c, int flags) throws IOException { int length=length(decode${lengthType}(r,c,flags)); require(length>=${op.minimumBytes ?? 0}&&length<=${maximum},${javaString(type.name + " length")}); ${decodeBound} ${absent ? `if(length==0)return new ${name}(null);` : ""} return new ${name}(${readValue}); }\n`
@@ -336,17 +387,19 @@ function codecMethods(type, typeByName, flagBits) {
     const args = fields.map((f) => fieldName(f.name)).join(", ");
     const decodeEnvelopeBound = negotiatedBound(type, "encoded-bytes", "decode", "(r.at-start)");
     const encodeEnvelopeBound = negotiatedBound(type, "encoded-bytes", "encode", "(w.size()-start)");
+    const decodeLimit = encodedLimit(type, "(r.at-start)", "decode");
+    const encodeLimit = encodedLimit(type, "(w.size()-start)", "encode");
     const before = delimited
-      ? `${decodeEnvelopeBound ? "int start=r.at; " : ""}require(decode${refType(op.version)}(r,c,flags).value()==${longLiteral(op.version.constant)},${javaString(type.name + " version")}); Reader body=r.slice(length(decode${refType(op.length)}(r,c,flags)));`
-      : "";
-    const after = delimited ? `body.end(${javaString(type.name)});${decodeEnvelopeBound}` : "";
+      ? `${decodeEnvelopeBound || decodeLimit ? "int start=r.at; " : ""}require(decode${refType(op.version)}(r,c,flags).value()==${longLiteral(op.version.constant)},${javaString(type.name + " version")}); Reader body=r.slice(length(decode${refType(op.length)}(r,c,flags)));`
+      : decodeLimit ? "int start=r.at;" : "";
+    const after = `${delimited ? `body.end(${javaString(type.name)});` : ""}${decodeEnvelopeBound}${decodeLimit}`;
     const encoded = encodeFields(fields, "value", delimited ? "body" : "w", "c", "flags", typeByName, flagBits);
     const encodeBefore = delimited
-      ? `${encodeEnvelopeBound ? "int start=w.size(); " : ""}encode${refType(op.version)}(new ${refType(op.version)}(${integerArgument(op.version, longLiteral(op.version.constant), typeByName)}),w,c,flags); Writer body=new Writer();`
-      : "";
+      ? `${encodeEnvelopeBound || encodeLimit ? "int start=w.size(); " : ""}encode${refType(op.version)}(new ${refType(op.version)}(${integerArgument(op.version, longLiteral(op.version.constant), typeByName)}),w,c,flags); Writer body=new Writer();`
+      : encodeLimit ? "int start=w.size();" : "";
     const encodeAfter = delimited
-      ? `byte[] bytes=body.result(); encode${refType(op.length)}(new ${refType(op.length)}(bytes.length),w,c,flags); w.bytes(bytes);${encodeEnvelopeBound}`
-      : "";
+      ? `byte[] bytes=body.result(); encode${refType(op.length)}(new ${refType(op.length)}(bytes.length),w,c,flags); w.bytes(bytes);${encodeEnvelopeBound}${encodeLimit}`
+      : encodeLimit;
     const decodedConstraints = structConstraints(type, op.constraints ?? []);
     const encodedConstraints = structConstraints(type, op.constraints ?? [], "value");
     const decodedPredicate = type.operations.some((entry) => entry.op === "runtime-predicate") ? predicateChecks(type, decoded.values) : "";
@@ -363,8 +416,10 @@ function codecMethods(type, typeByName, flagBits) {
     const encodePrefix = op.op === "versioned-vector" ? `encode${refType(op.layout[0])}(new ${refType(op.layout[0])}(${integerArgument(op.layout[0], longLiteral(op.layout[0].constant), typeByName)}),w,c,flags);` : "";
     const validation = vectorConstraintCode(type, op, repeat.item, "values");
     const encodeValidation = vectorConstraintCode(type, op, repeat.item, `value.${list}()`);
-    return `  private static ${name} decode${name}(Reader r, DecoderContext c, int flags) throws IOException { ${prefix} int count=length(decode${refType(countRef)}(r,c,flags)); ${op.maximumItems === undefined ? "" : `require(count<=${op.maximumItems},${javaString(type.name + " count")});`} List<${itemType}> values=new ArrayList<>(count); for(int i=0;i<count;i++)values.add(${decoderCall(repeat.item, "r", "c", "flags", new Map(), typeByName)}); ${validation} return new ${name}(values); }\n`
-    + `  private static void encode${name}(${name} value, Writer w, DecoderContext c, int flags) throws IOException { ${encodePrefix} ${op.maximumItems === undefined ? "" : `require(value.${list}().size()<=${op.maximumItems},${javaString(type.name + " count")});`} ${encodeValidation} encode${refType(countRef)}(new ${refType(countRef)}(${integerArgument(countRef, `value.${list}().size()`, typeByName)}),w,c,flags); for(${itemType} item:value.${list}())${encoderCall(repeat.item, "item", "w", "c", "flags", new Map(), typeByName)}; }`;
+    const decodeLimit = encodedLimit(type, "(r.at-start)", "decode");
+    const encodeLimit = encodedLimit(type, "(w.size()-start)", "encode");
+    return `  private static ${name} decode${name}(Reader r, DecoderContext c, int flags) throws IOException { ${decodeLimit ? "int start=r.at;" : ""} ${prefix} int count=length(decode${refType(countRef)}(r,c,flags)); ${op.maximumItems === undefined ? "" : `require(count<=${op.maximumItems},${javaString(type.name + " count")});`} List<${itemType}> values=new ArrayList<>(count); for(int i=0;i<count;i++)values.add(${decoderCall(repeat.item, "r", "c", "flags", new Map(), typeByName)}); ${validation}${decodeLimit} return new ${name}(values); }\n`
+    + `  private static void encode${name}(${name} value, Writer w, DecoderContext c, int flags) throws IOException { ${encodeLimit ? "int start=w.size();" : ""} ${encodePrefix} ${op.maximumItems === undefined ? "" : `require(value.${list}().size()<=${op.maximumItems},${javaString(type.name + " count")});`} ${encodeValidation} encode${refType(countRef)}(new ${refType(countRef)}(${integerArgument(countRef, `value.${list}().size()`, typeByName)}),w,c,flags); for(${itemType} item:value.${list}())${encoderCall(repeat.item, "item", "w", "c", "flags", new Map(), typeByName)}; ${encodeLimit} }`;
   }
   if (op.op === "conditional-union") return unionMethods(type, op, typeByName, flagBits);
   if (op.op === "tlv32") return tlvMethods(type, op, typeByName, flagBits);
@@ -384,7 +439,7 @@ function unionMethods(type, union, typeByName, flagBits) {
   const encodeParams = [`${name} value`, "Writer w", "DecoderContext c", "int flags", ...external].join(", ");
   const discriminatorValues = new Map();
   const decodeLines = [];
-  const limitAtDecode = encodedLimit(type, "(r.at-start)");
+  const limitAtDecode = encodedLimit(type, "(r.at-start)", "decode");
   if (limitAtDecode) decodeLines.push("    int start=r.at;");
   let externalIndex = 0;
   for (const d of union.discriminators) {
@@ -418,10 +473,25 @@ function unionMethods(type, union, typeByName, flagBits) {
   decodeLines.push(`    throw error(${javaString(type.name + " discriminator")});`);
 
   const encodeLines = [];
-  const limitAtEncode = encodedLimit(type, "(w.size()-start)");
+  const limitAtEncode = encodedLimit(type, "(w.size()-start)", "encode");
   if (limitAtEncode) encodeLines.push("    int start=w.size();");
   for (const entry of cases) {
     encodeLines.push(`    if(value instanceof ${entry.name} item){`);
+    if (entry.discriminator !== null) {
+      if (union.encode?.selection !== "variant" || union.encode.discriminatorAgreement !== "required" || union.encode.mismatch !== "protocol-error") {
+        throw new Error(`${type.name}: unsupported union encode agreement`);
+      }
+      let contextIndex = 0;
+      for (const d of union.discriminators) {
+        const expected = entry.discriminator[d.name];
+        const target = typeByName.get(referenceOf(d).$ref), targetOp = primaryOperation(target);
+        const actual = d.source.kind === "wire" ? `item.${fieldName(d.name)}()` : `external${contextIndex++}`;
+        const agreement = targetOp.op === "enum"
+          ? `${actual}==${refType(d)}.${enumName(expected)}`
+          : `${actual}.value()==${longLiteral(expected)}`;
+        encodeLines.push(`      require(${agreement},${javaString(type.name + " discriminator agreement")});`);
+      }
+    }
     const wire = union.discriminators.filter((d) => d.source.kind === "wire");
     for (const d of wire) encodeLines.push(`      ${encoderCall(d, `item.${fieldName(d.name)}()`, "w", "c", "flags", new Map(), typeByName)};`);
     if (union.bodyLengthType) encodeLines.push("      Writer selected=new Writer();");
@@ -445,19 +515,38 @@ function tlvMethods(type, op, typeByName, flagBits) {
   const vars = op.fields.map((f) => `    ${refType(f)} ${fieldName(f.name)}=null;`).join("\n");
   const cases = op.fields.map((f) => `case ${f.id} -> ${fieldName(f.name)}=${decoderCall(f, "item", "c", "flags", new Map(), typeByName)};`).join(" ");
   const required = op.requiredFields.map((field) => `require(${fieldName(field)}!=null,${javaString(field + " required")});`).join(" ");
+  const encodeRequired = op.requiredFields.map((field) => `require(value.${fieldName(field)}()!=null,${javaString(field + " required")});`).join(" ");
   const args = op.fields.map((f) => fieldName(f.name)).join(", ");
   const enc = op.fields.map((f) => `if(value.${fieldName(f.name)}()!=null){Writer item=new Writer(); ${encoderCall(f, `value.${fieldName(f.name)}()`, "item", "c", "flags", new Map(), typeByName)}; byte[] bytes=item.result(); encode${refType(op.fieldIdType)}(new ${refType(op.fieldIdType)}(${f.id}),body,c,flags); encode${refType(op.fieldLengthType)}(new ${refType(op.fieldLengthType)}(bytes.length),body,c,flags); body.bytes(bytes);}`).join("\n    ");
-  const fieldConstraints = op.fields.flatMap((field) => (field.constraints ?? []).map((constraint) => {
+  const constraintFor = (field, value) => (field.constraints ?? []).map((constraint) => {
     if (constraint.kind !== "contains-protocol-required-capability") throw new Error(`${type.name}.${field.name}: unsupported field constraint ${constraint.kind}`);
-    return `require(${fieldName(field.name)}!=null&&${fieldName(field.name)}.items().stream().anyMatch(item->item.value().equals(ServiceWireConstants.REQUIRED_CAPABILITY)),${javaString(field.name + " capability")});`;
-  })).join(" ");
+    return `require(${value}!=null&&${value}.items().stream().anyMatch(item->item.value().equals(ServiceWireConstants.REQUIRED_CAPABILITY)),${javaString(field.name + " capability")});`;
+  }).join(" ");
+  const rangeFor = (field, value) => {
+    if (field.minimum === undefined && field.maximum === undefined) return "";
+    const target = typeByName.get(referenceOf(field).$ref), targetOp = primaryOperation(target);
+    if (targetOp.op !== "integer") throw new Error(`${type.name}.${field.name}: range on non-integer`);
+    return `if(${value}!=null)requireUnsigned(${value}.value(),${targetOp.width},${field.minimum === undefined ? "null" : javaString(field.minimum)},${field.maximum === undefined ? "null" : javaString(field.maximum)},${javaString(field.name)});`;
+  };
+  const decodedFieldChecks = op.fields.map((field) => `${rangeFor(field, fieldName(field.name))}${constraintFor(field, fieldName(field.name))}`).join("");
+  const encodedFieldChecks = op.fields.map((field) => {
+    const value = `value.${fieldName(field.name)}()`;
+    return `${rangeFor(field, value)}${constraintFor(field, value)}`;
+  }).join("");
   const values = new Map(op.fields.map((field) => [field.name, fieldName(field.name)]));
   const presence = op.presenceRules.map((rule) => {
     const checks = [...(rule.require ?? []).map((field) => `${fieldName(field)}!=null`), ...(rule.forbid ?? []).map((field) => `${fieldName(field)}==null`)];
     return `if(${conditionExpression(rule.when, values, "flags", flagBits)})require(${checks.join("&&")},${javaString(type.name + " presence")});`;
   }).join(" ");
-  return `  private static ${name} decode${name}(Reader r, DecoderContext c, int flags) throws IOException { Reader body=r.slice(length(decode${refType(op.totalLengthType)}(r,c,flags))); ${vars}\n    int previous=0; while(!body.done()){int id=length(decode${refType(op.fieldIdType)}(body,c,flags));require(id>previous,${javaString(type.name + " order")});previous=id;Reader item=body.slice(length(decode${refType(op.fieldLengthType)}(body,c,flags)));switch(id){${cases} default -> item.skipRemaining(); }item.end(${javaString(type.name + " field")});} ${required} ${presence} ${fieldConstraints} return new ${name}(${args}); }\n`
-    + `  private static void encode${name}(${name} value, Writer w, DecoderContext c, int flags) throws IOException { Writer body=new Writer(); ${enc} byte[] bytes=body.result(); encode${refType(op.totalLengthType)}(new ${refType(op.totalLengthType)}(bytes.length),w,c,flags);w.bytes(bytes); }`;
+  const encodedValues = new Map(op.fields.map((field) => [field.name, `value.${fieldName(field.name)}()`]));
+  const encodePresence = op.presenceRules.map((rule) => {
+    const checks = [...(rule.require ?? []).map((field) => `value.${fieldName(field)}()!=null`), ...(rule.forbid ?? []).map((field) => `value.${fieldName(field)}()==null`)];
+    return `if(${conditionExpression(rule.when, encodedValues, "flags", flagBits)})require(${checks.join("&&")},${javaString(type.name + " presence")});`;
+  }).join("");
+  const decodeLimit = encodedLimit(type, "(r.at-start)", "decode");
+  const encodeLimit = encodedLimit(type, "(w.size()-start)", "encode");
+  return `  private static ${name} decode${name}(Reader r, DecoderContext c, int flags) throws IOException { ${decodeLimit ? "int start=r.at;" : ""} Reader body=r.slice(length(decode${refType(op.totalLengthType)}(r,c,flags))); ${vars}\n    int previous=0; while(!body.done()){int id=length(decode${refType(op.fieldIdType)}(body,c,flags));require(id>previous,${javaString(type.name + " order")});previous=id;Reader item=body.slice(length(decode${refType(op.fieldLengthType)}(body,c,flags)));switch(id){${cases} default -> item.skipRemaining(); }item.end(${javaString(type.name + " field")});} ${required} ${presence} ${decodedFieldChecks}${decodeLimit} return new ${name}(${args}); }\n`
+    + `  private static void encode${name}(${name} value, Writer w, DecoderContext c, int flags) throws IOException { ${encodeLimit ? "int start=w.size();" : ""}${encodeRequired}${encodePresence}${encodedFieldChecks} Writer body=new Writer(); ${enc} byte[] bytes=body.result(); encode${refType(op.totalLengthType)}(new ${refType(op.totalLengthType)}(bytes.length),w,c,flags);w.bytes(bytes);${encodeLimit} }`;
 }
 
 function publicMethods(ir) {
@@ -545,12 +634,14 @@ function commandMethods(ir, typeByName, flagBits) {
 
 function durableMethods(ir, typeByName) {
   const decode = ir.durableFormats.map((format) => `case ${javaString(format.name)} -> decodeDurable${typeName(format.name)}(bytes,c)`).join("; ");
-  const encode = ir.durableFormats.map((format) => { const header = operation(format, "durable-header"); return `case ${javaString(format.name)} -> encodeDurable${typeName(format.name)}((${refType(header.body)})value,c)`; }).join("; ");
+  const encode = ir.durableFormats.map((format) => { const body = operation(format, "field"); return `case ${javaString(format.name)} -> encodeDurable${typeName(format.name)}((${refType(body)})value,c)`; }).join("; ");
   const methods = ir.durableFormats.map((format) => {
-    const header = operation(format, "durable-header"), checksum = operation(format, "checksum"), limit = operation(format, "encoded-limit");
-    if (checksum.algorithm !== "crc32c-castagnoli" || checksum.position !== "trailing") throw new Error(`${format.name}: unsupported checksum operation`);
-    const body = refType(header.body), name = typeName(format.name), flagsType = refType(header.flagsType);
-    return `  private static ${body} decodeDurable${name}(byte[] bytes,DecoderContext c)throws IOException{require(bytes.length<=${limit.maximumEncodedBytes},${javaString(format.name + " encoded limit")});Reader r=new Reader(bytes);${header.magic.map((b) => `require(r.u8()==${b},"magic");`).join("")}require(r.u8()==${header.formatVersion},"version");${flagsType} headerFlags=decode${flagsType}(r,c,0);require(headerFlags.value()==${longLiteral(header.flags)},"flags");Reader bodyReader=r.slice(length(decode${refType(header.bodyLengthType)}(r,c,0)));${body} value=decode${body}(bodyReader,c,0);bodyReader.end(${javaString(format.name)});int checksum=(int)r.uint(4);r.end(${javaString(format.name)});CRC32C crc=new CRC32C();crc.update(bytes,0,bytes.length-4);require((int)crc.getValue()==checksum,"checksum");return value;}\n  private static byte[] encodeDurable${name}(${body} value,DecoderContext c)throws IOException{Writer bodyWriter=new Writer();encode${body}(value,bodyWriter,c,0);byte[] body=bodyWriter.result();Writer w=new Writer();${header.magic.map((b) => `w.u8(${b});`).join("")}w.u8(${header.formatVersion});encode${flagsType}(new ${flagsType}(${integerArgument(header.flagsType, longLiteral(header.flags), typeByName)}),w,c,0);encode${refType(header.bodyLengthType)}(new ${refType(header.bodyLengthType)}(${integerArgument(header.bodyLengthType, "body.length", typeByName)}),w,c,0);w.bytes(body);CRC32C crc=new CRC32C();byte[] covered=w.result();crc.update(covered,0,covered.length);w.uint(4,crc.getValue());byte[] result=w.result();require(result.length<=${limit.maximumEncodedBytes},${javaString(format.name + " encoded limit")});return result;}`;
+    const header = operation(format, "durable-header"), checksum = operation(format, "checksum"), limit = operation(format, "encoded-limit"), bodyField = operation(format, "field");
+    if (checksum.algorithm !== "crc32c-castagnoli" || checksum.position !== "trailing" || checksum.verification !== "before-body-interpretation"
+        || bodyField.interpretation !== "after-checksum-verification" || limit.measured !== "complete-encoded-value"
+        || !limit.applications.includes("encode") || !limit.applications.includes("decode")) throw new Error(`${format.name}: unsupported durable operation sequence`);
+    const body = refType(bodyField), name = typeName(format.name), flagsType = refType(header.flagsType);
+    return `  private static ${body} decodeDurable${name}(byte[] bytes,DecoderContext c)throws IOException{Reader r=new Reader(bytes);${header.magic.map((b) => `require(r.u8()==${b},"magic");`).join("")}require(r.u8()==${header.formatVersion},"version");${flagsType} headerFlags=decode${flagsType}(r,c,0);require(headerFlags.value()==${longLiteral(header.flags)},"flags");Reader bodyReader=r.slice(length(decode${refType(header.bodyLengthType)}(r,c,0)));require(bytes.length<=${limit.maximumEncodedBytes},${javaString(format.name + " encoded limit")});int checksum=(int)r.uint(4);r.end(${javaString(format.name)});CRC32C crc=new CRC32C();crc.update(bytes,0,bytes.length-4);require((int)crc.getValue()==checksum,"checksum");${body} value=decode${body}(bodyReader,c,0);bodyReader.end(${javaString(format.name)});return value;}\n  private static byte[] encodeDurable${name}(${body} value,DecoderContext c)throws IOException{Writer bodyWriter=new Writer();encode${body}(value,bodyWriter,c,0);byte[] body=bodyWriter.result();Writer w=new Writer();${header.magic.map((b) => `w.u8(${b});`).join("")}w.u8(${header.formatVersion});encode${flagsType}(new ${flagsType}(${integerArgument(header.flagsType, longLiteral(header.flags), typeByName)}),w,c,0);encode${refType(header.bodyLengthType)}(new ${refType(header.bodyLengthType)}(${integerArgument(header.bodyLengthType, "body.length", typeByName)}),w,c,0);w.bytes(body);CRC32C crc=new CRC32C();byte[] covered=w.result();crc.update(covered,0,covered.length);w.uint(4,crc.getValue());byte[] result=w.result();require(result.length<=${limit.maximumEncodedBytes},${javaString(format.name + " encoded limit")});return result;}`;
   }).join("\n");
   return `${methods}\n  static Object decodeDurable(String name,byte[] bytes,DecoderContext c)throws IOException{return switch(name){${decode};default->throw error("durable format");};}\n  static byte[] encodeDurable(String name,Object value,DecoderContext c)throws IOException{return switch(name){${encode};default->throw error("durable format");};}`;
 }
@@ -598,9 +689,10 @@ function runtimeHelpers() {
   private static void requireUnsigned(long value,int width,String minimum,String maximum,String name)throws IOException{BigInteger actual=new BigInteger(width==8?Long.toUnsignedString(value):Long.toString(Integer.toUnsignedLong((int)value)));if(minimum!=null&&actual.compareTo(new BigInteger(minimum))<0||maximum!=null&&actual.compareTo(new BigInteger(maximum))>0)throw error(name+" range");}
   private static void requireSigned(long value,String minimum,String maximum,String name)throws IOException{if(minimum!=null&&value<Long.parseLong(minimum)||maximum!=null&&value>Long.parseLong(maximum))throw error(name+" range");}
   private static int length(Object value)throws IOException{try{return switch(value){case U8 x->x.value();case U16 x->x.value();case U32 x->x.value();case U64 x->Math.toIntExact(x.value());default->throw error("length type");};}catch(ArithmeticException e){throw error("length range");}}
-  private static byte[] strictBytes(String value)throws IOException{if(value==null)return null;byte[] bytes=value.getBytes(StandardCharsets.UTF_8);for(byte b:bytes)if(b==0)throw error("NUL text");return bytes;}
+  private static byte[] strictBytes(String value)throws IOException{if(value==null)return null;try{ByteBuffer encoded=StandardCharsets.UTF_8.newEncoder().onMalformedInput(CodingErrorAction.REPORT).onUnmappableCharacter(CodingErrorAction.REPORT).encode(CharBuffer.wrap(value));byte[] bytes=new byte[encoded.remaining()];encoded.get(bytes);for(byte b:bytes)if(b==0)throw error("NUL text");return bytes;}catch(CharacterCodingException e){throw error("invalid UTF-16 text");}}
   private static String strictText(byte[] value,String name)throws IOException{for(byte b:value)if(b==0)throw error(name+" NUL");try{return StandardCharsets.UTF_8.newDecoder().onMalformedInput(CodingErrorAction.REPORT).onUnmappableCharacter(CodingErrorAction.REPORT).decode(ByteBuffer.wrap(value)).toString();}catch(CharacterCodingException e){throw error(name+" UTF-8");}}
   private static int compareUnsigned(byte[] left,byte[] right){int count=Math.min(left.length,right.length);for(int i=0;i<count;i++){int compared=Integer.compare(Byte.toUnsignedInt(left[i]),Byte.toUnsignedInt(right[i]));if(compared!=0)return compared;}return Integer.compare(left.length,right.length);}
+  private static void canonicalAuthorityKey(Writer writer,String prefix,String kind,String separator,String...components)throws IOException{writer.bytes((prefix+separator+kind).getBytes(StandardCharsets.US_ASCII));for(String component:components){byte[] raw=strictBytes(component);writer.bytes((separator+raw.length+separator).getBytes(StandardCharsets.US_ASCII));for(byte value:raw){int current=Byte.toUnsignedInt(value);if(current>='A'&&current<='Z'||current>='a'&&current<='z'||current>='0'&&current<='9'||current=='-'||current=='.'||current=='_'||current=='~')writer.u8(current);else{writer.u8('%');writer.u8("0123456789ABCDEF".charAt(current>>>4));writer.u8("0123456789ABCDEF".charAt(current&15));}}}}
 `;
 }
 
