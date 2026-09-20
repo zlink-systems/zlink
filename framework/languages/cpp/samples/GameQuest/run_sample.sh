@@ -21,42 +21,14 @@ mkdir -p "$LOG_DIR"
 
 cleanup() {
   local code=$?
-  local cleanup_failed=0
-  local status
-  for pid in "${PIDS[@]}"; do
-    if kill -0 "${pid}" >/dev/null 2>&1; then
-      kill "${pid}" >/dev/null 2>&1 || true
-      for _ in $(seq 1 300); do
-        if ! kill -0 "${pid}" >/dev/null 2>&1; then
-          break
-        fi
-        sleep "$WAIT_SECONDS"
-      done
-      if kill -0 "${pid}" >/dev/null 2>&1; then
-        echo "forced cleanup process ${pid}" >&2
-        kill -9 "${pid}" >/dev/null 2>&1 || true
-        cleanup_failed=1
-      fi
-    fi
-    set +e
-    wait "${pid}" 2>/dev/null
-    status=$?
-    set -e
-    if [[ "$status" != "0" && "$status" != "127" && "$status" != "130" && "$status" != "143" ]]; then
-      echo "cleanup process ${pid} exited unexpectedly with status ${status}" >&2
-      cleanup_failed=1
-    fi
-  done
+  zlink_cpp_sample_stop_processes "${PIDS[@]}"
   if [[ -n "$REDIS_CONTAINER_NAME" ]]; then
     zlink_redis_remove_by_id "$REDIS_CONTAINER_NAME" || true
-  fi
-  if [[ "$cleanup_failed" -ne 0 && "$code" -eq 0 ]]; then
-    code=1
   fi
   zlink_sample_close_run_dir "$RUN_DIR" "$code" "GameQuest"
   return "$code"
 }
-trap 'cleanup; status=$?; exit "$status"' EXIT
+trap zlink_cpp_sample_exit_trap EXIT
 
 PORT_ALLOCATION_OUTPUT="$(zlink_sample_allocate_ports 17)"
 read -r GAMEQUEST_RESERVED_PORT GAMEQUEST_API_A_STREAM_PORT GAMEQUEST_API_B_STREAM_PORT GAMEQUEST_API_A_HTTP_PORT GAMEQUEST_API_B_HTTP_PORT GAMEQUEST_MISSION_A_ROUTE_PORT GAMEQUEST_MISSION_B_ROUTE_PORT GAMEQUEST_MISSION_A_SPOT_ROUTE_PORT GAMEQUEST_MISSION_B_SPOT_ROUTE_PORT GAMEQUEST_MISSION_A_SPOT_ROUTER_PORT GAMEQUEST_MISSION_B_SPOT_ROUTER_PORT GAMEQUEST_MISSION_A_SPOT_PORT GAMEQUEST_MISSION_B_SPOT_PORT GAMEQUEST_API_A_SPOT_ROUTER_PORT GAMEQUEST_API_B_SPOT_ROUTER_PORT GAMEQUEST_API_A_SPOT_ROUTE_PORT GAMEQUEST_API_B_SPOT_ROUTE_PORT <<<"$PORT_ALLOCATION_OUTPUT"
@@ -362,4 +334,5 @@ wait_for_exact_count "replacement handler absence" 0 \
 
 trap - EXIT
 cleanup
+zlink_cpp_sample_assert_graceful_teardown
 echo "gamequest-placement=completed"

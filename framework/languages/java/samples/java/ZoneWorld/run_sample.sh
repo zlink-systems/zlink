@@ -41,8 +41,7 @@ fi
 
 RUN_DIR="$(mktemp -d)"; chmod 0700 "$RUN_DIR"
 LOG_DIR="$RUN_DIR/logs"; CONFIG_DIR="$RUN_DIR/config"; mkdir -p "$LOG_DIR" "$CONFIG_DIR"
-ZLINK_SAMPLE_FRAMEWORK_ROLE_LOGS=""
-declare -A ZLINK_SAMPLE_FRAMEWORK_ROLE_LOG_OFFSETS=()
+zlink_sample_init_framework_roles
 pids=(); redis_container_id=""; declare -A node_pid
 
 cleanup_sample() {
@@ -102,8 +101,7 @@ SERVER_BIN="$(app_bin Server Server)"; CLIENT_BIN="$(app_bin Client Client)"
 start() {
   local name=$1; shift
   if [[ "$1" == "$SERVER_BIN" ]]; then
-    ZLINK_SAMPLE_FRAMEWORK_ROLE_LOG_OFFSETS[$name.log]="$(next_line "$LOG_DIR/$name.log")"
-    ZLINK_SAMPLE_FRAMEWORK_ROLE_LOGS+=" $name.log"
+    zlink_sample_register_framework_role "$LOG_DIR" "$name.log"
   fi
   "$@" >>"$LOG_DIR/$name.log" 2>&1 &
   pids+=("$!"); node_pid[$name]=$!; echo "    started $name pid=$!"
@@ -119,7 +117,7 @@ kill_node() {
     ( ZLINK_SAMPLE_FRAMEWORK_ROLE_LOGS="$name.log"
       zlink_sample_verify_framework_termination "$LOG_DIR" ) || exit 1
   fi
-  ZLINK_SAMPLE_FRAMEWORK_ROLE_LOGS="${ZLINK_SAMPLE_FRAMEWORK_ROLE_LOGS//$name.log/}"
+  zlink_sample_unregister_framework_role "$name.log"
 }
 next_line() { [[ -f "$1" ]] && echo $(( $(wc -l <"$1") + 1 )) || echo 1; }
 wait_log() {

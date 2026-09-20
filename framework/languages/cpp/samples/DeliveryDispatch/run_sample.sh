@@ -20,42 +20,14 @@ REDIS_CONTAINER_NAME=""
 mkdir -p "$LOG_DIR" "$CONFIG_DIR" "$FLOW_LOG_DIR"
 cleanup() {
   local code=$?
-  local cleanup_failed=0
-  local status
-  for pid in "${PIDS[@]}"; do
-    if kill -0 "${pid}" >/dev/null 2>&1; then
-      kill "${pid}" >/dev/null 2>&1 || true
-      for _ in $(seq 1 "$WAIT_ATTEMPTS"); do
-        if ! kill -0 "${pid}" >/dev/null 2>&1; then
-          break
-        fi
-        sleep "$WAIT_INTERVAL_SECONDS"
-      done
-      if kill -0 "${pid}" >/dev/null 2>&1; then
-        echo "forced cleanup process ${pid}" >&2
-        kill -9 "${pid}" >/dev/null 2>&1 || true
-        cleanup_failed=1
-      fi
-    fi
-    set +e
-    wait "${pid}" 2>/dev/null
-    status=$?
-    set -e
-    if [[ "$status" != "0" && "$status" != "127" && "$status" != "130" && "$status" != "143" ]]; then
-      echo "cleanup process ${pid} exited unexpectedly with status ${status}" >&2
-      cleanup_failed=1
-    fi
-  done
+  zlink_cpp_sample_stop_processes "${PIDS[@]}"
   if [[ -n "$REDIS_CONTAINER_NAME" ]]; then
     zlink_redis_remove_by_id "$REDIS_CONTAINER_NAME" || true
-  fi
-  if [[ "$cleanup_failed" -ne 0 && "$code" -eq 0 ]]; then
-    code=1
   fi
   zlink_sample_close_run_dir "$RUN_DIR" "$code" "DeliveryDispatch"
   return "$code"
 }
-trap 'cleanup; status=$?; exit "$status"' EXIT
+trap zlink_cpp_sample_exit_trap EXIT
 
 read -r -a DELIVERY_PORTS <<<"$(zlink_sample_allocate_paired_ports 20)"
 RESERVED_PORT="${DELIVERY_PORTS[0]}"
@@ -342,6 +314,7 @@ wait_log_count "candidates exhausted" \
 trap - EXIT
 cleanup
 cleanup_status=$?
+zlink_cpp_sample_assert_graceful_teardown
 if [[ "$cleanup_status" -ne 0 ]]; then
   exit "$cleanup_status"
 fi
