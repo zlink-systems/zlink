@@ -382,9 +382,24 @@ internal sealed class ZLinkActorOperationTarget(
         if (!ZLinkActorCreationTerminalCodec.TryDecode(
                 record.TerminalEnvelope,
                 codecs,
-                out var terminal))
+                out var decoded))
             throw Protocol(string.Empty, "The retained Actor creation terminal is invalid.");
-        return terminal;
+        ActorCreateCompletion? completion = null;
+        if (decoded.Completion is { } retained)
+            completion = new ActorCreateCompletion(
+                retained.Result,
+                retained.Result == ActorCreateResult.Rejected
+                    ? default
+                    : new ActorRef(
+                        retained.ActorId,
+                        retained.ObjectGeneration,
+                        meshName,
+                        node.RoutingId));
+        return new ActorCreateOperationTerminal(
+            decoded.Result,
+            decoded.FailureCode,
+            completion,
+            decoded.ReplyParts);
     }
 
     private IReadOnlyList<ReadOnlyMemory<byte>>? EncodeReply(

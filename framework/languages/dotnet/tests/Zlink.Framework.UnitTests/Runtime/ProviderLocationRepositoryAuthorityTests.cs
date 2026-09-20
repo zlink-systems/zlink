@@ -3,8 +3,12 @@ using System.Globalization;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json.Nodes;
+using Systems.Zlink.Framework.Runtime.Protocol;
 using Zlink.Framework.LocationProvider;
+using Zlink.Framework.Runtime.Actors;
+using Zlink.Framework.Runtime.Codecs;
 using Zlink.Framework.Runtime.Locations;
+using Zlink.Framework.Runtime.Service;
 
 namespace Zlink.Framework.UnitTests;
 
@@ -1422,8 +1426,8 @@ public sealed class ProviderLocationRepositoryAuthorityTests
                 + "00000000000000010000000000abcdef",
             key);
         var nodeEnvelope = Convert.FromHexString(
-            "0000001e6372656174696f6e2d6f7065726174696f6e2d7465726d696e616c2d7631"
-            + "00000002000000000000000000000000000000000000000000");
+            "01000000250000000000000000010200180f6163746f722d63616e6f6e6963616c"
+            + "000000000000000100");
 
         Assert.IsType<ZLinkStoreWriteResult.Applied>(
             await provider.WriteAsync(new ZLinkStoreWriteRequest(
@@ -1436,6 +1440,29 @@ public sealed class ProviderLocationRepositoryAuthorityTests
         var read = Assert.IsType<ZLinkCreationTerminalReadResult.Found>(
             await repository.ReadCreationTerminalAsync(operation));
         Assert.Equal(nodeEnvelope, read.Record.TerminalEnvelope.ToArray());
+
+        var codecs = new ZLinkCodecRegistryBuilder();
+        Assert.True(ZLinkActorCreationTerminalCodec.TryDecode(
+            read.Record.TerminalEnvelope,
+            codecs,
+            out var decoded));
+        Assert.Equal(ActorCreateResult.Created, decoded.Completion?.Result);
+        Assert.Equal("actor-canonical", decoded.Completion?.ActorId);
+        Assert.Equal(1UL, decoded.Completion?.ObjectGeneration);
+
+        var dotnetEnvelope = ZLinkActorCreationTerminalCodec.Encode(
+            new ActorCreateOperationTerminal(
+                RequestResult.Ok,
+                ServiceWireConstants.FrameworkErrorCode.None,
+                new ActorCreateCompletion(
+                    ActorCreateResult.Created,
+                    new ActorRef(
+                        "actor-canonical",
+                        1,
+                        "mesh",
+                        RoutingId.From("node")))),
+            codecs);
+        Assert.Equal(nodeEnvelope, dotnetEnvelope);
     }
 
     [Fact]

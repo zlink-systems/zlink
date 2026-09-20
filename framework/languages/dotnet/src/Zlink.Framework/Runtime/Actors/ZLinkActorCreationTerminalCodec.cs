@@ -4,6 +4,17 @@ using Zlink.Framework.Runtime.Spots;
 
 namespace Zlink.Framework.Runtime.Actors;
 
+internal sealed record ZLinkActorCreationTerminal(
+    RequestResult Result,
+    ServiceWireConstants.FrameworkErrorCode FailureCode,
+    ZLinkActorCreationCompletion? Completion,
+    IReadOnlyList<ReadOnlyMemory<byte>>? ReplyParts);
+
+internal sealed record ZLinkActorCreationCompletion(
+    ActorCreateResult Result,
+    string ActorId,
+    ulong ObjectGeneration);
+
 internal static class ZLinkActorCreationTerminalCodec
 {
     private const int MaximumBytes = 1024 * 1024;
@@ -48,7 +59,7 @@ internal static class ZLinkActorCreationTerminalCodec
 
         var bytes = body.ToArray();
         var result = new byte[checked(5 + bytes.Length)];
-        result[0] = 2;
+        result[0] = 1;
         BinaryPrimitives.WriteUInt32BigEndian(result.AsSpan(1, 4), checked((uint)bytes.Length));
         bytes.CopyTo(result, 5);
         if (result.Length > MaximumBytes)
@@ -61,12 +72,12 @@ internal static class ZLinkActorCreationTerminalCodec
     internal static bool TryDecode(
         ReadOnlyMemory<byte> envelope,
         ZLinkCodecRegistryBuilder codecs,
-        out ActorCreateOperationTerminal terminal)
+        out ZLinkActorCreationTerminal terminal)
     {
         terminal = null!;
         var span = envelope.Span;
         if (span.Length is < 15 or > MaximumBytes
-            || span[0] != 2
+            || span[0] != 1
             || BinaryPrimitives.ReadUInt32BigEndian(span.Slice(1, 4)) != span.Length - 5)
             return false;
         var offset = 5;
@@ -74,7 +85,7 @@ internal static class ZLinkActorCreationTerminalCodec
         var failure = (ServiceWireConstants.FrameworkErrorCode)ReadU32(span, ref offset);
         if (!TryBool(span, ref offset, out var hasCompletion))
             return false;
-        ActorCreateCompletion? completion = null;
+        ZLinkActorCreationCompletion? completion = null;
         if (hasCompletion && !TryReadCompletion(span, ref offset, out completion))
             return false;
         if (!TryBool(span, ref offset, out var hasPayload))
@@ -121,7 +132,11 @@ internal static class ZLinkActorCreationTerminalCodec
             || result != RequestResult.Ok && hasPayload
             || completion?.Result == ActorCreateResult.Existing && hasPayload)
             return false;
-        terminal = new ActorCreateOperationTerminal(result, failure, completion, reply);
+        terminal = new ZLinkActorCreationTerminal(
+            result,
+            failure,
+            completion,
+            reply);
         return true;
     }
 
@@ -133,9 +148,6 @@ internal static class ZLinkActorCreationTerminalCodec
         {
             WriteText8(selected, completion.Actor.ActorId);
             WriteU64(selected, completion.Actor.ObjectGeneration);
-            WriteText8(selected, completion.Actor.MeshName);
-            selected.WriteByte(checked((byte)completion.Actor.NodeRid.Size));
-            selected.Write(completion.Actor.NodeRid.ToBytes());
         }
         WriteU16(stream, checked((ushort)selected.Length));
         selected.Position = 0;
@@ -145,7 +157,7 @@ internal static class ZLinkActorCreationTerminalCodec
     private static bool TryReadCompletion(
         ReadOnlySpan<byte> span,
         ref int offset,
-        out ActorCreateCompletion? completion)
+        out ZLinkActorCreationCompletion? completion)
     {
         completion = null;
         if (offset + 3 > span.Length) return false;
@@ -155,27 +167,22 @@ internal static class ZLinkActorCreationTerminalCodec
             || result is < ActorCreateResult.Existing or > ActorCreateResult.Rejected)
             return false;
         var end = offset + length;
-        ActorRef actor = default;
+        var actorId = string.Empty;
+        ulong objectGeneration = 0;
         if (result != ActorCreateResult.Rejected)
         {
-            if (!TryText8(span, ref offset, end, out var actorId)
+            if (!TryText8(span, ref offset, end, out actorId)
                 || offset + 8 > end)
                 return false;
-            var objectGeneration = ReadU64(span, ref offset);
-            if (objectGeneration == 0
-                || !TryText8(span, ref offset, end, out var meshName)
-                || offset >= end)
-                return false;
-            var ridLength = span[offset++];
-            if (ridLength == 0 || offset + ridLength > end) return false;
-            var nodeRid = RoutingId.From(span.Slice(offset, ridLength));
-            offset += ridLength;
-            if (offset != end) return false;
-            actor = new ActorRef(actorId, objectGeneration, meshName, nodeRid);
+            objectGeneration = ReadU64(span, ref offset);
+            if (objectGeneration == 0 || offset != end) return false;
         }
         else if (length != 0) return false;
         offset = end;
-        completion = new ActorCreateCompletion(result, actor);
+        completion = new ZLinkActorCreationCompletion(
+            result,
+            actorId,
+            objectGeneration);
         return true;
     }
 
