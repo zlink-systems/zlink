@@ -337,6 +337,11 @@ class observing_actor_creation_store_t final : public zlink::framework::location
     {
         if (key.value.starts_with (std::string ("creation-terminal") + '\0')) {
             terminal_reads.fetch_add (1, std::memory_order_acq_rel);
+            if (hide_terminal_reads.load (std::memory_order_acquire)) {
+                return zlink::framework::task_t<zlink::framework::store_read_result_t> (
+                  zlink::framework::result_t<zlink::framework::store_read_result_t>::success (
+                    zlink::framework::store_missing_t{std::chrono::system_clock::now ()}));
+            }
             if (terminal_override) {
                 const auto now = std::chrono::system_clock::now ();
                 return zlink::framework::task_t<zlink::framework::store_read_result_t> (
@@ -352,14 +357,23 @@ class observing_actor_creation_store_t final : public zlink::framework::location
     zlink::framework::task_t<zlink::framework::store_write_result_t>
     write (zlink::framework::store_write_request_t request) override
     {
+        bool writes_terminal = false;
         for (const auto &mutation : request.mutations) {
             if (const auto *put = std::get_if<zlink::framework::store_put_t> (&mutation);
                 put && put->key.value.starts_with (std::string ("creation-terminal") + '\0')) {
+                writes_terminal = true;
                 std::lock_guard lock (terminal_mutex);
                 published_terminal = put->bytes;
             }
         }
-        return inner->write (std::move (request));
+        auto written = inner->write (std::move (request));
+        if (!writes_terminal
+            || !force_terminal_write_conflict.load (std::memory_order_acquire))
+            return written;
+        written.result ().value ();
+        return zlink::framework::task_t<zlink::framework::store_write_result_t> (
+          zlink::framework::result_t<zlink::framework::store_write_result_t>::success (
+            zlink::framework::store_write_conflict_t{std::chrono::system_clock::now ()}));
     }
 
     zlink::framework::task_t<zlink::framework::store_scan_result_t>
@@ -371,6 +385,8 @@ class observing_actor_creation_store_t final : public zlink::framework::location
     std::shared_ptr<zlink::framework::runtime::in_memory_location_store_t> inner;
     std::atomic_size_t terminal_reads{0};
     std::optional<std::vector<std::byte>> terminal_override;
+    std::atomic_bool hide_terminal_reads{false};
+    std::atomic_bool force_terminal_write_conflict{false};
     std::mutex terminal_mutex;
     std::vector<std::byte> published_terminal;
 };
@@ -500,6 +516,31 @@ bool verify_remote_actor_create_target_owns_completion ()
       node_created && node_created->actor.actor_id ().value () == "actor-canonical"
       && node_created->actor.object_generation () == 1;
 
+    source_location_store->terminal_override.reset ();
+    target_location_store->hide_terminal_reads.store (true, std::memory_order_release);
+    target_location_store->force_terminal_write_conflict.store (true,
+                                                                 std::memory_order_release);
+    const auto exceptional_terminal_reads_before =
+      source_location_store->terminal_reads.load (std::memory_order_acquire);
+    const auto exceptional_reply_replay =
+      actors
+        .get_or_create (zlink::framework::actor_id_t ("actor-exception-replay"),
+                        "remote-create-actor")
+        .timeout (std::chrono::seconds (5))
+        .async ()
+        .result ();
+    const auto *exception_created =
+      exceptional_reply_replay
+        ? std::get_if<zlink::framework::actor_create_created_t> (
+            &exceptional_reply_replay.value ())
+        : nullptr;
+    const bool exceptional_reply_replayed =
+      exception_created
+      && exception_created->actor.actor_id ().value () == "actor-exception-replay"
+      && exception_created->actor.object_generation () == 2
+      && source_location_store->terminal_reads.load (std::memory_order_acquire)
+           == exceptional_terminal_reads_before + 2;
+
     const auto source_stopped = source.shutdown (std::chrono::seconds (2)).result ().value ();
     const auto target_stopped = target.shutdown (std::chrono::seconds (2)).result ().value ();
     source_thread.join ();
@@ -507,9 +548,10 @@ bool verify_remote_actor_create_target_owns_completion ()
 
     const bool passed =
       route_ready && created && authority_active && cpp_schema_encoded && node_schema_decoded
+      && exceptional_reply_replayed
       && source_terminal_reads == 1
       && std::holds_alternative<zlink::framework::actor_create_created_t> (created.value ())
-      && remote_create_entry_spot_t::created_count.load (std::memory_order_acquire) == 1
+      && remote_create_entry_spot_t::created_count.load (std::memory_order_acquire) == 2
       && remote_create_entry_spot_t::joined_count.load (std::memory_order_acquire) == 0
       && source_stopped.outcome == zlink::framework::termination_outcome_t::stopped
       && target_stopped.outcome == zlink::framework::termination_outcome_t::stopped
@@ -524,6 +566,16 @@ bool verify_remote_actor_create_target_owns_completion ()
                   << " authority-active=" << authority_active
                   << " cpp-schema-encoded=" << cpp_schema_encoded
                   << " node-schema-decoded=" << node_schema_decoded
+                  << " exceptional-reply-replayed=" << exceptional_reply_replayed
+                  << " exceptional-result=" << static_cast<bool> (exceptional_reply_replay)
+                  << " exceptional-actor="
+                  << (exception_created ? exception_created->actor.actor_id ().value () : "-")
+                  << " exceptional-generation="
+                  << (exception_created ? exception_created->actor.object_generation () : 0)
+                  << " exceptional-error="
+                  << (exceptional_reply_replay.error ()
+                        ? exceptional_reply_replay.error ()->what ()
+                        : "-")
                   << " source-terminal-reads=" << source_terminal_reads
                   << " error=" << (created.error () ? created.error ()->what () : "-") << '\n';
     }

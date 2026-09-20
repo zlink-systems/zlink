@@ -430,6 +430,7 @@ task_t<actor_create_result_t> mesh_node_host_service_t::complete_remote_actor_cr
               return message_t::from_raw (std::move (raw), _serializers);
           });
     };
+    std::optional<result_t<actor_create_result_t>> incomplete_result;
     try {
         const auto accepted = co_await source->native_node ().create_actor_remote (
           target.rid, std::move (command), timeout,
@@ -440,87 +441,97 @@ task_t<actor_create_result_t> mesh_node_host_service_t::complete_remote_actor_cr
           });
         if (!accepted) {
             (void) _location_store->abort ({reserve_key, fence}).result ();
-            co_return result_t<actor_create_result_t>::failure (
+            incomplete_result = result_t<actor_create_result_t>::failure (
               framework_error_kind_t::rejected, "Actor creation operation was not admitted");
         }
-
-        const auto completed_remote = co_await remote->task ();
-        //  Spec 32-framework-error-model:87-120 — classify the remote creation
-        //  outcome instead of collapsing every failure to InternalFailure.
-        if (completed_remote.terminal != foundation::operation_terminal_t::completed) {
-            if (auto stored = read_stored_terminal ())
-                co_return result_t<actor_create_result_t>::success (std::move (*stored));
-            //  Non-completed local operation terminals classify exactly like
-            //  the sibling User Spot lifecycle path (timed_out ->
-            //  DeadlineExceeded, transport_failed -> Unavailable, cancelled ->
-            //  InvalidOperation, shutdown -> ShuttingDown).
-            co_return result_t<actor_create_result_t>::failure (
-              user_spot_terminal::map_user_spot_operation_failure (completed_remote.terminal, {},
-                                                                   true),
-              "Remote Actor creation transport did not complete");
-        }
-        if (completed_remote.reply.header.terminal_result != 0) {
-            //  A carried wire terminal + fine failure code classifies via the
-            //  shared ownership-aware remote-reply mapper (spec 32:83-118,
-            //  99-108) — e.g. Busy+None -> Unavailable and workerTimedOut ->
-            //  DeadlineExceeded.
-            co_return result_t<actor_create_result_t>::failure (
-              messaging::request_failure_mapper_t{}
-                .reply_header_exception (completed_remote.reply.header.terminal_result,
-                                         completed_remote.reply.header.failure_code,
-                                         "Remote Actor creation")
-                .kind (),
-              "Remote Actor creation target rejected the operation");
-        }
-        if (completed_remote.reply.result == protocol::actor_create_result_t::rejected) {
-            std::optional<message_t> rejected_reply;
-            if (completed_remote.application_reply)
-                rejected_reply = message_t::from_raw (
-                  zlink::message_t::from (completed_remote.application_reply->payload_bytes ()),
-                  _serializers);
-            co_return result_t<actor_create_result_t>::success (
-              actor_create_rejected_t{std::move (rejected_reply)});
-        }
-        if (completed_remote.reply.result == protocol::actor_create_result_t::existing) {
-            if (completed_remote.reply.actor_id != actor_id.value ()
-                || completed_remote.reply.node_routing_id != target.rid.to_bytes ())
-                co_return result_t<actor_create_result_t>::failure (
+        else {
+            const auto completed_remote = co_await remote->task ();
+            //  Spec 32-framework-error-model:87-120 — classify the remote creation
+            //  outcome instead of collapsing every failure to InternalFailure.
+            if (completed_remote.terminal != foundation::operation_terminal_t::completed) {
+                //  Non-completed local operation terminals classify exactly like
+                //  the sibling User Spot lifecycle path (timed_out ->
+                //  DeadlineExceeded, transport_failed -> Unavailable, cancelled ->
+                //  InvalidOperation, shutdown -> ShuttingDown).
+                incomplete_result = result_t<actor_create_result_t>::failure (
+                  user_spot_terminal::map_user_spot_operation_failure (
+                    completed_remote.terminal, {}, true),
+                  "Remote Actor creation transport did not complete");
+            } else if (completed_remote.reply.header.terminal_result != 0) {
+                //  A carried wire terminal + fine failure code classifies via the
+                //  shared ownership-aware remote-reply mapper (spec 32:83-118,
+                //  99-108) — e.g. Busy+None -> Unavailable and workerTimedOut ->
+                //  DeadlineExceeded.
+                incomplete_result = result_t<actor_create_result_t>::failure (
+                  messaging::request_failure_mapper_t{}
+                    .reply_header_exception (completed_remote.reply.header.terminal_result,
+                                             completed_remote.reply.header.failure_code,
+                                             "Remote Actor creation")
+                    .kind (),
+                  "Remote Actor creation target rejected the operation");
+            } else if (completed_remote.reply.result
+                       == protocol::actor_create_result_t::rejected) {
+                std::optional<message_t> rejected_reply;
+                if (completed_remote.application_reply)
+                    rejected_reply = message_t::from_raw (
+                      zlink::message_t::from (
+                        completed_remote.application_reply->payload_bytes ()),
+                      _serializers);
+                co_return result_t<actor_create_result_t>::success (
+                  actor_create_rejected_t{std::move (rejected_reply)});
+            } else if (completed_remote.reply.result
+                       == protocol::actor_create_result_t::existing) {
+                if (completed_remote.reply.actor_id == actor_id.value ()
+                    && completed_remote.reply.node_routing_id == target.rid.to_bytes ()) {
+                    co_return result_t<actor_create_result_t>::success (
+                      actor_create_existing_t{
+                        ::zlink::framework::detail::actor_ref_access_t::make (
+                          node_rid_t::from_string (target.rid.to_string ()), stable_type,
+                          completed_remote.reply.actor_id,
+                          completed_remote.reply.object_generation)});
+                }
+                incomplete_result = result_t<actor_create_result_t>::failure (
                   framework_error_kind_t::protocol_error,
                   "Remote Actor creation returned a malformed existing reply");
-            co_return result_t<actor_create_result_t>::success (
-              actor_create_existing_t{::zlink::framework::detail::actor_ref_access_t::make (
-                node_rid_t::from_string (target.rid.to_string ()), stable_type,
-                completed_remote.reply.actor_id, completed_remote.reply.object_generation)});
+            } else if (completed_remote.reply.result != protocol::actor_create_result_t::created
+                       || completed_remote.reply.actor_id != actor_id.value ()
+                       || completed_remote.reply.node_routing_id != target.rid.to_bytes ()
+                       || completed_remote.reply.object_generation != fence.object_generation) {
+                //  Spec 32:91-92 — a reply that cannot be processed (unknown
+                //  result discriminator or fields disagreeing with the request)
+                //  is a ProtocolError, not InternalFailure.
+                incomplete_result = result_t<actor_create_result_t>::failure (
+                  framework_error_kind_t::protocol_error,
+                  "Remote Actor creation returned a malformed reply");
+            } else {
+                const auto created = ::zlink::framework::detail::actor_ref_access_t::make (
+                  node_rid_t::from_string (target.rid.to_string ()), stable_type,
+                  completed_remote.reply.actor_id, completed_remote.reply.object_generation);
+                std::optional<message_t> reply;
+                if (completed_remote.application_reply)
+                    reply = message_t::from_raw (
+                      zlink::message_t::from (
+                        completed_remote.application_reply->payload_bytes ()),
+                      _serializers);
+                co_return result_t<actor_create_result_t>::success (
+                  actor_create_created_t{created, std::move (reply)});
+            }
         }
-        if (completed_remote.reply.result != protocol::actor_create_result_t::created
-            || completed_remote.reply.actor_id != actor_id.value ()
-            || completed_remote.reply.node_routing_id != target.rid.to_bytes ()
-            || completed_remote.reply.object_generation != fence.object_generation) {
-            //  Spec 32:91-92 — a reply that cannot be processed (unknown
-            //  result discriminator or fields disagreeing with the request)
-            //  is a ProtocolError, not InternalFailure.
-            co_return result_t<actor_create_result_t>::failure (
-              framework_error_kind_t::protocol_error,
-              "Remote Actor creation returned a malformed reply");
-        }
-
-        const auto created = ::zlink::framework::detail::actor_ref_access_t::make (
-          node_rid_t::from_string (target.rid.to_string ()), stable_type,
-          completed_remote.reply.actor_id, completed_remote.reply.object_generation);
-        std::optional<message_t> reply;
-        if (completed_remote.application_reply)
-            reply = message_t::from_raw (
-              zlink::message_t::from (completed_remote.application_reply->payload_bytes ()), _serializers);
-        co_return result_t<actor_create_result_t>::success (
-          actor_create_created_t{created, std::move (reply)});
     }
     catch (const framework_exception_t &error) {
-        co_return detail::result_access_t::failure<actor_create_result_t> (error);
+        incomplete_result = detail::result_access_t::failure<actor_create_result_t> (error);
     }
     catch (const std::exception &error) {
-        co_return result_t<actor_create_result_t>::failure (
+        incomplete_result = result_t<actor_create_result_t>::failure (
           framework_error_kind_t::internal_failure, error.what ());
     }
+    if (auto stored = read_stored_terminal ())
+        co_return result_t<actor_create_result_t>::success (std::move (*stored));
+    co_return incomplete_result
+      ? std::move (*incomplete_result)
+      : result_t<actor_create_result_t>::failure (
+          framework_error_kind_t::internal_failure,
+          "Remote Actor creation did not produce a completed result");
 }
 
 namespace
