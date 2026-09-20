@@ -252,70 +252,18 @@ internal sealed partial class ZLinkProviderLocationRepository(
         ZLinkMeshNodeDescriptor descriptor,
         ZLinkLocationWriteIntent intent,
         CancellationToken cancellationToken = default)
-    {
-        var leaseKey = OwnerKey(descriptor.OwnerId);
-        var rowKey = MeshKey(descriptor.MeshName, descriptor.Rid);
-        var lease = await provider.ReadAsync(leaseKey, cancellationToken)
-            .ConfigureAwait(false);
-        if (lease is not ZLinkStoreReadResult.Found liveLease)
-            return ZLinkLocationWriteResult.IgnoredStale;
-        var liveOwner = DecodeOwner(liveLease.Value.Bytes);
-        if (!string.Equals(
-                liveOwner.OwnerId,
-                descriptor.OwnerId,
-                StringComparison.Ordinal)
-            || liveOwner.LeaseGeneration != descriptor.LeaseGeneration)
-            return ZLinkLocationWriteResult.IgnoredStale;
-
-        var current = await provider.ReadAsync(rowKey, cancellationToken)
-            .ConfigureAwait(false);
-        if (current is ZLinkStoreReadResult.Found found)
-        {
-            var record = DecodeDescriptor<ZLinkMeshNodeDescriptor>(found.Value.Bytes);
-            var stored = record.Descriptor;
-            var renew = intent == ZLinkLocationWriteIntent.Renew
-                        && stored.OwnerId == descriptor.OwnerId
-                        && stored.LeaseGeneration == descriptor.LeaseGeneration
-                        && stored.LifecycleGeneration
-                        == descriptor.LifecycleGeneration
-                        && descriptor.DescriptorRevision
-                        > stored.DescriptorRevision;
-            if (!renew)
-            {
-                if (intent == ZLinkLocationWriteIntent.NewClaim)
-                    return ZLinkLocationWriteResult.RejectedConflict;
-                var previousOwner = await provider.ReadAsync(
-                        OwnerKey(stored.OwnerId),
-                        cancellationToken)
-                    .ConfigureAwait(false);
-                if (previousOwner is ZLinkStoreReadResult.Found)
-                    return ZLinkLocationWriteResult.IgnoredStale;
-            }
-        }
-        else
-        {
-            if (intent == ZLinkLocationWriteIntent.Renew)
-                return ZLinkLocationWriteResult.IgnoredStale;
-        }
-
-        var encodedDescriptor = JsonSerializer.SerializeToUtf8Bytes(
-            new DescriptorRecord<ZLinkMeshNodeDescriptor>(
+        => await UpdateDescriptorAsync(
+                MeshKey(descriptor.MeshName, descriptor.Rid),
                 descriptor.OwnerId,
                 descriptor.LeaseGeneration,
+                descriptor.LifecycleGeneration,
                 descriptor.DescriptorRevision,
-                descriptor),
-            ZLinkJsonSerializerOptions.Default);
-        return await WriteDescriptorWithReconciliationAsync(
-                leaseKey,
-                descriptor.OwnerId,
-                descriptor.LeaseGeneration,
-                liveLease,
-                rowKey,
-                current,
-                encodedDescriptor,
+                descriptor,
+                intent,
+                static value => value.LifecycleGeneration,
+                static (_, _) => true,
                 cancellationToken)
             .ConfigureAwait(false);
-    }
 
     public async ValueTask<ZLinkLocationWriteStatus> RemoveMeshNodeAsync(
         ZLinkMeshNodeDescriptorKey key,

@@ -259,12 +259,6 @@ final class ZLinkProviderDescriptorRepository {
                                 stored,
                                 descriptor);
                     if (!renew) {
-                        if (intent
-                            == ZLinkLocationWriteIntent.NEW_CLAIM) {
-                            return completed(
-                                ZLinkLocationWriteResult
-                                    .rejectedConflict());
-                        }
                         return provider.read(
                                 ownerKey(identity.ownerId()),
                                 active())
@@ -272,7 +266,11 @@ final class ZLinkProviderDescriptorRepository {
                                 if (previousOwner
                                     instanceof ZLinkStoreReadFound) {
                                     return completed(
-                                        ZLinkLocationWriteResult
+                                        intent == ZLinkLocationWriteIntent
+                                            .NEW_CLAIM
+                                        ? ZLinkLocationWriteResult
+                                            .rejectedConflict()
+                                        : ZLinkLocationWriteResult
                                             .ignoredStale());
                                 }
                                 return writeDescriptor(

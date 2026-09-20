@@ -612,6 +612,78 @@ TEST (CppFrameworkOpaqueLocationStore, PrivateRepositoryPersistsLeaseAndDescript
     EXPECT_EQ (page.items.front ().owner_id, "owner-a");
 }
 
+TEST (CppFrameworkOpaqueLocationStore, MeshNewClaimUsesStoredOwnerLeaseExactRead)
+{
+    in_memory_location_store_t provider;
+    provider_location_repository_t repository (provider);
+    const auto expired_claim =
+      repository.claim_owner_lease ("expired-descriptor-owner", 30s).result ().value ();
+    const auto *expired_owner = std::get_if<owner_lease_claimed_t> (&expired_claim);
+    ASSERT_NE (expired_owner, nullptr);
+
+    const auto descriptor = [] (std::string rid, const location_owner_token_t &owner) {
+        mesh_node_descriptor_t value;
+        value.mesh_name = "descriptor-fence";
+        value.rid = zlink::routing_id_t::from (std::move (rid));
+        value.lifecycle_generation = 1;
+        value.descriptor_revision = 1;
+        value.endpoint = "tcp://127.0.0.1:7001";
+        value.owner_id = owner.owner_id;
+        value.lease_generation = owner.lease_generation;
+        value.object_role = object_role_t::server;
+        value.state = framework_runtime_state_t::serving;
+        return value;
+    };
+    ASSERT_EQ (repository
+                 .update_mesh_node (descriptor ("expired", expired_owner->token),
+                                    location_write_intent_t::new_claim)
+                 .result ()
+                 .value ()
+                 .status,
+               location_write_status_t::stored);
+    ASSERT_NE (std::get_if<owner_lease_released_t> (
+                 &repository.release_owner_lease (expired_owner->token).result ().value ()),
+               nullptr);
+    ASSERT_TRUE (std::holds_alternative<owner_lease_missing_t> (
+      repository.read_owner_lease (expired_owner->token.owner_id).result ().value ()));
+
+    const auto successor_claim =
+      repository.claim_owner_lease ("successor-descriptor-owner", 30s).result ().value ();
+    const auto *successor = std::get_if<owner_lease_claimed_t> (&successor_claim);
+    ASSERT_NE (successor, nullptr);
+    ASSERT_GT (successor->token.lease_generation, expired_owner->token.lease_generation);
+    EXPECT_EQ (repository
+                 .update_mesh_node (descriptor ("expired", successor->token),
+                                    location_write_intent_t::new_claim)
+                 .result ()
+                 .value ()
+                 .status,
+               location_write_status_t::stored);
+
+    const auto live_claim =
+      repository.claim_owner_lease ("live-descriptor-owner", 30s).result ().value ();
+    const auto *live_owner = std::get_if<owner_lease_claimed_t> (&live_claim);
+    ASSERT_NE (live_owner, nullptr);
+    ASSERT_EQ (repository
+                 .update_mesh_node (descriptor ("live", live_owner->token),
+                                    location_write_intent_t::new_claim)
+                 .result ()
+                 .value ()
+                 .status,
+               location_write_status_t::stored);
+    const auto contender_claim =
+      repository.claim_owner_lease ("contending-descriptor-owner", 30s).result ().value ();
+    const auto *contender = std::get_if<owner_lease_claimed_t> (&contender_claim);
+    ASSERT_NE (contender, nullptr);
+    EXPECT_EQ (repository
+                 .update_mesh_node (descriptor ("live", contender->token),
+                                    location_write_intent_t::new_claim)
+                 .result ()
+                 .value ()
+                 .status,
+               location_write_status_t::rejected_conflict);
+}
+
 TEST (CppFrameworkOpaqueLocationStore, ExpiredOwnerLeaseReclaimsReservedAuthority)
 {
     in_memory_location_store_t provider;
