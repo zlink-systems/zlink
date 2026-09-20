@@ -59,6 +59,7 @@ struct raw_mesh_node_options_t
 {
     service_node_descriptor_t descriptor;
     std::optional<std::string> advertise_host;
+    std::optional<std::chrono::milliseconds> receive_timeout;
     zlink::auto_hwm_profile auto_hwm_profile =
       zlink::auto_hwm_profile::balanced;
     std::shared_ptr<application_job_queue_t> application_jobs;

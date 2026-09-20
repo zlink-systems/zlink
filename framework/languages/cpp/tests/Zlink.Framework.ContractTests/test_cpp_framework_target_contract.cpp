@@ -1339,6 +1339,19 @@ int main ()
       "CPP-CONTRACT-STREAM-001",
       "STREAM send does not propagate its per-call deadline to binding-owned admission");
 
+    /* CPP-CONTRACT-MESH-SOCKET-001 — MeshNode ReceiveTimeout follows the
+     * existing socket configuration path into the binding ROUTER receive
+     * option. Send and receive timeouts must remain direction-specific. */
+    gate.require (
+      mesh_node_hpp.find ("std::optional<std::chrono::milliseconds> receive_timeout")
+          != std::string::npos
+        && mesh_node_runtime.find ("_state->socket.receive_timeout") != std::string::npos
+        && raw_mesh_node_owner.find (
+             "router->options ().recv_timeout (*_options.receive_timeout);")
+             != std::string::npos,
+      "CPP-CONTRACT-MESH-SOCKET-001",
+      "MeshNode ReceiveTimeout does not reach the binding ROUTER recv_timeout option");
+
     /* CPP-LAYER-002 — in-flight calls do not reuse the public Actor Join
      * OperationId type or name. */
     gate.require (call_id.find ("struct call_id_t") != std::string::npos
