@@ -75,6 +75,11 @@ function caseInfo(type, union = operation(type, "conditional-union")) {
   return cases;
 }
 
+function caseOperations(selected) { return selected.operations ?? selected.fields; }
+function caseFields(selected) {
+  return caseOperations(selected).filter((entry) => entry.op === "field");
+}
+
 function recordComponents(fields) {
   return fields.map((field) => `${refType(field)} ${fieldName(field.name)}`).join(", ");
 }
@@ -99,7 +104,7 @@ function declaration(type) {
       const variants = caseInfo(type, op);
       const records = variants.map((entry) => {
         const wire = entry.discriminator === null ? [] : op.discriminators.filter((d) => d.source.kind === "wire");
-        const fields = [...wire, ...entry.selected.fields];
+        const fields = [...wire, ...caseFields(entry.selected)];
         return `  record ${entry.name}(${recordComponents(fields)}) implements ${name} {}`;
       }).join("\n");
       return `  sealed interface ${name} permits ${variants.map((v) => v.name).join(", ")} {}\n${records}`;
@@ -269,7 +274,31 @@ function vectorConstraintCode(type, op, itemReference, listExpression) {
     if (!["sorted", "unique"].includes(constraint.kind)) {
       throw new Error(`${type.name}: unsupported vector constraint ${constraint.kind}`);
     }
-    return `for(int i=1;i<${listExpression}.size();i++){${itemType} previous=${listExpression}.get(i-1),current=${listExpression}.get(i);Writer left${index}=new Writer(),right${index}=new Writer();${key(constraint, "previous", `left${index}`)}${key(constraint, "current", `right${index}`)}int compared${index}=compareUnsigned(left${index}.result(),right${index}.result());require(compared${index}${constraint.kind === "sorted" ? "<=0" : "!=0"},${javaString(type.name + " " + constraint.kind)});}`;
+    if (constraint.kind === "sorted") {
+      return `for(int i=1;i<${listExpression}.size();i++){${itemType} previous=${listExpression}.get(i-1),current=${listExpression}.get(i);Writer left${index}=new Writer(),right${index}=new Writer();${key(constraint, "previous", `left${index}`)}${key(constraint, "current", `right${index}`)}int compared${index}=compareUnsigned(left${index}.result(),right${index}.result());require(compared${index}<=0,${javaString(type.name + " sorted")});}`;
+    }
+    return `Set<ByteKey> keys${index}=new HashSet<>();for(${itemType} item:${listExpression}){Writer key${index}=new Writer();${key(constraint, "item", `key${index}`)}require(keys${index}.add(new ByteKey(key${index}.result())),${javaString(type.name + " unique")});}`;
+  }).join("");
+}
+
+function negotiatedBound(type, measured) {
+  const bounds = type.operations.filter((entry) => entry.op === "negotiated-bound" && entry.measured === measured);
+  return bounds.map((bound) => {
+    if (bound.maximum.kind !== "decoder-context" || bound.comparison !== "less-than-or-equal" || bound.direction !== "decode") {
+      throw new Error(`${type.name}: unsupported negotiated-bound syntax`);
+    }
+    const value = measured === "content-bytes" ? "length" : "(r.at-start)";
+    return `require((long)${value}<=${longLiteral(bound.absoluteMaximum)}&&(long)${value}<=c.${fieldName(bound.maximum.name)}(),${javaString(type.name + " " + bound.topology + " negotiated bound")});`;
+  }).join("");
+}
+
+function encodedLimit(type, expression) {
+  const limits = type.operations.filter((entry) => entry.op === "encoded-limit");
+  return limits.map((limit) => {
+    if (limit.boundary !== "complete-value" || limit.trailingBytes !== "forbidden") {
+      throw new Error(`${type.name}: unsupported encoded-limit syntax`);
+    }
+    return `require((long)${expression}<=${longLiteral(limit.maximumEncodedBytes)},${javaString(type.name + " encoded limit")});`;
   }).join("");
 }
 
@@ -289,7 +318,8 @@ function codecMethods(type, typeByName, flagBits) {
     const maximum = Math.min(op.maximumBytes, 2147483647);
     const textValidation = type.operations.find((entry) => entry.op === "text-validation");
     if (isText && !textValidation) throw new Error(`${type.name}: missing text-validation operation`);
-    return `  private static ${name} decode${name}(Reader r, DecoderContext c, int flags) throws IOException { int length=length(decode${lengthType}(r,c,flags)); require(length>=${op.minimumBytes ?? 0}&&length<=${maximum},${javaString(type.name + " length")}); ${absent ? `if(length==0)return new ${name}(null);` : ""} return new ${name}(${readValue}); }\n`
+    const bound = negotiatedBound(type, "content-bytes");
+    return `  private static ${name} decode${name}(Reader r, DecoderContext c, int flags) throws IOException { int length=length(decode${lengthType}(r,c,flags)); require(length>=${op.minimumBytes ?? 0}&&length<=${maximum},${javaString(type.name + " length")}); ${bound} ${absent ? `if(length==0)return new ${name}(null);` : ""} return new ${name}(${readValue}); }\n`
       + `  private static void encode${name}(${name} value, Writer w, DecoderContext c, int flags) throws IOException { ${isText ? "byte[] bytes=" + bytes + ";" : `byte[] bytes=${bytes};`} ${absent ? "if(bytes==null)bytes=new byte[0];" : `require(bytes!=null,${javaString(type.name)});`} require(bytes.length>=${op.minimumBytes ?? 0}&&bytes.length<=${maximum},${javaString(type.name + " length")}); encode${lengthType}(new ${lengthType}(bytes.length),w,c,flags); w.bytes(bytes); }`;
   }
   if (op.op === "struct" || op.op === "versioned-length-delimited") {
@@ -297,10 +327,11 @@ function codecMethods(type, typeByName, flagBits) {
     const delimited = op.op === "versioned-length-delimited";
     const decoded = decodeFields(fields, delimited ? "body" : "r", "c", "flags", typeByName, flagBits);
     const args = fields.map((f) => fieldName(f.name)).join(", ");
+    const envelopeBound = negotiatedBound(type, "encoded-bytes");
     const before = delimited
-      ? `require(decode${refType(op.version)}(r,c,flags).value()==${longLiteral(op.version.constant)},${javaString(type.name + " version")}); Reader body=r.slice(length(decode${refType(op.length)}(r,c,flags)));`
+      ? `${envelopeBound ? "int start=r.at; " : ""}require(decode${refType(op.version)}(r,c,flags).value()==${longLiteral(op.version.constant)},${javaString(type.name + " version")}); Reader body=r.slice(length(decode${refType(op.length)}(r,c,flags)));`
       : "";
-    const after = delimited ? `body.end(${javaString(type.name)});` : "";
+    const after = delimited ? `body.end(${javaString(type.name)});${envelopeBound}` : "";
     const encoded = encodeFields(fields, "value", delimited ? "body" : "w", "c", "flags", typeByName, flagBits);
     const encodeBefore = delimited
       ? `encode${refType(op.version)}(new ${refType(op.version)}(${integerArgument(op.version, longLiteral(op.version.constant), typeByName)}),w,c,flags); Writer body=new Writer();`
@@ -345,6 +376,8 @@ function unionMethods(type, union, typeByName, flagBits) {
   const encodeParams = [`${name} value`, "Writer w", "DecoderContext c", "int flags", ...external].join(", ");
   const discriminatorValues = new Map();
   const decodeLines = [];
+  const limitAtDecode = encodedLimit(type, "(r.at-start)");
+  if (limitAtDecode) decodeLines.push("    int start=r.at;");
   let externalIndex = 0;
   for (const d of union.discriminators) {
     const variable = fieldName(d.name);
@@ -362,24 +395,37 @@ function unionMethods(type, union, typeByName, flagBits) {
       const target = typeByName.get(referenceOf(d).$ref);
       return primaryOperation(target).op === "enum" ? `${variable}==${refType(d)}.${enumName(expected)}` : `${variable}.value()==${longLiteral(expected)}`;
     }).join(" && ");
-    const decoded = decodeFields(entry.selected.fields, "selected", "c", "flags", typeByName, flagBits, "      ");
+    const fields = caseFields(entry.selected);
+    const decoded = decodeFields(fields, "selected", "c", "flags", typeByName, flagBits, "      ");
     const wireArgs = union.discriminators.filter((d) => d.source.kind === "wire").map((d) => discriminatorValues.get(d.name));
-    const args = [...wireArgs, ...entry.selected.fields.map((f) => fieldName(f.name))].join(", ");
+    const args = [...wireArgs, ...fields.map((f) => fieldName(f.name))].join(", ");
     const predicate = decoded.values.has("terminalResult") && decoded.values.has("failureCode") ? predicateChecks(type, decoded.values) : "";
-    decodeLines.push(`    ${index === 0 ? "if" : "else if"}(${test}) {\n${decoded.lines.join("\n")}\n      ${union.bodyLengthType ? `selected.end(${javaString(type.name)});` : ""}${predicate} return new ${entry.name}(${args});\n    }`);
+    const constraints = caseOperations(entry.selected).filter((item) => item.op === "constraint")
+      .map((item) => structConstraints(type, [item])).join("");
+    for (const item of caseOperations(entry.selected)) {
+      if (!["field", "constraint"].includes(item.op)) throw new Error(`${type.name}: unsupported case operation ${item.op}`);
+    }
+    decodeLines.push(`    ${index === 0 ? "if" : "else if"}(${test}) {\n${decoded.lines.join("\n")}\n      ${union.bodyLengthType ? `selected.end(${javaString(type.name)});` : ""}${constraints}${predicate}${limitAtDecode} return new ${entry.name}(${args});\n    }`);
   });
   decodeLines.push(`    throw error(${javaString(type.name + " discriminator")});`);
 
   const encodeLines = [];
+  const limitAtEncode = encodedLimit(type, "(w.size()-start)");
+  if (limitAtEncode) encodeLines.push("    int start=w.size();");
   for (const entry of cases) {
     encodeLines.push(`    if(value instanceof ${entry.name} item){`);
     const wire = union.discriminators.filter((d) => d.source.kind === "wire");
     for (const d of wire) encodeLines.push(`      ${encoderCall(d, `item.${fieldName(d.name)}()`, "w", "c", "flags", new Map(), typeByName)};`);
     if (union.bodyLengthType) encodeLines.push("      Writer selected=new Writer();");
-    encodeLines.push(...encodeFields(entry.selected.fields, "item", union.bodyLengthType ? "selected" : "w", "c", "flags", typeByName, flagBits, "      "));
-    const encodedValues = new Map(entry.selected.fields.map((field) => [field.name, `item.${fieldName(field.name)}()`]));
+    const fields = caseFields(entry.selected);
+    encodeLines.push(...encodeFields(fields, "item", union.bodyLengthType ? "selected" : "w", "c", "flags", typeByName, flagBits, "      "));
+    const encodedValues = new Map(fields.map((field) => [field.name, `item.${fieldName(field.name)}()`]));
+    const constraints = caseOperations(entry.selected).filter((operation) => operation.op === "constraint")
+      .map((operation) => structConstraints(type, [operation], "item")).join("");
+    if (constraints) encodeLines.push(`      ${constraints}`);
     if (encodedValues.has("terminalResult") && encodedValues.has("failureCode")) encodeLines.push(`      ${predicateChecks(type, encodedValues)}`);
     if (union.bodyLengthType) encodeLines.push(`      byte[] bytes=selected.result(); encode${refType(union.bodyLengthType)}(new ${refType(union.bodyLengthType)}(bytes.length),w,c,flags); w.bytes(bytes);`);
+    if (limitAtEncode) encodeLines.push(`      ${limitAtEncode}`);
     encodeLines.push("      return;\n    }");
   }
   encodeLines.push(`    throw error(${javaString(type.name + " case")});`);
@@ -511,7 +557,11 @@ function render(ir) {
   globalTypeByName = typeByName;
   assertOperationVocabulary(ir);
   const flagBits = new Map(ir.flags.map((flag) => [flag.name, flag.bit]));
-  const context = ir.semanticContexts.map((entry) => {
+  const negotiatedContexts = [...new Set(ir.types.flatMap((type) => type.operations
+    .filter((entry) => entry.op === "negotiated-bound")
+    .map((entry) => entry.maximum.name)))].sort().map((name) => ({ name, negotiated: true }));
+  const context = [...ir.semanticContexts, ...negotiatedContexts].map((entry) => {
+    if (entry.negotiated) return `long ${fieldName(entry.name)}`;
     const type = entry.valueType ? refType(entry.valueType) : "Boolean";
     return `${type} ${fieldName(entry.name)}`;
   }).join(", ");
@@ -526,7 +576,7 @@ function assertOperationVocabulary(ir) {
     "versioned-vector", "bounded-reader", "versioned-length-delimited", "discriminator",
     "conditional-union", "tlv32", "constraint", "command-header", "flags",
     "flag-constraint", "metadata-flag-frame", "payload", "durable-header", "checksum",
-    "encoded-limit", "logical-stream", "runtime-predicate",
+    "encoded-limit", "logical-stream", "runtime-predicate", "negotiated-bound",
   ]);
   for (const name of ir.operationVocabulary) if (!implemented.delete(name)) throw new Error(`unsupported operation ${name}`);
   if (implemented.size !== 0) throw new Error(`operation vocabulary missing ${[...implemented].join(",")}`);
@@ -534,7 +584,8 @@ function assertOperationVocabulary(ir) {
 
 function runtimeHelpers() {
   return String.raw`  private static final class Reader { final byte[] bytes; int at; Reader(byte[] bytes){this.bytes=bytes;} int u8()throws IOException{return(int)uint(1);} long uint(int n)throws IOException{need(n);long v=0;for(int i=0;i<n;i++)v=(v<<8)|Byte.toUnsignedLong(bytes[at++]);return v;} long i64()throws IOException{return uint(8);} byte[] bytes(int n)throws IOException{need(n);return Arrays.copyOfRange(bytes,at,at+=n);} Reader slice(int n)throws IOException{return new Reader(bytes(n));} void skipRemaining(){at=bytes.length;} boolean done(){return at==bytes.length;} void end(String name)throws IOException{require(done(),name+" trailing");} void need(int n)throws IOException{if(n<0||at+n>bytes.length)throw new EOFException("truncated field");} }
-  private static final class Writer { final ByteArrayOutputStream out=new ByteArrayOutputStream(); void u8(int v){out.write(v);} void uint(int n,long v){for(int i=n-1;i>=0;i--)out.write((int)(v>>>(i*8))&255);} void bytes(byte[] v){out.writeBytes(v);} byte[] result(){return out.toByteArray();} }
+  private static final class Writer { final ByteArrayOutputStream out=new ByteArrayOutputStream(); void u8(int v){out.write(v);} void uint(int n,long v){for(int i=n-1;i>=0;i--)out.write((int)(v>>>(i*8))&255);} void bytes(byte[] v){out.writeBytes(v);} int size(){return out.size();} byte[] result(){return out.toByteArray();} }
+  private record ByteKey(byte[] value) { ByteKey{value=value.clone();} public boolean equals(Object other){return other instanceof ByteKey key&&Arrays.equals(value,key.value);} public int hashCode(){return Arrays.hashCode(value);} }
   private static IOException error(String value){return new IOException(value);} private static void require(boolean ok,String message)throws IOException{if(!ok)throw error(message);}
   private static void requireUnsigned(long value,int width,String minimum,String maximum,String name)throws IOException{BigInteger actual=new BigInteger(width==8?Long.toUnsignedString(value):Long.toString(Integer.toUnsignedLong((int)value)));if(minimum!=null&&actual.compareTo(new BigInteger(minimum))<0||maximum!=null&&actual.compareTo(new BigInteger(maximum))>0)throw error(name+" range");}
   private static void requireSigned(long value,String minimum,String maximum,String name)throws IOException{if(minimum!=null&&value<Long.parseLong(minimum)||maximum!=null&&value>Long.parseLong(maximum))throw error(name+" range");}
