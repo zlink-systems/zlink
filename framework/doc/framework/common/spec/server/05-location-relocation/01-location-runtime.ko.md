@@ -374,7 +374,7 @@ publisher descriptor의 key가 참조하는, message를 보낼 Channel 범위를
 | Authority | `authority\0{actor \| spot}\0{Id}` |
 | Creation terminal | `creation-terminal\0{hex(SourceNodeRid)}\0{SourceHostGeneration}\0{hex(OperationId)}` |
 
-`{hex(RoutingId)}`와 `{hex(SourceNodeRid)}`는 그 RoutingId의 raw bytes를 소문자 16진수로 표기한
+`{hex(RoutingId)}`와 `{hex(SourceNodeRid)}`는 각 식별자의 raw bytes를 소문자 16진수로 표기한
 값이다. `{SourceHostGeneration}`은 부호와 선행 0이 없는 10진수이고, `{hex(OperationId)}`는
 128-bit `OperationId`를 big-endian 16 bytes로 두고 같은 방식으로 표기한 32자리다. `{MeshName}`,
 `{ChannelName}`, `{OwnerId}`와 authority의 `{Id}`(전역 ActorId 또는 SpotId, §3.3)는 UTF-8

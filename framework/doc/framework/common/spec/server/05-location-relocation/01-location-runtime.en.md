@@ -410,8 +410,8 @@ descriptor's and fanout publisher descriptor's key, is called a
 | Authority | `authority\0{actor \| spot}\0{Id}` |
 | Creation terminal | `creation-terminal\0{hex(SourceNodeRid)}\0{SourceHostGeneration}\0{hex(OperationId)}` |
 
-`{hex(RoutingId)}` and `{hex(SourceNodeRid)}` are the lowercase hex representation of that
-RoutingId's raw bytes. `{SourceHostGeneration}` is a decimal with no sign and no leading
+`{hex(RoutingId)}` and `{hex(SourceNodeRid)}` are the lowercase hex representation of each
+identifier's raw bytes. `{SourceHostGeneration}` is a decimal with no sign and no leading
 zero, and `{hex(OperationId)}` is the 32-digit representation, in the same form, of the
 128-bit `OperationId` laid out as 16 big-endian bytes. `{MeshName}`, `{ChannelName}`, `{OwnerId}`, and the authority's `{Id}` (the global ActorId
 or SpotId, §3.3) are UTF-8 bytes concatenated as-is, without a length prefix — only the
