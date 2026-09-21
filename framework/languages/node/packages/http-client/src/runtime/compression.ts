@@ -1,6 +1,10 @@
 /* SPDX-License-Identifier: Apache-2.0 */
 
-import { gunzip as gunzipCallback, inflate as inflateCallback, inflateRaw as inflateRawCallback } from 'node:zlib';
+import {
+  gunzip as gunzipCallback,
+  inflate as inflateCallback,
+  inflateRaw as inflateRawCallback
+} from 'node:zlib';
 import { promisify } from 'node:util';
 import { ZLinkFrameworkException, ZLinkFrameworkErrorKind } from '@zlink-systems/framework';
 import { responseBodySizeExceeded } from './http-client-errors';
@@ -25,11 +29,11 @@ export function gunzip(input: Buffer, maxBytes: number): Promise<Buffer> {
 export function inflateDeflate(input: Buffer, maxBytes: number): Promise<Buffer> {
   // Detect a zlib-wrapped stream (CMF/FLG: method deflate, header a multiple of 31) vs raw deflate.
   const zlibWrapped =
-    input.length >= 2 && (input[0] & 0x0f) === 8 && (((input[0] << 8) | input[1]) % 31) === 0;
+    input.length >= 2 && (input[0] & 0x0f) === 8 && ((input[0] << 8) | input[1]) % 31 === 0;
   return decode(() =>
     zlibWrapped
       ? inflateAsync(input, { maxOutputLength: maxBytes, chunkSize: 1 << 20 })
-      : inflateRawAsync(input, { maxOutputLength: maxBytes, chunkSize: 1 << 20 }),
+      : inflateRawAsync(input, { maxOutputLength: maxBytes, chunkSize: 1 << 20 })
   );
 }
 
@@ -44,7 +48,7 @@ async function decode(run: () => Promise<Buffer>): Promise<Buffer> {
     throw new ZLinkFrameworkException(
       ZLinkFrameworkErrorKind.ProtocolError,
       'HTTP response compressed body is malformed',
-      cause,
+      cause
     );
   }
 }

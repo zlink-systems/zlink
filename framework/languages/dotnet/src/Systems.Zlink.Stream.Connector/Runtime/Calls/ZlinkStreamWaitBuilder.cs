@@ -6,9 +6,7 @@ internal sealed class ZlinkStreamWaitBuilder : IZlinkStreamWaitCall
     private readonly ZlinkStreamCallBuilderState _state;
     private Func<ZlinkStreamMessage<ZlinkStreamEncodedPayload>, bool>? _predicate;
 
-    internal ZlinkStreamWaitBuilder(
-        IZlinkStreamConnectorInternal connector,
-        string name)
+    internal ZlinkStreamWaitBuilder(IZlinkStreamConnectorInternal connector, string name)
     {
         _connector = connector;
         _state = new ZlinkStreamCallBuilderState(name);
@@ -20,7 +18,9 @@ internal sealed class ZlinkStreamWaitBuilder : IZlinkStreamWaitCall
         return this;
     }
 
-    public IZlinkStreamWaitCall Where(Func<ZlinkStreamMessage<ZlinkStreamEncodedPayload>, bool> predicate)
+    public IZlinkStreamWaitCall Where(
+        Func<ZlinkStreamMessage<ZlinkStreamEncodedPayload>, bool> predicate
+    )
     {
         ArgumentNullException.ThrowIfNull(predicate);
         var previous = _predicate;
@@ -31,19 +31,22 @@ internal sealed class ZlinkStreamWaitBuilder : IZlinkStreamWaitCall
     }
 
     public async ValueTask<ZlinkStreamMessage<ZlinkStreamEncodedPayload>> Async(
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default
+    )
     {
         _state.EnsureNotExecuted();
         var name = _state.ResolveMessageName();
         var timeout = _state.Timeout ?? _connector.Options.WaitTimeout;
-        var message = await _connector.WaitForEncodedAsync(name, _predicate, timeout, cancellationToken)
+        var message = await _connector
+            .WaitForEncodedAsync(name, _predicate, timeout, cancellationToken)
             .ConfigureAwait(false);
 
         // A wait surface reports every violation as ValidationFailed carried by
         // ZlinkStreamException (stream-connector spec §10.1, §9.2).
         return message
-               ?? throw ZlinkStreamConnector.Error(
-                   ZlinkStreamErrorCode.ValidationFailed,
-                   $"Timed out after {timeout} waiting for '{name}' stream message.");
+            ?? throw ZlinkStreamConnector.Error(
+                ZlinkStreamErrorCode.ValidationFailed,
+                $"Timed out after {timeout} waiting for '{name}' stream message."
+            );
     }
 }

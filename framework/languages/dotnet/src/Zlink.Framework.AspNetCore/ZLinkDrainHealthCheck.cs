@@ -7,7 +7,8 @@ internal sealed class ZLinkDrainHealthCheck(IServiceProvider services) : IHealth
 {
     public Task<HealthCheckResult> CheckHealthAsync(
         HealthCheckContext context,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default
+    )
     {
         _ = context;
         cancellationToken.ThrowIfCancellationRequested();
@@ -15,6 +16,7 @@ internal sealed class ZLinkDrainHealthCheck(IServiceProvider services) : IHealth
         return Task.FromResult(
             ready
                 ? HealthCheckResult.Healthy("ZLink accepts new assignments.")
-                : HealthCheckResult.Unhealthy("ZLink is draining and rejects new assignments."));
+                : HealthCheckResult.Unhealthy("ZLink is draining and rejects new assignments.")
+        );
     }
 }

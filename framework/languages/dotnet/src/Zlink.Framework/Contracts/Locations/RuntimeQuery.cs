@@ -8,44 +8,50 @@ namespace Zlink.Framework.Contracts.Locations;
 public interface IZLinkLocationRuntimeQuery
 {
     ValueTask<ZLinkLocationRuntimeStatus> GetStatusAsync(
-        CancellationToken cancellationToken = default);
+        CancellationToken cancellationToken = default
+    );
 
     ValueTask<ZLinkLocationPage<ZLinkLocationTopologyEntry>> ListTopologyAsync(
         ZLinkLocationTopologyFilter filter,
         ZLinkPageRequest page = default,
-        CancellationToken cancellationToken = default);
+        CancellationToken cancellationToken = default
+    );
 
     ValueTask<ZLinkLocationPage<ZLinkLocationServiceSummary>> ListServiceSummariesAsync(
         ZLinkLocationServiceSummaryFilter filter,
         ZLinkPageRequest page = default,
-        CancellationToken cancellationToken = default);
+        CancellationToken cancellationToken = default
+    );
 
     ValueTask<ZLinkLocationObjectEntry?> FindActorLocationAsync(
         string actorId,
-        CancellationToken cancellationToken = default);
+        CancellationToken cancellationToken = default
+    );
 
     ValueTask<ZLinkLocationObjectEntry?> FindSpotLocationAsync(
         string spotId,
-        CancellationToken cancellationToken = default);
+        CancellationToken cancellationToken = default
+    );
 
     ValueTask<ZLinkLocationPage<ZLinkLocationObjectEntry>> ListObjectLocationsAsync(
         ZLinkLocationObjectFilter filter,
         ZLinkPageRequest page = default,
-        CancellationToken cancellationToken = default);
+        CancellationToken cancellationToken = default
+    );
 }
 
 public enum ZLinkLocationObjectKind
 {
     Actor = 0,
     UserSpot = 1,
-    InstanceSpot = 2
+    InstanceSpot = 2,
 }
 
 public enum ZLinkLocationObjectState
 {
     Creating = 0,
     Ready = 1,
-    Unavailable = 2
+    Unavailable = 2,
 }
 
 public sealed record ZLinkLocationObjectEntry(
@@ -54,9 +60,11 @@ public sealed record ZLinkLocationObjectEntry(
     string MeshName,
     RoutingId NodeRid,
     ZLinkLocationObjectState State,
-    string StableType);
+    string StableType
+);
 
 public sealed record ZLinkLocationObjectFilter(
     ZLinkLocationObjectKind ObjectKind,
     string? StableType = null,
-    string? MeshName = null);
+    string? MeshName = null
+);

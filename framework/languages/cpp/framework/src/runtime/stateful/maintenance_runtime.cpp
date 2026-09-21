@@ -20,16 +20,14 @@ namespace zlink::framework::runtime::stateful
 namespace
 {
 
-constexpr std::array<std::uint8_t, 4> session_journal_magic{
-  'Z', 'L', 'S', 'J'};
+constexpr std::array<std::uint8_t, 4> session_journal_magic{'Z', 'L', 'S', 'J'};
 constexpr std::chrono::hours relocation_retention{24};
 constexpr std::size_t max_envelope_bytes = 256u * 1024u * 1024u;
 constexpr std::size_t max_application_state_bytes = 64u * 1024u * 1024u;
 constexpr std::uint32_t max_pending_records = 4096;
 constexpr std::uint32_t max_logical_timers = 4096;
 
-protocol::relocation_object_kind_t to_wire_object_kind (
-  object_kind_t kind)
+protocol::relocation_object_kind_t to_wire_object_kind (object_kind_t kind)
 {
     switch (kind) {
         case object_kind_t::actor:
@@ -54,8 +52,7 @@ void append_u64 (std::vector<std::uint8_t> &output, std::uint64_t value)
         output.push_back (static_cast<std::uint8_t> (value >> shift));
 }
 
-bool append_bytes (std::vector<std::uint8_t> &output,
-                   const std::vector<std::uint8_t> &value)
+bool append_bytes (std::vector<std::uint8_t> &output, const std::vector<std::uint8_t> &value)
 {
     if (value.size () > std::numeric_limits<std::uint32_t>::max ())
         return false;
@@ -64,20 +61,15 @@ bool append_bytes (std::vector<std::uint8_t> &output,
     return true;
 }
 
-bool append_text (std::vector<std::uint8_t> &output,
-                  const std::string &value)
+bool append_text (std::vector<std::uint8_t> &output, const std::string &value)
 {
-    return append_bytes (
-      output, std::vector<std::uint8_t> (value.begin (), value.end ()));
+    return append_bytes (output, std::vector<std::uint8_t> (value.begin (), value.end ()));
 }
 
 class reader_t
 {
   public:
-    explicit reader_t (const std::vector<std::uint8_t> &input) :
-        _input (input)
-    {
-    }
+    explicit reader_t (const std::vector<std::uint8_t> &input) : _input (input) {}
 
     std::optional<std::uint8_t> u8 ()
     {
@@ -106,16 +98,14 @@ class reader_t
         return value;
     }
 
-    std::optional<std::vector<std::uint8_t>> bytes (
-      std::size_t maximum = max_envelope_bytes)
+    std::optional<std::vector<std::uint8_t>> bytes (std::size_t maximum = max_envelope_bytes)
     {
         const auto size = u32 ();
-        if (!size || *size > maximum
-            || *size > _input.size () - _offset)
+        if (!size || *size > maximum || *size > _input.size () - _offset)
             return std::nullopt;
-        std::vector<std::uint8_t> result (
-          _input.begin () + static_cast<std::ptrdiff_t> (_offset),
-          _input.begin () + static_cast<std::ptrdiff_t> (_offset + *size));
+        std::vector<std::uint8_t> result (_input.begin () + static_cast<std::ptrdiff_t> (_offset),
+                                          _input.begin ()
+                                            + static_cast<std::ptrdiff_t> (_offset + *size));
         _offset += *size;
         return result;
     }
@@ -123,17 +113,12 @@ class reader_t
     std::optional<std::string> text ()
     {
         const auto value = bytes (255);
-        return value
-                 ? std::make_optional (
-                     std::string (value->begin (), value->end ()))
-                 : std::nullopt;
+        return value ? std::make_optional (std::string (value->begin (), value->end ()))
+                     : std::nullopt;
     }
 
     bool done () const noexcept { return _offset == _input.size (); }
-    std::size_t remaining () const noexcept
-    {
-        return _input.size () - _offset;
-    }
+    std::size_t remaining () const noexcept { return _input.size () - _offset; }
     std::size_t checkpoint () const noexcept { return _offset; }
     void rewind (std::size_t checkpoint) noexcept { _offset = checkpoint; }
 
@@ -142,34 +127,24 @@ class reader_t
     std::size_t _offset = 0;
 };
 
-std::vector<std::uint8_t> encode_session_journal (
-  const durable_session_journal_record_t &record)
+std::vector<std::uint8_t> encode_session_journal (const durable_session_journal_record_t &record)
 {
-    if ((record.relocation_id_high == 0
-         && record.relocation_id_low == 0)
-        || record.actor.kind != object_kind_t::actor
-        || record.actor.key.empty ()
-        || record.actor.object_generation == 0
-        || record.actor.authority_owner_generation == 0
-        || record.actor.node_id.empty ()
-        || record.binding_generation == 0)
-        throw std::invalid_argument (
-          "durable Session journal identity is invalid");
-    std::vector<std::uint8_t> output (
-      session_journal_magic.begin (), session_journal_magic.end ());
+    if ((record.relocation_id_high == 0 && record.relocation_id_low == 0)
+        || record.actor.kind != object_kind_t::actor || record.actor.key.empty ()
+        || record.actor.object_generation == 0 || record.actor.authority_owner_generation == 0
+        || record.actor.node_id.empty () || record.binding_generation == 0)
+        throw std::invalid_argument ("durable Session journal identity is invalid");
+    std::vector<std::uint8_t> output (session_journal_magic.begin (), session_journal_magic.end ());
     append_u64 (output, record.relocation_id_high);
     append_u64 (output, record.relocation_id_low);
     append_u64 (output, record.actor.object_generation);
     append_u64 (output, record.actor.authority_owner_generation);
     append_u64 (output, record.binding_generation);
     append_u64 (output, record.last_accepted_session_sequence);
-    if (!append_text (output, record.actor.key)
-        || !append_text (output, record.actor.mesh_name)
+    if (!append_text (output, record.actor.key) || !append_text (output, record.actor.mesh_name)
         || !append_text (output, record.actor.node_id)
-        || !append_bytes (output, record.accepted_journal)
-        || output.size () > max_envelope_bytes)
-        throw std::invalid_argument (
-          "durable Session journal payload is too large");
+        || !append_bytes (output, record.accepted_journal) || output.size () > max_envelope_bytes)
+        throw std::invalid_argument ("durable Session journal payload is too large");
     return output;
 }
 
@@ -177,12 +152,10 @@ std::optional<durable_session_journal_record_t>
 decode_session_journal (const std::vector<std::uint8_t> &payload)
 {
     if (payload.size () < session_journal_magic.size ()
-        || !std::equal (session_journal_magic.begin (),
-                        session_journal_magic.end (),
+        || !std::equal (session_journal_magic.begin (), session_journal_magic.end (),
                         payload.begin ()))
         return std::nullopt;
-    std::vector<std::uint8_t> body (
-      payload.begin () + 4, payload.end ());
+    std::vector<std::uint8_t> body (payload.begin () + 4, payload.end ());
     reader_t reader (body);
     const auto relocation_high = reader.u64 ();
     const auto relocation_low = reader.u64 ();
@@ -194,24 +167,20 @@ decode_session_journal (const std::vector<std::uint8_t> &payload)
     const auto mesh_name = reader.text ();
     const auto node_id = reader.text ();
     const auto journal = reader.bytes ();
-    if (!relocation_high || !relocation_low
-        || (*relocation_high == 0 && *relocation_low == 0)
-        || !object_generation || *object_generation == 0
-        || !authority_generation || *authority_generation == 0
-        || !binding_generation || *binding_generation == 0
-        || !high_water || !actor_id || actor_id->empty ()
-        || !mesh_name || !node_id || node_id->empty ()
-        || !journal || !reader.done ())
+    if (!relocation_high || !relocation_low || (*relocation_high == 0 && *relocation_low == 0)
+        || !object_generation || *object_generation == 0 || !authority_generation
+        || *authority_generation == 0 || !binding_generation || *binding_generation == 0
+        || !high_water || !actor_id || actor_id->empty () || !mesh_name || !node_id
+        || node_id->empty () || !journal || !reader.done ())
         return std::nullopt;
-    return durable_session_journal_record_t{
-      *relocation_high,
-      *relocation_low,
-      object_ref_t{object_kind_t::actor, *actor_id,
-                   *object_generation, *authority_generation,
-                   *mesh_name, *node_id},
-      *binding_generation,
-      *high_water,
-      *journal};
+    return durable_session_journal_record_t{*relocation_high,
+                                            *relocation_low,
+                                            object_ref_t{object_kind_t::actor, *actor_id,
+                                                         *object_generation, *authority_generation,
+                                                         *mesh_name, *node_id},
+                                            *binding_generation,
+                                            *high_water,
+                                            *journal};
 }
 
 } // namespace
@@ -258,38 +227,30 @@ durable_session_journal_store_t::durable_session_journal_store_t (
     _store (std::move (store))
 {
     if (!_store)
-        throw std::invalid_argument (
-          "durable Session journal store is required");
+        throw std::invalid_argument ("durable Session journal store is required");
 }
 
 durable_session_journal_root_t
-durable_session_journal_store_t::prepare (
-  const durable_session_journal_record_t &record)
+durable_session_journal_store_t::prepare (const durable_session_journal_record_t &record)
 {
     const auto payload = encode_session_journal (record);
     const auto checksum = maintenance_runtime_t::crc32c (payload);
     const auto stored = _store->put (payload, relocation_retention);
-    if (stored.reference.empty ()
-        || stored.checksum_crc32c != checksum)
-        throw std::runtime_error (
-          "durable Session journal store write failed");
+    if (stored.reference.empty () || stored.checksum_crc32c != checksum)
+        throw std::runtime_error ("durable Session journal store write failed");
     return {stored.reference, checksum};
 }
 
 std::optional<durable_session_journal_record_t>
-durable_session_journal_store_t::recover (
-  const durable_session_journal_root_t &root) const
+durable_session_journal_store_t::recover (const durable_session_journal_root_t &root) const
 {
     const auto payload = _store->get (root.reference);
-    if (!payload
-        || maintenance_runtime_t::crc32c (*payload)
-             != root.checksum_crc32c)
+    if (!payload || maintenance_runtime_t::crc32c (*payload) != root.checksum_crc32c)
         return std::nullopt;
     return decode_session_journal (*payload);
 }
 
-void durable_session_journal_store_t::cleanup (
-  const durable_session_journal_root_t &root)
+void durable_session_journal_store_t::cleanup (const durable_session_journal_root_t &root)
 {
     _store->remove (root.reference);
 }
@@ -300,8 +261,7 @@ maintenance_runtime_t::maintenance_runtime_t (
   std::shared_ptr<relocation_store_port_t> relocations,
   relocation_limits_t limits,
   observer_t observer,
-  std::shared_ptr<aggregate_authority_port_t>
-    aggregate_authority) :
+  std::shared_ptr<aggregate_authority_port_t> aggregate_authority) :
     _objects (objects),
     _authority (std::move (authority)),
     _relocations (std::move (relocations)),
@@ -309,28 +269,25 @@ maintenance_runtime_t::maintenance_runtime_t (
     _limits (limits),
     _observer (std::move (observer))
 {
-    if (!_authority || !_relocations
-        || _limits.outbound_units == 0
-        || _limits.inbound_units == 0
-        || _limits.capture_callbacks == 0
-        || _limits.restore_callbacks == 0) {
+    if (!_authority || !_relocations || _limits.outbound_units == 0 || _limits.inbound_units == 0
+        || _limits.capture_callbacks == 0 || _limits.restore_callbacks == 0) {
         throw std::invalid_argument ("maintenance runtime configuration is invalid");
     }
 }
 
-maintenance_runtime_t::maintenance_runtime_t (
-  stateful_object_runtime_t &objects,
-  maintenance_provider_set_t providers,
-  relocation_limits_t limits,
-  observer_t observer) :
-    maintenance_runtime_t (
-      objects, std::move (providers.authority),
-      std::move (providers.relocations), limits, std::move (observer),
-      std::move (providers.aggregate_authority))
+maintenance_runtime_t::maintenance_runtime_t (stateful_object_runtime_t &objects,
+                                              maintenance_provider_set_t providers,
+                                              relocation_limits_t limits,
+                                              observer_t observer) :
+    maintenance_runtime_t (objects,
+                           std::move (providers.authority),
+                           std::move (providers.relocations),
+                           limits,
+                           std::move (observer),
+                           std::move (providers.aggregate_authority))
 {
     if (!_aggregate_authority || !providers.targets)
-        throw std::invalid_argument (
-          "maintenance provider set is incomplete");
+        throw std::invalid_argument ("maintenance provider set is incomplete");
 }
 
 void maintenance_runtime_t::attach_relocation_wire (
@@ -348,8 +305,7 @@ void maintenance_runtime_t::configure_route_convergence_metric (
 
 bool maintenance_runtime_t::relocation_units_settled () const noexcept
 {
-    return _shutdown_tracking->pending_units.load (std::memory_order_acquire)
-        <= 0;
+    return _shutdown_tracking->pending_units.load (std::memory_order_acquire) <= 0;
 }
 
 std::optional<std::vector<protocol::relocation_data_t>>
@@ -361,34 +317,27 @@ maintenance_runtime_t::build_boundary_records (
 {
     failure_reason = relocation_reason_t::restore_failed;
     if ((context.relocation.high == 0 && context.relocation.low == 0)
-        || context.target_attempt_generation == 0
-        || context.coordinator.owner_id.empty ()
-        || context.coordinator.lease_generation == 0
-        || context.coordinator.node_routing_id.empty ()
+        || context.target_attempt_generation == 0 || context.coordinator.owner_id.empty ()
+        || context.coordinator.lease_generation == 0 || context.coordinator.node_routing_id.empty ()
         || context.coordinator.node_generation == 0
         || context.coordinator.expected_authority_store_version.empty ()
-        || context.target_node_routing_id.empty ()
-        || context.target_node_generation == 0
-        || !context.prepare_target || !context.send_state_chunk
-        || !context.send_relocation_data
+        || context.target_node_routing_id.empty () || context.target_node_generation == 0
+        || !context.prepare_target || !context.send_state_chunk || !context.send_relocation_data
         || !context.send_cutover || !context.abort_target_before_cutover)
         return std::nullopt;
 
     std::vector<protocol::relocation_data_t> records;
     try {
         for (const auto &batch_participant : batch.participants) {
-            const auto frozen = std::find_if (
-              participants.begin (), participants.end (),
-              [&] (const frozen_object_state_t &candidate) {
-                  return candidate.owner == batch_participant.owner;
-              });
+            const auto frozen = std::find_if (participants.begin (), participants.end (),
+                                              [&] (const frozen_object_state_t &candidate) {
+                                                  return candidate.owner == batch_participant.owner;
+                                              });
             if (frozen == participants.end ())
                 return std::nullopt;
             const protocol::relocation_object_t object{
-              to_wire_object_kind (frozen->owner.kind),
-              frozen->stable_type, frozen->owner.key,
-              frozen->owner.object_generation,
-              frozen->owner.authority_owner_generation};
+              to_wire_object_kind (frozen->owner.kind), frozen->stable_type, frozen->owner.key,
+              frozen->owner.object_generation, frozen->owner.authority_owner_generation};
             for (const auto &turn : batch_participant.records) {
                 if (!turn.application_record)
                     return std::nullopt;
@@ -406,32 +355,33 @@ maintenance_runtime_t::build_boundary_records (
                   .operation = input.operation,
                   .operation_kind = input.operation_kind,
                   .reply_route_id = input.reply_route_id};
-                if (const auto *spot = std::get_if<
-                      protocol::frozen_spot_application_body_t> (&input.body)) {
+                if (const auto *spot =
+                      std::get_if<protocol::frozen_spot_application_body_t> (&input.body)) {
                     record.target = protocol::frozen_target_identity_t{
                       to_wire_object_kind (object_kind_t::user_spot),
-                      spot->target.spot_id, spot->target.object_generation,
+                      spot->target.spot_id,
+                      spot->target.object_generation,
                       spot->target.target_node_routing_id,
                       spot->target.target_node_generation,
                       spot->target.authority_owner_generation,
                       spot->expected_owner_lease_generation};
                     record.application = spot->application;
                 } else {
-                    const auto &actor = std::get<
-                      protocol::frozen_actor_application_body_t> (input.body);
-                    record.target = protocol::frozen_target_identity_t{
-                      to_wire_object_kind (object_kind_t::actor),
-                      actor.target.actor_id, actor.target.object_generation,
-                      actor.target.target_node_routing_id,
-                      actor.target.target_node_generation,
-                      actor.target.authority_owner_generation,
-                      actor.target.owner_lease_generation};
+                    const auto &actor =
+                      std::get<protocol::frozen_actor_application_body_t> (input.body);
+                    record.target =
+                      protocol::frozen_target_identity_t{to_wire_object_kind (object_kind_t::actor),
+                                                         actor.target.actor_id,
+                                                         actor.target.object_generation,
+                                                         actor.target.target_node_routing_id,
+                                                         actor.target.target_node_generation,
+                                                         actor.target.authority_owner_generation,
+                                                         actor.target.owner_lease_generation};
                     record.application = actor.application;
                 }
-                records.push_back ({context.relocation,
-                  context.target_attempt_generation, context.coordinator,
-                  protocol::relocation_role_t::source, object,
-                  std::move (record)});
+                records.push_back ({context.relocation, context.target_attempt_generation,
+                                    context.coordinator, protocol::relocation_role_t::source,
+                                    object, std::move (record)});
             }
         }
     }
@@ -448,8 +398,7 @@ task_t<relocation_reason_t> maintenance_runtime_t::prepare_target (
 {
     auto reason = relocation_reason_t::restore_failed;
     try {
-        reason = co_await context.prepare_target (
-          participants, manifest, context.session_routes);
+        reason = co_await context.prepare_target (participants, manifest, context.session_routes);
     }
     catch (...) {
         reason = relocation_reason_t::restore_failed;
@@ -470,8 +419,7 @@ std::uint64_t maintenance_runtime_t::effective_in_flight_budget () const noexcep
     return budget;
 }
 
-task_t<void> maintenance_runtime_t::acquire_transfer_budget (
-  std::uint64_t bytes)
+task_t<void> maintenance_runtime_t::acquire_transfer_budget (std::uint64_t bytes)
 {
     if (bytes == 0)
         co_return;
@@ -480,29 +428,24 @@ task_t<void> maintenance_runtime_t::acquire_transfer_budget (
         std::shared_ptr<detail::task_completion_source_t<bool>> waiter;
         {
             std::lock_guard lock (_budget_mutex);
-            if (_budget_in_flight_bytes == 0
-                || _budget_in_flight_bytes + bytes <= budget) {
+            if (_budget_in_flight_bytes == 0 || _budget_in_flight_bytes + bytes <= budget) {
                 _budget_in_flight_bytes += bytes;
                 co_return;
             }
-            waiter =
-              std::make_shared<detail::task_completion_source_t<bool>> ();
+            waiter = std::make_shared<detail::task_completion_source_t<bool>> ();
             _budget_waiters.emplace_back (bytes, waiter);
         }
         (void) co_await waiter->task ();
     }
 }
 
-void maintenance_runtime_t::release_transfer_budget (
-  std::uint64_t bytes) noexcept
+void maintenance_runtime_t::release_transfer_budget (std::uint64_t bytes) noexcept
 {
-    std::vector<std::shared_ptr<detail::task_completion_source_t<bool>>>
-      released;
+    std::vector<std::shared_ptr<detail::task_completion_source_t<bool>>> released;
     {
         std::lock_guard lock (_budget_mutex);
         _budget_in_flight_bytes =
-          _budget_in_flight_bytes > bytes ? _budget_in_flight_bytes - bytes
-                                          : 0;
+          _budget_in_flight_bytes > bytes ? _budget_in_flight_bytes - bytes : 0;
         while (!_budget_waiters.empty ()) {
             released.push_back (std::move (_budget_waiters.front ().second));
             _budget_waiters.pop_front ();
@@ -518,25 +461,20 @@ void maintenance_runtime_t::release_transfer_budget (
 }
 
 task_t<bool> maintenance_runtime_t::relocate_send_state_chunks (
-  std::shared_ptr<relocation_terminal_state_t> state,
-  std::function<bool ()> target_failed)
+  std::shared_ptr<relocation_terminal_state_t> state, std::function<bool ()> target_failed)
 {
     if (!state->context.send_state_chunk)
         co_return false;
     const auto &participants = state->seal_attempt.seal.participants;
-    const auto found = std::find_if (
-      participants.begin (), participants.end (),
-      [] (const frozen_object_state_t &candidate) {
-          return candidate.owner.kind == object_kind_t::user_spot;
-      });
-    const auto &principal =
-      found != participants.end () ? *found : participants.front ();
+    const auto found = std::find_if (participants.begin (), participants.end (),
+                                     [] (const frozen_object_state_t &candidate) {
+                                         return candidate.owner.kind == object_kind_t::user_spot;
+                                     });
+    const auto &principal = found != participants.end () ? *found : participants.front ();
     const protocol::relocation_object_t object{
-      to_wire_object_kind (principal.owner.kind), principal.stable_type,
-      principal.owner.key, principal.owner.object_generation,
-      principal.owner.authority_owner_generation};
-    for (std::uint32_t ordinal = 0; ordinal != state->manifest.chunk_count;
-         ++ordinal) {
+      to_wire_object_kind (principal.owner.kind), principal.stable_type, principal.owner.key,
+      principal.owner.object_generation, principal.owner.authority_owner_generation};
+    for (std::uint32_t ordinal = 0; ordinal != state->manifest.chunk_count; ++ordinal) {
         if (target_failed && target_failed ())
             co_return false;
         auto chunk = make_relocation_state_chunk (
@@ -587,8 +525,7 @@ namespace
 /* CRC-32C over the concatenated canonical wire bytes of the pre-boundary
  * relay batch, in send order. The target accumulates the same value over
  * the relocationData records it stages and compares it at cutover. */
-std::uint32_t boundary_batch_checksum (
-  const std::vector<protocol::relocation_data_t> &records)
+std::uint32_t boundary_batch_checksum (const std::vector<protocol::relocation_data_t> &records)
 {
     relocation_crc32c_accumulator_t accumulator;
     for (const auto &record : records) {
@@ -599,19 +536,16 @@ std::uint32_t boundary_batch_checksum (
 }
 } // namespace
 
-std::shared_ptr<void> maintenance_runtime_t::begin_pending_relocation_unit ()
-  noexcept
+std::shared_ptr<void> maintenance_runtime_t::begin_pending_relocation_unit () noexcept
 {
     auto tracking = _shutdown_tracking;
     tracking->pending_units.fetch_add (1, std::memory_order_acq_rel);
     /* The deleter (not `this`) owns the decrement, so it runs correctly
      * even if this maintenance_runtime_t is torn down while the token is
      * still held (retransmission window outliving the runtime). */
-    return std::shared_ptr<void> (
-      static_cast<void *> (nullptr),
-      [tracking] (void *) {
-          tracking->pending_units.fetch_sub (1, std::memory_order_acq_rel);
-      });
+    return std::shared_ptr<void> (static_cast<void *> (nullptr), [tracking] (void *) {
+        tracking->pending_units.fetch_sub (1, std::memory_order_acq_rel);
+    });
 }
 
 void maintenance_runtime_t::retain_retransmission_copies (
@@ -639,23 +573,20 @@ void maintenance_runtime_t::retain_retransmission_copies (
      * started it. */
     auto tracking = _shutdown_tracking;
     auto retention = std::make_shared<task_t<void>> (
-      [] (std::shared_ptr<relocation_terminal_state_t> retained,
-          std::chrono::milliseconds duration,
+      [] (std::shared_ptr<relocation_terminal_state_t> retained, std::chrono::milliseconds duration,
           std::chrono::milliseconds follow) -> task_t<void> {
           const auto deadline = std::chrono::steady_clock::now () + duration;
           constexpr auto retry_interval = std::chrono::milliseconds (100);
           while (std::chrono::steady_clock::now () < deadline) {
-              const auto remaining =
-                std::chrono::duration_cast<std::chrono::milliseconds> (
-                  deadline - std::chrono::steady_clock::now ());
+              const auto remaining = std::chrono::duration_cast<std::chrono::milliseconds> (
+                deadline - std::chrono::steady_clock::now ());
               if (retained->cutover_enqueued || !retained->cutover_record) {
                   co_await ::zlink::framework::detail::delay (
                     std::max (remaining, std::chrono::milliseconds (1)));
                   break;
               }
               co_await ::zlink::framework::detail::delay (
-                std::min (retry_interval,
-                          std::max (remaining, std::chrono::milliseconds (1))));
+                std::min (retry_interval, std::max (remaining, std::chrono::milliseconds (1))));
               try {
                   /* 28 §4.4/§9: the cutover submit reaching the wire does
                    * not by itself prove the target still has every
@@ -666,14 +597,14 @@ void maintenance_runtime_t::retain_retransmission_copies (
                    * so a target that lost partial staging gets the full
                    * batch again before the cutover comparison runs. */
                   if (retained->records
-                      && !co_await retained->context.send_relocation_data (
-                           *retained->records, retained->batch))
+                      && !co_await retained->context.send_relocation_data (*retained->records,
+                                                                           retained->batch))
                       continue;
-                  const auto retried = co_await retained->context.send_cutover (
-                    *retained->cutover_record);
+                  const auto retried =
+                    co_await retained->context.send_cutover (*retained->cutover_record);
                   if (retried
-                      == eligible_relocation_unit_t::canonical_wire_context_t::
-                        cutover_enqueue_t::enqueued)
+                      == eligible_relocation_unit_t::canonical_wire_context_t::cutover_enqueue_t::
+                        enqueued)
                       retained->cutover_enqueued = true;
               }
               catch (...) {
@@ -688,18 +619,15 @@ void maintenance_runtime_t::retain_retransmission_copies (
            * top of the retransmission window handled above. A unit that
            * never reached a cutover terminal (never sealed / no handoff)
            * has nothing to converge, so it skips this wait. */
-          if (retained->cutover_terminal_at
-              != std::chrono::steady_clock::time_point{}) {
-              const auto follow_deadline =
-                retained->cutover_terminal_at + follow;
+          if (retained->cutover_terminal_at != std::chrono::steady_clock::time_point{}) {
+              const auto follow_deadline = retained->cutover_terminal_at + follow;
               const auto now = std::chrono::steady_clock::now ();
               if (follow_deadline > now) {
                   co_await ::zlink::framework::detail::delay (
-                    std::chrono::duration_cast<std::chrono::milliseconds> (
-                      follow_deadline - now));
+                    std::chrono::duration_cast<std::chrono::milliseconds> (follow_deadline - now));
               }
           }
-      } (state, window, follow_duration));
+      }(state, window, follow_duration));
     /* route_convergence (25 §"zlink.relocation") measures S1 (cutover
      * submit terminal) to S4 (follow duration elapsed) specifically. It is
      * timed by its own wait, independent of the SafeToShutdown release
@@ -710,39 +638,36 @@ void maintenance_runtime_t::retain_retransmission_copies (
      * it by the extra window wait past S4. This wait only ever needs to
      * cover the follow duration itself. */
     if (state->cutover_terminal_at != std::chrono::steady_clock::time_point{}) {
-        auto metric_wait = std::make_shared<task_t<void>> (
-          [] (std::shared_ptr<relocation_terminal_state_t> retained,
-              std::chrono::milliseconds follow) -> task_t<void> {
+        auto metric_wait =
+          std::make_shared<task_t<void>> ([] (std::shared_ptr<relocation_terminal_state_t> retained,
+                                              std::chrono::milliseconds follow) -> task_t<void> {
               const auto deadline = retained->cutover_terminal_at + follow;
               const auto now = std::chrono::steady_clock::now ();
               if (deadline > now) {
                   co_await ::zlink::framework::detail::delay (
-                    std::chrono::duration_cast<std::chrono::milliseconds> (
-                      deadline - now));
+                    std::chrono::duration_cast<std::chrono::milliseconds> (deadline - now));
               }
-          } (state, follow_duration));
+          }(state, follow_duration));
         detail::observe_task_completion (
           *metric_wait, [metric_wait, tracking, state] (const result_t<void> &) {
               std::lock_guard lock (tracking->metric_mutex);
               if (tracking->route_convergence_metric) {
                   const auto elapsed = std::chrono::duration<double> (
-                    std::chrono::steady_clock::now ()
-                    - state->cutover_terminal_at);
+                    std::chrono::steady_clock::now () - state->cutover_terminal_at);
                   tracking->route_convergence_metric (elapsed.count ());
               }
           });
     }
-    detail::observe_task_completion (
-      *retention, [retention, state] (const result_t<void> &) {
-          /* Fires on any completion (normal or exceptional): this is the
+    detail::observe_task_completion (*retention, [retention, state] (const result_t<void> &) {
+        /* Fires on any completion (normal or exceptional): this is the
            * SafeToShutdown obligation, which is "S4 reached AND the
            * retransmission window is closed" — satisfied by the time this
            * observer runs, since the coroutine above waits out the window
            * first and then the remainder of the follow duration. Releases
            * the pending-unit token acquired at seal time
            * (begin_pending_relocation_unit). */
-          state->pending_unit_token.reset ();
-      });
+        state->pending_unit_token.reset ();
+    });
 }
 
 task_t<relocation_result_t> maintenance_runtime_t::relocate (
@@ -751,50 +676,41 @@ task_t<relocation_result_t> maintenance_runtime_t::relocate (
   location_owner_token_t target_owner,
   std::size_t encoded_upper_bound,
   inventory_digest_t inventory_digest,
-  const std::optional<eligible_relocation_unit_t::canonical_wire_context_t>
-    &canonical_wire,
+  const std::optional<eligible_relocation_unit_t::canonical_wire_context_t> &canonical_wire,
   std::stop_token cancellation,
   std::uint64_t advertised_receive_chunk_limit_bytes)
 {
     if (!canonical_wire) {
-        return task_t<relocation_result_t> (result_t<relocation_result_t>::success (
-          finish ({relocation_terminal_t::blocked,
-                   relocation_reason_t::restore_failed,
-                   std::nullopt})));
+        return task_t<relocation_result_t> (result_t<relocation_result_t>::success (finish (
+          {relocation_terminal_t::blocked, relocation_reason_t::restore_failed, std::nullopt})));
     }
     auto state = std::make_shared<relocation_terminal_state_t> (
-      relocation_terminal_state_t{
-        source, std::move (target_node_id), std::move (target_owner),
-        encoded_upper_bound, inventory_digest, *canonical_wire, cancellation,
-        std::make_shared<permit_t> (try_acquire ())});
-    state->advertised_receive_chunk_limit_bytes =
-      advertised_receive_chunk_limit_bytes;
+      relocation_terminal_state_t{source, std::move (target_node_id), std::move (target_owner),
+                                  encoded_upper_bound, inventory_digest, *canonical_wire,
+                                  cancellation, std::make_shared<permit_t> (try_acquire ())});
+    state->advertised_receive_chunk_limit_bytes = advertised_receive_chunk_limit_bytes;
     if (!*state->permit) {
         return task_t<relocation_result_t> (result_t<relocation_result_t>::success (
-          finish ({relocation_terminal_t::blocked,
-                   relocation_reason_t::permit_unavailable,
+          finish ({relocation_terminal_t::blocked, relocation_reason_t::permit_unavailable,
                    std::nullopt})));
     }
     return relocate_terminal (std::move (state));
 }
 
-task_t<relocation_result_t> maintenance_runtime_t::relocate_terminal (
-  std::shared_ptr<relocation_terminal_state_t> state)
+task_t<relocation_result_t>
+maintenance_runtime_t::relocate_terminal (std::shared_ptr<relocation_terminal_state_t> state)
 {
     /* The in-flight payload budget is acquired before the source admission
      * seal so a unit waiting on the budget keeps serving messages. Chunk
      * sends are awaited one at a time, so one reservation of the effective
      * chunk size bounds this unit's in-flight bytes. */
     state->effective_chunk_limit =
-      std::min<std::uint64_t> (_limits.payload_chunk_limit_bytes
-                                 ? _limits.payload_chunk_limit_bytes
-                                 : protocol::relocationChunkBytes,
+      std::min<std::uint64_t> (_limits.payload_chunk_limit_bytes ? _limits.payload_chunk_limit_bytes
+                                                                 : protocol::relocationChunkBytes,
                                protocol::relocationChunkBytes);
     state->effective_chunk_limit = apply_advertised_receive_chunk_limit (
-      state->effective_chunk_limit,
-      state->advertised_receive_chunk_limit_bytes);
-    state->budget_reserved =
-      std::min (state->effective_chunk_limit, effective_in_flight_budget ());
+      state->effective_chunk_limit, state->advertised_receive_chunk_limit_bytes);
+    state->budget_reserved = std::min (state->effective_chunk_limit, effective_in_flight_budget ());
     co_await acquire_transfer_budget (state->budget_reserved);
     const auto release_reservation = [this, state] {
         if (state->budget_reserved != 0) {
@@ -818,13 +734,12 @@ task_t<relocation_result_t> maintenance_runtime_t::relocate_terminal (
      * Relay-ready still arrives only after every chunk was assembled and
      * restored, and is awaited after the chunk sends complete. */
     auto prepared = relocate_prepare_target (state);
-    const auto chunks_sent = co_await relocate_send_state_chunks (
-      state, [&prepared] {
-          if (!prepared.await_ready ())
-              return false;
-          const auto &result = prepared.result ();
-          return !result || !result.value ();
-      });
+    const auto chunks_sent = co_await relocate_send_state_chunks (state, [&prepared] {
+        if (!prepared.await_ready ())
+            return false;
+        const auto &result = prepared.result ();
+        return !result || !result.value ();
+    });
     release_reservation ();
     const auto target_ready = co_await prepared;
     if (!target_ready)
@@ -833,11 +748,9 @@ task_t<relocation_result_t> maintenance_runtime_t::relocate_terminal (
         /* The target replied ready without every chunk — treat it as an
          * exact target failure before cutover. */
         if (abort_target_before_cutover (state->context))
-            (void) _objects.abort_relocation_before_cutover (
-              state->seal_attempt.seal.token);
-        state->result.emplace (finish ({relocation_terminal_t::blocked,
-                                        relocation_reason_t::restore_failed,
-                                        std::nullopt}));
+            (void) _objects.abort_relocation_before_cutover (state->seal_attempt.seal.token);
+        state->result.emplace (finish (
+          {relocation_terminal_t::blocked, relocation_reason_t::restore_failed, std::nullopt}));
         co_return std::move (*state->result);
     }
     if (!co_await relocate_boundary_and_send (state))
@@ -858,25 +771,24 @@ task_t<bool> maintenance_runtime_t::capture_relocation_session_routes (
     co_return true;
 }
 
-task_t<bool> maintenance_runtime_t::relocate_seal (
-  std::shared_ptr<relocation_terminal_state_t> state)
+task_t<bool>
+maintenance_runtime_t::relocate_seal (std::shared_ptr<relocation_terminal_state_t> state)
 {
     std::vector<object_ref_t> participants{state->source};
     std::function<task_t<bool> ()> before_capture = [this, state] {
         return capture_relocation_session_routes (state->context);
     };
-    auto seal_task = _objects.try_seal_relocation_aggregate (
-      participants, state->cancellation, before_capture);
+    auto seal_task =
+      _objects.try_seal_relocation_aggregate (participants, state->cancellation, before_capture);
     auto seal_attempt = co_await seal_task;
     state->seal_attempt = std::move (seal_attempt);
     if (state->seal_attempt.error != stateful_error_t::none
         || state->seal_attempt.seal.participants.size () != 1) {
-        state->result.emplace (finish (
-          {relocation_terminal_t::blocked,
-           state->seal_attempt.error == stateful_error_t::backpressured
-             ? relocation_reason_t::turn_active
-             : relocation_reason_t::restore_failed,
-           std::nullopt}));
+        state->result.emplace (finish ({relocation_terminal_t::blocked,
+                                        state->seal_attempt.error == stateful_error_t::backpressured
+                                          ? relocation_reason_t::turn_active
+                                          : relocation_reason_t::restore_failed,
+                                        std::nullopt}));
         co_return false;
     }
     state->sealed_at = std::chrono::steady_clock::now ();
@@ -892,145 +804,123 @@ bool maintenance_runtime_t::relocate_encode (
      * written to the Relocation Store on this path. */
     try {
         if (state->context.augment_frozen
-            && !state->context.augment_frozen (
-              state->seal_attempt.seal.participants)) {
-            (void) _objects.abort_relocation (
-              state->seal_attempt.seal.token);
-            state->result.emplace (finish (
-              {relocation_terminal_t::blocked,
-               relocation_reason_t::restore_failed,
-               std::nullopt}));
-            return false;
-        }
-        state->payload = encode_envelope (
-          state->seal_attempt.seal.participants, state->context.relocation,
-          state->context.application_version);
-        if (state->payload.empty () || state->payload.size () > state->encoded_upper_bound) {
+            && !state->context.augment_frozen (state->seal_attempt.seal.participants)) {
             (void) _objects.abort_relocation (state->seal_attempt.seal.token);
             state->result.emplace (finish (
-              {relocation_terminal_t::blocked,
-               relocation_reason_t::payload_bound_exceeded,
-               std::nullopt}));
+              {relocation_terminal_t::blocked, relocation_reason_t::restore_failed, std::nullopt}));
             return false;
         }
-        state->manifest = plan_relocation_payload (
-          state->payload, state->effective_chunk_limit);
+        state->payload =
+          encode_envelope (state->seal_attempt.seal.participants, state->context.relocation,
+                           state->context.application_version);
+        if (state->payload.empty () || state->payload.size () > state->encoded_upper_bound) {
+            (void) _objects.abort_relocation (state->seal_attempt.seal.token);
+            state->result.emplace (
+              finish ({relocation_terminal_t::blocked, relocation_reason_t::payload_bound_exceeded,
+                       std::nullopt}));
+            return false;
+        }
+        state->manifest = plan_relocation_payload (state->payload, state->effective_chunk_limit);
     }
     catch (...) {
         (void) _objects.abort_relocation (state->seal_attempt.seal.token);
-        state->result.emplace (finish (
-          {relocation_terminal_t::store_failed,
-           relocation_reason_t::store_write_failed,
-           std::nullopt}));
+        state->result.emplace (finish ({relocation_terminal_t::store_failed,
+                                        relocation_reason_t::store_write_failed, std::nullopt}));
         return false;
     }
-    if (state->payload.empty ()
-        || state->manifest.chunk_count > protocol::relocationChunkCount
+    if (state->payload.empty () || state->manifest.chunk_count > protocol::relocationChunkCount
         || state->manifest.total_length > protocol::relocationLogicalBytes) {
         (void) _objects.abort_relocation (state->seal_attempt.seal.token);
-        state->result.emplace (finish (
-          {relocation_terminal_t::blocked,
-           relocation_reason_t::payload_bound_exceeded,
-           std::nullopt}));
+        state->result.emplace (
+          finish ({relocation_terminal_t::blocked, relocation_reason_t::payload_bound_exceeded,
+                   std::nullopt}));
         return false;
     }
     return true;
 }
 
-task_t<bool> maintenance_runtime_t::relocate_prepare_target (
-  std::shared_ptr<relocation_terminal_state_t> state)
+task_t<bool>
+maintenance_runtime_t::relocate_prepare_target (std::shared_ptr<relocation_terminal_state_t> state)
 {
-    state->handoff.emplace (target_only_cas_t{
-      {state->source}, state->target_node_id, state->target_owner,
-      state->inventory_digest, state->manifest});
+    state->handoff.emplace (target_only_cas_t{{state->source},
+                                              state->target_node_id,
+                                              state->target_owner,
+                                              state->inventory_digest,
+                                              state->manifest});
     auto completion = std::make_shared<detail::task_completion_source_t<bool>> ();
     auto output = completion->task ();
     auto prepared = std::make_shared<task_t<relocation_reason_t>> (prepare_target (
-      state->context, {state->seal_attempt.seal.participants.front ()},
-      state->manifest));
-    detail::observe_task_completion (
-      *prepared, [this, state, completion, prepared] (
-                   const result_t<relocation_reason_t> &settled) {
-          if (!settled) {
-              completion->complete (detail::propagate_failure<bool> (
-                settled, "relocation target preparation failed"));
-              return;
-          }
-          if (settled.value () != relocation_reason_t::none) {
-              (void) _objects.abort_relocation_before_cutover (
-                state->seal_attempt.seal.token);
-              state->result.emplace (finish ({relocation_terminal_t::blocked,
-                                      settled.value (),
-                                      std::nullopt}));
-              completion->complete (result_t<bool>::success (false));
-              return;
-          }
-          completion->complete (result_t<bool>::success (true));
-      });
+      state->context, {state->seal_attempt.seal.participants.front ()}, state->manifest));
+    detail::observe_task_completion (*prepared, [this, state, completion, prepared] (
+                                                  const result_t<relocation_reason_t> &settled) {
+        if (!settled) {
+            completion->complete (
+              detail::propagate_failure<bool> (settled, "relocation target preparation failed"));
+            return;
+        }
+        if (settled.value () != relocation_reason_t::none) {
+            (void) _objects.abort_relocation_before_cutover (state->seal_attempt.seal.token);
+            state->result.emplace (
+              finish ({relocation_terminal_t::blocked, settled.value (), std::nullopt}));
+            completion->complete (result_t<bool>::success (false));
+            return;
+        }
+        completion->complete (result_t<bool>::success (true));
+    });
     return output;
 }
 
 task_t<bool> maintenance_runtime_t::relocate_boundary_and_send (
   std::shared_ptr<relocation_terminal_state_t> state)
 {
-    const auto boundary =
-      _objects.begin_relocation_boundary (state->seal_attempt.seal.token);
+    const auto boundary = _objects.begin_relocation_boundary (state->seal_attempt.seal.token);
     const auto boundary_error = boundary.first;
     state->batch = boundary.second;
     if (boundary_error != stateful_error_t::none) {
         (void) abort_target_before_cutover (state->context);
         (void) _objects.abort_relocation_before_cutover (state->seal_attempt.seal.token);
-        state->result.emplace (finish ({relocation_terminal_t::blocked,
-                        relocation_reason_t::restore_failed,
-                        std::nullopt}));
+        state->result.emplace (finish (
+          {relocation_terminal_t::blocked, relocation_reason_t::restore_failed, std::nullopt}));
         co_return false;
     }
-    state->records = build_boundary_records (
-      {state->seal_attempt.seal.participants.front ()}, state->context,
-      state->batch, state->failure);
+    state->records = build_boundary_records ({state->seal_attempt.seal.participants.front ()},
+                                             state->context, state->batch, state->failure);
     if (!state->records
-        || !co_await send_boundary_records (
-          state->context, *state->records, state->batch)) {
+        || !co_await send_boundary_records (state->context, *state->records, state->batch)) {
         if (abort_target_before_cutover (state->context))
             (void) _objects.abort_relocation_before_cutover (state->seal_attempt.seal.token);
-        state->result.emplace (finish ({relocation_terminal_t::recovery_required, state->failure,
-                        std::nullopt,
-                        state->records.value_or (std::vector<protocol::relocation_data_t>{}),
-                        state->handoff}));
+        state->result.emplace (finish (
+          {relocation_terminal_t::recovery_required, state->failure, std::nullopt,
+           state->records.value_or (std::vector<protocol::relocation_data_t>{}), state->handoff}));
         co_return false;
     }
     co_return true;
 }
 
-task_t<bool> maintenance_runtime_t::relocate_cutover (
-  std::shared_ptr<relocation_terminal_state_t> state)
+task_t<bool>
+maintenance_runtime_t::relocate_cutover (std::shared_ptr<relocation_terminal_state_t> state)
 {
     const protocol::relocation_object_t object{
       to_wire_object_kind (state->source.kind),
-      state->seal_attempt.seal.participants.front ().stable_type,
-      state->source.key, state->source.object_generation,
-      state->source.authority_owner_generation};
+      state->seal_attempt.seal.participants.front ().stable_type, state->source.key,
+      state->source.object_generation, state->source.authority_owner_generation};
     auto cutover = protocol::relocation_cutover_t{
       state->context.relocation, state->context.target_attempt_generation,
       state->context.coordinator, protocol::relocation_role_t::source, object};
     cutover.boundary_record_count = state->records->size ();
-    cutover.boundary_checksum_crc32c =
-      boundary_batch_checksum (*state->records);
+    cutover.boundary_checksum_crc32c = boundary_batch_checksum (*state->records);
     const auto outcome = co_await state->context.send_cutover (cutover);
     const auto terminal_now = std::chrono::steady_clock::now ();
     state->cutover_terminal_at = terminal_now;
-    const auto stall = state->sealed_at
-                           != std::chrono::steady_clock::time_point{}
+    const auto stall = state->sealed_at != std::chrono::steady_clock::time_point{}
                          ? terminal_now - state->sealed_at
                          : std::chrono::steady_clock::duration::zero ();
     /* The target's relay-ready reply was already accepted: source dispatch
      * never reopens from here, whatever the submit outcome (28 §4.4/§9). */
-    const auto finalized =
-      _objects.finalize_relocation_cutover (state->seal_attempt.seal.token)
-      == stateful_error_t::none;
+    const auto finalized = _objects.finalize_relocation_cutover (state->seal_attempt.seal.token)
+                           == stateful_error_t::none;
     const auto enqueued =
-      outcome
-      == eligible_relocation_unit_t::canonical_wire_context_t::cutover_enqueue_t::enqueued;
+      outcome == eligible_relocation_unit_t::canonical_wire_context_t::cutover_enqueue_t::enqueued;
     state->cutover_record = cutover;
     state->cutover_enqueued = enqueued;
     // The relocation execution permit ends at the cutover submit terminal.
@@ -1039,38 +929,32 @@ task_t<bool> maintenance_runtime_t::relocate_cutover (
     state->permit.reset ();
     retain_retransmission_copies (state);
     if (!enqueued || !finalized) {
-        state->result.emplace (finish ({relocation_terminal_t::recovery_required,
-                        relocation_reason_t::restore_failed, std::nullopt,
-                        *state->records, state->handoff, stall}));
+        state->result.emplace (
+          finish ({relocation_terminal_t::recovery_required, relocation_reason_t::restore_failed,
+                   std::nullopt, *state->records, state->handoff, stall}));
         co_return false;
     }
-    state->result.emplace (finish ({relocation_terminal_t::completed,
-                    relocation_reason_t::none,
-                    std::nullopt, *state->records, state->handoff, stall}));
+    state->result.emplace (finish ({relocation_terminal_t::completed, relocation_reason_t::none,
+                                    std::nullopt, *state->records, state->handoff, stall}));
     co_return true;
 }
 
-relocation_result_t maintenance_runtime_t::recover (
-  object_kind_t kind,
-  const std::string &key,
-  stateful_object_runtime_t &target,
-  std::stop_token cancellation)
+relocation_result_t maintenance_runtime_t::recover (object_kind_t kind,
+                                                    const std::string &key,
+                                                    stateful_object_runtime_t &target,
+                                                    std::stop_token cancellation)
 {
     std::optional<authority_relocation_reference_t> authority;
     try {
         authority = _authority->read (kind, key);
     }
     catch (...) {
-        return finish (
-          {relocation_terminal_t::recovery_required,
-           relocation_reason_t::authority_publish_failed,
-           std::nullopt});
+        return finish ({relocation_terminal_t::recovery_required,
+                        relocation_reason_t::authority_publish_failed, std::nullopt});
     }
     if (!authority) {
         return finish (
-          {relocation_terminal_t::conflict,
-           relocation_reason_t::authority_conflict,
-           std::nullopt});
+          {relocation_terminal_t::conflict, relocation_reason_t::authority_conflict, std::nullopt});
     }
     /* Direct transfer keeps the payload's only original in the source
      * process memory. A store-mediated payload recovery path no longer
@@ -1079,62 +963,47 @@ relocation_result_t maintenance_runtime_t::recover (
     (void) target;
     (void) cancellation;
     return finish (
-      {relocation_terminal_t::data_lost,
-       relocation_reason_t::payload_missing,
-       authority});
+      {relocation_terminal_t::data_lost, relocation_reason_t::payload_missing, authority});
 }
 
-aggregate_relocation_result_t maintenance_runtime_t::recover_aggregate (
-  const std::vector<object_ref_t> &sources,
-  stateful_object_runtime_t &target,
-  std::stop_token cancellation)
+aggregate_relocation_result_t
+maintenance_runtime_t::recover_aggregate (const std::vector<object_ref_t> &sources,
+                                          stateful_object_runtime_t &target,
+                                          std::stop_token cancellation)
 {
     if (sources.size () < 2) {
-        return {
-          relocation_terminal_t::conflict,
-          relocation_reason_t::inventory_mismatch,
-          {}};
+        return {relocation_terminal_t::conflict, relocation_reason_t::inventory_mismatch, {}};
     }
     std::vector<authority_relocation_reference_t> authority;
     try {
         auto canonical_sources = sources;
-        std::sort (
-          canonical_sources.begin (), canonical_sources.end (),
-          [] (const object_ref_t &left, const object_ref_t &right) {
-              if (left.kind != right.kind)
-                  return left.kind < right.kind;
-              return left.key < right.key;
-          });
-        for (std::size_t index = 1;
-             index != canonical_sources.size (); ++index) {
-            if (canonical_sources[index - 1].kind
-                  == canonical_sources[index].kind
-                && canonical_sources[index - 1].key
-                     == canonical_sources[index].key) {
+        std::sort (canonical_sources.begin (), canonical_sources.end (),
+                   [] (const object_ref_t &left, const object_ref_t &right) {
+                       if (left.kind != right.kind)
+                           return left.kind < right.kind;
+                       return left.key < right.key;
+                   });
+        for (std::size_t index = 1; index != canonical_sources.size (); ++index) {
+            if (canonical_sources[index - 1].kind == canonical_sources[index].kind
+                && canonical_sources[index - 1].key == canonical_sources[index].key) {
                 return {
-                  relocation_terminal_t::conflict,
-                  relocation_reason_t::inventory_mismatch,
-                  {}};
+                  relocation_terminal_t::conflict, relocation_reason_t::inventory_mismatch, {}};
             }
         }
         authority.reserve (sources.size ());
         for (const auto &source : sources) {
-            const auto current =
-              _authority->read (source.kind, source.key);
+            const auto current = _authority->read (source.kind, source.key);
             if (!current || current->source != source) {
                 return {
-                  relocation_terminal_t::conflict,
-                  relocation_reason_t::authority_conflict,
-                  {}};
+                  relocation_terminal_t::conflict, relocation_reason_t::authority_conflict, {}};
             }
             authority.push_back (*current);
         }
     }
     catch (...) {
-        return {
-          relocation_terminal_t::recovery_required,
-          relocation_reason_t::authority_publish_failed,
-          {}};
+        return {relocation_terminal_t::recovery_required,
+                relocation_reason_t::authority_publish_failed,
+                {}};
     }
 
     const auto &root = authority.front ();
@@ -1144,14 +1013,10 @@ aggregate_relocation_result_t maintenance_runtime_t::recover_aggregate (
             || current.inventory_digest != root.inventory_digest
             || current.target.node_id != root.target.node_id
             || current.target.mesh_name != root.target.mesh_name
-            || current.target_owner.owner_id
-                 != root.target_owner.owner_id
-            || current.target_owner.lease_generation
-                 != root.target_owner.lease_generation) {
-            return {
-              relocation_terminal_t::data_lost,
-              relocation_reason_t::inventory_mismatch,
-              authority};
+            || current.target_owner.owner_id != root.target_owner.owner_id
+            || current.target_owner.lease_generation != root.target_owner.lease_generation) {
+            return {relocation_terminal_t::data_lost, relocation_reason_t::inventory_mismatch,
+                    authority};
         }
     }
 
@@ -1160,10 +1025,7 @@ aggregate_relocation_result_t maintenance_runtime_t::recover_aggregate (
      * recover from. */
     (void) target;
     (void) cancellation;
-    return {
-      relocation_terminal_t::data_lost,
-      relocation_reason_t::payload_missing,
-      authority};
+    return {relocation_terminal_t::data_lost, relocation_reason_t::payload_missing, authority};
 }
 
 task_t<aggregate_relocation_result_t> maintenance_runtime_t::relocate_aggregate (
@@ -1172,88 +1034,71 @@ task_t<aggregate_relocation_result_t> maintenance_runtime_t::relocate_aggregate 
   location_owner_token_t target_owner,
   std::size_t encoded_upper_bound,
   inventory_digest_t inventory_digest,
-  const std::optional<eligible_relocation_unit_t::canonical_wire_context_t>
-    &canonical_wire,
+  const std::optional<eligible_relocation_unit_t::canonical_wire_context_t> &canonical_wire,
   std::stop_token cancellation,
   std::uint64_t advertised_receive_chunk_limit_bytes)
 {
     if (sources.size () < 2 || !canonical_wire || !_aggregate_authority) {
-        co_return aggregate_relocation_result_t{relocation_terminal_t::blocked,
-                relocation_reason_t::restore_failed, {}};
+        co_return aggregate_relocation_result_t{
+          relocation_terminal_t::blocked, relocation_reason_t::restore_failed, {}};
     }
     auto persisted_context = *canonical_wire;
     auto permit = std::make_shared<permit_t> (try_acquire ());
     if (!*permit) {
-        co_return aggregate_relocation_result_t{relocation_terminal_t::blocked,
-                relocation_reason_t::permit_unavailable, {}};
+        co_return aggregate_relocation_result_t{
+          relocation_terminal_t::blocked, relocation_reason_t::permit_unavailable, {}};
     }
-    const auto seal_attempt =
-      co_await _objects.try_seal_relocation_aggregate (
-        sources, cancellation,
-        [this, &persisted_context] {
-            return capture_relocation_session_routes (persisted_context);
-        });
+    const auto seal_attempt = co_await _objects.try_seal_relocation_aggregate (
+      sources, cancellation,
+      [this, &persisted_context] { return capture_relocation_session_routes (persisted_context); });
     const auto seal_error = seal_attempt.error;
     const auto &seal = seal_attempt.seal;
     if (seal_error != stateful_error_t::none) {
-        co_return aggregate_relocation_result_t{relocation_terminal_t::blocked,
-                relocation_reason_t::restore_failed, {}};
+        co_return aggregate_relocation_result_t{
+          relocation_terminal_t::blocked, relocation_reason_t::restore_failed, {}};
     }
     auto state = std::make_shared<relocation_terminal_state_t> ();
     state->context = persisted_context;
-    state->advertised_receive_chunk_limit_bytes =
-      advertised_receive_chunk_limit_bytes;
+    state->advertised_receive_chunk_limit_bytes = advertised_receive_chunk_limit_bytes;
     state->effective_chunk_limit =
-      std::min<std::uint64_t> (_limits.payload_chunk_limit_bytes
-                                 ? _limits.payload_chunk_limit_bytes
-                                 : protocol::relocationChunkBytes,
+      std::min<std::uint64_t> (_limits.payload_chunk_limit_bytes ? _limits.payload_chunk_limit_bytes
+                                                                 : protocol::relocationChunkBytes,
                                protocol::relocationChunkBytes);
     state->effective_chunk_limit = apply_advertised_receive_chunk_limit (
-      state->effective_chunk_limit,
-      state->advertised_receive_chunk_limit_bytes);
+      state->effective_chunk_limit, state->advertised_receive_chunk_limit_bytes);
     state->seal_attempt = seal_attempt;
     state->sealed_at = std::chrono::steady_clock::now ();
     state->pending_unit_token = begin_pending_relocation_unit ();
     try {
         if (persisted_context.augment_frozen
-            && !persisted_context.augment_frozen (
-              state->seal_attempt.seal.participants)) {
-            (void) _objects.abort_relocation_before_cutover (
-              seal.token);
+            && !persisted_context.augment_frozen (state->seal_attempt.seal.participants)) {
+            (void) _objects.abort_relocation_before_cutover (seal.token);
             co_return aggregate_relocation_result_t{
-              relocation_terminal_t::blocked,
-              relocation_reason_t::restore_failed, {}};
+              relocation_terminal_t::blocked, relocation_reason_t::restore_failed, {}};
         }
-        state->payload = encode_envelope (
-          state->seal_attempt.seal.participants,
-          persisted_context.relocation,
-          persisted_context.application_version);
-        state->manifest = plan_relocation_payload (
-          state->payload, state->effective_chunk_limit);
+        state->payload =
+          encode_envelope (state->seal_attempt.seal.participants, persisted_context.relocation,
+                           persisted_context.application_version);
+        state->manifest = plan_relocation_payload (state->payload, state->effective_chunk_limit);
     }
     catch (...) {
     }
-    if (state->payload.empty ()
-        || state->payload.size () > encoded_upper_bound
+    if (state->payload.empty () || state->payload.size () > encoded_upper_bound
         || state->manifest.chunk_count > protocol::relocationChunkCount) {
         (void) _objects.abort_relocation_before_cutover (seal.token);
-        co_return aggregate_relocation_result_t{relocation_terminal_t::blocked,
-                relocation_reason_t::payload_bound_exceeded, {}};
+        co_return aggregate_relocation_result_t{
+          relocation_terminal_t::blocked, relocation_reason_t::payload_bound_exceeded, {}};
     }
-    state->budget_reserved =
-      std::min (state->effective_chunk_limit, effective_in_flight_budget ());
+    state->budget_reserved = std::min (state->effective_chunk_limit, effective_in_flight_budget ());
     co_await acquire_transfer_budget (state->budget_reserved);
-    auto prepared = std::make_shared<task_t<relocation_reason_t>> (prepare_target (
-      persisted_context, seal.participants, state->manifest));
-    const auto chunks_sent =
-      co_await relocate_send_state_chunks (
-        state, [prepared] {
-            if (!prepared->await_ready ())
-                return false;
-            const auto &result = prepared->result ();
-            return !result
-                   || result.value () != relocation_reason_t::none;
-        });
+    auto prepared = std::make_shared<task_t<relocation_reason_t>> (
+      prepare_target (persisted_context, seal.participants, state->manifest));
+    const auto chunks_sent = co_await relocate_send_state_chunks (state, [prepared] {
+        if (!prepared->await_ready ())
+            return false;
+        const auto &result = prepared->result ();
+        return !result || result.value () != relocation_reason_t::none;
+    });
     release_transfer_budget (state->budget_reserved);
     state->budget_reserved = 0;
     auto target_prepare_reason = relocation_reason_t::restore_failed;
@@ -1266,24 +1111,28 @@ task_t<aggregate_relocation_result_t> maintenance_runtime_t::relocate_aggregate 
     if (target_prepare_reason != relocation_reason_t::none || !chunks_sent) {
         (void) _objects.abort_relocation_before_cutover (seal.token);
         co_return aggregate_relocation_result_t{relocation_terminal_t::blocked,
-                target_prepare_reason != relocation_reason_t::none
-                  ? target_prepare_reason
-                  : relocation_reason_t::restore_failed, {}};
+                                                target_prepare_reason != relocation_reason_t::none
+                                                  ? target_prepare_reason
+                                                  : relocation_reason_t::restore_failed,
+                                                {}};
     }
-    const target_only_cas_t handoff{
-      sources, target_node_id, target_owner,
-      inventory_digest, state->manifest};
-    const auto [boundary_error, batch] =
-      _objects.begin_relocation_boundary (seal.token);
+    const target_only_cas_t handoff{sources, target_node_id, target_owner, inventory_digest,
+                                    state->manifest};
+    const auto [boundary_error, batch] = _objects.begin_relocation_boundary (seal.token);
     auto failure = relocation_reason_t::restore_failed;
-    const auto records = boundary_error == stateful_error_t::none
-      ? build_boundary_records (seal.participants, *canonical_wire, batch, failure)
-      : std::nullopt;
+    const auto records =
+      boundary_error == stateful_error_t::none
+        ? build_boundary_records (seal.participants, *canonical_wire, batch, failure)
+        : std::nullopt;
     if (!records || !co_await send_boundary_records (*canonical_wire, *records, batch)) {
         if (abort_target_before_cutover (*canonical_wire))
             (void) _objects.abort_relocation_before_cutover (seal.token);
-        co_return aggregate_relocation_result_t{relocation_terminal_t::recovery_required, failure, {},
-                records.value_or (std::vector<protocol::relocation_data_t>{}), handoff};
+        co_return aggregate_relocation_result_t{
+          relocation_terminal_t::recovery_required,
+          failure,
+          {},
+          records.value_or (std::vector<protocol::relocation_data_t>{}),
+          handoff};
     }
     /* 28 §6 (target-only owner CAS): the multi-object location update's
      * atomic authority CAS is the target's decision, driven by
@@ -1299,20 +1148,20 @@ task_t<aggregate_relocation_result_t> maintenance_runtime_t::relocate_aggregate 
      * records to the wire and send cutover; the target owns the CAS. */
     /* Cutover carries the same principal object identity as the Restore
      * request so the target binds it to the prepared attempt. */
-    const auto principal = std::find_if (
-      seal.participants.begin (), seal.participants.end (),
-      [] (const frozen_object_state_t &candidate) {
-          return candidate.owner.kind == object_kind_t::user_spot;
-      });
-    const auto &root = principal != seal.participants.end ()
-                         ? *principal
-                         : seal.participants.front ();
+    const auto principal =
+      std::find_if (seal.participants.begin (), seal.participants.end (),
+                    [] (const frozen_object_state_t &candidate) {
+                        return candidate.owner.kind == object_kind_t::user_spot;
+                    });
+    const auto &root =
+      principal != seal.participants.end () ? *principal : seal.participants.front ();
     auto cutover = protocol::relocation_cutover_t{
-      canonical_wire->relocation, canonical_wire->target_attempt_generation,
-      canonical_wire->coordinator, protocol::relocation_role_t::source,
-      {to_wire_object_kind (root.owner.kind),
-       root.stable_type, root.owner.key, root.owner.object_generation,
-       root.owner.authority_owner_generation}};
+      canonical_wire->relocation,
+      canonical_wire->target_attempt_generation,
+      canonical_wire->coordinator,
+      protocol::relocation_role_t::source,
+      {to_wire_object_kind (root.owner.kind), root.stable_type, root.owner.key,
+       root.owner.object_generation, root.owner.authority_owner_generation}};
     cutover.boundary_record_count = records->size ();
     cutover.boundary_checksum_crc32c = boundary_batch_checksum (*records);
     const auto outcome = co_await canonical_wire->send_cutover (cutover);
@@ -1327,13 +1176,13 @@ task_t<aggregate_relocation_result_t> maintenance_runtime_t::relocate_aggregate 
     state->cutover_record = cutover;
     state->cutover_enqueued = enqueued;
     retain_retransmission_copies (state);
-    co_return aggregate_relocation_result_t{enqueued && finalized
-              ? relocation_terminal_t::completed
-              : relocation_terminal_t::recovery_required,
-            enqueued && finalized
-              ? relocation_reason_t::none
-              : relocation_reason_t::restore_failed,
-            {}, *records, handoff};
+    co_return aggregate_relocation_result_t{
+      enqueued && finalized ? relocation_terminal_t::completed
+                            : relocation_terminal_t::recovery_required,
+      enqueued && finalized ? relocation_reason_t::none : relocation_reason_t::restore_failed,
+      {},
+      *records,
+      handoff};
 }
 
 relocation_gate_snapshot_t maintenance_runtime_t::gate_snapshot () const
@@ -1343,25 +1192,22 @@ relocation_gate_snapshot_t maintenance_runtime_t::gate_snapshot () const
 }
 
 std::uint64_t maintenance_runtime_t::apply_advertised_receive_chunk_limit (
-  std::uint64_t local_limit_bytes,
-  std::uint64_t advertised_receive_chunk_limit_bytes) noexcept
+  std::uint64_t local_limit_bytes, std::uint64_t advertised_receive_chunk_limit_bytes) noexcept
 {
     if (advertised_receive_chunk_limit_bytes == 0)
         return local_limit_bytes;
     return std::min (local_limit_bytes, advertised_receive_chunk_limit_bytes);
 }
 
-std::uint32_t maintenance_runtime_t::crc32c (
-  const std::vector<std::uint8_t> &payload) noexcept
+std::uint32_t maintenance_runtime_t::crc32c (const std::vector<std::uint8_t> &payload) noexcept
 {
     std::uint32_t crc = 0xffffffffu;
     for (const auto byte : payload) {
         crc ^= byte;
         for (int bit = 0; bit != 8; ++bit)
-            crc = (crc >> 1)
-                  ^ (0x82f63b78u
-                     & static_cast<std::uint32_t> (
-                       -static_cast<std::int32_t> (crc & 1u)));
+            crc =
+              (crc >> 1)
+              ^ (0x82f63b78u & static_cast<std::uint32_t> (-static_cast<std::int32_t> (crc & 1u)));
     }
     return ~crc;
 }
@@ -1378,8 +1224,7 @@ std::string_view participant_sort_word (object_kind_t kind) noexcept
  * bytes. The cross-language authority-key preimage is
  * "authority\0{actor|spot}\0{Id}", so the order is the kind word first and
  * the raw object-id bytes second. */
-bool participant_order_less (const object_ref_t &left,
-                             const object_ref_t &right) noexcept
+bool participant_order_less (const object_ref_t &left, const object_ref_t &right) noexcept
 {
     const auto left_word = participant_sort_word (left.kind);
     const auto right_word = participant_sort_word (right.kind);
@@ -1407,63 +1252,51 @@ constexpr std::string_view bare_timer_handler_type = "LogicalTimer";
 
 } // namespace
 
-std::vector<std::uint8_t> maintenance_runtime_t::encode_envelope (
-  const std::vector<frozen_object_state_t> &participants,
-  const protocol::relocation_id_t &relocation,
-  std::uint64_t application_version)
+std::vector<std::uint8_t>
+maintenance_runtime_t::encode_envelope (const std::vector<frozen_object_state_t> &participants,
+                                        const protocol::relocation_id_t &relocation,
+                                        std::uint64_t application_version)
 {
-    if (participants.empty ()
-        || (relocation.high == 0 && relocation.low == 0))
+    if (participants.empty () || (relocation.high == 0 && relocation.low == 0))
         return {};
     std::vector<const frozen_object_state_t *> ordered;
     ordered.reserve (participants.size ());
     for (const auto &participant : participants)
         ordered.push_back (&participant);
     std::sort (ordered.begin (), ordered.end (),
-               [] (const frozen_object_state_t *left,
-                   const frozen_object_state_t *right) {
+               [] (const frozen_object_state_t *left, const frozen_object_state_t *right) {
                    return participant_order_less (left->owner, right->owner);
                });
     for (std::size_t index = 0; index != ordered.size (); ++index) {
         const auto &frozen = *ordered[index];
         if (frozen.owner.key.empty () || frozen.stable_type.empty ()
-            || frozen.owner.object_generation == 0
-            || frozen.owner.authority_owner_generation == 0
+            || frozen.owner.object_generation == 0 || frozen.owner.authority_owner_generation == 0
             || frozen.application_state.size () > max_application_state_bytes
             || frozen.pending_application.size () > max_pending_records
             || frozen.timers.size () > max_logical_timers)
             return {};
-        if (index != 0
-            && !participant_order_less (ordered[index - 1]->owner,
-                                        frozen.owner))
+        if (index != 0 && !participant_order_less (ordered[index - 1]->owner, frozen.owner))
             return {};
     }
     const auto principal = std::find_if (
-      participants.begin (), participants.end (),
-      [] (const frozen_object_state_t &candidate) {
+      participants.begin (), participants.end (), [] (const frozen_object_state_t &candidate) {
           return candidate.owner.kind == object_kind_t::user_spot;
       });
-    const auto &root =
-      principal != participants.end () ? *principal : participants.front ();
+    const auto &root = principal != participants.end () ? *principal : participants.front ();
 
     protocol::relocation_envelope_t envelope;
     envelope.relocation = relocation;
-    envelope.object = {to_wire_object_kind (root.owner.kind),
-                       root.stable_type, root.owner.key,
-                       root.owner.object_generation,
-                       root.owner.authority_owner_generation};
+    envelope.object = {to_wire_object_kind (root.owner.kind), root.stable_type, root.owner.key,
+                       root.owner.object_generation, root.owner.authority_owner_generation};
     if (application_version
-             > static_cast<std::uint64_t> (
-                 std::numeric_limits<std::int64_t>::max ()))
+        > static_cast<std::uint64_t> (std::numeric_limits<std::int64_t>::max ()))
         return {};
-    envelope.application_version =
-      static_cast<std::int64_t> (application_version);
+    envelope.application_version = static_cast<std::int64_t> (application_version);
 
     try {
         for (std::size_t index = 0; index != ordered.size (); ++index) {
             const auto &frozen = *ordered[index];
-            const auto participant_id =
-              static_cast<std::uint64_t> (index) + 1;
+            const auto participant_id = static_cast<std::uint64_t> (index) + 1;
             envelope.application_states.push_back (
               {participant_id, true, frozen.application_state});
 
@@ -1477,11 +1310,10 @@ std::vector<std::uint8_t> maintenance_runtime_t::encode_envelope (
                     if (record.frozen_record)
                         canonical = *record.frozen_record;
                     else if (record.application_record)
-                        canonical = protocol::encode_frozen_application_record (
-                          *record.application_record);
-                    else
                         canonical =
-                          protocol::decode_frozen_record (record.payload);
+                          protocol::encode_frozen_application_record (*record.application_record);
+                    else
+                        canonical = protocol::decode_frozen_record (record.payload);
                 }
                 catch (const protocol::service_wire_error_t &) {
                     /* Only canonical service-wire-v1 frozen records exist as
@@ -1493,21 +1325,16 @@ std::vector<std::uint8_t> maintenance_runtime_t::encode_envelope (
                   {participant_id, record.sequence, std::move (canonical)});
             }
 
-            std::vector<std::pair<std::string, const logical_timer_t *>>
-              timers;
+            std::vector<std::pair<std::string, const logical_timer_t *>> timers;
             timers.reserve (frozen.timers.size ());
             for (const auto &timer : frozen.timers) {
-                auto name = timer.name.empty ()
-                              ? std::to_string (timer.timer_id)
-                              : timer.name;
+                auto name = timer.name.empty () ? std::to_string (timer.timer_id) : timer.name;
                 timers.emplace_back (std::move (name), &timer);
             }
-            std::sort (timers.begin (), timers.end (),
-                       [] (const auto &left, const auto &right) {
-                           return left.first < right.first;
-                       });
-            for (std::size_t position = 1; position < timers.size ();
-                 ++position) {
+            std::sort (timers.begin (), timers.end (), [] (const auto &left, const auto &right) {
+                return left.first < right.first;
+            });
+            for (std::size_t position = 1; position < timers.size (); ++position) {
                 if (timers[position - 1].first == timers[position].first)
                     return {};
             }
@@ -1516,36 +1343,27 @@ std::vector<std::uint8_t> maintenance_runtime_t::encode_envelope (
                 protocol::relocation_envelope_timer_t registration;
                 registration.participant_id = participant_id;
                 registration.name = name;
-                registration.handler_type =
-                  timer->handler_type.empty ()
-                    ? std::string (bare_timer_handler_type)
-                    : timer->handler_type;
+                registration.handler_type = timer->handler_type.empty ()
+                                              ? std::string (bare_timer_handler_type)
+                                              : timer->handler_type;
                 registration.period_milliseconds =
                   timer->period_milliseconds != 0
                     ? timer->period_milliseconds
-                    : (timer->due_after_milliseconds != 0
-                         ? timer->due_after_milliseconds
-                         : 1);
+                    : (timer->due_after_milliseconds != 0 ? timer->due_after_milliseconds : 1);
                 registration.overrun_policy =
-                  timer->overrun_policy >= 1 && timer->overrun_policy <= 3
-                    ? timer->overrun_policy
-                    : 1;
+                  timer->overrun_policy >= 1 && timer->overrun_policy <= 3 ? timer->overrun_policy
+                                                                           : 1;
                 registration.max_catch_up_ticks =
-                  timer->max_catch_up_ticks != 0 ? timer->max_catch_up_ticks
-                                                 : 1;
-                registration.stop_on_unhandled_exception =
-                  timer->stop_on_unhandled_exception;
+                  timer->max_catch_up_ticks != 0 ? timer->max_catch_up_ticks : 1;
+                registration.stop_on_unhandled_exception = timer->stop_on_unhandled_exception;
                 if (bare) {
                     const auto completed =
-                      timer->next_tick_sequence != 0
-                        ? timer->next_tick_sequence - 1
-                        : 0;
+                      timer->next_tick_sequence != 0 ? timer->next_tick_sequence - 1 : 0;
                     registration.last_completed_delivery_index = completed;
                     registration.last_completed_scheduled_index = completed;
                     registration.next_scheduled_at_unix_milliseconds =
                       timer->due_after_milliseconds;
-                }
-                else {
+                } else {
                     registration.last_completed_delivery_index =
                       timer->last_completed_delivery_index;
                     registration.last_completed_scheduled_index =
@@ -1555,15 +1373,12 @@ std::vector<std::uint8_t> maintenance_runtime_t::encode_envelope (
                         ? timer->next_scheduled_at_unix_milliseconds
                         : timer->due_after_milliseconds;
                 }
-                envelope.timer_registrations.push_back (
-                  std::move (registration));
+                envelope.timer_registrations.push_back (std::move (registration));
                 for (const auto &tick : timer->pending_ticks) {
                     ++boundary;
                     envelope.pending_timer_ticks.push_back (
-                      {participant_id, boundary, name,
-                       tick.delivery_index, tick.scheduled_index,
-                       tick.scheduled_at_unix_milliseconds,
-                       tick.skipped_ticks});
+                      {participant_id, boundary, name, tick.delivery_index, tick.scheduled_index,
+                       tick.scheduled_at_unix_milliseconds, tick.skipped_ticks});
                 }
             }
         }
@@ -1578,27 +1393,21 @@ std::vector<std::uint8_t> maintenance_runtime_t::encode_envelope (
 }
 
 std::optional<protocol::relocation_envelope_t>
-maintenance_runtime_t::decode_envelope (
-  const std::vector<std::uint8_t> &payload) noexcept
-try
-{
+maintenance_runtime_t::decode_envelope (const std::vector<std::uint8_t> &payload) noexcept
+try {
     if (payload.empty () || payload.size () > max_envelope_bytes)
         return std::nullopt;
     return protocol::decode_relocation_envelope (payload);
 }
-catch (...)
-{
+catch (...) {
     return std::nullopt;
 }
 
-std::optional<std::vector<frozen_object_state_t>>
-maintenance_runtime_t::materialize_envelope (
+std::optional<std::vector<frozen_object_state_t>> maintenance_runtime_t::materialize_envelope (
   const protocol::relocation_envelope_t &envelope,
   std::vector<relocation_participant_identity_t> inventory) noexcept
-try
-{
-    if (inventory.empty ()
-        || inventory.size () != envelope.application_states.size ())
+try {
+    if (inventory.empty () || inventory.size () != envelope.application_states.size ())
         return std::nullopt;
     std::sort (inventory.begin (), inventory.end (),
                [] (const relocation_participant_identity_t &left,
@@ -1611,9 +1420,7 @@ try
             || identity.owner.object_generation == 0
             || identity.owner.authority_owner_generation == 0)
             return std::nullopt;
-        if (index != 0
-            && !participant_order_less (inventory[index - 1].owner,
-                                        identity.owner))
+        if (index != 0 && !participant_order_less (inventory[index - 1].owner, identity.owner))
             return std::nullopt;
         /* participantId is deliberately absent from the stream: it is this
          * sorted inventory's zero-based index plus one. */
@@ -1627,29 +1434,24 @@ try
     for (std::size_t index = 0; index != inventory.size (); ++index) {
         const auto &identity = inventory[index];
         const auto &state = envelope.application_states[index];
-        participants.push_back (frozen_object_state_t{
-          .owner = identity.owner,
-          .stable_type = identity.stable_type,
-          .application_state = state.state,
-          .pending_application = {},
-          .timers = {}});
+        participants.push_back (frozen_object_state_t{.owner = identity.owner,
+                                                      .stable_type = identity.stable_type,
+                                                      .application_state = state.state,
+                                                      .pending_application = {},
+                                                      .timers = {}});
     }
 
     for (const auto &entry : envelope.saved_work) {
-        if (entry.participant_id == 0
-            || entry.participant_id > participants.size ())
+        if (entry.participant_id == 0 || entry.participant_id > participants.size ())
             return std::nullopt;
-        auto &participant =
-          participants[static_cast<std::size_t> (entry.participant_id) - 1];
+        auto &participant = participants[static_cast<std::size_t> (entry.participant_id) - 1];
         std::optional<std::size_t> application_payload_bytes;
         if (entry.record.application)
             application_payload_bytes =
-              protocol::application_payload_hwm_bytes (
-                *entry.record.application);
+              protocol::application_payload_hwm_bytes (*entry.record.application);
         participant.pending_application.push_back (
-          turn_record_t{entry.order, entry.record.canonical_bytes,
-                        application_payload_bytes, std::nullopt,
-                        entry.record});
+          turn_record_t{entry.order, entry.record.canonical_bytes, application_payload_bytes,
+                        std::nullopt, entry.record});
     }
 
     /* Rebuild the runtime timer model. A schema registration whose handler
@@ -1659,19 +1461,18 @@ try
      * id from the name when it is numeric, or sequentially otherwise. */
     std::map<std::uint64_t, std::set<std::uint64_t>> used_ids;
     for (const auto &registration : envelope.timer_registrations) {
-        if (registration.participant_id == 0
-            || registration.participant_id > participants.size ())
+        if (registration.participant_id == 0 || registration.participant_id > participants.size ())
             return std::nullopt;
-        auto &participant = participants[static_cast<std::size_t> (
-                              registration.participant_id) - 1];
+        auto &participant =
+          participants[static_cast<std::size_t> (registration.participant_id) - 1];
         auto &ids = used_ids[registration.participant_id];
         std::uint64_t timer_id = 0;
         if (all_digits (registration.name)) {
             std::uint64_t parsed = 0;
             const auto *first = registration.name.data ();
             const auto *last = first + registration.name.size ();
-            if (std::from_chars (first, last, parsed).ec == std::errc{}
-                && parsed != 0 && !ids.contains (parsed))
+            if (std::from_chars (first, last, parsed).ec == std::errc{} && parsed != 0
+                && !ids.contains (parsed))
                 timer_id = parsed;
         }
         if (timer_id == 0) {
@@ -1681,71 +1482,59 @@ try
         }
         ids.insert (timer_id);
         const auto bare =
-          registration.handler_type == bare_timer_handler_type
-          && all_digits (registration.name);
+          registration.handler_type == bare_timer_handler_type && all_digits (registration.name);
         logical_timer_t timer;
         timer.timer_id = timer_id;
         timer.period_milliseconds = registration.period_milliseconds;
-        timer.due_after_milliseconds =
-          registration.next_scheduled_at_unix_milliseconds != 0
-            ? registration.next_scheduled_at_unix_milliseconds
-            : registration.period_milliseconds;
-        timer.next_tick_sequence =
-          registration.last_completed_delivery_index + 1;
+        timer.due_after_milliseconds = registration.next_scheduled_at_unix_milliseconds != 0
+                                         ? registration.next_scheduled_at_unix_milliseconds
+                                         : registration.period_milliseconds;
+        timer.next_tick_sequence = registration.last_completed_delivery_index + 1;
         if (!bare) {
             timer.name = registration.name;
             timer.handler_type = registration.handler_type;
             timer.overrun_policy = registration.overrun_policy;
             timer.max_catch_up_ticks = registration.max_catch_up_ticks;
-            timer.stop_on_unhandled_exception =
-              registration.stop_on_unhandled_exception;
-            timer.last_completed_delivery_index =
-              registration.last_completed_delivery_index;
-            timer.last_completed_scheduled_index =
-              registration.last_completed_scheduled_index;
+            timer.stop_on_unhandled_exception = registration.stop_on_unhandled_exception;
+            timer.last_completed_delivery_index = registration.last_completed_delivery_index;
+            timer.last_completed_scheduled_index = registration.last_completed_scheduled_index;
             timer.next_scheduled_at_unix_milliseconds =
               registration.next_scheduled_at_unix_milliseconds;
         }
         participant.timers.push_back (std::move (timer));
     }
     for (const auto &tick : envelope.pending_timer_ticks) {
-        if (tick.participant_id == 0
-            || tick.participant_id > participants.size ())
+        if (tick.participant_id == 0 || tick.participant_id > participants.size ())
             return std::nullopt;
-        auto &participant = participants[static_cast<std::size_t> (
-                              tick.participant_id) - 1];
-        const auto registration = std::find_if (
-          envelope.timer_registrations.begin (),
-          envelope.timer_registrations.end (),
-          [&tick] (const protocol::relocation_envelope_timer_t &candidate) {
-              return candidate.participant_id == tick.participant_id
-                     && candidate.name == tick.timer_name;
-          });
+        auto &participant = participants[static_cast<std::size_t> (tick.participant_id) - 1];
+        const auto registration =
+          std::find_if (envelope.timer_registrations.begin (), envelope.timer_registrations.end (),
+                        [&tick] (const protocol::relocation_envelope_timer_t &candidate) {
+                            return candidate.participant_id == tick.participant_id
+                                   && candidate.name == tick.timer_name;
+                        });
         if (registration == envelope.timer_registrations.end ())
             return std::nullopt;
         const auto position = static_cast<std::size_t> (std::distance (
-          std::find_if (envelope.timer_registrations.begin (),
-                        envelope.timer_registrations.end (),
+          std::find_if (envelope.timer_registrations.begin (), envelope.timer_registrations.end (),
                         [&tick] (const auto &candidate) {
-                            return candidate.participant_id
-                                   == tick.participant_id;
+                            return candidate.participant_id == tick.participant_id;
                         }),
           registration));
         if (position >= participant.timers.size ())
             return std::nullopt;
         participant.timers[position].pending_ticks.push_back (
-          {tick.delivery_index, tick.scheduled_index,
-           tick.scheduled_at_unix_milliseconds, tick.skipped_ticks});
+          {tick.delivery_index, tick.scheduled_index, tick.scheduled_at_unix_milliseconds,
+           tick.skipped_ticks});
     }
     return participants;
 }
-catch (...)
-{
+catch (...) {
     return std::nullopt;
 }
 
-inventory_digest_t maintenance_runtime_t::compute_inventory_digest (
-  const std::vector<object_ref_t> &participants)
+inventory_digest_t
+maintenance_runtime_t::compute_inventory_digest (const std::vector<object_ref_t> &participants)
 {
     auto sorted = participants;
     std::sort (sorted.begin (), sorted.end (),
@@ -1757,13 +1546,10 @@ inventory_digest_t maintenance_runtime_t::compute_inventory_digest (
     std::vector<std::byte> seed;
     for (const auto &source : sorted) {
         for (const auto value : source.key)
-            seed.push_back (static_cast<std::byte> (
-              static_cast<unsigned char> (value)));
+            seed.push_back (static_cast<std::byte> (static_cast<unsigned char> (value)));
         for (int shift = 56; shift >= 0; shift -= 8) {
-            seed.push_back (
-              static_cast<std::byte> (source.object_generation >> shift));
-            seed.push_back (static_cast<std::byte> (
-              source.authority_owner_generation >> shift));
+            seed.push_back (static_cast<std::byte> (source.object_generation >> shift));
+            seed.push_back (static_cast<std::byte> (source.authority_owner_generation >> shift));
         }
     }
     const auto digest = runtime::sha256 (seed);
@@ -1773,8 +1559,7 @@ inventory_digest_t maintenance_runtime_t::compute_inventory_digest (
     return output;
 }
 
-maintenance_runtime_t::permit_t::permit_t (maintenance_runtime_t *owner) :
-    _owner (owner)
+maintenance_runtime_t::permit_t::permit_t (maintenance_runtime_t *owner) : _owner (owner)
 {
 }
 
@@ -1784,15 +1569,13 @@ maintenance_runtime_t::permit_t::~permit_t ()
         _owner->release ();
 }
 
-maintenance_runtime_t::permit_t::permit_t (
-  permit_t &&other) noexcept :
+maintenance_runtime_t::permit_t::permit_t (permit_t &&other) noexcept :
     _owner (std::exchange (other._owner, nullptr))
 {
 }
 
 maintenance_runtime_t::permit_t &
-maintenance_runtime_t::permit_t::operator= (
-  permit_t &&other) noexcept
+maintenance_runtime_t::permit_t::operator= (permit_t &&other) noexcept
 {
     if (this == &other)
         return *this;
@@ -1807,8 +1590,7 @@ maintenance_runtime_t::permit_t::operator bool () const noexcept
     return _owner != nullptr;
 }
 
-maintenance_runtime_t::permit_t
-maintenance_runtime_t::try_acquire ()
+maintenance_runtime_t::permit_t maintenance_runtime_t::try_acquire ()
 {
     std::lock_guard lock (_gate_mutex);
     if (_gate.outbound_units >= _limits.outbound_units
@@ -1833,8 +1615,7 @@ void maintenance_runtime_t::release () noexcept
     --_gate.restore_callbacks;
 }
 
-relocation_result_t maintenance_runtime_t::finish (
-  relocation_result_t result)
+relocation_result_t maintenance_runtime_t::finish (relocation_result_t result)
 {
     if (_observer) {
         try {
@@ -1866,19 +1647,23 @@ host_maintenance_runtime_t::host_maintenance_runtime_t (
 
 void host_maintenance_runtime_t::mark_serving ()
 {
-    _lane.run ([this] {
-        if (_state != maintenance_admission_state_t::preparing)
-            throw std::logic_error ("host can become serving only from preparing");
-        _state = maintenance_admission_state_t::serving;
-    }).get ();
+    _lane
+      .run ([this] {
+          if (_state != maintenance_admission_state_t::preparing)
+              throw std::logic_error ("host can become serving only from preparing");
+          _state = maintenance_admission_state_t::serving;
+      })
+      .get ();
 }
 
 void host_maintenance_runtime_t::mark_error ()
 {
-    _lane.run ([this] {
-        if (_state != maintenance_admission_state_t::stopped)
-            _state = maintenance_admission_state_t::error;
-    }).get ();
+    _lane
+      .run ([this] {
+          if (_state != maintenance_admission_state_t::stopped)
+              _state = maintenance_admission_state_t::error;
+      })
+      .get ();
 }
 
 maintenance_admission_state_t host_maintenance_runtime_t::state () const
@@ -1886,24 +1671,23 @@ maintenance_admission_state_t host_maintenance_runtime_t::state () const
     return _lane.run ([this] { return _state; }).get ();
 }
 
-std::optional<termination_result_t>
-host_maintenance_runtime_t::terminal_result () const
+std::optional<termination_result_t> host_maintenance_runtime_t::terminal_result () const
 {
     return _lane.run ([this] { return _terminal; }).get ();
 }
 
-std::optional<termination_intent_t>
-host_maintenance_runtime_t::intent_snapshot () const
+std::optional<termination_intent_t> host_maintenance_runtime_t::intent_snapshot () const
 {
-    return _lane.run ([this] () -> std::optional<termination_intent_t> {
-        if (_shutdown_claimed)
-            return termination_intent_t::shutdown;
-        return _effective_intent;
-    }).get ();
+    return _lane
+      .run ([this] () -> std::optional<termination_intent_t> {
+          if (_shutdown_claimed)
+              return termination_intent_t::shutdown;
+          return _effective_intent;
+      })
+      .get ();
 }
 
-task_t<termination_result_t> host_maintenance_runtime_t::terminate (
-  termination_intent_t intent)
+task_t<termination_result_t> host_maintenance_runtime_t::terminate (termination_intent_t intent)
 {
     struct start_t
     {
@@ -1912,40 +1696,40 @@ task_t<termination_result_t> host_maintenance_runtime_t::terminate (
         std::optional<termination_result_t> immediate;
         bool started = false;
     };
-    auto start = _lane.run ([this, intent] {
-        start_t start;
-        if (_terminal)
-            start.immediate = *_terminal;
-        else if (_state == maintenance_admission_state_t::stopped) {
-            start.immediate = {intent, termination_outcome_t::stopped,
-                               termination_reason_t::none};
-        }
-        else if (_active) {
-            start.attempt = _active_attempt;
-            if (intent == termination_intent_t::shutdown && !_effective_intent)
-                _shutdown_claimed = true;
-            start.completion = _active_completion;
-        }
-        else if (intent == termination_intent_t::retire
-                 && _state != maintenance_admission_state_t::serving) {
-            start.immediate = {intent, termination_outcome_t::blocked,
-                               termination_reason_t::runtime_not_ready};
-        }
-        else {
-            _active = true;
-            _shutdown_claimed = false;
-            _effective_intent.reset ();
-            start.attempt = _next_attempt++;
-            _active_attempt = start.attempt;
-            if (intent == termination_intent_t::shutdown)
-                _effective_intent = termination_intent_t::shutdown;
-            start.completion = std::make_shared<
-              detail::task_completion_source_t<termination_result_t>> ();
-            _active_completion = start.completion;
-            start.started = true;
-        }
-        return start;
-    }).get ();
+    auto start =
+      _lane
+        .run ([this, intent] {
+            start_t start;
+            if (_terminal)
+                start.immediate = *_terminal;
+            else if (_state == maintenance_admission_state_t::stopped) {
+                start.immediate = {intent, termination_outcome_t::stopped,
+                                   termination_reason_t::none};
+            } else if (_active) {
+                start.attempt = _active_attempt;
+                if (intent == termination_intent_t::shutdown && !_effective_intent)
+                    _shutdown_claimed = true;
+                start.completion = _active_completion;
+            } else if (intent == termination_intent_t::retire
+                       && _state != maintenance_admission_state_t::serving) {
+                start.immediate = {intent, termination_outcome_t::blocked,
+                                   termination_reason_t::runtime_not_ready};
+            } else {
+                _active = true;
+                _shutdown_claimed = false;
+                _effective_intent.reset ();
+                start.attempt = _next_attempt++;
+                _active_attempt = start.attempt;
+                if (intent == termination_intent_t::shutdown)
+                    _effective_intent = termination_intent_t::shutdown;
+                start.completion =
+                  std::make_shared<detail::task_completion_source_t<termination_result_t>> ();
+                _active_completion = start.completion;
+                start.started = true;
+            }
+            return start;
+        })
+        .get ();
     if (start.immediate) {
         return task_t<termination_result_t> (
           result_t<termination_result_t>::success (*start.immediate));
@@ -1955,37 +1739,33 @@ task_t<termination_result_t> host_maintenance_runtime_t::terminate (
         return output;
     auto running = std::make_shared<task_t<termination_result_t>> (
       run_termination_attempt (intent, start.attempt));
-    detail::observe_task_completion (
-      *running, [completion = start.completion, running] (
-                  const result_t<termination_result_t> &settled) {
-          completion->complete (settled);
-      });
+    detail::observe_task_completion (*running, [completion = start.completion, running] (
+                                                 const result_t<termination_result_t> &settled) {
+        completion->complete (settled);
+    });
     return output;
 }
 
 task_t<termination_result_t>
-host_maintenance_runtime_t::run_termination_attempt (
-  termination_intent_t intent, std::uint64_t attempt)
+host_maintenance_runtime_t::run_termination_attempt (termination_intent_t intent,
+                                                     std::uint64_t attempt)
 {
     const auto result = intent == termination_intent_t::retire
-                        ? co_await run_retire ()
-                        : run_shutdown (termination_intent_t::shutdown);
+                          ? co_await run_retire ()
+                          : run_shutdown (termination_intent_t::shutdown);
     complete_attempt (attempt, result);
     co_return result;
 }
 
 std::vector<relocation_unit_t>
-host_maintenance_runtime_t::inventory_units (
-  std::vector<object_inventory_t> inventory)
+host_maintenance_runtime_t::inventory_units (std::vector<object_inventory_t> inventory)
 {
-    std::sort (
-      inventory.begin (), inventory.end (),
-      [] (const object_inventory_t &left,
-          const object_inventory_t &right) {
-          if (left.owner.kind != right.owner.kind)
-              return left.owner.kind < right.owner.kind;
-          return left.owner.key < right.owner.key;
-      });
+    std::sort (inventory.begin (), inventory.end (),
+               [] (const object_inventory_t &left, const object_inventory_t &right) {
+                   if (left.owner.kind != right.owner.kind)
+                       return left.owner.kind < right.owner.kind;
+                   return left.owner.key < right.owner.key;
+               });
     std::vector<relocation_unit_t> units;
     std::map<std::string, std::size_t> user_spots;
     for (const auto &object : inventory) {
@@ -2006,13 +1786,12 @@ host_maintenance_runtime_t::inventory_units (
         }
     }
     for (auto &unit : units) {
-        std::sort (
-          unit.participants.begin (), unit.participants.end (),
-          [] (const object_ref_t &left, const object_ref_t &right) {
-              if (left.kind != right.kind)
-                  return left.kind < right.kind;
-              return left.key < right.key;
-          });
+        std::sort (unit.participants.begin (), unit.participants.end (),
+                   [] (const object_ref_t &left, const object_ref_t &right) {
+                       if (left.kind != right.kind)
+                           return left.kind < right.kind;
+                       return left.key < right.key;
+                   });
     }
     return units;
 }
@@ -2021,20 +1800,17 @@ task_t<termination_result_t> host_maintenance_runtime_t::run_retire ()
 {
     auto inventory = _objects.try_begin_maintenance_inventory ();
     if (!inventory) {
-        co_return termination_result_t{
-          termination_intent_t::retire,
-          termination_outcome_t::blocked,
-          termination_reason_t::runtime_not_ready};
+        co_return termination_result_t{termination_intent_t::retire, termination_outcome_t::blocked,
+                                       termination_reason_t::runtime_not_ready};
     }
     _lane.run ([this] { _inventory_sealed = true; }).get ();
     for (const auto &object : *inventory) {
         if (object.state != object_state_t::ready) {
             _objects.end_maintenance_inventory ();
             _lane.run ([this] { _inventory_sealed = false; }).get ();
-            co_return termination_result_t{
-              termination_intent_t::retire,
-              termination_outcome_t::blocked,
-              termination_reason_t::state_incompatible};
+            co_return termination_result_t{termination_intent_t::retire,
+                                           termination_outcome_t::blocked,
+                                           termination_reason_t::state_incompatible};
         }
     }
     const auto units = inventory_units (std::move (*inventory));
@@ -2060,76 +1836,67 @@ task_t<termination_result_t> host_maintenance_runtime_t::run_retire ()
         bool shutdown = false;
         std::optional<termination_reason_t> blocked_reason;
     };
-    const auto preflight_state = _lane.run ([this, &preflight, exact_preflight] {
-        preflight_state_t state;
-        if (_shutdown_claimed) {
-            _effective_intent = termination_intent_t::shutdown;
-            _state = maintenance_admission_state_t::draining;
-            state.shutdown = true;
-        } else if (preflight.status
-                   == target_preflight_status_t::eligible
-                   && exact_preflight) {
-            _effective_intent = termination_intent_t::retire;
-            _state = maintenance_admission_state_t::retiring;
-        } else {
-            termination_reason_t reason =
-              termination_reason_t::target_unavailable;
-            switch (preflight.status) {
-            case target_preflight_status_t::store_unavailable:
-                reason = termination_reason_t::store_unavailable;
-                break;
-            case target_preflight_status_t::relocation_disabled:
-                reason = termination_reason_t::relocation_disabled;
-                break;
-            case target_preflight_status_t::state_incompatible:
-                reason = termination_reason_t::state_incompatible;
-                break;
-            case target_preflight_status_t::eligible:
-                reason = termination_reason_t::state_incompatible;
-                break;
-            default:
-                break;
+    const auto preflight_state =
+      _lane
+        .run ([this, &preflight, exact_preflight] {
+            preflight_state_t state;
+            if (_shutdown_claimed) {
+                _effective_intent = termination_intent_t::shutdown;
+                _state = maintenance_admission_state_t::draining;
+                state.shutdown = true;
+            } else if (preflight.status == target_preflight_status_t::eligible && exact_preflight) {
+                _effective_intent = termination_intent_t::retire;
+                _state = maintenance_admission_state_t::retiring;
+            } else {
+                termination_reason_t reason = termination_reason_t::target_unavailable;
+                switch (preflight.status) {
+                    case target_preflight_status_t::store_unavailable:
+                        reason = termination_reason_t::store_unavailable;
+                        break;
+                    case target_preflight_status_t::relocation_disabled:
+                        reason = termination_reason_t::relocation_disabled;
+                        break;
+                    case target_preflight_status_t::state_incompatible:
+                        reason = termination_reason_t::state_incompatible;
+                        break;
+                    case target_preflight_status_t::eligible:
+                        reason = termination_reason_t::state_incompatible;
+                        break;
+                    default:
+                        break;
+                }
+                _inventory_sealed = false;
+                state.blocked_reason = reason;
             }
-            _inventory_sealed = false;
-            state.blocked_reason = reason;
-        }
-        return state;
-    }).get ();
+            return state;
+        })
+        .get ();
     if (preflight_state.blocked_reason) {
         _objects.end_maintenance_inventory ();
-        co_return termination_result_t{
-          termination_intent_t::retire,
-          termination_outcome_t::blocked, *preflight_state.blocked_reason};
+        co_return termination_result_t{termination_intent_t::retire, termination_outcome_t::blocked,
+                                       *preflight_state.blocked_reason};
     }
     if (preflight_state.shutdown)
         co_return run_shutdown (termination_intent_t::shutdown);
 
     std::size_t committed_units = 0;
-    const auto fail_relocation =
-      [&] (termination_reason_t blocked_reason, bool irreversible = false) {
-          if (committed_units == 0 && !irreversible) {
-              return termination_result_t{
-                termination_intent_t::retire,
-                termination_outcome_t::blocked, blocked_reason};
-          }
-          _lane.run ([this] {
-              _state = maintenance_admission_state_t::draining;
-          }).get ();
-          _sessions.force_close_all ();
-          _lane.run ([this] {
-              _state = maintenance_admission_state_t::stopped;
-          }).get ();
-          return termination_result_t{
-            termination_intent_t::retire,
-            termination_outcome_t::force_stopped,
-            termination_reason_t::relocation_failed};
-      };
+    const auto fail_relocation = [&] (termination_reason_t blocked_reason,
+                                      bool irreversible = false) {
+        if (committed_units == 0 && !irreversible) {
+            return termination_result_t{termination_intent_t::retire,
+                                        termination_outcome_t::blocked, blocked_reason};
+        }
+        _lane.run ([this] { _state = maintenance_admission_state_t::draining; }).get ();
+        _sessions.force_close_all ();
+        _lane.run ([this] { _state = maintenance_admission_state_t::stopped; }).get ();
+        return termination_result_t{termination_intent_t::retire,
+                                    termination_outcome_t::force_stopped,
+                                    termination_reason_t::relocation_failed};
+    };
     for (const auto &eligible : preflight.units) {
-        if (eligible.unit.participants.empty ()
-            || eligible.target_node_id.empty ()
+        if (eligible.unit.participants.empty () || eligible.target_node_id.empty ()
             || eligible.encoded_upper_bound == 0) {
-            co_return fail_relocation (
-              termination_reason_t::state_incompatible);
+            co_return fail_relocation (termination_reason_t::state_incompatible);
         }
 
         std::vector<stream_barrier_t> barriers;
@@ -2137,8 +1904,7 @@ task_t<termination_result_t> host_maintenance_runtime_t::run_retire ()
         for (const auto &participant : eligible.unit.participants) {
             if (participant.kind != object_kind_t::actor)
                 continue;
-            auto [error, barrier] =
-              _sessions.try_seal_actor (participant);
+            auto [error, barrier] = _sessions.try_seal_actor (participant);
             if (error != stateful_error_t::none) {
                 barrier_ready = false;
                 break;
@@ -2148,141 +1914,114 @@ task_t<termination_result_t> host_maintenance_runtime_t::run_retire ()
         if (!barrier_ready) {
             for (const auto &barrier : barriers)
                 (void) _sessions.abort_barrier (barrier);
-            co_return fail_relocation (
-              termination_reason_t::state_incompatible);
+            co_return fail_relocation (termination_reason_t::state_incompatible);
         }
 
         std::vector<authority_relocation_reference_t> current;
         relocation_terminal_t terminal = relocation_terminal_t::blocked;
         if (eligible.unit.participants.size () == 1) {
             const auto result = co_await _relocation.relocate (
-              eligible.unit.participants.front (),
-              eligible.target_node_id, eligible.target_owner,
-              eligible.encoded_upper_bound,
-              eligible.inventory_digest,
-              eligible.canonical_wire);
+              eligible.unit.participants.front (), eligible.target_node_id, eligible.target_owner,
+              eligible.encoded_upper_bound, eligible.inventory_digest, eligible.canonical_wire);
             terminal = result.terminal;
             if (result.authority)
                 current.push_back (*result.authority);
         } else {
             const auto result = co_await _relocation.relocate_aggregate (
-              eligible.unit.participants, eligible.target_node_id,
-              eligible.target_owner,
-              eligible.encoded_upper_bound,
-              eligible.inventory_digest,
-              eligible.canonical_wire);
+              eligible.unit.participants, eligible.target_node_id, eligible.target_owner,
+              eligible.encoded_upper_bound, eligible.inventory_digest, eligible.canonical_wire);
             terminal = result.terminal;
             current = result.authority;
         }
         if (terminal != relocation_terminal_t::completed) {
             for (const auto &barrier : barriers)
                 (void) _sessions.abort_barrier (barrier);
-            co_return fail_relocation (
-              termination_reason_t::store_unavailable,
-              terminal == relocation_terminal_t::recovery_required
-                || terminal == relocation_terminal_t::data_lost);
+            co_return fail_relocation (termination_reason_t::store_unavailable,
+                                       terminal == relocation_terminal_t::recovery_required
+                                         || terminal == relocation_terminal_t::data_lost);
         }
         for (const auto &barrier : barriers) {
-            const auto target = std::find_if (
-              current.begin (), current.end (),
-              [&] (const authority_relocation_reference_t &reference) {
-                  return reference.source == barrier.actor;
-              });
+            const auto target =
+              std::find_if (current.begin (), current.end (),
+                            [&] (const authority_relocation_reference_t &reference) {
+                                return reference.source == barrier.actor;
+                            });
             if (target == current.end ()
-                || _sessions.commit_barrier (
-                     barrier, target->target)
-                     != stateful_error_t::none) {
-                co_return fail_relocation (
-                  termination_reason_t::relocation_failed, true);
+                || _sessions.commit_barrier (barrier, target->target) != stateful_error_t::none) {
+                co_return fail_relocation (termination_reason_t::relocation_failed, true);
             }
         }
         ++committed_units;
     }
-    _lane.run ([this] {
-        _state = maintenance_admission_state_t::draining;
-    }).get ();
+    _lane.run ([this] { _state = maintenance_admission_state_t::draining; }).get ();
     if (!_sessions.try_seal_all ()) {
         _sessions.force_close_all ();
-        _lane.run ([this] {
-            _state = maintenance_admission_state_t::stopped;
-        }).get ();
-        co_return termination_result_t{
-          termination_intent_t::retire,
-          termination_outcome_t::force_stopped,
-          termination_reason_t::relocation_failed};
+        _lane.run ([this] { _state = maintenance_admission_state_t::stopped; }).get ();
+        co_return termination_result_t{termination_intent_t::retire,
+                                       termination_outcome_t::force_stopped,
+                                       termination_reason_t::relocation_failed};
     }
-    _lane.run ([this] {
-        _state = maintenance_admission_state_t::stopped;
-    }).get ();
-    co_return termination_result_t{
-      termination_intent_t::retire,
-      termination_outcome_t::stopped,
-      termination_reason_t::none};
+    _lane.run ([this] { _state = maintenance_admission_state_t::stopped; }).get ();
+    co_return termination_result_t{termination_intent_t::retire, termination_outcome_t::stopped,
+                                   termination_reason_t::none};
 }
 
-termination_result_t host_maintenance_runtime_t::run_shutdown (
-  termination_intent_t effective_intent)
+termination_result_t
+host_maintenance_runtime_t::run_shutdown (termination_intent_t effective_intent)
 {
-    const auto acquire_inventory = _lane.run ([this, effective_intent] {
-        _effective_intent = effective_intent;
-        _state = maintenance_admission_state_t::draining;
-        return !_inventory_sealed;
-    }).get ();
+    const auto acquire_inventory = _lane
+                                     .run ([this, effective_intent] {
+                                         _effective_intent = effective_intent;
+                                         _state = maintenance_admission_state_t::draining;
+                                         return !_inventory_sealed;
+                                     })
+                                     .get ();
     if (acquire_inventory) {
-        const auto inventory =
-          _objects.try_begin_maintenance_inventory ();
+        const auto inventory = _objects.try_begin_maintenance_inventory ();
         if (!inventory) {
-            _lane.run ([this] {
-                _state = maintenance_admission_state_t::stopped;
-            }).get ();
-            return {
-              effective_intent,
-              termination_outcome_t::force_stopped,
-              termination_reason_t::teardown_failed};
+            _lane.run ([this] { _state = maintenance_admission_state_t::stopped; }).get ();
+            return {effective_intent, termination_outcome_t::force_stopped,
+                    termination_reason_t::teardown_failed};
         }
         _lane.run ([this] { _inventory_sealed = true; }).get ();
     }
     const auto sealed = _sessions.try_seal_all ();
     if (!sealed)
         _sessions.force_close_all ();
-    _lane.run ([this] {
-        _state = maintenance_admission_state_t::stopped;
-    }).get ();
-    return {
-      effective_intent,
-      sealed ? termination_outcome_t::stopped
-             : termination_outcome_t::force_stopped,
-      sealed ? termination_reason_t::none
-             : termination_reason_t::teardown_failed};
+    _lane.run ([this] { _state = maintenance_admission_state_t::stopped; }).get ();
+    return {effective_intent,
+            sealed ? termination_outcome_t::stopped : termination_outcome_t::force_stopped,
+            sealed ? termination_reason_t::none : termination_reason_t::teardown_failed};
 }
 
-void host_maintenance_runtime_t::complete_attempt (
-  std::uint64_t attempt,
-  const termination_result_t &result)
+void host_maintenance_runtime_t::complete_attempt (std::uint64_t attempt,
+                                                   const termination_result_t &result)
 {
-    const auto completion = _lane.run ([this, attempt, &result] {
-        struct completion_t
-        {
-            bool release_inventory = false;
-            observer_t observer;
-        } completion;
-        _attempt_results[attempt] = result;
-        _active = false;
-        _active_attempt = 0;
-        _active_completion.reset ();
-        _shutdown_claimed = false;
-        _effective_intent.reset ();
-        if (result.outcome != termination_outcome_t::blocked)
-            _terminal = result;
-        else {
-            completion.release_inventory = _inventory_sealed;
-            _inventory_sealed = false;
-            if (_state == maintenance_admission_state_t::retiring)
-                _state = maintenance_admission_state_t::serving;
-        }
-        completion.observer = _observer;
-        return completion;
-    }).get ();
+    const auto completion = _lane
+                              .run ([this, attempt, &result] {
+                                  struct completion_t
+                                  {
+                                      bool release_inventory = false;
+                                      observer_t observer;
+                                  } completion;
+                                  _attempt_results[attempt] = result;
+                                  _active = false;
+                                  _active_attempt = 0;
+                                  _active_completion.reset ();
+                                  _shutdown_claimed = false;
+                                  _effective_intent.reset ();
+                                  if (result.outcome != termination_outcome_t::blocked)
+                                      _terminal = result;
+                                  else {
+                                      completion.release_inventory = _inventory_sealed;
+                                      _inventory_sealed = false;
+                                      if (_state == maintenance_admission_state_t::retiring)
+                                          _state = maintenance_admission_state_t::serving;
+                                  }
+                                  completion.observer = _observer;
+                                  return completion;
+                              })
+                              .get ();
     if (completion.release_inventory)
         _objects.end_maintenance_inventory ();
     if (completion.observer) {
@@ -2302,28 +2041,23 @@ namespace zlink::framework::runtime::host
 void public_host_runtime_t::configure_relocation (
   std::shared_ptr<stateful::authority_relocation_port_t> authority,
   std::shared_ptr<stateful::relocation_store_port_t> relocations,
-  std::shared_ptr<stateful::aggregate_authority_port_t>
-    aggregate_authority,
+  std::shared_ptr<stateful::aggregate_authority_port_t> aggregate_authority,
   stateful::relocation_limits_t limits,
   stateful::maintenance_runtime_t::observer_t relocation_observer)
 {
     if (!authority || !relocations)
-        throw std::invalid_argument (
-          "relocation providers must not be null");
+        throw std::invalid_argument ("relocation providers must not be null");
     std::lock_guard lock (_mutex);
     if (_started || _maintenance || _termination) {
-        throw std::logic_error (
-          "relocation providers must be configured once before host start");
+        throw std::logic_error ("relocation providers must be configured once before host start");
     }
     _relocation_authority = authority;
     _aggregate_relocation_authority = aggregate_authority;
     _session_relocations = relocations;
     _relocation_cutover_wait = limits.cutover_wait_timeout;
-    auto maintenance =
-      std::make_unique<stateful::maintenance_runtime_t> (
-        _objects, std::move (authority), std::move (relocations),
-        limits, std::move (relocation_observer),
-        std::move (aggregate_authority));
+    auto maintenance = std::make_unique<stateful::maintenance_runtime_t> (
+      _objects, std::move (authority), std::move (relocations), limits,
+      std::move (relocation_observer), std::move (aggregate_authority));
     maintenance->attach_relocation_wire (*_relocation_wire);
     _maintenance = std::move (maintenance);
 }
@@ -2344,56 +2078,44 @@ void public_host_runtime_t::configure_relocation_source_metrics (
         maintenance_ptr = _maintenance.get ();
     }
     if (maintenance_ptr)
-        maintenance_ptr->configure_route_convergence_metric (
-          std::move (route_convergence_metric));
+        maintenance_ptr->configure_route_convergence_metric (std::move (route_convergence_metric));
 }
 
 void public_host_runtime_t::configure_maintenance (
   stateful::maintenance_provider_set_t providers,
   stateful::relocation_limits_t limits,
   stateful::maintenance_runtime_t::observer_t relocation_observer,
-  stateful::host_maintenance_runtime_t::observer_t
-    termination_observer)
+  stateful::host_maintenance_runtime_t::observer_t termination_observer)
 {
     std::lock_guard lock (_mutex);
     if (_started || _maintenance || _termination) {
-        throw std::logic_error (
-          "maintenance providers must be configured once before host start");
+        throw std::logic_error ("maintenance providers must be configured once before host start");
     }
     auto targets = providers.targets;
     _relocation_authority = providers.authority;
     _aggregate_relocation_authority = providers.aggregate_authority;
     _session_relocations = providers.relocations;
     _relocation_cutover_wait = limits.cutover_wait_timeout;
-    auto maintenance =
-      std::make_unique<stateful::maintenance_runtime_t> (
-      _objects, std::move (providers), limits,
-      std::move (relocation_observer));
+    auto maintenance = std::make_unique<stateful::maintenance_runtime_t> (
+      _objects, std::move (providers), limits, std::move (relocation_observer));
     maintenance->attach_relocation_wire (*_relocation_wire);
-    auto termination =
-      std::make_unique<stateful::host_maintenance_runtime_t> (
-        _objects, _sessions, *maintenance, std::move (targets),
-        std::move (termination_observer));
+    auto termination = std::make_unique<stateful::host_maintenance_runtime_t> (
+      _objects, _sessions, *maintenance, std::move (targets), std::move (termination_observer));
     _maintenance = std::move (maintenance);
     _termination = std::move (termination);
-    _maintenance_started = [this] {
-        _termination->mark_serving ();
-    };
+    _maintenance_started = [this] { _termination->mark_serving (); };
     _maintenance_closing = [this] {
-        (void) _termination->terminate (
-          stateful::termination_intent_t::shutdown);
+        (void) _termination->terminate (stateful::termination_intent_t::shutdown);
     };
 }
 
-stateful::maintenance_runtime_t *
-public_host_runtime_t::maintenance () noexcept
+stateful::maintenance_runtime_t *public_host_runtime_t::maintenance () noexcept
 {
     std::lock_guard lock (_mutex);
     return _maintenance.get ();
 }
 
-stateful::host_maintenance_runtime_t *
-public_host_runtime_t::termination () noexcept
+stateful::host_maintenance_runtime_t *public_host_runtime_t::termination () noexcept
 {
     std::lock_guard lock (_mutex);
     return _termination.get ();

@@ -1,6 +1,6 @@
 package systems.zlink.framework.runtime.internal.completion;
-import java.util.Objects;
 
+import java.util.Objects;
 import java.util.concurrent.atomic.AtomicReference;
 
 /** Gives one terminal cause exclusive ownership of an operation completion. */

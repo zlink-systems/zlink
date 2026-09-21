@@ -4,25 +4,23 @@ namespace Zlink.Framework.Runtime.Handlers;
 
 internal sealed class ZLinkHandlerDispatcher(
     IServiceScopeFactory scopeFactory,
-    ZLinkFrameworkRegistration registration)
+    ZLinkFrameworkRegistration registration
+)
 {
     public ValueTask<ZLinkHandlerDispatchResult> DispatchAsync(
         ZLinkHandlerEndpointDescriptor endpoint,
         object? message,
         IZLinkMessageContext context,
         ZLinkHandlerDispatchKind dispatchKind,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken
+    )
     {
         return DispatchCoreAsync(
             context,
             dispatchKind,
-            (instances, ct) => InvokeHandlerAsync(
-                endpoint,
-                message,
-                context,
-                instances,
-                ct),
-            cancellationToken);
+            (instances, ct) => InvokeHandlerAsync(endpoint, message, context, instances, ct),
+            cancellationToken
+        );
     }
 
     public ValueTask<ZLinkHandlerDispatchResult> DispatchRouteAsync(
@@ -30,7 +28,8 @@ internal sealed class ZLinkHandlerDispatcher(
         object? message,
         ZLinkRouteMessageContext context,
         ZLinkHandlerDispatchKind dispatchKind,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken
+    )
     {
         return DispatchCoreAsync(
             context,
@@ -38,34 +37,29 @@ internal sealed class ZLinkHandlerDispatcher(
             async (instances, ct) =>
             {
                 var handler = instances.Resolve(descriptor.HandlerType);
-                return await ZLinkHandlerInvocationEngine.InvokeAsync(
-                        handler,
-                        descriptor.Invoker,
-                        message,
-                        context,
-                        ct)
+                return await ZLinkHandlerInvocationEngine
+                    .InvokeAsync(handler, descriptor.Invoker, message, context, ct)
                     .ConfigureAwait(false);
             },
-            cancellationToken);
+            cancellationToken
+        );
     }
 
     private async ValueTask<ZLinkHandlerDispatchResult> DispatchCoreAsync(
         IZLinkMessageContext context,
         ZLinkHandlerDispatchKind dispatchKind,
-        Func<ZLinkScopedHandlerInstanceOwner, CancellationToken, ValueTask<object?>>
-            invokeHandler,
-        CancellationToken cancellationToken)
+        Func<ZLinkScopedHandlerInstanceOwner, CancellationToken, ValueTask<object?>> invokeHandler,
+        CancellationToken cancellationToken
+    )
     {
         await using var scope = scopeFactory.CreateAsyncScope();
-        await using var instances =
-            new ZLinkScopedHandlerInstanceOwner(scope.ServiceProvider);
+        await using var instances = new ZLinkScopedHandlerInstanceOwner(scope.ServiceProvider);
         if (registration.Filters.Count == 0)
         {
             // No filters registered (the common configuration): invoke the
             // handler directly instead of building the filter pipeline's
             // closures for an empty chain.
-            var direct = await invokeHandler(instances, cancellationToken)
-                .ConfigureAwait(false);
+            var direct = await invokeHandler(instances, cancellationToken).ConfigureAwait(false);
             return new ZLinkHandlerDispatchResult(true, direct);
         }
 
@@ -80,7 +74,8 @@ internal sealed class ZLinkHandlerDispatcher(
                 handlerInvoked = true;
                 result = await invokeHandler(instances, ct).ConfigureAwait(false);
             },
-            cancellationToken);
+            cancellationToken
+        );
         await pipeline().ConfigureAwait(false);
         return new ZLinkHandlerDispatchResult(handlerInvoked, result);
     }
@@ -89,10 +84,10 @@ internal sealed class ZLinkHandlerDispatcher(
         IZLinkHandlerFilterContext context,
         ZLinkScopedHandlerInstanceOwner instances,
         Func<CancellationToken, ValueTask> invokeHandler,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken
+    )
     {
-        ZLinkHandlerFilterNext pipeline =
-            () => invokeHandler(cancellationToken);
+        ZLinkHandlerFilterNext pipeline = () => invokeHandler(cancellationToken);
 
         for (var index = registration.Filters.Count - 1; index >= 0; index--)
         {
@@ -108,8 +103,7 @@ internal sealed class ZLinkHandlerDispatcher(
         return pipeline;
     }
 
-    private static ZLinkHandlerFilterNext InvokeAtMostOnce(
-        ZLinkHandlerFilterNext next)
+    private static ZLinkHandlerFilterNext InvokeAtMostOnce(ZLinkHandlerFilterNext next)
     {
         var invoked = 0;
         return () =>
@@ -120,7 +114,9 @@ internal sealed class ZLinkHandlerDispatcher(
             return ValueTask.FromException(
                 new ZLinkFrameworkException(
                     ZLinkFrameworkErrorKind.InvalidOperation,
-                    "A handler filter cannot invoke next more than once."));
+                    "A handler filter cannot invoke next more than once."
+                )
+            );
         };
     }
 
@@ -129,21 +125,21 @@ internal sealed class ZLinkHandlerDispatcher(
         object? message,
         IZLinkMessageContext context,
         ZLinkScopedHandlerInstanceOwner instances,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken
+    )
     {
         var handler = instances.Resolve(endpoint.DeclaringType);
-        return await ZLinkHandlerInvocationEngine.InvokeAsync(
+        return await ZLinkHandlerInvocationEngine
+            .InvokeAsync(
                 handler,
                 endpoint.Invoker,
                 endpoint.ArgumentPlan,
                 message,
                 context,
-                cancellationToken)
+                cancellationToken
+            )
             .ConfigureAwait(false);
     }
-
 }
 
-internal readonly record struct ZLinkHandlerDispatchResult(
-    bool HandlerInvoked,
-    object? Value);
+internal readonly record struct ZLinkHandlerDispatchResult(bool HandlerInvoked, object? Value);

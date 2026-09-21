@@ -1,5 +1,5 @@
-using Zlink.Framework.Contracts.Messaging;
 using Zlink.Framework.Contracts.Handlers;
+using Zlink.Framework.Contracts.Messaging;
 using Zlink.Framework.LocationProvider;
 
 namespace Zlink.Framework.UnitTests;
@@ -11,7 +11,8 @@ public abstract class RegistrationValidationSupport
         public ValueTask InvokeAsync(
             IZLinkHandlerFilterContext context,
             ZLinkHandlerFilterNext next,
-            CancellationToken cancellationToken)
+            CancellationToken cancellationToken
+        )
         {
             return next();
         }
@@ -28,7 +29,8 @@ public abstract class RegistrationValidationSupport
         public ValueTask<TestChannelReply> HandleAsync(
             TestChannelRequest request,
             IZLinkMessageContext context,
-            CancellationToken cancellationToken)
+            CancellationToken cancellationToken
+        )
         {
             _ = context;
             cancellationToken.ThrowIfCancellationRequested();
@@ -42,7 +44,8 @@ public abstract class RegistrationValidationSupport
         public ValueTask<TestChannelReply> HandleAsync(
             TestChannelRequest request,
             IZLinkMessageContext context,
-            CancellationToken cancellationToken)
+            CancellationToken cancellationToken
+        )
         {
             _ = context;
             cancellationToken.ThrowIfCancellationRequested();
@@ -57,7 +60,8 @@ public abstract class RegistrationValidationSupport
         public ValueTask HandleAsync(
             TestSendMessage message,
             IZLinkMessageContext context,
-            CancellationToken cancellationToken)
+            CancellationToken cancellationToken
+        )
         {
             _ = message;
             _ = context;
@@ -74,7 +78,8 @@ public abstract class RegistrationValidationSupport
         public ValueTask HandleAsync(
             TestPublishedEvent message,
             ZLinkPublishMessageContext context,
-            CancellationToken cancellationToken)
+            CancellationToken cancellationToken
+        )
         {
             _ = message;
             cancellationToken.ThrowIfCancellationRequested();
@@ -93,7 +98,8 @@ public abstract class RegistrationValidationSupport
         public ValueTask<TestRouteReply> HandleAsync(
             TestRouteRequest request,
             ZLinkRouteMessageContext context,
-            CancellationToken cancellationToken)
+            CancellationToken cancellationToken
+        )
         {
             _ = context;
             cancellationToken.ThrowIfCancellationRequested();
@@ -107,7 +113,8 @@ public abstract class RegistrationValidationSupport
         public ValueTask<TestRouteReply> HandleAsync(
             TestRouteRequest request,
             ZLinkRouteMessageContext context,
-            CancellationToken cancellationToken)
+            CancellationToken cancellationToken
+        )
         {
             _ = context;
             cancellationToken.ThrowIfCancellationRequested();
@@ -130,7 +137,8 @@ public abstract class RegistrationValidationSupport
         public ValueTask HandleAttributedAsync(
             AttributedSessionPacketMessage message,
             ZLinkSessionDispatchContext dispatch,
-            CancellationToken cancellationToken)
+            CancellationToken cancellationToken
+        )
         {
             _ = message;
             _ = dispatch;
@@ -157,25 +165,24 @@ public abstract class RegistrationValidationSupport
         public ValueTask OnDispatchAsync(
             ZLinkSessionDispatchContext dispatch,
             Message body,
-            CancellationToken cancellationToken)
+            CancellationToken cancellationToken
+        )
         {
             return ValueTask.CompletedTask;
         }
     }
 
-    protected interface ITestSessionDependencyHandler
-    {
-    }
+    protected interface ITestSessionDependencyHandler { }
 
-    protected sealed class TestSessionDependencyHandler : ITestSessionDependencyHandler
-    {
-    }
+    protected sealed class TestSessionDependencyHandler : ITestSessionDependencyHandler { }
 
     protected sealed class TestSessionWithEnumerableHandlers(
         IZLinkSessionContext context,
-        IEnumerable<ITestSessionDependencyHandler> handlers) : IZLinkSession
+        IEnumerable<ITestSessionDependencyHandler> handlers
+    ) : IZLinkSession
     {
-        public IReadOnlyCollection<ITestSessionDependencyHandler> Handlers { get; } = handlers.ToArray();
+        public IReadOnlyCollection<ITestSessionDependencyHandler> Handlers { get; } =
+            handlers.ToArray();
         public IZLinkSessionContext Context { get; } = context;
 
         public ValueTask OnConnectedAsync(CancellationToken cancellationToken)
@@ -196,7 +203,8 @@ public abstract class RegistrationValidationSupport
         public ValueTask OnDispatchAsync(
             ZLinkSessionDispatchContext dispatch,
             Message body,
-            CancellationToken cancellationToken)
+            CancellationToken cancellationToken
+        )
         {
             return ValueTask.CompletedTask;
         }
@@ -232,13 +240,15 @@ public abstract class RegistrationValidationSupport
         public ValueTask CloseAsync() => ValueTask.CompletedTask;
     }
 
-    protected sealed class TestSessionPacketHandler : IZLinkSessionPacketHandler<TestSessionPacketContext, TestSessionPacketMessage>
+    protected sealed class TestSessionPacketHandler
+        : IZLinkSessionPacketHandler<TestSessionPacketContext, TestSessionPacketMessage>
     {
         public ValueTask HandleAsync(
             TestSessionPacketContext context,
             ZLinkSessionDispatchContext dispatch,
             TestSessionPacketMessage message,
-            CancellationToken cancellationToken)
+            CancellationToken cancellationToken
+        )
         {
             _ = dispatch;
             _ = message;
@@ -258,13 +268,15 @@ public abstract class RegistrationValidationSupport
     protected sealed record AsyncDisposableSessionPacketMessage;
 
     protected sealed class AsyncDisposableSessionPacketHandler(AsyncSessionHandlerLifetime lifetime)
-        : IZLinkSessionPacketHandler<TestSessionPacketContext, AsyncDisposableSessionPacketMessage>, IAsyncDisposable
+        : IZLinkSessionPacketHandler<TestSessionPacketContext, AsyncDisposableSessionPacketMessage>,
+            IAsyncDisposable
     {
         public ValueTask HandleAsync(
             TestSessionPacketContext context,
             ZLinkSessionDispatchContext dispatch,
             AsyncDisposableSessionPacketMessage message,
-            CancellationToken cancellationToken)
+            CancellationToken cancellationToken
+        )
         {
             _ = context;
             _ = dispatch;
@@ -281,8 +293,8 @@ public abstract class RegistrationValidationSupport
         }
     }
 
-    protected sealed class TestSessionWithConfiguredPacketHandler(
-        IZLinkSessionContext context) : IZLinkSession
+    protected sealed class TestSessionWithConfiguredPacketHandler(IZLinkSessionContext context)
+        : IZLinkSession
     {
         public IZLinkSessionContext Context { get; } = context;
 
@@ -309,7 +321,8 @@ public abstract class RegistrationValidationSupport
         public ValueTask OnDispatchAsync(
             ZLinkSessionDispatchContext dispatch,
             Message body,
-            CancellationToken cancellationToken)
+            CancellationToken cancellationToken
+        )
         {
             return ValueTask.CompletedTask;
         }
@@ -326,21 +339,22 @@ public abstract class RegistrationValidationSupport
             DuplicateSessionPacketContext context,
             ZLinkSessionDispatchContext dispatch,
             DuplicateSessionPacketMessage message,
-            CancellationToken cancellationToken)
+            CancellationToken cancellationToken
+        )
         {
             return ValueTask.CompletedTask;
         }
     }
 
-    protected sealed class
-        SecondDuplicateSessionPacketHandler
+    protected sealed class SecondDuplicateSessionPacketHandler
         : IZLinkSessionPacketHandler<DuplicateSessionPacketContext, DuplicateSessionPacketMessage>
     {
         public ValueTask HandleAsync(
             DuplicateSessionPacketContext context,
             ZLinkSessionDispatchContext dispatch,
             DuplicateSessionPacketMessage message,
-            CancellationToken cancellationToken)
+            CancellationToken cancellationToken
+        )
         {
             return ValueTask.CompletedTask;
         }
@@ -370,7 +384,8 @@ public abstract class RegistrationValidationSupport
     {
         public ValueTask<TestActor> CreateAsync(
             IZLinkActorContext context,
-            CancellationToken cancellationToken = default)
+            CancellationToken cancellationToken = default
+        )
         {
             cancellationToken.ThrowIfCancellationRequested();
             return ValueTask.FromResult(new TestActor(context));
@@ -381,14 +396,14 @@ public abstract class RegistrationValidationSupport
     {
         public ValueTask<byte[]> CaptureAsync(
             TestActor actor,
-            CancellationToken cancellationToken) =>
-            ValueTask.FromResult(Array.Empty<byte>());
+            CancellationToken cancellationToken
+        ) => ValueTask.FromResult(Array.Empty<byte>());
 
         public ValueTask RestoreAsync(
             TestActor actor,
             ReadOnlyMemory<byte> payload,
-            CancellationToken cancellationToken) =>
-            ValueTask.CompletedTask;
+            CancellationToken cancellationToken
+        ) => ValueTask.CompletedTask;
     }
 
     protected sealed class TestActor(IZLinkActorContext context) : IZLinkActor
@@ -402,23 +417,23 @@ public abstract class RegistrationValidationSupport
             ZLinkBlobReference reference,
             ReadOnlyMemory<byte> payload,
             TimeSpan retention,
-            CancellationToken cancellationToken = default) =>
-            throw new NotSupportedException();
+            CancellationToken cancellationToken = default
+        ) => throw new NotSupportedException();
 
         public ValueTask<ZLinkBlobReadResult> ReadAsync(
             ZLinkBlobReference reference,
-            CancellationToken cancellationToken = default) =>
-            throw new NotSupportedException();
+            CancellationToken cancellationToken = default
+        ) => throw new NotSupportedException();
 
         public ValueTask<ZLinkBlobRenewResult> RenewAsync(
             ZLinkBlobReference reference,
             TimeSpan retention,
-            CancellationToken cancellationToken = default) =>
-            throw new NotSupportedException();
+            CancellationToken cancellationToken = default
+        ) => throw new NotSupportedException();
 
         public ValueTask DeleteAsync(
             ZLinkBlobReference reference,
-            CancellationToken cancellationToken = default) =>
-            ValueTask.FromException(new NotSupportedException());
+            CancellationToken cancellationToken = default
+        ) => ValueTask.FromException(new NotSupportedException());
     }
 }

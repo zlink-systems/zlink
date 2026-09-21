@@ -16,8 +16,7 @@ namespace detail
 
 inline bool is_valid_contract_utf8 (std::string_view value) noexcept
 {
-    const auto *bytes =
-      reinterpret_cast<const unsigned char *> (value.data ());
+    const auto *bytes = reinterpret_cast<const unsigned char *> (value.data ());
     std::size_t index = 0;
     while (index < value.size ()) {
         const auto first = bytes[index++];
@@ -50,22 +49,18 @@ inline bool is_valid_contract_utf8 (std::string_view value) noexcept
         }
         if ((continuation_count == 1 && code_point < 0x80)
             || (continuation_count == 2 && code_point < 0x800)
-            || (continuation_count == 3 && code_point < 0x10000)
-            || code_point > 0x10ffff
+            || (continuation_count == 3 && code_point < 0x10000) || code_point > 0x10ffff
             || (code_point >= 0xd800 && code_point <= 0xdfff))
             return false;
     }
     return true;
 }
 
-inline std::string placement_value (std::string value,
-                                    std::string_view name)
+inline std::string placement_value (std::string value, std::string_view name)
 {
-    if (value.empty () || value.size () > 255
-        || !is_valid_contract_utf8 (value))
-        throw std::invalid_argument (
-          std::string (name)
-          + " must contain 1..255 non-NUL UTF-8 bytes");
+    if (value.empty () || value.size () > 255 || !is_valid_contract_utf8 (value))
+        throw std::invalid_argument (std::string (name)
+                                     + " must contain 1..255 non-NUL UTF-8 bytes");
     return value;
 }
 

@@ -15,17 +15,13 @@ public class ZLinkFrameworkException extends RuntimeException {
     }
 
     public ZLinkFrameworkException(
-        ZLinkFrameworkErrorKind kind,
-        String message,
-        Throwable cause,
-        Map<String, String> metadata) {
+            ZLinkFrameworkErrorKind kind,
+            String message,
+            Throwable cause,
+            Map<String, String> metadata) {
         super(message, cause);
-        this.kind = kind == null
-            ? ZLinkFrameworkErrorKind.INTERNAL_FAILURE
-            : kind;
-        this.metadata = metadata == null || metadata.isEmpty()
-            ? Map.of()
-            : Map.copyOf(metadata);
+        this.kind = kind == null ? ZLinkFrameworkErrorKind.INTERNAL_FAILURE : kind;
+        this.metadata = metadata == null || metadata.isEmpty() ? Map.of() : Map.copyOf(metadata);
     }
 
     public ZLinkFrameworkErrorKind kind() {
@@ -33,12 +29,11 @@ public class ZLinkFrameworkException extends RuntimeException {
     }
 
     /**
-     * Framework-owned reply metadata carried with the error. Framework-generated
-     * errors mark their origin here ({@code zlink.origin=framework}); errors an
-     * application handler raised never carry that marker.
+     * Framework-owned reply metadata carried with the error. Framework-generated errors mark their
+     * origin here ({@code zlink.origin=framework}); errors an application handler raised never
+     * carry that marker.
      */
     public Map<String, String> metadata() {
         return metadata;
     }
-
 }

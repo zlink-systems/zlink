@@ -80,20 +80,20 @@ function relocationGolden(): {
   readonly canonical: readonly GoldenEntry[];
   readonly malformed: readonly MalformedEntry[];
 } {
-  return JSON.parse(readFileSync(
-    '../../runtime/protocol/golden/relocation-control-v1.json',
-    'utf8'
-  )) as {
+  return JSON.parse(
+    readFileSync('../../runtime/protocol/golden/relocation-control-v1.json', 'utf8')
+  ) as {
     readonly canonical: readonly GoldenEntry[];
     readonly malformed: readonly MalformedEntry[];
   };
 }
 
 function sessionGolden(): readonly GoldenEntry[] {
-  return (JSON.parse(readFileSync(
-    '../../runtime/protocol/golden/session-relocation-barrier-v1.json',
-    'utf8'
-  )) as { readonly canonical: readonly GoldenEntry[] }).canonical;
+  return (
+    JSON.parse(
+      readFileSync('../../runtime/protocol/golden/session-relocation-barrier-v1.json', 'utf8')
+    ) as { readonly canonical: readonly GoldenEntry[] }
+  ).canonical;
 }
 
 interface ActorJoinGoldenEntry {
@@ -121,10 +121,9 @@ function actorJoinReplyGolden(): {
   readonly canonical: readonly ActorJoinGoldenEntry[];
   readonly malformed: readonly ActorJoinMalformedEntry[];
 } {
-  return JSON.parse(readFileSync(
-    '../../runtime/protocol/golden/actor-join-reply-v1.json',
-    'utf8'
-  )) as {
+  return JSON.parse(
+    readFileSync('../../runtime/protocol/golden/actor-join-reply-v1.json', 'utf8')
+  ) as {
     readonly canonical: readonly ActorJoinGoldenEntry[];
     readonly malformed: readonly ActorJoinMalformedEntry[];
   };
@@ -170,13 +169,26 @@ function generatedRelocationRoundTrip(entry: GoldenEntry): Buffer {
 function generatedRelocationDecode(entry: GoldenEntry): void {
   const encoded = Buffer.from(entry.hex, 'hex');
   switch (entry.command) {
-    case 30: decodeRelocationReady30(encoded); return;
-    case 31: decodeRelocationData31(encoded); return;
-    case 34: decodeRelocationCutover34(encoded); return;
-    case 40: decodeRelocationPrepare40(encoded); return;
-    case 52: decodeRelocationState52(encoded); return;
-    case 53: decodeRelocationFailed53(encoded); return;
-    default: throw new Error(`Unexpected relocation command '${entry.command}'.`);
+    case 30:
+      decodeRelocationReady30(encoded);
+      return;
+    case 31:
+      decodeRelocationData31(encoded);
+      return;
+    case 34:
+      decodeRelocationCutover34(encoded);
+      return;
+    case 40:
+      decodeRelocationPrepare40(encoded);
+      return;
+    case 52:
+      decodeRelocationState52(encoded);
+      return;
+    case 53:
+      decodeRelocationFailed53(encoded);
+      return;
+    default:
+      throw new Error(`Unexpected relocation command '${entry.command}'.`);
   }
 }
 
@@ -184,17 +196,21 @@ test('batch-3 relocation hand/generated codecs are byte-equal on canonical golde
   const golden = relocationGolden();
   for (const entry of golden.canonical) {
     const encoded = Buffer.from(entry.hex, 'hex');
-    const hand = encodeMaintenanceRelocationControl(
-      decodeMaintenanceRelocationControl(encoded)
-    );
+    const hand = encodeMaintenanceRelocationControl(decodeMaintenanceRelocationControl(encoded));
     assert.equal(hand.toString('hex'), entry.hex, `hand:${entry.name}`);
-    assert.equal(generatedRelocationRoundTrip(entry).toString('hex'), entry.hex,
-      `generated:${entry.name}`);
+    assert.equal(
+      generatedRelocationRoundTrip(entry).toString('hex'),
+      entry.hex,
+      `generated:${entry.name}`
+    );
     assert.deepEqual(hand, generatedRelocationRoundTrip(entry), entry.name);
   }
   for (const entry of golden.malformed) {
-    assert.throws(() => decodeMaintenanceRelocationControl(Buffer.from(entry.hex, 'hex')),
-      Error, `hand:${entry.name}`);
+    assert.throws(
+      () => decodeMaintenanceRelocationControl(Buffer.from(entry.hex, 'hex')),
+      Error,
+      `hand:${entry.name}`
+    );
     assert.throws(() => generatedRelocationDecode(entry), Error, `generated:${entry.name}`);
   }
 });
@@ -202,7 +218,7 @@ test('batch-3 relocation hand/generated codecs are byte-equal on canonical golde
 test('commands 30, 31, 34, 40, 52, and 53 match the shared golden vectors', () => {
   const golden = relocationGolden();
   const entries = golden.canonical;
-  const dataEntry = entries.find(entry => entry.name === 'relocationDataPostCaptureIngress');
+  const dataEntry = entries.find((entry) => entry.name === 'relocationDataPostCaptureIngress');
   assert.ok(dataEntry);
   const base = {
     relocation: { high: 4n, low: 5n },
@@ -259,16 +275,22 @@ test('commands 30, 31, 34, 40, 52, and 53 match the shared golden vectors', () =
     }
   ];
 
-  assert.deepEqual(entries.map(entry => entry.command), [30, 53, 31, 34, 40, 52, 52]);
-  assert.deepEqual(entries.map(entry => entry.name), [
-    'relocationReady',
-    'relocationFailed',
-    'relocationDataPostCaptureIngress',
-    'relocationCutover',
-    'relocationPrepareRestore',
-    'relocationStateChunk',
-    'relocationStateFinalChunk'
-  ]);
+  assert.deepEqual(
+    entries.map((entry) => entry.command),
+    [30, 53, 31, 34, 40, 52, 52]
+  );
+  assert.deepEqual(
+    entries.map((entry) => entry.name),
+    [
+      'relocationReady',
+      'relocationFailed',
+      'relocationDataPostCaptureIngress',
+      'relocationCutover',
+      'relocationPrepareRestore',
+      'relocationStateChunk',
+      'relocationStateFinalChunk'
+    ]
+  );
   for (const [index, entry] of entries.entries()) {
     const encoded = Buffer.from(entry.hex, 'hex');
     const decoded = decodeMaintenanceRelocationControl(encoded);
@@ -363,52 +385,87 @@ test('commands 42, 43, and 44 match the shared Session golden vectors', () => {
   };
   const entries = sessionGolden();
 
-  assert.deepEqual(entries.map(entry => entry.command), [42, 43, 44, 44]);
-  assertGoldenRoundTrip(entries[0]!, seal,
-    encodeSessionRelocationSeal, decodeSessionRelocationSeal);
-  assertGoldenRoundTrip(entries[1]!, sealed,
-    encodeSessionRelocationSealed, decodeSessionRelocationSealed);
-  assertGoldenRoundTrip(entries[2]!, commit,
-    encodeSessionRelocationRoute, decodeSessionRelocationRoute);
-  assertGoldenRoundTrip(entries[3]!, abort,
-    encodeSessionRelocationRoute, decodeSessionRelocationRoute);
+  assert.deepEqual(
+    entries.map((entry) => entry.command),
+    [42, 43, 44, 44]
+  );
+  assertGoldenRoundTrip(
+    entries[0]!,
+    seal,
+    encodeSessionRelocationSeal,
+    decodeSessionRelocationSeal
+  );
+  assertGoldenRoundTrip(
+    entries[1]!,
+    sealed,
+    encodeSessionRelocationSealed,
+    decodeSessionRelocationSealed
+  );
+  assertGoldenRoundTrip(
+    entries[2]!,
+    commit,
+    encodeSessionRelocationRoute,
+    decodeSessionRelocationRoute
+  );
+  assertGoldenRoundTrip(
+    entries[3]!,
+    abort,
+    encodeSessionRelocationRoute,
+    decodeSessionRelocationRoute
+  );
 
   const reserved = Buffer.from(entries[2]!.hex, 'hex');
   reserved[3] = 45;
   assert.throws(() => decodeSessionRelocationRoute(reserved));
-  assert.throws(() => encodeSessionRelocationSeal({
-    ...seal,
-    senderRole: 'target'
-  } as never), /sender role/);
+  assert.throws(
+    () =>
+      encodeSessionRelocationSeal({
+        ...seal,
+        senderRole: 'target'
+      } as never),
+    /sender role/
+  );
 });
 
 test('batch-3 Session barrier hand/generated codecs are byte-equal and reject the same malformed bytes', () => {
   for (const entry of sessionGolden()) {
     const encoded = Buffer.from(entry.hex, 'hex');
-    const hand = entry.command === 42
-      ? encodeSessionRelocationSeal(decodeSessionRelocationSeal(encoded))
-      : entry.command === 43
-        ? encodeSessionRelocationSealed(decodeSessionRelocationSealed(encoded))
-        : encodeSessionRelocationRoute(decodeSessionRelocationRoute(encoded));
-    const generated = entry.command === 42
-      ? encodeSessionRelocationSeal42(decodeSessionRelocationSeal42(encoded))
-      : entry.command === 43
-        ? encodeSessionRelocationSealed43(decodeSessionRelocationSealed43(encoded))
-        : encodeSessionRelocationRoute44(decodeSessionRelocationRoute44(encoded));
+    const hand =
+      entry.command === 42
+        ? encodeSessionRelocationSeal(decodeSessionRelocationSeal(encoded))
+        : entry.command === 43
+          ? encodeSessionRelocationSealed(decodeSessionRelocationSealed(encoded))
+          : encodeSessionRelocationRoute(decodeSessionRelocationRoute(encoded));
+    const generated =
+      entry.command === 42
+        ? encodeSessionRelocationSeal42(decodeSessionRelocationSeal42(encoded))
+        : entry.command === 43
+          ? encodeSessionRelocationSealed43(decodeSessionRelocationSealed43(encoded))
+          : encodeSessionRelocationRoute44(decodeSessionRelocationRoute44(encoded));
     assert.equal(hand.toString('hex'), entry.hex, `hand:${entry.name}`);
     assert.equal(Buffer.from(generated).toString('hex'), entry.hex, `generated:${entry.name}`);
 
     const truncated = encoded.subarray(0, -1);
-    assert.throws(() => entry.command === 42
-      ? decodeSessionRelocationSeal(truncated)
-      : entry.command === 43
-        ? decodeSessionRelocationSealed(truncated)
-        : decodeSessionRelocationRoute(truncated), Error, `hand:${entry.name}:truncated`);
-    assert.throws(() => entry.command === 42
-      ? decodeSessionRelocationSeal42(truncated)
-      : entry.command === 43
-        ? decodeSessionRelocationSealed43(truncated)
-        : decodeSessionRelocationRoute44(truncated), Error, `generated:${entry.name}:truncated`);
+    assert.throws(
+      () =>
+        entry.command === 42
+          ? decodeSessionRelocationSeal(truncated)
+          : entry.command === 43
+            ? decodeSessionRelocationSealed(truncated)
+            : decodeSessionRelocationRoute(truncated),
+      Error,
+      `hand:${entry.name}:truncated`
+    );
+    assert.throws(
+      () =>
+        entry.command === 42
+          ? decodeSessionRelocationSeal42(truncated)
+          : entry.command === 43
+            ? decodeSessionRelocationSealed43(truncated)
+            : decodeSessionRelocationRoute44(truncated),
+      Error,
+      `generated:${entry.name}:truncated`
+    );
   }
 });
 
@@ -458,13 +515,16 @@ test('Session relocation retain identity includes every coordinator fence field'
 test('actorJoin reply tail (command 20, actor-join-reply-tail) matches the shared golden vectors', () => {
   const golden = actorJoinReplyGolden();
 
-  assert.deepEqual(golden.canonical.map(entry => entry.name), [
-    'actorJoinAcceptedTypical',
-    'actorJoinAcceptedAtRelocationChunkLimitBound',
-    'actorJoinAcceptedNotAdvertised',
-    'actorJoinRejectedWithSpot',
-    'actorJoinRejectedWithoutSpot'
-  ]);
+  assert.deepEqual(
+    golden.canonical.map((entry) => entry.name),
+    [
+      'actorJoinAcceptedTypical',
+      'actorJoinAcceptedAtRelocationChunkLimitBound',
+      'actorJoinAcceptedNotAdvertised',
+      'actorJoinRejectedWithSpot',
+      'actorJoinRejectedWithoutSpot'
+    ]
+  );
 
   for (const entry of golden.canonical) {
     assert.equal(entry.command, 20, entry.name);
@@ -487,10 +547,14 @@ test('actorJoin reply tail (command 20, actor-join-reply-tail) matches the share
     if (entry.decoded.spot === undefined) {
       assert.equal(tail.spot, undefined, entry.name);
     } else {
-      assert.deepEqual(tail.spot, {
-        spotId: entry.decoded.spot.spotId,
-        generation: BigInt(entry.decoded.spot.generation)
-      }, entry.name);
+      assert.deepEqual(
+        tail.spot,
+        {
+          spotId: entry.decoded.spot.spotId,
+          generation: BigInt(entry.decoded.spot.generation)
+        },
+        entry.name
+      );
     }
     if (entry.decoded.membershipEpoch !== undefined) {
       assert.equal(tail.membershipEpoch, BigInt(entry.decoded.membershipEpoch), entry.name);
@@ -536,88 +600,93 @@ test('actorJoin reply tail (command 20, actor-join-reply-tail) matches the share
   }
 });
 
-test('actorJoin accepted reply tail round-trips receiveChunkLimitBytes and ' +
-  'decodes old-format frames as not-advertised', () => {
-  const correlation = 42n;
-  const spot = { spotId: 'spot-1', generation: 3n } as const;
-  const encoded = encodeStatefulReply(correlation, 0, 0, {
-    kind: 'actorJoin',
-    joinResult: 0,
-    spot,
-    membershipEpoch: 5n,
-    receiveChunkLimitBytes: 32768
-  });
-  const decoded = decodeStatefulReply(encoded, correlation, 'actorJoin');
-  assert.deepEqual(decoded.tail, {
-    kind: 'actorJoin',
-    joinResult: 0,
-    spot,
-    membershipEpoch: 5n,
-    receiveChunkLimitBytes: 32768
-  });
+test(
+  'actorJoin accepted reply tail round-trips receiveChunkLimitBytes and ' +
+    'decodes old-format frames as not-advertised',
+  () => {
+    const correlation = 42n;
+    const spot = { spotId: 'spot-1', generation: 3n } as const;
+    const encoded = encodeStatefulReply(correlation, 0, 0, {
+      kind: 'actorJoin',
+      joinResult: 0,
+      spot,
+      membershipEpoch: 5n,
+      receiveChunkLimitBytes: 32768
+    });
+    const decoded = decodeStatefulReply(encoded, correlation, 'actorJoin');
+    assert.deepEqual(decoded.tail, {
+      kind: 'actorJoin',
+      joinResult: 0,
+      spot,
+      membershipEpoch: 5n,
+      receiveChunkLimitBytes: 32768
+    });
 
-  // 0 means "not advertised" and is the default when the field is omitted.
-  const encodedDefault = encodeStatefulReply(correlation, 0, 0, {
-    kind: 'actorJoin',
-    joinResult: 0,
-    spot,
-    membershipEpoch: 5n
-  });
-  const decodedDefault = decodeStatefulReply(encodedDefault, correlation, 'actorJoin');
-  assert.equal(
-    (decodedDefault.tail as { readonly receiveChunkLimitBytes?: number }).receiveChunkLimitBytes,
-    0
-  );
+    // 0 means "not advertised" and is the default when the field is omitted.
+    const encodedDefault = encodeStatefulReply(correlation, 0, 0, {
+      kind: 'actorJoin',
+      joinResult: 0,
+      spot,
+      membershipEpoch: 5n
+    });
+    const decodedDefault = decodeStatefulReply(encodedDefault, correlation, 'actorJoin');
+    assert.equal(
+      (decodedDefault.tail as { readonly receiveChunkLimitBytes?: number }).receiveChunkLimitBytes,
+      0
+    );
 
-  // An old-format frame that stops right after membershipEpoch (no trailing
-  // u32) still decodes — tolerant of an unpatched encoder.
-  const oldFormatBody = Buffer.concat([
-    Buffer.from([0x5a, 0x4d, 1, 20, 0]),
-    (() => {
-      const buffer = Buffer.alloc(8);
-      buffer.writeBigUInt64BE(correlation);
-      return buffer;
-    })(),
-    Buffer.alloc(4), // terminalResult = 0
-    Buffer.alloc(4), // failureCode = 0
-    Buffer.from([0, 0, 0, 0]), // joinResult = 0 (u32)
-    (() => {
-      // joinBodyLength covers spotRef + membershipEpoch only, no cap field.
-      const spotIdBytes = Buffer.from(spot.spotId, 'utf8');
-      const spotRef = Buffer.concat([
-        Buffer.from([spotIdBytes.byteLength]),
-        spotIdBytes,
-        (() => {
-          const value = Buffer.alloc(8);
-          value.writeBigUInt64BE(spot.generation);
-          return value;
-        })()
-      ]);
-      const epoch = Buffer.alloc(8);
-      epoch.writeBigUInt64BE(5n);
-      const body = Buffer.concat([spotRef, epoch]);
-      const length = Buffer.alloc(2);
-      length.writeUInt16BE(body.byteLength);
-      return Buffer.concat([length, body]);
-    })()
-  ]);
-  const oldFormatDecoded = decodeStatefulReply(oldFormatBody, correlation, 'actorJoin');
-  assert.deepEqual(oldFormatDecoded.tail, {
-    kind: 'actorJoin',
-    joinResult: 0,
-    spot,
-    membershipEpoch: 5n,
-    receiveChunkLimitBytes: 0
-  });
+    // An old-format frame that stops right after membershipEpoch (no trailing
+    // u32) still decodes — tolerant of an unpatched encoder.
+    const oldFormatBody = Buffer.concat([
+      Buffer.from([0x5a, 0x4d, 1, 20, 0]),
+      (() => {
+        const buffer = Buffer.alloc(8);
+        buffer.writeBigUInt64BE(correlation);
+        return buffer;
+      })(),
+      Buffer.alloc(4), // terminalResult = 0
+      Buffer.alloc(4), // failureCode = 0
+      Buffer.from([0, 0, 0, 0]), // joinResult = 0 (u32)
+      (() => {
+        // joinBodyLength covers spotRef + membershipEpoch only, no cap field.
+        const spotIdBytes = Buffer.from(spot.spotId, 'utf8');
+        const spotRef = Buffer.concat([
+          Buffer.from([spotIdBytes.byteLength]),
+          spotIdBytes,
+          (() => {
+            const value = Buffer.alloc(8);
+            value.writeBigUInt64BE(spot.generation);
+            return value;
+          })()
+        ]);
+        const epoch = Buffer.alloc(8);
+        epoch.writeBigUInt64BE(5n);
+        const body = Buffer.concat([spotRef, epoch]);
+        const length = Buffer.alloc(2);
+        length.writeUInt16BE(body.byteLength);
+        return Buffer.concat([length, body]);
+      })()
+    ]);
+    const oldFormatDecoded = decodeStatefulReply(oldFormatBody, correlation, 'actorJoin');
+    assert.deepEqual(oldFormatDecoded.tail, {
+      kind: 'actorJoin',
+      joinResult: 0,
+      spot,
+      membershipEpoch: 5n,
+      receiveChunkLimitBytes: 0
+    });
 
-  assert.throws(() => encodeStatefulReply(correlation, 0, 0, {
-    kind: 'actorJoin',
-    joinResult: 0,
-    spot,
-    membershipEpoch: 5n,
-    receiveChunkLimitBytes: 67_108_865
-  }));
-});
+    assert.throws(() =>
+      encodeStatefulReply(correlation, 0, 0, {
+        kind: 'actorJoin',
+        joinResult: 0,
+        spot,
+        membershipEpoch: 5n,
+        receiveChunkLimitBytes: 67_108_865
+      })
+    );
+  }
+);
 
 test('effectiveActorJoinChunkLimitBytes takes the minimum of configured, advertised and the conservative floor', () => {
   // 0 from the target means "not advertised" and must not participate in the min.
@@ -630,7 +699,9 @@ test('effectiveActorJoinChunkLimitBytes takes the minimum of configured, adverti
 test('restoreRelocationAdapterState restores through the adapter and returns the same instance', async () => {
   const events: string[] = [];
   const adapter: ZLinkRelocationStateAdapterLike<{ readonly id: number }> = {
-    async capture() { return Buffer.alloc(0); },
+    async capture() {
+      return Buffer.alloc(0);
+    },
     async restore(instance, payload) {
       events.push(`restore:${instance.id}:${Buffer.from(payload).toString()}`);
     }

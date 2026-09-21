@@ -46,10 +46,7 @@ import { encodeRoutingIdStorageHex, routingIdsEqual } from '../routing-id';
 import type { ZLinkLocationLifecycle } from '../locations';
 import { wrapFrameworkPayloadMessage } from '../messaging/payload-codec';
 import type { DefaultZLinkSpotManager } from '../spots';
-import type {
-  ZLinkSpotRouteResolver,
-  ZLinkSpotRouteTarget
-} from '../spots/spot-routing-internal';
+import type { ZLinkSpotRouteResolver, ZLinkSpotRouteTarget } from '../spots/spot-routing-internal';
 import type {
   ZLinkActorHandoffPacket,
   ZLinkActorHandoffResult,
@@ -103,17 +100,19 @@ export function committedActorOwnerFence(
   targetActorRef: ActorRef,
   authority: ZLinkCommittedActorAuthority
 ): ZLinkActorMessageFollowOwnerFence {
-  if (targetActorRef.actorId !== actorId
-    || targetActorRef.objectGeneration <= 0n
-    || authority.objectGeneration !== targetActorRef.objectGeneration
-    || authority.allocation.state !== 'active'
-    || authority.allocation.objectKind !== 'actor'
-    || authority.allocation.descriptor.meshName !== targetActorRef.meshName
-    || !routingIdsEqual(authority.allocation.descriptor.rid, targetActorRef.nodeRid)
-    || authority.ownerId.length === 0
-    || authority.ownerLeaseGeneration <= 0n
-    || authority.allocation.descriptorLifecycleGeneration <= 0n
-    || authority.authorityOwnerGeneration <= 0n) {
+  if (
+    targetActorRef.actorId !== actorId ||
+    targetActorRef.objectGeneration <= 0n ||
+    authority.objectGeneration !== targetActorRef.objectGeneration ||
+    authority.allocation.state !== 'active' ||
+    authority.allocation.objectKind !== 'actor' ||
+    authority.allocation.descriptor.meshName !== targetActorRef.meshName ||
+    !routingIdsEqual(authority.allocation.descriptor.rid, targetActorRef.nodeRid) ||
+    authority.ownerId.length === 0 ||
+    authority.ownerLeaseGeneration <= 0n ||
+    authority.allocation.descriptorLifecycleGeneration <= 0n ||
+    authority.authorityOwnerGeneration <= 0n
+  ) {
     throw new Error(
       `Actor '${actorId}' handoff target does not match the committed authority snapshot.`
     );
@@ -128,10 +127,7 @@ export function committedActorOwnerFence(
   });
 }
 
-function requireSourceObjectGeneration(
-  actorId: string,
-  state: ZLinkActorRuntimeState
-): bigint {
+function requireSourceObjectGeneration(actorId: string, state: ZLinkActorRuntimeState): bigint {
   const generation = state.nativeActorRef?.generation;
   if (generation === undefined || generation <= 0n) {
     throw new Error(`Actor '${actorId}' handoff requires a positive source ObjectGeneration.`);
@@ -144,7 +140,7 @@ function createHandoffReplayGate(): {
   open(): void;
 } {
   let open!: () => void;
-  const start = new Promise<void>(resolve => {
+  const start = new Promise<void>((resolve) => {
     open = resolve;
   });
   return { start, open };
@@ -199,11 +195,8 @@ export interface ZLinkActorTransferRuntimeOptions {
   readonly spotRouteResolver?: () => ZLinkSpotRouteResolver | undefined;
   readonly actorHandoff: ZLinkActorHandoffCoordinator;
   readonly actorTransferRegistry: ZLinkActorTransferRegistry;
-  readonly authorityStore: () => (
-    ZLinkAuthorityStore
-    & ZLinkObjectCreationStore
-    & ZLinkOwnerLeaseStore
-  ) | undefined;
+  readonly authorityStore: () =>
+    (ZLinkAuthorityStore & ZLinkObjectCreationStore & ZLinkOwnerLeaseStore) | undefined;
   readonly currentOwner: () => ZLinkLocationOwnerToken | undefined;
   readonly relocationStore: () => ZLinkRelocationStore | undefined;
   /** Live admitted peers of a mesh; used to stop retries against a gone session owner. */
@@ -224,21 +217,26 @@ export interface ZLinkActorTransferRuntimeOptions {
 
 export class ZLinkActorTransferRuntime {
   private readonly sourceDepartureTasks = new Map<string, Promise<void>>();
-  private readonly coreSourceLeaves = new Map<string, {
-    readonly promise: Promise<void>;
-    readonly resolve: () => void;
-    readonly reject: (error: unknown) => void;
-    readonly submitted: Promise<void>;
-    readonly resolveSubmitted: () => void;
-    readonly rejectSubmitted: (error: unknown) => void;
-    notifySubmitted?: () => Promise<void>;
-  }>();
-  private readonly activeDeferredJoinTerminals =
-    new Map<string, Promise<ZLinkDeferredJoinAcceptedRoot>>();
-  private readonly deferredJoinTerminals =
-    new BoundedReplayMap<string, ZLinkDeferredJoinAcceptedRoot>(
-      DEFERRED_JOIN_TERMINAL_CAPACITY
-    );
+  private readonly coreSourceLeaves = new Map<
+    string,
+    {
+      readonly promise: Promise<void>;
+      readonly resolve: () => void;
+      readonly reject: (error: unknown) => void;
+      readonly submitted: Promise<void>;
+      readonly resolveSubmitted: () => void;
+      readonly rejectSubmitted: (error: unknown) => void;
+      notifySubmitted?: () => Promise<void>;
+    }
+  >();
+  private readonly activeDeferredJoinTerminals = new Map<
+    string,
+    Promise<ZLinkDeferredJoinAcceptedRoot>
+  >();
+  private readonly deferredJoinTerminals = new BoundedReplayMap<
+    string,
+    ZLinkDeferredJoinAcceptedRoot
+  >(DEFERRED_JOIN_TERMINAL_CAPACITY);
 
   constructor(private readonly options: ZLinkActorTransferRuntimeOptions) {}
 
@@ -276,14 +274,10 @@ export class ZLinkActorTransferRuntime {
       throw new Error(`Actor '${actorId}' same-node Join has no local Spot manager.`);
     }
     const admitted = this.options.actorHandoff.admitDeferredPrefix(
-        actorId,
-        operationId,
-        drain => manager.admitRoutedActorPacketPrefix(
-          target.spotId,
-          actorId,
-          drain
-        ),
-        this.options.prepareApplicationJob
+      actorId,
+      operationId,
+      (drain) => manager.admitRoutedActorPacketPrefix(target.spotId, actorId, drain),
+      this.options.prepareApplicationJob
     );
     void this.observeHandoffReplay(admitted.terminal);
   }
@@ -293,11 +287,7 @@ export class ZLinkActorTransferRuntime {
     _state: ZLinkActorRuntimeState,
     operationId: string
   ): Promise<void> {
-    const admitted = this.admitDeferredSourcePrefix(
-      actor,
-      _state,
-      operationId
-    );
+    const admitted = this.admitDeferredSourcePrefix(actor, _state, operationId);
     void this.observeHandoffReplay(admitted.terminal);
   }
 
@@ -377,7 +367,7 @@ export class ZLinkActorTransferRuntime {
     );
     this.activeDeferredJoinTerminals.set(terminalKey, completion);
     void completion.then(
-      completed => {
+      (completed) => {
         this.deferredJoinTerminals.remember(terminalKey, completed);
         if (this.activeDeferredJoinTerminals.get(terminalKey) === completion) {
           this.activeDeferredJoinTerminals.delete(terminalKey);
@@ -398,15 +388,17 @@ export class ZLinkActorTransferRuntime {
     actorRef: ActorRef,
     submitMailbox: <T>(operation: () => Promise<T>) => Promise<T>
   ): Promise<ZLinkDeferredJoinAcceptedRoot> {
-    const targetActorRef = this.options.actorManager()
-      ?.getState(actor.context.actorId)
-      ?.nativeActorRef;
-    const currentActorRef = targetActorRef === undefined
-      ? actorRef
-      : toFrameworkActorRef(targetActorRef, actor.context.meshName);
-    let current = root.cursor === 'prepared'
-      ? await this.requireDeferredJoinJournal().markCommitted(root, currentActorRef)
-      : root;
+    const targetActorRef = this.options
+      .actorManager()
+      ?.getState(actor.context.actorId)?.nativeActorRef;
+    const currentActorRef =
+      targetActorRef === undefined
+        ? actorRef
+        : toFrameworkActorRef(targetActorRef, actor.context.meshName);
+    let current =
+      root.cursor === 'prepared'
+        ? await this.requireDeferredJoinJournal().markCommitted(root, currentActorRef)
+        : root;
     if (current.cursor === 'delivered') return current;
     let lastError: unknown;
     for (let attempt = 0; attempt < 3; attempt++) {
@@ -421,13 +413,12 @@ export class ZLinkActorTransferRuntime {
       } catch (error) {
         lastError = error;
         if (attempt < 2) {
-          await new Promise<void>(resolve => {
+          await new Promise<void>((resolve) => {
             const timer = setTimeout(resolve, 10 << attempt);
             timer.unref();
           });
-          current = await this.requireDeferredJoinJournal().recover(
-            currentActorRef.actorId
-          ) ?? current;
+          current =
+            (await this.requireDeferredJoinJournal().recover(currentActorRef.actorId)) ?? current;
         }
       }
     }
@@ -482,7 +473,10 @@ export class ZLinkActorTransferRuntime {
     state: ZLinkActorRuntimeState,
     deferredOperationId?: string
   ): Promise<void> {
-    if (deferredOperationId !== undefined && this.options.actorHandoff.isProvisional(actor.context.actorId)) {
+    if (
+      deferredOperationId !== undefined &&
+      this.options.actorHandoff.isProvisional(actor.context.actorId)
+    ) {
       this.promoteDeferredActorHandoff(actor, state, deferredOperationId);
     }
     state.beginMove();
@@ -508,11 +502,7 @@ export class ZLinkActorTransferRuntime {
       if (deferredOperationId === undefined) {
         this.options.actorHandoff.cancel(actor.context.actorId);
       } else {
-        const admitted = this.admitDeferredSourcePrefix(
-          actor,
-          state,
-          deferredOperationId
-        );
+        const admitted = this.admitDeferredSourcePrefix(actor, state, deferredOperationId);
         void this.observeHandoffReplay(admitted.terminal);
       }
       state.endMove();
@@ -564,10 +554,10 @@ export class ZLinkActorTransferRuntime {
       return { terminal: Promise.resolve() };
     }
     return this.options.actorHandoff.admitCanceledPrefix(
-        actor.context.actorId,
-        queue,
-        this.options.prepareApplicationJob,
-        replayStart
+      actor.context.actorId,
+      queue,
+      this.options.prepareApplicationJob,
+      replayStart
     );
   }
 
@@ -615,11 +605,8 @@ export class ZLinkActorTransferRuntime {
     if (sourceSpotId === undefined || manager === undefined) {
       return undefined;
     }
-    return drain => manager.admitRoutedActorPacketPrefix(
-      sourceSpotId,
-      actor.context.actorId,
-      drain
-    );
+    return (drain) =>
+      manager.admitRoutedActorPacketPrefix(sourceSpotId, actor.context.actorId, drain);
   }
 
   async prepareSource(
@@ -631,25 +618,21 @@ export class ZLinkActorTransferRuntime {
     relocation?: ServiceWireOperationId
   ) {
     await this.beginSourceActorMove(actor, state, deferredOperationId);
-    const relocationMetric = state.meshName === undefined
-      ? undefined
-      : this.options.metrics?.startRelocation(
-          state.meshName,
-          'actor',
-          this.options.actorTransferRegistry.policy(state.actorType)
-        );
+    const relocationMetric =
+      state.meshName === undefined
+        ? undefined
+        : this.options.metrics?.startRelocation(
+            state.meshName,
+            'actor',
+            this.options.actorTransferRegistry.policy(state.actorType)
+          );
     const sourceSpotId = state.spotId;
     let sourceLeaveStarted = false;
     let sealId: string | undefined;
     try {
       if (state.remoteBoundSessionTarget !== undefined) {
         sealId = randomUUID();
-        const sealedTarget = await this.sealBoundSessionRoute(
-          actor,
-          state,
-          signal,
-          relocation
-        );
+        const sealedTarget = await this.sealBoundSessionRoute(actor, state, signal, relocation);
         state.setRemoteBoundSessionTarget(sealedTarget);
         this.options.actorHandoff.sealConnectionBoundIngress(actor.context.actorId);
       }
@@ -666,16 +649,17 @@ export class ZLinkActorTransferRuntime {
         sourceLeaveStarted = true;
         await this.prepareSourceActorLeave(actor, sourceSpotId, signal);
       }
-      const coreSourceLeave = lifecycleAuthority === 'core'
-        ? this.beginCoreSourceLeave(actor.context.actorId)
-        : undefined;
+      const coreSourceLeave =
+        lifecycleAuthority === 'core'
+          ? this.beginCoreSourceLeave(actor.context.actorId)
+          : undefined;
       const sourceLeaveCompletion = coreSourceLeave?.completion;
-      const handoffBacklog = lifecycleAuthority === 'core'
-        ? this.options.actorHandoff.snapshotCoreBacklog(actor.context.actorId)
-        : this.options.actorHandoff.snapshot(actor.context.actorId);
+      const handoffBacklog =
+        lifecycleAuthority === 'core'
+          ? this.options.actorHandoff.snapshotCoreBacklog(actor.context.actorId)
+          : this.options.actorHandoff.snapshot(actor.context.actorId);
       let phase: 'prepared' | 'committed' | 'rolledBack' = 'prepared';
-      let committedTargetOwnerFence:
-        ZLinkActorMessageFollowOwnerFence | undefined;
+      let committedTargetOwnerFence: ZLinkActorMessageFollowOwnerFence | undefined;
       return {
         ...transfer,
         handoffBacklog,
@@ -684,9 +668,7 @@ export class ZLinkActorTransferRuntime {
         onSourceLeaveSubmitted: (notify: () => Promise<void>) => {
           const pending = this.coreSourceLeaves.get(actor.context.actorId);
           if (pending === undefined) {
-            throw new Error(
-              `Actor '${actor.context.actorId}' has no pending Core source leave.`
-            );
+            throw new Error(`Actor '${actor.context.actorId}' has no pending Core source leave.`);
           }
           pending.notifySubmitted = notify;
         },
@@ -696,10 +678,12 @@ export class ZLinkActorTransferRuntime {
           observeSignal?: AbortSignal
         ) => {
           const authority = this.options.authorityStore();
-          if (authority === undefined
-            || target.targetOwnerId === undefined
-            || target.ownerLeaseGeneration === undefined
-            || target.targetNodeGeneration === undefined) {
+          if (
+            authority === undefined ||
+            target.targetOwnerId === undefined ||
+            target.ownerLeaseGeneration === undefined ||
+            target.targetNodeGeneration === undefined
+          ) {
             throw new Error(
               `Actor '${actor.context.actorId}' relocation target has no complete authority fence.`
             );
@@ -709,12 +693,12 @@ export class ZLinkActorTransferRuntime {
             observeSignal
           );
           if (
-            committed.kind !== 'snapshot'
-            || committed.ownerId !== target.targetOwnerId
-            || committed.ownerLeaseGeneration !== target.ownerLeaseGeneration
-            || committed.allocation.descriptorLifecycleGeneration !== target.targetNodeGeneration
-            || !routingIdsEqual(committed.allocation.descriptor.rid, target.targetNodeRid)
-            || committed.objectGeneration !== targetActorRef.objectGeneration
+            committed.kind !== 'snapshot' ||
+            committed.ownerId !== target.targetOwnerId ||
+            committed.ownerLeaseGeneration !== target.ownerLeaseGeneration ||
+            committed.allocation.descriptorLifecycleGeneration !== target.targetNodeGeneration ||
+            !routingIdsEqual(committed.allocation.descriptor.rid, target.targetNodeRid) ||
+            committed.objectGeneration !== targetActorRef.objectGeneration
           ) {
             throw new Error(
               `Actor '${actor.context.actorId}' relocation target authority was not committed exactly.`
@@ -761,7 +745,7 @@ export class ZLinkActorTransferRuntime {
               // callback, then release the old location and registry entry.
               void sourceLeaveCompletion.then(
                 () => this.scheduleSourceDeparture(actor, sourceSpotId, true),
-                error => {
+                (error) => {
                   this.options.reportPostCommitError?.(error);
                   this.scheduleSourceDeparture(actor, sourceSpotId, true);
                 }
@@ -778,12 +762,7 @@ export class ZLinkActorTransferRuntime {
           this.coreSourceLeaves.delete(actor.context.actorId);
           const replayGate = createHandoffReplayGate();
           try {
-            await this.cancelSourceActorMove(
-              actor,
-              state,
-              deferredOperationId,
-              replayGate.start
-            );
+            await this.cancelSourceActorMove(actor, state, deferredOperationId, replayGate.start);
             await this.restoreSourceActor(actor, sourceSpotId);
             if (sealId !== undefined) {
               await this.observeBoundSessionSealAbort(actor, state);
@@ -797,18 +776,16 @@ export class ZLinkActorTransferRuntime {
       relocationMetric?.complete('failed');
       const replayGate = createHandoffReplayGate();
       try {
-        await this.cancelSourceActorMove(
-          actor,
-          state,
-          deferredOperationId,
-          replayGate.start
-        );
+        await this.cancelSourceActorMove(actor, state, deferredOperationId, replayGate.start);
         if (sourceLeaveStarted) await this.restoreSourceActor(actor, sourceSpotId);
         if (sealId !== undefined) {
           await this.observeBoundSessionSealAbort(actor, state);
         }
       } catch (rollbackError) {
-        throw new AggregateError([error, rollbackError], 'Actor source leave and rollback both failed.');
+        throw new AggregateError(
+          [error, rollbackError],
+          'Actor source leave and rollback both failed.'
+        );
       } finally {
         replayGate.open();
       }
@@ -867,7 +844,7 @@ export class ZLinkActorTransferRuntime {
         handoffBacklog,
         takeRelocationRelay: () =>
           this.options.actorHandoff.takeRelocationRelay(actor.context.actorId),
-        setReplayResults: results => {
+        setReplayResults: (results) => {
           if (terminal === 'prepared') replayResults = [...results];
         },
         commit: async (target, targetActorRef, targetOwnerFence) => {
@@ -881,7 +858,8 @@ export class ZLinkActorTransferRuntime {
               targetOwnerFence
             );
             if (manageMembership && state.spotId !== undefined) {
-              await this.options.spotManager()
+              await this.options
+                .spotManager()
                 ?.commitActorLeaveAfterTransfer(state.spotId, actor.context.actorId);
             }
             state.endMove();
@@ -894,19 +872,10 @@ export class ZLinkActorTransferRuntime {
           const replayGate = createHandoffReplayGate();
           try {
             if (manageMembership) {
-              await this.cancelSourceActorMove(
-                actor,
-                state,
-                undefined,
-                replayGate.start
-              );
+              await this.cancelSourceActorMove(actor, state, undefined, replayGate.start);
             } else {
               try {
-                const admitted = this.admitCanceledSourcePrefix(
-                  actor,
-                  state,
-                  replayGate.start
-                );
+                const admitted = this.admitCanceledSourcePrefix(actor, state, replayGate.start);
                 void this.observeHandoffReplay(admitted.terminal);
               } finally {
                 state.endMove();
@@ -926,21 +895,12 @@ export class ZLinkActorTransferRuntime {
       try {
         if (manageMembership) {
           try {
-            await this.cancelSourceActorMove(
-              actor,
-              state,
-              undefined,
-              replayGate.start
-            );
+            await this.cancelSourceActorMove(actor, state, undefined, replayGate.start);
             sourceRestored = true;
           } catch {}
         } else {
           try {
-            const admitted = this.admitCanceledSourcePrefix(
-              actor,
-              state,
-              replayGate.start
-            );
+            const admitted = this.admitCanceledSourcePrefix(actor, state, replayGate.start);
             void this.observeHandoffReplay(admitted.terminal);
             sourceRestored = true;
           } catch {
@@ -1043,91 +1003,92 @@ export class ZLinkActorTransferRuntime {
     const target = state.remoteBoundSessionTarget;
     const actorRef = state.nativeActorRef;
     if (
-      target === undefined || actorRef === undefined ||
-      target.bindingGeneration === undefined || target.bindingGeneration <= 0n ||
-      state.locationGeneration === undefined || state.locationGeneration < 0n ||
-      state.ownerLeaseGeneration === undefined || state.ownerLeaseGeneration <= 0n
+      target === undefined ||
+      actorRef === undefined ||
+      target.bindingGeneration === undefined ||
+      target.bindingGeneration <= 0n ||
+      state.locationGeneration === undefined ||
+      state.locationGeneration < 0n ||
+      state.ownerLeaseGeneration === undefined ||
+      state.ownerLeaseGeneration <= 0n
     ) {
-      throw new Error(`Actor '${actor.context.actorId}' Session route cannot be sealed without its exact source fence.`);
+      throw new Error(
+        `Actor '${actor.context.actorId}' Session route cannot be sealed without its exact source fence.`
+      );
     }
     const serviceWire = this.options.sessionRelocationWire?.();
     const authorityStore = this.options.authorityStore();
     const descriptors = this.options.liveDescriptors;
     if (
-      relocation === undefined
-      || serviceWire === undefined
-      || authorityStore === undefined
-      || descriptors === undefined
-      || target.sessionRid === undefined
+      relocation === undefined ||
+      serviceWire === undefined ||
+      authorityStore === undefined ||
+      descriptors === undefined ||
+      target.sessionRid === undefined
     ) {
       throw new Error(
         `Actor '${actor.context.actorId}' Session relocation requires the command 42/43 service-wire path.`
       );
     }
     const [authority, live] = await Promise.all([
-        authorityStore.readAuthority(
-          encodeAuthorityKey('actor', actor.context.actorId),
-          signal
-        ),
-        descriptors(target.routerChannelId, signal)
-      ]);
+      authorityStore.readAuthority(encodeAuthorityKey('actor', actor.context.actorId), signal),
+      descriptors(target.routerChannelId, signal)
+    ]);
     const local = this.options.primaryMeshNode().status();
-    const sessionOwner = live.find(value =>
-        String(value.rid) === String(target.targetNodeRid)
-      );
+    const sessionOwner = live.find((value) => String(value.rid) === String(target.targetNodeRid));
     if (
-        authority.kind !== 'snapshot'
-        || sessionOwner === undefined
-        || String(local.routingId) !== String(actorRef.nodeRid)
-        || authority.objectGeneration !== actorRef.generation
-        || authority.authorityOwnerGeneration !== state.locationGeneration
-        || authority.ownerLeaseGeneration !== state.ownerLeaseGeneration
-        || String(authority.allocation.descriptor.rid) !== String(actorRef.nodeRid)
-        || authority.allocation.descriptorLifecycleGeneration !== local.lifecycleGeneration
-        || (target.sessionNodeRid !== undefined
-          && String(target.sessionNodeRid) !== String(target.targetNodeRid))
+      authority.kind !== 'snapshot' ||
+      sessionOwner === undefined ||
+      String(local.routingId) !== String(actorRef.nodeRid) ||
+      authority.objectGeneration !== actorRef.generation ||
+      authority.authorityOwnerGeneration !== state.locationGeneration ||
+      authority.ownerLeaseGeneration !== state.ownerLeaseGeneration ||
+      String(authority.allocation.descriptor.rid) !== String(actorRef.nodeRid) ||
+      authority.allocation.descriptorLifecycleGeneration !== local.lifecycleGeneration ||
+      (target.sessionNodeRid !== undefined &&
+        String(target.sessionNodeRid) !== String(target.targetNodeRid))
     ) {
       throw new Error(
         `Actor '${actor.context.actorId}' Session route service-wire source fence is stale.`
       );
     }
     const coordinator = {
-        ownerId: authority.ownerId,
-        leaseGeneration: authority.ownerLeaseGeneration,
-        nodeRid: String(local.routingId),
-        nodeGeneration: local.lifecycleGeneration,
-        expectedAuthorityStoreVersion: authority.storeVersion.value
-      };
+      ownerId: authority.ownerId,
+      leaseGeneration: authority.ownerLeaseGeneration,
+      nodeRid: String(local.routingId),
+      nodeGeneration: local.lifecycleGeneration,
+      expectedAuthorityStoreVersion: authority.storeVersion.value
+    };
     const session = {
-        sessionOwnerNodeRid: String(target.targetNodeRid),
-        sessionOwnerNodeGeneration: sessionOwner.lifecycleGeneration,
-        sessionOwnerId: sessionOwner.ownerId,
-        sessionOwnerLeaseGeneration: sessionOwner.leaseGeneration,
-        sessionRid: String(target.sessionRid),
-        bindingGeneration: target.bindingGeneration
-      };
+      sessionOwnerNodeRid: String(target.targetNodeRid),
+      sessionOwnerNodeGeneration: sessionOwner.lifecycleGeneration,
+      sessionOwnerId: sessionOwner.ownerId,
+      sessionOwnerLeaseGeneration: sessionOwner.leaseGeneration,
+      sessionRid: String(target.sessionRid),
+      bindingGeneration: target.bindingGeneration
+    };
     const request: ServiceSessionRelocationSeal = {
-        relocation,
-        coordinator,
-        senderRole: 'source',
+      relocation,
+      coordinator,
+      senderRole: 'source',
+      actor: {
         actor: {
-          actor: {
-            actorId: actor.context.actorId,
-            generation: actorRef.generation,
-            nodeRid: String(actorRef.nodeRid)
-          },
-          targetNodeGeneration: local.lifecycleGeneration,
-          authorityOwnerGeneration: authority.authorityOwnerGeneration,
-          ownerLeaseGeneration: authority.ownerLeaseGeneration
+          actorId: actor.context.actorId,
+          generation: actorRef.generation,
+          nodeRid: String(actorRef.nodeRid)
         },
-        session
-      };
+        targetNodeGeneration: local.lifecycleGeneration,
+        authorityOwnerGeneration: authority.authorityOwnerGeneration,
+        ownerLeaseGeneration: authority.ownerLeaseGeneration
+      },
+      session
+    };
     await serviceWire.requestSessionRelocationSeal(
-        target.routerChannelId,
-        target.targetNodeRid,
-        request,
-        signal
-      );
+      target.routerChannelId,
+      target.targetNodeRid,
+      request,
+      signal
+    );
     return {
       ...target,
       previousAuthorityOwnerGeneration: authority.authorityOwnerGeneration,
@@ -1142,14 +1103,23 @@ export class ZLinkActorTransferRuntime {
     state: ZLinkActorRuntimeState,
     targetOverride?: ZLinkRemoteBoundSessionTarget
   ): Promise<void> {
-    const target = targetOverride ?? preferredRemoteBoundSessionTarget(
-      state.remoteBoundSessionTarget,
-      state.boundSessionTransferTarget
-    );
+    const target =
+      targetOverride ??
+      preferredRemoteBoundSessionTarget(
+        state.remoteBoundSessionTarget,
+        state.boundSessionTransferTarget
+      );
     const actorRef = state.nativeActorRef;
-    if (target === undefined || actorRef === undefined || target.bindingGeneration === undefined ||
-      target.previousAuthorityOwnerGeneration === undefined || target.previousOwnerLeaseGeneration === undefined) {
-      throw new Error(`Actor '${actor.context.actorId}' Session route seal cannot be released without its exact fence.`);
+    if (
+      target === undefined ||
+      actorRef === undefined ||
+      target.bindingGeneration === undefined ||
+      target.previousAuthorityOwnerGeneration === undefined ||
+      target.previousOwnerLeaseGeneration === undefined
+    ) {
+      throw new Error(
+        `Actor '${actor.context.actorId}' Session route seal cannot be released without its exact fence.`
+      );
     }
     const serviceFence = target.serviceWireRelocation;
     const serviceWire = this.options.sessionRelocationWire?.();
@@ -1179,10 +1149,10 @@ export class ZLinkActorTransferRuntime {
       );
     }
     await serviceWire.sendSessionRelocationRoute(
-        target.routerChannelId,
-        target.targetNodeRid,
-        route,
-        this.options.shutdownSignal?.()
+      target.routerChannelId,
+      target.targetNodeRid,
+      route,
+      this.options.shutdownSignal?.()
     );
   }
 
@@ -1236,8 +1206,9 @@ export class ZLinkActorTransferRuntime {
     releaseLocation: boolean
   ): void {
     if (this.sourceDepartureTasks.has(actor.context.actorId)) return;
-    const task = this.finishSourceDeparture(actor, sourceSpotId, releaseLocation)
-      .finally(() => this.sourceDepartureTasks.delete(actor.context.actorId));
+    const task = this.finishSourceDeparture(actor, sourceSpotId, releaseLocation).finally(() =>
+      this.sourceDepartureTasks.delete(actor.context.actorId)
+    );
     this.sourceDepartureTasks.set(actor.context.actorId, task);
   }
 
@@ -1250,15 +1221,16 @@ export class ZLinkActorTransferRuntime {
     while (this.options.shutdownSignal?.()?.aborted !== true) {
       try {
         if (sourceSpotId !== undefined) {
-          await this.options.spotManager()?.commitActorLeaveAfterTransfer(sourceSpotId, actor.context.actorId);
+          await this.options
+            .spotManager()
+            ?.commitActorLeaveAfterTransfer(sourceSpotId, actor.context.actorId);
         }
         if (releaseLocation) {
           const state = this.options.actorManager()?.getState(actor.context.actorId);
           if (state?.actorType !== undefined && state.ownsLocation) {
-            await this.options.locationLifecycle()?.releaseActor(
-              state.actorType,
-              actor.context.actorId
-            );
+            await this.options
+              .locationLifecycle()
+              ?.releaseActor(state.actorType, actor.context.actorId);
             state.markLocationReleased();
           }
           // Message Follow owns the bounded stale route after the native leave.
@@ -1271,7 +1243,7 @@ export class ZLinkActorTransferRuntime {
         return;
       } catch (error) {
         this.options.reportPostCommitError?.(error);
-        if (!await retry.wait(this.options.shutdownSignal?.())) return;
+        if (!(await retry.wait(this.options.shutdownSignal?.()))) return;
       }
     }
   }
@@ -1284,18 +1256,21 @@ export class ZLinkActorTransferRuntime {
     actorCreateRequest?: Message,
     signal?: AbortSignal
   ): Promise<{ readonly actor: ZLinkActor; readonly actorRef: ZLinkBackendActorRef }> {
-    const actorManager = this.requireActorManager('Routed actor join requires ZLINK_ACTOR_MANAGER.');
-    const actor = actorRef === undefined
-      ? await actorManager.getOrCreateActor(actorId, actorType, signal)
-      : await actorManager.getOrCreateWithNativeRef(
-          actorId,
-          actorType,
-          actorRef as unknown as ZLinkBackendActorRef,
-          actorCreateRequest === undefined
-            ? undefined
-            : wrapFrameworkPayloadMessage(actorCreateRequest, this.options.messageSerializers),
-          signal
-        );
+    const actorManager = this.requireActorManager(
+      'Routed actor join requires ZLINK_ACTOR_MANAGER.'
+    );
+    const actor =
+      actorRef === undefined
+        ? await actorManager.getOrCreateActor(actorId, actorType, signal)
+        : await actorManager.getOrCreateWithNativeRef(
+            actorId,
+            actorType,
+            actorRef as unknown as ZLinkBackendActorRef,
+            actorCreateRequest === undefined
+              ? undefined
+              : wrapFrameworkPayloadMessage(actorCreateRequest, this.options.messageSerializers),
+            signal
+          );
     const state = actorManager.getState(actorId);
     if (state === undefined) {
       throw new Error(`Actor '${actorId}' state was not created.`);
@@ -1317,7 +1292,9 @@ export class ZLinkActorTransferRuntime {
     remoteBoundSessionTarget?: ZLinkRemoteBoundSessionTarget,
     signal?: AbortSignal
   ): Promise<{ readonly actor: ZLinkActor; readonly actorRef: ZLinkBackendActorRef }> {
-    const actorManager = this.requireActorManager('Routed actor transfer requires ZLINK_ACTOR_MANAGER.');
+    const actorManager = this.requireActorManager(
+      'Routed actor transfer requires ZLINK_ACTOR_MANAGER.'
+    );
     const materialized = await actorManager.materializeTransferredActor(
       actorId,
       actorType,
@@ -1333,10 +1310,7 @@ export class ZLinkActorTransferRuntime {
     state.setBoundSessionTransferTarget(remoteBoundSessionTarget);
     if (remoteBoundSessionTarget !== undefined) {
       state.setRemoteBoundSessionTarget(
-        mergeRemoteBoundSessionTarget(
-          remoteBoundSessionTarget,
-          state.remoteBoundSessionTarget
-        )
+        mergeRemoteBoundSessionTarget(remoteBoundSessionTarget, state.remoteBoundSessionTarget)
       );
     }
     if (remoteBoundSessionTarget?.bindingGeneration !== undefined) {
@@ -1364,19 +1338,20 @@ export class ZLinkActorTransferRuntime {
     const state = this.options.actorManager()?.getState(actor.context.actorId);
     const actorType = state?.actorType;
     const local = this.options.primaryMeshNode().status();
-    const targetActorRef = state?.nativeActorRef === undefined
-      ? undefined
-      : toFrameworkActorRef(state.nativeActorRef, actor.context.meshName);
+    const targetActorRef =
+      state?.nativeActorRef === undefined
+        ? undefined
+        : toFrameworkActorRef(state.nativeActorRef, actor.context.meshName);
     if (
-      store === undefined
-      || owner === undefined
-      || state === undefined
-      || actorType === undefined
-      || targetActorRef === undefined
-      || local.lifecycleGeneration <= 0n
-      || spotGeneration <= 0n
-      || membershipEpoch <= 0n
-      || !Number.isSafeInteger(deadlineUnixMs)
+      store === undefined ||
+      owner === undefined ||
+      state === undefined ||
+      actorType === undefined ||
+      targetActorRef === undefined ||
+      local.lifecycleGeneration <= 0n ||
+      spotGeneration <= 0n ||
+      membershipEpoch <= 0n ||
+      !Number.isSafeInteger(deadlineUnixMs)
     ) {
       throw new Error(
         `Actor '${actor.context.actorId}' target authority commit has an incomplete materialization fence.`
@@ -1385,18 +1360,20 @@ export class ZLinkActorTransferRuntime {
     const key = encodeAuthorityKey('actor', actor.context.actorId);
     const expected = await store.readAuthority(key, signal);
     if (expected.kind !== 'snapshot') {
-      throw new Error(`Actor '${actor.context.actorId}' source authority is missing at the target.`);
+      throw new Error(
+        `Actor '${actor.context.actorId}' source authority is missing at the target.`
+      );
     }
     const exactTarget = (value: ZLinkAuthoritySnapshot): boolean =>
-      value.allocation.state === 'active'
-      && value.allocation.objectKind === 'actor'
-      && value.allocation.stableType === actorType
-      && value.objectGeneration === targetActorRef.objectGeneration
-      && value.ownerId === owner.ownerId
-      && value.ownerLeaseGeneration === owner.leaseGeneration
-      && value.allocation.descriptor.meshName === actor.context.meshName
-      && routingIdsEqual(value.allocation.descriptor.rid, local.routingId)
-      && value.allocation.descriptorLifecycleGeneration === local.lifecycleGeneration;
+      value.allocation.state === 'active' &&
+      value.allocation.objectKind === 'actor' &&
+      value.allocation.stableType === actorType &&
+      value.objectGeneration === targetActorRef.objectGeneration &&
+      value.ownerId === owner.ownerId &&
+      value.ownerLeaseGeneration === owner.leaseGeneration &&
+      value.allocation.descriptor.meshName === actor.context.meshName &&
+      routingIdsEqual(value.allocation.descriptor.rid, local.routingId) &&
+      value.allocation.descriptorLifecycleGeneration === local.lifecycleGeneration;
     const adopt = (value: ZLinkAuthoritySnapshot): ZLinkAuthoritySnapshot => {
       state.setLocationGeneration(value.authorityOwnerGeneration);
       state.setOwnerLeaseGeneration(value.ownerLeaseGeneration);
@@ -1406,42 +1383,47 @@ export class ZLinkActorTransferRuntime {
     };
     if (exactTarget(expected)) return adopt(expected);
     if (
-      expected.allocation.state !== 'active'
-      || expected.allocation.objectKind !== 'actor'
-      || expected.allocation.stableType !== actorType
-      || expected.objectGeneration !== sourceActorRef.objectGeneration
-      || expected.allocation.descriptor.meshName !== sourceActorRef.meshName
-      || !routingIdsEqual(expected.allocation.descriptor.rid, sourceActorRef.nodeRid)
+      expected.allocation.state !== 'active' ||
+      expected.allocation.objectKind !== 'actor' ||
+      expected.allocation.stableType !== actorType ||
+      expected.objectGeneration !== sourceActorRef.objectGeneration ||
+      expected.allocation.descriptor.meshName !== sourceActorRef.meshName ||
+      !routingIdsEqual(expected.allocation.descriptor.rid, sourceActorRef.nodeRid)
     ) {
       throw new Error(
         `Actor '${actor.context.actorId}' relocation source authority is stale at the target.`
       );
     }
-    const membershipMutation = Buffer.from(JSON.stringify({
-      actorId: actor.context.actorId,
-      actorGeneration: targetActorRef.objectGeneration.toString(),
-      spotId: String(spotId),
-      spotGeneration: spotGeneration.toString(),
-      membershipEpoch: membershipEpoch.toString()
-    }), 'utf8');
+    const membershipMutation = Buffer.from(
+      JSON.stringify({
+        actorId: actor.context.actorId,
+        actorGeneration: targetActorRef.objectGeneration.toString(),
+        spotId: String(spotId),
+        spotGeneration: spotGeneration.toString(),
+        membershipEpoch: membershipEpoch.toString()
+      }),
+      'utf8'
+    );
     const request = {
       aggregateId: { value: transferId } as ZLinkAggregateId,
       aggregateGeneration: local.lifecycleGeneration,
-      participants: [{
-        authorityKey: key,
-        expectedStoreVersion: expected.storeVersion,
-        ownerTransition: 'newOwner' as const,
-        authorityPayload: rewriteActorAuthorityRoute(
-          expected.payload,
-          targetActorRef,
-          String(spotId),
-          spotGeneration,
-          ZLinkSpotKind.User,
-          local.lifecycleGeneration,
-          owner
-        ),
-        membershipMutation
-      }],
+      participants: [
+        {
+          authorityKey: key,
+          expectedStoreVersion: expected.storeVersion,
+          ownerTransition: 'newOwner' as const,
+          authorityPayload: rewriteActorAuthorityRoute(
+            expected.payload,
+            targetActorRef,
+            String(spotId),
+            spotGeneration,
+            ZLinkSpotKind.User,
+            local.lifecycleGeneration,
+            owner
+          ),
+          membershipMutation
+        }
+      ],
       inventoryDigest: createHash('sha256').update(membershipMutation).digest(),
       targetDescriptor: {
         meshName: actor.context.meshName,
@@ -1463,11 +1445,13 @@ export class ZLinkActorTransferRuntime {
       if (prepared?.kind === 'prepared' || prepared?.kind === 'alreadyPrepared') break;
       const observed = await this.readActorAuthorityForRelocation(store, key, signal);
       if (observed !== undefined && exactTarget(observed)) return adopt(observed);
-      if (prepared !== undefined || observed !== undefined && !sameSourceActorAuthority(observed, expected)) {
-        throw new Error(
-          `Actor '${actor.context.actorId}' target authority prepare was rejected.`,
-          { cause: firstError }
-        );
+      if (
+        prepared !== undefined ||
+        (observed !== undefined && !sameSourceActorAuthority(observed, expected))
+      ) {
+        throw new Error(`Actor '${actor.context.actorId}' target authority prepare was rejected.`, {
+          cause: firstError
+        });
       }
       await waitForActorAuthorityRetry(deadlineAtMs, signal, firstError);
     }
@@ -1482,9 +1466,9 @@ export class ZLinkActorTransferRuntime {
       const observed = await this.readActorAuthorityForRelocation(store, key, signal);
       if (observed !== undefined && exactTarget(observed)) return adopt(observed);
       if (
-        committed?.kind === 'stale'
-        || committed?.kind === 'generationExhausted'
-        || observed !== undefined && !sameSourceActorAuthority(observed, expected)
+        committed?.kind === 'stale' ||
+        committed?.kind === 'generationExhausted' ||
+        (observed !== undefined && !sameSourceActorAuthority(observed, expected))
       ) {
         throw new Error(
           `Actor '${actor.context.actorId}' target authority commit did not converge.`,
@@ -1532,17 +1516,19 @@ export class ZLinkActorTransferRuntime {
     const actorRef = state?.nativeActorRef;
     const binding = state?.boundSessionTransferTarget;
     if (
-      actorRef !== undefined
-      && binding?.sessionNodeRid !== undefined
-      && binding.sessionRid !== undefined
-      && binding.bindingGeneration !== undefined
+      actorRef !== undefined &&
+      binding?.sessionNodeRid !== undefined &&
+      binding.sessionRid !== undefined &&
+      binding.bindingGeneration !== undefined
     ) {
-      this.options.primaryMeshNode().restoreActorSessionBinding?.(
-        actorRef,
-        binding.sessionNodeRid,
-        binding.sessionRid,
-        binding.bindingGeneration
-      );
+      this.options
+        .primaryMeshNode()
+        .restoreActorSessionBinding?.(
+          actorRef,
+          binding.sessionNodeRid,
+          binding.sessionRid,
+          binding.bindingGeneration
+        );
     }
   }
 
@@ -1552,9 +1538,8 @@ export class ZLinkActorTransferRuntime {
     const targetActorRef = {
       actorId: actorRef.actorId,
       nodeRid: node.status().routingId,
-      generation: localActorRef.generation > 0n
-        ? localActorRef.generation
-        : actorRef.objectGeneration
+      generation:
+        localActorRef.generation > 0n ? localActorRef.generation : actorRef.objectGeneration
     };
     this.options.actorManager()?.getState(actor.context.actorId)?.setNativeActorRef(targetActorRef);
   }
@@ -1579,35 +1564,39 @@ export class ZLinkActorTransferRuntime {
     const spotGeneration = joinedLocation?.spotGeneration ?? location.spotGeneration;
     const membershipEpoch = joinedLocation?.membershipEpoch ?? location.membershipEpoch;
     if (spotGeneration <= 0n || membershipEpoch <= 0n) {
-      throw new Error(`Actor '${actor.context.actorId}' committed target location has invalid lifecycle generations.`);
+      throw new Error(
+        `Actor '${actor.context.actorId}' committed target location has invalid lifecycle generations.`
+      );
     }
     // RoutingId is an opaque byte value, so the committed target is compared by
     // value. Reference equality would reject a matching SPOT read back from the
     // Core lookup.
     if (
-      joinedLocation === undefined
-      && (
-        location.spotId === null
-        || location.spotId === undefined
-        || encodeRoutingIdStorageHex(location.spotId as RoutingId)
-          !== encodeRoutingIdStorageHex(spotId)
-      )
+      joinedLocation === undefined &&
+      (location.spotId === null ||
+        location.spotId === undefined ||
+        encodeRoutingIdStorageHex(location.spotId as RoutingId) !==
+          encodeRoutingIdStorageHex(spotId))
     ) {
-      throw new Error(`Actor '${actor.context.actorId}' Core location does not match the committed target SPOT.`);
+      throw new Error(
+        `Actor '${actor.context.actorId}' Core location does not match the committed target SPOT.`
+      );
     }
     const deadline = performance.now() + 5_000;
     const ownerNodeGeneration = node.status().lifecycleGeneration;
     if (ownerNodeGeneration <= 0n) {
-      throw new Error(`Actor '${actor.context.actorId}' owner MeshNode has no valid lifecycle generation.`);
+      throw new Error(
+        `Actor '${actor.context.actorId}' owner MeshNode has no valid lifecycle generation.`
+      );
     }
-    const authority = await this.options.authorityStore()?.readAuthority(
-      encodeAuthorityKey('actor', actor.context.actorId)
-    );
+    const authority = await this.options
+      .authorityStore()
+      ?.readAuthority(encodeAuthorityKey('actor', actor.context.actorId));
     if (
-      authority?.kind === 'snapshot'
-      && authority.allocation.state === 'active'
-      && String(authority.allocation.descriptor.rid) === String(node.status().routingId)
-      && authority.allocation.descriptorLifecycleGeneration === ownerNodeGeneration
+      authority?.kind === 'snapshot' &&
+      authority.allocation.state === 'active' &&
+      String(authority.allocation.descriptor.rid) === String(node.status().routingId) &&
+      authority.allocation.descriptorLifecycleGeneration === ownerNodeGeneration
     ) {
       state.setLocationGeneration(authority.authorityOwnerGeneration);
       state.setOwnerLeaseGeneration(authority.ownerLeaseGeneration);
@@ -1620,10 +1609,7 @@ export class ZLinkActorTransferRuntime {
       claim = await lifecycle.takeoverActorJoinedSpot(
         actorType,
         actor.context.actorId,
-        toFrameworkActorRef(
-          state.nativeActorRef ?? location.actor as never,
-          spotMeshName
-        ),
+        toFrameworkActorRef(state.nativeActorRef ?? (location.actor as never), spotMeshName),
         spotMeshName,
         spotId,
         spotGeneration,
@@ -1659,9 +1645,9 @@ export class ZLinkActorTransferRuntime {
     const target = await this.options.spotRouteResolver?.()?.resolve(spotId);
     if (target === undefined || target.spotKind === 'entry') return;
     if (
-      !routingIdsEqual(target.spotId, spotId)
-      || !routingIdsEqual(target.targetNodeRid, node.status().routingId)
-      || target.targetSpotGeneration !== spotGeneration
+      !routingIdsEqual(target.spotId, spotId) ||
+      !routingIdsEqual(target.targetNodeRid, node.status().routingId) ||
+      target.targetSpotGeneration !== spotGeneration
     ) {
       throw new Error('Committed native Actor target does not match its Ready Spot route.');
     }
@@ -1674,7 +1660,9 @@ export class ZLinkActorTransferRuntime {
     spotMeshName: string
   ): Promise<ZLinkNativeActorJoinSnapshot> {
     const state = this.options.actorManager()?.getState(actor.context.actorId);
-    const previousLocation = this.options.locationLifecycle()?.actorLocationSnapshot(actor.context.actorId);
+    const previousLocation = this.options
+      .locationLifecycle()
+      ?.actorLocationSnapshot(actor.context.actorId);
     const snapshot = {
       spotId: state?.spotId,
       spot: state?.spot,
@@ -1727,12 +1715,14 @@ export class ZLinkActorTransferRuntime {
     if (state?.ownsLocation !== true || actorType === undefined || lifecycle === undefined) return;
     if (snapshot.spotId === undefined) {
       if (
-        snapshot.locationSpotId === undefined
-        || snapshot.spotGeneration === undefined
-        || snapshot.membershipEpoch === undefined
-        || snapshot.ownerNodeGeneration === undefined
+        snapshot.locationSpotId === undefined ||
+        snapshot.spotGeneration === undefined ||
+        snapshot.membershipEpoch === undefined ||
+        snapshot.ownerNodeGeneration === undefined
       ) {
-        throw new Error(`Actor '${actor.context.actorId}' cannot restore its Entry SPOT location without its exact generation fields.`);
+        throw new Error(
+          `Actor '${actor.context.actorId}' cannot restore its Entry SPOT location without its exact generation fields.`
+        );
       }
       await lifecycle.notifyActorLeftSpot(
         actorType,
@@ -1745,15 +1735,19 @@ export class ZLinkActorTransferRuntime {
       return;
     }
     if (snapshot.actorRef === undefined) {
-      throw new Error(`Actor '${actor.context.actorId}' cannot restore its previous SPOT location without a native ref.`);
+      throw new Error(
+        `Actor '${actor.context.actorId}' cannot restore its previous SPOT location without a native ref.`
+      );
     }
     if (
-      snapshot.spotMeshName === undefined
-      || snapshot.spotGeneration === undefined
-      || snapshot.membershipEpoch === undefined
-      || snapshot.ownerNodeGeneration === undefined
+      snapshot.spotMeshName === undefined ||
+      snapshot.spotGeneration === undefined ||
+      snapshot.membershipEpoch === undefined ||
+      snapshot.ownerNodeGeneration === undefined
     ) {
-      throw new Error(`Actor '${actor.context.actorId}' cannot restore its previous SPOT location without its exact generation fields.`);
+      throw new Error(
+        `Actor '${actor.context.actorId}' cannot restore its previous SPOT location without its exact generation fields.`
+      );
     }
     const restored = await lifecycle.takeoverActorJoinedSpot(
       actorType,
@@ -1767,10 +1761,13 @@ export class ZLinkActorTransferRuntime {
       async () => state.clearAfterDestroy()
     );
     if (restored.status === 'conflict') {
-      throw new Error(`Actor '${actor.context.actorId}' previous SPOT location could not be restored.`);
+      throw new Error(
+        `Actor '${actor.context.actorId}' previous SPOT location could not be restored.`
+      );
     }
     if (restored.generation !== undefined) state.setLocationGeneration(restored.generation);
-    if (restored.claimed !== undefined) state.setOwnerLeaseGeneration(restored.claimed.leaseGeneration);
+    if (restored.claimed !== undefined)
+      state.setOwnerLeaseGeneration(restored.claimed.leaseGeneration);
   }
 
   async rollbackRoutedActor(actor: ZLinkActor, signal?: AbortSignal): Promise<void> {
@@ -1825,35 +1822,33 @@ export class ZLinkActorTransferRuntime {
       return;
     }
     const serviceFence = target.serviceWireRelocation;
-    const serviceWire = serviceFence === undefined
-      ? undefined
-      : this.options.sessionRelocationWire?.();
+    const serviceWire =
+      serviceFence === undefined ? undefined : this.options.sessionRelocationWire?.();
     if (serviceFence === undefined) {
       throw new Error(`Actor '${actorId}' command 44 has no service-wire relocation fence.`);
     }
     {
       if (
-        target.bindingGeneration === undefined
-        || target.previousAuthorityOwnerGeneration === undefined
-        || target.bindingGeneration <= 0n
-        || target.previousAuthorityOwnerGeneration < 0n
-        || ownershipGeneration <= target.previousAuthorityOwnerGeneration
+        target.bindingGeneration === undefined ||
+        target.previousAuthorityOwnerGeneration === undefined ||
+        target.bindingGeneration <= 0n ||
+        target.previousAuthorityOwnerGeneration < 0n ||
+        ownershipGeneration <= target.previousAuthorityOwnerGeneration
       ) {
         throw new Error(`Actor '${actorId}' command 44 Session route fence is incomplete.`);
       }
       if (serviceWire === undefined) {
         throw new Error(`Actor '${actorId}' command 44 service-wire bridge is unavailable.`);
       }
-      const authority = await this.options.authorityStore()?.readAuthority(
-        encodeAuthorityKey('actor', actorId),
-        this.options.shutdownSignal?.()
-      );
+      const authority = await this.options
+        .authorityStore()
+        ?.readAuthority(encodeAuthorityKey('actor', actorId), this.options.shutdownSignal?.());
       if (
-        authority?.kind !== 'snapshot'
-        || authority.objectGeneration !== actorRef.generation
-        || authority.authorityOwnerGeneration !== ownershipGeneration
-        || authority.ownerLeaseGeneration !== targetOwnerLeaseGeneration
-        || String(authority.allocation.descriptor.rid) !== String(actorRef.nodeRid)
+        authority?.kind !== 'snapshot' ||
+        authority.objectGeneration !== actorRef.generation ||
+        authority.authorityOwnerGeneration !== ownershipGeneration ||
+        authority.ownerLeaseGeneration !== targetOwnerLeaseGeneration ||
+        String(authority.allocation.descriptor.rid) !== String(actorRef.nodeRid)
       ) {
         throw new Error(`Actor '${actorId}' command 44 target authority fence is stale.`);
       }
@@ -1891,8 +1886,10 @@ function relocationDebug(marker: string, detail: Record<string, unknown>): void 
 }
 
 function deferredJoinTerminalKey(root: ZLinkDeferredJoinAcceptedRoot): string {
-  return `${root.actor.actorId}:${root.actor.objectGeneration.toString()}:` +
-    operationIdentityKey(root.operationId);
+  return (
+    `${root.actor.actorId}:${root.actor.objectGeneration.toString()}:` +
+    operationIdentityKey(root.operationId)
+  );
 }
 
 function waitForOperation<T>(operation: Promise<T>, signal?: AbortSignal): Promise<T> {
@@ -1902,11 +1899,11 @@ function waitForOperation<T>(operation: Promise<T>, signal?: AbortSignal): Promi
     const abort = () => reject(signal.reason);
     signal.addEventListener('abort', abort, { once: true });
     operation.then(
-      value => {
+      (value) => {
         signal.removeEventListener('abort', abort);
         resolve(value);
       },
-      error => {
+      (error) => {
         signal.removeEventListener('abort', abort);
         reject(error);
       }
@@ -1918,21 +1915,20 @@ function sameSourceActorAuthority(
   current: ZLinkAuthoritySnapshot,
   expected: ZLinkAuthoritySnapshot
 ): boolean {
-  return current.storeVersion.value === expected.storeVersion.value
-    && current.objectGeneration === expected.objectGeneration
-    && current.authorityOwnerGeneration === expected.authorityOwnerGeneration
-    && current.ownerId === expected.ownerId
-    && current.ownerLeaseGeneration === expected.ownerLeaseGeneration
-    && current.allocation.state === expected.allocation.state
-    && current.allocation.objectKind === expected.allocation.objectKind
-    && current.allocation.stableType === expected.allocation.stableType
-    && current.allocation.descriptor.meshName === expected.allocation.descriptor.meshName
-    && routingIdsEqual(
-      current.allocation.descriptor.rid,
-      expected.allocation.descriptor.rid
-    )
-    && current.allocation.descriptorLifecycleGeneration
-      === expected.allocation.descriptorLifecycleGeneration;
+  return (
+    current.storeVersion.value === expected.storeVersion.value &&
+    current.objectGeneration === expected.objectGeneration &&
+    current.authorityOwnerGeneration === expected.authorityOwnerGeneration &&
+    current.ownerId === expected.ownerId &&
+    current.ownerLeaseGeneration === expected.ownerLeaseGeneration &&
+    current.allocation.state === expected.allocation.state &&
+    current.allocation.objectKind === expected.allocation.objectKind &&
+    current.allocation.stableType === expected.allocation.stableType &&
+    current.allocation.descriptor.meshName === expected.allocation.descriptor.meshName &&
+    routingIdsEqual(current.allocation.descriptor.rid, expected.allocation.descriptor.rid) &&
+    current.allocation.descriptorLifecycleGeneration ===
+      expected.allocation.descriptorLifecycleGeneration
+  );
 }
 
 async function waitForActorAuthorityRetry(

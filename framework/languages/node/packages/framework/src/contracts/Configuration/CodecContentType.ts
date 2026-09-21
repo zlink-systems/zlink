@@ -1,8 +1,6 @@
 import { ZLinkConfigurationException } from './ConfigurationException';
 
-const mediaTypePunctuation = new Set(
-  [..."!#$%&'*+-.^_`|~"].map((value) => value.charCodeAt(0))
-);
+const mediaTypePunctuation = new Set([..."!#$%&'*+-.^_`|~"].map((value) => value.charCodeAt(0)));
 
 export function normalizeCodecContentType(contentType: string): string {
   if (typeof contentType !== 'string') {
@@ -27,9 +25,7 @@ export function normalizeCodecContentType(contentType: string): string {
       continue;
     }
     if (!isTokenCharacter(code)) throw invalidContentType();
-    normalized += code >= 0x41 && code <= 0x5a
-      ? String.fromCharCode(code + 0x20)
-      : value[index]!;
+    normalized += code >= 0x41 && code <= 0x5a ? String.fromCharCode(code + 0x20) : value[index]!;
   }
   if (slash === -1) throw invalidContentType();
   return normalized;
@@ -55,10 +51,12 @@ function isOuterWhitespace(code: number): boolean {
 }
 
 function isTokenCharacter(code: number): boolean {
-  return (code >= 0x30 && code <= 0x39)
-    || (code >= 0x41 && code <= 0x5a)
-    || (code >= 0x61 && code <= 0x7a)
-    || mediaTypePunctuation.has(code);
+  return (
+    (code >= 0x30 && code <= 0x39) ||
+    (code >= 0x41 && code <= 0x5a) ||
+    (code >= 0x61 && code <= 0x7a) ||
+    mediaTypePunctuation.has(code)
+  );
 }
 
 function invalidContentType(): ZLinkConfigurationException {

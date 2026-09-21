@@ -1,14 +1,15 @@
 /* SPDX-License-Identifier: Apache-2.0 */
 package systems.zlink.httpclient.internal;
-import java.io.InputStream;
+
+import systems.zlink.framework.errors.ZLinkFrameworkException;
 
 import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
+import java.io.InputStream;
 import java.util.zip.GZIPInputStream;
 import java.util.zip.Inflater;
 import java.util.zip.InflaterInputStream;
-import systems.zlink.framework.errors.ZLinkFrameworkException;
 
 /**
  * Wrapper-controlled response decompression mirroring the C++ {@code compression.cpp}: gzip and
@@ -20,8 +21,7 @@ import systems.zlink.framework.errors.ZLinkFrameworkException;
  */
 public final class ResponseCompression {
 
-    private ResponseCompression() {
-    }
+    private ResponseCompression() {}
 
     public static byte[] gunzip(byte[] input, long maxBytes) {
         try {
@@ -33,13 +33,16 @@ public final class ResponseCompression {
 
     public static byte[] inflateDeflate(byte[] input, long maxBytes) {
         // Detect a zlib-wrapped stream (method deflate, header a multiple of 31) vs raw deflate.
-        boolean zlibWrapped = input.length >= 2
-            && (input[0] & 0x0f) == 8
-            && (((input[0] & 0xff) << 8 | (input[1] & 0xff)) % 31) == 0;
+        boolean zlibWrapped =
+                input.length >= 2
+                        && (input[0] & 0x0f) == 8
+                        && (((input[0] & 0xff) << 8 | (input[1] & 0xff)) % 31) == 0;
         try {
-            InflaterInputStream stream = zlibWrapped
-                ? new InflaterInputStream(new ByteArrayInputStream(input))
-                : new InflaterInputStream(new ByteArrayInputStream(input), new Inflater(true));
+            InflaterInputStream stream =
+                    zlibWrapped
+                            ? new InflaterInputStream(new ByteArrayInputStream(input))
+                            : new InflaterInputStream(
+                                    new ByteArrayInputStream(input), new Inflater(true));
             return decode(stream, maxBytes);
         } catch (IOException cause) {
             throw malformed(cause);
@@ -48,9 +51,13 @@ public final class ResponseCompression {
 
     private static byte[] decode(InputStream stream, long maxBytes) throws IOException {
         ByteArrayOutputStream output = new ByteArrayOutputStream();
-        // The limit failure is unchecked, so it escapes the callers' IOException->malformed mapping.
-        BoundedRead.copy(stream, maxBytes, ResponseBodyReader::tooLarge,
-            (buffer, length) -> output.write(buffer, 0, length));
+        // The limit failure is unchecked, so it escapes the callers' IOException->malformed
+        // mapping.
+        BoundedRead.copy(
+                stream,
+                maxBytes,
+                ResponseBodyReader::tooLarge,
+                (buffer, length) -> output.write(buffer, 0, length));
         return output.toByteArray();
     }
 

@@ -46,14 +46,12 @@ class message_metadata_t
     const std::map<std::string, std::string> &values () const noexcept { return _values; }
 
   private:
-    std::map<std::string, std::string>::const_iterator
-    lower_bound (std::string_view key) const
+    std::map<std::string, std::string>::const_iterator lower_bound (std::string_view key) const
     {
-        return std::lower_bound (
-          _values.begin (), _values.end (), key,
-          [] (const auto &entry, std::string_view value) {
-              return std::string_view (entry.first) < value;
-          });
+        return std::lower_bound (_values.begin (), _values.end (), key,
+                                 [] (const auto &entry, std::string_view value) {
+                                     return std::string_view (entry.first) < value;
+                                 });
     }
 
     std::map<std::string, std::string> _values;

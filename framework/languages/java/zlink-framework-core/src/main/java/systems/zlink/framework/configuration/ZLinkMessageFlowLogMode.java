@@ -8,7 +8,11 @@ public enum ZLinkMessageFlowLogMode {
 
     private final int value;
 
-    ZLinkMessageFlowLogMode(int value) { this.value = value; }
+    ZLinkMessageFlowLogMode(int value) {
+        this.value = value;
+    }
 
-    public int value() { return value; }
+    public int value() {
+        return value;
+    }
 }

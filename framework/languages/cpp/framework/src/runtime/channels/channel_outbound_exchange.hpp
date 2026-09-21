@@ -35,12 +35,12 @@ class channel_outbound_exchange_t
                               const send_call_t::metadata_map_t &metadata);
 
     task_t<void> submit_publish (std::string channel_name,
-                                   std::string topic,
-                                   std::string packet_name,
-                                   std::type_index event_type,
-                                   message_bus_t::payload_encoder_t encode_payload,
-                                   std::chrono::milliseconds timeout,
-                                   const send_call_t::metadata_map_t &metadata);
+                                 std::string topic,
+                                 std::string packet_name,
+                                 std::type_index event_type,
+                                 message_bus_t::payload_encoder_t encode_payload,
+                                 std::chrono::milliseconds timeout,
+                                 const send_call_t::metadata_map_t &metadata);
 
   private:
     std::shared_ptr<channel_runtime_state_t> _state;
@@ -49,8 +49,7 @@ class channel_outbound_exchange_t
 void close_native_channel_transports (
   const std::shared_ptr<channel_runtime_state_t> &state) noexcept;
 
-void initialize_manual_channel_publishers (
-  const std::shared_ptr<channel_runtime_state_t> &state);
+void initialize_manual_channel_publishers (const std::shared_ptr<channel_runtime_state_t> &state);
 
 void close_manual_channel_publishers (
   const std::shared_ptr<channel_runtime_state_t> &state) noexcept;

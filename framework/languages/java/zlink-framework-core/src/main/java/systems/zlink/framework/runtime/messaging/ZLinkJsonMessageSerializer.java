@@ -1,9 +1,8 @@
 package systems.zlink.framework.runtime.messaging;
-import java.nio.charset.StandardCharsets;
 
-import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.core.JsonGenerator;
 import com.fasterxml.jackson.core.JsonParser;
+import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.core.JsonToken;
 import com.fasterxml.jackson.databind.DeserializationContext;
 import com.fasterxml.jackson.databind.JsonDeserializer;
@@ -12,23 +11,27 @@ import com.fasterxml.jackson.databind.JsonSerializer;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.SerializerProvider;
 import com.fasterxml.jackson.databind.module.SimpleModule;
-import java.io.IOException;
-import java.util.HashSet;
-import java.util.Set;
+
 import systems.zlink.contracts.core.RoutingId;
 import systems.zlink.contracts.messaging.Message;
 import systems.zlink.framework.ZLinkEncodedPayload;
 import systems.zlink.framework.ZLinkMessageSerializer;
 import systems.zlink.framework.actors.ActorRef;
-import systems.zlink.framework.spots.SpotRef;
 import systems.zlink.framework.runtime.internal.json.ZLinkFrameworkJsonProfile;
+import systems.zlink.framework.spots.SpotRef;
+
+import java.io.IOException;
+import java.nio.charset.StandardCharsets;
+import java.util.HashSet;
+import java.util.Set;
 
 public final class ZLinkJsonMessageSerializer implements ZLinkMessageSerializer {
     private final ObjectMapper mapper;
 
     public ZLinkJsonMessageSerializer() {
-        this(ZLinkFrameworkJsonProfile.mapper(
-            routingIdModule(), actorRefModule(), spotRefModule()));
+        this(
+                ZLinkFrameworkJsonProfile.mapper(
+                        routingIdModule(), actorRefModule(), spotRefModule()));
     }
 
     ZLinkJsonMessageSerializer(ObjectMapper mapper) {
@@ -47,8 +50,7 @@ public final class ZLinkJsonMessageSerializer implements ZLinkMessageSerializer 
             return ZLinkEncodedPayload.from(mapper.writeValueAsBytes(value));
         } catch (JsonProcessingException ex) {
             throw new IllegalArgumentException(
-                "failed to serialize message as JSON: " + valueTypeName(value),
-                ex);
+                    "failed to serialize message as JSON: " + valueTypeName(value), ex);
         }
     }
 
@@ -63,8 +65,7 @@ public final class ZLinkJsonMessageSerializer implements ZLinkMessageSerializer 
             return Message.from(mapper.writeValueAsBytes(value));
         } catch (JsonProcessingException ex) {
             throw new IllegalArgumentException(
-                "failed to serialize message as JSON: " + valueTypeName(value),
-                ex);
+                    "failed to serialize message as JSON: " + valueTypeName(value), ex);
         }
     }
 
@@ -81,11 +82,11 @@ public final class ZLinkJsonMessageSerializer implements ZLinkMessageSerializer 
             return mapper.readValue(bytes, type);
         } catch (IOException ex) {
             throw new IllegalArgumentException(
-                "failed to deserialize JSON message as "
-                    + type.getName()
-                    + " payload="
-                    + new String(bytes, StandardCharsets.UTF_8),
-                ex);
+                    "failed to deserialize JSON message as "
+                            + type.getName()
+                            + " payload="
+                            + new String(bytes, StandardCharsets.UTF_8),
+                    ex);
         }
     }
 
@@ -104,202 +105,202 @@ public final class ZLinkJsonMessageSerializer implements ZLinkMessageSerializer 
 
     private static SimpleModule routingIdModule() {
         SimpleModule module = new SimpleModule("zlink-routing-id");
-        module.addSerializer(RoutingId.class, new JsonSerializer<>() {
-            @Override
-            public void serialize(
-                RoutingId value,
-                JsonGenerator generator,
-                SerializerProvider serializers) throws IOException {
-                generator.writeString(value.toHex());
-            }
-        });
-        module.addDeserializer(RoutingId.class, new JsonDeserializer<>() {
-            @Override
-            public RoutingId deserialize(
-                JsonParser parser,
-                DeserializationContext context) throws IOException {
-                return RoutingId.fromHex(parser.getValueAsString());
-            }
-        });
+        module.addSerializer(
+                RoutingId.class,
+                new JsonSerializer<>() {
+                    @Override
+                    public void serialize(
+                            RoutingId value,
+                            JsonGenerator generator,
+                            SerializerProvider serializers)
+                            throws IOException {
+                        generator.writeString(value.toHex());
+                    }
+                });
+        module.addDeserializer(
+                RoutingId.class,
+                new JsonDeserializer<>() {
+                    @Override
+                    public RoutingId deserialize(JsonParser parser, DeserializationContext context)
+                            throws IOException {
+                        return RoutingId.fromHex(parser.getValueAsString());
+                    }
+                });
         return module;
     }
 
     private static SimpleModule actorRefModule() {
         SimpleModule module = new SimpleModule("zlink-actor-ref");
-        module.addSerializer(ActorRef.class, new JsonSerializer<>() {
-            @Override
-            public void serialize(
-                ActorRef value,
-                JsonGenerator generator,
-                SerializerProvider serializers) throws IOException {
-                generator.writeStartObject();
-                generator.writeStringField("actorId", value.actorId());
-                generator.writeStringField(
-                    "objectGeneration",
-                    Long.toUnsignedString(value.objectGeneration()));
-                generator.writeStringField("meshName", value.meshName());
-                generator.writeStringField(
-                    "nodeRid",
-                    value.nodeRid().toHex());
-                generator.writeEndObject();
-            }
-        });
-        module.addDeserializer(ActorRef.class, new JsonDeserializer<>() {
-            @Override
-            public ActorRef deserialize(
-                JsonParser parser,
-                DeserializationContext context) throws IOException {
-                if (parser.currentToken() != JsonToken.START_OBJECT) {
-                    throw JsonMappingException.from(parser,
-                        "ActorRef must be a JSON object");
-                }
-                String actorId = null;
-                String objectGeneration = null;
-                String meshName = null;
-                String nodeRid = null;
-                Set<String> seen = new HashSet<>();
-                while (parser.nextToken() != JsonToken.END_OBJECT) {
-                    String field = parser.currentName();
-                    parser.nextToken();
-                    if (!seen.add(field)) {
-                        throw context.weirdStringException(
-                            field,
-                            ActorRef.class,
-                            "duplicate ActorRef property");
+        module.addSerializer(
+                ActorRef.class,
+                new JsonSerializer<>() {
+                    @Override
+                    public void serialize(
+                            ActorRef value, JsonGenerator generator, SerializerProvider serializers)
+                            throws IOException {
+                        generator.writeStartObject();
+                        generator.writeStringField("actorId", value.actorId());
+                        generator.writeStringField(
+                                "objectGeneration",
+                                Long.toUnsignedString(value.objectGeneration()));
+                        generator.writeStringField("meshName", value.meshName());
+                        generator.writeStringField("nodeRid", value.nodeRid().toHex());
+                        generator.writeEndObject();
                     }
-                    switch (field) {
-                        case "actorId" -> actorId = requireString(
-                            parser, context, field);
-                        case "objectGeneration" -> objectGeneration =
-                            requireString(parser, context, field);
-                        case "meshName" -> meshName = requireString(
-                            parser, context, field);
-                        case "nodeRid" -> nodeRid = requireString(
-                            parser, context, field);
-                        default -> throw JsonMappingException.from(parser,
-                            "unknown ActorRef property: " + field);
+                });
+        module.addDeserializer(
+                ActorRef.class,
+                new JsonDeserializer<>() {
+                    @Override
+                    public ActorRef deserialize(JsonParser parser, DeserializationContext context)
+                            throws IOException {
+                        if (parser.currentToken() != JsonToken.START_OBJECT) {
+                            throw JsonMappingException.from(
+                                    parser, "ActorRef must be a JSON object");
+                        }
+                        String actorId = null;
+                        String objectGeneration = null;
+                        String meshName = null;
+                        String nodeRid = null;
+                        Set<String> seen = new HashSet<>();
+                        while (parser.nextToken() != JsonToken.END_OBJECT) {
+                            String field = parser.currentName();
+                            parser.nextToken();
+                            if (!seen.add(field)) {
+                                throw context.weirdStringException(
+                                        field, ActorRef.class, "duplicate ActorRef property");
+                            }
+                            switch (field) {
+                                case "actorId" -> actorId = requireString(parser, context, field);
+                                case "objectGeneration" ->
+                                        objectGeneration = requireString(parser, context, field);
+                                case "meshName" -> meshName = requireString(parser, context, field);
+                                case "nodeRid" -> nodeRid = requireString(parser, context, field);
+                                default ->
+                                        throw JsonMappingException.from(
+                                                parser, "unknown ActorRef property: " + field);
+                            }
+                        }
+                        if (actorId == null
+                                || objectGeneration == null
+                                || meshName == null
+                                || nodeRid == null
+                                || !objectGeneration.matches("[1-9][0-9]*")) {
+                            throw JsonMappingException.from(
+                                    parser,
+                                    "ActorRef requires actorId, positive decimal-string "
+                                            + "objectGeneration, meshName and nodeRid");
+                        }
+                        try {
+                            return new ActorRef(
+                                    actorId,
+                                    Long.parseUnsignedLong(objectGeneration),
+                                    meshName,
+                                    RoutingId.fromHex(nodeRid));
+                        } catch (RuntimeException failure) {
+                            throw context.weirdStringException(
+                                    objectGeneration, ActorRef.class, "invalid ActorRef");
+                        }
                     }
-                }
-                if (actorId == null || objectGeneration == null
-                    || meshName == null || nodeRid == null
-                    || !objectGeneration.matches("[1-9][0-9]*")) {
-                    throw JsonMappingException.from(parser,
-                        "ActorRef requires actorId, positive decimal-string "
-                            + "objectGeneration, meshName and nodeRid");
-                }
-                try {
-                    return new ActorRef(
-                        actorId,
-                        Long.parseUnsignedLong(objectGeneration),
-                        meshName,
-                        RoutingId.fromHex(nodeRid));
-                } catch (RuntimeException failure) {
-                    throw context.weirdStringException(
-                        objectGeneration,
-                        ActorRef.class,
-                        "invalid ActorRef");
-                }
-            }
 
-            private String requireString(
-                JsonParser parser,
-                DeserializationContext context,
-                String field) throws IOException {
-                if (parser.currentToken() != JsonToken.VALUE_STRING) {
-                    throw JsonMappingException.from(parser,
-                        "ActorRef " + field + " must be a string");
-                }
-                return parser.getText();
-            }
-        });
+                    private String requireString(
+                            JsonParser parser, DeserializationContext context, String field)
+                            throws IOException {
+                        if (parser.currentToken() != JsonToken.VALUE_STRING) {
+                            throw JsonMappingException.from(
+                                    parser, "ActorRef " + field + " must be a string");
+                        }
+                        return parser.getText();
+                    }
+                });
         return module;
     }
 
     private static SimpleModule spotRefModule() {
         SimpleModule module = new SimpleModule("zlink-spot-ref");
-        module.addSerializer(SpotRef.class, new JsonSerializer<>() {
-            @Override
-            public void serialize(
-                SpotRef value,
-                JsonGenerator generator,
-                SerializerProvider serializers) throws IOException {
-                generator.writeStartObject();
-                generator.writeStringField("spotId", value.spotId());
-                generator.writeStringField(
-                    "objectGeneration",
-                    Long.toUnsignedString(value.objectGeneration()));
-                generator.writeStringField("meshName", value.meshName());
-                generator.writeStringField("nodeRid", value.nodeRid().toHex());
-                generator.writeEndObject();
-            }
-        });
-        module.addDeserializer(SpotRef.class, new JsonDeserializer<>() {
-            @Override
-            public SpotRef deserialize(
-                JsonParser parser,
-                DeserializationContext context) throws IOException {
-                if (parser.currentToken() != JsonToken.START_OBJECT) {
-                    throw JsonMappingException.from(parser,
-                        "SpotRef must be a JSON object");
-                }
-                String spotId = null;
-                String objectGeneration = null;
-                String meshName = null;
-                String nodeRid = null;
-                Set<String> seen = new HashSet<>();
-                while (parser.nextToken() != JsonToken.END_OBJECT) {
-                    String field = parser.currentName();
-                    parser.nextToken();
-                    if (!seen.add(field)) {
-                        throw context.weirdStringException(
-                            field,
-                            SpotRef.class,
-                            "duplicate SpotRef property");
+        module.addSerializer(
+                SpotRef.class,
+                new JsonSerializer<>() {
+                    @Override
+                    public void serialize(
+                            SpotRef value, JsonGenerator generator, SerializerProvider serializers)
+                            throws IOException {
+                        generator.writeStartObject();
+                        generator.writeStringField("spotId", value.spotId());
+                        generator.writeStringField(
+                                "objectGeneration",
+                                Long.toUnsignedString(value.objectGeneration()));
+                        generator.writeStringField("meshName", value.meshName());
+                        generator.writeStringField("nodeRid", value.nodeRid().toHex());
+                        generator.writeEndObject();
                     }
-                    switch (field) {
-                        case "spotId" -> spotId = requireRefString(
-                            parser, field, "SpotRef");
-                        case "objectGeneration" -> objectGeneration =
-                            requireRefString(parser, field, "SpotRef");
-                        case "meshName" -> meshName = requireRefString(
-                            parser, field, "SpotRef");
-                        case "nodeRid" -> nodeRid = requireRefString(
-                            parser, field, "SpotRef");
-                        default -> throw JsonMappingException.from(parser,
-                            "unknown SpotRef property: " + field);
+                });
+        module.addDeserializer(
+                SpotRef.class,
+                new JsonDeserializer<>() {
+                    @Override
+                    public SpotRef deserialize(JsonParser parser, DeserializationContext context)
+                            throws IOException {
+                        if (parser.currentToken() != JsonToken.START_OBJECT) {
+                            throw JsonMappingException.from(
+                                    parser, "SpotRef must be a JSON object");
+                        }
+                        String spotId = null;
+                        String objectGeneration = null;
+                        String meshName = null;
+                        String nodeRid = null;
+                        Set<String> seen = new HashSet<>();
+                        while (parser.nextToken() != JsonToken.END_OBJECT) {
+                            String field = parser.currentName();
+                            parser.nextToken();
+                            if (!seen.add(field)) {
+                                throw context.weirdStringException(
+                                        field, SpotRef.class, "duplicate SpotRef property");
+                            }
+                            switch (field) {
+                                case "spotId" ->
+                                        spotId = requireRefString(parser, field, "SpotRef");
+                                case "objectGeneration" ->
+                                        objectGeneration =
+                                                requireRefString(parser, field, "SpotRef");
+                                case "meshName" ->
+                                        meshName = requireRefString(parser, field, "SpotRef");
+                                case "nodeRid" ->
+                                        nodeRid = requireRefString(parser, field, "SpotRef");
+                                default ->
+                                        throw JsonMappingException.from(
+                                                parser, "unknown SpotRef property: " + field);
+                            }
+                        }
+                        if (spotId == null
+                                || objectGeneration == null
+                                || meshName == null
+                                || nodeRid == null
+                                || !objectGeneration.matches("[1-9][0-9]*")) {
+                            throw JsonMappingException.from(
+                                    parser,
+                                    "SpotRef requires spotId, positive decimal-string "
+                                            + "objectGeneration, meshName and nodeRid");
+                        }
+                        try {
+                            return new SpotRef(
+                                    spotId,
+                                    Long.parseUnsignedLong(objectGeneration),
+                                    meshName,
+                                    RoutingId.fromHex(nodeRid));
+                        } catch (RuntimeException failure) {
+                            throw context.weirdStringException(
+                                    objectGeneration, SpotRef.class, "invalid SpotRef");
+                        }
                     }
-                }
-                if (spotId == null || objectGeneration == null
-                    || meshName == null || nodeRid == null
-                    || !objectGeneration.matches("[1-9][0-9]*")) {
-                    throw JsonMappingException.from(parser,
-                        "SpotRef requires spotId, positive decimal-string "
-                            + "objectGeneration, meshName and nodeRid");
-                }
-                try {
-                    return new SpotRef(
-                        spotId,
-                        Long.parseUnsignedLong(objectGeneration),
-                        meshName,
-                        RoutingId.fromHex(nodeRid));
-                } catch (RuntimeException failure) {
-                    throw context.weirdStringException(
-                        objectGeneration,
-                        SpotRef.class,
-                        "invalid SpotRef");
-                }
-            }
-        });
+                });
         return module;
     }
 
-    private static String requireRefString(
-        JsonParser parser,
-        String field,
-        String typeName) throws IOException {
+    private static String requireRefString(JsonParser parser, String field, String typeName)
+            throws IOException {
         if (parser.currentToken() != JsonToken.VALUE_STRING) {
-            throw JsonMappingException.from(parser,
-                typeName + " " + field + " must be a string");
+            throw JsonMappingException.from(parser, typeName + " " + field + " must be a string");
         }
         return parser.getText();
     }

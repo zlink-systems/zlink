@@ -1,4 +1,7 @@
-import { ZLinkFrameworkInternalErrorKind, createInternalFrameworkException  } from '../framework-errors-internal';
+import {
+  ZLinkFrameworkInternalErrorKind,
+  createInternalFrameworkException
+} from '../framework-errors-internal';
 import type { RoutingId } from '../../contracts/Common';
 import type {
   ZLinkAuthoritySnapshot,
@@ -12,10 +15,7 @@ import {
 } from './internal-location-contracts';
 import { ZLinkSpotKind } from '../../contracts/Spots';
 import { ZLinkLocationKeyCodec } from './key-codec';
-import type {
-  IZLinkLocationLifecycleRuntime,
-  ZLinkOwnershipLostEvent
-} from './lifecycle-runtime';
+import type { IZLinkLocationLifecycleRuntime, ZLinkOwnershipLostEvent } from './lifecycle-runtime';
 import type { ZLinkAuthorityStore, ZLinkSpotLocationStore } from './internal-store-contracts';
 import { encodeAuthorityKey } from './authority-key-codec';
 import { routingIdsEqual } from '../routing-id';
@@ -63,20 +63,17 @@ export class ZLinkSpotLocationClaims {
     const result = await this.runtime.writeSpot(row, ZLinkLocationWriteIntent.NewClaim);
     if (result.status === ZLinkLocationWriteStatus.Stored) {
       const owner = this.runtime.currentOwnerToken;
-      this.spots.set(
-        ZLinkLocationKeyCodec.encodeSpotKey({ meshName, spotId }),
-        {
-          kind: 'legacy',
-          row: {
-            ...row,
-            ownerId: this.runtime.ownerId,
-            leaseGeneration: owner?.leaseGeneration ?? row.leaseGeneration,
-            updatedAt: result.updatedAt
-          },
-          generation: result.generation,
-          deactivate
-        }
-      );
+      this.spots.set(ZLinkLocationKeyCodec.encodeSpotKey({ meshName, spotId }), {
+        kind: 'legacy',
+        row: {
+          ...row,
+          ownerId: this.runtime.ownerId,
+          leaseGeneration: owner?.leaseGeneration ?? row.leaseGeneration,
+          updatedAt: result.updatedAt
+        },
+        generation: result.generation,
+        deactivate
+      });
     }
     return result.status;
   }
@@ -106,8 +103,8 @@ export class ZLinkSpotLocationClaims {
       return;
     }
     if (
-      expectedObjectGeneration !== undefined
-      && (tracked.kind !== 'authority' || tracked.objectGeneration !== expectedObjectGeneration)
+      expectedObjectGeneration !== undefined &&
+      (tracked.kind !== 'authority' || tracked.objectGeneration !== expectedObjectGeneration)
     ) {
       return;
     }
@@ -148,27 +145,23 @@ export class ZLinkSpotLocationClaims {
     if (decoded?.state !== 'ready' || decoded.activationRecovery !== undefined) {
       return undefined;
     }
-    const result = await store.compareExchangeAuthority(
-      key,
-      current.storeVersion,
-      {
-        kind: 'put',
-        generationTransition: 'preserve',
-        payload: replaceServiceRelocationAuthorityApplicationPayload(
-          current.payload,
-          encodeServiceInstanceAuthorityPayload({
-            state: 'closing',
-            stableType: decoded.stableType,
-            spotId: decoded.spotId,
-            ownerId: decoded.ownerId,
-            ownerLeaseGeneration: decoded.ownerLeaseGeneration,
-            ownerMeshName: decoded.ownerMeshName,
-            ownerNodeRid: decoded.ownerNodeRid,
-            ownerNodeGeneration: decoded.ownerNodeGeneration
-          })
-        )
-      }
-    );
+    const result = await store.compareExchangeAuthority(key, current.storeVersion, {
+      kind: 'put',
+      generationTransition: 'preserve',
+      payload: replaceServiceRelocationAuthorityApplicationPayload(
+        current.payload,
+        encodeServiceInstanceAuthorityPayload({
+          state: 'closing',
+          stableType: decoded.stableType,
+          spotId: decoded.spotId,
+          ownerId: decoded.ownerId,
+          ownerLeaseGeneration: decoded.ownerLeaseGeneration,
+          ownerMeshName: decoded.ownerMeshName,
+          ownerNodeRid: decoded.ownerNodeRid,
+          ownerNodeGeneration: decoded.ownerNodeGeneration
+        })
+      )
+    });
     if (result.kind !== 'stored') {
       return undefined;
     }
@@ -178,27 +171,23 @@ export class ZLinkSpotLocationClaims {
     return {
       restoreReady: async () => {
         if (restored) return;
-        const restore = await store.compareExchangeAuthority(
-          key,
-          result.storeVersion,
-          {
-            kind: 'put',
-            generationTransition: 'preserve',
-            payload: replaceServiceRelocationAuthorityApplicationPayload(
-              current.payload,
-              encodeServiceInstanceAuthorityPayload({
-                state: 'ready',
-                stableType: decoded.stableType,
-                spotId: decoded.spotId,
-                ownerId: decoded.ownerId,
-                ownerLeaseGeneration: decoded.ownerLeaseGeneration,
-                ownerMeshName: decoded.ownerMeshName,
-                ownerNodeRid: decoded.ownerNodeRid,
-                ownerNodeGeneration: decoded.ownerNodeGeneration
-              })
-            )
-          }
-        );
+        const restore = await store.compareExchangeAuthority(key, result.storeVersion, {
+          kind: 'put',
+          generationTransition: 'preserve',
+          payload: replaceServiceRelocationAuthorityApplicationPayload(
+            current.payload,
+            encodeServiceInstanceAuthorityPayload({
+              state: 'ready',
+              stableType: decoded.stableType,
+              spotId: decoded.spotId,
+              ownerId: decoded.ownerId,
+              ownerLeaseGeneration: decoded.ownerLeaseGeneration,
+              ownerMeshName: decoded.ownerMeshName,
+              ownerNodeRid: decoded.ownerNodeRid,
+              ownerNodeGeneration: decoded.ownerNodeGeneration
+            })
+          )
+        });
         if (restore.kind !== 'stored') {
           throw createInternalFrameworkException(
             ZLinkFrameworkInternalErrorKind.SpotMoving,
@@ -243,10 +232,12 @@ export class ZLinkSpotLocationClaims {
             spotId: tracked.row.spotId
           });
           if (this.spots.get(canonical) !== tracked) continue;
-          if (current === undefined
-            || current.ownerId !== owner.ownerId
-            || (current.leaseGeneration !== tracked.row.leaseGeneration
-              && current.leaseGeneration !== owner.leaseGeneration)) {
+          if (
+            current === undefined ||
+            current.ownerId !== owner.ownerId ||
+            (current.leaseGeneration !== tracked.row.leaseGeneration &&
+              current.leaseGeneration !== owner.leaseGeneration)
+          ) {
             if (this.spots.get(canonical) !== tracked) continue;
             this.spots.delete(canonical);
             await tracked.deactivate?.();
@@ -258,14 +249,13 @@ export class ZLinkSpotLocationClaims {
             continue;
           }
           if (this.spots.get(canonical) !== tracked) continue;
-          const result = await this.runtime.writeSpot(
-            current,
-            ZLinkLocationWriteIntent.Takeover
-          );
+          const result = await this.runtime.writeSpot(current, ZLinkLocationWriteIntent.Takeover);
           if (result.status !== ZLinkLocationWriteStatus.Stored) {
-            failures.push(new Error(
-              `Spot location recovery for '${tracked.row.spotId}' was rejected with status ${result.status}.`
-            ));
+            failures.push(
+              new Error(
+                `Spot location recovery for '${tracked.row.spotId}' was rejected with status ${result.status}.`
+              )
+            );
             continue;
           }
           if (this.spots.get(canonical) !== tracked) continue;
@@ -282,9 +272,12 @@ export class ZLinkSpotLocationClaims {
         const key = encodeAuthorityKey('instance_spot', String(tracked.spotId));
         const current = await this.authorityStore?.readAuthority(key);
         if (this.spots.get(canonical) !== tracked) continue;
-        if (current === undefined || current.kind === 'missing'
-          || !matchesTrackedAuthorityIdentity(current, tracked)
-          || current.ownerId !== owner.ownerId) {
+        if (
+          current === undefined ||
+          current.kind === 'missing' ||
+          !matchesTrackedAuthorityIdentity(current, tracked) ||
+          current.ownerId !== owner.ownerId
+        ) {
           if (this.spots.get(canonical) !== tracked) continue;
           this.spots.delete(canonical);
           await tracked.deactivate?.();
@@ -306,9 +299,11 @@ export class ZLinkSpotLocationClaims {
             }
           );
           if (rebound.kind !== 'stored') {
-            failures.push(new Error(
-              `Instance Spot '${String(tracked.spotId)}' authority recovery returned '${rebound.kind}'.`
-            ));
+            failures.push(
+              new Error(
+                `Instance Spot '${String(tracked.spotId)}' authority recovery returned '${rebound.kind}'.`
+              )
+            );
             continue;
           }
           if (this.spots.get(canonical) !== tracked) continue;
@@ -337,26 +332,25 @@ export class ZLinkSpotLocationClaims {
       { kind: 'delete' }
     );
     if (
-      result.kind === 'conflict'
-      && result.current.kind === 'snapshot'
-      && matchesTrackedAuthority(result.current, tracked)
+      result.kind === 'conflict' &&
+      result.current.kind === 'snapshot' &&
+      matchesTrackedAuthority(result.current, tracked)
     ) {
-      result = await store.compareExchangeAuthority(
-        key,
-        result.current.storeVersion,
-        { kind: 'delete' }
-      );
+      result = await store.compareExchangeAuthority(key, result.current.storeVersion, {
+        kind: 'delete'
+      });
     }
     if (
-      result.kind === 'conflict'
-      && result.current.kind === 'snapshot'
-      && !matchesTrackedAuthority(result.current, tracked)
+      result.kind === 'conflict' &&
+      result.current.kind === 'snapshot' &&
+      !matchesTrackedAuthority(result.current, tracked)
     ) {
       return;
     }
-    if (result.kind === 'deleted' || (
-      result.kind === 'conflict' && result.current.kind === 'missing'
-    )) {
+    if (
+      result.kind === 'deleted' ||
+      (result.kind === 'conflict' && result.current.kind === 'missing')
+    ) {
       return;
     }
     if (result.kind === 'generationExhausted') {
@@ -408,28 +402,32 @@ function matchesTrackedAuthority(
   snapshot: ZLinkAuthoritySnapshot,
   tracked: TrackedAuthoritySpot
 ): boolean {
-  return snapshot.objectGeneration === tracked.objectGeneration
-    && snapshot.authorityOwnerGeneration === tracked.authorityOwnerGeneration
-    && snapshot.ownerId === tracked.ownerId
-    && snapshot.ownerLeaseGeneration === tracked.ownerLeaseGeneration
-    && snapshot.allocation.state === 'active'
-    && snapshot.allocation.objectKind === 'instance_spot'
-    && snapshot.allocation.stableType === tracked.stableType
-    && snapshot.allocation.descriptor.meshName === tracked.meshName
-    && routingIdsEqual(snapshot.allocation.descriptor.rid, tracked.nodeRid)
-    && snapshot.allocation.descriptorLifecycleGeneration === tracked.nodeGeneration;
+  return (
+    snapshot.objectGeneration === tracked.objectGeneration &&
+    snapshot.authorityOwnerGeneration === tracked.authorityOwnerGeneration &&
+    snapshot.ownerId === tracked.ownerId &&
+    snapshot.ownerLeaseGeneration === tracked.ownerLeaseGeneration &&
+    snapshot.allocation.state === 'active' &&
+    snapshot.allocation.objectKind === 'instance_spot' &&
+    snapshot.allocation.stableType === tracked.stableType &&
+    snapshot.allocation.descriptor.meshName === tracked.meshName &&
+    routingIdsEqual(snapshot.allocation.descriptor.rid, tracked.nodeRid) &&
+    snapshot.allocation.descriptorLifecycleGeneration === tracked.nodeGeneration
+  );
 }
 
 function matchesTrackedAuthorityIdentity(
   snapshot: ZLinkAuthoritySnapshot,
   tracked: TrackedAuthoritySpot
 ): boolean {
-  return snapshot.objectGeneration === tracked.objectGeneration
-    && snapshot.authorityOwnerGeneration === tracked.authorityOwnerGeneration
-    && snapshot.allocation.state === 'active'
-    && snapshot.allocation.objectKind === 'instance_spot'
-    && snapshot.allocation.stableType === tracked.stableType
-    && snapshot.allocation.descriptor.meshName === tracked.meshName
-    && routingIdsEqual(snapshot.allocation.descriptor.rid, tracked.nodeRid)
-    && snapshot.allocation.descriptorLifecycleGeneration === tracked.nodeGeneration;
+  return (
+    snapshot.objectGeneration === tracked.objectGeneration &&
+    snapshot.authorityOwnerGeneration === tracked.authorityOwnerGeneration &&
+    snapshot.allocation.state === 'active' &&
+    snapshot.allocation.objectKind === 'instance_spot' &&
+    snapshot.allocation.stableType === tracked.stableType &&
+    snapshot.allocation.descriptor.meshName === tracked.meshName &&
+    routingIdsEqual(snapshot.allocation.descriptor.rid, tracked.nodeRid) &&
+    snapshot.allocation.descriptorLifecycleGeneration === tracked.nodeGeneration
+  );
 }

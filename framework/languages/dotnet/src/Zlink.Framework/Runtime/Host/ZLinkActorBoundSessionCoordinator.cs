@@ -11,8 +11,8 @@ internal sealed class ZLinkActorBoundSessionCoordinator
     private readonly ZLinkSessionActorBindingTable _sessionBindings;
     private readonly ZLinkRemoteRelayFrameAssembler _remoteFrames;
     private readonly ZLinkBoundedRemoteRequestAdmission _remoteRequestAdmission = new();
-    private readonly Dictionary<RemoteRequestKey, PendingRemoteRequest>
-        _pendingRemoteRequests = new();
+    private readonly Dictionary<RemoteRequestKey, PendingRemoteRequest> _pendingRemoteRequests =
+        new();
     private readonly ZLinkStateLane _lane = new();
     private readonly Func<string, ZLinkActorRuntimeState> _getState;
     private readonly Func<IZLinkBackendSpotNode?> _getNode;
@@ -28,7 +28,8 @@ internal sealed class ZLinkActorBoundSessionCoordinator
         Func<string, IZLinkBackendSpotNode?> getNodeForMesh,
         ZLinkFrameworkRegistration registration,
         Func<CancellationToken> getShutdownToken,
-        ILoggerFactory? loggerFactory = null)
+        ILoggerFactory? loggerFactory = null
+    )
     {
         _getState = getState;
         _getNode = getNode;
@@ -39,12 +40,14 @@ internal sealed class ZLinkActorBoundSessionCoordinator
             registration.DefaultRequestTimeout + registration.DefaultRequestTimeout,
             registration.Locations.SessionRelocationSealTimeoutAtStartup,
             registration.TimeProvider,
-            logger: loggerFactory?.CreateLogger<ZLinkSessionActorBindingTable>());
+            logger: loggerFactory?.CreateLogger<ZLinkSessionActorBindingTable>()
+        );
         _boundSessions = new ZLinkActorBoundSessionRegistry(UnbindActorSession);
         _remoteFrames = new ZLinkRemoteRelayFrameAssembler(
             registration.DefaultRequestTimeout,
             getShutdownToken,
-            registration.TimeProvider);
+            registration.TimeProvider
+        );
     }
 
     /// <summary>Set by the runtime after construction: relays an encoded push
@@ -54,16 +57,33 @@ internal sealed class ZLinkActorBoundSessionCoordinator
     /// (spec 31 §6 keeps the session route inside the framework).</summary>
     public Func<string, ZLinkActorBoundSession, byte[], bool>? RemotePushRelay { get; set; }
 
-    public Func<string, ZLinkActorBoundSession, byte[], CancellationToken,
-        ValueTask<ZLinkOneWaySubmitResult>>? RemotePushRelayAsync { get; set; }
+    public Func<
+        string,
+        ZLinkActorBoundSession,
+        byte[],
+        CancellationToken,
+        ValueTask<ZLinkOneWaySubmitResult>
+    >? RemotePushRelayAsync { get; set; }
 
     /// <summary>Set by the runtime after construction: relays a session frame
     /// to a bound actor that migrated to another node as (actorRef,
     /// sessionNodeRid, sessionRid, headerBytes, bodyBytes).</summary>
-    public Func<string?, ZLinkBackendActorRef, ulong, ulong, ulong,
-        RoutingId, RoutingId, ZLinkBackendActorRouteContext,
-        ulong, ZLinkServiceWireCodec.RequestSourceFence?,
-        ReadOnlyMemory<byte>, byte[], byte[], bool>? RemoteFrameRelay { get; set; }
+    public Func<
+        string?,
+        ZLinkBackendActorRef,
+        ulong,
+        ulong,
+        ulong,
+        RoutingId,
+        RoutingId,
+        ZLinkBackendActorRouteContext,
+        ulong,
+        ZLinkServiceWireCodec.RequestSourceFence?,
+        ReadOnlyMemory<byte>,
+        byte[],
+        byte[],
+        bool
+    >? RemoteFrameRelay { get; set; }
 
     public enum RemotePushDelivery
     {
@@ -71,59 +91,59 @@ internal sealed class ZLinkActorBoundSessionCoordinator
         Retained,
         Backpressured,
         NoBinding,
-        WrongSession
+        WrongSession,
     }
 
     internal async ValueTask<RemotePushDelivery> AdmitRemoteSessionFrameAsync(
         ZLinkRemoteSessionPushRelay identity,
         byte[] frame,
         RoutingId sourceNodeRid,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken
+    )
     {
         var admission = await PrepareRemoteSessionFrameAdmissionAsync(
                 identity,
                 frame,
                 sourceNodeRid,
-                cancellationToken)
+                cancellationToken
+            )
             .ConfigureAwait(false);
-        return await CompleteOutboundAdmissionAsync(
-                admission,
-                cancellationToken)
+        return await CompleteOutboundAdmissionAsync(admission, cancellationToken)
             .ConfigureAwait(false);
     }
 
-    internal async ValueTask<RemotePushDelivery>
-        AdmitRemoteSessionFrameOneWayAsync(
-            ZLinkRemoteSessionPushRelay identity,
-            byte[] frame,
-            RoutingId sourceNodeRid,
-            CancellationToken cancellationToken)
+    internal async ValueTask<RemotePushDelivery> AdmitRemoteSessionFrameOneWayAsync(
+        ZLinkRemoteSessionPushRelay identity,
+        byte[] frame,
+        RoutingId sourceNodeRid,
+        CancellationToken cancellationToken
+    )
     {
         var admission = await PrepareRemoteSessionFrameAdmissionAsync(
                 identity,
                 frame,
                 sourceNodeRid,
-                cancellationToken)
+                cancellationToken
+            )
             .ConfigureAwait(false);
         if (admission.Kind == ZLinkSessionOutboundAdmissionKind.Retained)
             return RemotePushDelivery.Retained;
-        return await CompleteOutboundAdmissionAsync(
-                admission,
-                cancellationToken)
+        return await CompleteOutboundAdmissionAsync(admission, cancellationToken)
             .ConfigureAwait(false);
     }
 
-    private async ValueTask<ZLinkSessionOutboundAdmission>
-        PrepareRemoteSessionFrameAdmissionAsync(
-            ZLinkRemoteSessionPushRelay identity,
-            byte[] frame,
-            RoutingId sourceNodeRid,
-            CancellationToken cancellationToken)
+    private async ValueTask<ZLinkSessionOutboundAdmission> PrepareRemoteSessionFrameAdmissionAsync(
+        ZLinkRemoteSessionPushRelay identity,
+        byte[] frame,
+        RoutingId sourceNodeRid,
+        CancellationToken cancellationToken
+    )
     {
         var targetNodeRid = RoutingId.FromHex(identity.TargetNodeRid);
         if (sourceNodeRid != targetNodeRid)
             return new ZLinkSessionOutboundAdmission(
-                ZLinkSessionOutboundAdmissionKind.WrongSession);
+                ZLinkSessionOutboundAdmissionKind.WrongSession
+            );
         var sessionRid = RoutingId.FromHex(identity.SessionRid);
         var tenure = new ZLinkSessionOutboundTenure(
             identity.ActorId,
@@ -136,43 +156,41 @@ internal sealed class ZLinkActorBoundSessionCoordinator
             identity.BindingToken,
             identity.BindingGeneration,
             identity.SessionOwnerNodeGeneration,
-            sessionRid);
-        var admission = await _sessionBindings.AdmitOutboundAsync(
-                tenure,
-                frame)
+            sessionRid
+        );
+        var admission = await _sessionBindings
+            .AdmitOutboundAsync(tenure, frame)
             .ConfigureAwait(false);
         return admission;
     }
 
-    private static async ValueTask<RemotePushDelivery>
-        CompleteOutboundAdmissionAsync(
-            ZLinkSessionOutboundAdmission admission,
-            CancellationToken cancellationToken)
+    private static async ValueTask<RemotePushDelivery> CompleteOutboundAdmissionAsync(
+        ZLinkSessionOutboundAdmission admission,
+        CancellationToken cancellationToken
+    )
     {
         return admission.Kind switch
         {
             ZLinkSessionOutboundAdmissionKind.Immediate => MapOutboundDelivery(
-                admission.Capability!.Settle(deliver: true)),
+                admission.Capability!.Settle(deliver: true)
+            ),
             ZLinkSessionOutboundAdmissionKind.Retained => MapOutboundDelivery(
-                await admission.Capability!.Completion
-                    .WaitAsync(cancellationToken)
-                    .ConfigureAwait(false)),
-            ZLinkSessionOutboundAdmissionKind.Backpressured
-                => RemotePushDelivery.Backpressured,
+                await admission
+                    .Capability!.Completion.WaitAsync(cancellationToken)
+                    .ConfigureAwait(false)
+            ),
+            ZLinkSessionOutboundAdmissionKind.Backpressured => RemotePushDelivery.Backpressured,
             ZLinkSessionOutboundAdmissionKind.NoBinding => RemotePushDelivery.NoBinding,
-            _ => RemotePushDelivery.WrongSession
+            _ => RemotePushDelivery.WrongSession,
         };
     }
 
-    private static RemotePushDelivery MapOutboundDelivery(
-        ZLinkSessionOutboundDelivery delivery) =>
+    private static RemotePushDelivery MapOutboundDelivery(ZLinkSessionOutboundDelivery delivery) =>
         delivery switch
         {
-            ZLinkSessionOutboundDelivery.Delivered
-                => RemotePushDelivery.Delivered,
-            ZLinkSessionOutboundDelivery.Backpressured
-                => RemotePushDelivery.Backpressured,
-            _ => RemotePushDelivery.WrongSession
+            ZLinkSessionOutboundDelivery.Delivered => RemotePushDelivery.Delivered,
+            ZLinkSessionOutboundDelivery.Backpressured => RemotePushDelivery.Backpressured,
+            _ => RemotePushDelivery.WrongSession,
         };
 
     public (bool Claimed, RemoteReplyClaim? Claim) TryClaimRemoteSessionReply(
@@ -181,7 +199,8 @@ internal sealed class ZLinkActorBoundSessionCoordinator
         uint flags,
         string replyCapability,
         RoutingId sourceNodeRid,
-        RoutingId responderNodeRid)
+        RoutingId responderNodeRid
+    )
     {
         PendingRemoteRequest? pending = null;
         RemoteRequestKey pendingKey = default;
@@ -192,17 +211,19 @@ internal sealed class ZLinkActorBoundSessionCoordinator
             pending = null;
             foreach (var entry in _pendingRemoteRequests)
             {
-                if (!string.Equals(
-                        entry.Key.ActorId,
-                        actorId,
-                        StringComparison.Ordinal)
-                    || entry.Key.RequestId != requestId)
+                if (
+                    !string.Equals(entry.Key.ActorId, actorId, StringComparison.Ordinal)
+                    || entry.Key.RequestId != requestId
+                )
                     continue;
                 actorRequestMatch = true;
-                if (!string.Equals(
+                if (
+                    !string.Equals(
                         entry.Value.ReplyCapability,
                         replyCapability,
-                        StringComparison.Ordinal))
+                        StringComparison.Ordinal
+                    )
+                )
                     continue;
                 capabilityMatch = true;
                 pendingKey = entry.Key;
@@ -212,32 +233,40 @@ internal sealed class ZLinkActorBoundSessionCoordinator
             var claimed = pending?.Claimed ?? false;
             var flagsMatch = flags == ZLinkActorBoundSessionRelay.ActorRecvInfoNoBind;
             var responderMatch = sourceNodeRid == responderNodeRid;
-            var objectMatch = pending is not null
-                              && pending.Binding.ObjectGeneration
-                                 == pendingKey.ObjectGeneration;
-            var bindingMatch = pending is not null
-                               && string.Equals(
-                                   pending.Binding.BindingToken,
-                                   pendingKey.BindingToken,
-                                   StringComparison.Ordinal);
-            if (pending is null
+            var objectMatch =
+                pending is not null
+                && pending.Binding.ObjectGeneration == pendingKey.ObjectGeneration;
+            var bindingMatch =
+                pending is not null
+                && string.Equals(
+                    pending.Binding.BindingToken,
+                    pendingKey.BindingToken,
+                    StringComparison.Ordinal
+                );
+            if (
+                pending is null
                 || claimed
                 || !flagsMatch
                 || !responderMatch
                 || !objectMatch
-                || !bindingMatch)
+                || !bindingMatch
+            )
             {
                 Diagnostics.ZLinkFrameworkDebugLog.SpotDiscovery(
                     $"remote_session_reply_claim_refused actor={actorId} "
-                    + $"request_id={requestId} pending_count={_pendingRemoteRequests.Count} "
-                    + $"actor_request_match={actorRequestMatch} "
-                    + $"capability_match={capabilityMatch} claimed={claimed} "
-                    + $"flags={flags} flags_match={flagsMatch} "
-                    + $"source_node={sourceNodeRid} responder_node={responderNodeRid} "
-                    + $"responder_match={responderMatch} object_match={objectMatch} "
-                    + $"binding_match={bindingMatch} capability={replyCapability}");
-                return (Claimed: false, Pending: (PendingRemoteRequest?)null,
-                    Key: default(RemoteRequestKey));
+                        + $"request_id={requestId} pending_count={_pendingRemoteRequests.Count} "
+                        + $"actor_request_match={actorRequestMatch} "
+                        + $"capability_match={capabilityMatch} claimed={claimed} "
+                        + $"flags={flags} flags_match={flagsMatch} "
+                        + $"source_node={sourceNodeRid} responder_node={responderNodeRid} "
+                        + $"responder_match={responderMatch} object_match={objectMatch} "
+                        + $"binding_match={bindingMatch} capability={replyCapability}"
+                );
+                return (
+                    Claimed: false,
+                    Pending: (PendingRemoteRequest?)null,
+                    Key: default(RemoteRequestKey)
+                );
             }
 
             // Validation and ownership transfer are one atomic step. Keep the
@@ -253,35 +282,37 @@ internal sealed class ZLinkActorBoundSessionCoordinator
 
         Diagnostics.ZLinkFrameworkDebugLog.SpotDiscovery(
             $"remote_session_reply_claimed actor={actorId} "
-            + $"request_id={requestId} object={pendingKey.ObjectGeneration} "
-            + $"binding={pendingKey.BindingToken}");
+                + $"request_id={requestId} object={pendingKey.ObjectGeneration} "
+                + $"binding={pendingKey.BindingToken}"
+        );
 
-        return (true, new RemoteReplyClaim(
-            frame => DeliverClaimedRemoteSessionReply(
-                actorId,
-                pending.Binding,
-                frame),
-            () => CompleteRemoteSessionRequest(
-                pendingKey,
-                pending,
-                allowClaimed: true)));
+        return (
+            true,
+            new RemoteReplyClaim(
+                frame => DeliverClaimedRemoteSessionReply(actorId, pending.Binding, frame),
+                () => CompleteRemoteSessionRequest(pendingKey, pending, allowClaimed: true)
+            )
+        );
     }
 
     private RemotePushDelivery DeliverClaimedRemoteSessionReply(
         string actorId,
         ZLinkSessionBindingEntry expected,
-        byte[] frame)
+        byte[] frame
+    )
     {
         var entry = AwaitStateLane(
-            _sessionBindings.GetBindingAsync(actorId, expected.BindingToken));
+            _sessionBindings.GetBindingAsync(actorId, expected.BindingToken)
+        );
         if (entry is null)
-            return AwaitStateLane(
-                    _sessionBindings.GetContextByActorIdAsync(actorId)) is not null
+            return AwaitStateLane(_sessionBindings.GetContextByActorIdAsync(actorId)) is not null
                 ? RemotePushDelivery.WrongSession
                 : RemotePushDelivery.NoBinding;
-        if (entry.ObjectGeneration != expected.ObjectGeneration
+        if (
+            entry.ObjectGeneration != expected.ObjectGeneration
             || entry.BindingGeneration != expected.BindingGeneration
-            || entry.Context.RoutingId != expected.Context.RoutingId)
+            || entry.Context.RoutingId != expected.Context.RoutingId
+        )
             return RemotePushDelivery.WrongSession;
 
         using var message = Message.From(frame);
@@ -290,8 +321,8 @@ internal sealed class ZLinkActorBoundSessionCoordinator
             : RemotePushDelivery.Backpressured;
     }
 
-    public ulong NextBindingGeneration()
-        => checked((ulong)Interlocked.Increment(ref _bindingGeneration));
+    public ulong NextBindingGeneration() =>
+        checked((ulong)Interlocked.Increment(ref _bindingGeneration));
 
     public ZLinkSessionBindingEntry[] BindSessionActor(
         string actorId,
@@ -303,41 +334,44 @@ internal sealed class ZLinkActorBoundSessionCoordinator
         ulong sessionOwnerNodeGeneration,
         RoutingId sessionOwnerNodeRid = default,
         string sessionOwnerId = "",
-        ulong sessionOwnerLeaseGeneration = 0)
+        ulong sessionOwnerLeaseGeneration = 0
+    )
     {
         var actorKey = ZLinkActorId.FromBoundary(actorId, nameof(actorId));
-        var replaced = AwaitStateLane(_sessionBindings.BindAsync(
-            actorKey,
-            context,
-            bindingToken,
-            actorRef,
-            bindingGeneration,
-            route,
-            sessionOwnerNodeGeneration,
-            sessionOwnerNodeRid,
-            sessionOwnerId,
-            sessionOwnerLeaseGeneration));
+        var replaced = AwaitStateLane(
+            _sessionBindings.BindAsync(
+                actorKey,
+                context,
+                bindingToken,
+                actorRef,
+                bindingGeneration,
+                route,
+                sessionOwnerNodeGeneration,
+                sessionOwnerNodeRid,
+                sessionOwnerId,
+                sessionOwnerLeaseGeneration
+            )
+        );
         CompleteReplacedBindingRequests(actorId, replaced);
         return replaced;
     }
 
     private void CompleteReplacedBindingRequests(
         string actorId,
-        IReadOnlyList<ZLinkSessionBindingEntry> replaced)
+        IReadOnlyList<ZLinkSessionBindingEntry> replaced
+    )
     {
-        if (replaced.Count == 0) return;
+        if (replaced.Count == 0)
+            return;
 
         List<PendingRemoteRequest>? stale = null;
         RunState(() =>
         {
             var keys = _pendingRemoteRequests
                 .Where(entry =>
-                    string.Equals(
-                        entry.Key.ActorId,
-                        actorId,
-                        StringComparison.Ordinal)
-                    && replaced.Any(binding =>
-                        SameBindingIdentity(entry.Value.Binding, binding)))
+                    string.Equals(entry.Key.ActorId, actorId, StringComparison.Ordinal)
+                    && replaced.Any(binding => SameBindingIdentity(entry.Value.Binding, binding))
+                )
                 .Select(static entry => entry.Key)
                 .ToArray();
             foreach (var key in keys)
@@ -345,76 +379,68 @@ internal sealed class ZLinkActorBoundSessionCoordinator
                 var pending = _pendingRemoteRequests[key];
                 _pendingRemoteRequests.Remove(key);
                 _remoteRequestAdmission.Release(
-                    ZLinkSessionBindingKey.FromBoundary(
-                        actorId,
-                        pending.Binding.BindingToken));
+                    ZLinkSessionBindingKey.FromBoundary(actorId, pending.Binding.BindingToken)
+                );
                 (stale ??= []).Add(pending);
             }
         });
 
-        if (stale is null) return;
+        if (stale is null)
+            return;
         foreach (var pending in stale)
             pending.Dispose();
     }
 
     private static bool SameBindingIdentity(
         ZLinkSessionBindingEntry left,
-        ZLinkSessionBindingEntry right) =>
-        string.Equals(
-            left.BindingToken,
-            right.BindingToken,
-            StringComparison.Ordinal)
+        ZLinkSessionBindingEntry right
+    ) =>
+        string.Equals(left.BindingToken, right.BindingToken, StringComparison.Ordinal)
         && left.BindingGeneration == right.BindingGeneration
         && left.ObjectGeneration == right.ObjectGeneration
         && left.SessionOwnerNodeGeneration == right.SessionOwnerNodeGeneration;
 
-    public ZLinkSessionFrameAcceptance? AcceptSessionFrame(
-        string actorId,
-        string bindingToken) => AwaitStateLane(
-        _sessionBindings.AcceptAsync(actorId, bindingToken));
+    public ZLinkSessionFrameAcceptance? AcceptSessionFrame(string actorId, string bindingToken) =>
+        AwaitStateLane(_sessionBindings.AcceptAsync(actorId, bindingToken));
 
     public ValueTask<bool> WaitForSessionRouteAvailableAsync(
         string actorId,
         string bindingToken,
-        CancellationToken cancellationToken)
-        => _sessionBindings.WaitForRouteAvailableAsync(
-            actorId,
-            bindingToken,
-            cancellationToken);
+        CancellationToken cancellationToken
+    ) => _sessionBindings.WaitForRouteAvailableAsync(actorId, bindingToken, cancellationToken);
 
-    public ZLinkSessionRouteCommitResult CommitSessionRoute(
-        ZLinkSessionRouteCommit request)
-        => AwaitStateLane(_sessionBindings.CommitRouteAsync(request));
+    public ZLinkSessionRouteCommitResult CommitSessionRoute(ZLinkSessionRouteCommit request) =>
+        AwaitStateLane(_sessionBindings.CommitRouteAsync(request));
 
     public ValueTask<ZLinkSessionRouteSealResult> SealSessionRouteAsync(
         ZLinkSessionRouteSeal request,
-        CancellationToken cancellationToken)
-        => _sessionBindings.SealRouteAsync(request, cancellationToken);
+        CancellationToken cancellationToken
+    ) => _sessionBindings.SealRouteAsync(request, cancellationToken);
 
-    internal ValueTask<
-        ZLinkServiceWireCodec.SessionRelocationSealedRecord>
-        SealCanonicalSessionRouteAsync(
-            ZLinkServiceWireCodec.SessionRelocationSealRecord request,
-            CancellationToken cancellationToken) =>
-        _sessionBindings.SealCanonicalRouteAsync(request, cancellationToken);
+    internal ValueTask<ZLinkServiceWireCodec.SessionRelocationSealedRecord> SealCanonicalSessionRouteAsync(
+        ZLinkServiceWireCodec.SessionRelocationSealRecord request,
+        CancellationToken cancellationToken
+    ) => _sessionBindings.SealCanonicalRouteAsync(request, cancellationToken);
 
     internal bool RouteCanonicalSession(
-            ZLinkServiceWireCodec.SessionRelocationRouteRecord request,
-            ZLinkSessionRelocationAuthenticatedRoute authenticatedRoute)
+        ZLinkServiceWireCodec.SessionRelocationRouteRecord request,
+        ZLinkSessionRelocationAuthenticatedRoute authenticatedRoute
+    )
     {
         return RunState(() =>
         {
             RequireOpenApplicationEpoch();
             return AwaitStateLane(
-                _sessionBindings.RouteCanonicalAsync(request, authenticatedRoute));
+                _sessionBindings.RouteCanonicalAsync(request, authenticatedRoute)
+            );
         });
     }
 
-    internal ValueTask
-        RouteCanonicalSessionAsync(
-            ZLinkServiceWireCodec.SessionRelocationRouteRecord request,
-            ZLinkSessionRelocationAuthenticatedRoute authenticatedCandidate,
-            CancellationToken cancellationToken)
+    internal ValueTask RouteCanonicalSessionAsync(
+        ZLinkServiceWireCodec.SessionRelocationRouteRecord request,
+        ZLinkSessionRelocationAuthenticatedRoute authenticatedCandidate,
+        CancellationToken cancellationToken
+    )
     {
         cancellationToken.ThrowIfCancellationRequested();
         _ = RouteCanonicalSession(request, authenticatedCandidate);
@@ -427,39 +453,34 @@ internal sealed class ZLinkActorBoundSessionCoordinator
             throw new ZLinkFrameworkException(
                 ZLinkFrameworkErrorKind.Unavailable,
                 "Session route application generation is resetting.",
-                ZLinkRetryAdvice.RetryAfterBackoff);
+                ZLinkRetryAdvice.RetryAfterBackoff
+            );
     }
 
-    public void CompleteAcceptedSessionFrame(
-        string actorId,
-        string bindingToken)
-        => AwaitStateLane(
-            _sessionBindings.CompleteAcceptedAsync(actorId, bindingToken));
+    public void CompleteAcceptedSessionFrame(string actorId, string bindingToken) =>
+        AwaitStateLane(_sessionBindings.CompleteAcceptedAsync(actorId, bindingToken));
 
-    public string TrackRemoteSessionRequest(
-        string actorId,
-        ulong requestId,
-        string bindingToken)
+    public string TrackRemoteSessionRequest(string actorId, ulong requestId, string bindingToken)
     {
-        var binding = AwaitStateLane(
-            _sessionBindings.GetBindingAsync(actorId, bindingToken));
+        var binding = AwaitStateLane(_sessionBindings.GetBindingAsync(actorId, bindingToken));
         if (binding is null)
             throw new ZLinkFrameworkException(
                 ZLinkFrameworkErrorKind.InvalidOperation,
                 $"Actor '{actorId}' session binding changed before request tracking.",
-                ZLinkRetryAdvice.RetryAfterBackoff);
+                ZLinkRetryAdvice.RetryAfterBackoff
+            );
         var pending = new PendingRemoteRequest(
             binding,
             Guid.NewGuid().ToString("N"),
-            new CancellationTokenSource());
+            new CancellationTokenSource()
+        );
         var key = new RemoteRequestKey(
             actorId,
             binding.ObjectGeneration,
             binding.BindingToken,
-            requestId);
-        var admissionKey = ZLinkSessionBindingKey.FromBoundary(
-            actorId,
-            bindingToken);
+            requestId
+        );
+        var admissionKey = ZLinkSessionBindingKey.FromBoundary(actorId, bindingToken);
         RunState(() =>
         {
             if (!_remoteRequestAdmission.TryAcquire(admissionKey))
@@ -468,7 +489,8 @@ internal sealed class ZLinkActorBoundSessionCoordinator
                 throw new ZLinkFrameworkException(
                     ZLinkFrameworkErrorKind.Rejected,
                     $"Actor '{actorId}' remote session request capacity is exhausted.",
-                    ZLinkRetryAdvice.RetryAfterBackoff);
+                    ZLinkRetryAdvice.RetryAfterBackoff
+                );
             }
             if (!_pendingRemoteRequests.TryAdd(key, pending))
             {
@@ -476,13 +498,15 @@ internal sealed class ZLinkActorBoundSessionCoordinator
                 pending.Dispose();
                 throw new ZLinkFrameworkException(
                     ZLinkFrameworkErrorKind.ProtocolError,
-                    $"Actor '{actorId}' remote session request '{requestId}' is already pending.");
+                    $"Actor '{actorId}' remote session request '{requestId}' is already pending."
+                );
             }
         });
         Diagnostics.ZLinkFrameworkDebugLog.SpotDiscovery(
             $"remote_session_request_tracked actor={actorId} "
-            + $"request_id={requestId} object={binding.ObjectGeneration} "
-            + $"binding={binding.BindingToken} capability={pending.ReplyCapability}");
+                + $"request_id={requestId} object={binding.ObjectGeneration} "
+                + $"binding={binding.BindingToken} capability={pending.ReplyCapability}"
+        );
         _ = ExpireRemoteSessionRequestAsync(key, pending);
         return pending.ReplyCapability;
     }
@@ -491,83 +515,79 @@ internal sealed class ZLinkActorBoundSessionCoordinator
         string actorId,
         ulong objectGeneration,
         string bindingToken,
-        ulong requestId)
-        => CompleteRemoteSessionRequest(
-            new RemoteRequestKey(
-                actorId,
-                objectGeneration,
-                bindingToken,
-                requestId),
+        ulong requestId
+    ) =>
+        CompleteRemoteSessionRequest(
+            new RemoteRequestKey(actorId, objectGeneration, bindingToken, requestId),
             expected: null,
-            allowClaimed: true);
+            allowClaimed: true
+        );
 
     private void CompleteRemoteSessionRequest(
         RemoteRequestKey key,
         PendingRemoteRequest? expected,
-        bool allowClaimed)
+        bool allowClaimed
+    )
     {
         PendingRemoteRequest? removed = null;
         RunState(() =>
         {
-            if (!_pendingRemoteRequests.TryGetValue(key, out var pending)
+            if (
+                !_pendingRemoteRequests.TryGetValue(key, out var pending)
                 || (expected is not null && !ReferenceEquals(pending, expected))
-                || (!allowClaimed && pending.Claimed))
+                || (!allowClaimed && pending.Claimed)
+            )
                 return;
             _pendingRemoteRequests.Remove(key);
             _remoteRequestAdmission.Release(
-                ZLinkSessionBindingKey.FromBoundary(
-                    key.ActorId,
-                    pending.Binding.BindingToken));
+                ZLinkSessionBindingKey.FromBoundary(key.ActorId, pending.Binding.BindingToken)
+            );
             removed = pending;
         });
         if (removed is not null)
         {
             removed.Dispose();
-            AwaitStateLane(_sessionBindings.CompleteAcceptedAsync(
-                key.ActorId,
-                removed.Binding.BindingToken));
+            AwaitStateLane(
+                _sessionBindings.CompleteAcceptedAsync(key.ActorId, removed.Binding.BindingToken)
+            );
         }
     }
 
     private async Task ExpireRemoteSessionRequestAsync(
         RemoteRequestKey key,
-        PendingRemoteRequest pending)
+        PendingRemoteRequest pending
+    )
     {
         try
         {
             await Task.Delay(
                     _registration.DefaultRequestTimeout,
                     _registration.TimeProvider,
-                    pending.Cancellation.Token)
+                    pending.Cancellation.Token
+                )
                 .ConfigureAwait(false);
         }
         catch (OperationCanceledException) { }
-        CompleteRemoteSessionRequest(
-            key,
-            pending,
-            allowClaimed: false);
+        CompleteRemoteSessionRequest(key, pending, allowClaimed: false);
     }
 
-    public bool AbortSessionRouteSeal(ZLinkSessionRouteSeal request)
-        => AwaitStateLane(_sessionBindings.AbortRouteSealAsync(request));
+    public bool AbortSessionRouteSeal(ZLinkSessionRouteSeal request) =>
+        AwaitStateLane(_sessionBindings.AbortRouteSealAsync(request));
 
-    public bool UnsealCommittedSessionRoute(ZLinkSessionRouteCommit request)
-        => AwaitStateLane(_sessionBindings.UnsealCommittedRouteAsync(request));
+    public bool UnsealCommittedSessionRoute(ZLinkSessionRouteCommit request) =>
+        AwaitStateLane(_sessionBindings.UnsealCommittedRouteAsync(request));
 
-    public ZLinkSessionBindingEntry? GetSessionBinding(
-        string actorId,
-        string bindingToken) => AwaitStateLane(
-        _sessionBindings.GetBindingAsync(actorId, bindingToken));
+    public ZLinkSessionBindingEntry? GetSessionBinding(string actorId, string bindingToken) =>
+        AwaitStateLane(_sessionBindings.GetBindingAsync(actorId, bindingToken));
 
     public ZLinkSessionBindingRoute? GetSessionRoute(
         string actorId,
         string bindingToken,
-        ZLinkSessionActor actorRef) => AwaitStateLane(
-        _sessionBindings.GetRouteAsync(actorId, bindingToken, actorRef));
+        ZLinkSessionActor actorRef
+    ) => AwaitStateLane(_sessionBindings.GetRouteAsync(actorId, bindingToken, actorRef));
 
-    public ZLinkSessionBindingEntry? GetSessionBindingByActorId(
-        string actorId) => AwaitStateLane(
-        _sessionBindings.GetEntryByActorIdAsync(actorId));
+    public ZLinkSessionBindingEntry? GetSessionBindingByActorId(string actorId) =>
+        AwaitStateLane(_sessionBindings.GetEntryByActorIdAsync(actorId));
 
     public ZLinkSessionBindingEntry? GetExactRetiredSessionBinding(
         string actorId,
@@ -576,7 +596,8 @@ internal sealed class ZLinkActorBoundSessionCoordinator
         ulong sessionOwnerNodeGeneration,
         string sessionOwnerId,
         ulong sessionOwnerLeaseGeneration,
-        ulong bindingGeneration) =>
+        ulong bindingGeneration
+    ) =>
         GetExactRetiredSessionBinding(
             ZLinkActorId.FromBoundary(actorId, nameof(actorId)),
             sessionOwnerNodeRid,
@@ -584,7 +605,8 @@ internal sealed class ZLinkActorBoundSessionCoordinator
             sessionOwnerNodeGeneration,
             sessionOwnerId,
             sessionOwnerLeaseGeneration,
-            bindingGeneration);
+            bindingGeneration
+        );
 
     internal ZLinkSessionBindingEntry? GetExactRetiredSessionBinding(
         ZLinkActorId actorId,
@@ -593,23 +615,25 @@ internal sealed class ZLinkActorBoundSessionCoordinator
         ulong sessionOwnerNodeGeneration,
         string sessionOwnerId,
         ulong sessionOwnerLeaseGeneration,
-        ulong bindingGeneration) => AwaitStateLane(
-        _sessionBindings.GetExactRetiredBindingAsync(
-            actorId,
-            sessionOwnerNodeRid,
-            sessionRid,
-            sessionOwnerNodeGeneration,
-            sessionOwnerId,
-            sessionOwnerLeaseGeneration,
-            bindingGeneration));
+        ulong bindingGeneration
+    ) =>
+        AwaitStateLane(
+            _sessionBindings.GetExactRetiredBindingAsync(
+                actorId,
+                sessionOwnerNodeRid,
+                sessionRid,
+                sessionOwnerNodeGeneration,
+                sessionOwnerId,
+                sessionOwnerLeaseGeneration,
+                bindingGeneration
+            )
+        );
 
     public IReadOnlyCollection<IZLinkSessionActor> SnapshotSessionActors(
-        ZLinkSessionContext context) =>
-        AwaitStateLane(_sessionBindings.SnapshotActorsAsync(context));
+        ZLinkSessionContext context
+    ) => AwaitStateLane(_sessionBindings.SnapshotActorsAsync(context));
 
-    public ZLinkSessionActor? FindSessionActor(
-        ZLinkSessionContext context,
-        string actorId) =>
+    public ZLinkSessionActor? FindSessionActor(ZLinkSessionContext context, string actorId) =>
         AwaitStateLane(_sessionBindings.FindActorAsync(context, actorId));
 
     public void UnbindSessionActor(string actorId, ZLinkSessionContext context, string bindingToken)
@@ -617,19 +641,16 @@ internal sealed class ZLinkActorBoundSessionCoordinator
         AwaitStateLane(_sessionBindings.UnbindAsync(actorId, context, bindingToken));
     }
 
-    public ZLinkSessionContext? GetSessionActorContext(
-        string actorId,
-        string bindingToken) => AwaitStateLane(
-        GetSessionActorContextAsync(actorId, bindingToken));
+    public ZLinkSessionContext? GetSessionActorContext(string actorId, string bindingToken) =>
+        AwaitStateLane(GetSessionActorContextAsync(actorId, bindingToken));
 
     private ValueTask<ZLinkSessionContext?> GetSessionActorContextAsync(
         string actorId,
-        string bindingToken) =>
-        _sessionBindings.GetContextAsync(actorId, bindingToken);
+        string bindingToken
+    ) => _sessionBindings.GetContextAsync(actorId, bindingToken);
 
-    public ZLinkSessionContext? GetSessionActorContext(
-        string actorId) => AwaitStateLane(
-        _sessionBindings.GetContextByActorIdAsync(actorId));
+    public ZLinkSessionContext? GetSessionActorContext(string actorId) =>
+        AwaitStateLane(_sessionBindings.GetContextByActorIdAsync(actorId));
 
     public ZLinkActorBoundSession? BindActorSession(
         string actorId,
@@ -645,26 +666,30 @@ internal sealed class ZLinkActorBoundSessionCoordinator
         ulong sessionOwnerNodeGeneration = 1,
         ulong acceptedHighWater = 0,
         string sessionOwnerId = "",
-        ulong sessionOwnerLeaseGeneration = 0)
+        ulong sessionOwnerLeaseGeneration = 0
+    )
     {
         //  Recorded at bind time and read again when a relocation seals the
         //  route; printing both ends shows if they disagree.
         Diagnostics.ZLinkFrameworkDebugLog.SpotDiscovery(
-            $"bind_session actor={actorId} session_node={sessionNodeRid} session_rid={sessionRid}");
-        var previous = _getState(actorId).BindSession(
-            sessionNodeRid,
-            sessionRid,
-            bindingToken,
-            bindingGeneration,
-            objectGeneration,
-            authorityOwnerGeneration,
-            ZLinkMeshName.FromBoundary(meshName, nameof(meshName)),
-            targetNodeGeneration,
-            ownerLeaseGeneration,
-            sessionOwnerNodeGeneration,
-            acceptedHighWater,
-            sessionOwnerId,
-            sessionOwnerLeaseGeneration);
+            $"bind_session actor={actorId} session_node={sessionNodeRid} session_rid={sessionRid}"
+        );
+        var previous = _getState(actorId)
+            .BindSession(
+                sessionNodeRid,
+                sessionRid,
+                bindingToken,
+                bindingGeneration,
+                objectGeneration,
+                authorityOwnerGeneration,
+                ZLinkMeshName.FromBoundary(meshName, nameof(meshName)),
+                targetNodeGeneration,
+                ownerLeaseGeneration,
+                sessionOwnerNodeGeneration,
+                acceptedHighWater,
+                sessionOwnerId,
+                sessionOwnerLeaseGeneration
+            );
         _boundSessions.Register(actorId, sessionRid, bindingToken);
         return previous;
     }
@@ -684,47 +709,54 @@ internal sealed class ZLinkActorBoundSessionCoordinator
         ulong acceptedHighWater,
         string sessionOwnerId = "",
         ulong sessionOwnerLeaseGeneration = 0,
-        ZLinkActorPreviousBindingFence? previousFence = null)
+        ZLinkActorPreviousBindingFence? previousFence = null
+    )
     {
-        return _getState(actorId).BeginSessionReplacement(
-            sessionNodeRid,
-            sessionRid,
-            bindingToken,
-            bindingGeneration,
-            objectGeneration,
-            authorityOwnerGeneration,
-            ZLinkMeshName.FromBoundary(meshName, nameof(meshName)),
-            targetNodeGeneration,
-            ownerLeaseGeneration,
-            sessionOwnerNodeGeneration,
-            acceptedHighWater,
-            sessionOwnerId,
-            sessionOwnerLeaseGeneration,
-            previousFence);
+        return _getState(actorId)
+            .BeginSessionReplacement(
+                sessionNodeRid,
+                sessionRid,
+                bindingToken,
+                bindingGeneration,
+                objectGeneration,
+                authorityOwnerGeneration,
+                ZLinkMeshName.FromBoundary(meshName, nameof(meshName)),
+                targetNodeGeneration,
+                ownerLeaseGeneration,
+                sessionOwnerNodeGeneration,
+                acceptedHighWater,
+                sessionOwnerId,
+                sessionOwnerLeaseGeneration,
+                previousFence
+            );
     }
 
     public void CompleteActorSessionReplacement(
         string actorId,
-        ZLinkActorSessionReplacementAttempt attempt)
+        ZLinkActorSessionReplacementAttempt attempt
+    )
     {
         _getState(actorId).CompleteSessionReplacement(attempt);
     }
 
     public void PublishActorSessionReplacement(
         string actorId,
-        ZLinkActorSessionReplacementAttempt attempt)
+        ZLinkActorSessionReplacementAttempt attempt
+    )
     {
         _getState(actorId).PublishSessionReplacement(attempt);
         _boundSessions.Register(
             actorId,
             attempt.Replacement.SessionRid,
-            attempt.Replacement.BindingToken);
+            attempt.Replacement.BindingToken
+        );
     }
 
     public void AbortActorSessionReplacement(
         string actorId,
         ZLinkActorSessionReplacementAttempt attempt,
-        Exception failure)
+        Exception failure
+    )
     {
         _getState(actorId).AbortSessionReplacement(attempt, failure);
     }
@@ -735,15 +767,19 @@ internal sealed class ZLinkActorBoundSessionCoordinator
         string bindingToken,
         ulong bindingGeneration,
         ulong sessionOwnerNodeGeneration,
-        ZLinkSessionBindingRoute actorRoute)
+        ZLinkSessionBindingRoute actorRoute
+    )
     {
-        AwaitStateLane(_sessionBindings.TombstoneAsync(
-            actorId,
-            sessionRid,
-            bindingToken,
-            bindingGeneration,
-            sessionOwnerNodeGeneration,
-            actorRoute));
+        AwaitStateLane(
+            _sessionBindings.TombstoneAsync(
+                actorId,
+                sessionRid,
+                bindingToken,
+                bindingGeneration,
+                sessionOwnerNodeGeneration,
+                actorRoute
+            )
+        );
     }
 
     public void UnbindActorSession(string actorId, string bindingToken)
@@ -760,9 +796,7 @@ internal sealed class ZLinkActorBoundSessionCoordinator
         _boundSessions.Unregister(actorId, bindingToken);
     }
 
-    public void TombstoneActorSession(
-        string actorId,
-        ZLinkActorBoundSession expected)
+    public void TombstoneActorSession(string actorId, ZLinkActorBoundSession expected)
     {
         _getState(actorId).TombstoneSession(expected);
         _boundSessions.Unregister(actorId, expected.BindingToken);
@@ -775,7 +809,8 @@ internal sealed class ZLinkActorBoundSessionCoordinator
         UnbindActorSession(actorId, bindingToken);
     }
 
-    public void CleanupActorSessionsForSession(RoutingId sessionRid) => _boundSessions.Cleanup(sessionRid);
+    public void CleanupActorSessionsForSession(RoutingId sessionRid) =>
+        _boundSessions.Cleanup(sessionRid);
 
     public bool TryGetActorBoundSession(string actorId, out ZLinkActorBoundSession session) =>
         _getState(actorId).TryGetBoundSession(out session);
@@ -794,9 +829,12 @@ internal sealed class ZLinkActorBoundSessionCoordinator
         foreach (var request in pending)
         {
             request.Dispose();
-            AwaitStateLane(_sessionBindings.CompleteAcceptedAsync(
-                request.Binding.ActorRef.ActorId,
-                request.Binding.BindingToken));
+            AwaitStateLane(
+                _sessionBindings.CompleteAcceptedAsync(
+                    request.Binding.ActorRef.ActorId,
+                    request.Binding.BindingToken
+                )
+            );
         }
         AwaitStateLane(_sessionBindings.ResetGenerationAsync());
         _boundSessions.Clear();
@@ -811,7 +849,8 @@ internal sealed class ZLinkActorBoundSessionCoordinator
     private sealed class PendingRemoteRequest(
         ZLinkSessionBindingEntry binding,
         string replyCapability,
-        CancellationTokenSource cancellation) : IDisposable
+        CancellationTokenSource cancellation
+    ) : IDisposable
     {
         internal ZLinkSessionBindingEntry Binding { get; } = binding;
         internal string ReplyCapability { get; } = replyCapability;
@@ -829,11 +868,13 @@ internal sealed class ZLinkActorBoundSessionCoordinator
         string ActorId,
         ulong ObjectGeneration,
         string BindingToken,
-        ulong RequestId);
+        ulong RequestId
+    );
 
     internal sealed class RemoteReplyClaim(
         Func<byte[], RemotePushDelivery> deliver,
-        Action completePending) : IDisposable
+        Action completePending
+    ) : IDisposable
     {
         private int _completed;
 
@@ -853,25 +894,33 @@ internal sealed class ZLinkActorBoundSessionCoordinator
         {
             Diagnostics.ZLinkFrameworkDebugLog.SpotDiscovery(
                 $"bound_session_send actor={actorId} session_node={session.SessionNodeRid} "
-                + $"session_rid={session.SessionRid} binding={session.BindingToken} "
-                + $"parts={parts.Count}");
+                    + $"session_rid={session.SessionRid} binding={session.BindingToken} "
+                    + $"parts={parts.Count}"
+            );
             if (GetSessionActorContext(actorId, session.BindingToken) is not null)
             {
                 if (parts.Count != 1)
-                    throw new InvalidOperationException("A local actor bound-session send requires one encoded stream frame.");
+                    throw new InvalidOperationException(
+                        "A local actor bound-session send requires one encoded stream frame."
+                    );
                 Diagnostics.ZLinkFrameworkDebugLog.SpotDiscovery(
-                    $"bound_session_send_local actor={actorId}");
+                    $"bound_session_send_local actor={actorId}"
+                );
                 var targetNodeRid = state.NativeActorRef?.NodeRid;
-                if (targetNodeRid is null
-                    && AwaitStateLane(_sessionBindings.GetBindingAsync(
-                            actorId,
-                            session.BindingToken)) is { } currentBinding)
+                if (
+                    targetNodeRid is null
+                    && AwaitStateLane(
+                        _sessionBindings.GetBindingAsync(actorId, session.BindingToken)
+                    )
+                        is { } currentBinding
+                )
                     targetNodeRid = currentBinding.Route.Ref.NodeRid;
                 if (targetNodeRid is null)
                     throw Error(
                         ZLinkFrameworkErrorKind.NotFound,
                         $"Actor '{actorId}' does not have an accepted route.",
-                        ZLinkRetryAdvice.DoNotRetry);
+                        ZLinkRetryAdvice.DoNotRetry
+                    );
                 var tenure = new ZLinkSessionOutboundTenure(
                     actorId,
                     session.ObjectGeneration,
@@ -883,47 +932,57 @@ internal sealed class ZLinkActorBoundSessionCoordinator
                     session.BindingToken,
                     session.BindingGeneration,
                     session.SessionOwnerNodeGeneration,
-                    session.SessionRid);
+                    session.SessionRid
+                );
                 var admission = AwaitStateLane(
-                    _sessionBindings.AdmitOutboundAsync(
-                        tenure,
-                        ConcatParts(parts)));
+                    _sessionBindings.AdmitOutboundAsync(tenure, ConcatParts(parts))
+                );
                 return admission.Kind switch
                 {
-                    ZLinkSessionOutboundAdmissionKind.Immediate
-                        => admission.Capability!.Settle(deliver: true)
-                           == ZLinkSessionOutboundDelivery.Delivered,
+                    ZLinkSessionOutboundAdmissionKind.Immediate => admission.Capability!.Settle(
+                        deliver: true
+                    ) == ZLinkSessionOutboundDelivery.Delivered,
                     // 04-session/02-session-actor-binding §8.1: relocation seal
                     // 중 도착한 message는 aggregate가 보관했다가 route 전환 뒤
                     // 제출한다. 보관(Retained)은 수락이므로 실패로 접지 않는다.
                     ZLinkSessionOutboundAdmissionKind.Retained => true,
-                    _ => false
+                    _ => false,
                 };
             }
             if (TryRelayRemotePush(actorId, session, ConcatParts(parts)))
             {
                 Diagnostics.ZLinkFrameworkDebugLog.SpotDiscovery(
-                    $"bound_session_send_remote_submitted actor={actorId}");
+                    $"bound_session_send_remote_submitted actor={actorId}"
+                );
                 return true;
             }
             if (!ZLinkActorBoundSessionBindingToken.IsNative(session.BindingToken))
-                throw Error(ZLinkFrameworkErrorKind.InvalidOperation,
-                    $"Actor '{actorId}' no longer has the selected local session binding.", ZLinkRetryAdvice.RetryAfterBackoff);
-            var nativeActorRef = state.NativeActorRef
-                                 ?? throw Error(
-                                     ZLinkFrameworkErrorKind.NotFound,
-                                     $"Actor '{actorId}' does not have a native Actor ref.",
-                                     ZLinkRetryAdvice.DoNotRetry);
+                throw Error(
+                    ZLinkFrameworkErrorKind.InvalidOperation,
+                    $"Actor '{actorId}' no longer has the selected local session binding.",
+                    ZLinkRetryAdvice.RetryAfterBackoff
+                );
+            var nativeActorRef =
+                state.NativeActorRef
+                ?? throw Error(
+                    ZLinkFrameworkErrorKind.NotFound,
+                    $"Actor '{actorId}' does not have a native Actor ref.",
+                    ZLinkRetryAdvice.DoNotRetry
+                );
             return RequireNodeForMesh(
                     session.MeshName.Value,
-                    "Actor bound session send requires its stored Mesh route.")
+                    "Actor bound session send requires its stored Mesh route."
+                )
                 .SendActorBoundSession(nativeActorRef, parts);
         }
 
-        var actorRef = state.NativeActorRef
-                       ?? throw Error(ZLinkFrameworkErrorKind.NotFound,
-                           $"Actor '{actorId}' does not have a native Actor ref.",
-                           ZLinkRetryAdvice.DoNotRetry);
+        var actorRef =
+            state.NativeActorRef
+            ?? throw Error(
+                ZLinkFrameworkErrorKind.NotFound,
+                $"Actor '{actorId}' does not have a native Actor ref.",
+                ZLinkRetryAdvice.DoNotRetry
+            );
         return RequireNode("Actor bound session send requires a router-capable SpotNode.")
             .SendActorBoundSession(actorRef, parts);
     }
@@ -931,39 +990,34 @@ internal sealed class ZLinkActorBoundSessionCoordinator
     public bool SendIfBoundTo(
         string actorId,
         string expectedBindingToken,
-        IReadOnlyList<Message> parts)
+        IReadOnlyList<Message> parts
+    )
     {
         var state = _getState(actorId);
-        return state.TryUseBoundSession(
-            expectedBindingToken,
-            _ => Send(actorId, parts));
+        return state.TryUseBoundSession(expectedBindingToken, _ => Send(actorId, parts));
     }
 
     public ValueTask<ZLinkOneWaySubmitResult> SendIfBoundToAsync(
         string actorId,
         string expectedBindingToken,
         IReadOnlyList<Message> parts,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken
+    )
     {
         var state = _getState(actorId);
-        if (!state.TryGetBoundSessionForOutbound(out var session)
-            || !string.Equals(
-                session.BindingToken,
-                expectedBindingToken,
-                StringComparison.Ordinal))
+        if (
+            !state.TryGetBoundSessionForOutbound(out var session)
+            || !string.Equals(session.BindingToken, expectedBindingToken, StringComparison.Ordinal)
+        )
         {
             //  Designed stale-binding drop (same contract as the sync
             //  SendIfBoundTo path), reported honestly: nothing was
             //  submitted, so this must not read as a delivery signal.
-            return ValueTask.FromResult(new ZLinkOneWaySubmitResult(
-                ZLinkOneWaySubmitStatus.SkippedNotBound));
+            return ValueTask.FromResult(
+                new ZLinkOneWaySubmitResult(ZLinkOneWaySubmitStatus.SkippedNotBound)
+            );
         }
-        return SendCurrentAsync(
-            state,
-            actorId,
-            session,
-            parts,
-            cancellationToken);
+        return SendCurrentAsync(state, actorId, session, parts, cancellationToken);
     }
 
     private async ValueTask<ZLinkOneWaySubmitResult> SendCurrentAsync(
@@ -971,30 +1025,38 @@ internal sealed class ZLinkActorBoundSessionCoordinator
         string actorId,
         ZLinkActorBoundSession session,
         IReadOnlyList<Message> parts,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken
+    )
     {
         Diagnostics.ZLinkFrameworkDebugLog.SpotDiscovery(
             $"bound_session_send_async actor={actorId} session_node={session.SessionNodeRid} "
-            + $"session_rid={session.SessionRid} binding={session.BindingToken} "
-            + $"binding_gen={session.BindingGeneration} parts={parts.Count}");
-        if (await GetSessionActorContextAsync(actorId, session.BindingToken)
-                .ConfigureAwait(false) is not null)
+                + $"session_rid={session.SessionRid} binding={session.BindingToken} "
+                + $"binding_gen={session.BindingGeneration} parts={parts.Count}"
+        );
+        if (
+            await GetSessionActorContextAsync(actorId, session.BindingToken).ConfigureAwait(false)
+            is not null
+        )
         {
             if (parts.Count != 1)
                 throw new InvalidOperationException(
-                    "A local actor bound-session send requires one encoded stream frame.");
+                    "A local actor bound-session send requires one encoded stream frame."
+                );
             var targetNodeRid = state.NativeActorRef?.NodeRid;
-            if (targetNodeRid is null
-                && await _sessionBindings.GetBindingAsync(
-                        actorId,
-                        session.BindingToken)
-                    .ConfigureAwait(false) is { } currentBinding)
+            if (
+                targetNodeRid is null
+                && await _sessionBindings
+                    .GetBindingAsync(actorId, session.BindingToken)
+                    .ConfigureAwait(false)
+                    is { } currentBinding
+            )
                 targetNodeRid = currentBinding.Route.Ref.NodeRid;
             if (targetNodeRid is null)
                 throw Error(
                     ZLinkFrameworkErrorKind.NotFound,
                     $"Actor '{actorId}' does not have an accepted route.",
-                    ZLinkRetryAdvice.DoNotRetry);
+                    ZLinkRetryAdvice.DoNotRetry
+                );
             var tenure = new ZLinkSessionOutboundTenure(
                 actorId,
                 session.ObjectGeneration,
@@ -1006,74 +1068,76 @@ internal sealed class ZLinkActorBoundSessionCoordinator
                 session.BindingToken,
                 session.BindingGeneration,
                 session.SessionOwnerNodeGeneration,
-                session.SessionRid);
-            var admission = await _sessionBindings.AdmitOutboundAsync(
-                    tenure,
-                    ConcatParts(parts))
+                session.SessionRid
+            );
+            var admission = await _sessionBindings
+                .AdmitOutboundAsync(tenure, ConcatParts(parts))
                 .ConfigureAwait(false);
             var status = admission.Kind switch
             {
-                ZLinkSessionOutboundAdmissionKind.Immediate
-                    => admission.Capability!.Settle(deliver: true) switch
-                    {
-                        ZLinkSessionOutboundDelivery.Delivered
-                            => ZLinkOneWaySubmitStatus.Submitted,
-                        ZLinkSessionOutboundDelivery.Backpressured
-                            => ZLinkOneWaySubmitStatus.Backpressured,
-                        _ => ZLinkOneWaySubmitStatus.TargetNotFound
-                    },
+                ZLinkSessionOutboundAdmissionKind.Immediate => admission.Capability!.Settle(
+                    deliver: true
+                ) switch
+                {
+                    ZLinkSessionOutboundDelivery.Delivered => ZLinkOneWaySubmitStatus.Submitted,
+                    ZLinkSessionOutboundDelivery.Backpressured =>
+                        ZLinkOneWaySubmitStatus.Backpressured,
+                    _ => ZLinkOneWaySubmitStatus.TargetNotFound,
+                },
                 // 04-session/02-session-actor-binding §8.1: seal 중 보관된
                 // message는 route 전환 시 제출된다 — 제출 완료로 보고한다.
-                ZLinkSessionOutboundAdmissionKind.Retained
-                    => ZLinkOneWaySubmitStatus.Submitted,
-                ZLinkSessionOutboundAdmissionKind.Backpressured
-                    => ZLinkOneWaySubmitStatus.Backpressured,
-                _ => ZLinkOneWaySubmitStatus.TargetNotFound
+                ZLinkSessionOutboundAdmissionKind.Retained => ZLinkOneWaySubmitStatus.Submitted,
+                ZLinkSessionOutboundAdmissionKind.Backpressured =>
+                    ZLinkOneWaySubmitStatus.Backpressured,
+                _ => ZLinkOneWaySubmitStatus.TargetNotFound,
             };
             return new ZLinkOneWaySubmitResult(status);
         }
 
-        if (RemotePushRelayAsync is { } relay
+        if (
+            RemotePushRelayAsync is { } relay
             && session.SessionNodeRid is { } sessionNodeRid
             && !sessionNodeRid.IsEmpty
             && _getNodeForMesh(session.MeshName.Value) is { } localNode
-            && !sessionNodeRid.Equals(localNode.RoutingId))
-            return await relay(
-                    actorId,
-                    session,
-                    ConcatParts(parts),
-                    cancellationToken)
+            && !sessionNodeRid.Equals(localNode.RoutingId)
+        )
+            return await relay(actorId, session, ConcatParts(parts), cancellationToken)
                 .ConfigureAwait(false);
 
         if (!ZLinkActorBoundSessionBindingToken.IsNative(session.BindingToken))
             throw Error(
                 ZLinkFrameworkErrorKind.InvalidOperation,
                 $"Actor '{actorId}' no longer has the selected local session binding.",
-                ZLinkRetryAdvice.RetryAfterBackoff);
-        var nativeActorRef = state.NativeActorRef
-                             ?? throw Error(
-                                 ZLinkFrameworkErrorKind.NotFound,
-                                 $"Actor '{actorId}' does not have a native Actor ref.",
-                                 ZLinkRetryAdvice.DoNotRetry);
+                ZLinkRetryAdvice.RetryAfterBackoff
+            );
+        var nativeActorRef =
+            state.NativeActorRef
+            ?? throw Error(
+                ZLinkFrameworkErrorKind.NotFound,
+                $"Actor '{actorId}' does not have a native Actor ref.",
+                ZLinkRetryAdvice.DoNotRetry
+            );
         var node = RequireNodeForMesh(
             session.MeshName.Value,
-            "Actor bound session send requires its stored Mesh route.");
+            "Actor bound session send requires its stored Mesh route."
+        );
         return await SendNativeBoundSessionAsync(
                 node,
                 nativeActorRef,
                 session.BindingGeneration,
                 parts,
-                cancellationToken)
+                cancellationToken
+            )
             .ConfigureAwait(false);
     }
 
-    private static async ValueTask<ZLinkOneWaySubmitResult>
-        SendNativeBoundSessionAsync(
-            IZLinkBackendSpotNode node,
-            ZLinkBackendActorRef actor,
-            ulong expectedBindingGeneration,
-            IReadOnlyList<Message> parts,
-            CancellationToken cancellationToken)
+    private static async ValueTask<ZLinkOneWaySubmitResult> SendNativeBoundSessionAsync(
+        IZLinkBackendSpotNode node,
+        ZLinkBackendActorRef actor,
+        ulong expectedBindingGeneration,
+        IReadOnlyList<Message> parts,
+        CancellationToken cancellationToken
+    )
     {
         try
         {
@@ -1081,46 +1145,57 @@ internal sealed class ZLinkActorBoundSessionCoordinator
                     actor,
                     expectedBindingGeneration,
                     parts,
-                    cancellationToken)
+                    cancellationToken
+                )
                 .ConfigureAwait(false);
-            return new ZLinkOneWaySubmitResult(
-                ZLinkOneWaySubmitStatus.Submitted);
+            return new ZLinkOneWaySubmitResult(ZLinkOneWaySubmitStatus.Submitted);
         }
         catch (ZlinkSubmitException failure)
         {
             return failure.Result switch
             {
-                ZlinkSubmitException.ErrorCode.NotConnected =>
-                    new ZLinkOneWaySubmitResult(
-                        ZLinkOneWaySubmitStatus.RouteNotConnected),
-                ZlinkSubmitException.ErrorCode.NotFound =>
-                    new ZLinkOneWaySubmitResult(
-                        ZLinkOneWaySubmitStatus.TargetNotFound),
-                ZlinkSubmitException.ErrorCode.Terminated =>
-                    new ZLinkOneWaySubmitResult(
-                        ZLinkOneWaySubmitStatus.Shutdown),
-                ZlinkSubmitException.ErrorCode.Backpressured =>
-                    new ZLinkOneWaySubmitResult(
-                        ZLinkOneWaySubmitStatus.Backpressured),
+                ZlinkSubmitException.ErrorCode.NotConnected => new ZLinkOneWaySubmitResult(
+                    ZLinkOneWaySubmitStatus.RouteNotConnected
+                ),
+                ZlinkSubmitException.ErrorCode.NotFound => new ZLinkOneWaySubmitResult(
+                    ZLinkOneWaySubmitStatus.TargetNotFound
+                ),
+                ZlinkSubmitException.ErrorCode.Terminated => new ZLinkOneWaySubmitResult(
+                    ZLinkOneWaySubmitStatus.Shutdown
+                ),
+                ZlinkSubmitException.ErrorCode.Backpressured => new ZLinkOneWaySubmitResult(
+                    ZLinkOneWaySubmitStatus.Backpressured
+                ),
                 _ => throw ZLinkRequestFailureMapper.CreateSubmitException(
                     failure,
-                    "Actor bound-session send")
+                    "Actor bound-session send"
+                ),
             };
         }
         catch (ObjectDisposedException)
         {
-            return new ZLinkOneWaySubmitResult(
-                ZLinkOneWaySubmitStatus.Shutdown);
+            return new ZLinkOneWaySubmitResult(ZLinkOneWaySubmitStatus.Shutdown);
         }
     }
 
-    public bool ReplyNoBind(ZLinkBackendActorRef actor, RoutingId sourceNodeRid, RoutingId sourceSessionRid,
-        ulong requestId, uint flags, IReadOnlyList<Message> parts) =>
+    public bool ReplyNoBind(
+        ZLinkBackendActorRef actor,
+        RoutingId sourceNodeRid,
+        RoutingId sourceSessionRid,
+        ulong requestId,
+        uint flags,
+        IReadOnlyList<Message> parts
+    ) =>
         RequireNode("Actor no-bind reply requires a router-capable SpotNode.")
             .ReplyActorNoBind(actor, sourceNodeRid, sourceSessionRid, requestId, flags, parts);
 
-    public bool ForwardPart(ZLinkBackendActorRef actorRef, RoutingId sourceNodeRid, RoutingId sourceSessionRid,
-        Message message, bool hasMore, string? meshName = null,
+    public bool ForwardPart(
+        ZLinkBackendActorRef actorRef,
+        RoutingId sourceNodeRid,
+        RoutingId sourceSessionRid,
+        Message message,
+        bool hasMore,
+        string? meshName = null,
         IZLinkBackendSpotNode? selectedNode = null,
         ulong targetNodeGeneration = 0,
         ulong authorityOwnerGeneration = 0,
@@ -1128,24 +1203,28 @@ internal sealed class ZLinkActorBoundSessionCoordinator
         ZLinkBackendActorRouteContext routeContext = default,
         ulong sourceNodeGeneration = 0,
         ZLinkServiceWireCodec.RequestSourceFence? requestSource = null,
-        ReadOnlyMemory<byte> applicationMetadata = default)
+        ReadOnlyMemory<byte> applicationMetadata = default
+    )
     {
         var routeNode = selectedNode ?? _getNode();
         //  Three outcomes below all return a bool the caller mostly ignores;
         //  name which branch a frame took so a vanished frame is traceable.
         Diagnostics.ZLinkFrameworkDebugLog.SpotDiscovery(
             $"forward_part actor={actorRef.ActorId} target_node={actorRef.NodeRid} "
-            + $"local_node={(routeNode is null ? "none" : routeNode.RoutingId.ToString())} "
-            + $"has_relay={RemoteFrameRelay is not null} has_more={hasMore}");
+                + $"local_node={(routeNode is null ? "none" : routeNode.RoutingId.ToString())} "
+                + $"has_relay={RemoteFrameRelay is not null} has_more={hasMore}"
+        );
 
         // A bound actor that migrated to another node cannot be reached
         // through the local bound-session send; buffer the parts and relay
         // the frame to the actor's owner node, which dispatches it through
         // its actor pipeline (replies come back on the push relay).
-        if (RemoteFrameRelay is { } frameRelay
+        if (
+            RemoteFrameRelay is { } frameRelay
             && !actorRef.NodeRid.IsEmpty
             && routeNode is { } frameLocalNode
-            && !actorRef.NodeRid.Equals(frameLocalNode.RoutingId))
+            && !actorRef.NodeRid.Equals(frameLocalNode.RoutingId)
+        )
         {
             // Locally relayed frames carry no session identity; the actor's
             // bound-session state (or the local session-side binding registry
@@ -1153,16 +1232,19 @@ internal sealed class ZLinkActorBoundSessionCoordinator
             // names the session this frame belongs to.
             if (!routeContext.IsDirectRoute && sourceSessionRid.IsEmpty)
             {
-                if (_getState(actorRef.ActorId).TryGetBoundSession(out var forwardSession)
-                    && !forwardSession.SessionRid.IsEmpty)
+                if (
+                    _getState(actorRef.ActorId).TryGetBoundSession(out var forwardSession)
+                    && !forwardSession.SessionRid.IsEmpty
+                )
                 {
                     sourceSessionRid = forwardSession.SessionRid;
                     if (sourceNodeRid.IsEmpty && forwardSession.SessionNodeRid is { } forwardNode)
                         sourceNodeRid = forwardNode;
                 }
-                else if (AwaitStateLane(
-                             _sessionBindings.GetContextByActorIdAsync(
-                                 actorRef.ActorId)) is { RoutingId: { } forwardRid })
+                else if (
+                    AwaitStateLane(_sessionBindings.GetContextByActorIdAsync(actorRef.ActorId)) is
+                    { RoutingId: { } forwardRid }
+                )
                 {
                     sourceSessionRid = forwardRid;
                 }
@@ -1176,11 +1258,11 @@ internal sealed class ZLinkActorBoundSessionCoordinator
                 sourceNodeGeneration,
                 sourceSessionRid,
                 requestSource,
-                routeContext);
-            var assembled = AwaitStateLane(_remoteFrames.TryAppendAsync(
-                frameKey,
-                message.ToArray(),
-                hasMore));
+                routeContext
+            );
+            var assembled = AwaitStateLane(
+                _remoteFrames.TryAppendAsync(frameKey, message.ToArray(), hasMore)
+            );
             if (!assembled.Accepted)
                 return false;
             var completed = assembled.Completed;
@@ -1194,7 +1276,8 @@ internal sealed class ZLinkActorBoundSessionCoordinator
             }
             var header = completed.Parts[0];
             var frameBody = ConcatParts(completed.Parts, 1);
-            if (!frameRelay(
+            if (
+                !frameRelay(
                     meshName,
                     actorRef,
                     targetNodeGeneration,
@@ -1207,7 +1290,9 @@ internal sealed class ZLinkActorBoundSessionCoordinator
                     requestSource,
                     applicationMetadata,
                     header,
-                    frameBody))
+                    frameBody
+                )
+            )
             {
                 // The assembler accepts both runtime retry forms: a terminal-
                 // only retry reuses the prefix, while a new prefix replaces it.
@@ -1221,13 +1306,14 @@ internal sealed class ZLinkActorBoundSessionCoordinator
         // A session on another node cannot be reached through the local
         // bound-session send; buffer the parts and relay the coalesced frame
         // to the session's node instead.
-        if (RemotePushRelay is { } relay
+        if (
+            RemotePushRelay is { } relay
             && !sourceNodeRid.IsEmpty
             && routeNode is { } localNode
-            && !sourceNodeRid.Equals(localNode.RoutingId))
+            && !sourceNodeRid.Equals(localNode.RoutingId)
+        )
         {
-            if (!_getState(actorRef.ActorId)
-                    .TryGetBoundSession(out var session))
+            if (!_getState(actorRef.ActorId).TryGetBoundSession(out var session))
                 return false;
             var frameKey = RelayFrameKey(
                 routeKind: 2,
@@ -1237,11 +1323,11 @@ internal sealed class ZLinkActorBoundSessionCoordinator
                 sourceNodeGeneration,
                 sourceSessionRid,
                 requestSource,
-                routeContext);
-            var assembled = AwaitStateLane(_remoteFrames.TryAppendAsync(
-                frameKey,
-                message.ToArray(),
-                hasMore));
+                routeContext
+            );
+            var assembled = AwaitStateLane(
+                _remoteFrames.TryAppendAsync(frameKey, message.ToArray(), hasMore)
+            );
             if (!assembled.Accepted)
                 return false;
             var completed = assembled.Completed;
@@ -1257,37 +1343,45 @@ internal sealed class ZLinkActorBoundSessionCoordinator
             return true;
         }
 
-        return (routeNode
-                ?? throw Error(
-                    ZLinkFrameworkErrorKind.NotFound,
-                    "Actor session forward requires a router-capable SpotNode.",
-                    ZLinkRetryAdvice.DoNotRetry))
-            .ForwardActorBoundSessionPart(actorRef, sourceNodeRid, sourceSessionRid, message, hasMore);
+        return (
+            routeNode
+            ?? throw Error(
+                ZLinkFrameworkErrorKind.NotFound,
+                "Actor session forward requires a router-capable SpotNode.",
+                ZLinkRetryAdvice.DoNotRetry
+            )
+        ).ForwardActorBoundSessionPart(actorRef, sourceNodeRid, sourceSessionRid, message, hasMore);
     }
 
     private bool TryRelayRemotePush(string actorId, ZLinkActorBoundSession session, byte[] frame)
     {
-        if (RemotePushRelay is not { } relay
+        if (
+            RemotePushRelay is not { } relay
             || session.SessionNodeRid is not { } sessionNodeRid
-            || sessionNodeRid.IsEmpty)
+            || sessionNodeRid.IsEmpty
+        )
         {
             return false;
         }
-        if (_getNodeForMesh(session.MeshName.Value) is not { } localNode
-            || sessionNodeRid.Equals(localNode.RoutingId))
+        if (
+            _getNodeForMesh(session.MeshName.Value) is not { } localNode
+            || sessionNodeRid.Equals(localNode.RoutingId)
+        )
         {
             return false;
         }
         var submitted = relay(actorId, session, frame);
         Diagnostics.ZLinkFrameworkDebugLog.SpotDiscovery(
             $"session_push_relay actor={actorId} source_node={localNode.RoutingId} "
-            + $"target_node={sessionNodeRid} submitted={submitted} bytes={frame.Length}");
+                + $"target_node={sessionNodeRid} submitted={submitted} bytes={frame.Length}"
+        );
         return submitted;
     }
 
     private static byte[] ConcatParts(IReadOnlyList<Message> parts)
     {
-        if (parts.Count == 1) return parts[0].ToArray();
+        if (parts.Count == 1)
+            return parts[0].ToArray();
         var buffers = new byte[parts.Count][];
         var total = 0;
         for (var i = 0; i < parts.Count; i++)
@@ -1307,9 +1401,7 @@ internal sealed class ZLinkActorBoundSessionCoordinator
         return frame;
     }
 
-    private static byte[] ConcatParts(
-        IReadOnlyList<byte[]> parts,
-        int start)
+    private static byte[] ConcatParts(IReadOnlyList<byte[]> parts, int start)
     {
         var total = 0;
         for (var i = start; i < parts.Count; i++)
@@ -1332,7 +1424,9 @@ internal sealed class ZLinkActorBoundSessionCoordinator
         ulong sourceNodeGeneration,
         RoutingId sourceSessionRid,
         ZLinkServiceWireCodec.RequestSourceFence? requestSource,
-        ZLinkBackendActorRouteContext route) => new(
+        ZLinkBackendActorRouteContext route
+    ) =>
+        new(
             routeKind,
             actor.ActorId,
             actor.Generation,
@@ -1342,28 +1436,32 @@ internal sealed class ZLinkActorBoundSessionCoordinator
             sourceSessionRid.IsEmpty ? string.Empty : sourceSessionRid.ToHex(),
             requestSource?.OwnerId ?? string.Empty,
             requestSource?.LeaseGeneration ?? 0,
-            requestSource is { } source
-                ? source.NodeRid.ToHex()
-                : string.Empty,
+            requestSource is { } source ? source.NodeRid.ToHex() : string.Empty,
             requestSource?.NodeGeneration ?? 0,
             route.OperationId.High,
             route.OperationId.Low,
             route.ReplyRequestId,
             route.TargetNodeGeneration,
             route.AuthorityOwnerGeneration,
-            route.OwnerLeaseGeneration);
+            route.OwnerLeaseGeneration
+        );
 
     public ValueTask NotifyRemoteDisconnectedAsync(
         ZLinkSessionBindingEntry binding,
         IZLinkBackendSpotNode node,
         ZLinkServiceWireCodec.RequestSourceFence localRequestSource,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken
+    )
     {
         cancellationToken.ThrowIfCancellationRequested();
         var actorRef = binding.Route.Ref.ToBackend();
         if (binding.Context.RoutingId is not { } sourceSessionRid)
         {
-            node.CloseActorBoundSession(actorRef, _registration.DefaultRequestTimeout, cancellationToken);
+            node.CloseActorBoundSession(
+                actorRef,
+                _registration.DefaultRequestTimeout,
+                cancellationToken
+            );
             return ValueTask.CompletedTask;
         }
         var sourceNodeRid = node.RoutingId;
@@ -1374,15 +1472,22 @@ internal sealed class ZLinkActorBoundSessionCoordinator
         // and authority fences.
         var operationId = node.AllocateOperationId();
 
-        var header = new ZlinkStreamHeader(ZlinkStreamMessageKind.Send, ZlinkStreamCodec.Raw,
-            ZlinkStreamHeaderFlags.None, null, ZLinkRemoteActorJoinPackets.SessionDisconnectedPacketName,
-            ZlinkStreamMetadata.Empty);
+        var header = new ZlinkStreamHeader(
+            ZlinkStreamMessageKind.Send,
+            ZlinkStreamCodec.Raw,
+            ZlinkStreamHeaderFlags.None,
+            null,
+            ZLinkRemoteActorJoinPackets.SessionDisconnectedPacketName,
+            ZlinkStreamMetadata.Empty
+        );
         using var headerPart = Message.From(ZLinkStreamProtocolDefaults.EncodeHeader(header).Span);
         using var bodyPart = Message.From(
             ZLinkActorBoundSessionRelay.EncodeSessionDisconnected(
                 binding.BindingToken,
                 binding.BindingGeneration,
-                binding.SessionOwnerNodeGeneration));
+                binding.SessionOwnerNodeGeneration
+            )
+        );
         //  A relayed session frame has to name the session it belongs to and
         //  the node it came from, and the relay validates that on the way out.
         //  Without it the disconnect never leaves this node.
@@ -1392,7 +1497,8 @@ internal sealed class ZLinkActorBoundSessionCoordinator
             binding.TargetNodeGeneration,
             binding.AuthorityOwnerGeneration,
             binding.OwnerLeaseGeneration,
-            IsBoundSessionRoute: true);
+            IsBoundSessionRoute: true
+        );
         var applicationMetadata = ZLinkActorBoundSessionHandoffMetadata.Encode(
             new ZLinkActorBoundSessionHandoffFence(
                 actorRef.ActorId,
@@ -1402,35 +1508,56 @@ internal sealed class ZLinkActorBoundSessionCoordinator
                 binding.BindingGeneration,
                 //  The fence rejects a zero sequence, and a disconnect carries
                 //  no frame of its own, so it names the last one it accepted.
-                binding.AcceptedHighWater == 0 ? 1 : binding.AcceptedHighWater));
+                binding.AcceptedHighWater == 0
+                    ? 1
+                    : binding.AcceptedHighWater
+            )
+        );
         Diagnostics.ZLinkFrameworkDebugLog.SpotDiscovery(
             $"disconnect_route_prepared actor={actorRef.ActorId} "
-            + $"operation={operationId.High:x16}{operationId.Low:x16} "
-            + $"target_node={actorRef.NodeRid} source_node={sourceNodeRid}");
+                + $"operation={operationId.High:x16}{operationId.Low:x16} "
+                + $"target_node={actorRef.NodeRid} source_node={sourceNodeRid}"
+        );
         // The disconnect frame takes the same route as any session frame to
         // this actor: ForwardPart relays it to the actor's owner node when the
         // actor is remote and writes the native bound session when it is local.
-        if (!ForwardPart(
-                actorRef, sourceNodeRid, sourceSessionRid, headerPart, true,
-                binding.MeshName, node,
+        if (
+            !ForwardPart(
+                actorRef,
+                sourceNodeRid,
+                sourceSessionRid,
+                headerPart,
+                true,
+                binding.MeshName,
+                node,
                 binding.TargetNodeGeneration,
                 binding.AuthorityOwnerGeneration,
                 binding.OwnerLeaseGeneration,
                 routeContext,
                 localRequestSource.NodeGeneration,
                 localRequestSource,
-                applicationMetadata))
+                applicationMetadata
+            )
+        )
             throw new InvalidOperationException("Actor session disconnect header forward failed.");
-        if (!ForwardPart(
-                actorRef, sourceNodeRid, sourceSessionRid, bodyPart, false,
-                binding.MeshName, node,
+        if (
+            !ForwardPart(
+                actorRef,
+                sourceNodeRid,
+                sourceSessionRid,
+                bodyPart,
+                false,
+                binding.MeshName,
+                node,
                 binding.TargetNodeGeneration,
                 binding.AuthorityOwnerGeneration,
                 binding.OwnerLeaseGeneration,
                 routeContext,
                 localRequestSource.NodeGeneration,
                 localRequestSource,
-                applicationMetadata))
+                applicationMetadata
+            )
+        )
             throw new InvalidOperationException("Actor session disconnect body forward failed.");
         return ValueTask.CompletedTask;
     }
@@ -1438,48 +1565,54 @@ internal sealed class ZLinkActorBoundSessionCoordinator
     public ValueTask CloseAsync(string actorId, CancellationToken cancellationToken)
     {
         var state = _getState(actorId);
-        var actorRef = state.NativeActorRef
-                       ?? throw Error(ZLinkFrameworkErrorKind.NotFound,
-                           $"Actor '{actorId}' does not have a native Actor ref.",
-                           ZLinkRetryAdvice.DoNotRetry);
+        var actorRef =
+            state.NativeActorRef
+            ?? throw Error(
+                ZLinkFrameworkErrorKind.NotFound,
+                $"Actor '{actorId}' does not have a native Actor ref.",
+                ZLinkRetryAdvice.DoNotRetry
+            );
         if (!state.TryGetBoundSession(out var session))
             throw Error(
                 ZLinkFrameworkErrorKind.InvalidOperation,
                 $"Actor '{actorId}' does not have a bound session.",
-                ZLinkRetryAdvice.DoNotRetry);
+                ZLinkRetryAdvice.DoNotRetry
+            );
         RequireNodeForMesh(
                 session.MeshName.Value,
-                "Actor bound session close requires its stored Mesh route.")
-            .CloseActorBoundSession(actorRef, _registration.DefaultRequestTimeout, cancellationToken);
+                "Actor bound session close requires its stored Mesh route."
+            )
+            .CloseActorBoundSession(
+                actorRef,
+                _registration.DefaultRequestTimeout,
+                cancellationToken
+            );
         return ValueTask.CompletedTask;
     }
 
     private IZLinkBackendSpotNode RequireNodeForMesh(
         string meshName,
         string message,
-        ZLinkFrameworkErrorKind kind = ZLinkFrameworkErrorKind.InvalidOperation) =>
-        _getNodeForMesh(meshName) ??
-        throw Error(kind, message, ZLinkRetryAdvice.DoNotRetry);
+        ZLinkFrameworkErrorKind kind = ZLinkFrameworkErrorKind.InvalidOperation
+    ) => _getNodeForMesh(meshName) ?? throw Error(kind, message, ZLinkRetryAdvice.DoNotRetry);
 
-    private IZLinkBackendSpotNode RequireNode(string message,
-        ZLinkFrameworkErrorKind kind = ZLinkFrameworkErrorKind.InvalidOperation) =>
-        _getNode() ?? throw Error(kind, message, ZLinkRetryAdvice.DoNotRetry);
+    private IZLinkBackendSpotNode RequireNode(
+        string message,
+        ZLinkFrameworkErrorKind kind = ZLinkFrameworkErrorKind.InvalidOperation
+    ) => _getNode() ?? throw Error(kind, message, ZLinkRetryAdvice.DoNotRetry);
 
-    private T RunState<T>(Func<T> operation) =>
-        AwaitStateLane(_lane.RunAsync(operation));
+    private T RunState<T>(Func<T> operation) => AwaitStateLane(_lane.RunAsync(operation));
 
-    private void RunState(Action operation) =>
-        AwaitStateLane(_lane.RunAsync(operation));
+    private void RunState(Action operation) => AwaitStateLane(_lane.RunAsync(operation));
 
     private static T AwaitStateLane<T>(ValueTask<T> operation) =>
         operation.GetAwaiter().GetResult();
 
-    private static void AwaitStateLane(ValueTask operation) =>
-        operation.GetAwaiter().GetResult();
+    private static void AwaitStateLane(ValueTask operation) => operation.GetAwaiter().GetResult();
 
     private static ZLinkFrameworkException Error(
         ZLinkFrameworkErrorKind kind,
         string message,
-        ZLinkRetryAdvice retryAdvice) =>
-        new(kind, message, retryAdvice);
+        ZLinkRetryAdvice retryAdvice
+    ) => new(kind, message, retryAdvice);
 }

@@ -1,9 +1,10 @@
-import { ZLinkFrameworkInternalErrorKind, createInternalFrameworkException  } from '../framework-errors-internal';
+import {
+  ZLinkFrameworkInternalErrorKind,
+  createInternalFrameworkException
+} from '../framework-errors-internal';
 import type { RoutingId } from '../../contracts';
 import { ZLinkLocationWriteStatus } from '../../contracts/Locations';
-import {
-  ZLinkSpotKind,
-} from '../../contracts';
+import { ZLinkSpotKind } from '../../contracts';
 import { ZLinkConfigurationException } from '../configuration';
 import type { ZLinkLocationLifecycle } from '../locations';
 

@@ -1,14 +1,15 @@
 package systems.zlink.framework.runtime.internal.diagnostics;
 
+import systems.zlink.framework.monitoring.ZLinkFlowOrigin;
+
 import java.security.SecureRandom;
 import java.time.Instant;
 import java.util.UUID;
-import java.util.concurrent.atomic.AtomicLong;
-import java.util.concurrent.Executor;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionStage;
+import java.util.concurrent.Executor;
+import java.util.concurrent.atomic.AtomicLong;
 import java.util.function.Supplier;
-import systems.zlink.framework.monitoring.ZLinkFlowOrigin;
 
 /** Internal flow context. It is deliberately not a public context-capture API. */
 public final class ZLinkFlowContext {
@@ -16,8 +17,7 @@ public final class ZLinkFlowContext {
     private static final AtomicLong LAST_MILLIS = new AtomicLong();
     private static final ThreadLocal<State> CURRENT = new ThreadLocal<>();
 
-    private ZLinkFlowContext() {
-    }
+    private ZLinkFlowContext() {}
 
     public static State current() {
         return CURRENT.get();
@@ -44,32 +44,27 @@ public final class ZLinkFlowContext {
     }
 
     /**
-     * Ingress entry: installs the inbound flow pair, or starts a new flow when
-     * the message carries none (spec 27 §4). Callers must decode the inbound
-     * pair only when capture is enabled and use {@link #suppress()} otherwise.
+     * Ingress entry: installs the inbound flow pair, or starts a new flow when the message carries
+     * none (spec 27 §4). Callers must decode the inbound pair only when capture is enabled and use
+     * {@link #suppress()} otherwise.
      */
     public static Scope enterOrCreate(State inbound, ZLinkFlowOrigin defaultOrigin) {
         return enter(inbound != null ? inbound : create(defaultOrigin));
     }
 
     /**
-     * Outbound entry: preserves an ambient callback flow or starts an
-     * application flow for the first outbound operation (spec 27 §4). The
-     * live capture gate is intentionally checked by every terminal entrypoint.
+     * Outbound entry: preserves an ambient callback flow or starts an application flow for the
+     * first outbound operation (spec 27 §4). The live capture gate is intentionally checked by
+     * every terminal entrypoint.
      */
-    public static Scope enterCurrentOrCreate(
-        ZLinkFlowOrigin origin,
-        boolean captureEnabled) {
-        return captureEnabled
-            ? enterOrCreate(current(), origin)
-            : suppress();
+    public static Scope enterCurrentOrCreate(ZLinkFlowOrigin origin, boolean captureEnabled) {
+        return captureEnabled ? enterOrCreate(current(), origin) : suppress();
     }
 
     /**
-     * Off path (spec 27 §4): no validation, no context capture, no new flow.
-     * A stale ambient flow left by a scope entered while tracing was enabled
-     * is cleared for the duration so outbound encoders do not copy it onto
-     * envelopes; steady-state Off pays only the ambient null read.
+     * Off path (spec 27 §4): no validation, no context capture, no new flow. A stale ambient flow
+     * left by a scope entered while tracing was enabled is cleared for the duration so outbound
+     * encoders do not copy it onto envelopes; steady-state Off pays only the ambient null read.
      */
     public static Scope suppress() {
         State previous = CURRENT.get();
@@ -80,20 +75,21 @@ public final class ZLinkFlowContext {
         return () -> CURRENT.set(previous);
     }
 
-    private static final Scope NOOP = () -> { };
+    private static final Scope NOOP = () -> {};
 
     public static Executor propagating(Executor delegate) {
         return command -> {
             State captured = current();
-            delegate.execute(() -> {
-                if (captured == null) {
-                    command.run();
-                    return;
-                }
-                try (Scope ignored = enter(captured)) {
-                    command.run();
-                }
-            });
+            delegate.execute(
+                    () -> {
+                        if (captured == null) {
+                            command.run();
+                            return;
+                        }
+                        try (Scope ignored = enter(captured)) {
+                            command.run();
+                        }
+                    });
         };
     }
 
@@ -101,12 +97,13 @@ public final class ZLinkFlowContext {
         State captured = current();
         if (captured == null) return source;
         CompletableFuture<T> result = new CompletableFuture<>();
-        source.whenComplete((value, error) -> {
-            try (Scope ignored = enter(captured)) {
-                if (error != null) result.completeExceptionally(error);
-                else result.complete(value);
-            }
-        });
+        source.whenComplete(
+                (value, error) -> {
+                    try (Scope ignored = enter(captured)) {
+                        if (error != null) result.completeExceptionally(error);
+                        else result.complete(value);
+                    }
+                });
         return result;
     }
 
@@ -131,17 +128,17 @@ public final class ZLinkFlowContext {
 
     /** Lowercase hyphenated UUIDv7 wire validation from spec 27 §3. */
     public static boolean isValidFlowId(String value) {
-        if (value == null || value.length() != 36
-            || value.charAt(8) != '-'
-            || value.charAt(13) != '-'
-            || value.charAt(18) != '-'
-            || value.charAt(23) != '-'
-            || value.charAt(14) != '7') {
+        if (value == null
+                || value.length() != 36
+                || value.charAt(8) != '-'
+                || value.charAt(13) != '-'
+                || value.charAt(18) != '-'
+                || value.charAt(23) != '-'
+                || value.charAt(14) != '7') {
             return false;
         }
         char variant = value.charAt(19);
-        if (variant != '8' && variant != '9'
-            && variant != 'a' && variant != 'b') {
+        if (variant != '8' && variant != '9' && variant != 'a' && variant != 'b') {
             return false;
         }
         for (int index = 0; index < value.length(); index++) {
@@ -149,8 +146,7 @@ public final class ZLinkFlowContext {
                 continue;
             }
             char current = value.charAt(index);
-            if (!((current >= '0' && current <= '9')
-                || (current >= 'a' && current <= 'f'))) {
+            if (!((current >= '0' && current <= '9') || (current >= 'a' && current <= 'f'))) {
                 return false;
             }
         }

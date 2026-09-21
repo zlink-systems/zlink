@@ -1,16 +1,16 @@
 package systems.zlink.framework.spots;
 
-import java.util.concurrent.CompletableFuture;
-import java.util.concurrent.CompletionStage;
 import systems.zlink.framework.actors.ZLinkActor;
 import systems.zlink.framework.messaging.ZLinkMessage;
 
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CompletionStage;
+
 public interface ZLinkEntrySpot<TActor extends ZLinkActor>
-    extends ZLinkSpotActorMembershipLifecycle<TActor> {
+        extends ZLinkSpotActorMembershipLifecycle<TActor> {
     ZLinkEntrySpotContext context();
 
-    default void configure() {
-    }
+    default void configure() {}
 
     default CompletionStage<Void> onInitialize() {
         return CompletableFuture.completedFuture(null);
@@ -20,15 +20,12 @@ public interface ZLinkEntrySpot<TActor extends ZLinkActor>
         return CompletableFuture.completedFuture(null);
     }
 
-    default CompletionStage<Void> onClosing(
-        ZLinkSpotClosingContext context) {
+    default CompletionStage<Void> onClosing(ZLinkSpotClosingContext context) {
         return onClosing();
     }
 
     default CompletionStage<ZLinkActorCreateResponse> onCreateActor(
-        TActor actor,
-        ZLinkMessage createRequest) {
+            TActor actor, ZLinkMessage createRequest) {
         return CompletableFuture.completedFuture(ZLinkActorCreateResponse.accept());
     }
-
 }

@@ -3,11 +3,7 @@ import type { ActorRef, RoutingId } from '../Common';
 export type ZLinkActorTransferState = 'prepared' | 'committed' | 'activated' | 'aborted';
 
 export type ZLinkActorTransferWriteStatus =
-  | 'stored'
-  | 'notFound'
-  | 'ignoredStale'
-  | 'rejectedConflict'
-  | 'invalidState';
+  'stored' | 'notFound' | 'ignoredStale' | 'rejectedConflict' | 'invalidState';
 
 export interface ZLinkActorTransferRecord {
   readonly meshName: string;

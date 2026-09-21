@@ -34,16 +34,14 @@ class route_mesh_runtime_service_t final : public route_mesh_runtime_t
       std::vector<std::shared_ptr<detail::mesh_node_runtime_t>> nodes,
       location_runtime_query_t *location_runtime,
       location_repository_t *location_store = nullptr,
-      std::shared_ptr<zlink::framework::detail::monitoring_runtime_state_t>
-        monitoring = {});
+      std::shared_ptr<zlink::framework::detail::monitoring_runtime_state_t> monitoring = {});
     ~route_mesh_runtime_service_t ();
 
     mesh_node_snapshot_t snapshot (std::string mesh_name) const override;
-    std::unique_ptr<mesh_runtime_observation_t>
-    observe (std::string mesh_name,
-             std::size_t capacity,
-             std::function<void (
-               const observed_status_t<mesh_node_snapshot_t> &)> observer) override;
+    std::unique_ptr<mesh_runtime_observation_t> observe (
+      std::string mesh_name,
+      std::size_t capacity,
+      std::function<void (const observed_status_t<mesh_node_snapshot_t> &)> observer) override;
     bool is_ready (std::string mesh_name) const override;
 
     void start ();

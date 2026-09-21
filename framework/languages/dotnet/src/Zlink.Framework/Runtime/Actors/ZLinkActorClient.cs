@@ -4,20 +4,15 @@ using Zlink.Framework.Runtime.Backend.DotNet.Mappings;
 
 namespace Zlink.Framework.Runtime.Actors;
 
-internal sealed class ZLinkActorClient(
-    ZLinkFrameworkRuntime runtime) : IZLinkActorClient
+internal sealed class ZLinkActorClient(ZLinkFrameworkRuntime runtime) : IZLinkActorClient
 {
-    public IZLinkActorSendCall SendToActor<TMessage>(
-        string actorId,
-        TMessage message)
+    public IZLinkActorSendCall SendToActor<TMessage>(string actorId, TMessage message)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(actorId);
         return new ZLinkActorSendCall<TMessage>(this, actorId, message);
     }
 
-    public IZLinkActorRequestCall RequestToActor<TRequest>(
-        string actorId,
-        TRequest request)
+    public IZLinkActorRequestCall RequestToActor<TRequest>(string actorId, TRequest request)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(actorId);
         return new ZLinkActorRequestCall<TRequest>(this, actorId, request);
@@ -29,7 +24,8 @@ internal sealed class ZLinkActorClient(
         ulong targetNodeGeneration,
         ulong authorityOwnerGeneration,
         ulong ownerLeaseGeneration,
-        TRequest request) =>
+        TRequest request
+    ) =>
         new ZLinkActorRequestCall<TRequest>(
             this,
             actor.ActorId,
@@ -39,7 +35,9 @@ internal sealed class ZLinkActorClient(
                 actor,
                 targetNodeGeneration,
                 authorityOwnerGeneration,
-                ownerLeaseGeneration));
+                ownerLeaseGeneration
+            )
+        );
 
     private async ValueTask<ZLinkOneWaySubmitResult> SubmitSendAsync<TMessage>(
         string actorId,
@@ -47,16 +45,18 @@ internal sealed class ZLinkActorClient(
         TMessage message,
         ZLinkCallMetadata metadata,
         CancellationToken cancellationToken,
-        ResolvedActorRoute? fixedRoute = null)
+        ResolvedActorRoute? fixedRoute = null
+    )
     {
         using var operation = runtime.EnterOperation();
         using var flow = ZLinkFlowContext.EnterCurrentOrCreate(
             ZLinkFlowOrigin.Application,
-            runtime.Flow.CaptureEnabled);
+            runtime.Flow.CaptureEnabled
+        );
         cancellationToken.ThrowIfCancellationRequested();
-        var route = fixedRoute
-            ?? await ResolveActorRouteAsync(actorId, cancellationToken)
-                .ConfigureAwait(false);
+        var route =
+            fixedRoute
+            ?? await ResolveActorRouteAsync(actorId, cancellationToken).ConfigureAwait(false);
         var actor = route.ActorRef;
         var meshName = route.MeshName;
         var targetNodeGeneration = route.TargetNodeGeneration;
@@ -68,18 +68,19 @@ internal sealed class ZLinkActorClient(
                 actor.ToBackend(),
                 targetNodeGeneration,
                 authorityOwnerGeneration,
-                ownerLeaseGeneration);
+                ownerLeaseGeneration
+            );
         EnsureRouteAvailable(nodeRuntime, actor);
         var parts = CreatePacketParts(
             ZlinkStreamMessageKind.Send,
             null,
             packetName,
             message,
-            metadata);
+            metadata
+        );
         if (actor.NodeRid == nodeRuntime.Node.RoutingId)
         {
-            var header = ZLinkStreamProtocolDefaults.DecodeHeader(
-                parts[0].AsReadOnlyMemory());
+            var header = ZLinkStreamProtocolDefaults.DecodeHeader(parts[0].AsReadOnlyMemory());
             if (runtime.TrySubmitLocalActorSend(actor.ToBackend(), header, parts[1]))
             {
                 TraceSent(actor, packetName, parts, ZLinkDispatchMessageKind.ActorSend);
@@ -90,10 +91,8 @@ internal sealed class ZLinkActorClient(
         try
         {
             TraceSent(actor, packetName, parts, ZLinkDispatchMessageKind.ActorSend);
-            var result = await nodeRuntime.SendToActorAsync(
-                    actor.ToBackend(),
-                    parts,
-                    cancellationToken)
+            var result = await nodeRuntime
+                .SendToActorAsync(actor.ToBackend(), parts, cancellationToken)
                 .ConfigureAwait(false);
             if (result.Status == ZLinkOneWaySubmitStatus.TargetNotFound)
                 InvalidateActorRoute(actorId);
@@ -115,33 +114,37 @@ internal sealed class ZLinkActorClient(
         TimeSpan? timeout,
         ZLinkCallMetadata metadata,
         CancellationToken cancellationToken,
-        ResolvedActorRoute? fixedRoute = null)
+        ResolvedActorRoute? fixedRoute = null
+    )
     {
         var started = timeout is null ? 0 : Stopwatch.GetTimestamp();
         using var operation = runtime.EnterOperation(countAsRequest: true);
         using var flow = ZLinkFlowContext.EnterCurrentOrCreate(
             ZLinkFlowOrigin.Application,
-            runtime.Flow.CaptureEnabled);
+            runtime.Flow.CaptureEnabled
+        );
         var terminal = runtime.Flow.CaptureEnabled
             ? new ActorRequestTerminalTrace(runtime.Flow, actorId, packetName)
             : null;
         try
         {
-            var route = fixedRoute
-                ?? await ResolveActorRouteAsync(actorId, cancellationToken)
-                    .ConfigureAwait(false);
+            var route =
+                fixedRoute
+                ?? await ResolveActorRouteAsync(actorId, cancellationToken).ConfigureAwait(false);
             var actor = route.ActorRef;
             var meshName = route.MeshName;
             var targetNodeGeneration = route.TargetNodeGeneration;
             var authorityOwnerGeneration = route.AuthorityOwnerGeneration;
             var ownerLeaseGeneration = route.OwnerLeaseGeneration;
-            var nodeRuntime = await GetActorSpotNodeAsync(meshName, cancellationToken).ConfigureAwait(false);
+            var nodeRuntime = await GetActorSpotNodeAsync(meshName, cancellationToken)
+                .ConfigureAwait(false);
             if (authorityOwnerGeneration != 0)
                 nodeRuntime.ObserveActorAuthority(
                     actor.ToBackend(),
                     targetNodeGeneration,
                     authorityOwnerGeneration,
-                    ownerLeaseGeneration);
+                    ownerLeaseGeneration
+                );
             EnsureRouteAvailable(nodeRuntime, actor);
             var node = nodeRuntime.Node;
             var remainingTimeout = RemainingTimeout(timeout, started);
@@ -150,7 +153,8 @@ internal sealed class ZLinkActorClient(
                 new ZlinkStreamRequestSeq(1),
                 packetName,
                 request,
-                metadata);
+                metadata
+            );
             var header = ZLinkStreamProtocolDefaults.DecodeHeader(parts[0].AsReadOnlyMemory());
             terminal?.SetRoute(meshName, actor.NodeRid.ToString(), header.CorrelationId);
             TraceSent(actor, packetName, parts, ZLinkDispatchMessageKind.ActorRequest);
@@ -159,7 +163,8 @@ internal sealed class ZLinkActorClient(
                     actor.ToBackend(),
                     parts,
                     remainingTimeout,
-                    cancellationToken)
+                    cancellationToken
+                )
                 .ConfigureAwait(false);
             terminal?.Succeeded();
             return reply;
@@ -183,28 +188,34 @@ internal sealed class ZLinkActorClient(
 
     private async ValueTask<ResolvedActorRoute> ResolveActorRouteAsync(
         string actorId,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken
+    )
     {
-        var rows = runtime.Services.GetService(typeof(ZLinkStoreLocationResolvers))
+        var rows =
+            runtime.Services.GetService(typeof(ZLinkStoreLocationResolvers))
             as ZLinkStoreLocationResolvers;
         if (rows is null)
             throw new ZLinkFrameworkException(
                 ZLinkFrameworkErrorKind.InvalidOperation,
-                "Actor direct messaging requires a Location Store.");
+                "Actor direct messaging requires a Location Store."
+            );
         var resolution = await rows.ResolveActorRowWithStatusAsync(
                 new ZLinkActorLocationKey(actorId),
-                cancellationToken)
+                cancellationToken
+            )
             .ConfigureAwait(false);
         if (resolution.Row is null)
         {
-            var kind = resolution.Kind == ZLinkLocationResolutionKind.KnownUnavailable
-                ? ZLinkFrameworkErrorKind.Unavailable
-                : ZLinkFrameworkErrorKind.NotFound;
+            var kind =
+                resolution.Kind == ZLinkLocationResolutionKind.KnownUnavailable
+                    ? ZLinkFrameworkErrorKind.Unavailable
+                    : ZLinkFrameworkErrorKind.NotFound;
             throw new ZLinkFrameworkException(
                 kind,
                 kind == ZLinkFrameworkErrorKind.Unavailable
                     ? $"Actor route '{actorId}' is currently unavailable."
-                    : $"Actor route '{actorId}' was not found.");
+                    : $"Actor route '{actorId}' was not found."
+            );
         }
         var row = resolution.Row;
         return new ResolvedActorRoute(
@@ -212,28 +223,30 @@ internal sealed class ZLinkActorClient(
             row.ActorRef,
             row.OwnerNodeGeneration,
             row.AuthorityOwnerGeneration,
-            checked((ulong)row.LeaseGeneration));
+            checked((ulong)row.LeaseGeneration)
+        );
     }
 
-    private static TimeSpan? RemainingTimeout(
-        TimeSpan? timeout,
-        long started)
+    private static TimeSpan? RemainingTimeout(TimeSpan? timeout, long started)
     {
-        if (timeout is null) return null;
-        var remaining = timeout.Value
-                        - Stopwatch.GetElapsedTime(started);
+        if (timeout is null)
+            return null;
+        var remaining = timeout.Value - Stopwatch.GetElapsedTime(started);
         if (remaining <= TimeSpan.Zero)
             throw new ZLinkFrameworkException(
                 ZLinkFrameworkErrorKind.DeadlineExceeded,
                 "Actor request timed out before transport delivery.",
-                ZLinkRetryAdvice.RetryAfterBackoff);
+                ZLinkRetryAdvice.RetryAfterBackoff
+            );
         return remaining;
     }
 
     private void InvalidateActorRoute(string actorId)
     {
-        if (runtime.Services.GetService(typeof(ZLinkStoreLocationResolvers))
-            is ZLinkStoreLocationResolvers rows)
+        if (
+            runtime.Services.GetService(typeof(ZLinkStoreLocationResolvers))
+            is ZLinkStoreLocationResolvers rows
+        )
             rows.InvalidateActorRoute(new ZLinkActorLocationKey(actorId));
     }
 
@@ -244,26 +257,30 @@ internal sealed class ZLinkActorClient(
     // Unavailable must not invalidate the cached route. Local failures
     // (Unspecified origin: resolution, transport) keep invalidating as before.
     private static bool IsStaleRoute(ZLinkFrameworkException failure) =>
-        failure.Kind is ZLinkFrameworkErrorKind.NotFound
-            or ZLinkFrameworkErrorKind.Unavailable
+        failure.Kind is ZLinkFrameworkErrorKind.NotFound or ZLinkFrameworkErrorKind.Unavailable
         && failure.Origin != ZLinkErrorOrigin.Application;
 
     private void TraceSent(
         ActorRef actor,
         string packetName,
         IReadOnlyList<Message> parts,
-        ZLinkDispatchMessageKind messageKind)
+        ZLinkDispatchMessageKind messageKind
+    )
     {
-        if (!runtime.Flow.Enabled(ZLinkMessageFlowOutcome.Sent)) return;
+        if (!runtime.Flow.Enabled(ZLinkMessageFlowOutcome.Sent))
+            return;
 
         var header = ZLinkStreamProtocolDefaults.DecodeHeader(parts[0].AsReadOnlyMemory());
-        runtime.Flow.Trace(new ZLinkMessageFlowEvent(
-            ZLinkMessageFlowOutcome.Sent,
-            ZLinkDispatchErrorSurface.SpotActor,
-            messageKind,
-            packetName,
-            CorrelationId: header.CorrelationId,
-            ActorId: actor.ActorId));
+        runtime.Flow.Trace(
+            new ZLinkMessageFlowEvent(
+                ZLinkMessageFlowOutcome.Sent,
+                ZLinkDispatchErrorSurface.SpotActor,
+                messageKind,
+                packetName,
+                CorrelationId: header.CorrelationId,
+                ActorId: actor.ActorId
+            )
+        );
     }
 
     private async ValueTask<TReply> SubmitActorRequestAsync<TReply>(
@@ -271,16 +288,13 @@ internal sealed class ZLinkActorClient(
         ZLinkBackendActorRef actor,
         IReadOnlyList<Message> parts,
         TimeSpan? timeout,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken
+    )
     {
         IReadOnlyList<Message> reply;
         try
         {
-            reply = await node.RequestToActorAsync(
-                    actor,
-                    parts,
-                    timeout,
-                    cancellationToken)
+            reply = await node.RequestToActorAsync(actor, parts, timeout, cancellationToken)
                 .ConfigureAwait(false);
         }
         catch (ZlinkSubmitException error)
@@ -302,9 +316,7 @@ internal sealed class ZLinkActorClient(
 
         try
         {
-            return ZLinkActorReplyDecoder.Decode<TReply>(
-                reply,
-                runtime.Flow.CaptureEnabled);
+            return ZLinkActorReplyDecoder.Decode<TReply>(reply, runtime.Flow.CaptureEnabled);
         }
         finally
         {
@@ -314,24 +326,26 @@ internal sealed class ZLinkActorClient(
 
     private async ValueTask<ZLinkSpotNodeRuntime> GetActorSpotNodeAsync(
         string meshName,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken
+    )
     {
         await runtime.EnsureStartedStateAsync(cancellationToken).ConfigureAwait(false);
         return runtime.GetMeshNodeRuntime(meshName);
     }
 
-    private static void EnsureRouteAvailable(
-        ZLinkSpotNodeRuntime node,
-        ActorRef actor)
+    private static void EnsureRouteAvailable(ZLinkSpotNodeRuntime node, ActorRef actor)
     {
-        if (actor.NodeRid == node.Node.RoutingId
-            || !node.IsExplicitManualRouterRouteDisconnected(actor.NodeRid))
+        if (
+            actor.NodeRid == node.Node.RoutingId
+            || !node.IsExplicitManualRouterRouteDisconnected(actor.NodeRid)
+        )
             return;
 
         throw new ZLinkFrameworkException(
             ZLinkFrameworkErrorKind.Unavailable,
             $"Actor route to node '{actor.NodeRid}' is not connected.",
-            ZLinkRetryAdvice.RetryAfterBackoff);
+            ZLinkRetryAdvice.RetryAfterBackoff
+        );
     }
 
     private static IReadOnlyList<Message> CreatePacketParts<TMessage>(
@@ -339,13 +353,15 @@ internal sealed class ZLinkActorClient(
         ZlinkStreamRequestSeq? requestSeq,
         string packetName,
         TMessage message,
-        ZLinkCallMetadata? callMetadata = null)
+        ZLinkCallMetadata? callMetadata = null
+    )
     {
         var metadata = callMetadata?.ToStreamMetadata() ?? ZlinkStreamMetadata.Empty;
         var flags = requestSeq is null
             ? ZlinkStreamHeaderFlags.None
             : ZlinkStreamHeaderFlags.HasRequestSeq;
-        if (metadata.Count != 0) flags |= ZlinkStreamHeaderFlags.HasMetadata;
+        if (metadata.Count != 0)
+            flags |= ZlinkStreamHeaderFlags.HasMetadata;
         var header = new ZlinkStreamHeader(
             kind,
             ZlinkStreamCodec.Json,
@@ -353,18 +369,20 @@ internal sealed class ZLinkActorClient(
             requestSeq,
             packetName,
             metadata,
-            ZlinkStreamCorrelation.Next());
-        var payload = ZLinkEnvelopeCodec.EncodeJsonBytes(message, message?.GetType() ?? typeof(TMessage));
+            ZlinkStreamCorrelation.Next()
+        );
+        var payload = ZLinkEnvelopeCodec.EncodeJsonBytes(
+            message,
+            message?.GetType() ?? typeof(TMessage)
+        );
         return
         [
             Message.From(ZLinkStreamProtocolDefaults.EncodeHeader(header).Span),
-            Message.From(payload)
+            Message.From(payload),
         ];
     }
 
-    private static Exception MapSubmitException(
-        ZlinkSubmitException error,
-        string operationName)
+    private static Exception MapSubmitException(ZlinkSubmitException error, string operationName)
     {
         return error.Result switch
         {
@@ -372,18 +390,18 @@ internal sealed class ZLinkActorClient(
                 ZLinkFrameworkErrorKind.Unavailable,
                 $"{operationName} failed because the target route is not connected.",
                 ZLinkRetryAdvice.RetryAfterBackoff,
-                error),
+                error
+            ),
             ZlinkSubmitException.ErrorCode.NotFound => new ZLinkFrameworkException(
                 ZLinkFrameworkErrorKind.NotFound,
                 $"{operationName} failed because the actor route was not found.",
-                innerException: error),
-            _ => ZLinkRequestFailureMapper.CreateSubmitException(error, operationName)
+                innerException: error
+            ),
+            _ => ZLinkRequestFailureMapper.CreateSubmitException(error, operationName),
         };
     }
 
-    private static Exception MapRequestException(
-        ZlinkRequestException error,
-        string operationName)
+    private static Exception MapRequestException(ZlinkRequestException error, string operationName)
     {
         return error.Result switch
         {
@@ -391,26 +409,31 @@ internal sealed class ZLinkActorClient(
                 ZLinkFrameworkErrorKind.Unavailable,
                 $"{operationName} failed because the target route is not connected.",
                 ZLinkRetryAdvice.RetryAfterBackoff,
-                error),
+                error
+            ),
             ZlinkRequestException.ErrorCode.NotFound => new ZLinkFrameworkException(
                 ZLinkFrameworkErrorKind.NotFound,
                 $"{operationName} failed because the actor route was not found.",
-                innerException: error),
+                innerException: error
+            ),
             ZlinkRequestException.ErrorCode.Conflict => new ZLinkFrameworkException(
                 ZLinkFrameworkErrorKind.Unavailable,
                 $"{operationName} failed because the actor location is stale.",
                 ZLinkRetryAdvice.RetryAfterBackoff,
-                error),
+                error
+            ),
             _ => ZLinkRequestFailureMapper.CreateCompletionException(
                 (RequestResult)(int)error.Result,
-                operationName)
+                operationName
+            ),
         };
     }
 
     private sealed class ActorRequestTerminalTrace(
         ZLinkMessageFlowTracer tracer,
         string actorId,
-        string packetName) : IDisposable
+        string packetName
+    ) : IDisposable
     {
         private readonly long _started = Stopwatch.GetTimestamp();
         private string? _meshName;
@@ -435,27 +458,32 @@ internal sealed class ZLinkActorClient(
                 OperationCanceledException => ZLinkMessageFlowResult.Cancelled,
                 ZLinkFrameworkException { Kind: ZLinkFrameworkErrorKind.ShuttingDown } =>
                     ZLinkMessageFlowResult.Shutdown,
-                _ => ZLinkMessageFlowResult.Failed
+                _ => ZLinkMessageFlowResult.Failed,
             };
         }
 
         public void Dispose()
         {
-            if (Interlocked.Exchange(ref _emitted, 1) != 0) return;
-            if (!tracer.Enabled(ZLinkMessageFlowOutcome.ReplyReceived, _result)) return;
-            tracer.Trace(new ZLinkMessageFlowEvent(
-                ZLinkMessageFlowOutcome.ReplyReceived,
-                ZLinkDispatchErrorSurface.SpotActor,
-                ZLinkDispatchMessageKind.ActorRequest,
-                packetName,
-                CorrelationId: _correlationId,
-                ActorId: actorId,
-                MeshName: _meshName,
-                TargetRid: _targetRid,
-                DurationSeconds: tracer.DetailedEnabled
-                    ? Stopwatch.GetElapsedTime(_started).TotalSeconds
-                    : null,
-                Result: _result));
+            if (Interlocked.Exchange(ref _emitted, 1) != 0)
+                return;
+            if (!tracer.Enabled(ZLinkMessageFlowOutcome.ReplyReceived, _result))
+                return;
+            tracer.Trace(
+                new ZLinkMessageFlowEvent(
+                    ZLinkMessageFlowOutcome.ReplyReceived,
+                    ZLinkDispatchErrorSurface.SpotActor,
+                    ZLinkDispatchMessageKind.ActorRequest,
+                    packetName,
+                    CorrelationId: _correlationId,
+                    ActorId: actorId,
+                    MeshName: _meshName,
+                    TargetRid: _targetRid,
+                    DurationSeconds: tracer.DetailedEnabled
+                        ? Stopwatch.GetElapsedTime(_started).TotalSeconds
+                        : null,
+                    Result: _result
+                )
+            );
         }
     }
 
@@ -466,42 +494,50 @@ internal sealed class ZLinkActorClient(
     //  probes (e.g. authority-transition conflict) continue to observe it.
     private static Exception MapRequestException(
         ZLinkRequestTerminalException terminal,
-        string operationName)
+        string operationName
+    )
     {
         if (ZLinkRequestFailureMapper.ClassifyFineFailure(terminal.FailureErrno) is not null)
             return ZLinkRequestFailureMapper.CreateCompletionException(
                 terminal.Result,
                 terminal.FailureErrno,
-                operationName);
+                operationName
+            );
         var inner = new ZlinkRequestException(
-            (ZlinkRequestException.ErrorCode)(int)terminal.Result);
+            (ZlinkRequestException.ErrorCode)(int)terminal.Result
+        );
         return terminal.Result switch
         {
             RequestResult.NotConnected => new ZLinkFrameworkException(
                 ZLinkFrameworkErrorKind.Unavailable,
                 $"{operationName} failed because the target route is not connected.",
                 ZLinkRetryAdvice.RetryAfterBackoff,
-                inner),
+                inner
+            ),
             RequestResult.NotFound => new ZLinkFrameworkException(
                 ZLinkFrameworkErrorKind.NotFound,
                 $"{operationName} failed because the actor route was not found.",
-                innerException: inner),
+                innerException: inner
+            ),
             RequestResult.Conflict => new ZLinkFrameworkException(
                 ZLinkFrameworkErrorKind.Unavailable,
                 $"{operationName} failed because the actor location is stale.",
                 ZLinkRetryAdvice.RetryAfterBackoff,
-                inner),
+                inner
+            ),
             _ => ZLinkRequestFailureMapper.CreateCompletionException(
                 terminal.Result,
                 terminal.FailureErrno,
-                operationName)
+                operationName
+            ),
         };
     }
 
     private sealed class ZLinkActorSendCall<TMessage>(
         ZLinkActorClient client,
         string actorId,
-        TMessage message) : IZLinkActorSendCall
+        TMessage message
+    ) : IZLinkActorSendCall
     {
         private readonly ZLinkCallMetadata _metadata = new();
         private readonly ZLinkOneWayCallGate _submission = new("Actor send");
@@ -518,18 +554,18 @@ internal sealed class ZLinkActorClient(
             return this;
         }
 
-        public ValueTask Async(
-            CancellationToken cancellationToken = default)
+        public ValueTask Async(CancellationToken cancellationToken = default)
         {
             _submission.Claim();
-            return client.SubmitSendAsync(
-                actorId,
-                ZLinkMessageNameResolver.ResolveFromMessage(message),
-                message,
-                _metadata,
-                cancellationToken).EnsureAcceptedAsync(
-                    "Actor send",
-                    ZLinkFrameworkErrorKind.NotFound);
+            return client
+                .SubmitSendAsync(
+                    actorId,
+                    ZLinkMessageNameResolver.ResolveFromMessage(message),
+                    message,
+                    _metadata,
+                    cancellationToken
+                )
+                .EnsureAcceptedAsync("Actor send", ZLinkFrameworkErrorKind.NotFound);
         }
     }
 
@@ -537,7 +573,8 @@ internal sealed class ZLinkActorClient(
         ZLinkActorClient client,
         string actorId,
         TRequest request,
-        ResolvedActorRoute? fixedRoute = null) : IZLinkActorRequestCall
+        ResolvedActorRoute? fixedRoute = null
+    ) : IZLinkActorRequestCall
     {
         private readonly ZLinkCallMetadata _metadata = new();
         private readonly ZLinkApplicationExecutionScope? _executionScope =
@@ -569,7 +606,8 @@ internal sealed class ZLinkActorClient(
             ZLinkApplicationExecutionContext.ValidateActorRequest(
                 actorId,
                 ZLinkNestedRequestTerminator.Async,
-                _executionScope);
+                _executionScope
+            );
             return ExecuteAsync<TReply>(cancellationToken);
         }
 
@@ -578,7 +616,8 @@ internal sealed class ZLinkActorClient(
             ZLinkApplicationExecutionContext.ValidateActorRequest(
                 actorId,
                 ZLinkNestedRequestTerminator.Yield,
-                _executionScope);
+                _executionScope
+            );
             return ZLinkApplicationExecutionContext
                 .RequireYieldTurn(_turn, "Actor request")
                 .YieldFrameworkCallAsync(ExecuteAsync<TReply>, cancellationToken);
@@ -593,7 +632,8 @@ internal sealed class ZLinkActorClient(
                 _timeout,
                 _metadata,
                 cancellationToken,
-                fixedRoute);
+                fixedRoute
+            );
         }
     }
 
@@ -602,5 +642,6 @@ internal sealed class ZLinkActorClient(
         ActorRef ActorRef,
         ulong TargetNodeGeneration,
         ulong AuthorityOwnerGeneration,
-        ulong OwnerLeaseGeneration);
+        ulong OwnerLeaseGeneration
+    );
 }

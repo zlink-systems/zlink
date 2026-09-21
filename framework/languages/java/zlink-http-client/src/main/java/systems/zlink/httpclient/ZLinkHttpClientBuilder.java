@@ -1,14 +1,15 @@
 /* SPDX-License-Identifier: Apache-2.0 */
 package systems.zlink.httpclient;
-import java.util.Locale;
 
-import java.time.Duration;
-import java.util.LinkedHashMap;
-import java.util.Map;
 import systems.zlink.httpclient.internal.HttpClientErrors;
 import systems.zlink.httpclient.internal.HttpClientOptions;
 import systems.zlink.httpclient.internal.HttpClientRuntime;
 import systems.zlink.httpclient.internal.HttpClientText;
+
+import java.time.Duration;
+import java.util.LinkedHashMap;
+import java.util.Locale;
+import java.util.Map;
 
 /** Fluent builder for {@link ZLinkHttpClient}. Mirrors the C++ {@code client_builder_t}. */
 public final class ZLinkHttpClientBuilder {
@@ -57,7 +58,8 @@ public final class ZLinkHttpClientBuilder {
 
     public ZLinkHttpClientBuilder maxResponseBodySize(long bytes) {
         if (bytes <= 0) {
-            throw HttpClientErrors.protocol("HTTP client max response body size must be greater than zero");
+            throw HttpClientErrors.protocol(
+                    "HTTP client max response body size must be greater than zero");
         }
         this.maxResponseBodySize = bytes;
         return this;
@@ -82,7 +84,8 @@ public final class ZLinkHttpClientBuilder {
 
     public ZLinkHttpClientBuilder followRedirects(int maxRedirects) {
         if (maxRedirects <= 0) {
-            throw HttpClientErrors.protocol("HTTP client follow_redirects must be greater than zero");
+            throw HttpClientErrors.protocol(
+                    "HTTP client follow_redirects must be greater than zero");
         }
         this.followRedirects = maxRedirects;
         return this;
@@ -127,28 +130,29 @@ public final class ZLinkHttpClientBuilder {
         HttpClientText.requirePositiveTimeout(timeout);
         String lower = baseUrl.toLowerCase(Locale.ROOT);
         if (!lower.startsWith("http://") && !lower.startsWith("https://")) {
-            throw HttpClientErrors.protocol("HTTP client base_url must start with http:// or https://");
+            throw HttpClientErrors.protocol(
+                    "HTTP client base_url must start with http:// or https://");
         }
 
-        HttpClientOptions options = new HttpClientOptions(
-            baseUrl,
-            timeout,
-            maxResponseBodySize,
-            Map.copyOf(headers),
-            trustCertificateFile,
-            clientCertificate,
-            followRedirects,
-            retryAttempts,
-            cookies,
-            proxy,
-            proxyAuthorization,
-            compression);
+        HttpClientOptions options =
+                new HttpClientOptions(
+                        baseUrl,
+                        timeout,
+                        maxResponseBodySize,
+                        Map.copyOf(headers),
+                        trustCertificateFile,
+                        clientCertificate,
+                        followRedirects,
+                        retryAttempts,
+                        cookies,
+                        proxy,
+                        proxyAuthorization,
+                        compression);
         return new ZLinkHttpClient(new HttpClientRuntime(options));
     }
 
     public ZLinkHttpServerClient buildServer(ZLinkHttpExecutionTurn executionTurn) {
-        return new ZLinkHttpServerClient(
-            build(), executionTurn, Throwable::printStackTrace);
+        return new ZLinkHttpServerClient(build(), executionTurn, Throwable::printStackTrace);
     }
 
     public ZLinkHttpRequestBuilder get(String path) {

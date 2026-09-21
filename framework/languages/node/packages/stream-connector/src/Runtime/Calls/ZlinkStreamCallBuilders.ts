@@ -59,14 +59,20 @@ class ZlinkStreamCallBuilderState {
 
   ensureNotExecuted(): void {
     if (this.executed) {
-      throw connectorError(ZlinkStreamErrorCode.ValidationFailed, 'Builder instances can be executed only once.');
+      throw connectorError(
+        ZlinkStreamErrorCode.ValidationFailed,
+        'Builder instances can be executed only once.'
+      );
     }
     this.executed = true;
   }
 
   resolveMessageName(): string {
     if (this.name === undefined) {
-      throw connectorError(ZlinkStreamErrorCode.ValidationFailed, 'Message name is required when the encoded stream payload has no message type.');
+      throw connectorError(
+        ZlinkStreamErrorCode.ValidationFailed,
+        'Message name is required when the encoded stream payload has no message type.'
+      );
     }
     return this.name;
   }
@@ -92,9 +98,10 @@ export class ZlinkStreamSendBuilder implements ZlinkStreamSendCall {
   metadata(key: string, value: string): this;
   metadata(metadata: ZlinkStreamMetadata): this;
   metadata(keyOrMetadata: string | ZlinkStreamMetadata, value?: string): this {
-    this.state.metadata = typeof keyOrMetadata === 'string'
-      ? this.state.metadata.with(keyOrMetadata, value ?? '')
-      : keyOrMetadata;
+    this.state.metadata =
+      typeof keyOrMetadata === 'string'
+        ? this.state.metadata.with(keyOrMetadata, value ?? '')
+        : keyOrMetadata;
     return this;
   }
 
@@ -144,9 +151,10 @@ export class ZlinkStreamRequestBuilder implements ZlinkStreamRequestCall {
   metadata(key: string, value: string): this;
   metadata(metadata: ZlinkStreamMetadata): this;
   metadata(keyOrMetadata: string | ZlinkStreamMetadata, value?: string): this {
-    this.state.metadata = typeof keyOrMetadata === 'string'
-      ? this.state.metadata.with(keyOrMetadata, value ?? '')
-      : keyOrMetadata;
+    this.state.metadata =
+      typeof keyOrMetadata === 'string'
+        ? this.state.metadata.with(keyOrMetadata, value ?? '')
+        : keyOrMetadata;
     return this;
   }
 
@@ -168,7 +176,8 @@ export class ZlinkStreamRequestBuilder implements ZlinkStreamRequestCall {
   submit<TReply = unknown>(signal?: AbortSignal): Promise<TReply>;
   submit(callback: (result: ZlinkStreamResultOf<ZlinkStreamEncodedPayload>) => void): void;
   submit<TReply = unknown>(
-    signalOrCallback?: AbortSignal | ((result: ZlinkStreamResultOf<ZlinkStreamEncodedPayload>) => void)
+    signalOrCallback?:
+      AbortSignal | ((result: ZlinkStreamResultOf<ZlinkStreamEncodedPayload>) => void)
   ): Promise<TReply> | void {
     this.state.ensureNotExecuted();
     const operation = this.connector.requestEncoded(
@@ -187,7 +196,9 @@ export class ZlinkStreamRequestBuilder implements ZlinkStreamRequestCall {
       );
       return;
     }
-    return operation.then((value) => (this.connector.options.codec ?? zlinkStreamJsonCodec).decode<TReply>(value));
+    return operation.then((value) =>
+      (this.connector.options.codec ?? zlinkStreamJsonCodec).decode<TReply>(value)
+    );
   }
 
   submitEncoded(signal?: AbortSignal): Promise<ZlinkStreamEncodedPayload> {
@@ -204,7 +215,9 @@ export class ZlinkStreamRequestBuilder implements ZlinkStreamRequestCall {
   }
 }
 
-export class ZlinkStreamWaitBuilder<TPayload = ZlinkStreamEncodedPayload> implements ZlinkStreamWaitCall<TPayload> {
+export class ZlinkStreamWaitBuilder<
+  TPayload = ZlinkStreamEncodedPayload
+> implements ZlinkStreamWaitCall<TPayload> {
   private executed = false;
   private timeoutMs: number | undefined;
   private predicate: (message: ZlinkStreamMessage<TPayload>) => boolean = () => true;
@@ -229,7 +242,12 @@ export class ZlinkStreamWaitBuilder<TPayload = ZlinkStreamEncodedPayload> implem
   async submit(signal?: AbortSignal): Promise<ZlinkStreamMessage<TPayload>> {
     this.markExecuted();
     const timeoutMs = this.timeoutMs ?? this.connector.options.waitTimeoutMs;
-    const message = await this.connector.waitForMessage(this.name, timeoutMs, this.predicate, signal);
+    const message = await this.connector.waitForMessage(
+      this.name,
+      timeoutMs,
+      this.predicate,
+      signal
+    );
     if (message === undefined) {
       // Spec stream-connector 32 §10.1.1: nothing arriving inside the window
       // is a violated observation, not a request that got no reply.
@@ -243,7 +261,10 @@ export class ZlinkStreamWaitBuilder<TPayload = ZlinkStreamEncodedPayload> implem
 
   private ensureConfigurable(): void {
     if (this.executed) {
-      throw connectorError(ZlinkStreamErrorCode.ValidationFailed, 'Builder instances can be executed only once.');
+      throw connectorError(
+        ZlinkStreamErrorCode.ValidationFailed,
+        'Builder instances can be executed only once.'
+      );
     }
   }
 

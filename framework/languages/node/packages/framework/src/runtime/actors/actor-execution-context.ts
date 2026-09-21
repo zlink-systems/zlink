@@ -27,10 +27,12 @@ export async function runZLinkActorExecution<T>(
   });
 }
 
-export function currentZLinkActorExecution(): Readonly<{
-  actorId: string;
-  spotId?: unknown;
-}> | undefined {
+export function currentZLinkActorExecution():
+  | Readonly<{
+      actorId: string;
+      spotId?: unknown;
+    }>
+  | undefined {
   const context = actorExecutionStorage.getStore();
   return context?.active === true
     ? { actorId: context.actorId, spotId: context.spotId }

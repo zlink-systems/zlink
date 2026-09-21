@@ -120,8 +120,7 @@ struct spot_actor_leave_route_command_t
 /* Advertised inbound chunk-size cap (bytes) this node offers for
  * direct-transfer relocation payloads bound for actors admitted through
  * spot_actor_join_route_reply_t. */
-inline constexpr std::uint64_t
-  spot_actor_join_advertised_receive_chunk_limit_bytes = 32768;
+inline constexpr std::uint64_t spot_actor_join_advertised_receive_chunk_limit_bytes = 32768;
 
 struct spot_actor_join_route_reply_t
 {
@@ -243,10 +242,9 @@ void from_json (const nlohmann::json &json, actor_bound_session_bind_route_reque
 void to_json (nlohmann::json &json, const actor_bound_session_route_reply_t &value);
 void from_json (const nlohmann::json &json, actor_bound_session_route_reply_t &value);
 
-result_t<zlink::message_t> encode_actor_bound_session_frame (
-  stream_codec_t codec,
-  std::string packet_name,
-  const zlink::message_t &payload);
+result_t<zlink::message_t> encode_actor_bound_session_frame (stream_codec_t codec,
+                                                             std::string packet_name,
+                                                             const zlink::message_t &payload);
 
 actor_ref_t actor_ref_from_spot_route (const spot_actor_admission_route_request_t &request);
 actor_ref_t actor_ref_from_spot_route (const spot_actor_commit_route_request_t &request);
@@ -255,15 +253,13 @@ spot_actor_join_route_reply_t make_spot_actor_join_route_reply (const actor_join
 
 actor_join_reply_t actor_join_reply_from_spot_route (const spot_actor_join_route_reply_t &reply);
 
-spot_actor_packet_route_request_t
-make_spot_actor_packet_route_request (const actor_ref_t &actor_ref,
-                                      spot_id_t spot_id,
-                                      std::string_view packet_name,
-                                      const zlink::message_t &payload,
-                                      const spot_inbound_message_t &metadata,
-                                      std::optional<runtime::protocol::
-                                        actor_route_fence_t> target_fence =
-                                        std::nullopt);
+spot_actor_packet_route_request_t make_spot_actor_packet_route_request (
+  const actor_ref_t &actor_ref,
+  spot_id_t spot_id,
+  std::string_view packet_name,
+  const zlink::message_t &payload,
+  const spot_inbound_message_t &metadata,
+  std::optional<runtime::protocol::actor_route_fence_t> target_fence = std::nullopt);
 
 actor_ref_t actor_ref_from_spot_route (const spot_actor_packet_route_request_t &request);
 
@@ -272,11 +268,11 @@ make_spot_actor_disconnect_route_request (const actor_ref_t &actor_ref);
 
 actor_ref_t actor_ref_from_spot_route (const spot_actor_disconnect_route_request_t &request);
 
-actor_bound_session_route_request_t make_actor_bound_session_route_request (
-  const actor_ref_t &actor_ref,
-  std::string_view packet_name,
-  stream_codec_t codec,
-  const zlink::message_t &payload);
+actor_bound_session_route_request_t
+make_actor_bound_session_route_request (const actor_ref_t &actor_ref,
+                                        std::string_view packet_name,
+                                        stream_codec_t codec,
+                                        const zlink::message_t &payload);
 
 actor_ref_t actor_ref_from_bound_session_route (const actor_bound_session_route_request_t &request);
 actor_ref_t

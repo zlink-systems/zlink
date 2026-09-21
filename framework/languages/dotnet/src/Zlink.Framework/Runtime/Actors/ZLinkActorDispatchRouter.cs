@@ -7,32 +7,31 @@ namespace Zlink.Framework.Runtime.Actors;
 internal sealed class ZLinkActorDispatchRouter(
     ZLinkFrameworkRuntime runtime,
     ZLinkActorSessionRegistry actorSessions,
-    Func<IZLinkActor, ZLinkActorRuntimeState, ZLinkActorContext> ensureActorContext)
+    Func<IZLinkActor, ZLinkActorRuntimeState, ZLinkActorContext> ensureActorContext
+)
 {
     private readonly ZLinkDispatchErrorReporter _dispatchErrors = new(
         runtime.Registration.DispatchOptions,
         runtime.Services.GetService<ILoggerFactory>()?.CreateLogger<ZLinkActorDispatchRouter>(),
-        runtime);
+        runtime
+    );
 
     public async ValueTask SubmitByIdAsync(
         string actorId,
         ZlinkStreamHeader header,
         Message payload,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default
+    )
     {
-        var state = actorSessions.GetOrCreate(
-            ZLinkActorId.FromBoundary(actorId, nameof(actorId)));
-        var actor = state.Actor
-                    ?? throw new ZLinkFrameworkException(
-                        ZLinkFrameworkErrorKind.NotFound,
-                        $"Actor '{actorId}' is not active.");
+        var state = actorSessions.GetOrCreate(ZLinkActorId.FromBoundary(actorId, nameof(actorId)));
+        var actor =
+            state.Actor
+            ?? throw new ZLinkFrameworkException(
+                ZLinkFrameworkErrorKind.NotFound,
+                $"Actor '{actorId}' is not active."
+            );
 
-        await Async(
-                actor,
-                header,
-                payload,
-                relocationReplay: false,
-                cancellationToken)
+        await Async(actor, header, payload, relocationReplay: false, cancellationToken)
             .ConfigureAwait(false);
     }
 
@@ -41,14 +40,16 @@ internal sealed class ZLinkActorDispatchRouter(
         ZlinkStreamHeader header,
         Message payload,
         bool relocationReplay,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default
+    )
     {
-        var state = actorSessions.GetOrCreate(
-            ZLinkActorId.FromBoundary(actorId, nameof(actorId)));
-        var actor = state.Actor
-                    ?? throw new ZLinkFrameworkException(
-                        ZLinkFrameworkErrorKind.NotFound,
-                        $"Actor '{actorId}' is not active.");
+        var state = actorSessions.GetOrCreate(ZLinkActorId.FromBoundary(actorId, nameof(actorId)));
+        var actor =
+            state.Actor
+            ?? throw new ZLinkFrameworkException(
+                ZLinkFrameworkErrorKind.NotFound,
+                $"Actor '{actorId}' is not active."
+            );
 
         return await SubmitForReplyCoreAsync(
                 actor,
@@ -56,7 +57,8 @@ internal sealed class ZLinkActorDispatchRouter(
                 header,
                 payload,
                 relocationReplay,
-                cancellationToken)
+                cancellationToken
+            )
             .ConfigureAwait(false);
     }
 
@@ -65,18 +67,14 @@ internal sealed class ZLinkActorDispatchRouter(
         ZlinkStreamHeader header,
         Message payload,
         bool relocationReplay,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default
+    )
     {
         var state = actorSessions.GetOrCreate(
-            ZLinkActorId.FromBoundary(actor.Context.ActorId, nameof(actor)));
+            ZLinkActorId.FromBoundary(actor.Context.ActorId, nameof(actor))
+        );
 
-        await Async(
-                actor,
-                state,
-                header,
-                payload,
-                relocationReplay,
-                cancellationToken)
+        await Async(actor, state, header, payload, relocationReplay, cancellationToken)
             .ConfigureAwait(false);
     }
 
@@ -86,57 +84,71 @@ internal sealed class ZLinkActorDispatchRouter(
         ZlinkStreamHeader header,
         Message payload,
         bool relocationReplay,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default
+    )
     {
         using var flow = ZLinkFlowContext.Enter(
             header.FlowId,
-            header.FlowOrigin is { } streamOrigin ? ZLinkStreamHeaderCodec.ToFrameworkOrigin(streamOrigin) : null,
+            header.FlowOrigin is { } streamOrigin
+                ? ZLinkStreamHeaderCodec.ToFrameworkOrigin(streamOrigin)
+                : null,
             _dispatchErrors.Flow.CaptureEnabled,
-            ZLinkFlowOrigin.Inbound);
+            ZLinkFlowOrigin.Inbound
+        );
         var shouldPrune = false;
         ensureActorContext(actor, state);
 
         try
         {
-            shouldPrune = await state.ExecuteDispatchAsync(
+            shouldPrune = await state
+                .ExecuteDispatchAsync(
                     header,
-                    ct => SubmitByCurrentLocationAsync(
-                        actor,
-                        state,
-                        header,
-                        payload,
-                        relocationReplay,
-                        ct),
+                    ct =>
+                        SubmitByCurrentLocationAsync(
+                            actor,
+                            state,
+                            header,
+                            payload,
+                            relocationReplay,
+                            ct
+                        ),
                     countAsPendingRequest: false,
                     allowRelocationReplay: relocationReplay,
-                    cancellationToken: cancellationToken)
+                    cancellationToken: cancellationToken
+                )
                 .ConfigureAwait(false);
         }
         finally
         {
-            if (shouldPrune) actorSessions.TryRemove(state.RuntimeActorId, state);
+            if (shouldPrune)
+                actorSessions.TryRemove(state.RuntimeActorId, state);
         }
     }
 
     public async ValueTask NotifyDisconnectedByIdAsync(
         string actorId,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default
+    )
     {
         using var flow = ZLinkFlowContext.Enter(
             null,
             null,
             _dispatchErrors.Flow.CaptureEnabled,
-            ZLinkFlowOrigin.Lifecycle);
-        var state = actorSessions.GetOrCreate(
-            ZLinkActorId.FromBoundary(actorId, nameof(actorId)));
-        var actor = state.Actor
-                    ?? throw new ZLinkFrameworkException(
-                        ZLinkFrameworkErrorKind.NotFound,
-                        $"Actor '{actorId}' is not active.");
+            ZLinkFlowOrigin.Lifecycle
+        );
+        var state = actorSessions.GetOrCreate(ZLinkActorId.FromBoundary(actorId, nameof(actorId)));
+        var actor =
+            state.Actor
+            ?? throw new ZLinkFrameworkException(
+                ZLinkFrameworkErrorKind.NotFound,
+                $"Actor '{actorId}' is not active."
+            );
 
-        await state.ExecuteLifecycleAsync(
+        await state
+            .ExecuteLifecycleAsync(
                 ct => NotifyDisconnectedByCurrentLocationAsync(actor, state, ct),
-                cancellationToken: cancellationToken)
+                cancellationToken: cancellationToken
+            )
             .ConfigureAwait(false);
     }
 
@@ -146,25 +158,33 @@ internal sealed class ZLinkActorDispatchRouter(
         ZlinkStreamHeader header,
         Message payload,
         bool relocationReplay,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken
+    )
     {
         using var flow = ZLinkFlowContext.Enter(
             header.FlowId,
-            header.FlowOrigin is { } streamOrigin ? ZLinkStreamHeaderCodec.ToFrameworkOrigin(streamOrigin) : null,
+            header.FlowOrigin is { } streamOrigin
+                ? ZLinkStreamHeaderCodec.ToFrameworkOrigin(streamOrigin)
+                : null,
             _dispatchErrors.Flow.CaptureEnabled,
-            ZLinkFlowOrigin.Inbound);
-        return await state.ExecuteDispatchAsync(
+            ZLinkFlowOrigin.Inbound
+        );
+        return await state
+            .ExecuteDispatchAsync(
                 header,
-                ct => SubmitByCurrentLocationForReplyAsync(
-                    actor,
-                    state,
-                    header,
-                    payload,
-                    relocationReplay,
-                    ct),
+                ct =>
+                    SubmitByCurrentLocationForReplyAsync(
+                        actor,
+                        state,
+                        header,
+                        payload,
+                        relocationReplay,
+                        ct
+                    ),
                 countAsPendingRequest: true,
                 allowRelocationReplay: relocationReplay,
-                cancellationToken: cancellationToken)
+                cancellationToken: cancellationToken
+            )
             .ConfigureAwait(false);
     }
 
@@ -174,14 +194,9 @@ internal sealed class ZLinkActorDispatchRouter(
         ZlinkStreamHeader header,
         Message payload,
         bool relocationReplay,
-        CancellationToken cancellationToken = default) =>
-        SubmitForReplyCoreAsync(
-            actor,
-            state,
-            header,
-            payload,
-            relocationReplay,
-            cancellationToken);
+        CancellationToken cancellationToken = default
+    ) =>
+        SubmitForReplyCoreAsync(actor, state, header, payload, relocationReplay, cancellationToken);
 
     private async ValueTask<bool> SubmitByCurrentLocationAsync(
         IZLinkActor actor,
@@ -189,46 +204,46 @@ internal sealed class ZLinkActorDispatchRouter(
         ZlinkStreamHeader header,
         Message payload,
         bool relocationReplay,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken
+    )
     {
-        var placement = await state.ExecuteLockedAsync(
-            () => state.SelectPlacementLocked(true),
-            cancellationToken).ConfigureAwait(false);
+        var placement = await state
+            .ExecuteLockedAsync(() => state.SelectPlacementLocked(true), cancellationToken)
+            .ConfigureAwait(false);
 
         if (placement.Activation is null)
         {
-            var handled = await runtime.TrySubmitEntrySpotActorAsync(
-                    actor,
-                    state,
-                    header,
-                    payload,
-                    cancellationToken)
+            var handled = await runtime
+                .TrySubmitEntrySpotActorAsync(actor, state, header, payload, cancellationToken)
                 .ConfigureAwait(false);
             if (!handled)
                 ReportMissingHandler(
                     actor,
                     header,
                     ZLinkDispatchMessageKind.ActorSend,
-                    ZLinkDispatchErrorAction.Drop);
+                    ZLinkDispatchErrorAction.Drop
+                );
             return placement.Prune;
         }
 
-        var replayAdmission = relocationReplay
-            ? ZLinkSpotRelocationReplayScope.Current
-            : null;
-        if (relocationReplay
+        var replayAdmission = relocationReplay ? ZLinkSpotRelocationReplayScope.Current : null;
+        if (
+            relocationReplay
             && replayAdmission is null
-            && placement.Activation.ExecutionMode
-               != ZLinkUserSpotExecutionMode.PerActor)
+            && placement.Activation.ExecutionMode != ZLinkUserSpotExecutionMode.PerActor
+        )
             throw new InvalidOperationException(
-                "SPOT Actor relocation replay has no target admission.");
-        await placement.Activation.SubmitActorAsync(
+                "SPOT Actor relocation replay has no target admission."
+            );
+        await placement
+            .Activation.SubmitActorAsync(
                 actor,
                 state,
                 header,
                 payload,
                 replayAdmission,
-                cancellationToken)
+                cancellationToken
+            )
             .ConfigureAwait(false);
         return placement.Prune;
     }
@@ -239,51 +254,60 @@ internal sealed class ZLinkActorDispatchRouter(
         ZlinkStreamHeader header,
         Message payload,
         bool relocationReplay,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken
+    )
     {
-        var placement = await state.ExecuteLockedAsync(
-            () => state.SelectPlacementLocked(false),
-            cancellationToken).ConfigureAwait(false);
+        var placement = await state
+            .ExecuteLockedAsync(() => state.SelectPlacementLocked(false), cancellationToken)
+            .ConfigureAwait(false);
         ZLinkFrameworkDebugLog.SpotDiscovery(
             $"actor_dispatch_placement actor={actor.Context.ActorId} "
-            + $"correlation_id={header.CorrelationId} "
-            + $"activation={placement.Activation?.SpotId ?? "<entry>"} "
-            + $"node={placement.Activation?.NodeRid.ToString() ?? "<entry>"}");
+                + $"correlation_id={header.CorrelationId} "
+                + $"activation={placement.Activation?.SpotId ?? "<entry>"} "
+                + $"node={placement.Activation?.NodeRid.ToString() ?? "<entry>"}"
+        );
 
         if (placement.Activation is not null)
         {
-            var replayAdmission = relocationReplay
-                ? ZLinkSpotRelocationReplayScope.Current
-                : null;
-            if (relocationReplay
+            var replayAdmission = relocationReplay ? ZLinkSpotRelocationReplayScope.Current : null;
+            if (
+                relocationReplay
                 && replayAdmission is null
-                && placement.Activation.ExecutionMode
-                   != ZLinkUserSpotExecutionMode.PerActor)
+                && placement.Activation.ExecutionMode != ZLinkUserSpotExecutionMode.PerActor
+            )
                 throw new InvalidOperationException(
-                    "SPOT Actor relocation replay has no target admission.");
-            var reply = await placement.Activation.SubmitActorForReplyAsync(
+                    "SPOT Actor relocation replay has no target admission."
+                );
+            var reply = await placement
+                .Activation.SubmitActorForReplyAsync(
                     actor,
                     state,
                     header,
                     payload,
                     replayAdmission,
-                    cancellationToken)
+                    cancellationToken
+                )
                 .ConfigureAwait(false);
             ZLinkFrameworkDebugLog.SpotDiscovery(
                 $"actor_dispatch_placement_completed actor={actor.Context.ActorId} "
-                + $"correlation_id={header.CorrelationId} reply={reply is not null}");
-            return reply ?? throw new InvalidOperationException(
-                $"Actor request handler for '{header.Name}' returned no reply.");
+                    + $"correlation_id={header.CorrelationId} reply={reply is not null}"
+            );
+            return reply
+                ?? throw new InvalidOperationException(
+                    $"Actor request handler for '{header.Name}' returned no reply."
+                );
         }
 
-        var entryResult = await runtime.TrySubmitEntrySpotActorForReplyAsync(
+        var entryResult = await runtime
+            .TrySubmitEntrySpotActorForReplyAsync(
                 actor,
                 state,
                 header,
                 payload,
                 callerOwnsDispatchTurn: true,
                 relocationReplay: false,
-                cancellationToken)
+                cancellationToken
+            )
             .ConfigureAwait(false);
         if (entryResult.Handled)
         {
@@ -291,43 +315,46 @@ internal sealed class ZLinkActorDispatchRouter(
                 return reply;
 
             var replyPathError = new InvalidOperationException(
-                $"Entry Spot actor request handler for '{header.Name}' returned no reply.");
+                $"Entry Spot actor request handler for '{header.Name}' returned no reply."
+            );
             ReportReplyPathMissing(actor, header, replyPathError);
             return ZLinkActorReply.FromError(replyPathError);
         }
 
         var error = new ZLinkFrameworkException(
             ZLinkFrameworkErrorKind.NotFound,
-            $"No Spot actor request handler is registered for '{header.Name}'.");
+            $"No Spot actor request handler is registered for '{header.Name}'."
+        );
         ReportMissingHandler(
             actor,
             header,
             ZLinkDispatchMessageKind.ActorRequest,
             ZLinkDispatchErrorAction.ReplyError,
-            error);
+            error
+        );
         return ZLinkActorReply.FromError(error);
     }
 
     private async ValueTask NotifyDisconnectedByCurrentLocationAsync(
         IZLinkActor actor,
         ZLinkActorRuntimeState state,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken
+    )
     {
-        var placement = await state.ExecuteLockedAsync(
-            () => state.SelectPlacementLocked(false),
-            cancellationToken).ConfigureAwait(false);
+        var placement = await state
+            .ExecuteLockedAsync(() => state.SelectPlacementLocked(false), cancellationToken)
+            .ConfigureAwait(false);
 
         if (placement.Activation is not null)
         {
-            await placement.Activation.NotifyActorDisconnectedAsync(actor, cancellationToken)
+            await placement
+                .Activation.NotifyActorDisconnectedAsync(actor, cancellationToken)
                 .ConfigureAwait(false);
             return;
         }
 
-        await runtime.TryNotifyEntrySpotActorDisconnectedAsync(
-                actor,
-                null,
-                cancellationToken)
+        await runtime
+            .TryNotifyEntrySpotActorDisconnectedAsync(actor, null, cancellationToken)
             .ConfigureAwait(false);
     }
 
@@ -336,7 +363,8 @@ internal sealed class ZLinkActorDispatchRouter(
         ZlinkStreamHeader header,
         ZLinkDispatchMessageKind kind,
         ZLinkDispatchErrorAction action,
-        Exception? exception = null)
+        Exception? exception = null
+    )
     {
         var scope = new ZLinkDispatchFlowScope(
             ZLinkDispatchErrorSurface.SpotActor,
@@ -344,18 +372,17 @@ internal sealed class ZLinkActorDispatchRouter(
             kind,
             header.Name,
             correlationId: header.CorrelationId,
-            actorId: actor.Context.ActorId);
+            actorId: actor.Context.ActorId
+        );
 
-        scope.HandlerMissing(
-            _dispatchErrors,
-            action,
-            exception);
+        scope.HandlerMissing(_dispatchErrors, action, exception);
     }
 
     private void ReportReplyPathMissing(
         IZLinkActor actor,
         ZlinkStreamHeader header,
-        Exception exception)
+        Exception exception
+    )
     {
         var scope = new ZLinkDispatchFlowScope(
             ZLinkDispatchErrorSurface.SpotActor,
@@ -363,7 +390,8 @@ internal sealed class ZLinkActorDispatchRouter(
             ZLinkDispatchMessageKind.ActorRequest,
             header.Name,
             correlationId: header.CorrelationId,
-            actorId: actor.Context.ActorId);
+            actorId: actor.Context.ActorId
+        );
 
         scope.ReplyPathMissing(_dispatchErrors, exception);
     }

@@ -2,9 +2,10 @@ import type { MonitorEvent } from '@zlink-systems/zlink';
 import type { ZLinkBackendSocketMonitor, ZLinkBackendSocketMonitorEvent } from '../contracts';
 import { zlink } from './node-backend-adapter-support';
 
-export function wrapMonitorSocket(
-  nativeInstance: { close(): void; recv(flags?: number): MonitorEvent | null }
-): ZLinkBackendSocketMonitor {
+export function wrapMonitorSocket(nativeInstance: {
+  close(): void;
+  recv(flags?: number): MonitorEvent | null;
+}): ZLinkBackendSocketMonitor {
   const handlers = new Set<(event: ZLinkBackendSocketMonitorEvent) => void>();
   return {
     nativeInstance,

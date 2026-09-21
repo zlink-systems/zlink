@@ -6,7 +6,7 @@ import type {
   ZLinkLocationTopologyEntry,
   ZLinkLocationTopologyFilter,
   ZLinkMeshNodeDescriptor,
-  ZLinkPageRequest,
+  ZLinkPageRequest
 } from './Models';
 import type { ZLinkPlacementObjectKind } from './Authority';
 
@@ -52,5 +52,9 @@ export interface ZLinkLocationRuntimeQuery {
     spotId: import('../Common').SpotId,
     signal?: AbortSignal
   ): Promise<ZLinkLocationObjectEntry | undefined>;
-  listObjectLocations(filter: ZLinkLocationObjectFilter, page?: ZLinkPageRequest, signal?: AbortSignal): Promise<ZLinkLocationPage<ZLinkLocationObjectEntry>>;
+  listObjectLocations(
+    filter: ZLinkLocationObjectFilter,
+    page?: ZLinkPageRequest,
+    signal?: AbortSignal
+  ): Promise<ZLinkLocationPage<ZLinkLocationObjectEntry>>;
 }

@@ -44,9 +44,9 @@ export class ApplicationJobReceiveFlowController<TNativeState> {
     private readonly toNativeState: (state: ApplicationJobPressureState) => TNativeState,
     private readonly failureSink?: (error: unknown) => void
   ) {
-    this.unregisterPressureListener = queue?.onPressureStateChange?.(
-      (state, sequence) => this.apply(state, sequence)
-    ) ?? (() => undefined);
+    this.unregisterPressureListener =
+      queue?.onPressureStateChange?.((state, sequence) => this.apply(state, sequence)) ??
+      (() => undefined);
   }
 
   register(target: ApplicationJobReceiveFlowTarget<TNativeState>): boolean {
@@ -106,9 +106,9 @@ export class ApplicationJobReceiveFlowController<TNativeState> {
   private currentTransition(): ApplicationJobPressureTransition | undefined {
     const snapshot = this.queue?.pressureTransition?.();
     const fallbackState = snapshot === undefined ? this.queue?.pressureState?.() : undefined;
-    const current = snapshot ?? (fallbackState === undefined
-      ? undefined
-      : { state: fallbackState, sequence: 0n });
+    const current =
+      snapshot ??
+      (fallbackState === undefined ? undefined : { state: fallbackState, sequence: 0n });
     if (this.latestTransition === undefined) return current;
     if (current === undefined || this.latestTransition.sequence > current.sequence) {
       return this.latestTransition;
@@ -117,8 +117,10 @@ export class ApplicationJobReceiveFlowController<TNativeState> {
   }
 
   private rememberLatest(transition: ApplicationJobPressureTransition): void {
-    if (this.latestTransition === undefined
-        || transition.sequence > this.latestTransition.sequence) {
+    if (
+      this.latestTransition === undefined ||
+      transition.sequence > this.latestTransition.sequence
+    ) {
       this.latestTransition = transition;
     }
   }
@@ -129,18 +131,19 @@ export class ApplicationJobReceiveFlowController<TNativeState> {
     transition: ApplicationJobPressureTransition,
     throwOnFailure: boolean
   ): void {
-    if (this.targets.get(target) !== targetState
-        || transition.sequence <= targetState.appliedSequence
-        || (targetState.pending !== undefined
-          && transition.sequence <= targetState.pending.sequence)) return;
+    if (
+      this.targets.get(target) !== targetState ||
+      transition.sequence <= targetState.appliedSequence ||
+      (targetState.pending !== undefined && transition.sequence <= targetState.pending.sequence)
+    )
+      return;
     targetState.pending = transition;
     if (targetState.applying) return;
 
     targetState.applying = true;
     let firstFailure: unknown;
     try {
-      while (this.targets.get(target) === targetState
-          && targetState.pending !== undefined) {
+      while (this.targets.get(target) === targetState && targetState.pending !== undefined) {
         const next = targetState.pending;
         targetState.pending = undefined;
         if (next.sequence <= targetState.appliedSequence) continue;

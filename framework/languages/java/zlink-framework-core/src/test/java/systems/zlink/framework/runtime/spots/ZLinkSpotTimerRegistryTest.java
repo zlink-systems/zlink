@@ -1,6 +1,4 @@
 package systems.zlink.framework.runtime.spots;
-import systems.zlink.framework.errors.ZLinkFrameworkErrorKind;
-import systems.zlink.framework.errors.ZLinkFrameworkException;
 
 import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertEquals;
@@ -9,11 +7,23 @@ import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
+import org.junit.jupiter.api.Test;
+
+import systems.zlink.framework.actors.ZLinkActor;
+import systems.zlink.framework.errors.ZLinkFrameworkErrorKind;
+import systems.zlink.framework.errors.ZLinkFrameworkException;
+import systems.zlink.framework.runtime.internal.handlers.ZLinkHandlerActivator;
+import systems.zlink.framework.runtime.internal.handlers.ZLinkHandlerInstanceOwner;
+import systems.zlink.framework.spots.ZLinkSpot;
+import systems.zlink.framework.spots.ZLinkSpotContext;
+import systems.zlink.framework.spots.ZLinkTimer;
+import systems.zlink.framework.spots.ZLinkTimerTick;
+
 import java.time.Duration;
 import java.util.List;
-import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionStage;
+import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.Delayed;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.Executors;
@@ -26,22 +36,14 @@ import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.Supplier;
-import org.junit.jupiter.api.Test;
-import systems.zlink.contracts.core.RoutingId;
-import systems.zlink.framework.actors.ZLinkActor;
-import systems.zlink.framework.spots.ZLinkSpot;
-import systems.zlink.framework.spots.ZLinkSpotContext;
-import systems.zlink.framework.spots.ZLinkTimer;
-import systems.zlink.framework.spots.ZLinkTimerTick;
-import systems.zlink.framework.runtime.internal.handlers.ZLinkHandlerActivator;
-import systems.zlink.framework.runtime.internal.handlers.ZLinkHandlerInstanceOwner;
 
 final class ZLinkSpotTimerRegistryTest {
     @Test
     void emptyCanonicalTimerEnvelopeRestoresAsNoTimers() {
-        var decoded = ZLinkSpotTimerRelocationEnvelope.decode(
-            ZLinkSpotTimerRelocationEnvelope.encodeCanonical(List.of()),
-            ignored -> TimerHandler.class);
+        var decoded =
+                ZLinkSpotTimerRelocationEnvelope.decode(
+                        ZLinkSpotTimerRelocationEnvelope.encodeCanonical(List.of()),
+                        ignored -> TimerHandler.class);
 
         assertEquals(List.of(), decoded.timers());
     }
@@ -53,41 +55,38 @@ final class ZLinkSpotTimerRegistryTest {
         AtomicInteger creates = new AtomicInteger();
         AtomicInteger destroys = new AtomicInteger();
         AtomicInteger preparations = new AtomicInteger();
-        ZLinkHandlerActivator activator = new ZLinkHandlerActivator() {
-            @Override
-            public void prepare(Class<?> handlerType) {
-                preparations.incrementAndGet();
-            }
+        ZLinkHandlerActivator activator =
+                new ZLinkHandlerActivator() {
+                    @Override
+                    public void prepare(Class<?> handlerType) {
+                        preparations.incrementAndGet();
+                    }
 
-            @Override
-            public Object create(Class<?> handlerType) {
-                creates.incrementAndGet();
-                return new CountingTimerHandler(handled);
-            }
+                    @Override
+                    public Object create(Class<?> handlerType) {
+                        creates.incrementAndGet();
+                        return new CountingTimerHandler(handled);
+                    }
 
-            @Override
-            public void destroy(Object instance) {
-                destroys.incrementAndGet();
-            }
-        };
-        ZLinkHandlerInstanceOwner handlers =
-            new ZLinkHandlerInstanceOwner(activator);
-        ZLinkSpotTimerRegistry registry = new ZLinkSpotTimerRegistry(
-            "spot",
-            executor,
-            handlers,
-            List.of(),
-            null,
-            "test",
-            (timerName, operation) -> operation.get());
+                    @Override
+                    public void destroy(Object instance) {
+                        destroys.incrementAndGet();
+                    }
+                };
+        ZLinkHandlerInstanceOwner handlers = new ZLinkHandlerInstanceOwner(activator);
+        ZLinkSpotTimerRegistry registry =
+                new ZLinkSpotTimerRegistry(
+                        "spot",
+                        executor,
+                        handlers,
+                        List.of(),
+                        null,
+                        "test",
+                        (timerName, operation) -> operation.get());
         registry.setSpot(new TestSpot());
 
         try {
-            registry.add(
-                "timer",
-                Duration.ofMillis(1),
-                CountingTimerHandler.class,
-                null);
+            registry.add("timer", Duration.ofMillis(1), CountingTimerHandler.class, null);
             assertEquals(1, preparations.get());
             assertTrue(handled.await(2, TimeUnit.SECONDS));
             assertEquals(1, creates.get());
@@ -100,31 +99,29 @@ final class ZLinkSpotTimerRegistryTest {
     }
 
     @Test
-    void omittedTimerOptionsKeepTickingAfterAnUnhandledException()
-        throws Exception {
-        ScheduledExecutorService executor =
-            Executors.newSingleThreadScheduledExecutor();
+    void omittedTimerOptionsKeepTickingAfterAnUnhandledException() throws Exception {
+        ScheduledExecutorService executor = Executors.newSingleThreadScheduledExecutor();
         AtomicInteger ticks = new AtomicInteger();
-        ZLinkHandlerActivator activator = new ZLinkHandlerActivator() {
-            @Override
-            public Object create(Class<?> handlerType) {
-                return new ThrowingTimerHandler(ticks);
-            }
+        ZLinkHandlerActivator activator =
+                new ZLinkHandlerActivator() {
+                    @Override
+                    public Object create(Class<?> handlerType) {
+                        return new ThrowingTimerHandler(ticks);
+                    }
 
-            @Override
-            public void destroy(Object instance) {
-            }
-        };
-        ZLinkHandlerInstanceOwner handlers =
-            new ZLinkHandlerInstanceOwner(activator);
-        ZLinkSpotTimerRegistry registry = new ZLinkSpotTimerRegistry(
-            "spot",
-            executor,
-            handlers,
-            List.of(),
-            null,
-            "test",
-            (timerName, operation) -> operation.get());
+                    @Override
+                    public void destroy(Object instance) {}
+                };
+        ZLinkHandlerInstanceOwner handlers = new ZLinkHandlerInstanceOwner(activator);
+        ZLinkSpotTimerRegistry registry =
+                new ZLinkSpotTimerRegistry(
+                        "spot",
+                        executor,
+                        handlers,
+                        List.of(),
+                        null,
+                        "test",
+                        (timerName, operation) -> operation.get());
         registry.setSpot(new TestSpot());
 
         try {
@@ -133,16 +130,13 @@ final class ZLinkSpotTimerRegistryTest {
             // stopOnUnhandledException = false (explicit in the C++/.NET/Node
             // interfaces; the Java interface is silent and nothing authorizes
             // true), so a repeating timer keeps ticking after each exception.
-            registry.add(
-                "timer",
-                Duration.ofMillis(5),
-                ThrowingTimerHandler.class,
-                null);
+            registry.add("timer", Duration.ofMillis(5), ThrowingTimerHandler.class, null);
             Thread.sleep(200);
             assertTrue(
-                ticks.get() > 1,
-                "an omitted-options repeating timer must keep ticking after an "
-                    + "unhandled exception; ticks=" + ticks.get());
+                    ticks.get() > 1,
+                    "an omitted-options repeating timer must keep ticking after an "
+                            + "unhandled exception; ticks="
+                            + ticks.get());
         } finally {
             registry.close();
             handlers.close();
@@ -156,17 +150,18 @@ final class ZLinkSpotTimerRegistryTest {
         CountDownLatch handled = new CountDownLatch(1);
         AtomicBoolean enteredDispatch = new AtomicBoolean();
         TimerHandler handler = new TimerHandler(handled, enteredDispatch);
-        ZLinkSpotTimerRegistry registry = new ZLinkSpotTimerRegistry(
-            "spot",
-            executor,
-            ignored -> handler,
-            List.of(),
-            null,
-            "test",
-            (timerName, operation) -> {
-                enteredDispatch.set(true);
-                return operation.get();
-            });
+        ZLinkSpotTimerRegistry registry =
+                new ZLinkSpotTimerRegistry(
+                        "spot",
+                        executor,
+                        ignored -> handler,
+                        List.of(),
+                        null,
+                        "test",
+                        (timerName, operation) -> {
+                            enteredDispatch.set(true);
+                            return operation.get();
+                        });
         registry.setSpot(new TestSpot());
 
         try {
@@ -180,30 +175,26 @@ final class ZLinkSpotTimerRegistryTest {
     }
 
     @Test
-    void concurrentCancelWaitsForRunningCallbackAndSharesCompletion()
-        throws Exception {
-        ScheduledExecutorService executor =
-            Executors.newSingleThreadScheduledExecutor();
+    void concurrentCancelWaitsForRunningCallbackAndSharesCompletion() throws Exception {
+        ScheduledExecutorService executor = Executors.newSingleThreadScheduledExecutor();
         CountDownLatch started = new CountDownLatch(1);
         CompletableFuture<Void> release = new CompletableFuture<>();
-        ZLinkSpotTimerRegistry registry = new ZLinkSpotTimerRegistry(
-            "spot",
-            executor,
-            ignored -> new BlockingTimerHandler(started, release),
-            List.of(),
-            null,
-            "test",
-            (timerName, operation) -> operation.get());
+        ZLinkSpotTimerRegistry registry =
+                new ZLinkSpotTimerRegistry(
+                        "spot",
+                        executor,
+                        ignored -> new BlockingTimerHandler(started, release),
+                        List.of(),
+                        null,
+                        "test",
+                        (timerName, operation) -> operation.get());
         registry.setSpot(new TestSpot());
 
         try {
-            ZLinkTimer timer = registry.add(
-                    "timer",
-                    Duration.ofMillis(1),
-                    BlockingTimerHandler.class,
-                    null)
-                .toCompletableFuture()
-                .get(1, TimeUnit.SECONDS);
+            ZLinkTimer timer =
+                    registry.add("timer", Duration.ofMillis(1), BlockingTimerHandler.class, null)
+                            .toCompletableFuture()
+                            .get(1, TimeUnit.SECONDS);
             assertTrue(started.await(2, TimeUnit.SECONDS));
 
             CompletionStage<Void> first = timer.cancel();
@@ -213,10 +204,8 @@ final class ZLinkSpotTimerRegistryTest {
             assertFalse(second.toCompletableFuture().isDone());
 
             release.complete(null);
-            CompletableFuture.allOf(
-                    first.toCompletableFuture(),
-                    second.toCompletableFuture())
-                .get(1, TimeUnit.SECONDS);
+            CompletableFuture.allOf(first.toCompletableFuture(), second.toCompletableFuture())
+                    .get(1, TimeUnit.SECONDS);
         } finally {
             release.complete(null);
             registry.close();
@@ -226,38 +215,38 @@ final class ZLinkSpotTimerRegistryTest {
 
     @Test
     void concurrentCancelCallersObserveTheSameResourceCleanupFailure() {
-        RuntimeException cleanupFailure =
-            new RuntimeException("timer resource cleanup failed");
-        ScheduledExecutorService executor =
-            new FailingCancelScheduledExecutor(cleanupFailure);
-        ZLinkSpotTimerRegistry registry = new ZLinkSpotTimerRegistry(
-            "spot",
-            executor,
-            ignored -> new PreviousTimerHandler(new AtomicBoolean()),
-            List.of(),
-            null,
-            "test",
-            (timerName, operation) -> operation.get());
+        RuntimeException cleanupFailure = new RuntimeException("timer resource cleanup failed");
+        ScheduledExecutorService executor = new FailingCancelScheduledExecutor(cleanupFailure);
+        ZLinkSpotTimerRegistry registry =
+                new ZLinkSpotTimerRegistry(
+                        "spot",
+                        executor,
+                        ignored -> new PreviousTimerHandler(new AtomicBoolean()),
+                        List.of(),
+                        null,
+                        "test",
+                        (timerName, operation) -> operation.get());
         registry.setSpot(new TestSpot());
 
         try {
-            ZLinkTimer timer = registry.add(
-                    "timer",
-                    Duration.ofHours(1),
-                    PreviousTimerHandler.class,
-                    null)
-                .toCompletableFuture()
-                .join();
+            ZLinkTimer timer =
+                    registry.add("timer", Duration.ofHours(1), PreviousTimerHandler.class, null)
+                            .toCompletableFuture()
+                            .join();
 
             CompletionStage<Void> first = timer.cancel();
             CompletionStage<Void> second = timer.cancel();
             assertSame(first, second);
-            Throwable firstResult = assertThrows(
-                java.util.concurrent.CompletionException.class,
-                () -> first.toCompletableFuture().join()).getCause();
-            Throwable secondResult = assertThrows(
-                java.util.concurrent.CompletionException.class,
-                () -> second.toCompletableFuture().join()).getCause();
+            Throwable firstResult =
+                    assertThrows(
+                                    java.util.concurrent.CompletionException.class,
+                                    () -> first.toCompletableFuture().join())
+                            .getCause();
+            Throwable secondResult =
+                    assertThrows(
+                                    java.util.concurrent.CompletionException.class,
+                                    () -> second.toCompletableFuture().join())
+                            .getCause();
             assertSame(cleanupFailure, firstResult);
             assertSame(firstResult, secondResult);
         } finally {
@@ -271,29 +260,23 @@ final class ZLinkSpotTimerRegistryTest {
         ScheduledExecutorService executor = Executors.newSingleThreadScheduledExecutor();
         CountDownLatch replacementHandled = new CountDownLatch(1);
         AtomicBoolean previousHandled = new AtomicBoolean();
-        ZLinkSpotTimerRegistry registry = new ZLinkSpotTimerRegistry(
-            "spot",
-            executor,
-            type -> type == PreviousTimerHandler.class
-                ? new PreviousTimerHandler(previousHandled)
-                : new ReplacementTimerHandler(replacementHandled),
-            List.of(),
-            null,
-            "test",
-            (timerName, operation) -> operation.get());
+        ZLinkSpotTimerRegistry registry =
+                new ZLinkSpotTimerRegistry(
+                        "spot",
+                        executor,
+                        type ->
+                                type == PreviousTimerHandler.class
+                                        ? new PreviousTimerHandler(previousHandled)
+                                        : new ReplacementTimerHandler(replacementHandled),
+                        List.of(),
+                        null,
+                        "test",
+                        (timerName, operation) -> operation.get());
         registry.setSpot(new TestSpot());
 
         try {
-            registry.add(
-                "timer",
-                Duration.ofMillis(250),
-                PreviousTimerHandler.class,
-                null);
-            registry.add(
-                "timer",
-                Duration.ofMillis(1),
-                ReplacementTimerHandler.class,
-                null);
+            registry.add("timer", Duration.ofMillis(250), PreviousTimerHandler.class, null);
+            registry.add("timer", Duration.ofMillis(1), ReplacementTimerHandler.class, null);
 
             assertTrue(replacementHandled.await(2, TimeUnit.SECONDS));
             Thread.sleep(300);
@@ -305,48 +288,45 @@ final class ZLinkSpotTimerRegistryTest {
     }
 
     @Test
-    void relocationEnvelopeRestoresPendingTickWithoutRunningItAtSource()
-        throws Exception {
-        ScheduledExecutorService sourceExecutor =
-            Executors.newSingleThreadScheduledExecutor();
+    void relocationEnvelopeRestoresPendingTickWithoutRunningItAtSource() throws Exception {
+        ScheduledExecutorService sourceExecutor = Executors.newSingleThreadScheduledExecutor();
         CountDownLatch pending = new CountDownLatch(1);
-        AtomicReference<Supplier<CompletionStage<Void>>> queued =
-            new AtomicReference<>();
+        AtomicReference<Supplier<CompletionStage<Void>>> queued = new AtomicReference<>();
         CompletableFuture<Void> queuedCompletion = new CompletableFuture<>();
         AtomicBoolean sourceHandled = new AtomicBoolean();
-        ZLinkSpotTimerRegistry source = new ZLinkSpotTimerRegistry(
-            "source",
-            sourceExecutor,
-            ignored -> new PreviousTimerHandler(sourceHandled),
-            List.of(),
-            null,
-            "source",
-            (timerName, operation) -> {
-                queued.set(operation);
-                pending.countDown();
-                return queuedCompletion;
-            });
+        ZLinkSpotTimerRegistry source =
+                new ZLinkSpotTimerRegistry(
+                        "source",
+                        sourceExecutor,
+                        ignored -> new PreviousTimerHandler(sourceHandled),
+                        List.of(),
+                        null,
+                        "source",
+                        (timerName, operation) -> {
+                            queued.set(operation);
+                            pending.countDown();
+                            return queuedCompletion;
+                        });
         source.setSpot(new TestSpot());
 
         ZLinkSpotTimerRegistry.FrozenTimers frozen;
         byte[] encoded;
         try {
-            source.add(
-                "timer",
-                Duration.ofMillis(1),
-                PreviousTimerHandler.class,
-                null);
+            source.add("timer", Duration.ofMillis(1), PreviousTimerHandler.class, null);
             assertTrue(pending.await(2, TimeUnit.SECONDS));
             frozen = source.freeze();
             encoded = ZLinkSpotTimerRelocationEnvelope.encode(frozen);
 
-            queued.get().get().whenComplete((ignored, failure) -> {
-                if (failure == null) {
-                    queuedCompletion.complete(null);
-                } else {
-                    queuedCompletion.completeExceptionally(failure);
-                }
-            });
+            queued.get()
+                    .get()
+                    .whenComplete(
+                            (ignored, failure) -> {
+                                if (failure == null) {
+                                    queuedCompletion.complete(null);
+                                } else {
+                                    queuedCompletion.completeExceptionally(failure);
+                                }
+                            });
             queuedCompletion.get(1, TimeUnit.SECONDS);
             assertFalse(sourceHandled.get());
         } finally {
@@ -354,38 +334,35 @@ final class ZLinkSpotTimerRegistryTest {
             sourceExecutor.shutdownNow();
         }
 
-        ScheduledExecutorService targetExecutor =
-            Executors.newSingleThreadScheduledExecutor();
+        ScheduledExecutorService targetExecutor = Executors.newSingleThreadScheduledExecutor();
         CountDownLatch restored = new CountDownLatch(1);
         AtomicReference<ZLinkTimerTick> restoredTick = new AtomicReference<>();
-        ZLinkSpotTimerRegistry target = new ZLinkSpotTimerRegistry(
-            "target",
-            targetExecutor,
-            ignored -> new RestoredTimerHandler(restored, restoredTick),
-            List.of(),
-            null,
-            "target",
-            (timerName, operation) -> operation.get());
+        ZLinkSpotTimerRegistry target =
+                new ZLinkSpotTimerRegistry(
+                        "target",
+                        targetExecutor,
+                        ignored -> new RestoredTimerHandler(restored, restoredTick),
+                        List.of(),
+                        null,
+                        "target",
+                        (timerName, operation) -> operation.get());
         target.setSpot(new TestSpot());
         try {
-            var decoded = ZLinkSpotTimerRelocationEnvelope.decode(
-                encoded,
-                ignored -> RestoredTimerHandler.class);
-            long expectedScheduledIndex = decoded.timers().getFirst()
-                .pendingTick()
-                .orElseThrow()
-                .scheduledIndex();
+            var decoded =
+                    ZLinkSpotTimerRelocationEnvelope.decode(
+                            encoded, ignored -> RestoredTimerHandler.class);
+            long expectedScheduledIndex =
+                    decoded.timers().getFirst().pendingTick().orElseThrow().scheduledIndex();
             target.stageRestore(decoded);
 
-            assertFalse(restored.await(100, TimeUnit.MILLISECONDS),
-                "staged timers must not run before aggregate publication");
+            assertFalse(
+                    restored.await(100, TimeUnit.MILLISECONDS),
+                    "staged timers must not run before aggregate publication");
             target.publishStagedRestore();
 
             assertTrue(restored.await(2, TimeUnit.SECONDS));
             assertEquals(1, restoredTick.get().deliveryIndex());
-            assertEquals(
-                expectedScheduledIndex,
-                restoredTick.get().scheduledIndex());
+            assertEquals(expectedScheduledIndex, restoredTick.get().scheduledIndex());
         } finally {
             target.close();
             targetExecutor.shutdownNow();
@@ -394,34 +371,25 @@ final class ZLinkSpotTimerRegistryTest {
 
     @Test
     void relocationEnvelopeIsCanonicalForScheduledTimers() {
-        ScheduledExecutorService executor =
-            Executors.newSingleThreadScheduledExecutor();
-        ZLinkSpotTimerRegistry registry = new ZLinkSpotTimerRegistry(
-            "spot",
-            executor,
-            ignored -> new PreviousTimerHandler(new AtomicBoolean()),
-            List.of(),
-            null,
-            "test",
-            (timerName, operation) -> operation.get());
+        ScheduledExecutorService executor = Executors.newSingleThreadScheduledExecutor();
+        ZLinkSpotTimerRegistry registry =
+                new ZLinkSpotTimerRegistry(
+                        "spot",
+                        executor,
+                        ignored -> new PreviousTimerHandler(new AtomicBoolean()),
+                        List.of(),
+                        null,
+                        "test",
+                        (timerName, operation) -> operation.get());
         registry.setSpot(new TestSpot());
         try {
-            registry.add(
-                "z-timer",
-                Duration.ofHours(1),
-                PreviousTimerHandler.class,
-                null);
-            registry.add(
-                "a-timer",
-                Duration.ofHours(1),
-                PreviousTimerHandler.class,
-                null);
-            byte[] first = ZLinkSpotTimerRelocationEnvelope.encode(
-                registry.freeze());
-            byte[] second = ZLinkSpotTimerRelocationEnvelope.encode(
-                ZLinkSpotTimerRelocationEnvelope.decode(
-                    first,
-                    ignored -> PreviousTimerHandler.class));
+            registry.add("z-timer", Duration.ofHours(1), PreviousTimerHandler.class, null);
+            registry.add("a-timer", Duration.ofHours(1), PreviousTimerHandler.class, null);
+            byte[] first = ZLinkSpotTimerRelocationEnvelope.encode(registry.freeze());
+            byte[] second =
+                    ZLinkSpotTimerRelocationEnvelope.encode(
+                            ZLinkSpotTimerRelocationEnvelope.decode(
+                                    first, ignored -> PreviousTimerHandler.class));
 
             assertArrayEquals(first, second);
         } finally {
@@ -432,26 +400,27 @@ final class ZLinkSpotTimerRegistryTest {
 
     @Test
     void relocationAbortResumesTheExistingTimerHandle() throws Exception {
-        ScheduledExecutorService executor =
-            Executors.newSingleThreadScheduledExecutor();
+        ScheduledExecutorService executor = Executors.newSingleThreadScheduledExecutor();
         CountDownLatch handled = new CountDownLatch(1);
-        ZLinkSpotTimerRegistry registry = new ZLinkSpotTimerRegistry(
-            "spot",
-            executor,
-            ignored -> new ReplacementTimerHandler(handled),
-            List.of(),
-            null,
-            "test",
-            (timerName, operation) -> operation.get());
+        ZLinkSpotTimerRegistry registry =
+                new ZLinkSpotTimerRegistry(
+                        "spot",
+                        executor,
+                        ignored -> new ReplacementTimerHandler(handled),
+                        List.of(),
+                        null,
+                        "test",
+                        (timerName, operation) -> operation.get());
         registry.setSpot(new TestSpot());
         try {
-            ZLinkTimer timer = registry.add(
-                    "timer",
-                    Duration.ofMillis(100),
-                    ReplacementTimerHandler.class,
-                    null)
-                .toCompletableFuture()
-                .get(1, TimeUnit.SECONDS);
+            ZLinkTimer timer =
+                    registry.add(
+                                    "timer",
+                                    Duration.ofMillis(100),
+                                    ReplacementTimerHandler.class,
+                                    null)
+                            .toCompletableFuture()
+                            .get(1, TimeUnit.SECONDS);
             registry.freeze();
             Thread.sleep(150);
             assertEquals(1, handled.getCount());
@@ -468,11 +437,13 @@ final class ZLinkSpotTimerRegistryTest {
 
     @Test
     void relocationEnvelopeRejectsTrailingBytes() {
-        ZLinkFrameworkException failure = assertThrows(
-            ZLinkFrameworkException.class,
-            () -> ZLinkSpotTimerRelocationEnvelope.decode(
-                new byte[] {0, 1, 2, 3},
-                ignored -> PreviousTimerHandler.class));
+        ZLinkFrameworkException failure =
+                assertThrows(
+                        ZLinkFrameworkException.class,
+                        () ->
+                                ZLinkSpotTimerRelocationEnvelope.decode(
+                                        new byte[] {0, 1, 2, 3},
+                                        ignored -> PreviousTimerHandler.class));
         //  Spec 32-framework-error-model:42 — an unverifiable relocation payload
         //  is DataLost, not a configuration error.
         assertEquals(ZLinkFrameworkErrorKind.DATA_LOST, failure.kind());
@@ -510,16 +481,12 @@ final class ZLinkSpotTimerRegistryTest {
         private final CountDownLatch started;
         private final CompletionStage<Void> release;
 
-        BlockingTimerHandler(
-            CountDownLatch started,
-            CompletionStage<Void> release) {
+        BlockingTimerHandler(CountDownLatch started, CompletionStage<Void> release) {
             this.started = started;
             this.release = release;
         }
 
-        public CompletionStage<Void> handle(
-            ZLinkSpot<?> spot,
-            ZLinkTimerTick tick) {
+        public CompletionStage<Void> handle(ZLinkSpot<?> spot, ZLinkTimerTick tick) {
             started.countDown();
             return release;
         }
@@ -566,9 +533,7 @@ final class ZLinkSpotTimerRegistryTest {
         private final CountDownLatch handled;
         private final AtomicReference<ZLinkTimerTick> tick;
 
-        RestoredTimerHandler(
-            CountDownLatch handled,
-            AtomicReference<ZLinkTimerTick> tick) {
+        RestoredTimerHandler(CountDownLatch handled, AtomicReference<ZLinkTimerTick> tick) {
             this.handled = handled;
             this.tick = tick;
         }
@@ -580,8 +545,7 @@ final class ZLinkSpotTimerRegistryTest {
         }
     }
 
-    private static final class FailingCancelScheduledExecutor
-        extends ScheduledThreadPoolExecutor {
+    private static final class FailingCancelScheduledExecutor extends ScheduledThreadPoolExecutor {
         private final RuntimeException failure;
 
         FailingCancelScheduledExecutor(RuntimeException failure) {
@@ -590,24 +554,16 @@ final class ZLinkSpotTimerRegistryTest {
         }
 
         @Override
-        public ScheduledFuture<?> schedule(
-            Runnable command,
-            long delay,
-            TimeUnit unit) {
-            return new FailingCancelScheduledFuture(
-                super.schedule(command, delay, unit),
-                failure);
+        public ScheduledFuture<?> schedule(Runnable command, long delay, TimeUnit unit) {
+            return new FailingCancelScheduledFuture(super.schedule(command, delay, unit), failure);
         }
     }
 
-    private static final class FailingCancelScheduledFuture
-        implements ScheduledFuture<Object> {
+    private static final class FailingCancelScheduledFuture implements ScheduledFuture<Object> {
         private final ScheduledFuture<?> delegate;
         private final RuntimeException failure;
 
-        FailingCancelScheduledFuture(
-            ScheduledFuture<?> delegate,
-            RuntimeException failure) {
+        FailingCancelScheduledFuture(ScheduledFuture<?> delegate, RuntimeException failure) {
             this.delegate = delegate;
             this.failure = failure;
         }
@@ -618,29 +574,34 @@ final class ZLinkSpotTimerRegistryTest {
             throw failure;
         }
 
-        @Override public boolean isCancelled() {
+        @Override
+        public boolean isCancelled() {
             return delegate.isCancelled();
         }
 
-        @Override public boolean isDone() {
+        @Override
+        public boolean isDone() {
             return delegate.isDone();
         }
 
-        @Override public Object get()
-            throws InterruptedException, ExecutionException {
+        @Override
+        public Object get() throws InterruptedException, ExecutionException {
             return delegate.get();
         }
 
-        @Override public Object get(long timeout, TimeUnit unit)
-            throws InterruptedException, ExecutionException, TimeoutException {
+        @Override
+        public Object get(long timeout, TimeUnit unit)
+                throws InterruptedException, ExecutionException, TimeoutException {
             return delegate.get(timeout, unit);
         }
 
-        @Override public long getDelay(TimeUnit unit) {
+        @Override
+        public long getDelay(TimeUnit unit) {
             return delegate.getDelay(unit);
         }
 
-        @Override public int compareTo(Delayed other) {
+        @Override
+        public int compareTo(Delayed other) {
             return delegate.compareTo(other);
         }
     }
@@ -651,10 +612,13 @@ final class ZLinkSpotTimerRegistryTest {
             return null;
         }
 
-        @Override public CompletionStage<Void> onJoinedActor(ZLinkActor actor) {
+        @Override
+        public CompletionStage<Void> onJoinedActor(ZLinkActor actor) {
             return CompletableFuture.completedFuture(null);
         }
-        @Override public CompletionStage<Void> onLeaveActor(ZLinkActor actor) {
+
+        @Override
+        public CompletionStage<Void> onLeaveActor(ZLinkActor actor) {
             return CompletableFuture.completedFuture(null);
         }
     }

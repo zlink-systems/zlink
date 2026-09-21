@@ -37,20 +37,25 @@ export type FrameworkRuntimeHost = ZLinkNestIntegrationRuntimeHost;
 
 interface FrameworkIntegrationModule {
   readonly ZLinkConfigurationException: new (message: string) => Error;
-  createFrameworkRegistration(options: ZLinkFrameworkRegistrationOptions): ZLinkFrameworkRegistration;
+  createFrameworkRegistration(
+    options: ZLinkFrameworkRegistrationOptions
+  ): ZLinkFrameworkRegistration;
   hasActorManager(registration: ZLinkFrameworkRegistration): boolean;
   hasSpotNode(registration: ZLinkFrameworkRegistration): boolean;
   hasSpotPublisherClient(registration: ZLinkFrameworkRegistration): boolean;
-  createIntegrationDispatchOptionsBuilder(dispatch: ZLinkDispatchOptions): ZLinkDispatchOptionsBuilder;
+  createIntegrationDispatchOptionsBuilder(
+    dispatch: ZLinkDispatchOptions
+  ): ZLinkDispatchOptionsBuilder;
   createIntegrationInboundDispatchOptionsBuilder(
     options: Pick<ZLinkFrameworkRegistrationOptions, 'coreHwm' | 'applicationJobQueue'>
   ): ZLinkInboundDispatchOptions;
   createIntegrationLocationOptionsBuilder(
     options: Partial<ZLinkLocationOptionValues>
   ): ZLinkLocationOptions;
-  createIntegrationStreamCompressionBuilder(
-    options: { disabled?: boolean; codec?: ZLinkStreamCompressionCodec }
-  ): ZLinkStreamCompressionBuilder;
+  createIntegrationStreamCompressionBuilder(options: {
+    disabled?: boolean;
+    codec?: ZLinkStreamCompressionCodec;
+  }): ZLinkStreamCompressionBuilder;
   createIntegrationCodecRegistryBuilder(options: {
     serializers: ZLinkCodecSerializerRegistration[];
     streamCodecs: ZLinkStreamCodecRegistration[];
@@ -87,7 +92,9 @@ interface FrameworkIntegrationModule {
     providerResolver?: ZLinkProviderResolver
   ): ZLinkSpotManager;
   createIntegrationSpotOutbound(runtime: ZLinkNestIntegrationRuntimeHost): ZLinkSpotOutbound;
-  createIntegrationHttpExecutionScheduler(runtime: ZLinkNestIntegrationRuntimeHost): ZLinkHttpExecutionScheduler;
+  createIntegrationHttpExecutionScheduler(
+    runtime: ZLinkNestIntegrationRuntimeHost
+  ): ZLinkHttpExecutionScheduler;
   validateActorTransferTimeout(timeoutMs: number): number;
   validateMessageFollowDuration(timeoutMs: number): number;
   validateSessionReplacementCallbackTimeout(timeoutMs: number): number;
@@ -96,8 +103,15 @@ interface FrameworkIntegrationModule {
     options: { entrySpotType?: Type<ZLinkEntrySpot> },
     entrySpotType: Type<ZLinkEntrySpot>
   ): void;
-  registerSpotFactory(options: { spotFactories?: Type<ZLinkSpot>[] }, spotType: Type<ZLinkSpot>): void;
-  registerActorFactory(options: { actorFactories?: Record<string, Type> }, actorType: string, factoryType: Type): void;
+  registerSpotFactory(
+    options: { spotFactories?: Type<ZLinkSpot>[] },
+    spotType: Type<ZLinkSpot>
+  ): void;
+  registerActorFactory(
+    options: { actorFactories?: Record<string, Type> },
+    actorType: string,
+    factoryType: Type
+  ): void;
   registerIntegrationHandlerFilterScope(
     resolver: ZLinkProviderResolver,
     runner: (

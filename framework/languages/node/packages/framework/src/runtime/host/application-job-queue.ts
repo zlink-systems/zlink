@@ -9,11 +9,7 @@ import {
   type ApplicationJobReceiveFlowTarget
 } from '../application-jobs/receive-flow-controller';
 
-export type ApplicationJobQueueProfileValue =
-  | 'compact'
-  | 'low_latency'
-  | 'balanced'
-  | 'throughput';
+export type ApplicationJobQueueProfileValue = 'compact' | 'low_latency' | 'balanced' | 'throughput';
 
 export interface ApplicationJobQueueOptions {
   readonly profile?: ApplicationJobQueueProfileValue;
@@ -79,35 +75,29 @@ export function resolveApplicationJobQueueConfiguration(
   }
 
   const configuredManualMax = options.maxQueuedApplicationJobs;
-  if (configuredManualMax !== undefined
-      && (typeof configuredManualMax !== 'bigint'
-        || configuredManualMax < 1n
-        || configuredManualMax > MAX_QUEUED_APPLICATION_JOBS)) {
-    throw new RangeError(
-      'maxQueuedApplicationJobs must be a bigint in the range 1..2147483647.'
-    );
+  if (
+    configuredManualMax !== undefined &&
+    (typeof configuredManualMax !== 'bigint' ||
+      configuredManualMax < 1n ||
+      configuredManualMax > MAX_QUEUED_APPLICATION_JOBS)
+  ) {
+    throw new RangeError('maxQueuedApplicationJobs must be a bigint in the range 1..2147483647.');
   }
 
   const processors = effectiveProcessorCount();
   if (typeof processors !== 'bigint' || processors < 1n) {
     throw new RangeError('effectiveProcessorCount must be a positive bigint.');
   }
-  const effectiveMax = configuredManualMax
-    ?? JOBS_PER_PROCESSOR[configuredProfile] * processors;
+  const effectiveMax = configuredManualMax ?? JOBS_PER_PROCESSOR[configuredProfile] * processors;
   if (effectiveMax < 1n || effectiveMax > MAX_QUEUED_APPLICATION_JOBS) {
-    throw new RangeError(
-      'Application job queue profile calculation exceeds the supported range.'
-    );
+    throw new RangeError('Application job queue profile calculation exceeds the supported range.');
   }
 
-  const configuredPauseThresholdPercent = options.pauseThresholdPercent
-    ?? DEFAULT_PAUSE_THRESHOLD_PERCENT;
-  const configuredResumeThresholdPercent = options.resumeThresholdPercent
-    ?? DEFAULT_RESUME_THRESHOLD_PERCENT;
-  validatePressureThresholds(
-    configuredPauseThresholdPercent,
-    configuredResumeThresholdPercent
-  );
+  const configuredPauseThresholdPercent =
+    options.pauseThresholdPercent ?? DEFAULT_PAUSE_THRESHOLD_PERCENT;
+  const configuredResumeThresholdPercent =
+    options.resumeThresholdPercent ?? DEFAULT_RESUME_THRESHOLD_PERCENT;
+  validatePressureThresholds(configuredPauseThresholdPercent, configuredResumeThresholdPercent);
   const pauseNumerator = effectiveMax * BigInt(configuredPauseThresholdPercent);
   const resumeNumerator = effectiveMax * BigInt(configuredResumeThresholdPercent);
 
@@ -182,28 +172,22 @@ export class ApplicationJobQueue implements ApplicationJobQueuePort {
   private pausedTransitionCount = 0n;
   private cumulativePauseDurationSeconds = 0;
   private flowStateConfigFailureCount = 0n;
-  private readonly pressureListeners = new Set<(
-    state: ApplicationJobQueuePressureState,
-    sequence: bigint
-  ) => void>();
+  private readonly pressureListeners = new Set<
+    (state: ApplicationJobQueuePressureState, sequence: bigint) => void
+  >();
   private readonly waiters: CapacityWaiter[] = [];
   private readonly receiveFlowTargets = new Map<
     object,
     ApplicationJobReceiveFlowTarget<ApplicationJobQueuePressureState>
   >();
-  private readonly receiveFlowController: ApplicationJobReceiveFlowController<
-    ApplicationJobQueuePressureState
-  >;
+  private readonly receiveFlowController: ApplicationJobReceiveFlowController<ApplicationJobQueuePressureState>;
 
   constructor(
     private readonly configuration: ApplicationJobQueueConfiguration,
     private readonly nowMs: () => number = () => performance.now(),
     private readonly handlerStartGate?: () => boolean
   ) {
-    this.receiveFlowController = new ApplicationJobReceiveFlowController(
-      this,
-      state => state
-    );
+    this.receiveFlowController = new ApplicationJobReceiveFlowController(this, (state) => state);
   }
 
   shouldHoldPermitBeforeHandler(): boolean {
@@ -307,9 +291,8 @@ export class ApplicationJobQueue implements ApplicationJobQueuePort {
     this.runningTransitionCount = 0n;
     this.pausedTransitionCount = 0n;
     this.cumulativePauseDurationSeconds = 0;
-    this.cumulativePauseStartedAtMs = this.pressureStateValue === 'paused'
-      ? this.nowMs()
-      : undefined;
+    this.cumulativePauseStartedAtMs =
+      this.pressureStateValue === 'paused' ? this.nowMs() : undefined;
     this.flowStateConfigFailureCount = 0n;
   }
 
@@ -405,9 +388,14 @@ export class ApplicationJobQueue implements ApplicationJobQueuePort {
 
   private evaluatePressure(): void {
     const permitsInUse = this.permitsInUse();
-    const next = this.pressureStateValue === 'running'
-      ? permitsInUse >= this.configuration.pausePermitCount ? 'paused' : 'running'
-      : permitsInUse <= this.configuration.resumePermitCount ? 'running' : 'paused';
+    const next =
+      this.pressureStateValue === 'running'
+        ? permitsInUse >= this.configuration.pausePermitCount
+          ? 'paused'
+          : 'running'
+        : permitsInUse <= this.configuration.resumePermitCount
+          ? 'running'
+          : 'paused';
     if (next === this.pressureStateValue) return;
 
     const now = this.nowMs();
@@ -485,18 +473,14 @@ function quotaProcessorCount(quotaText: string, periodText: string): number | un
     if (quota <= 0n || period <= 0n) return undefined;
     const floored = quota / period;
     const count = floored < 1n ? 1n : floored;
-    return count > BigInt(Number.MAX_SAFE_INTEGER)
-      ? Number.MAX_SAFE_INTEGER
-      : Number(count);
+    return count > BigInt(Number.MAX_SAFE_INTEGER) ? Number.MAX_SAFE_INTEGER : Number(count);
   } catch {
     return undefined;
   }
 }
 
 function positiveSafeInteger(value: number | undefined): number | undefined {
-  return value !== undefined && Number.isSafeInteger(value) && value > 0
-    ? value
-    : undefined;
+  return value !== undefined && Number.isSafeInteger(value) && value > 0 ? value : undefined;
 }
 
 function readSystemFile(path: string): string | undefined {

@@ -36,7 +36,7 @@ class service_instance_store_t
     }
 
     std::shared_ptr<void> cache_framework_dependency (std::type_index type,
-                                                       std::shared_ptr<void> instance)
+                                                      std::shared_ptr<void> instance)
     {
         return cache_in (framework_dependencies_by_type, type, std::move (instance));
     }
@@ -59,16 +59,14 @@ class service_instance_store_t
   private:
     using instance_index_t = std::unordered_map<std::type_index, std::size_t>;
 
-    std::shared_ptr<void> find_in (const instance_index_t &index,
-                                   std::type_index type) const
+    std::shared_ptr<void> find_in (const instance_index_t &index, std::type_index type) const
     {
         const auto found = index.find (type);
         return found == index.end () ? nullptr : instances[found->second];
     }
 
-    std::shared_ptr<void> cache_in (instance_index_t &index,
-                                    std::type_index type,
-                                    std::shared_ptr<void> instance)
+    std::shared_ptr<void>
+    cache_in (instance_index_t &index, std::type_index type, std::shared_ptr<void> instance)
     {
         const auto found = index.find (type);
         if (found != index.end ()) {
@@ -179,20 +177,20 @@ detail::service_scope_t detail::service_scope_t::create (service_provider_t &pro
 {
     if (provider.is_closed ()) {
         throw detail::make_boundary_exception (detail::boundary_error_t::shutdown,
-                                     "service provider is closed");
+                                               "service provider is closed");
     }
     return service_scope_t (service_scope_access_t::create_child (provider, kind));
 }
 
-service_provider_t detail::service_scope_access_t::create_child (
-  service_provider_t &provider, service_scope_kind_t kind)
+service_provider_t detail::service_scope_access_t::create_child (service_provider_t &provider,
+                                                                 service_scope_kind_t kind)
 {
-    return service_provider_t (
-      provider._registry, std::make_shared<service_scope_state_t> (true, kind));
+    return service_provider_t (provider._registry,
+                               std::make_shared<service_scope_state_t> (true, kind));
 }
 
-detail::service_scope_kind_t detail::service_scope_access_t::kind (
-  const service_provider_t &provider) noexcept
+detail::service_scope_kind_t
+detail::service_scope_access_t::kind (const service_provider_t &provider) noexcept
 {
     return provider._scope->kind;
 }
@@ -214,7 +212,7 @@ std::shared_ptr<void> service_provider_t::resolve (std::type_index type)
 {
     if (is_closed ()) {
         throw detail::make_boundary_exception (detail::boundary_error_t::shutdown,
-                                     "service provider is closed");
+                                               "service provider is closed");
     }
 
     auto &descriptor = _registry->required (type);
@@ -247,7 +245,7 @@ std::shared_ptr<void> service_provider_t::try_resolve (std::type_index type)
 {
     if (is_closed ()) {
         throw detail::make_boundary_exception (detail::boundary_error_t::shutdown,
-                                     "service provider is closed");
+                                               "service provider is closed");
     }
     if (!_registry->contains (type)) {
         return nullptr;
@@ -318,9 +316,8 @@ service_collection_t &service_collection_t::add_descriptor (std::type_index type
     return *this;
 }
 
-service_collection_t &
-service_collection_t::add_singleton_instance (std::type_index type,
-                                               std::shared_ptr<void> instance)
+service_collection_t &service_collection_t::add_singleton_instance (std::type_index type,
+                                                                    std::shared_ptr<void> instance)
 {
     _registry->add_singleton_instance (type, std::move (instance));
     return *this;
@@ -328,8 +325,9 @@ service_collection_t::add_singleton_instance (std::type_index type,
 
 service_provider_t service_collection_t::build_provider () const
 {
-    return service_provider_t (_registry, std::make_shared<detail::service_scope_state_t> (
-                                            false, detail::service_scope_kind_t::handler_invocation));
+    return service_provider_t (_registry,
+                               std::make_shared<detail::service_scope_state_t> (
+                                 false, detail::service_scope_kind_t::handler_invocation));
 }
 
 bool service_collection_t::contains (std::type_index type) const

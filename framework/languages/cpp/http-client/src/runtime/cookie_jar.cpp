@@ -100,10 +100,9 @@ void cookie_jar_t::store (const std::string &host, const std::string &set_cookie
             }
         }
         while (cookies_for_host > max_cookies_per_host) {
-            auto oldest = std::find_if (_cookies.begin (), _cookies.end (),
-                                        [&] (const cookie_t &stored) {
-                                            return stored.host == host;
-                                        });
+            auto oldest =
+              std::find_if (_cookies.begin (), _cookies.end (),
+                            [&] (const cookie_t &stored) { return stored.host == host; });
             if (oldest == _cookies.end ()) {
                 break;
             }

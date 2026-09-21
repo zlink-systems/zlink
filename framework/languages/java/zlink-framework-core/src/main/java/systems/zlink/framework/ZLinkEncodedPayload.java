@@ -18,5 +18,4 @@ public final class ZLinkEncodedPayload {
     public byte[] bytes() {
         return Arrays.copyOf(bytes, bytes.length);
     }
-
 }

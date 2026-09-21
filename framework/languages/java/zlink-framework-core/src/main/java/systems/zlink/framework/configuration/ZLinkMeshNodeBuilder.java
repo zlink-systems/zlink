@@ -1,4 +1,5 @@
 package systems.zlink.framework.configuration;
+
 import systems.zlink.contracts.core.RoutingId;
 
 import java.time.Duration;
@@ -16,8 +17,7 @@ public interface ZLinkMeshNodeBuilder {
 
     ZLinkMeshNodeBuilder setAdvertiseHost(String host);
 
-    ZLinkMeshNodeBuilder setRoutingId(
-        RoutingId routingId);
+    ZLinkMeshNodeBuilder setRoutingId(RoutingId routingId);
 
     ZLinkMeshNodeBuilder setRoutingIdPrefix(String prefix);
 
@@ -27,8 +27,7 @@ public interface ZLinkMeshNodeBuilder {
 
     ZLinkMeshNodeBuilder setSpotCapacity(int maxSpots);
 
-    ZLinkMeshNodeBuilder setActivationConcurrency(
-        int maxConcurrentActivations);
+    ZLinkMeshNodeBuilder setActivationConcurrency(int maxConcurrentActivations);
 
     ZLinkMeshNodeBuilder setInstanceSpotIdleTimeout(Duration timeout);
 
@@ -42,15 +41,9 @@ public interface ZLinkMeshNodeBuilder {
 
     ZLinkMeshObjectRoleBuilder objects();
 
-    <THandler, TMessage>
-    ZLinkMeshNodeBuilder addRouteSendHandler(
-        Class<THandler> handlerType,
-        Class<TMessage> messageType);
+    <THandler, TMessage> ZLinkMeshNodeBuilder addRouteSendHandler(
+            Class<THandler> handlerType, Class<TMessage> messageType);
 
-    <THandler, TRequest, TReply>
-    ZLinkMeshNodeBuilder addRouteRequestHandler(
-        Class<THandler> handlerType,
-        Class<TRequest> requestType,
-        Class<TReply> replyType);
-
+    <THandler, TRequest, TReply> ZLinkMeshNodeBuilder addRouteRequestHandler(
+            Class<THandler> handlerType, Class<TRequest> requestType, Class<TReply> replyType);
 }

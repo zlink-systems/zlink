@@ -1,10 +1,5 @@
 package systems.zlink.framework.runtime.actors;
-import java.util.Objects;
 
-import java.time.Duration;
-import java.util.concurrent.CompletableFuture;
-import java.util.concurrent.CompletionStage;
-import java.util.concurrent.atomic.AtomicReference;
 import systems.zlink.contracts.core.RoutingId;
 import systems.zlink.framework.actors.ZLinkActor;
 import systems.zlink.framework.actors.ZLinkBoundSession;
@@ -13,6 +8,12 @@ import systems.zlink.framework.errors.ZLinkFrameworkErrorKind;
 import systems.zlink.framework.errors.ZLinkFrameworkException;
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendActorRef;
 import systems.zlink.framework.spots.ZLinkSpot;
+
+import java.time.Duration;
+import java.util.Objects;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CompletionStage;
+import java.util.concurrent.atomic.AtomicReference;
 
 final class ZLinkActorContextState {
     private ZLinkActor actor;
@@ -40,10 +41,7 @@ final class ZLinkActorContextState {
     private final AtomicReference<Object> deferredJoinClaim = new AtomicReference<>();
     private CompletableFuture<Void> moveCompletion = CompletableFuture.completedFuture(null);
 
-    ZLinkActorContextState(
-        ZLinkBackendActorRef actorRef,
-        String meshName,
-        String entrySpotId) {
+    ZLinkActorContextState(ZLinkBackendActorRef actorRef, String meshName, String entrySpotId) {
         this.actorId = actorRef.actorId();
         this.meshName = meshName;
         this.actorRef = actorRef;
@@ -135,8 +133,7 @@ final class ZLinkActorContextState {
         if (moving) {
             //  Spec 15-spot-actor:374 — the Actor is already moving: Unavailable.
             throw new ZLinkFrameworkException(
-                ZLinkFrameworkErrorKind.UNAVAILABLE,
-                "actor is already moving: " + actorId);
+                    ZLinkFrameworkErrorKind.UNAVAILABLE, "actor is already moving: " + actorId);
         }
         moving = true;
         moveCompletion = new CompletableFuture<>();
@@ -171,8 +168,8 @@ final class ZLinkActorContextState {
             //  Spec 32-framework-error-model:41 — an operation that requires a
             //  bound session in a state that has none is InvalidOperation.
             throw new ZLinkFrameworkException(
-                ZLinkFrameworkErrorKind.INVALID_OPERATION,
-                "actor has no bound session: " + actorId);
+                    ZLinkFrameworkErrorKind.INVALID_OPERATION,
+                    "actor has no bound session: " + actorId);
         }
         return boundSession;
     }
@@ -180,11 +177,10 @@ final class ZLinkActorContextState {
     /**
      * The session the Actor context hands to application code.
      *
-     * <p>Spec 04-actor-model §8.1 puts a bound-session failure at the call's
-     * terminal, like every other call failure, rather than in the accessor that
-     * creates the call. With no binding this returns a session whose send and
-     * disconnect complete with {@code InvalidOperation}, so the caller observes
-     * it through the completion stage instead of a throw at the accessor.
+     * <p>Spec 04-actor-model §8.1 puts a bound-session failure at the call's terminal, like every
+     * other call failure, rather than in the accessor that creates the call. With no binding this
+     * returns a session whose send and disconnect complete with {@code InvalidOperation}, so the
+     * caller observes it through the completion stage instead of a throw at the accessor.
      */
     ZLinkBoundSession boundSessionOrUnbound() {
         return boundSession == null ? new ZLinkUnboundSession(actorId) : boundSession;
@@ -201,10 +197,7 @@ final class ZLinkActorContextState {
         return spot;
     }
 
-    void markJoined(
-        ZLinkBackendActorRef actorRef,
-        String spotId,
-        ZLinkSpot<?> spot) {
+    void markJoined(ZLinkBackendActorRef actorRef, String spotId, ZLinkSpot<?> spot) {
         this.actorRef = actorRef;
         updateNativeBoundSessionActorRef(actorRef);
         this.spotId = spotId;
@@ -213,9 +206,7 @@ final class ZLinkActorContextState {
     }
 
     void markMovedToEntrySpot(
-        ZLinkBackendActorRef actorRef,
-        RoutingId entrySpotNodeRid,
-        String entrySpotId) {
+            ZLinkBackendActorRef actorRef, RoutingId entrySpotNodeRid, String entrySpotId) {
         this.actorRef = actorRef;
         updateNativeBoundSessionActorRef(actorRef);
         this.entrySpotNodeRid = entrySpotNodeRid;
@@ -226,9 +217,7 @@ final class ZLinkActorContextState {
     }
 
     void markNativeActorRef(
-        ZLinkBackendActorRef actorRef,
-        RoutingId sourceNodeRid,
-        RoutingId sourceSessionRid) {
+            ZLinkBackendActorRef actorRef, RoutingId sourceNodeRid, RoutingId sourceSessionRid) {
         this.actorRef = actorRef;
         this.boundSessionSourceNodeRid = sourceNodeRid;
         this.boundSessionSourceSessionRid = sourceSessionRid;
@@ -241,27 +230,21 @@ final class ZLinkActorContextState {
     }
 
     long bindSession(
-        ZLinkBoundSession boundSession,
-        RoutingId sourceNodeRid,
-        RoutingId sourceSessionRid) {
-        return bindSession(
-            boundSession,
-            sourceNodeRid,
-            sourceSessionRid,
-            0,
-            0);
+            ZLinkBoundSession boundSession, RoutingId sourceNodeRid, RoutingId sourceSessionRid) {
+        return bindSession(boundSession, sourceNodeRid, sourceSessionRid, 0, 0);
     }
 
     long bindSession(
-        ZLinkBoundSession boundSession,
-        RoutingId sourceNodeRid,
-        RoutingId sourceSessionRid,
-        long bindingGeneration,
-        long initialSessionSequence) {
-        if (bindingGeneration < 0 || initialSessionSequence < 0
-            || bindingGeneration == 0 && initialSessionSequence != 0) {
+            ZLinkBoundSession boundSession,
+            RoutingId sourceNodeRid,
+            RoutingId sourceSessionRid,
+            long bindingGeneration,
+            long initialSessionSequence) {
+        if (bindingGeneration < 0
+                || initialSessionSequence < 0
+                || bindingGeneration == 0 && initialSessionSequence != 0) {
             throw new IllegalArgumentException(
-                "bound Session fence must be zero or fully initialized");
+                    "bound Session fence must be zero or fully initialized");
         }
         //  A fence-less re-bind of the session that is already bound must
         //  keep the session-owner-issued fence and accepted sequence. Every
@@ -272,21 +255,19 @@ final class ZLinkActorContextState {
         //  check as stale. A different session rid is a new binding identity
         //  and still fabricates below.
         if (bindingGeneration == 0
-            && this.boundSession != null
-            && sourceSessionRid != null
-            && sourceSessionRid.equals(boundSessionSourceSessionRid)
-            && sourceNodeRid != null
-            && sourceNodeRid.equals(boundSessionSourceNodeRid)
-            && sessionBindingGeneration > 0) {
+                && this.boundSession != null
+                && sourceSessionRid != null
+                && sourceSessionRid.equals(boundSessionSourceSessionRid)
+                && sourceNodeRid != null
+                && sourceNodeRid.equals(boundSessionSourceNodeRid)
+                && sessionBindingGeneration > 0) {
             this.boundSession = boundSession;
             return sessionBindingToken;
         }
         boundSessionSourceNodeRid = sourceNodeRid;
         boundSessionSourceSessionRid = sourceSessionRid;
         sessionBindingToken++;
-        sessionBindingGeneration = bindingGeneration == 0
-            ? sessionBindingToken
-            : bindingGeneration;
+        sessionBindingGeneration = bindingGeneration == 0 ? sessionBindingToken : bindingGeneration;
         sessionSourceSequence = initialSessionSequence;
         this.boundSession = boundSession;
         return sessionBindingToken;
@@ -294,41 +275,39 @@ final class ZLinkActorContextState {
 
     BoundSessionSource nextBoundSessionSource() {
         return nextBoundSessionSource(
-            sessionSourceSequence == Long.MAX_VALUE
-                ? 0
-                : sessionSourceSequence + 1);
+                sessionSourceSequence == Long.MAX_VALUE ? 0 : sessionSourceSequence + 1);
     }
 
     BoundSessionSource nextBoundSessionSource(long acceptedSessionSequence) {
         if (boundSession == null
-            || boundSessionSourceNodeRid == null
-            || boundSessionSourceSessionRid == null
-            || sessionBindingToken <= 0
-            || sessionBindingGeneration <= 0
-            || acceptedSessionSequence <= sessionSourceSequence) {
+                || boundSessionSourceNodeRid == null
+                || boundSessionSourceSessionRid == null
+                || sessionBindingToken <= 0
+                || sessionBindingGeneration <= 0
+                || acceptedSessionSequence <= sessionSourceSequence) {
             return null;
         }
         sessionSourceSequence = acceptedSessionSequence;
         return new BoundSessionSource(
-            boundSessionSourceNodeRid,
-            boundSessionSourceSessionRid,
-            sessionBindingGeneration,
-            sessionSourceSequence);
+                boundSessionSourceNodeRid,
+                boundSessionSourceSessionRid,
+                sessionBindingGeneration,
+                sessionSourceSequence);
     }
 
     BoundSessionSource boundSessionSourceSnapshot() {
         if (boundSession == null
-            || boundSessionSourceNodeRid == null
-            || boundSessionSourceSessionRid == null
-            || sessionBindingToken <= 0
-            || sessionBindingGeneration <= 0) {
+                || boundSessionSourceNodeRid == null
+                || boundSessionSourceSessionRid == null
+                || sessionBindingToken <= 0
+                || sessionBindingGeneration <= 0) {
             return null;
         }
         return new BoundSessionSource(
-            boundSessionSourceNodeRid,
-            boundSessionSourceSessionRid,
-            sessionBindingGeneration,
-            sessionSourceSequence);
+                boundSessionSourceNodeRid,
+                boundSessionSourceSessionRid,
+                sessionBindingGeneration,
+                sessionSourceSequence);
     }
 
     boolean clearBoundSession(long bindingToken) {
@@ -344,15 +323,12 @@ final class ZLinkActorContextState {
     }
 
     record BoundSessionSource(
-        RoutingId sourceNodeRid,
-        RoutingId sourceSessionRid,
-        long bindingGeneration,
-        long sessionSequence) {
-    }
+            RoutingId sourceNodeRid,
+            RoutingId sourceSessionRid,
+            long bindingGeneration,
+            long sessionSequence) {}
 
-    CompletionStage<Void> rebindNativeActor(
-        ZLinkBackendActorRef targetActor,
-        Duration timeout) {
+    CompletionStage<Void> rebindNativeActor(ZLinkBackendActorRef targetActor, Duration timeout) {
         if (boundSession instanceof ZLinkBoundSessionRuntime runtime) {
             return runtime.rebindNativeActor(targetActor, timeout);
         }
@@ -373,12 +349,10 @@ final class ZLinkActorContextState {
         return boundSession != null;
     }
 
-    boolean hasBoundSession(
-        RoutingId sourceNodeRid,
-        RoutingId sourceSessionRid) {
+    boolean hasBoundSession(RoutingId sourceNodeRid, RoutingId sourceSessionRid) {
         return boundSession != null
-            && Objects.equals(boundSessionSourceNodeRid, sourceNodeRid)
-            && Objects.equals(boundSessionSourceSessionRid, sourceSessionRid);
+                && Objects.equals(boundSessionSourceNodeRid, sourceNodeRid)
+                && Objects.equals(boundSessionSourceSessionRid, sourceSessionRid);
     }
 
     CompletionStage<Boolean> sendBoundSessionFrame(byte[] frameBytes) {
@@ -414,8 +388,8 @@ final class ZLinkActorContextState {
         joined = false;
         destroying = false;
         moving = false;
-        moveCompletion.completeExceptionally(new ZLinkConfigurationException(
-            "actor was destroyed while moving: " + actorId));
+        moveCompletion.completeExceptionally(
+                new ZLinkConfigurationException("actor was destroyed while moving: " + actorId));
     }
 
     ZLinkBackendActorRef beginDestroy(RoutingId entryNodeRid, String actorId) {
@@ -424,15 +398,15 @@ final class ZLinkActorContextState {
         }
         if (actorRef == null) {
             throw new ZLinkConfigurationException(
-                "actor does not have a native Actor ref: " + actorId);
+                    "actor does not have a native Actor ref: " + actorId);
         }
         if (spot != null) {
             throw new ZLinkConfigurationException(
-                "actor must leave its current Spot before destroy: " + actorId);
+                    "actor must leave its current Spot before destroy: " + actorId);
         }
         if (!actorRef.nodeRid().equals(entryNodeRid)) {
             throw new ZLinkConfigurationException(
-                "actor is not owned by this Entry Spot: " + actorId);
+                    "actor is not owned by this Entry Spot: " + actorId);
         }
 
         destroying = true;

@@ -53,8 +53,8 @@ export function decodeRoutingId(text: string, hex: unknown): RoutingId {
   const bytes = Buffer.from(normalizedHex, 'hex');
   const decoded = bytes.toString('utf8');
   if (
-    Buffer.from(decoded, 'utf8').toString('hex') === normalizedHex
-    && !/[\u0000-\u001f\u007f-\u009f]/u.test(decoded)
+    Buffer.from(decoded, 'utf8').toString('hex') === normalizedHex &&
+    !/[\u0000-\u001f\u007f-\u009f]/u.test(decoded)
   ) {
     return normalizeRoutingId(decoded);
   }
@@ -63,9 +63,7 @@ export function decodeRoutingId(text: string, hex: unknown): RoutingId {
 
 export function routingIdWireHex(routingId: RoutingId): string | undefined {
   const value = routingId as unknown as { toHex?: () => string };
-  return typeof value.toHex === 'function'
-    ? value.toHex.call(routingId).toLowerCase()
-    : undefined;
+  return typeof value.toHex === 'function' ? value.toHex.call(routingId).toLowerCase() : undefined;
 }
 
 export function encodeRoutingIdStorageHex(routingId: RoutingId): string {
@@ -92,7 +90,10 @@ export function toBackendRoutingId(routingId: unknown): RoutingId {
   };
   if (typeof value.toBytes === 'function') {
     const bytes = value.toBytes.call(routingId);
-    return new ZLinkOpaqueRoutingId(String(routingId), Buffer.from(bytes).toString('hex')) as unknown as RoutingId;
+    return new ZLinkOpaqueRoutingId(
+      String(routingId),
+      Buffer.from(bytes).toString('hex')
+    ) as unknown as RoutingId;
   }
   if (typeof value.toHex === 'function') {
     return new ZLinkOpaqueRoutingId(
@@ -107,7 +108,9 @@ export function toBackendRoutingId(routingId: unknown): RoutingId {
 function normalizeRoutingIdHex(value: string): string {
   const hex = value.toLowerCase();
   if (hex.length === 0 || hex.length % 2 !== 0 || !/^[0-9a-f]+$/.test(hex)) {
-    throw new TypeError('RoutingId hex must contain a non-empty, even number of hexadecimal digits.');
+    throw new TypeError(
+      'RoutingId hex must contain a non-empty, even number of hexadecimal digits.'
+    );
   }
   return hex;
 }

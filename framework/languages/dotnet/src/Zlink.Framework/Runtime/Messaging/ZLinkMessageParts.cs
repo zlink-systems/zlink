@@ -9,9 +9,7 @@ internal interface IZLinkApplicationPayloadSized
 
 internal static class ZLinkMessageParts
 {
-    public static IReadOnlyList<Message> Create(
-        Message header,
-        Message body)
+    public static IReadOnlyList<Message> Create(Message header, Message body)
     {
         // Hot path: most envelopes are exactly header + body. Keep this as a
         // tiny IReadOnlyList wrapper so send/request avoids allocating arrays.
@@ -20,7 +18,8 @@ internal static class ZLinkMessageParts
 
     public static void DisposeAll(IReadOnlyList<Message> parts)
     {
-        for (var index = 0; index < parts.Count; index++) parts[index].Dispose();
+        for (var index = 0; index < parts.Count; index++)
+            parts[index].Dispose();
     }
 
     public static IReadOnlyList<Message> CopyAll(IReadOnlyList<Message> parts)
@@ -29,7 +28,8 @@ internal static class ZLinkMessageParts
         var copied = 0;
         try
         {
-            for (; copied < parts.Count; copied++) copies[copied] = parts[copied].Copy();
+            for (; copied < parts.Count; copied++)
+                copies[copied] = parts[copied].Copy();
 
             return parts is IZLinkApplicationPayloadSized sized
                 ? new KnownMessageParts(copies, sized.ApplicationPayloadBytes)
@@ -37,7 +37,8 @@ internal static class ZLinkMessageParts
         }
         catch
         {
-            for (var index = 0; index < copied; index++) copies[index].Dispose();
+            for (var index = 0; index < copied; index++)
+                copies[index].Dispose();
 
             throw;
         }
@@ -45,17 +46,16 @@ internal static class ZLinkMessageParts
 
     public static IReadOnlyList<Message> WithApplicationPayloadBytes(
         Message[] parts,
-        ulong applicationPayloadBytes) =>
-        new KnownMessageParts(parts, applicationPayloadBytes);
+        ulong applicationPayloadBytes
+    ) => new KnownMessageParts(parts, applicationPayloadBytes);
 
-    private sealed class TwoMessageParts(
-        Message header,
-        Message body) : IReadOnlyList<Message>, IZLinkApplicationPayloadSized
+    private sealed class TwoMessageParts(Message header, Message body)
+        : IReadOnlyList<Message>,
+            IZLinkApplicationPayloadSized
     {
         public int Count => 2;
 
-        public ulong ApplicationPayloadBytes =>
-            checked((ulong)Math.Max(body.Size, 0));
+        public ulong ApplicationPayloadBytes => checked((ulong)Math.Max(body.Size, 0));
 
         public Message this[int index]
         {
@@ -65,7 +65,7 @@ internal static class ZLinkMessageParts
                 {
                     0 => header,
                     1 => body,
-                    _ => throw new ArgumentOutOfRangeException(nameof(index))
+                    _ => throw new ArgumentOutOfRangeException(nameof(index)),
                 };
             }
         }
@@ -82,9 +82,9 @@ internal static class ZLinkMessageParts
         }
     }
 
-    private sealed class KnownMessageParts(
-        Message[] parts,
-        ulong applicationPayloadBytes) : IReadOnlyList<Message>, IZLinkApplicationPayloadSized
+    private sealed class KnownMessageParts(Message[] parts, ulong applicationPayloadBytes)
+        : IReadOnlyList<Message>,
+            IZLinkApplicationPayloadSized
     {
         public int Count => parts.Length;
 

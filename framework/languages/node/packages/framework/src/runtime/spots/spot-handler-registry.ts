@@ -4,7 +4,7 @@ import type {
   ZLinkEntrySpot,
   ZLinkInstanceSpotHandlerRegistry,
   ZLinkSpot,
-  ZLinkSpotHandlerRegistry,
+  ZLinkSpotHandlerRegistry
 } from '../../contracts';
 import type {
   ZLinkEntrySpotActorRequestHandlerRegistration,
@@ -17,19 +17,11 @@ import type {
   ZLinkSpotSubscriptionHandlerRegistration
 } from '../../contracts/Configuration/RegistrationTypes';
 import { ZLinkConfigurationException } from '../configuration';
-import {
-  ZLinkActorPacketKind,
-  ZLinkSpotActorHandlerRegistryRuntime
-} from '../actors';
+import { ZLinkActorPacketKind, ZLinkSpotActorHandlerRegistryRuntime } from '../actors';
 import { readZLinkDecoratorMetadata } from '../../contracts/Handlers/Attributes';
 
 export interface ZLinkSpotHandlerRegistration {
-  readonly kind:
-    | 'packet'
-    | 'subscribe'
-    | 'actorSend'
-    | 'actorRequest'
-    | 'spotHandler';
+  readonly kind: 'packet' | 'subscribe' | 'actorSend' | 'actorRequest' | 'spotHandler';
   readonly handlerType: Type;
   readonly packetName?: string;
   readonly channelName?: string;
@@ -37,14 +29,17 @@ export interface ZLinkSpotHandlerRegistration {
   readonly actorType?: Type<ZLinkActor>;
 }
 
-export class DefaultZLinkSpotHandlerRegistry<TActor extends ZLinkActor = ZLinkActor> implements ZLinkSpotHandlerRegistry {
+export class DefaultZLinkSpotHandlerRegistry<
+  TActor extends ZLinkActor = ZLinkActor
+> implements ZLinkSpotHandlerRegistry {
   private readonly entries: ZLinkSpotHandlerRegistration[] = [];
 
   constructor(private readonly actorHandlers?: ZLinkSpotActorHandlerRegistryRuntime) {}
 
   addHandler<THandler>(handlerType: Type<THandler>, packetName?: string): this {
-    const metadata = readZLinkDecoratorMetadata(handlerType).find((entry) =>
-      entry.kind === 'spotActorSend' || entry.kind === 'spotActorRequest');
+    const metadata = readZLinkDecoratorMetadata(handlerType).find(
+      (entry) => entry.kind === 'spotActorSend' || entry.kind === 'spotActorRequest'
+    );
     const resolvedPacketName = packetName ?? metadata?.packetName;
     if (metadata === undefined || resolvedPacketName === undefined) {
       throw new ZLinkConfigurationException(
@@ -52,9 +47,7 @@ export class DefaultZLinkSpotHandlerRegistry<TActor extends ZLinkActor = ZLinkAc
       );
     }
     return this.addActorPacketRegistration(
-      metadata.kind === 'spotActorSend'
-        ? ZLinkActorPacketKind.Send
-        : ZLinkActorPacketKind.Request,
+      metadata.kind === 'spotActorSend' ? ZLinkActorPacketKind.Send : ZLinkActorPacketKind.Request,
       handlerType,
       Object as unknown as Type<TActor>,
       resolvedPacketName
@@ -65,10 +58,13 @@ export class DefaultZLinkSpotHandlerRegistry<TActor extends ZLinkActor = ZLinkAc
     handlerType: Type<THandler>,
     actorType: Type<TRegisteredActor>
   ): this {
-    const metadata = readZLinkDecoratorMetadata(handlerType).find((entry) =>
-      entry.kind === 'spotActorSend' || entry.kind === 'spotActorRequest');
+    const metadata = readZLinkDecoratorMetadata(handlerType).find(
+      (entry) => entry.kind === 'spotActorSend' || entry.kind === 'spotActorRequest'
+    );
     if (metadata?.packetName === undefined) {
-      throw new ZLinkConfigurationException(`Actor packet handler '${handlerType.name}' must declare a packet name.`);
+      throw new ZLinkConfigurationException(
+        `Actor packet handler '${handlerType.name}' must declare a packet name.`
+      );
     }
     return this.addActorPacketRegistration(
       metadata.kind === 'spotActorSend' ? ZLinkActorPacketKind.Send : ZLinkActorPacketKind.Request,
@@ -79,9 +75,14 @@ export class DefaultZLinkSpotHandlerRegistry<TActor extends ZLinkActor = ZLinkAc
   }
 
   addPacket(handlerType: Type, packetName?: string): this {
-    const declared = readZLinkDecoratorMetadata(handlerType)
-      .find((entry) => entry.kind === 'packet')?.packetName;
-    this.entries.push({ kind: 'packet', handlerType, packetName: packetName ?? declared ?? handlerType.name });
+    const declared = readZLinkDecoratorMetadata(handlerType).find(
+      (entry) => entry.kind === 'packet'
+    )?.packetName;
+    this.entries.push({
+      kind: 'packet',
+      handlerType,
+      packetName: packetName ?? declared ?? handlerType.name
+    });
     return this;
   }
 
@@ -110,7 +111,11 @@ export class DefaultZLinkSpotHandlerRegistry<TActor extends ZLinkActor = ZLinkAc
     return this;
   }
 
-  actorSend(packetName: string, handlerType: Type, actorType: Type<TActor> = Object as unknown as Type<TActor>): this {
+  actorSend(
+    packetName: string,
+    handlerType: Type,
+    actorType: Type<TActor> = Object as unknown as Type<TActor>
+  ): this {
     return this.addActorPacketRegistration(
       ZLinkActorPacketKind.Send,
       handlerType,
@@ -119,7 +124,11 @@ export class DefaultZLinkSpotHandlerRegistry<TActor extends ZLinkActor = ZLinkAc
     );
   }
 
-  actorRequest(packetName: string, handlerType: Type, actorType: Type<TActor> = Object as unknown as Type<TActor>): this {
+  actorRequest(
+    packetName: string,
+    handlerType: Type,
+    actorType: Type<TActor> = Object as unknown as Type<TActor>
+  ): this {
     return this.addActorPacketRegistration(
       ZLinkActorPacketKind.Request,
       handlerType,
@@ -135,10 +144,15 @@ export class DefaultZLinkSpotHandlerRegistry<TActor extends ZLinkActor = ZLinkAc
     if (topic.trim().length === 0) {
       throw new ZLinkConfigurationException('SPOT subscribe topic must not be empty.');
     }
-    if (this.entries.some((entry) => entry.kind === 'subscribe'
-      && entry.handlerType === handlerType
-      && entry.channelName === channelName
-      && entry.topic === topic)) {
+    if (
+      this.entries.some(
+        (entry) =>
+          entry.kind === 'subscribe' &&
+          entry.handlerType === handlerType &&
+          entry.channelName === channelName &&
+          entry.topic === topic
+      )
+    ) {
       return this;
     }
     this.entries.push({ kind: 'subscribe', handlerType, channelName, topic });
@@ -268,6 +282,5 @@ function isSpotImplementation(
   registeredType: Type<ZLinkSpot>,
   implementation: Type<ZLinkSpot>
 ): boolean {
-  return registeredType === implementation
-    || implementation.prototype instanceof registeredType;
+  return registeredType === implementation || implementation.prototype instanceof registeredType;
 }

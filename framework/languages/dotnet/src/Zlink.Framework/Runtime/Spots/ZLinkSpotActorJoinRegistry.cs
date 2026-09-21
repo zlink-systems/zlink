@@ -6,7 +6,11 @@ internal sealed class ZLinkSpotActorJoinRegistry
 
     public void Bind(object spot)
     {
-        foreach (var descriptor in ZLinkSpotDescriptorFactory.CreateSpotActorJoinDescriptors(spot.GetType()))
+        foreach (
+            var descriptor in ZLinkSpotDescriptorFactory.CreateSpotActorJoinDescriptors(
+                spot.GetType()
+            )
+        )
             AddDescriptor(spot, descriptor);
     }
 
@@ -14,7 +18,8 @@ internal sealed class ZLinkSpotActorJoinRegistry
     {
         if (_descriptor is not null)
             throw new InvalidOperationException(
-                $"SPOT actor join callback is already registered on '{spot.GetType()}'.");
+                $"SPOT actor join callback is already registered on '{spot.GetType()}'."
+            );
 
         _descriptor = descriptor;
     }

@@ -58,8 +58,7 @@ inline void wait_poll_interval (std::chrono::microseconds interval) noexcept
                 // Before Windows 10 1803 the high-resolution flag is rejected. A
                 // plain timer behaves exactly like the sleep this replaces, so
                 // the fallback is never worse than the previous behaviour.
-                handle = ::CreateWaitableTimerExW (NULL, NULL,
-                                                   CREATE_WAITABLE_TIMER_MANUAL_RESET,
+                handle = ::CreateWaitableTimerExW (NULL, NULL, CREATE_WAITABLE_TIMER_MANUAL_RESET,
                                                    TIMER_ALL_ACCESS);
             }
         }

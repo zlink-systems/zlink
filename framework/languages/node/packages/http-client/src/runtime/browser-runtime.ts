@@ -3,7 +3,12 @@
 import { ZLinkFrameworkException, ZLinkFrameworkErrorKind } from '@zlink-systems/framework';
 import type { HttpClientOptions } from './options';
 import type { HttpRequestSpec, RawResult } from './request-performer';
-import { isRedirectStatus, makeTarget, resolveLocation, rewriteForRedirect } from './redirect-policy';
+import {
+  isRedirectStatus,
+  makeTarget,
+  resolveLocation,
+  rewriteForRedirect
+} from './redirect-policy';
 import { RetryPolicy } from './retry-policy';
 import { redirectLimitExceeded, responseBodySizeExceeded } from './http-client-errors';
 
@@ -32,18 +37,26 @@ export class HttpClientRuntime {
     let redirectsLeft = this.options.followRedirects;
 
     for (;;) {
-      const headers = this.buildHeaders(spec, current.origin === origin, body !== undefined || bodyProvider !== undefined);
+      const headers = this.buildHeaders(
+        spec,
+        current.origin === origin,
+        body !== undefined || bodyProvider !== undefined
+      );
       const response = await fetch(current, {
         method,
         headers,
         body: body ?? bodyStream(bodyProvider),
         credentials: this.options.cookies ? 'include' : 'same-origin',
         redirect: 'manual',
-        signal,
+        signal
       });
 
       const location = response.headers.get('location');
-      if (this.options.followRedirects > 0 && isRedirectStatus(response.status) && location !== null) {
+      if (
+        this.options.followRedirects > 0 &&
+        isRedirectStatus(response.status) &&
+        location !== null
+      ) {
         if (redirectsLeft === 0) {
           await response.body?.cancel();
           throw redirectLimitExceeded();
@@ -72,7 +85,7 @@ export class HttpClientRuntime {
   private buildHeaders(
     spec: HttpRequestSpec,
     keepAuthorization: boolean,
-    hasBody: boolean,
+    hasBody: boolean
   ): Record<string, string> {
     const headers: Record<string, string> = { accept: 'application/json' };
     applyHeaders(headers, this.options.headers, keepAuthorization);
@@ -83,29 +96,35 @@ export class HttpClientRuntime {
 }
 
 function rejectUnsupportedTransportOptions(options: HttpClientOptions): void {
-  if (options.trustCertificateFile !== undefined || options.clientCertificate !== undefined || options.proxy !== undefined) {
+  if (
+    options.trustCertificateFile !== undefined ||
+    options.clientCertificate !== undefined ||
+    options.proxy !== undefined
+  ) {
     throw new ZLinkFrameworkException(
       ZLinkFrameworkErrorKind.ProtocolError,
-      'Browser HTTP clients cannot configure certificate files or a transport proxy.',
+      'Browser HTTP clients cannot configure certificate files or a transport proxy.'
     );
   }
 }
 
-function bodyStream(provider: HttpRequestSpec['bodyProvider']): ReadableStream<Uint8Array> | undefined {
+function bodyStream(
+  provider: HttpRequestSpec['bodyProvider']
+): ReadableStream<Uint8Array> | undefined {
   if (provider === undefined) return undefined;
   return new ReadableStream<Uint8Array>({
     pull(controller) {
       const chunk = provider();
       if (chunk === null) controller.close();
       else controller.enqueue(chunk);
-    },
+    }
   });
 }
 
 async function streamResponse(
   response: Response,
   sink: NonNullable<HttpRequestSpec['sink']>,
-  maximumSize: number,
+  maximumSize: number
 ): Promise<void> {
   if (response.body === null) return;
   const reader = response.body.getReader();
@@ -124,14 +143,16 @@ async function streamResponse(
 
 function collectHeaders(headers: Headers): Record<string, string> {
   const result: Record<string, string> = {};
-  headers.forEach((value, name) => { result[name.toLowerCase()] = value; });
+  headers.forEach((value, name) => {
+    result[name.toLowerCase()] = value;
+  });
   return result;
 }
 
 function applyHeaders(
   target: Record<string, string>,
   source: Readonly<Record<string, string>>,
-  keepAuthorization: boolean,
+  keepAuthorization: boolean
 ): void {
   for (const [name, value] of Object.entries(source)) {
     const lower = name.toLowerCase();

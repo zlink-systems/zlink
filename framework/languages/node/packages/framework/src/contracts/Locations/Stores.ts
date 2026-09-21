@@ -81,8 +81,7 @@ export interface ZLinkStoreScanPage {
 }
 
 export type ZLinkStoreScanResult =
-  | { readonly kind: 'page'; readonly value: ZLinkStoreScanPage }
-  | { readonly kind: 'expired' };
+  { readonly kind: 'page'; readonly value: ZLinkStoreScanPage } | { readonly kind: 'expired' };
 
 export interface ZLinkLocationStore {
   read(key: ZLinkStoreKey, signal?: AbortSignal): Promise<ZLinkStoreReadResult>;

@@ -8,6 +8,11 @@ import static org.junit.jupiter.api.Assertions.fail;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+
+import org.junit.jupiter.api.Test;
+
+import systems.zlink.framework.runtime.internal.locations.ZLinkInlineCreationContentCodec;
+
 import java.io.IOException;
 import java.io.UnsupportedEncodingException;
 import java.nio.charset.StandardCharsets;
@@ -17,21 +22,17 @@ import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
 import java.util.HexFormat;
 import java.util.Iterator;
-import org.junit.jupiter.api.Test;
-import systems.zlink.framework.runtime.internal.locations.ZLinkInlineCreationContentCodec;
 
 /**
- * Target-contract pin for checklist C-3 (store record golden fixture:
- * 21-location-runtime.md#2.4, 22-location-store-redis.md#7). This test
- * consumes {@code golden/store-record-v1.json} directly, independent of any
- * production opaque-record store codec — no language has implemented the
- * {@code zlink-location-v3} opaque record write path yet (checklist C-4).
- * It stays green today because sha256 key derivation and cmsgpack value
- * decoding need nothing from C-4. The cmsgpack member decoder below is
- * written from scratch against the MessagePack type table in
- * 22-location-store-redis.md#7 (str family for strings/bytes, unsigned int
- * family for expiresAtMs, bool for tombstone) rather than reusing any
- * project msgpack dependency, so it is a genuinely independent check.
+ * Target-contract pin for checklist C-3 (store record golden fixture: 21-location-runtime.md#2.4,
+ * 22-location-store-redis.md#7). This test consumes {@code golden/store-record-v1.json} directly,
+ * independent of any production opaque-record store codec — no language has implemented the {@code
+ * zlink-location-v3} opaque record write path yet (checklist C-4). It stays green today because
+ * sha256 key derivation and cmsgpack value decoding need nothing from C-4. The cmsgpack member
+ * decoder below is written from scratch against the MessagePack type table in
+ * 22-location-store-redis.md#7 (str family for strings/bytes, unsigned int family for expiresAtMs,
+ * bool for tombstone) rather than reusing any project msgpack dependency, so it is a genuinely
+ * independent check.
  */
 final class ZLinkStoreRecordGoldenTest {
     @Test
@@ -43,22 +44,26 @@ final class ZLinkStoreRecordGoldenTest {
         for (JsonNode key : fixture.path("keyDerivation")) {
             byte[] preimage = HexFormat.of().parseHex(key.path("preimageHex").asText());
             String sha256Hex = sha256Hex(preimage);
-            assertEquals(key.path("sha256Hex").asText(), sha256Hex,
-                "sha256 mismatch: " + key.path("record").asText());
             assertEquals(
-                prefix + ":" + namespaceTag + ":" + sha256Hex,
-                key.path("redisKey").asText(),
-                "redis key assembly mismatch: " + key.path("record").asText());
+                    key.path("sha256Hex").asText(),
+                    sha256Hex,
+                    "sha256 mismatch: " + key.path("record").asText());
+            assertEquals(
+                    prefix + ":" + namespaceTag + ":" + sha256Hex,
+                    key.path("redisKey").asText(),
+                    "redis key assembly mismatch: " + key.path("record").asText());
         }
 
         JsonNode relocationBlob = fixture.path("relocationBlob");
-        byte[] relocationBytes = HexFormat.of().parseHex(relocationBlob.path("rawBytesHex").asText());
+        byte[] relocationBytes =
+                HexFormat.of().parseHex(relocationBlob.path("rawBytesHex").asText());
         assertTrue(relocationBytes.length > 0);
         assertEquals(
-            prefix + ":{zlink-relocation-v1}:blob:" + relocationBlob.path("reference").asText(),
-            relocationBlob.path("redisKey").asText());
+                prefix + ":{zlink-relocation-v1}:blob:" + relocationBlob.path("reference").asText(),
+                relocationBlob.path("redisKey").asText());
 
-        Iterator<JsonNode> vectors = fixture.path("valueVectors").path("genericOpaqueRecord").elements();
+        Iterator<JsonNode> vectors =
+                fixture.path("valueVectors").path("genericOpaqueRecord").elements();
         while (vectors.hasNext()) {
             JsonNode vector = vectors.next();
             String name = vector.path("name").asText();
@@ -66,35 +71,46 @@ final class ZLinkStoreRecordGoldenTest {
             assertEquals((byte) 0x01, full[0], "format tag mismatch: " + name);
             OpaqueMember decoded = decodeOpaqueMember(full, 1, full.length);
 
-            String expectedOriginalKey = vector.path("originalKey").asText().replace("\\u0000", "\0");
+            String expectedOriginalKey =
+                    vector.path("originalKey").asText().replace("\\u0000", "\0");
             assertEquals(expectedOriginalKey, decoded.originalKey, "originalKey mismatch: " + name);
-            assertEquals(vector.path("jsonBytesHex").asText(), HexFormat.of().formatHex(decoded.rawBytes),
-                "rawBytes mismatch: " + name);
-            assertEquals(vector.path("version").asText(), decoded.version, "version mismatch: " + name);
-            assertEquals(vector.path("expiresAtMs").asText(), Long.toUnsignedString(decoded.expiresAtMs),
-                "expiresAtMs mismatch: " + name);
-            assertEquals(vector.path("tombstone").asBoolean(), decoded.tombstone, "tombstone mismatch: " + name);
+            assertEquals(
+                    vector.path("jsonBytesHex").asText(),
+                    HexFormat.of().formatHex(decoded.rawBytes),
+                    "rawBytes mismatch: " + name);
+            assertEquals(
+                    vector.path("version").asText(), decoded.version, "version mismatch: " + name);
+            assertEquals(
+                    vector.path("expiresAtMs").asText(),
+                    Long.toUnsignedString(decoded.expiresAtMs),
+                    "expiresAtMs mismatch: " + name);
+            assertEquals(
+                    vector.path("tombstone").asBoolean(),
+                    decoded.tombstone,
+                    "tombstone mismatch: " + name);
 
             byte[] member = HexFormat.of().parseHex(vector.path("cmsgpackMemberHex").asText());
-            assertArrayEquals(member, java.util.Arrays.copyOfRange(full, 1, full.length),
-                "cmsgpack member/full byte mismatch: " + name);
+            assertArrayEquals(
+                    member,
+                    java.util.Arrays.copyOfRange(full, 1, full.length),
+                    "cmsgpack member/full byte mismatch: " + name);
 
             if (!vector.path("tombstone").asBoolean()) {
                 JsonNode parsed = new ObjectMapper().readTree(decoded.rawBytes);
                 assertEquals(vector.path("decoded"), parsed, "JSON field mismatch: " + name);
             } else {
-                assertEquals(0, decoded.rawBytes.length, "tombstone must carry empty rawBytes: " + name);
+                assertEquals(
+                        0, decoded.rawBytes.length, "tombstone must carry empty rawBytes: " + name);
             }
         }
     }
 
     /**
-     * 21-location-runtime.md#2.4: {@code pendingCreation.requestContentReference}
-     * is {@code inline-v1:{base64url}} and no other form is recognized; the node
-     * that runs the creation verifies the decoded bytes against the same
-     * record's {@code requestEncodedSize} and {@code requestSha256}. This drives
-     * the production codec with the fixture's accepted and rejected vectors, so
-     * Java demonstrates rejection as well as acceptance.
+     * 21-location-runtime.md#2.4: {@code pendingCreation.requestContentReference} is {@code
+     * inline-v1:{base64url}} and no other form is recognized; the node that runs the creation
+     * verifies the decoded bytes against the same record's {@code requestEncodedSize} and {@code
+     * requestSha256}. This drives the production codec with the fixture's accepted and rejected
+     * vectors, so Java demonstrates rejection as well as acceptance.
      */
     @Test
     void creationContentReferencesAcceptAndRejectAsPinned() throws IOException {
@@ -104,15 +120,16 @@ final class ZLinkStoreRecordGoldenTest {
         int accepted = 0;
         for (JsonNode item : creation.path("accepted")) {
             byte[] expected = HexFormat.of().parseHex(item.path("payloadHex").asText());
-            byte[] payload = ZLinkInlineCreationContentCodec.decode(
-                item.path("reference").asText(),
-                HexFormat.of().parseHex(item.path("requestSha256").asText()),
-                item.path("requestEncodedSize").asInt());
+            byte[] payload =
+                    ZLinkInlineCreationContentCodec.decode(
+                            item.path("reference").asText(),
+                            HexFormat.of().parseHex(item.path("requestSha256").asText()),
+                            item.path("requestEncodedSize").asInt());
             assertArrayEquals(expected, payload, item.path("name").asText());
             assertEquals(
-                item.path("reference").asText(),
-                ZLinkInlineCreationContentCodec.encode(expected),
-                item.path("name").asText());
+                    item.path("reference").asText(),
+                    ZLinkInlineCreationContentCodec.encode(expected),
+                    item.path("name").asText());
             accepted++;
         }
         assertTrue(accepted > 0);
@@ -120,23 +137,27 @@ final class ZLinkStoreRecordGoldenTest {
         int rejected = 0;
         for (JsonNode item : creation.path("rejected")) {
             assertThrows(
-                IllegalArgumentException.class,
-                () -> ZLinkInlineCreationContentCodec.decode(
-                    item.path("reference").asText(),
-                    HexFormat.of().parseHex(item.path("requestSha256").asText()),
-                    item.path("requestEncodedSize").asInt()),
-                item.path("name").asText());
+                    IllegalArgumentException.class,
+                    () ->
+                            ZLinkInlineCreationContentCodec.decode(
+                                    item.path("reference").asText(),
+                                    HexFormat.of().parseHex(item.path("requestSha256").asText()),
+                                    item.path("requestEncodedSize").asInt()),
+                    item.path("name").asText());
             rejected++;
         }
         assertTrue(rejected > 0);
     }
 
-    private record OpaqueMember(String originalKey, byte[] rawBytes, String version, long expiresAtMs,
-            boolean tombstone) {
-    }
+    private record OpaqueMember(
+            String originalKey,
+            byte[] rawBytes,
+            String version,
+            long expiresAtMs,
+            boolean tombstone) {}
 
     private static OpaqueMember decodeOpaqueMember(byte[] bytes, int offset, int end)
-        throws UnsupportedEncodingException {
+            throws UnsupportedEncodingException {
         int[] cursor = {offset};
         int count = readArrayHead(bytes, cursor);
         if (count != 5) fail("invalid opaque member arity: " + count);

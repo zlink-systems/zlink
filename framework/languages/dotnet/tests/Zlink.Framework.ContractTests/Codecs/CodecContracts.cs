@@ -6,7 +6,11 @@ namespace Zlink.Framework.ContractTests.Codecs;
 public sealed class CodecContracts
 {
     [Fact]
-    [ContractExample(typeof(IZLinkCodecRegistryBuilder), typeof(IZLinkCodecRegistrar), typeof(IZLinkCodecExtension))]
+    [ContractExample(
+        typeof(IZLinkCodecRegistryBuilder),
+        typeof(IZLinkCodecRegistrar),
+        typeof(IZLinkCodecExtension)
+    )]
     public void Codec_registry_builder_registers_extensions_and_serializers()
     {
         var codecs = new ExampleCodecRegistryBuilder();
@@ -35,7 +39,9 @@ public sealed class CodecContracts
         public ZLinkEncodedPayload Serialize(object value, Type type)
         {
             var order = (Order)value;
-            return ZLinkEncodedPayload.From(Encoding.UTF8.GetBytes($"{order.Sku}:{order.Quantity}"));
+            return ZLinkEncodedPayload.From(
+                Encoding.UTF8.GetBytes($"{order.Sku}:{order.Quantity}")
+            );
         }
 
         public object? Deserialize(ZLinkEncodedPayload payload, Type type)
@@ -45,7 +51,9 @@ public sealed class CodecContracts
         }
     }
 
-    private sealed class ExampleCodecRegistryBuilder : IZLinkCodecRegistryBuilder, IZLinkCodecRegistrar
+    private sealed class ExampleCodecRegistryBuilder
+        : IZLinkCodecRegistryBuilder,
+            IZLinkCodecRegistrar
     {
         private readonly List<string> _enabledCodecs = [];
 
@@ -64,11 +72,11 @@ public sealed class CodecContracts
         public void AddSerializer(
             string contentType,
             IZLinkMessageSerializer serializer,
-            Func<Type, bool> canSerialize)
+            Func<Type, bool> canSerialize
+        )
         {
             _enabledCodecs.Add(contentType);
         }
-
     }
 
     private sealed class ExampleCodecExtension : IZLinkCodecExtension
@@ -78,5 +86,4 @@ public sealed class CodecContracts
             codecs.AddSerializer("application/example", new ExampleMessageSerializer());
         }
     }
-
 }

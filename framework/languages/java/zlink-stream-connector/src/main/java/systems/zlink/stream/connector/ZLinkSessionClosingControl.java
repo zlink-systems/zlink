@@ -10,8 +10,7 @@ final class ZLinkSessionClosingControl {
     static final int VERSION = 1;
     private static final int MAX_DIAGNOSTIC_BYTES = 512;
 
-    private ZLinkSessionClosingControl() {
-    }
+    private ZLinkSessionClosingControl() {}
 
     static ZLinkStreamCloseReason decode(byte[] payload) {
         if (payload.length < 4) {
@@ -21,17 +20,19 @@ final class ZLinkSessionClosingControl {
         int version = Byte.toUnsignedInt(buffer.get());
         int reason = Byte.toUnsignedInt(buffer.get());
         int diagnosticLength = Short.toUnsignedInt(buffer.getShort());
-        if (version != VERSION || diagnosticLength > MAX_DIAGNOSTIC_BYTES
-            || diagnosticLength != buffer.remaining()) {
+        if (version != VERSION
+                || diagnosticLength > MAX_DIAGNOSTIC_BYTES
+                || diagnosticLength != buffer.remaining()) {
             throw new IllegalArgumentException("invalid session-closing control");
         }
         byte[] diagnostic = new byte[diagnosticLength];
         buffer.get(diagnostic);
         try {
-            StandardCharsets.UTF_8.newDecoder()
-                .onMalformedInput(CodingErrorAction.REPORT)
-                .onUnmappableCharacter(CodingErrorAction.REPORT)
-                .decode(ByteBuffer.wrap(diagnostic));
+            StandardCharsets.UTF_8
+                    .newDecoder()
+                    .onMalformedInput(CodingErrorAction.REPORT)
+                    .onUnmappableCharacter(CodingErrorAction.REPORT)
+                    .decode(ByteBuffer.wrap(diagnostic));
         } catch (CharacterCodingException error) {
             throw new IllegalArgumentException("invalid session-closing diagnostic", error);
         }

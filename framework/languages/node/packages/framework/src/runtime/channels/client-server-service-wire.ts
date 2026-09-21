@@ -63,10 +63,7 @@ export function encodeClientServerHello(value: ZLinkClientServerHello): Buffer {
     encodeText8(value.channelName, 'channelName'),
     Buffer.of(DIRECTION_CLIENT_TO_SERVER),
     encodeText8(value.securityIdentity, 'securityIdentity'),
-    encodeNonZeroU32(
-      value.normalizedEffectiveMaxMessageBytes,
-      'normalizedEffectiveMaxMessageBytes'
-    )
+    encodeNonZeroU32(value.normalizedEffectiveMaxMessageBytes, 'normalizedEffectiveMaxMessageBytes')
   );
   return encodeAdmission(COMMAND_HELLO, ROLE_CLIENT, roleBody);
 }
@@ -101,18 +98,19 @@ export function encodeClientServerLivenessAck(probeId: bigint): Buffer {
 }
 
 export function isClientServerControlFrame(frame: Uint8Array): boolean {
-  return frame.byteLength >= 5
-    && frame[0] === MAGIC_0
-    && frame[1] === MAGIC_1
-    && frame[2] === WIRE_MAJOR;
+  return (
+    frame.byteLength >= 5 && frame[0] === MAGIC_0 && frame[1] === MAGIC_1 && frame[2] === WIRE_MAJOR
+  );
 }
 
 export function decodeClientServerControl(frame: Uint8Array): ZLinkClientServerControlRecord {
   if (frame.byteLength > MAX_DESCRIPTOR_BYTES) fail('ClientServer control record is oversized.');
   const reader = new Reader(frame);
-  if (reader.u8('magic[0]') !== MAGIC_0
-    || reader.u8('magic[1]') !== MAGIC_1
-    || reader.u8('wireMajor') !== WIRE_MAJOR) {
+  if (
+    reader.u8('magic[0]') !== MAGIC_0 ||
+    reader.u8('magic[1]') !== MAGIC_1 ||
+    reader.u8('wireMajor') !== WIRE_MAJOR
+  ) {
     fail('ClientServer control record prefix is invalid.');
   }
   const command = reader.u8('command');
@@ -150,9 +148,7 @@ export function decodeClientServerControl(frame: Uint8Array): ZLinkClientServerC
   if (role !== ROLE_SERVER) fail('ClientServer server admission role is invalid.');
   const admission = decodeServerAdmission(reader);
   reader.end();
-  return command === COMMAND_ADMIT
-    ? { kind: 'admit', admission }
-    : { kind: 'update', admission };
+  return command === COMMAND_ADMIT ? { kind: 'admit', admission } : { kind: 'update', admission };
 }
 
 function encodeLiveness(command: number, probeId: bigint): Buffer {
@@ -174,10 +170,7 @@ function encodeServerAdmission(
     encodeU32(descriptor.weight),
     Buffer.of(runtimeStateToWire(descriptor.state)),
     encodeText8(descriptor.securityIdentity, 'securityIdentity'),
-    encodeNonZeroU32(
-      normalizedEffectiveMaxMessageBytes,
-      'normalizedEffectiveMaxMessageBytes'
-    ),
+    encodeNonZeroU32(normalizedEffectiveMaxMessageBytes, 'normalizedEffectiveMaxMessageBytes'),
     encodeText16(descriptor.endpoint, 'advertisedEndpoint')
   );
   return encodeAdmission(command, ROLE_SERVER, roleBody);
@@ -204,9 +197,7 @@ function decodeClientHello(reader: Reader): ZLinkClientServerHello {
   return {
     channelName,
     securityIdentity: reader.text8('securityIdentity'),
-    normalizedEffectiveMaxMessageBytes: reader.nonZeroU32(
-      'normalizedEffectiveMaxMessageBytes'
-    )
+    normalizedEffectiveMaxMessageBytes: reader.nonZeroU32('normalizedEffectiveMaxMessageBytes')
   };
 }
 
@@ -228,9 +219,7 @@ function decodeServerAdmission(reader: Reader): ZLinkClientServerAdmission {
     weight,
     state: runtimeStateFromWire(reader.u8('runtimeState')),
     securityIdentity: reader.text8('securityIdentity'),
-    normalizedEffectiveMaxMessageBytes: reader.nonZeroU32(
-      'normalizedEffectiveMaxMessageBytes'
-    ),
+    normalizedEffectiveMaxMessageBytes: reader.nonZeroU32('normalizedEffectiveMaxMessageBytes'),
     advertisedEndpoint: normalizeEndpoint(reader.text16('advertisedEndpoint'))
   };
 }
@@ -278,25 +267,37 @@ function encodeText16(value: string, field: string): Buffer {
 
 function runtimeStateToWire(value: ZLinkFrameworkRuntimeState): number {
   switch (value) {
-    case ZLinkFrameworkRuntimeState.Preparing: return 0;
-    case ZLinkFrameworkRuntimeState.Serving: return 1;
+    case ZLinkFrameworkRuntimeState.Preparing:
+      return 0;
+    case ZLinkFrameworkRuntimeState.Serving:
+      return 1;
     case ZLinkFrameworkRuntimeState.Relocating:
     case ZLinkFrameworkRuntimeState.Relocated:
-    case ZLinkFrameworkRuntimeState.Draining: return 2;
-    case ZLinkFrameworkRuntimeState.Stopped: return 3;
-    case ZLinkFrameworkRuntimeState.Error: return 4;
-    default: fail('ClientServer runtime state is invalid.');
+    case ZLinkFrameworkRuntimeState.Draining:
+      return 2;
+    case ZLinkFrameworkRuntimeState.Stopped:
+      return 3;
+    case ZLinkFrameworkRuntimeState.Error:
+      return 4;
+    default:
+      fail('ClientServer runtime state is invalid.');
   }
 }
 
 function runtimeStateFromWire(value: number): ZLinkFrameworkRuntimeState {
   switch (value) {
-    case 0: return ZLinkFrameworkRuntimeState.Preparing;
-    case 1: return ZLinkFrameworkRuntimeState.Serving;
-    case 2: return ZLinkFrameworkRuntimeState.Draining;
-    case 3: return ZLinkFrameworkRuntimeState.Stopped;
-    case 4: return ZLinkFrameworkRuntimeState.Error;
-    default: fail('ClientServer runtime state is invalid.');
+    case 0:
+      return ZLinkFrameworkRuntimeState.Preparing;
+    case 1:
+      return ZLinkFrameworkRuntimeState.Serving;
+    case 2:
+      return ZLinkFrameworkRuntimeState.Draining;
+    case 3:
+      return ZLinkFrameworkRuntimeState.Stopped;
+    case 4:
+      return ZLinkFrameworkRuntimeState.Error;
+    default:
+      fail('ClientServer runtime state is invalid.');
   }
 }
 

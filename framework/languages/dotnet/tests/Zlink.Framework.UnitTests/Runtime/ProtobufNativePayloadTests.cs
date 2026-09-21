@@ -45,7 +45,10 @@ public sealed class ProtobufNativePayloadTests
 
         Assert.Equal(expected, part.ToArray());
         Assert.Equal(expected, publicPayload.Bytes.ToArray());
-        Assert.Equal(value, spanDeserializer.Deserialize(part.AsReadOnlySpan(), typeof(StringValue)));
+        Assert.Equal(
+            value,
+            spanDeserializer.Deserialize(part.AsReadOnlySpan(), typeof(StringValue))
+        );
         Assert.Equal(value, serializer.Deserialize(publicPayload, typeof(StringValue)));
         value.Value = "changed";
         Assert.Equal(expected, publicPayload.Bytes.ToArray());
@@ -62,12 +65,20 @@ public sealed class ProtobufNativePayloadTests
         Assert.True(codecs.TryGetSerializer("application/x-protobuf", out var serializer));
         var spanDeserializer = Assert.IsAssignableFrom<IZLinkMessageSpanDeserializer>(serializer);
         BytesValue decoded;
-        using (var part = ZLinkEnvelopeCodec.EncodeBody(value, typeof(BytesValue), codecs, out var contentType))
+        using (
+            var part = ZLinkEnvelopeCodec.EncodeBody(
+                value,
+                typeof(BytesValue),
+                codecs,
+                out var contentType
+            )
+        )
         {
             Assert.Equal("application/x-protobuf", contentType);
             Assert.Equal(value.ToByteArray(), part.ToArray());
-            decoded = Assert.IsType<BytesValue>(spanDeserializer.Deserialize(
-                part.AsReadOnlySpan(), typeof(BytesValue)));
+            decoded = Assert.IsType<BytesValue>(
+                spanDeserializer.Deserialize(part.AsReadOnlySpan(), typeof(BytesValue))
+            );
         }
 
         Assert.Equal(value, decoded);
@@ -82,28 +93,54 @@ public sealed class ProtobufNativePayloadTests
         var value = new BytesValue { Value = ByteString.CopyFrom(new byte[payloadSize]) };
         using var header = Message.From("header");
         using var body = ZLinkEnvelopeCodec.EncodeBody(value, typeof(BytesValue), codecs);
-        using var frame = ZLinkApplicationPayloadEnvelopeCodec.EncodeFrameworkMultipartMessage([header, body]);
+        using var frame = ZLinkApplicationPayloadEnvelopeCodec.EncodeFrameworkMultipartMessage([
+            header,
+            body,
+        ]);
         for (var index = 0; index < iterations; index++)
         {
-            Assert.True(ZLinkApplicationPayloadEnvelopeCodec.TryDecodeFrameworkMultipartView(frame, out var warmup));
-            _ = ZLinkEnvelopeCodec.DecodeBody(warmup, typeof(BytesValue), "application/x-protobuf", codecs);
+            Assert.True(
+                ZLinkApplicationPayloadEnvelopeCodec.TryDecodeFrameworkMultipartView(
+                    frame,
+                    out var warmup
+                )
+            );
+            _ = ZLinkEnvelopeCodec.DecodeBody(
+                warmup,
+                typeof(BytesValue),
+                "application/x-protobuf",
+                codecs
+            );
         }
 
         var before = GC.GetAllocatedBytesForCurrentThread();
         BytesValue? decoded = null;
         for (var index = 0; index < iterations; index++)
         {
-            if (!ZLinkApplicationPayloadEnvelopeCodec.TryDecodeFrameworkMultipartView(frame, out var view))
+            if (
+                !ZLinkApplicationPayloadEnvelopeCodec.TryDecodeFrameworkMultipartView(
+                    frame,
+                    out var view
+                )
+            )
                 throw new InvalidOperationException("The fixed multipart frame must decode.");
-            decoded = (BytesValue)ZLinkEnvelopeCodec.DecodeBody(
-                view, typeof(BytesValue), "application/x-protobuf", codecs)!;
+            decoded = (BytesValue)
+                ZLinkEnvelopeCodec.DecodeBody(
+                    view,
+                    typeof(BytesValue),
+                    "application/x-protobuf",
+                    codecs
+                )!;
         }
         var allocated = GC.GetAllocatedBytesForCurrentThread() - before;
 
         Assert.Equal(value, decoded);
         // ByteString owns one decoded payload array. A native-to-managed frame
         // copy before parsing would add a second payload-sized allocation.
-        Assert.True(allocated < (long)payloadSize * iterations * 5 / 4, $"managed bytes: {allocated}");
+        Assert.True(
+            allocated < (long)payloadSize * iterations * 5 / 4,
+            $"managed bytes: {allocated}"
+        );
     }
 
     [Fact]
@@ -126,12 +163,15 @@ public sealed class ProtobufNativePayloadTests
     private sealed class LegacyMessage : IMessage
     {
         public MessageDescriptor Descriptor => StringValue.Descriptor;
+
         public int CalculateSize() => 4;
+
         public void WriteTo(CodedOutputStream output)
         {
             output.WriteRawTag(0x0a);
             output.WriteString("ok");
         }
+
         public void MergeFrom(CodedInputStream input) => throw new NotSupportedException();
     }
 }

@@ -2,18 +2,20 @@ namespace Zlink.Framework.Runtime.Spots;
 
 internal interface IZLinkInstanceSpotHandlerRegistrySink
 {
-    void AddPacket<THandler>() where THandler : class;
+    void AddPacket<THandler>()
+        where THandler : class;
 }
 
-internal interface IZLinkSpotHandlerRegistrySink :
-    IZLinkInstanceSpotHandlerRegistrySink
+internal interface IZLinkSpotHandlerRegistrySink : IZLinkInstanceSpotHandlerRegistrySink
 {
+    void AddSubscribe<THandler>(string channelName, string topic)
+        where THandler : class;
 
-    void AddSubscribe<THandler>(string channelName, string topic) where THandler : class;
+    void AddHandler<THandler>()
+        where THandler : class;
 
-    void AddHandler<THandler>() where THandler : class;
-
-    void AddHandler<THandler>(string packetName) where THandler : class;
+    void AddHandler<THandler>(string packetName)
+        where THandler : class;
 
     void AddActorPacket<THandler, TActor>()
         where THandler : class
@@ -27,22 +29,26 @@ internal interface IZLinkSpotHandlerRegistrySink :
 internal sealed class ZLinkSpotHandlerRegistrySurface(IZLinkSpotHandlerRegistrySink activation)
     : IZLinkSpotHandlerRegistry
 {
-    public void AddPacket<THandler>() where THandler : class
+    public void AddPacket<THandler>()
+        where THandler : class
     {
         activation.AddPacket<THandler>();
     }
 
-    public void AddSubscribe<THandler>(string channelName, string topic) where THandler : class
+    public void AddSubscribe<THandler>(string channelName, string topic)
+        where THandler : class
     {
         activation.AddSubscribe<THandler>(channelName, topic);
     }
 
-    public void AddHandler<THandler>() where THandler : class
+    public void AddHandler<THandler>()
+        where THandler : class
     {
         activation.AddHandler<THandler>();
     }
 
-    public void AddHandler<THandler>(string packetName) where THandler : class
+    public void AddHandler<THandler>(string packetName)
+        where THandler : class
     {
         activation.AddHandler<THandler>(packetName);
     }
@@ -60,13 +66,14 @@ internal sealed class ZLinkSpotHandlerRegistrySurface(IZLinkSpotHandlerRegistryS
     {
         activation.AddActorPacket<THandler, TActor>(packetName);
     }
-
 }
 
 internal sealed class ZLinkInstanceSpotHandlerRegistrySurface(
-    IZLinkInstanceSpotHandlerRegistrySink activation) : IZLinkInstanceSpotHandlerRegistry
+    IZLinkInstanceSpotHandlerRegistrySink activation
+) : IZLinkInstanceSpotHandlerRegistry
 {
-    public void AddPacket<THandler>() where THandler : class
+    public void AddPacket<THandler>()
+        where THandler : class
     {
         activation.AddPacket<THandler>();
     }

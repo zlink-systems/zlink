@@ -43,11 +43,13 @@ public sealed class ActorFactoryContracts
         Assert.Equal(2, factory.CreatedCount);
 
         // Context owns identity; the factory does not receive a duplicate ID.
-        var typedCreate = typeof(IZLinkActorFactory<PlayerActor>)
-            .GetMethod(nameof(IZLinkActorFactory<PlayerActor>.CreateAsync))!;
+        var typedCreate = typeof(IZLinkActorFactory<PlayerActor>).GetMethod(
+            nameof(IZLinkActorFactory<PlayerActor>.CreateAsync)
+        )!;
         Assert.Equal(
             [typeof(IZLinkActorContext), typeof(CancellationToken)],
-            typedCreate.GetParameters().Select(parameter => parameter.ParameterType));
+            typedCreate.GetParameters().Select(parameter => parameter.ParameterType)
+        );
         Assert.Equal(typeof(ValueTask<PlayerActor>), typedCreate.ReturnType);
         Assert.Null(typeof(IZLinkActor).GetProperty("ActorId"));
     }
@@ -56,33 +58,28 @@ public sealed class ActorFactoryContracts
     [ContractExample(
         typeof(IZLinkActorRelocationAdapter<>),
         typeof(IZLinkActorFactory<>),
-        typeof(IZLinkActorFactoryBuilder<>))]
+        typeof(IZLinkActorFactoryBuilder<>)
+    )]
     public async Task Preserve_state_policy_moves_application_state_through_the_relocation_adapter()
     {
         // Registration decides how a cross-node move materializes the actor.
         // The builder requires exactly one of DisableRelocation,
         // RecreateOnRelocation or PreserveStateWith. The last choice names
         // the adapter that round-trips application state.
-        var builderMethods = typeof(IZLinkActorFactoryBuilder<PlayerActor>)
-            .GetMethods();
+        var builderMethods = typeof(IZLinkActorFactoryBuilder<PlayerActor>).GetMethods();
+        Assert.Contains(builderMethods, method => method.Name == "DisableRelocation");
+        Assert.Contains(builderMethods, method => method.Name == "RecreateOnRelocation");
         Assert.Contains(
             builderMethods,
-            method => method.Name == "DisableRelocation");
-        Assert.Contains(
-            builderMethods,
-            method => method.Name == "RecreateOnRelocation");
-        Assert.Contains(
-            builderMethods,
-            method => method.Name == "PreserveStateWith"
-                      && method.IsGenericMethodDefinition);
+            method => method.Name == "PreserveStateWith" && method.IsGenericMethodDefinition
+        );
 
         var factory = new PlayerActorFactory(startingLoadout: "torch,potion");
         var adapter = new PlayerRelocationAdapter();
 
         // Source node: the actor has played for a while before play-node-b
         // starts retiring.
-        var source = await factory.CreateAsync(
-            new ExampleActorContext("player-8821"));
+        var source = await factory.CreateAsync(new ExampleActorContext("player-8821"));
         source.Rating = 1901;
         source.Loadout = "torch,potion,greatsword";
 
@@ -91,8 +88,7 @@ public sealed class ActorFactoryContracts
         // Target node: Recreate's factory call happens first, so the restored
         // actor starts from the registered defaults and the adapter is the
         // only thing that carries the played-out state over.
-        var target = await factory.CreateAsync(
-            new ExampleActorContext("player-8821"));
+        var target = await factory.CreateAsync(new ExampleActorContext("player-8821"));
         Assert.Equal(0, target.Rating);
         Assert.Equal("torch,potion", target.Loadout);
 
@@ -108,17 +104,18 @@ public sealed class ActorFactoryContracts
         var adapterMethods = typeof(IZLinkActorRelocationAdapter<PlayerActor>).GetMethods();
         Assert.Equal(
             typeof(ValueTask<byte[]>),
-            adapterMethods.Single(method => method.Name == "CaptureAsync").ReturnType);
+            adapterMethods.Single(method => method.Name == "CaptureAsync").ReturnType
+        );
         Assert.Equal(
             [typeof(PlayerActor), typeof(ReadOnlyMemory<byte>), typeof(CancellationToken)],
             adapterMethods
                 .Single(method => method.Name == "RestoreAsync")
                 .GetParameters()
-                .Select(parameter => parameter.ParameterType));
+                .Select(parameter => parameter.ParameterType)
+        );
     }
 
-    private sealed class PlayerActor(IZLinkActorContext context, string loadout)
-        : IZLinkActor
+    private sealed class PlayerActor(IZLinkActorContext context, string loadout) : IZLinkActor
     {
         public IZLinkActorContext Context { get; } = context;
 
@@ -127,13 +124,15 @@ public sealed class ActorFactoryContracts
         public string Loadout { get; set; } = loadout;
     }
 
-    private sealed class PlayerActorFactory(string startingLoadout) : IZLinkActorFactory<PlayerActor>
+    private sealed class PlayerActorFactory(string startingLoadout)
+        : IZLinkActorFactory<PlayerActor>
     {
         public int CreatedCount { get; private set; }
 
         public ValueTask<PlayerActor> CreateAsync(
             IZLinkActorContext context,
-            CancellationToken cancellationToken = default)
+            CancellationToken cancellationToken = default
+        )
         {
             CreatedCount++;
             return ValueTask.FromResult(new PlayerActor(context, startingLoadout));
@@ -144,17 +143,18 @@ public sealed class ActorFactoryContracts
     {
         public ValueTask<byte[]> CaptureAsync(
             PlayerActor actor,
-            CancellationToken cancellationToken)
+            CancellationToken cancellationToken
+        )
         {
-            var state = JsonSerializer.Serialize(
-                new PlayerState(actor.Rating, actor.Loadout));
+            var state = JsonSerializer.Serialize(new PlayerState(actor.Rating, actor.Loadout));
             return ValueTask.FromResult(Encoding.UTF8.GetBytes(state));
         }
 
         public ValueTask RestoreAsync(
             PlayerActor actor,
             ReadOnlyMemory<byte> payload,
-            CancellationToken cancellationToken)
+            CancellationToken cancellationToken
+        )
         {
             var state = JsonSerializer.Deserialize<PlayerState>(payload.Span)!;
             actor.Rating = state.Rating;

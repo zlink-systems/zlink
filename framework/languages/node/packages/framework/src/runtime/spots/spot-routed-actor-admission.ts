@@ -26,10 +26,7 @@ import {
   type ZLinkRoutedActorTransferProvider,
   type ZLinkRemoteActorJoinWirePayload
 } from './spot-remote-codec';
-import {
-  submitRoutedActorJoinError,
-  submitRoutedActorJoinReply
-} from './spot-route-replies';
+import { submitRoutedActorJoinError, submitRoutedActorJoinReply } from './spot-route-replies';
 import type { ZLinkSpotSerialTurnExecutor } from './spot-serial-turn-executor';
 import type { ZLinkActorHandoffPacket, ZLinkActorHandoffResult } from '../actors/actor-handoff';
 
@@ -107,8 +104,9 @@ export class ZLinkSpotRoutedActorAdmission {
       const existing = this.pending.get(decoded.transferId);
       if (existing !== undefined) {
         this.requireMatchingTransfer(existing, decoded);
-        const reply = existing.admissionReply ?? await existing.admissionTask;
-        if (reply === undefined) throw new Error(`Remote actor transfer '${decoded.transferId}' has no admission result.`);
+        const reply = existing.admissionReply ?? (await existing.admissionTask);
+        if (reply === undefined)
+          throw new Error(`Remote actor transfer '${decoded.transferId}' has no admission result.`);
         submitRoutedActorJoinReply(received, decoded, reply);
         return;
       }
@@ -138,8 +136,14 @@ export class ZLinkSpotRoutedActorAdmission {
         throw new Error('Remote actor transfer commit requires a transfer id.');
       }
       const pending = this.pending.get(transferId);
-      if (pending === undefined || pending.actorId !== decoded.actorId || pending.actorType !== decoded.actorType) {
-        throw new Error(`Remote actor transfer '${transferId}' does not have a matching admission.`);
+      if (
+        pending === undefined ||
+        pending.actorId !== decoded.actorId ||
+        pending.actorType !== decoded.actorType
+      ) {
+        throw new Error(
+          `Remote actor transfer '${transferId}' does not have a matching admission.`
+        );
       }
       if (pending.phase === 'rejected') {
         throw new Error(`Remote actor transfer '${transferId}' admission was rejected.`);
@@ -152,7 +156,7 @@ export class ZLinkSpotRoutedActorAdmission {
         if (pending.deadline !== undefined) clearTimeout(pending.deadline);
         pending.commitTask = this.evaluateCommit(decoded, transferId, pending);
       }
-      const commitReply = pending.commitReply ?? await pending.commitTask;
+      const commitReply = pending.commitReply ?? (await pending.commitTask);
       submitRoutedActorJoinReply(received, decoded, commitReply);
     } catch (error) {
       submitRoutedActorJoinError(received, decoded, error);
@@ -167,15 +171,17 @@ export class ZLinkSpotRoutedActorAdmission {
   ): Promise<Record<string, unknown>> {
     try {
       const response = await this.runJoinCallback(decoded, decoded.request);
-      const reply = response.reply === undefined
-        ? undefined
-        : encodeFrameworkPayloadMessage(response.reply, this.options.messageSerializers);
+      const reply =
+        response.reply === undefined
+          ? undefined
+          : encodeFrameworkPayloadMessage(response.reply, this.options.messageSerializers);
       try {
         const actorRef = decoded.actorRef;
         const admissionReply = {
           accepted: response.accepted,
           actorNodeRid: String(actorRef?.nodeRid ?? ''),
-          actorNodeRidHex: actorRef?.nodeRid === undefined ? undefined : encodeRoutingIdHex(actorRef.nodeRid),
+          actorNodeRidHex:
+            actorRef?.nodeRid === undefined ? undefined : encodeRoutingIdHex(actorRef.nodeRid),
           actorId: decoded.actorId,
           actorGeneration: (actorRef?.generation ?? 0n).toString(),
           reply: reply?.data().toString('base64')
@@ -199,7 +205,10 @@ export class ZLinkSpotRoutedActorAdmission {
     pending: ZLinkPendingRoutedActorTransfer
   ): Promise<Record<string, unknown>> {
     try {
-      if (decoded.transferState === undefined || this.options.routedActorTransferProvider === undefined) {
+      if (
+        decoded.transferState === undefined ||
+        this.options.routedActorTransferProvider === undefined
+      ) {
         throw new Error('Remote actor transfer commit cannot materialize the target actor.');
       }
       const { actor, actorRef } = await this.options.routedActorTransferProvider(
@@ -210,7 +219,8 @@ export class ZLinkSpotRoutedActorAdmission {
         decoded.actorEntryNodeRid,
         decoded.remoteBoundSessionTarget
       );
-      const handoffResults = await this.options.commitTransferredActor?.(actor, decoded.handoffBacklog) ?? [];
+      const handoffResults =
+        (await this.options.commitTransferredActor?.(actor, decoded.handoffBacklog)) ?? [];
       const commitReply = {
         accepted: true,
         actorNodeRid: String(actorRef.nodeRid),
@@ -258,18 +268,17 @@ export class ZLinkSpotRoutedActorAdmission {
     decoded: ZLinkDecodedRemoteActorJoinRequest
   ): void {
     if (pending.actorId !== decoded.actorId || pending.actorType !== decoded.actorType) {
-      throw new Error(`Remote actor transfer '${decoded.transferId}' identity does not match its first request.`);
+      throw new Error(
+        `Remote actor transfer '${decoded.transferId}' identity does not match its first request.`
+      );
     }
   }
 
   private scheduleExpiration(transferId: string, pending: ZLinkPendingRoutedActorTransfer): void {
     if (pending.deadline !== undefined) clearTimeout(pending.deadline);
-    pending.deadline = setTimeout(
-      () => {
-        if (this.pending.get(transferId) === pending) this.pending.delete(transferId);
-      },
-      this.options.pendingAdmissionTimeoutMs ?? 30_000
-    );
+    pending.deadline = setTimeout(() => {
+      if (this.pending.get(transferId) === pending) this.pending.delete(transferId);
+    }, this.options.pendingAdmissionTimeoutMs ?? 30_000);
     pending.deadline.unref();
   }
 
@@ -289,10 +298,7 @@ export class ZLinkSpotRoutedActorAdmission {
       }
       try {
         const payload = JSON.parse(parts[0].data().toString()) as ZLinkRemoteActorJoinWirePayload;
-        if (
-          payload.packetName !== REMOTE_ACTOR_JOIN_PACKET ||
-          !isRemoteActorJoinPayload(payload)
-        ) {
+        if (payload.packetName !== REMOTE_ACTOR_JOIN_PACKET || !isRemoteActorJoinPayload(payload)) {
           return undefined;
         }
         return decodeRemoteActorJoinPayload(
@@ -306,7 +312,11 @@ export class ZLinkSpotRoutedActorAdmission {
       }
     }
     try {
-      const envelope = decodeChannelEnvelope(parts, undefined, this.options.flowEnabled?.() ?? true);
+      const envelope = decodeChannelEnvelope(
+        parts,
+        undefined,
+        this.options.flowEnabled?.() ?? true
+      );
       if (envelope.packetName !== REMOTE_ACTOR_JOIN_PACKET) {
         return undefined;
       }

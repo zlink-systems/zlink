@@ -9,7 +9,8 @@ export interface ZLinkSpotRouteBridgeReplyPayload {
   readonly actorPacketTarget?: ZLinkRemoteActorPacketTargetWire;
 }
 
-export function encodeSpotRouteBridgeReply(payload: ZLinkSpotRouteBridgeReplyPayload): ZLinkSpotRouteBridgeReplyPayload {
+export function encodeSpotRouteBridgeReply(
+  payload: ZLinkSpotRouteBridgeReplyPayload
+): ZLinkSpotRouteBridgeReplyPayload {
   return payload;
 }
-

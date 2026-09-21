@@ -71,8 +71,8 @@ template <typename T> struct task_state_t
                 return;
             }
             continuation = {};
-            result = result_t<T>::failure (error_code_t::disconnected,
-                                           "stream e2e task was canceled");
+            result =
+              result_t<T>::failure (error_code_t::disconnected, "stream e2e task was canceled");
         }
         ready.notify_all ();
     }
@@ -152,8 +152,8 @@ template <typename T> class task_t
 
         void return_value (result_t<T> value) { this->outcome = std::move (value); }
         template <typename U>
-        requires (!std::is_same_v<std::remove_cvref_t<U>, result_t<T>>) void return_value (
-          U &&value)
+            requires (!std::is_same_v<std::remove_cvref_t<U>, result_t<T>>)
+        void return_value (U &&value)
         {
             this->outcome = result_t<T>::success (T (std::forward<U> (value)));
         }
@@ -229,8 +229,8 @@ template <typename T> class task_t
         std::unique_lock<std::mutex> lock (_state->mutex);
         _state->ready.wait (lock, [this] { return _state->result.has_value (); });
         auto result = std::move (*_state->result);
-        _state->result = result_t<T>::failure (error_code_t::disconnected,
-                                               "stream e2e task result was consumed");
+        _state->result =
+          result_t<T>::failure (error_code_t::disconnected, "stream e2e task result was consumed");
         return result;
     }
 
@@ -377,7 +377,8 @@ template <> class task_t<void>
             _state->started = true;
             starter = _state->starter;
         }
-        starter ([state = _state] (result_t<void> result) { state->complete (std::move (result)); });
+        starter (
+          [state = _state] (result_t<void> result) { state->complete (std::move (result)); });
     }
 
     void cancel_pending ()

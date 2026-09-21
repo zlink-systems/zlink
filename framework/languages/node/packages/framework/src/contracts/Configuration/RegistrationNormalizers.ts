@@ -5,10 +5,7 @@ import type {
   ZLinkStreamCompressionCodec
 } from '../../contracts';
 import { ZLinkConfigurationException } from './ConfigurationException';
-import {
-  copyRouteInternalState,
-  markRouteTransportDeclared
-} from './RouteChannelInternalState';
+import { copyRouteInternalState, markRouteTransportDeclared } from './RouteChannelInternalState';
 import type {
   ZLinkChannelOptions,
   ZLinkFrameworkRegistration,
@@ -53,38 +50,49 @@ export function toChannelMap(
   channels: ZLinkFrameworkRegistrationOptions['channels'],
   network: ZLinkNetworkOptions
 ): Map<string, ZLinkChannelOptions> {
-  return new Map(Object.entries(channels ?? {}).map(([name, channel]) => {
-    const server = channel.server === undefined
-      ? undefined
-      : normalizeListener(channel.server, network);
-    const publisher = channel.publisher === undefined
-      ? undefined
-      : normalizeListener(channel.publisher, network);
-    // In-place: channel.client/subscriber.manualConnections can be the same
-    // array a live RuntimeEndpointConnections handle mutates, so this must
-    // not replace the array or the containing client/subscriber object.
-    normalizeEndpointList(channel.client?.manualConnections);
-    normalizeEndpointList(channel.subscriber?.manualConnections);
-    return [name, {
-      ...channel,
-      ...(server === undefined ? {} : { server }),
-      ...(publisher === undefined ? {} : { publisher }),
-      requestTimeoutMs: normalizeOptionalPositiveInteger(channel.requestTimeoutMs, `${name}.requestTimeoutMs`)
-    }];
-  }));
+  return new Map(
+    Object.entries(channels ?? {}).map(([name, channel]) => {
+      const server =
+        channel.server === undefined ? undefined : normalizeListener(channel.server, network);
+      const publisher =
+        channel.publisher === undefined ? undefined : normalizeListener(channel.publisher, network);
+      // In-place: channel.client/subscriber.manualConnections can be the same
+      // array a live RuntimeEndpointConnections handle mutates, so this must
+      // not replace the array or the containing client/subscriber object.
+      normalizeEndpointList(channel.client?.manualConnections);
+      normalizeEndpointList(channel.subscriber?.manualConnections);
+      return [
+        name,
+        {
+          ...channel,
+          ...(server === undefined ? {} : { server }),
+          ...(publisher === undefined ? {} : { publisher }),
+          requestTimeoutMs: normalizeOptionalPositiveInteger(
+            channel.requestTimeoutMs,
+            `${name}.requestTimeoutMs`
+          )
+        }
+      ];
+    })
+  );
 }
 
 export function toStreamNodeMap(
   streamNodes: ZLinkFrameworkRegistrationOptions['streamNodes'],
   network: ZLinkNetworkOptions
 ): Map<string, ZLinkStreamNodeOptions> {
-  return new Map(Object.entries(streamNodes ?? {}).map(([name, streamNode]) => {
-    const normalized = normalizeListener(streamNode, network);
-    return [name, {
-      ...normalized,
-      maxMessageSize: streamNode.maxMessageSize ?? DEFAULT_STREAM_NODE_MAX_MESSAGE_SIZE
-    }];
-  }));
+  return new Map(
+    Object.entries(streamNodes ?? {}).map(([name, streamNode]) => {
+      const normalized = normalizeListener(streamNode, network);
+      return [
+        name,
+        {
+          ...normalized,
+          maxMessageSize: streamNode.maxMessageSize ?? DEFAULT_STREAM_NODE_MAX_MESSAGE_SIZE
+        }
+      ];
+    })
+  );
 }
 
 export function toRouteChannelOptions(
@@ -112,7 +120,9 @@ export function toRouteChannelOptions(
       continue;
     }
     if (routeOptions.has(channelName)) {
-      throw new ZLinkConfigurationException(`Route mesh channel '${channelName}' is already registered.`);
+      throw new ZLinkConfigurationException(
+        `Route mesh channel '${channelName}' is already registered.`
+      );
     }
     const routeChannel = {
       routerChannelId: channelName,
@@ -139,7 +149,10 @@ export function requirePositiveInteger(label: string, value: number | undefined)
   }
 }
 
-export function normalizeOptionalPositiveInteger(value: number | undefined, label: string): number | undefined {
+export function normalizeOptionalPositiveInteger(
+  value: number | undefined,
+  label: string
+): number | undefined {
   requirePositiveInteger(label, value);
   return value;
 }
@@ -149,19 +162,18 @@ export function hasSpotNode(registration: ZLinkFrameworkRegistration): boolean {
 }
 
 export function hasActorManager(registration: ZLinkFrameworkRegistration): boolean {
-  const hasObjectCapability = [...registration.spotNodes.values()].some(node =>
-    node.objectRole === 'client'
-    || node.objectRole === 'server'
-    || (
-      node.actorFactories instanceof Map
+  const hasObjectCapability = [...registration.spotNodes.values()].some(
+    (node) =>
+      node.objectRole === 'client' ||
+      node.objectRole === 'server' ||
+      (node.actorFactories instanceof Map
         ? node.actorFactories.size > 0
-        : Object.keys(node.actorFactories ?? {}).length > 0
-    )
-    || Object.keys(node.actorFactoryRegistrations ?? {}).length > 0
+        : Object.keys(node.actorFactories ?? {}).length > 0) ||
+      Object.keys(node.actorFactoryRegistrations ?? {}).length > 0
   );
-  return hasObjectCapability && (
-    registration.locations.useInMemoryStores
-    || registration.locations.storeInstance !== undefined
+  return (
+    hasObjectCapability &&
+    (registration.locations.useInMemoryStores || registration.locations.storeInstance !== undefined)
   );
 }
 
@@ -179,7 +191,9 @@ export function toTypeMap(value: ZLinkSpotNodeOptions['actorFactories']): Map<st
   return new Map(Object.entries(value));
 }
 
-export function typeMapToRecord(value: ZLinkSpotNodeOptions['actorFactories']): Record<string, Type> {
+export function typeMapToRecord(
+  value: ZLinkSpotNodeOptions['actorFactories']
+): Record<string, Type> {
   if (value === undefined) {
     return {};
   }
@@ -193,8 +207,12 @@ function isTypeMap(value: ZLinkSpotNodeOptions['actorFactories']): value is Map<
   return value instanceof Map;
 }
 
-export function actorFactoriesFromSpotNodes(spotNodes: ReadonlyMap<string, ZLinkSpotNodeOptions>): Map<string, Type> {
-  const actorCapableNodes = [...spotNodes.values()].filter((spotNode) => toTypeMap(spotNode.actorFactories).size > 0);
+export function actorFactoriesFromSpotNodes(
+  spotNodes: ReadonlyMap<string, ZLinkSpotNodeOptions>
+): Map<string, Type> {
+  const actorCapableNodes = [...spotNodes.values()].filter(
+    (spotNode) => toTypeMap(spotNode.actorFactories).size > 0
+  );
   if (actorCapableNodes.length === 0) {
     return new Map();
   }
@@ -209,44 +227,49 @@ export function toSpotNodeMap(
     return new Map();
   }
   if (!Array.isArray(value)) {
-    return new Map(Object.entries(value).map(([name, spotNode]) => [
-      name,
-      normalizeSpotNodeOptions(spotNode, network)
-    ]));
+    return new Map(
+      Object.entries(value).map(([name, spotNode]) => [
+        name,
+        normalizeSpotNodeOptions(spotNode, network)
+      ])
+    );
   }
-  return new Map(value.map((spotNode) => {
-    if (typeof spotNode === 'string') {
-      return [spotNode, normalizeSpotNodeOptions({}, network)];
-    }
-    const { name, ...options } = spotNode;
-    return [name, normalizeSpotNodeOptions(options, network)];
-  }));
+  return new Map(
+    value.map((spotNode) => {
+      if (typeof spotNode === 'string') {
+        return [spotNode, normalizeSpotNodeOptions({}, network)];
+      }
+      const { name, ...options } = spotNode;
+      return [name, normalizeSpotNodeOptions(options, network)];
+    })
+  );
 }
 
 function normalizeSpotNodeOptions(
   spotNode: ZLinkSpotNodeOptions,
   network: ZLinkNetworkOptions
 ): ZLinkSpotNodeOptions {
-  const router = spotNode.router === undefined
-    ? undefined
-    : normalizeListener(spotNode.router, network);
+  const router =
+    spotNode.router === undefined ? undefined : normalizeListener(spotNode.router, network);
   return {
     ...spotNode,
-    router: router === undefined
-      ? undefined
-      : {
-          ...router,
-          routingId: router.routingId ?? spotNode.routingId,
-          manualConnections: normalizeEndpointList(router.manualConnections),
-          manualPeerConnections: normalizeManualPeerConnections(router.manualPeerConnections)
-        },
-    pubSub: spotNode.pubSub === undefined
-      ? undefined
-      : {
-          ...spotNode.pubSub,
-          routingId: spotNode.pubSub.routingId ?? spotNode.routingId,
-          manualConnections: normalizeEndpointList(spotNode.pubSub.manualConnections)
-        }
+    router:
+      router === undefined
+        ? undefined
+        : {
+            ...router,
+            routingId: router.routingId ?? spotNode.routingId,
+            manualConnections: normalizeEndpointList(router.manualConnections),
+            manualPeerConnections: normalizeManualPeerConnections(router.manualPeerConnections)
+          },
+    pubSub:
+      spotNode.pubSub === undefined
+        ? undefined
+        : {
+            ...spotNode.pubSub,
+            routingId: spotNode.pubSub.routingId ?? spotNode.routingId,
+            manualConnections: normalizeEndpointList(spotNode.pubSub.manualConnections)
+          }
   };
 }
 
@@ -257,15 +280,18 @@ function normalizeListener<
     readonly advertiseHost?: string;
     readonly port?: number;
   }
->(listener: T, network: ZLinkNetworkOptions): T & {
+>(
+  listener: T,
+  network: ZLinkNetworkOptions
+): T & {
   readonly bind: string;
   readonly bindHost?: string;
   readonly port: number;
 } {
   const usesConfiguredEndpoint = listener.bind !== undefined && listener.port === undefined;
   const port = listener.port ?? (usesConfiguredEndpoint ? endpointPort(listener.bind!) : 0);
-  const bindHost = listener.bindHost
-    ?? (usesConfiguredEndpoint ? endpointHost(listener.bind!) : network.bindHost);
+  const bindHost =
+    listener.bindHost ?? (usesConfiguredEndpoint ? endpointHost(listener.bind!) : network.bindHost);
   const bind = usesConfiguredEndpoint
     ? normalizeEndpoint(listener.bind!)
     : tcpEndpoint(bindHost ?? network.bindHost, port);
@@ -372,10 +398,14 @@ export function normalizeStreamCompression(
     return undefined;
   }
   if (value.disabled === true && value.codec !== undefined) {
-    throw new ZLinkConfigurationException('STREAM compression codec cannot be set when compression is disabled.');
+    throw new ZLinkConfigurationException(
+      'STREAM compression codec cannot be set when compression is disabled.'
+    );
   }
   if (value.codec !== undefined && !isStreamCompressionCodec(value.codec)) {
-    throw new ZLinkConfigurationException('STREAM compression codec must provide compress and decompress functions.');
+    throw new ZLinkConfigurationException(
+      'STREAM compression codec must provide compress and decompress functions.'
+    );
   }
   return {
     disabled: value.disabled,
@@ -384,10 +414,12 @@ export function normalizeStreamCompression(
 }
 
 export function isStreamCompressionCodec(value: unknown): value is ZLinkStreamCompressionCodec {
-  return typeof value === 'object'
-    && value !== null
-    && typeof (value as { compress?: unknown }).compress === 'function'
-    && typeof (value as { decompress?: unknown }).decompress === 'function';
+  return (
+    typeof value === 'object' &&
+    value !== null &&
+    typeof (value as { compress?: unknown }).compress === 'function' &&
+    typeof (value as { decompress?: unknown }).decompress === 'function'
+  );
 }
 
 export function normalizeLocationRegistration(

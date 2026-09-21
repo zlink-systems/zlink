@@ -8,17 +8,13 @@ namespace Zlink.Framework.Runtime.Backend.Contracts;
 /// </summary>
 internal interface IZLinkBackendRuntimeContext : IAsyncDisposable
 {
-    void ConfigureCoreHwm(
-        AutoHwmProfile profile,
-        ulong memoryLimitBytes,
-        ulong budgetBytes);
+    void ConfigureCoreHwm(AutoHwmProfile profile, ulong memoryLimitBytes, ulong budgetBytes);
 
     CoreHwmBudgetSnapshot GetCoreHwmBudgetSnapshot();
 
     void ResetCoreHwmBudgetMetrics();
 
-    void ConfigureApplicationJobQueue(
-        ZLinkApplicationJobQueue applicationJobQueue);
+    void ConfigureApplicationJobQueue(ZLinkApplicationJobQueue applicationJobQueue);
 
     IDealerSocket CreateDealerSocket();
 
@@ -32,5 +28,6 @@ internal interface IZLinkBackendRuntimeContext : IAsyncDisposable
 
     IZLinkBackendStreamSocket CreateStreamSocket(
         string standaloneMeshName,
-        IZLinkBackendSpotNode? actorDispatchNode = null);
+        IZLinkBackendSpotNode? actorDispatchNode = null
+    );
 }

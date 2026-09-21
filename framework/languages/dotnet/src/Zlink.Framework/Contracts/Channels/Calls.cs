@@ -16,8 +16,7 @@ public interface IZLinkMetadataCall<TSelf>
 
 public interface IZLinkSendCall : IZLinkMetadataCall<IZLinkSendCall>
 {
-    ValueTask Async(
-        CancellationToken cancellationToken = default);
+    ValueTask Async(CancellationToken cancellationToken = default);
 
     /// <summary>
     /// Blocks the application thread until source-local admission completes.
@@ -56,12 +55,10 @@ public interface IZLinkPublishCall : IZLinkMetadataCall<IZLinkPublishCall>
     ///     queue and to each matching local Spot queue. Completion does not
     ///     wait for a remote Spot queue, subscriber handler, or remote ACK.
     /// </summary>
-    ValueTask Async(
-        CancellationToken cancellationToken = default);
+    ValueTask Async(CancellationToken cancellationToken = default);
 }
 
 public interface IZLinkFanoutPublishCall
 {
-    ValueTask Async(
-        CancellationToken cancellationToken = default);
+    ValueTask Async(CancellationToken cancellationToken = default);
 }

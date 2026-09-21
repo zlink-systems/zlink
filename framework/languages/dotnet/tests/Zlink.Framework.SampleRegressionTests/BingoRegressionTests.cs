@@ -13,48 +13,80 @@ public sealed partial class RegressionTests
             Path.Combine(sampleRoot, "Server", "Api", "ApiServerHostFactory.cs"),
             Path.Combine(sampleRoot, "Server", "Matchmaking", "MatchmakingServerHostFactory.cs"),
             Path.Combine(sampleRoot, "Server", "Play", "PlayServerHostFactory.cs"),
-            Path.Combine(sampleRoot, "Server", "Session", "SessionServerHostFactory.cs")
+            Path.Combine(sampleRoot, "Server", "Session", "SessionServerHostFactory.cs"),
         };
 
         var api = ReadSource(hosts[0]);
         var matchmaking = ReadSource(hosts[1]);
         var play = ReadSource(hosts[2]);
-        var names = ReadSource(Path.Combine(
-            sampleRoot,
-            "Server",
-            "Configuration",
-            "SampleNames.cs"));
-        var matchHandler = ReadSource(Path.Combine(
-            sampleRoot,
-            "Server",
-            "Api",
-            "Handlers",
-            "MatchBingoHandler.cs"));
+        var names = ReadSource(
+            Path.Combine(sampleRoot, "Server", "Configuration", "SampleNames.cs")
+        );
+        var matchHandler = ReadSource(
+            Path.Combine(sampleRoot, "Server", "Api", "Handlers", "MatchBingoHandler.cs")
+        );
         Assert.Contains("AddHandlersFromAssemblyOf", api, StringComparison.Ordinal);
         Assert.Contains("AddHandlerGroup(\"api\")", api, StringComparison.Ordinal);
         Assert.DoesNotContain("AddRequestHandler<", api, StringComparison.Ordinal);
         Assert.Contains("AddRouteMesh(SampleNames.PlayMeshName)", api, StringComparison.Ordinal);
-        Assert.Contains("AddRouteMesh(SampleNames.MatchmakingMeshName)", api, StringComparison.Ordinal);
-        Assert.Contains("AddClientServerChannel(SampleNames.ApiChannel)", api, StringComparison.Ordinal);
-        Assert.Contains("AddInstanceSpotFactory<BingoMatchmaker>", matchmaking, StringComparison.Ordinal);
+        Assert.Contains(
+            "AddRouteMesh(SampleNames.MatchmakingMeshName)",
+            api,
+            StringComparison.Ordinal
+        );
+        Assert.Contains(
+            "AddClientServerChannel(SampleNames.ApiChannel)",
+            api,
+            StringComparison.Ordinal
+        );
+        Assert.Contains(
+            "AddInstanceSpotFactory<BingoMatchmaker>",
+            matchmaking,
+            StringComparison.Ordinal
+        );
         Assert.Contains("RoomChannel = \"bingo.room\"", names, StringComparison.Ordinal);
         Assert.DoesNotContain("PlayChannel", names, StringComparison.Ordinal);
-        Assert.Contains("mesh.Channel(SampleNames.RoomChannel).Server()", play, StringComparison.Ordinal);
-        Assert.Contains(".InstanceSpot(SampleNames.MatchmakerSpotType)", matchHandler,
-            StringComparison.Ordinal);
+        Assert.Contains(
+            "mesh.Channel(SampleNames.RoomChannel).Server()",
+            play,
+            StringComparison.Ordinal
+        );
+        Assert.Contains(
+            ".InstanceSpot(SampleNames.MatchmakerSpotType)",
+            matchHandler,
+            StringComparison.Ordinal
+        );
     }
 
     [Fact]
     public void Bingo_Registers_Stateful_Actor_Relocation_Adapter()
     {
         var sampleRoot = ResolveSampleRoot("Bingo");
-        var host = ReadSource(Path.Combine(sampleRoot, "Server", "Play", "PlayServerHostFactory.cs"));
-        var adapter = ReadSource(Path.Combine(sampleRoot, "Server", "Play", "Infrastructure", "ZLink",
-            "Actors", "PlayerActorRelocationAdapter.cs"));
+        var host = ReadSource(
+            Path.Combine(sampleRoot, "Server", "Play", "PlayServerHostFactory.cs")
+        );
+        var adapter = ReadSource(
+            Path.Combine(
+                sampleRoot,
+                "Server",
+                "Play",
+                "Infrastructure",
+                "ZLink",
+                "Actors",
+                "PlayerActorRelocationAdapter.cs"
+            )
+        );
 
-        Assert.Contains("PreserveStateWith<PlayerActorRelocationAdapter>()", host,
-            StringComparison.Ordinal);
-        Assert.Contains("IZLinkActorRelocationAdapter<PlayerActor>", adapter, StringComparison.Ordinal);
+        Assert.Contains(
+            "PreserveStateWith<PlayerActorRelocationAdapter>()",
+            host,
+            StringComparison.Ordinal
+        );
+        Assert.Contains(
+            "IZLinkActorRelocationAdapter<PlayerActor>",
+            adapter,
+            StringComparison.Ordinal
+        );
         Assert.Contains("ValueTask<byte[]> CaptureAsync", adapter, StringComparison.Ordinal);
         Assert.Contains("ValueTask RestoreAsync", adapter, StringComparison.Ordinal);
     }
@@ -63,26 +95,61 @@ public sealed partial class RegressionTests
     public void Bingo_Registers_Application_Signaled_Room_Relocation_And_Join_Dedupe()
     {
         var sampleRoot = ResolveSampleRoot("Bingo");
-        var host = ReadSource(Path.Combine(
-            sampleRoot, "Server", "Play", "PlayServerHostFactory.cs"));
-        var roomAdapter = ReadSource(Path.Combine(
-            sampleRoot, "Server", "Play", "Infrastructure", "ZLink", "Spots",
-            "BingoRoomSpot", "BingoRoomRelocationAdapter.cs"));
-        var actor = ReadSource(Path.Combine(
-            sampleRoot, "Server", "Play", "Infrastructure", "ZLink", "Actors",
-            "PlayerActor.cs"));
-        var actorAdapter = ReadSource(Path.Combine(
-            sampleRoot, "Server", "Play", "Infrastructure", "ZLink", "Actors",
-            "PlayerActorRelocationAdapter.cs"));
+        var host = ReadSource(
+            Path.Combine(sampleRoot, "Server", "Play", "PlayServerHostFactory.cs")
+        );
+        var roomAdapter = ReadSource(
+            Path.Combine(
+                sampleRoot,
+                "Server",
+                "Play",
+                "Infrastructure",
+                "ZLink",
+                "Spots",
+                "BingoRoomSpot",
+                "BingoRoomRelocationAdapter.cs"
+            )
+        );
+        var actor = ReadSource(
+            Path.Combine(
+                sampleRoot,
+                "Server",
+                "Play",
+                "Infrastructure",
+                "ZLink",
+                "Actors",
+                "PlayerActor.cs"
+            )
+        );
+        var actorAdapter = ReadSource(
+            Path.Combine(
+                sampleRoot,
+                "Server",
+                "Play",
+                "Infrastructure",
+                "ZLink",
+                "Actors",
+                "PlayerActorRelocationAdapter.cs"
+            )
+        );
 
         Assert.Contains(".RelocationCoordinationMode(", host, StringComparison.Ordinal);
         Assert.Contains("ApplicationSignaled", host, StringComparison.Ordinal);
         Assert.Contains(
             "PreserveStateWith<BingoRoomRelocationAdapter>()",
             host,
-            StringComparison.Ordinal);
-        Assert.Contains("IZLinkSpotRelocationAdapter<BingoRoom>", roomAdapter, StringComparison.Ordinal);
-        Assert.Contains("LastCompletedJoinOperationId == operationId", actor, StringComparison.Ordinal);
+            StringComparison.Ordinal
+        );
+        Assert.Contains(
+            "IZLinkSpotRelocationAdapter<BingoRoom>",
+            roomAdapter,
+            StringComparison.Ordinal
+        );
+        Assert.Contains(
+            "LastCompletedJoinOperationId == operationId",
+            actor,
+            StringComparison.Ordinal
+        );
         Assert.Contains("JoinOperationHigh", actorAdapter, StringComparison.Ordinal);
         Assert.Contains("JoinOperationLow", actorAdapter, StringComparison.Ordinal);
     }
@@ -109,58 +176,136 @@ public sealed partial class RegressionTests
         var scenario = ReadSource(Path.Combine(sampleRoot, "Client", "BingoClientScenario.cs"));
 
         Assert.Contains("client1Card.State.Players.Count == 2", scenario, StringComparison.Ordinal);
-        Assert.Contains("client1Card.State.Players.All(static player => player.Card.Count == 9)", scenario,
-            StringComparison.Ordinal);
-        Assert.Contains("client2Drawn.Payload.State.Equals(client1Drawn.Payload.State)", scenario,
-            StringComparison.Ordinal);
+        Assert.Contains(
+            "client1Card.State.Players.All(static player => player.Card.Count == 9)",
+            scenario,
+            StringComparison.Ordinal
+        );
+        Assert.Contains(
+            "client2Drawn.Payload.State.Equals(client1Drawn.Payload.State)",
+            scenario,
+            StringComparison.Ordinal
+        );
         Assert.Contains(
             NormalizeWhitespace("connector.Request(new MatchBingoReq"),
             NormalizeWhitespace(scenario),
-            StringComparison.Ordinal);
-        Assert.Contains(".Async<MatchBingoRes>(cancellationToken)", scenario, StringComparison.Ordinal);
+            StringComparison.Ordinal
+        );
+        Assert.Contains(
+            ".Async<MatchBingoRes>(cancellationToken)",
+            scenario,
+            StringComparison.Ordinal
+        );
         Assert.Contains(
             NormalizeWhitespace("connector.Request(new ObserveBingoEventsReq"),
             NormalizeWhitespace(scenario),
-            StringComparison.Ordinal);
-        Assert.Contains(".Async<ObserveBingoEventsRes>(cancellationToken)", scenario, StringComparison.Ordinal);
+            StringComparison.Ordinal
+        );
+        Assert.Contains(
+            ".Async<ObserveBingoEventsRes>(cancellationToken)",
+            scenario,
+            StringComparison.Ordinal
+        );
         Assert.Contains("WaitFor<BingoGameStartedNotify>()", scenario, StringComparison.Ordinal);
-        Assert.DoesNotContain("State = new BingoRoomState()", ReadSource(Path.Combine(
-            sampleRoot,
-            "Server",
-            "Play",
-            "Infrastructure",
-            "ZLink",
-            "Spots",
-            "EntrySpot",
-            "Handlers",
-            "MatchBingoActorHandler.cs")), StringComparison.Ordinal);
+        Assert.DoesNotContain(
+            "State = new BingoRoomState()",
+            ReadSource(
+                Path.Combine(
+                    sampleRoot,
+                    "Server",
+                    "Play",
+                    "Infrastructure",
+                    "ZLink",
+                    "Spots",
+                    "EntrySpot",
+                    "Handlers",
+                    "MatchBingoActorHandler.cs"
+                )
+            ),
+            StringComparison.Ordinal
+        );
     }
 
     [Fact]
     public void Bingo_Creates_A_New_Room_Through_Framework_Placement()
     {
         var sampleRoot = ResolveSampleRoot("Bingo");
-        var handler = ReadSource(Path.Combine(sampleRoot, "Server", "Api", "Handlers",
-            "MatchBingoHandler.cs"));
-        var matchmaker = ReadSource(Path.Combine(sampleRoot, "Server", "Matchmaking",
-            "Infrastructure", "ZLink", "BingoMatchmakerHandlers.cs"));
-        var observer = ReadSource(Path.Combine(sampleRoot, "Server", "Play", "Infrastructure",
-            "ZLink", "Spots", "EntrySpot", "Handlers", "ObserveBingoEventsHandler.cs"));
-        var mapper = ReadSource(Path.Combine(sampleRoot, "Server", "Play", "Infrastructure",
-            "ZLink", "Spots", "BingoRoomSpot", "BingoRoomSettingsPayloadMapper.cs"));
+        var handler = ReadSource(
+            Path.Combine(sampleRoot, "Server", "Api", "Handlers", "MatchBingoHandler.cs")
+        );
+        var matchmaker = ReadSource(
+            Path.Combine(
+                sampleRoot,
+                "Server",
+                "Matchmaking",
+                "Infrastructure",
+                "ZLink",
+                "BingoMatchmakerHandlers.cs"
+            )
+        );
+        var observer = ReadSource(
+            Path.Combine(
+                sampleRoot,
+                "Server",
+                "Play",
+                "Infrastructure",
+                "ZLink",
+                "Spots",
+                "EntrySpot",
+                "Handlers",
+                "ObserveBingoEventsHandler.cs"
+            )
+        );
+        var mapper = ReadSource(
+            Path.Combine(
+                sampleRoot,
+                "Server",
+                "Play",
+                "Infrastructure",
+                "ZLink",
+                "Spots",
+                "BingoRoomSpot",
+                "BingoRoomSettingsPayloadMapper.cs"
+            )
+        );
 
         Assert.Contains("RequestToSpot(", handler, StringComparison.Ordinal);
-        Assert.Contains(".InstanceSpot(SampleNames.MatchmakerSpotType)", handler, StringComparison.Ordinal);
-        Assert.Contains(".GetOrCreate(allocated.RoomId, SampleNames.RoomSpotType)", handler,
-            StringComparison.Ordinal);
-        Assert.Contains(".Request(new BingoRoomCreateReq { Settings = allocated.Settings })", handler,
-            StringComparison.Ordinal);
+        Assert.Contains(
+            ".InstanceSpot(SampleNames.MatchmakerSpotType)",
+            handler,
+            StringComparison.Ordinal
+        );
+        Assert.Contains(
+            ".GetOrCreate(allocated.RoomId, SampleNames.RoomSpotType)",
+            handler,
+            StringComparison.Ordinal
+        );
+        Assert.Contains(
+            ".Request(new BingoRoomCreateReq { Settings = allocated.Settings })",
+            handler,
+            StringComparison.Ordinal
+        );
         Assert.DoesNotContain(".Request(allocated.Settings)", handler, StringComparison.Ordinal);
-        Assert.Contains(".Request(BingoRoomSettingsPayloadMapper.ToCreateRequest(settings))", observer,
-            StringComparison.Ordinal);
-        Assert.Contains("request.Decode<BingoRoomCreateReq>().Settings", mapper, StringComparison.Ordinal);
-        Assert.DoesNotContain("request.Decode<BingoRoomSettingsPayload>()", mapper, StringComparison.Ordinal);
-        Assert.Contains("IZLinkSpotRequestHandler<BingoMatchmaker", matchmaker, StringComparison.Ordinal);
+        Assert.Contains(
+            ".Request(BingoRoomSettingsPayloadMapper.ToCreateRequest(settings))",
+            observer,
+            StringComparison.Ordinal
+        );
+        Assert.Contains(
+            "request.Decode<BingoRoomCreateReq>().Settings",
+            mapper,
+            StringComparison.Ordinal
+        );
+        Assert.DoesNotContain(
+            "request.Decode<BingoRoomSettingsPayload>()",
+            mapper,
+            StringComparison.Ordinal
+        );
+        Assert.Contains(
+            "IZLinkSpotRequestHandler<BingoMatchmaker",
+            matchmaker,
+            StringComparison.Ordinal
+        );
         Assert.DoesNotContain("NodeRid", handler, StringComparison.Ordinal);
     }
 
@@ -170,18 +315,16 @@ public sealed partial class RegressionTests
         var sampleRoot = ResolveSampleRoot("Bingo");
         var runner = ReadSource(Path.Combine(sampleRoot, "run_sample.sh"));
 
-        var playBStart = runner.IndexOf(
-            "start_server play-b",
-            StringComparison.Ordinal);
-        var playAStart = runner.IndexOf(
-            "start_server play-a",
-            StringComparison.Ordinal);
+        var playBStart = runner.IndexOf("start_server play-b", StringComparison.Ordinal);
+        var playAStart = runner.IndexOf("start_server play-a", StringComparison.Ordinal);
         var completed = runner.IndexOf(
             "echo \"bingo-placement=completed\"",
-            StringComparison.Ordinal);
+            StringComparison.Ordinal
+        );
         var finalEvidence = runner.LastIndexOf(
             "wait_log_count 0 \"bingo-lifecycle entry-destroy-complete actor=observer\"",
-            StringComparison.Ordinal);
+            StringComparison.Ordinal
+        );
 
         Assert.True(playBStart >= 0 && playAStart > playBStart);
         Assert.True(completed > finalEvidence);
@@ -193,10 +336,24 @@ public sealed partial class RegressionTests
     public void Bingo_Player_Records_Are_Loaded_And_Reported_Through_Yielding_Room_Lifecycle()
     {
         var sampleRoot = ResolveSampleRoot("Bingo");
-        var contracts = ReadSource(Path.Combine(sampleRoot, "Shared", "Contracts", "bingo_messages.proto"));
-        var room = ReadSource(Path.Combine(sampleRoot, "Server", "Play", "Infrastructure", "ZLink",
-            "Spots", "BingoRoomSpot", "BingoRoom.cs"));
-        var apiHost = ReadSource(Path.Combine(sampleRoot, "Server", "Api", "ApiServerHostFactory.cs"));
+        var contracts = ReadSource(
+            Path.Combine(sampleRoot, "Shared", "Contracts", "bingo_messages.proto")
+        );
+        var room = ReadSource(
+            Path.Combine(
+                sampleRoot,
+                "Server",
+                "Play",
+                "Infrastructure",
+                "ZLink",
+                "Spots",
+                "BingoRoomSpot",
+                "BingoRoom.cs"
+            )
+        );
+        var apiHost = ReadSource(
+            Path.Combine(sampleRoot, "Server", "Api", "ApiServerHostFactory.cs")
+        );
         var scenario = ReadSource(Path.Combine(sampleRoot, "Client", "BingoClientScenario.cs"));
 
         Assert.Contains("message GetPlayerRecordReq", contracts, StringComparison.Ordinal);
@@ -206,25 +363,53 @@ public sealed partial class RegressionTests
         Assert.Contains(".Yield<GetPlayerRecordRes>", room, StringComparison.Ordinal);
         Assert.Contains(".Yield<ReportBingoResultRes>", room, StringComparison.Ordinal);
         Assert.Contains("AddSingleton<BingoPlayerRecordStore>", apiHost, StringComparison.Ordinal);
-        Assert.Contains("player.Wins == 0 && player.Losses == 0", scenario, StringComparison.Ordinal);
+        Assert.Contains(
+            "player.Wins == 0 && player.Losses == 0",
+            scenario,
+            StringComparison.Ordinal
+        );
     }
 
     [Fact]
     public void Bingo_Client_Contract_Uses_Optional_Auth_Fields_And_No_Unlisted_Notifies()
     {
         var sampleRoot = ResolveSampleRoot("Bingo");
-        var contracts = ReadSource(Path.Combine(sampleRoot, "Shared", "Contracts",
-            "bingo_messages.proto"));
-        var playerActor = ReadSource(Path.Combine(sampleRoot, "Server", "Play",
-            "Infrastructure", "ZLink", "Actors", "PlayerActor.cs"));
-        var entrySpot = ReadSource(Path.Combine(sampleRoot, "Server", "Play",
-            "Infrastructure", "ZLink", "Spots", "EntrySpot", "BingoEntrySpot.cs"));
+        var contracts = ReadSource(
+            Path.Combine(sampleRoot, "Shared", "Contracts", "bingo_messages.proto")
+        );
+        var playerActor = ReadSource(
+            Path.Combine(
+                sampleRoot,
+                "Server",
+                "Play",
+                "Infrastructure",
+                "ZLink",
+                "Actors",
+                "PlayerActor.cs"
+            )
+        );
+        var entrySpot = ReadSource(
+            Path.Combine(
+                sampleRoot,
+                "Server",
+                "Play",
+                "Infrastructure",
+                "ZLink",
+                "Spots",
+                "EntrySpot",
+                "BingoEntrySpot.cs"
+            )
+        );
 
         Assert.Contains("optional string actor_id = 2", contracts, StringComparison.Ordinal);
         Assert.Contains("optional string display_name = 3", contracts, StringComparison.Ordinal);
         Assert.Contains("optional string reason = 4", contracts, StringComparison.Ordinal);
         Assert.DoesNotContain("message BingoJoinFailedNotify", contracts, StringComparison.Ordinal);
-        Assert.DoesNotContain("message BingoActorEntrySpotNotify", contracts, StringComparison.Ordinal);
+        Assert.DoesNotContain(
+            "message BingoActorEntrySpotNotify",
+            contracts,
+            StringComparison.Ordinal
+        );
         Assert.DoesNotContain("BingoJoinFailedNotify", playerActor, StringComparison.Ordinal);
         Assert.DoesNotContain("BingoActorEntrySpotNotify", entrySpot, StringComparison.Ordinal);
     }
@@ -236,14 +421,16 @@ public sealed partial class RegressionTests
         // Framework already merges duplicate disconnect notifications; the sample only records
         // lifecycle evidence, matching Node's reference session (bingo-session.ts).
         var sampleRoot = ResolveSampleRoot("Bingo");
-        var session = ReadSource(Path.Combine(
-            sampleRoot, "Server", "Session", "Sessions", "BingoSession.cs"));
+        var session = ReadSource(
+            Path.Combine(sampleRoot, "Server", "Session", "Sessions", "BingoSession.cs")
+        );
 
         Assert.DoesNotContain("NotifyDisconnectedAsync", session, StringComparison.Ordinal);
         Assert.Contains(
             "bingo-lifecycle session-disconnect actor={ActorId} destroy=false",
             session,
-            StringComparison.Ordinal);
+            StringComparison.Ordinal
+        );
     }
 
     [Fact]
@@ -254,84 +441,193 @@ public sealed partial class RegressionTests
         var powershellRunner = ReadSource(Path.Combine(sampleRoot, "run_sample.ps1"));
         var readme = ReadSource(Path.Combine(sampleRoot, "README.md"));
 
-        Assert.Contains("RUN_ID=\"$(basename \"${RUN_DIR}\")-$$-${RANDOM}\"", shellRunner, StringComparison.Ordinal);
-        Assert.Contains("BINGO_REDIS_KEY_PREFIX=\"bingo:dotnet:${RUN_ID}:\"", shellRunner, StringComparison.Ordinal);
-        Assert.Contains("BINGO_LOG_DIR=\"${RUN_DIR}/sample-logs\"", shellRunner, StringComparison.Ordinal);
-        Assert.DoesNotContain("BINGO_LOG_DIR=\"${SCRIPT_DIR}/logs\"", shellRunner, StringComparison.Ordinal);
+        Assert.Contains(
+            "RUN_ID=\"$(basename \"${RUN_DIR}\")-$$-${RANDOM}\"",
+            shellRunner,
+            StringComparison.Ordinal
+        );
+        Assert.Contains(
+            "BINGO_REDIS_KEY_PREFIX=\"bingo:dotnet:${RUN_ID}:\"",
+            shellRunner,
+            StringComparison.Ordinal
+        );
+        Assert.Contains(
+            "BINGO_LOG_DIR=\"${RUN_DIR}/sample-logs\"",
+            shellRunner,
+            StringComparison.Ordinal
+        );
+        Assert.DoesNotContain(
+            "BINGO_LOG_DIR=\"${SCRIPT_DIR}/logs\"",
+            shellRunner,
+            StringComparison.Ordinal
+        );
         Assert.DoesNotContain("rm -f \"${BINGO_LOG_DIR}\"", shellRunner, StringComparison.Ordinal);
-        Assert.Contains("REDIS_CONTAINER=\"zlink-bingo-dotnet-redis-${RUN_ID}\"", shellRunner, StringComparison.Ordinal);
-        AssertShellRunnerUsesRedisDockerHelper(shellRunner, "zlink-bingo-dotnet-redis", "BINGO_REDIS_ENDPOINT");
-        Assert.DoesNotContain("if [[ -z \"${BINGO_REDIS_ENDPOINT:-}\" ]]", shellRunner, StringComparison.Ordinal);
-        Assert.DoesNotContain("when BINGO_REDIS_ENDPOINT is not set", shellRunner, StringComparison.Ordinal);
+        Assert.Contains(
+            "REDIS_CONTAINER=\"zlink-bingo-dotnet-redis-${RUN_ID}\"",
+            shellRunner,
+            StringComparison.Ordinal
+        );
+        AssertShellRunnerUsesRedisDockerHelper(
+            shellRunner,
+            "zlink-bingo-dotnet-redis",
+            "BINGO_REDIS_ENDPOINT"
+        );
+        Assert.DoesNotContain(
+            "if [[ -z \"${BINGO_REDIS_ENDPOINT:-}\" ]]",
+            shellRunner,
+            StringComparison.Ordinal
+        );
+        Assert.DoesNotContain(
+            "when BINGO_REDIS_ENDPOINT is not set",
+            shellRunner,
+            StringComparison.Ordinal
+        );
         Assert.DoesNotContain("BINGO_STARTUP_DELAY_SECONDS", shellRunner, StringComparison.Ordinal);
-        Assert.DoesNotContain("BINGO_STARTUP_SETTLE_SECONDS", shellRunner, StringComparison.Ordinal);
-        Assert.DoesNotContain("auto-connect reconcile loops", shellRunner, StringComparison.Ordinal);
-        Assert.DoesNotContain("intentionally derived here, not read", shellRunner, StringComparison.Ordinal);
+        Assert.DoesNotContain(
+            "BINGO_STARTUP_SETTLE_SECONDS",
+            shellRunner,
+            StringComparison.Ordinal
+        );
+        Assert.DoesNotContain(
+            "auto-connect reconcile loops",
+            shellRunner,
+            StringComparison.Ordinal
+        );
+        Assert.DoesNotContain(
+            "intentionally derived here, not read",
+            shellRunner,
+            StringComparison.Ordinal
+        );
 
-        Assert.Contains("$RunId = \"$PID-$([Guid]::NewGuid().ToString('N'))\"", powershellRunner, StringComparison.Ordinal);
-        Assert.Contains("$BINGO_REDIS_KEY_PREFIX = \"bingo:dotnet:${RunId}:\"",
-            powershellRunner, StringComparison.Ordinal);
-        Assert.DoesNotContain("[Environment]::SetEnvironmentVariable", powershellRunner, StringComparison.Ordinal);
+        Assert.Contains(
+            "$RunId = \"$PID-$([Guid]::NewGuid().ToString('N'))\"",
+            powershellRunner,
+            StringComparison.Ordinal
+        );
+        Assert.Contains(
+            "$BINGO_REDIS_KEY_PREFIX = \"bingo:dotnet:${RunId}:\"",
+            powershellRunner,
+            StringComparison.Ordinal
+        );
+        Assert.DoesNotContain(
+            "[Environment]::SetEnvironmentVariable",
+            powershellRunner,
+            StringComparison.Ordinal
+        );
         AssertPowerShellRunnerUsesRedisDockerHelper(powershellRunner, "zlink-bingo-dotnet-redis");
         Assert.Contains("if ($RedisContainer)", powershellRunner, StringComparison.Ordinal);
-        Assert.DoesNotContain("if (-not $BINGO_REDIS_ENDPOINT)", powershellRunner, StringComparison.Ordinal);
-        Assert.DoesNotContain("when BINGO_REDIS_ENDPOINT is not set", powershellRunner, StringComparison.Ordinal);
-        Assert.DoesNotContain("BINGO_STARTUP_DELAY_SECONDS", powershellRunner, StringComparison.Ordinal);
-        Assert.DoesNotContain("BINGO_STARTUP_SETTLE_SECONDS", powershellRunner, StringComparison.Ordinal);
-        Assert.Contains("$BINGO_LOG_DIR = $SampleLogDir", powershellRunner, StringComparison.Ordinal);
-        Assert.Contains("$SampleLogDir = Join-Path $RunDir \"sample-logs\"", powershellRunner,
-            StringComparison.Ordinal);
-        Assert.DoesNotContain("Join-Path $ScriptDir \"logs\"", powershellRunner, StringComparison.Ordinal);
+        Assert.DoesNotContain(
+            "if (-not $BINGO_REDIS_ENDPOINT)",
+            powershellRunner,
+            StringComparison.Ordinal
+        );
+        Assert.DoesNotContain(
+            "when BINGO_REDIS_ENDPOINT is not set",
+            powershellRunner,
+            StringComparison.Ordinal
+        );
+        Assert.DoesNotContain(
+            "BINGO_STARTUP_DELAY_SECONDS",
+            powershellRunner,
+            StringComparison.Ordinal
+        );
+        Assert.DoesNotContain(
+            "BINGO_STARTUP_SETTLE_SECONDS",
+            powershellRunner,
+            StringComparison.Ordinal
+        );
+        Assert.Contains(
+            "$BINGO_LOG_DIR = $SampleLogDir",
+            powershellRunner,
+            StringComparison.Ordinal
+        );
+        Assert.Contains(
+            "$SampleLogDir = Join-Path $RunDir \"sample-logs\"",
+            powershellRunner,
+            StringComparison.Ordinal
+        );
+        Assert.DoesNotContain(
+            "Join-Path $ScriptDir \"logs\"",
+            powershellRunner,
+            StringComparison.Ordinal
+        );
         Assert.Contains("function Wait-LogCount", powershellRunner, StringComparison.Ordinal);
         Assert.Contains("[int]$Attempts = 300", powershellRunner, StringComparison.Ordinal);
-        Assert.Contains("Start-Sleep -Milliseconds 100", powershellRunner, StringComparison.Ordinal);
+        Assert.Contains(
+            "Start-Sleep -Milliseconds 100",
+            powershellRunner,
+            StringComparison.Ordinal
+        );
         Assert.Contains("for _ in $(seq 1 300)", shellRunner, StringComparison.Ordinal);
         Assert.Contains("sleep 0.1", shellRunner, StringComparison.Ordinal);
         Assert.Contains(
             "wait_log_count 1 \"bingo-ready kind=peer-route node=play-a peer=play-b\"",
             shellRunner,
-            StringComparison.Ordinal);
+            StringComparison.Ordinal
+        );
         Assert.Contains(
             "wait_log_count 0 \"bingo-record reported actor=observer\"",
             shellRunner,
-            StringComparison.Ordinal);
+            StringComparison.Ordinal
+        );
         Assert.Contains(
             "wait_log_count 0 \"bingo-lifecycle entry-destroy-complete actor=observer\"",
             shellRunner,
-            StringComparison.Ordinal);
+            StringComparison.Ordinal
+        );
         Assert.Contains(
             "wait_log_count 1 \"bingo-lifecycle session-disconnect actor=player-2 destroy=false\"",
             shellRunner,
-            StringComparison.Ordinal);
+            StringComparison.Ordinal
+        );
         Assert.Contains(
             "Wait-LogCount -Path $playA -Pattern \"bingo-ready kind=peer-route node=play-a peer=play-b\" -Expected 1",
             powershellRunner,
-            StringComparison.Ordinal);
+            StringComparison.Ordinal
+        );
         Assert.Contains(
             "Wait-LogCount -Path $playLogs -Pattern \"bingo-record reported actor=observer\" -Expected 0",
             powershellRunner,
-            StringComparison.Ordinal);
+            StringComparison.Ordinal
+        );
         Assert.Contains(
             "Wait-LogCount -Path $playLogs -Pattern \"bingo-lifecycle entry-destroy-complete actor=observer\" -Expected 0",
             powershellRunner,
-            StringComparison.Ordinal);
+            StringComparison.Ordinal
+        );
         Assert.Contains(
             "Wait-LogCount -Path $sessionLogs -Pattern \"bingo-lifecycle session-disconnect actor=player-2 destroy=false\" -Expected 1",
             powershellRunner,
-            StringComparison.Ordinal);
-        Assert.Contains("Write-Host \"bingo-placement=completed\"", powershellRunner,
-            StringComparison.Ordinal);
+            StringComparison.Ordinal
+        );
+        Assert.Contains(
+            "Write-Host \"bingo-placement=completed\"",
+            powershellRunner,
+            StringComparison.Ordinal
+        );
         Assert.DoesNotContain("message flow", powershellRunner, StringComparison.OrdinalIgnoreCase);
-        Assert.DoesNotContain("intentionally derived here, not read", powershellRunner, StringComparison.Ordinal);
+        Assert.DoesNotContain(
+            "intentionally derived here, not read",
+            powershellRunner,
+            StringComparison.Ordinal
+        );
 
-        Assert.Contains("always provisions a dedicated Redis Docker", readme, StringComparison.Ordinal);
+        Assert.Contains(
+            "always provisions a dedicated Redis Docker",
+            readme,
+            StringComparison.Ordinal
+        );
         Assert.Contains("does not", readme, StringComparison.Ordinal);
         Assert.Contains("reuse an externally supplied Redis", readme, StringComparison.Ordinal);
         Assert.Contains("endpoint", readme, StringComparison.Ordinal);
         Assert.Contains("sample name and execution id", readme, StringComparison.Ordinal);
         Assert.Contains("public endpoints", readme, StringComparison.Ordinal);
         Assert.DoesNotContain("waits briefly", readme, StringComparison.Ordinal);
-        Assert.Contains("parallel sample runs do not share location store", readme, StringComparison.Ordinal);
+        Assert.Contains(
+            "parallel sample runs do not share location store",
+            readme,
+            StringComparison.Ordinal
+        );
         Assert.Contains("or reservation keys", readme, StringComparison.Ordinal);
     }
 }

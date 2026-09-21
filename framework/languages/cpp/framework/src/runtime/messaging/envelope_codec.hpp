@@ -55,10 +55,7 @@ class message_parts_t
     std::size_t size () const noexcept { return _parts.size (); }
     const zlink::message_t &operator[] (std::size_t index) const;
     const std::vector<zlink::message_t> &items () const noexcept { return _parts; }
-    std::vector<zlink::message_t> take_items () && noexcept
-    {
-        return std::move (_parts);
-    }
+    std::vector<zlink::message_t> take_items () && noexcept { return std::move (_parts); }
 
   private:
     std::vector<zlink::message_t> _parts;
@@ -77,17 +74,15 @@ class envelope_codec_t
                                   const serializer_registry_t &serializers) const;
 
     template <typename TBody>
-    message_parts_t encode_parts (
-      const envelope_header_t &header,
-      const TBody &body,
-      const serializer_registry_t &serializers) const
+    message_parts_t encode_parts (const envelope_header_t &header,
+                                  const TBody &body,
+                                  const serializer_registry_t &serializers) const
     {
         const auto serializer = serializers.get<TBody> ();
         auto typed_header = header;
         typed_header.content_type = serializer.content_type ();
-        return encode_raw_body_parts (
-          typed_header,
-          detail::encoded_payload_to_raw (serializer.serialize (body)));
+        return encode_raw_body_parts (typed_header,
+                                      detail::encoded_payload_to_raw (serializer.serialize (body)));
     }
 
     zlink::message_t encode_header (const envelope_header_t &header) const;

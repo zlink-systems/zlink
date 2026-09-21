@@ -159,9 +159,8 @@ void finalize_perf_result (perf_result_t &result)
     result.latency_p95_us = percentile (result.request_latencies_us, 0.95);
     result.latency_p99_us = percentile (result.request_latencies_us, 0.99);
     if (result.duration_ms > 0) {
-        result.throughput_rps =
-          static_cast<double> (result.requests_completed) * 1000.0
-          / static_cast<double> (result.duration_ms);
+        result.throughput_rps = static_cast<double> (result.requests_completed) * 1000.0
+                                / static_cast<double> (result.duration_ms);
     }
 }
 
@@ -226,9 +225,8 @@ run_request (zlink::stream_e2e_client::coroutine_connector_t &client,
     packet.name = "connector.perf.request";
     packet.codec = zlink::stream_connector::codec_t::raw;
     packet.payload = zlink::message_t::from (std::string (payload_bytes, 'r'));
-    auto reply = co_await client.request (std::move (packet))
-                   .timeout (timeout)
-                   .async<zlink::message_t> ();
+    auto reply =
+      co_await client.request (std::move (packet)).timeout (timeout).async<zlink::message_t> ();
     co_return reply;
 }
 
@@ -243,9 +241,8 @@ run_wait (zlink::stream_e2e_client::coroutine_connector_t &client,
     co_return packet.payload;
 }
 
-std::thread start_loopback_server (zlink::context_t &context,
-                                   std::string &endpoint,
-                                   int expected_clients)
+std::thread
+start_loopback_server (zlink::context_t &context, std::string &endpoint, int expected_clients)
 {
     auto server = std::make_shared<zlink::stream_socket_t> (context);
     server->options ().recv_mode (zlink::stream_recv_mode_t::raw);
@@ -273,13 +270,13 @@ std::thread start_loopback_server (zlink::context_t &context,
                     if (frame->header.kind == zlink::stream_connector::message_kind_t::request) {
                         // Response correlation is carried only by request_seq;
                         // response headers do not carry packet names.
-                        auto response = make_server_frame (
-                          zlink::stream_connector::message_kind_t::response,
-                          frame->header.request_seq.value_or (0), {}, "ok");
+                        auto response =
+                          make_server_frame (zlink::stream_connector::message_kind_t::response,
+                                             frame->header.request_seq.value_or (0), {}, "ok");
                         outbound += response.to_string ();
-                        auto push = make_server_frame (
-                          zlink::stream_connector::message_kind_t::send, 0,
-                          "connector.perf.push", "push");
+                        auto push =
+                          make_server_frame (zlink::stream_connector::message_kind_t::send, 0,
+                                             "connector.perf.push", "push");
                         outbound += push.to_string ();
                         ++replied;
                     }
@@ -352,9 +349,9 @@ perf_result_t run_endpoint_load (const perf_options_t &options)
             wait_task.start ();
         }
         const auto request_started = std::chrono::steady_clock::now ();
-        auto reply = run_request (client, static_cast<std::size_t> (options.payload_bytes),
-                                  request_timeout)
-                       .result ();
+        auto reply =
+          run_request (client, static_cast<std::size_t> (options.payload_bytes), request_timeout)
+            .result ();
         const auto request_finished = std::chrono::steady_clock::now ();
         if (reply) {
             ++result.requests_completed;
@@ -373,7 +370,8 @@ perf_result_t run_endpoint_load (const perf_options_t &options)
             if (waited) {
                 ++result.waits_completed;
             } else {
-                if (waited.error_code () == zlink::stream_connector::error_code_t::request_timeout) {
+                if (waited.error_code ()
+                    == zlink::stream_connector::error_code_t::request_timeout) {
                     ++result.timeouts;
                 }
                 ++result.errors;
@@ -384,10 +382,9 @@ perf_result_t run_endpoint_load (const perf_options_t &options)
     for (auto &connector : connectors) {
         connector.close ();
     }
-    result.duration_ms =
-      std::chrono::duration_cast<std::chrono::milliseconds> (std::chrono::steady_clock::now ()
-                                                            - started)
-        .count ();
+    result.duration_ms = std::chrono::duration_cast<std::chrono::milliseconds> (
+                           std::chrono::steady_clock::now () - started)
+                           .count ();
     finalize_perf_result (result);
     return result;
 }
@@ -416,8 +413,8 @@ int main (int argc, char **argv)
         std::thread loopback_server;
         auto endpoint_options = options;
         if (endpoint_options.loopback) {
-            loopback_server = start_loopback_server (context, endpoint_options.endpoint,
-                                                     endpoint_options.clients);
+            loopback_server =
+              start_loopback_server (context, endpoint_options.endpoint, endpoint_options.clients);
             endpoint_options.transport = "tcp";
         }
         if (options.endpoint.empty ()) {
@@ -430,8 +427,8 @@ int main (int argc, char **argv)
         if (loopback_server.joinable ()) {
             loopback_server.join ();
         }
-        write_report (endpoint_options, endpoint_options.loopback ? "loopback-request-wait"
-                                                                  : "endpoint-request-wait",
+        write_report (endpoint_options,
+                      endpoint_options.loopback ? "loopback-request-wait" : "endpoint-request-wait",
                       result);
         if (endpoint_options.loopback
             && (result.requests_completed != endpoint_options.clients || result.errors != 0)) {

@@ -6,40 +6,40 @@ internal enum ZLinkSpotNodeState
     Connecting = 2,
     PartialReady = 3,
     Ready = 4,
-    Error = 5
+    Error = 5,
 }
 
 internal enum ZLinkSpotPeerSource
 {
     Manual = 1,
     Discovery = 2,
-    Mixed = 3
+    Mixed = 3,
 }
 
 internal enum ZLinkSpotPeerKind
 {
     SpotMesh = 1,
-    RouterChannel = 2
+    RouterChannel = 2,
 }
 
 internal enum ZLinkSpotPeerState
 {
     Configured = 1,
     Connecting = 2,
-    Connected = 3
+    Connected = 3,
 }
 
 internal enum ZLinkSubjectKind : uint
 {
     None = 0,
     Topic = 1,
-    Pattern = 2
+    Pattern = 2,
 }
 
 internal enum ZLinkSpotRole
 {
     Pub = 1,
-    Sub = 2
+    Sub = 2,
 }
 
 internal sealed record ZLinkSpotNodeStatus(
@@ -53,7 +53,8 @@ internal sealed record ZLinkSpotNodeStatus(
     uint SubjectCount,
     uint ReadySubjectCount,
     int LastError,
-    ulong LastChangedMs);
+    ulong LastChangedMs
+);
 
 internal sealed record ZLinkSpotNodePeerEntry(
     string ChannelName,
@@ -64,7 +65,8 @@ internal sealed record ZLinkSpotNodePeerEntry(
     ZLinkSpotPeerState State,
     int Weight,
     ulong ConnectedSinceMs,
-    ulong LastChangedMs);
+    ulong LastChangedMs
+);
 
 internal sealed record ZLinkSpotNodeSubjectEntry(
     ZLinkSpotRole Role,
@@ -72,4 +74,5 @@ internal sealed record ZLinkSpotNodeSubjectEntry(
     ZLinkSubjectKind SubjectKind,
     uint ReadyPeerCount,
     uint ActivePeerCount,
-    ulong LastChangedMs);
+    ulong LastChangedMs
+);

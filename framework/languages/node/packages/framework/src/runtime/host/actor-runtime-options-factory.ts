@@ -1,9 +1,4 @@
-import type {
-  ActorRef,
-  RoutingId,
-  ZLinkActor,
-  ZLinkMessage
-} from '../../contracts';
+import type { ActorRef, RoutingId, ZLinkActor, ZLinkMessage } from '../../contracts';
 import type { ZLinkProviderResolver } from '../../contracts/Common/ZLinkProviderResolver';
 import type { Type } from '../../contracts/Common/CoreTypes';
 import {
@@ -45,7 +40,8 @@ export interface ZLinkActorRuntimeOptionsFactoryOptions {
   readonly messageFlow?: () =>
     import('../diagnostics/message-flow').ZLinkMessageFlowTracer | undefined;
   readonly routeTransport: ZLinkActorRoutedJoinTransport;
-  readonly streamBindingRuntime: ZLinkStreamActorLifecyclePort & ZLinkNativeFallbackBoundSessionPort;
+  readonly streamBindingRuntime: ZLinkStreamActorLifecyclePort &
+    ZLinkNativeFallbackBoundSessionPort;
   readonly providerResolver?: ZLinkProviderResolver;
   readonly spotManager: () => DefaultZLinkSpotManager | undefined;
   readonly actorManager: () => DefaultZLinkActorManager | undefined;
@@ -73,9 +69,7 @@ export interface ZLinkActorRuntimeOptionsFactoryOptions {
    * positive route cache must not bridge the two incarnations.
    */
   readonly invalidateActorRoute: (actorId: string) => void;
-  readonly publishActorAuthority: NonNullable<
-    ZLinkActorManagerOptions['publishActorAuthority']
-  >;
+  readonly publishActorAuthority: NonNullable<ZLinkActorManagerOptions['publishActorAuthority']>;
   readonly reportPostCommitError: (error: unknown) => void;
   readonly reportBoundSessionSendError: (error: unknown) => void;
   readonly actorHandoff: ZLinkActorHandoffCoordinator;
@@ -133,7 +127,7 @@ export class ZLinkActorRuntimeOptionsFactory {
         postCommitErrorReporter: this.options.reportPostCommitError,
         sourceTransfer: this.options.actorTransferRuntime,
         actorJoinRelocation: this.options.actorJoinRelocation,
-        entrySpotIdProvider: meshName => {
+        entrySpotIdProvider: (meshName) => {
           const resolvedMeshName = meshName ?? this.options.primaryMeshName();
           return resolvedMeshName === undefined
             ? undefined
@@ -153,62 +147,67 @@ export class ZLinkActorRuntimeOptionsFactory {
       nativeActorNodeProvider: this.options.primaryMeshNodeOrUndefined,
       nativeActorCompletionTableProvider: this.options.primaryMeshCompletions,
       locationLifecycle: this.options.locationLifecycle(),
-      boundSessionFactory: (actorId) => new ZLinkNativeFallbackBoundSession({
-        runtime: this.options.streamBindingRuntime,
-        routedTransport: this.options.routeTransport,
-        actorRefProvider: () => {
-          const state = this.options.actorManager()?.getState(actorId);
-          const actorRef = state?.nativeActorRef;
-          const meshName = state?.meshName
-            ?? (state?.actorType === undefined
+      boundSessionFactory: (actorId) =>
+        new ZLinkNativeFallbackBoundSession({
+          runtime: this.options.streamBindingRuntime,
+          routedTransport: this.options.routeTransport,
+          actorRefProvider: () => {
+            const state = this.options.actorManager()?.getState(actorId);
+            const actorRef = state?.nativeActorRef;
+            const meshName =
+              state?.meshName ??
+              (state?.actorType === undefined
+                ? undefined
+                : this.options.actorMeshName(state.actorType));
+            const objectGeneration =
+              actorRef?.generation ??
+              (actorRef as unknown as { readonly objectGeneration?: bigint } | undefined)
+                ?.objectGeneration;
+            return actorRef === undefined || objectGeneration === undefined
               ? undefined
-              : this.options.actorMeshName(state.actorType));
-          const objectGeneration = actorRef?.generation
-            ?? (actorRef as unknown as { readonly objectGeneration?: bigint } | undefined)
-              ?.objectGeneration;
-          return actorRef === undefined || objectGeneration === undefined
-            ? undefined
-            : {
-                actorId: actorRef.actorId,
-                objectGeneration,
-                meshName: meshName ?? this.options.primaryMeshName() ?? '',
-                nodeRid: actorRef.nodeRid,
-                ownershipGeneration: state?.locationGeneration,
-                ownerLeaseGeneration: state?.ownerLeaseGeneration,
-                bindingGeneration: state?.boundSessionBindingGeneration
-              } as ActorRef;
-        },
-        nativeActorNodeProvider: () => {
-          const state = this.options.actorManager()?.getState(actorId);
-          const meshName = state?.meshName
-            ?? (state?.actorType === undefined
-              ? undefined
-              : this.options.actorMeshName(state.actorType));
-          const node = meshName === undefined
-            ? this.options.primaryMeshNodeOrUndefined()
-            : this.options.meshNode(meshName);
-          const completions = meshName === undefined
-            ? this.options.primaryMeshCompletions()
-            : this.options.meshCompletions(meshName);
-          return node === undefined
-            ? undefined
-            : meshActorSessionNodeAdapter(node, completions);
-        },
-        localActorProvider: () => this.options.actorManager()?.getState(actorId)?.actor !== undefined,
-        remoteBoundSessionTargetProvider: () => {
-          const state = this.options.actorManager()?.getState(actorId);
-          return preferredRemoteBoundSessionTarget(
-            state?.remoteBoundSessionTarget,
-            state?.boundSessionTransferTarget
-          );
-        },
-        remoteActorPacketTargetProvider: () => this.options.actorPacketTargetForState(actorId),
-        requestTimeoutMs: this.options.registration.requestTimeoutMs,
-        actorId,
-        onSend: this.options.traceBoundSessionSend,
-        reportError: this.options.reportBoundSessionSendError,
-        flowCreationEnabled: this.options.flowCreationEnabled
-      }),
+              : ({
+                  actorId: actorRef.actorId,
+                  objectGeneration,
+                  meshName: meshName ?? this.options.primaryMeshName() ?? '',
+                  nodeRid: actorRef.nodeRid,
+                  ownershipGeneration: state?.locationGeneration,
+                  ownerLeaseGeneration: state?.ownerLeaseGeneration,
+                  bindingGeneration: state?.boundSessionBindingGeneration
+                } as ActorRef);
+          },
+          nativeActorNodeProvider: () => {
+            const state = this.options.actorManager()?.getState(actorId);
+            const meshName =
+              state?.meshName ??
+              (state?.actorType === undefined
+                ? undefined
+                : this.options.actorMeshName(state.actorType));
+            const node =
+              meshName === undefined
+                ? this.options.primaryMeshNodeOrUndefined()
+                : this.options.meshNode(meshName);
+            const completions =
+              meshName === undefined
+                ? this.options.primaryMeshCompletions()
+                : this.options.meshCompletions(meshName);
+            return node === undefined ? undefined : meshActorSessionNodeAdapter(node, completions);
+          },
+          localActorProvider: () =>
+            this.options.actorManager()?.getState(actorId)?.actor !== undefined,
+          remoteBoundSessionTargetProvider: () => {
+            const state = this.options.actorManager()?.getState(actorId);
+            return preferredRemoteBoundSessionTarget(
+              state?.remoteBoundSessionTarget,
+              state?.boundSessionTransferTarget
+            );
+          },
+          remoteActorPacketTargetProvider: () => this.options.actorPacketTargetForState(actorId),
+          requestTimeoutMs: this.options.registration.requestTimeoutMs,
+          actorId,
+          onSend: this.options.traceBoundSessionSend,
+          reportError: this.options.reportBoundSessionSendError,
+          flowCreationEnabled: this.options.flowCreationEnabled
+        }),
       actorCreatedNodeRidProvider: () => {
         const node = this.options.primaryMeshNodeOrUndefined();
         return node === undefined ? undefined : String(node.status().routingId);
@@ -223,7 +222,8 @@ export class ZLinkActorRuntimeOptionsFactory {
       },
       actorDestroyedCleanup: (actorId) => {
         this.options.invalidateActorRoute(actorId);
-        const actorRef = this.options.actorManager()?.getState(actorId)?.nativeActorRef as ActorRef | undefined;
+        const actorRef = this.options.actorManager()?.getState(actorId)?.nativeActorRef as
+          ActorRef | undefined;
         if (actorRef !== undefined) {
           this.options.rememberDestroyedActorRef(actorId, actorRef);
         }
@@ -240,27 +240,28 @@ export class ZLinkActorRuntimeOptionsFactory {
       completionTableProvider: this.options.meshCompletions,
       locationResolver: () => locationResolver,
       routeTransport: this.options.routeTransport,
-      transportDeliveryGate: () => this.options.providerResolver?.get?.(
-        ZLINK_INTERNAL_ACTOR_TRANSPORT_DELIVERY_GATE as unknown as
-          Type<ZLinkInternalActorTransportDeliveryGate>
-      ),
+      transportDeliveryGate: () =>
+        this.options.providerResolver?.get?.(
+          ZLINK_INTERNAL_ACTOR_TRANSPORT_DELIVERY_GATE as unknown as Type<ZLinkInternalActorTransportDeliveryGate>
+        ),
       messageSerializers: this.options.registration.messageSerializers,
       defaultRequestTimeoutMs: this.options.registration.requestTimeoutMs,
-      staleActorRefReporter: (_meshName, actorId) => this.options.actorHandoff.recordStaleFailure(actorId),
+      staleActorRefReporter: (_meshName, actorId) =>
+        this.options.actorHandoff.recordStaleFailure(actorId),
       staleActorRefPredicate: (meshName, actor) =>
-        this.actorBelongsToMesh(meshName, actor.actorId)
-        && this.options.actorHandoff.isKnownStale(actor),
+        this.actorBelongsToMesh(meshName, actor.actorId) &&
+        this.options.actorHandoff.isKnownStale(actor),
       handoffCapture: (meshName, actorId, parts, returnResponse, actor, deadlineUnixMs) =>
-        this.actorBelongsToMesh(meshName, actorId)
-          && !this.options.actorHandoff.isProvisional(actorId)
+        this.actorBelongsToMesh(meshName, actorId) &&
+        !this.options.actorHandoff.isProvisional(actorId)
           ? this.options.actorHandoff.capture(
-            actorId,
-            parts,
-            returnResponse,
-            undefined,
-            actor,
-            deadlineUnixMs
-          )
+              actorId,
+              parts,
+              returnResponse,
+              undefined,
+              actor,
+              deadlineUnixMs
+            )
           : undefined,
       sendErrorReporter: this.options.reportPostCommitError
     };
@@ -272,11 +273,12 @@ export class ZLinkActorRuntimeOptionsFactory {
       return this.options.actorMeshName(actorType) === meshName;
     }
     const actorMeshes = [...this.options.registration.spotNodes.entries()]
-      .filter(([, node]) => node.actorFactories instanceof Map
-        ? node.actorFactories.size > 0
-        : Object.keys(node.actorFactories ?? {}).length > 0)
+      .filter(([, node]) =>
+        node.actorFactories instanceof Map
+          ? node.actorFactories.size > 0
+          : Object.keys(node.actorFactories ?? {}).length > 0
+      )
       .map(([name]) => name);
     return actorMeshes.length === 1 && actorMeshes[0] === meshName;
   }
-
 }

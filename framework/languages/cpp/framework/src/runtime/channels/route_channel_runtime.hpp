@@ -54,8 +54,7 @@ class route_channel_runtime_t
     bool connect (std::string endpoint);
     bool connect (zlink::routing_id_t peer_rid, std::string endpoint);
     bool disconnect (const std::string &endpoint);
-    bool disconnect (const zlink::routing_id_t &peer_rid,
-                     const std::string &endpoint);
+    bool disconnect (const zlink::routing_id_t &peer_rid, const std::string &endpoint);
     std::vector<std::string> list_connections () const;
     std::vector<route_connection_set_t::target_t> list_connection_targets () const;
     void mark_peer_ready (const zlink::routing_id_t &peer_rid);
@@ -127,15 +126,13 @@ class route_channel_runtime_t
                                           std::chrono::milliseconds timeout) const;
 
   private:
-    route_outbound_packet_t &
-    append_outbound_unlocked (const zlink::routing_id_t &target_node_rid,
-                              std::optional<std::string> target_spot_id,
-                              runtime::messaging::message_parts_t parts,
-                              std::optional<std::uint64_t> request_seq);
-    result_t<std::uint64_t>
-    register_request_unlocked (const zlink::routing_id_t &target_node_rid,
-                               std::optional<std::string> target_spot_id,
-                               runtime::messaging::message_parts_t parts);
+    route_outbound_packet_t &append_outbound_unlocked (const zlink::routing_id_t &target_node_rid,
+                                                       std::optional<std::string> target_spot_id,
+                                                       runtime::messaging::message_parts_t parts,
+                                                       std::optional<std::uint64_t> request_seq);
+    result_t<std::uint64_t> register_request_unlocked (const zlink::routing_id_t &target_node_rid,
+                                                       std::optional<std::string> target_spot_id,
+                                                       runtime::messaging::message_parts_t parts);
     result_t<void> ensure_connected () const;
     std::string _router_channel_id;
     runtime::offload_executor_t _lane_executor;

@@ -1,8 +1,6 @@
 package systems.zlink.framework.configuration;
 
-/**
- * Selects when a SpotWide User Spot may begin relocation.
- */
+/** Selects when a SpotWide User Spot may begin relocation. */
 public enum ZLinkSpotRelocationCoordinationMode {
     FRAMEWORK_MANAGED(0),
     APPLICATION_SIGNALED(1);

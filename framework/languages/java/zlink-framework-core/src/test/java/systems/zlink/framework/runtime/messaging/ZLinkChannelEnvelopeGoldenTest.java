@@ -1,7 +1,7 @@
 package systems.zlink.framework.runtime.messaging;
 
-import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertArrayEquals;
+import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertThrows;
@@ -10,6 +10,14 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 import com.fasterxml.jackson.core.JsonGenerator;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+
+import org.junit.jupiter.api.Test;
+
+import systems.zlink.contracts.messaging.Message;
+import systems.zlink.framework.errors.ZLinkFrameworkErrorKind;
+import systems.zlink.framework.errors.ZLinkFrameworkException;
+import systems.zlink.framework.monitoring.ZLinkFlowOrigin;
+
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
@@ -20,18 +28,12 @@ import java.util.Map;
 import java.util.UUID;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
-import org.junit.jupiter.api.Test;
-import systems.zlink.contracts.messaging.Message;
-import systems.zlink.framework.errors.ZLinkFrameworkErrorKind;
-import systems.zlink.framework.errors.ZLinkFrameworkException;
-import systems.zlink.framework.monitoring.ZLinkFlowOrigin;
 
 /**
- * Pins the Java envelope encoder/decoder to the canonical C++ wire form
- * ({@code runtime/messaging/envelope_codec.cpp},
- * {@code runtime/channels/channel_reply_writer.cpp}): exact JSON field names,
- * the 0xF2 format marker, the message kind values, the flow origin wire
- * integers and the 13 snake_case error code names.
+ * Pins the Java envelope encoder/decoder to the canonical C++ wire form ({@code
+ * runtime/messaging/envelope_codec.cpp}, {@code runtime/channels/channel_reply_writer.cpp}): exact
+ * JSON field names, the 0xF2 format marker, the message kind values, the flow origin wire integers
+ * and the 13 snake_case error code names.
  */
 final class ZLinkChannelEnvelopeGoldenTest {
     private static final ObjectMapper JSON = new ObjectMapper();
@@ -39,30 +41,32 @@ final class ZLinkChannelEnvelopeGoldenTest {
 
     @Test
     void encodesCanonicalHeaderFieldNamesAndValues() throws Exception {
-        ZLinkChannelEnvelope.Header header = new ZLinkChannelEnvelope.Header(
-            ZLinkChannelEnvelope.KIND_REQUEST,
-            "orders-route",
-            "PlaceOrder",
-            "application/json",
-            "abc123",
-            null,
-            null,
-            null,
-            null,
-            null,
-            Map.of("tenant", "blue"),
-            FLOW_ID,
-            ZLinkFlowOrigin.APPLICATION);
+        ZLinkChannelEnvelope.Header header =
+                new ZLinkChannelEnvelope.Header(
+                        ZLinkChannelEnvelope.KIND_REQUEST,
+                        "orders-route",
+                        "PlaceOrder",
+                        "application/json",
+                        "abc123",
+                        null,
+                        null,
+                        null,
+                        null,
+                        null,
+                        Map.of("tenant", "blue"),
+                        FLOW_ID,
+                        ZLinkFlowOrigin.APPLICATION);
         try (Message encoded = ZLinkChannelEnvelope.encodeHeader(header)) {
             assertArrayEquals(
-                ("{\"formatMarker\":242,\"flowId\":\"" + FLOW_ID
-                    + "\",\"flowOrigin\":3,\"kind\":1,\"channelName\":\"orders-route\","
-                    + "\"messageName\":\"PlaceOrder\",\"contentType\":\"application/json\","
-                    + "\"correlationId\":\"abc123\",\"deadline\":null,\"topic\":null,"
-                    + "\"errorCode\":null,\"errorMessage\":null,\"source\":null,"
-                    + "\"metadata\":{\"tenant\":\"blue\"}}")
-                    .getBytes(StandardCharsets.UTF_8),
-                encoded.toByteArray());
+                    ("{\"formatMarker\":242,\"flowId\":\""
+                                    + FLOW_ID
+                                    + "\",\"flowOrigin\":3,\"kind\":1,\"channelName\":\"orders-route\","
+                                    + "\"messageName\":\"PlaceOrder\",\"contentType\":\"application/json\","
+                                    + "\"correlationId\":\"abc123\",\"deadline\":null,\"topic\":null,"
+                                    + "\"errorCode\":null,\"errorMessage\":null,\"source\":null,"
+                                    + "\"metadata\":{\"tenant\":\"blue\"}}")
+                            .getBytes(StandardCharsets.UTF_8),
+                    encoded.toByteArray());
             JsonNode json = JSON.readTree(encoded.toByteArray());
             assertEquals(0xF2, json.get("formatMarker").asInt());
             assertEquals(242, json.get("formatMarker").asInt());
@@ -84,46 +88,54 @@ final class ZLinkChannelEnvelopeGoldenTest {
 
     @Test
     void requestWithoutFlowKeepsTheExactCanonicalBytes() {
-        var header = ZLinkChannelEnvelope.create(
-            ZLinkChannelEnvelope.KIND_REQUEST, "orders", "Request", "application/json",
-            null, Map.of(), null,
-            UUID.fromString("01234567-89ab-cdef-fedc-ba9876543210"));
+        var header =
+                ZLinkChannelEnvelope.create(
+                        ZLinkChannelEnvelope.KIND_REQUEST,
+                        "orders",
+                        "Request",
+                        "application/json",
+                        null,
+                        Map.of(),
+                        null,
+                        UUID.fromString("01234567-89ab-cdef-fedc-ba9876543210"));
         try (Message encoded = ZLinkChannelEnvelope.encodeHeader(header)) {
-            assertArrayEquals((
-                "{\"formatMarker\":242,\"flowId\":null,\"flowOrigin\":null,\"kind\":1,"
-                    + "\"channelName\":\"orders\",\"messageName\":\"Request\","
-                    + "\"contentType\":\"application/json\","
-                    + "\"correlationId\":\"0123456789abcdeffedcba9876543210\","
-                    + "\"deadline\":null,\"topic\":null,\"errorCode\":null,"
-                    + "\"errorMessage\":null,\"source\":null,\"metadata\":{}}")
-                .getBytes(StandardCharsets.UTF_8), encoded.toByteArray());
+            assertArrayEquals(
+                    ("{\"formatMarker\":242,\"flowId\":null,\"flowOrigin\":null,\"kind\":1,"
+                                    + "\"channelName\":\"orders\",\"messageName\":\"Request\","
+                                    + "\"contentType\":\"application/json\","
+                                    + "\"correlationId\":\"0123456789abcdeffedcba9876543210\","
+                                    + "\"deadline\":null,\"topic\":null,\"errorCode\":null,"
+                                    + "\"errorMessage\":null,\"source\":null,\"metadata\":{}}")
+                            .getBytes(StandardCharsets.UTF_8),
+                    encoded.toByteArray());
         }
     }
 
     @Test
     void repeatedEncodingKeepsTheExactCanonicalBytes() {
-        ZLinkChannelEnvelope.Header header = new ZLinkChannelEnvelope.Header(
-            ZLinkChannelEnvelope.KIND_REQUEST,
-            "orders",
-            "Request",
-            "application/json",
-            "0123456789abcdeffedcba9876543210",
-            null,
-            null,
-            null,
-            null,
-            null,
-            Map.of(),
-            null,
-            null);
-        byte[] expected = (
-            "{\"formatMarker\":242,\"flowId\":null,\"flowOrigin\":null,\"kind\":1,"
-                + "\"channelName\":\"orders\",\"messageName\":\"Request\","
-                + "\"contentType\":\"application/json\","
-                + "\"correlationId\":\"0123456789abcdeffedcba9876543210\","
-                + "\"deadline\":null,\"topic\":null,\"errorCode\":null,"
-                + "\"errorMessage\":null,\"source\":null,\"metadata\":{}}")
-            .getBytes(StandardCharsets.UTF_8);
+        ZLinkChannelEnvelope.Header header =
+                new ZLinkChannelEnvelope.Header(
+                        ZLinkChannelEnvelope.KIND_REQUEST,
+                        "orders",
+                        "Request",
+                        "application/json",
+                        "0123456789abcdeffedcba9876543210",
+                        null,
+                        null,
+                        null,
+                        null,
+                        null,
+                        Map.of(),
+                        null,
+                        null);
+        byte[] expected =
+                ("{\"formatMarker\":242,\"flowId\":null,\"flowOrigin\":null,\"kind\":1,"
+                                + "\"channelName\":\"orders\",\"messageName\":\"Request\","
+                                + "\"contentType\":\"application/json\","
+                                + "\"correlationId\":\"0123456789abcdeffedcba9876543210\","
+                                + "\"deadline\":null,\"topic\":null,\"errorCode\":null,"
+                                + "\"errorMessage\":null,\"source\":null,\"metadata\":{}}")
+                        .getBytes(StandardCharsets.UTF_8);
 
         for (int attempt = 0; attempt < 5; attempt++) {
             try (Message encoded = ZLinkChannelEnvelope.encodeHeader(header)) {
@@ -134,59 +146,62 @@ final class ZLinkChannelEnvelopeGoldenTest {
 
     @Test
     void streamingEncoderPreservesEscapesUnicodeMetadataAndFlowBytes() {
-        ZLinkChannelEnvelope.Header header = new ZLinkChannelEnvelope.Header(
-            ZLinkChannelEnvelope.KIND_REQUEST,
-            "route\"\\\n☃",
-            "Place\tOrder\u0001",
-            "application/x-test; profile=\"v1\"",
-            "0123456789abcdef0123456789abcdef",
-            "2030-01-02T03:04:05Z",
-            "topic\u2028next",
-            null,
-            null,
-            null,
-            Map.of("meta\"\\\n", "blue\t☃"),
-            FLOW_ID,
-            ZLinkFlowOrigin.TIMER);
+        ZLinkChannelEnvelope.Header header =
+                new ZLinkChannelEnvelope.Header(
+                        ZLinkChannelEnvelope.KIND_REQUEST,
+                        "route\"\\\n☃",
+                        "Place\tOrder\u0001",
+                        "application/x-test; profile=\"v1\"",
+                        "0123456789abcdef0123456789abcdef",
+                        "2030-01-02T03:04:05Z",
+                        "topic\u2028next",
+                        null,
+                        null,
+                        null,
+                        Map.of("meta\"\\\n", "blue\t☃"),
+                        FLOW_ID,
+                        ZLinkFlowOrigin.TIMER);
         try (Message encoded = ZLinkChannelEnvelope.encodeHeader(header)) {
             assertArrayEquals(
-                ("{\"formatMarker\":242,\"flowId\":\"" + FLOW_ID
-                    + "\",\"flowOrigin\":2,\"kind\":1,\"channelName\":\"route\\\"\\\\\\n☃\","
-                    + "\"messageName\":\"Place\\tOrder\\u0001\","
-                    + "\"contentType\":\"application/x-test; profile=\\\"v1\\\"\","
-                    + "\"correlationId\":\"0123456789abcdef0123456789abcdef\","
-                    + "\"deadline\":\"2030-01-02T03:04:05Z\",\"topic\":\"topic next\","
-                    + "\"errorCode\":null,\"errorMessage\":null,\"source\":null,"
-                    + "\"metadata\":{\"meta\\\"\\\\\\n\":\"blue\\t☃\"}}")
-                    .getBytes(StandardCharsets.UTF_8),
-                encoded.toByteArray());
+                    ("{\"formatMarker\":242,\"flowId\":\""
+                                    + FLOW_ID
+                                    + "\",\"flowOrigin\":2,\"kind\":1,\"channelName\":\"route\\\"\\\\\\n☃\","
+                                    + "\"messageName\":\"Place\\tOrder\\u0001\","
+                                    + "\"contentType\":\"application/x-test; profile=\\\"v1\\\"\","
+                                    + "\"correlationId\":\"0123456789abcdef0123456789abcdef\","
+                                    + "\"deadline\":\"2030-01-02T03:04:05Z\",\"topic\":\"topic next\","
+                                    + "\"errorCode\":null,\"errorMessage\":null,\"source\":null,"
+                                    + "\"metadata\":{\"meta\\\"\\\\\\n\":\"blue\\t☃\"}}")
+                            .getBytes(StandardCharsets.UTF_8),
+                    encoded.toByteArray());
         }
     }
 
     @Test
-    void cachedStableStringsMatchThePreviousStringWriterForUnicodeAndSurrogates()
-        throws Exception {
-        for (String value : List.of(
-                "plain-ascii",
-                "quote\\\" slash\\\\ control\\n\\t",
-                "snowman-☃",
-                "emoji-😀",
-                "lone-high-\uD83D",
-                "lone-low-\uDE00")) {
-            ZLinkChannelEnvelope.Header header = new ZLinkChannelEnvelope.Header(
-                ZLinkChannelEnvelope.KIND_REQUEST,
-                value,
-                value,
-                value,
-                value,
-                value,
-                value,
-                value,
-                value,
-                value,
-                Map.of("metadata", value),
-                null,
-                null);
+    void cachedStableStringsMatchThePreviousStringWriterForUnicodeAndSurrogates() throws Exception {
+        for (String value :
+                List.of(
+                        "plain-ascii",
+                        "quote\\\" slash\\\\ control\\n\\t",
+                        "snowman-☃",
+                        "emoji-😀",
+                        "lone-high-\uD83D",
+                        "lone-low-\uDE00")) {
+            ZLinkChannelEnvelope.Header header =
+                    new ZLinkChannelEnvelope.Header(
+                            ZLinkChannelEnvelope.KIND_REQUEST,
+                            value,
+                            value,
+                            value,
+                            value,
+                            value,
+                            value,
+                            value,
+                            value,
+                            value,
+                            Map.of("metadata", value),
+                            null,
+                            null);
             byte[] expected = encodeWithPreviousStringWriter(header);
             try (Message encoded = ZLinkChannelEnvelope.encodeHeader(header)) {
                 assertArrayEquals(expected, encoded.toByteArray(), value);
@@ -197,35 +212,37 @@ final class ZLinkChannelEnvelopeGoldenTest {
     @Test
     void explicitOperationIdentityUsesFixedLowercaseCorrelationHex() {
         UUID operationId = UUID.fromString("01234567-89ab-cdef-fedc-ba9876543210");
-        ZLinkChannelEnvelope.Header header = ZLinkChannelEnvelope.create(
-            ZLinkChannelEnvelope.KIND_REQUEST,
-            "route",
-            "Request",
-            "application/json",
-            null,
-            Map.of(),
-            null,
-            operationId);
+        ZLinkChannelEnvelope.Header header =
+                ZLinkChannelEnvelope.create(
+                        ZLinkChannelEnvelope.KIND_REQUEST,
+                        "route",
+                        "Request",
+                        "application/json",
+                        null,
+                        Map.of(),
+                        null,
+                        operationId);
 
         assertEquals("0123456789abcdeffedcba9876543210", header.correlationId());
     }
 
     @Test
     void encodeRetainsTheCallerOwnedPayloadMessage() {
-        ZLinkChannelEnvelope.Header header = new ZLinkChannelEnvelope.Header(
-            ZLinkChannelEnvelope.KIND_COMMAND,
-            "route",
-            "Notify",
-            "application/json",
-            null,
-            null,
-            null,
-            null,
-            null,
-            null,
-            Map.of(),
-            null,
-            null);
+        ZLinkChannelEnvelope.Header header =
+                new ZLinkChannelEnvelope.Header(
+                        ZLinkChannelEnvelope.KIND_COMMAND,
+                        "route",
+                        "Notify",
+                        "application/json",
+                        null,
+                        null,
+                        null,
+                        null,
+                        null,
+                        null,
+                        Map.of(),
+                        null,
+                        null);
         try (Message payload = Message.from(new byte[] {7, 8, 9})) {
             List<Message> parts = ZLinkChannelEnvelope.encode(header, payload);
             try {
@@ -272,45 +289,52 @@ final class ZLinkChannelEnvelopeGoldenTest {
         canonical.put(ZLinkFrameworkErrorKind.INTERNAL_FAILURE, "internal_failure");
         assertEquals(12, canonical.size());
         assertEquals(ZLinkFrameworkErrorKind.values().length, canonical.size());
-        canonical.forEach((kind, name) -> {
-            assertEquals(name, ZLinkChannelEnvelope.errorCodeName(kind));
-            assertEquals(kind, ZLinkChannelEnvelope.errorKindFromCode(name));
-        });
+        canonical.forEach(
+                (kind, name) -> {
+                    assertEquals(name, ZLinkChannelEnvelope.errorCodeName(kind));
+                    assertEquals(kind, ZLinkChannelEnvelope.errorKindFromCode(name));
+                });
     }
 
     @Test
     void errorCodeDecodeRejectsNumericMissingAndUnknownPeerKinds() {
         assertEquals(
-            ZLinkFrameworkErrorKind.PROTOCOL_ERROR,
-            ZLinkChannelEnvelope.errorKindFromCode("0"));
+                ZLinkFrameworkErrorKind.PROTOCOL_ERROR,
+                ZLinkChannelEnvelope.errorKindFromCode("0"));
         assertEquals(
-            ZLinkFrameworkErrorKind.PROTOCOL_ERROR,
-            ZLinkChannelEnvelope.errorKindFromCode("12"));
+                ZLinkFrameworkErrorKind.PROTOCOL_ERROR,
+                ZLinkChannelEnvelope.errorKindFromCode("12"));
         assertEquals(
-            ZLinkFrameworkErrorKind.PROTOCOL_ERROR,
-            ZLinkChannelEnvelope.errorKindFromCode("no_such_code"));
+                ZLinkFrameworkErrorKind.PROTOCOL_ERROR,
+                ZLinkChannelEnvelope.errorKindFromCode("no_such_code"));
         assertEquals(
-            ZLinkFrameworkErrorKind.PROTOCOL_ERROR,
-            ZLinkChannelEnvelope.errorKindFromCode(null));
+                ZLinkFrameworkErrorKind.PROTOCOL_ERROR,
+                ZLinkChannelEnvelope.errorKindFromCode(null));
     }
 
     @Test
     void errorReplyEnvelopeEchoesRequestAndCarriesOriginMarker() throws Exception {
-        ZLinkChannelEnvelope.Header request = new ZLinkChannelEnvelope.Header(
-            ZLinkChannelEnvelope.KIND_REQUEST,
-            "orders-route",
-            "PlaceOrder",
-            "application/json",
-            "corr-77",
-            null, null, null, null, null,
-            Map.of(),
-            null,
-            null);
-        List<Message> reply = ZLinkFrameworkErrorReply.create(
-            request,
-            ZLinkFrameworkErrorKind.NOT_FOUND,
-            "route is stale",
-            ZLinkFrameworkErrorOrigin.frameworkMetadata());
+        ZLinkChannelEnvelope.Header request =
+                new ZLinkChannelEnvelope.Header(
+                        ZLinkChannelEnvelope.KIND_REQUEST,
+                        "orders-route",
+                        "PlaceOrder",
+                        "application/json",
+                        "corr-77",
+                        null,
+                        null,
+                        null,
+                        null,
+                        null,
+                        Map.of(),
+                        null,
+                        null);
+        List<Message> reply =
+                ZLinkFrameworkErrorReply.create(
+                        request,
+                        ZLinkFrameworkErrorKind.NOT_FOUND,
+                        "route is stale",
+                        ZLinkFrameworkErrorOrigin.frameworkMetadata());
         try {
             assertEquals(2, reply.size());
             JsonNode json = JSON.readTree(reply.get(0).toByteArray());
@@ -321,17 +345,12 @@ final class ZLinkChannelEnvelopeGoldenTest {
             assertEquals("corr-77", json.get("correlationId").asText());
             assertEquals("not_found", json.get("errorCode").asText());
             assertEquals("route is stale", json.get("errorMessage").asText());
-            assertEquals(
-                "framework",
-                json.get("metadata").get("zlink.origin").asText());
+            assertEquals("framework", json.get("metadata").get("zlink.origin").asText());
             //  Round trip through the decoder used by requesters.
-            assertEquals(
-                ZLinkFrameworkErrorKind.NOT_FOUND,
-                ZLinkFrameworkErrorReply.kind(reply));
+            assertEquals(ZLinkFrameworkErrorKind.NOT_FOUND, ZLinkFrameworkErrorReply.kind(reply));
             assertEquals("route is stale", ZLinkFrameworkErrorReply.message(reply));
             assertEquals(
-                Map.of("zlink.origin", "framework"),
-                ZLinkFrameworkErrorReply.metadata(reply));
+                    Map.of("zlink.origin", "framework"), ZLinkFrameworkErrorReply.metadata(reply));
         } finally {
             reply.forEach(Message::close);
         }
@@ -351,60 +370,68 @@ final class ZLinkChannelEnvelopeGoldenTest {
 
     @Test
     void decodeRejectsJsonParseFailureAsProtocolError() {
-        try (Message malformed = Message.from(
-                "{not json".getBytes(StandardCharsets.UTF_8))) {
-            ZLinkFrameworkException failure = assertThrows(
-                ZLinkFrameworkException.class,
-                () -> ZLinkChannelEnvelope.decodeHeader(malformed, false));
+        try (Message malformed = Message.from("{not json".getBytes(StandardCharsets.UTF_8))) {
+            ZLinkFrameworkException failure =
+                    assertThrows(
+                            ZLinkFrameworkException.class,
+                            () -> ZLinkChannelEnvelope.decodeHeader(malformed, false));
             assertEquals(ZLinkFrameworkErrorKind.PROTOCOL_ERROR, failure.kind());
         }
     }
 
     @Test
     void decodeRejectsFormatMarkerMismatchAsProtocolError() {
-        try (Message wrongMarker = Message.from(
-                ("{\"formatMarker\":1,\"kind\":1,\"channelName\":\"c\","
-                    + "\"messageName\":\"m\",\"contentType\":\"application/json\"}")
-                    .getBytes(StandardCharsets.UTF_8))) {
-            ZLinkFrameworkException failure = assertThrows(
-                ZLinkFrameworkException.class,
-                () -> ZLinkChannelEnvelope.decodeHeader(wrongMarker, false));
+        try (Message wrongMarker =
+                Message.from(
+                        ("{\"formatMarker\":1,\"kind\":1,\"channelName\":\"c\","
+                                        + "\"messageName\":\"m\",\"contentType\":\"application/json\"}")
+                                .getBytes(StandardCharsets.UTF_8))) {
+            ZLinkFrameworkException failure =
+                    assertThrows(
+                            ZLinkFrameworkException.class,
+                            () -> ZLinkChannelEnvelope.decodeHeader(wrongMarker, false));
             assertEquals(ZLinkFrameworkErrorKind.PROTOCOL_ERROR, failure.kind());
         }
     }
 
     @Test
     void decodeValidatesFlowPairOnlyWhenCapturing() {
-        String header = "{\"formatMarker\":242,\"kind\":1,\"channelName\":\"c\","
-            + "\"messageName\":\"m\",\"contentType\":\"application/json\","
-            + "\"flowId\":\"not-a-uuid\",\"flowOrigin\":3}";
+        String header =
+                "{\"formatMarker\":242,\"kind\":1,\"channelName\":\"c\","
+                        + "\"messageName\":\"m\",\"contentType\":\"application/json\","
+                        + "\"flowId\":\"not-a-uuid\",\"flowOrigin\":3}";
         try (Message frame = Message.from(header.getBytes(StandardCharsets.UTF_8))) {
             //  Spec 27 §4: at Off the flow fields are ignored entirely.
             assertNull(ZLinkChannelEnvelope.decodeHeader(frame, false).flowId());
-            ZLinkFrameworkException failure = assertThrows(
-                ZLinkFrameworkException.class,
-                () -> ZLinkChannelEnvelope.decodeHeader(frame, true));
+            ZLinkFrameworkException failure =
+                    assertThrows(
+                            ZLinkFrameworkException.class,
+                            () -> ZLinkChannelEnvelope.decodeHeader(frame, true));
             assertEquals(ZLinkFrameworkErrorKind.PROTOCOL_ERROR, failure.kind());
         }
-        String orphanOrigin = "{\"formatMarker\":242,\"kind\":1,\"channelName\":\"c\","
-            + "\"messageName\":\"m\",\"contentType\":\"application/json\","
-            + "\"flowOrigin\":3}";
+        String orphanOrigin =
+                "{\"formatMarker\":242,\"kind\":1,\"channelName\":\"c\","
+                        + "\"messageName\":\"m\",\"contentType\":\"application/json\","
+                        + "\"flowOrigin\":3}";
         try (Message frame = Message.from(orphanOrigin.getBytes(StandardCharsets.UTF_8))) {
-            ZLinkFrameworkException failure = assertThrows(
-                ZLinkFrameworkException.class,
-                () -> ZLinkChannelEnvelope.decodeHeader(frame, true));
+            ZLinkFrameworkException failure =
+                    assertThrows(
+                            ZLinkFrameworkException.class,
+                            () -> ZLinkChannelEnvelope.decodeHeader(frame, true));
             assertEquals(ZLinkFrameworkErrorKind.PROTOCOL_ERROR, failure.kind());
         }
     }
 
     @Test
     void decodeReadsValidFlowPairWhenCapturing() {
-        String header = "{\"formatMarker\":242,\"kind\":2,\"channelName\":\"c\","
-            + "\"messageName\":\"m\",\"contentType\":\"application/json\","
-            + "\"correlationId\":\"1\",\"flowId\":\"" + FLOW_ID + "\",\"flowOrigin\":1}";
+        String header =
+                "{\"formatMarker\":242,\"kind\":2,\"channelName\":\"c\","
+                        + "\"messageName\":\"m\",\"contentType\":\"application/json\","
+                        + "\"correlationId\":\"1\",\"flowId\":\""
+                        + FLOW_ID
+                        + "\",\"flowOrigin\":1}";
         try (Message frame = Message.from(header.getBytes(StandardCharsets.UTF_8))) {
-            ZLinkChannelEnvelope.Header decoded =
-                ZLinkChannelEnvelope.decodeHeader(frame, true);
+            ZLinkChannelEnvelope.Header decoded = ZLinkChannelEnvelope.decodeHeader(frame, true);
             assertEquals(FLOW_ID, decoded.flowId());
             assertEquals(ZLinkFlowOrigin.INBOUND, decoded.flowOrigin());
             assertEquals("1", decoded.correlationId());
@@ -413,15 +440,15 @@ final class ZLinkChannelEnvelopeGoldenTest {
 
     @Test
     void decodeAcceptsTheCanonicalFieldsInAnotherJsonOrder() {
-        String header = "{\"metadata\":{\"tenant\":\"blue\"},\"source\":null,"
-            + "\"errorMessage\":null,\"errorCode\":null,\"topic\":null,"
-            + "\"deadline\":null,\"correlationId\":\"corr\","
-            + "\"contentType\":\"application/json\",\"messageName\":\"Request\","
-            + "\"channelName\":\"orders\",\"kind\":1,\"flowOrigin\":null,"
-            + "\"flowId\":null,\"formatMarker\":242}";
+        String header =
+                "{\"metadata\":{\"tenant\":\"blue\"},\"source\":null,"
+                        + "\"errorMessage\":null,\"errorCode\":null,\"topic\":null,"
+                        + "\"deadline\":null,\"correlationId\":\"corr\","
+                        + "\"contentType\":\"application/json\",\"messageName\":\"Request\","
+                        + "\"channelName\":\"orders\",\"kind\":1,\"flowOrigin\":null,"
+                        + "\"flowId\":null,\"formatMarker\":242}";
         try (Message frame = Message.from(header.getBytes(StandardCharsets.UTF_8))) {
-            ZLinkChannelEnvelope.Header decoded =
-                ZLinkChannelEnvelope.decodeHeader(frame, true);
+            ZLinkChannelEnvelope.Header decoded = ZLinkChannelEnvelope.decodeHeader(frame, true);
             assertEquals(ZLinkChannelEnvelope.KIND_REQUEST, decoded.kind());
             assertEquals("orders", decoded.channelName());
             assertEquals("Request", decoded.messageName());
@@ -434,10 +461,11 @@ final class ZLinkChannelEnvelopeGoldenTest {
 
     @Test
     void decodeUsesTheLastDuplicateTopLevelValue() {
-        String header = "{\"formatMarker\":0,\"formatMarker\":242,"
-            + "\"kind\":\"not-an-int\",\"kind\":1,"
-            + "\"channelName\":\"orders\",\"messageName\":\"Request\","
-            + "\"contentType\":7,\"contentType\":\"application/json\"}";
+        String header =
+                "{\"formatMarker\":0,\"formatMarker\":242,"
+                        + "\"kind\":\"not-an-int\",\"kind\":1,"
+                        + "\"channelName\":\"orders\",\"messageName\":\"Request\","
+                        + "\"contentType\":7,\"contentType\":\"application/json\"}";
 
         ZLinkChannelEnvelope.Header decoded = decode(header, false);
 
@@ -450,49 +478,80 @@ final class ZLinkChannelEnvelopeGoldenTest {
     @Test
     void decodePreservesOptionalStringAndDefaultContentTypeSemantics() {
         assertEquals(
-            ZLinkChannelEnvelope.DEFAULT_CONTENT_TYPE,
-            decode("{\"formatMarker\":242,\"kind\":1,\"channelName\":\"c\","
-                + "\"messageName\":\"m\"}", false).contentType());
+                ZLinkChannelEnvelope.DEFAULT_CONTENT_TYPE,
+                decode(
+                                "{\"formatMarker\":242,\"kind\":1,\"channelName\":\"c\","
+                                        + "\"messageName\":\"m\"}",
+                                false)
+                        .contentType());
         assertEquals(
-            ZLinkChannelEnvelope.DEFAULT_CONTENT_TYPE,
-            decode("{\"formatMarker\":242,\"kind\":1,\"channelName\":\"c\","
-                + "\"messageName\":\"m\",\"contentType\":null}", false).contentType());
+                ZLinkChannelEnvelope.DEFAULT_CONTENT_TYPE,
+                decode(
+                                "{\"formatMarker\":242,\"kind\":1,\"channelName\":\"c\","
+                                        + "\"messageName\":\"m\",\"contentType\":null}",
+                                false)
+                        .contentType());
 
-        for (String field : List.of(
-                "contentType", "correlationId", "deadline", "topic", "errorCode",
-                "errorMessage", "source")) {
-            assertProtocolError("{\"formatMarker\":242,\"kind\":1,\"channelName\":\"c\","
-                + "\"messageName\":\"m\",\"" + field + "\":7}", false);
+        for (String field :
+                List.of(
+                        "contentType",
+                        "correlationId",
+                        "deadline",
+                        "topic",
+                        "errorCode",
+                        "errorMessage",
+                        "source")) {
+            assertProtocolError(
+                    "{\"formatMarker\":242,\"kind\":1,\"channelName\":\"c\","
+                            + "\"messageName\":\"m\",\""
+                            + field
+                            + "\":7}",
+                    false);
         }
     }
 
     @Test
     void decodeKeepsJacksonIntNodeBoundariesForMarkerAndKind() {
         assertEquals(
-            Integer.MAX_VALUE,
-            decode("{\"formatMarker\":242,\"kind\":2147483647,\"channelName\":\"c\","
-                + "\"messageName\":\"m\"}", false).kind());
+                Integer.MAX_VALUE,
+                decode(
+                                "{\"formatMarker\":242,\"kind\":2147483647,\"channelName\":\"c\","
+                                        + "\"messageName\":\"m\"}",
+                                false)
+                        .kind());
         assertEquals(
-            Integer.MIN_VALUE,
-            decode("{\"formatMarker\":242,\"kind\":-2147483648,\"channelName\":\"c\","
-                + "\"messageName\":\"m\"}", false).kind());
+                Integer.MIN_VALUE,
+                decode(
+                                "{\"formatMarker\":242,\"kind\":-2147483648,\"channelName\":\"c\","
+                                        + "\"messageName\":\"m\"}",
+                                false)
+                        .kind());
 
         for (String marker : List.of("242.0", "2147483648", "-2147483649")) {
-            assertProtocolError("{\"formatMarker\":" + marker + ",\"kind\":1,"
-                + "\"channelName\":\"c\",\"messageName\":\"m\"}", false);
+            assertProtocolError(
+                    "{\"formatMarker\":"
+                            + marker
+                            + ",\"kind\":1,"
+                            + "\"channelName\":\"c\",\"messageName\":\"m\"}",
+                    false);
         }
         for (String kind : List.of("1.0", "2147483648", "-2147483649")) {
-            assertProtocolError("{\"formatMarker\":242,\"kind\":" + kind + ","
-                + "\"channelName\":\"c\",\"messageName\":\"m\"}", false);
+            assertProtocolError(
+                    "{\"formatMarker\":242,\"kind\":"
+                            + kind
+                            + ","
+                            + "\"channelName\":\"c\",\"messageName\":\"m\"}",
+                    false);
         }
     }
 
     @Test
     void decodeIgnoresUnknownNestedFieldsAndMalformedFlowWhileOff() {
-        String header = "{\"unknown\":{\"nested\":[1,{\"value\":true}]},"
-            + "\"formatMarker\":242,\"kind\":1,\"channelName\":\"c\","
-            + "\"messageName\":\"m\",\"flowId\":{\"nested\":true},"
-            + "\"flowOrigin\":[3]}";
+        String header =
+                "{\"unknown\":{\"nested\":[1,{\"value\":true}]},"
+                        + "\"formatMarker\":242,\"kind\":1,\"channelName\":\"c\","
+                        + "\"messageName\":\"m\",\"flowId\":{\"nested\":true},"
+                        + "\"flowOrigin\":[3]}";
 
         ZLinkChannelEnvelope.Header decoded = decode(header, false);
 
@@ -506,18 +565,27 @@ final class ZLinkChannelEnvelopeGoldenTest {
     void decodeKeepsMetadataDomSemantics() {
         for (String metadata : List.of("null", "7", "[]", "\"text\"")) {
             assertEquals(
-                Map.of(),
-                decode("{\"formatMarker\":242,\"kind\":1,\"channelName\":\"c\","
-                    + "\"messageName\":\"m\",\"metadata\":" + metadata + "}", false)
-                    .metadata());
+                    Map.of(),
+                    decode(
+                                    "{\"formatMarker\":242,\"kind\":1,\"channelName\":\"c\","
+                                            + "\"messageName\":\"m\",\"metadata\":"
+                                            + metadata
+                                            + "}",
+                                    false)
+                            .metadata());
         }
         assertEquals(
-            Map.of("tenant", "new"),
-            decode("{\"formatMarker\":242,\"kind\":1,\"channelName\":\"c\","
-                + "\"messageName\":\"m\",\"metadata\":{\"tenant\":\"old\","
-                + "\"tenant\":\"new\"}}", false).metadata());
-        assertProtocolError("{\"formatMarker\":242,\"kind\":1,\"channelName\":\"c\","
-            + "\"messageName\":\"m\",\"metadata\":{\"tenant\":7}}", false);
+                Map.of("tenant", "new"),
+                decode(
+                                "{\"formatMarker\":242,\"kind\":1,\"channelName\":\"c\","
+                                        + "\"messageName\":\"m\",\"metadata\":{\"tenant\":\"old\","
+                                        + "\"tenant\":\"new\"}}",
+                                false)
+                        .metadata());
+        assertProtocolError(
+                "{\"formatMarker\":242,\"kind\":1,\"channelName\":\"c\","
+                        + "\"messageName\":\"m\",\"metadata\":{\"tenant\":7}}",
+                false);
     }
 
     @Test
@@ -527,29 +595,30 @@ final class ZLinkChannelEnvelopeGoldenTest {
             String deadline = attempt % 2 == 0 ? null : "2030-01-02T03:04:05Z";
             String flowId = attempt % 2 == 0 ? null : FLOW_ID;
             ZLinkFlowOrigin flowOrigin = flowId == null ? null : ZLinkFlowOrigin.APPLICATION;
-            Map<String, String> metadata = attempt % 3 == 0
-                ? Map.of()
-                : Map.of("attempt", String.valueOf(attempt));
-            ZLinkChannelEnvelope.Header header = new ZLinkChannelEnvelope.Header(
-                ZLinkChannelEnvelope.KIND_REQUEST,
-                "orders",
-                "Request",
-                "application/json",
-                correlationId,
-                deadline,
-                null,
-                null,
-                null,
-                null,
-                metadata,
-                flowId,
-                flowOrigin);
+            Map<String, String> metadata =
+                    attempt % 3 == 0 ? Map.of() : Map.of("attempt", String.valueOf(attempt));
+            ZLinkChannelEnvelope.Header header =
+                    new ZLinkChannelEnvelope.Header(
+                            ZLinkChannelEnvelope.KIND_REQUEST,
+                            "orders",
+                            "Request",
+                            "application/json",
+                            correlationId,
+                            deadline,
+                            null,
+                            null,
+                            null,
+                            null,
+                            metadata,
+                            flowId,
+                            flowOrigin);
 
             try (Message encoded = ZLinkChannelEnvelope.encodeHeader(header)) {
                 assertArrayEquals(
-                    canonicalRequestBytes(correlationId, deadline, metadata, flowId, flowOrigin),
-                    encoded.toByteArray(),
-                    "attempt=" + attempt);
+                        canonicalRequestBytes(
+                                correlationId, deadline, metadata, flowId, flowOrigin),
+                        encoded.toByteArray(),
+                        "attempt=" + attempt);
             }
         }
     }
@@ -557,44 +626,50 @@ final class ZLinkChannelEnvelopeGoldenTest {
     @Test
     void aLaterHeaderDoesNotMutateAnEarlierReturnedMessage() {
         Map<String, String> firstMetadata = Map.of("tenant", "blue");
-        ZLinkChannelEnvelope.Header first = new ZLinkChannelEnvelope.Header(
-            ZLinkChannelEnvelope.KIND_REQUEST,
-            "orders",
-            "Request",
-            "application/json",
-            "corr-first",
-            null,
-            null,
-            null,
-            null,
-            null,
-            firstMetadata,
-            null,
-            null);
-        ZLinkChannelEnvelope.Header second = new ZLinkChannelEnvelope.Header(
-            ZLinkChannelEnvelope.KIND_REQUEST,
-            "orders",
-            "Request",
-            "application/json",
-            "corr-second",
-            "2030-01-02T03:04:05Z",
-            null,
-            null,
-            null,
-            null,
-            Map.of(),
-            FLOW_ID,
-            ZLinkFlowOrigin.APPLICATION);
+        ZLinkChannelEnvelope.Header first =
+                new ZLinkChannelEnvelope.Header(
+                        ZLinkChannelEnvelope.KIND_REQUEST,
+                        "orders",
+                        "Request",
+                        "application/json",
+                        "corr-first",
+                        null,
+                        null,
+                        null,
+                        null,
+                        null,
+                        firstMetadata,
+                        null,
+                        null);
+        ZLinkChannelEnvelope.Header second =
+                new ZLinkChannelEnvelope.Header(
+                        ZLinkChannelEnvelope.KIND_REQUEST,
+                        "orders",
+                        "Request",
+                        "application/json",
+                        "corr-second",
+                        "2030-01-02T03:04:05Z",
+                        null,
+                        null,
+                        null,
+                        null,
+                        Map.of(),
+                        FLOW_ID,
+                        ZLinkFlowOrigin.APPLICATION);
 
         try (Message encodedFirst = ZLinkChannelEnvelope.encodeHeader(first);
-             Message encodedSecond = ZLinkChannelEnvelope.encodeHeader(second)) {
+                Message encodedSecond = ZLinkChannelEnvelope.encodeHeader(second)) {
             assertArrayEquals(
-                canonicalRequestBytes("corr-second", "2030-01-02T03:04:05Z", Map.of(),
-                    FLOW_ID, ZLinkFlowOrigin.APPLICATION),
-                encodedSecond.toByteArray());
+                    canonicalRequestBytes(
+                            "corr-second",
+                            "2030-01-02T03:04:05Z",
+                            Map.of(),
+                            FLOW_ID,
+                            ZLinkFlowOrigin.APPLICATION),
+                    encodedSecond.toByteArray());
             assertArrayEquals(
-                canonicalRequestBytes("corr-first", null, firstMetadata, null, null),
-                encodedFirst.toByteArray());
+                    canonicalRequestBytes("corr-first", null, firstMetadata, null, null),
+                    encodedFirst.toByteArray());
         }
     }
 
@@ -604,34 +679,42 @@ final class ZLinkChannelEnvelopeGoldenTest {
         try (var workers = Executors.newVirtualThreadPerTaskExecutor()) {
             for (int sequence = 0; sequence < 32; sequence++) {
                 int current = sequence;
-                calls.add(workers.submit(() -> {
-                    String correlationId = "corr-" + current;
-                    String flowId = current % 2 == 0 ? null : FLOW_ID;
-                    ZLinkFlowOrigin flowOrigin = flowId == null
-                        ? null
-                        : ZLinkFlowOrigin.APPLICATION;
-                    Map<String, String> metadata = Map.of("sequence", String.valueOf(current));
-                    ZLinkChannelEnvelope.Header header = new ZLinkChannelEnvelope.Header(
-                        ZLinkChannelEnvelope.KIND_REQUEST,
-                        "orders",
-                        "Request",
-                        "application/json",
-                        correlationId,
-                        null,
-                        null,
-                        null,
-                        null,
-                        null,
-                        metadata,
-                        flowId,
-                        flowOrigin);
-                    try (Message encoded = ZLinkChannelEnvelope.encodeHeader(header)) {
-                        return new EncodedHeader(
-                            canonicalRequestBytes(
-                                correlationId, null, metadata, flowId, flowOrigin),
-                            encoded.toByteArray());
-                    }
-                }));
+                calls.add(
+                        workers.submit(
+                                () -> {
+                                    String correlationId = "corr-" + current;
+                                    String flowId = current % 2 == 0 ? null : FLOW_ID;
+                                    ZLinkFlowOrigin flowOrigin =
+                                            flowId == null ? null : ZLinkFlowOrigin.APPLICATION;
+                                    Map<String, String> metadata =
+                                            Map.of("sequence", String.valueOf(current));
+                                    ZLinkChannelEnvelope.Header header =
+                                            new ZLinkChannelEnvelope.Header(
+                                                    ZLinkChannelEnvelope.KIND_REQUEST,
+                                                    "orders",
+                                                    "Request",
+                                                    "application/json",
+                                                    correlationId,
+                                                    null,
+                                                    null,
+                                                    null,
+                                                    null,
+                                                    null,
+                                                    metadata,
+                                                    flowId,
+                                                    flowOrigin);
+                                    try (Message encoded =
+                                            ZLinkChannelEnvelope.encodeHeader(header)) {
+                                        return new EncodedHeader(
+                                                canonicalRequestBytes(
+                                                        correlationId,
+                                                        null,
+                                                        metadata,
+                                                        flowId,
+                                                        flowOrigin),
+                                                encoded.toByteArray());
+                                    }
+                                }));
             }
             for (Future<EncodedHeader> call : calls) {
                 EncodedHeader result = call.get();
@@ -642,70 +725,86 @@ final class ZLinkChannelEnvelopeGoldenTest {
 
     @Test
     void invalidHeaderDoesNotContaminateTheNextValidHeader() {
-        ZLinkChannelEnvelope.Header invalid = new ZLinkChannelEnvelope.Header(
-            ZLinkChannelEnvelope.KIND_REQUEST,
-            "orders",
-            "Request",
-            "application/json",
-            "corr-invalid",
-            null,
-            null,
-            null,
-            null,
-            null,
-            Map.of(),
-            "not-a-uuid",
-            ZLinkFlowOrigin.APPLICATION);
+        ZLinkChannelEnvelope.Header invalid =
+                new ZLinkChannelEnvelope.Header(
+                        ZLinkChannelEnvelope.KIND_REQUEST,
+                        "orders",
+                        "Request",
+                        "application/json",
+                        "corr-invalid",
+                        null,
+                        null,
+                        null,
+                        null,
+                        null,
+                        Map.of(),
+                        "not-a-uuid",
+                        ZLinkFlowOrigin.APPLICATION);
 
-        assertThrows(ZLinkFrameworkException.class,
-            () -> ZLinkChannelEnvelope.encodeHeader(invalid));
+        assertThrows(
+                ZLinkFrameworkException.class, () -> ZLinkChannelEnvelope.encodeHeader(invalid));
 
-        try (Message encoded = ZLinkChannelEnvelope.encodeHeader(new ZLinkChannelEnvelope.Header(
-                ZLinkChannelEnvelope.KIND_REQUEST,
-                "orders",
-                "Request",
-                "application/json",
-                "corr-valid",
-                null,
-                null,
-                null,
-                null,
-                null,
-                Map.of(),
-                null,
-                null))) {
+        try (Message encoded =
+                ZLinkChannelEnvelope.encodeHeader(
+                        new ZLinkChannelEnvelope.Header(
+                                ZLinkChannelEnvelope.KIND_REQUEST,
+                                "orders",
+                                "Request",
+                                "application/json",
+                                "corr-valid",
+                                null,
+                                null,
+                                null,
+                                null,
+                                null,
+                                Map.of(),
+                                null,
+                                null))) {
             assertArrayEquals(
-                canonicalRequestBytes("corr-valid", null, Map.of(), null, null),
-                encoded.toByteArray());
+                    canonicalRequestBytes("corr-valid", null, Map.of(), null, null),
+                    encoded.toByteArray());
         }
     }
 
     private static byte[] canonicalRequestBytes(
-        String correlationId,
-        String deadline,
-        Map<String, String> metadata,
-        String flowId,
-        ZLinkFlowOrigin flowOrigin) {
+            String correlationId,
+            String deadline,
+            Map<String, String> metadata,
+            String flowId,
+            ZLinkFlowOrigin flowOrigin) {
         String flow = flowId == null ? "null" : "\"" + flowId + "\"";
-        String origin = flowOrigin == null
-            ? "null"
-            : String.valueOf(ZLinkChannelEnvelope.flowOriginWireValue(flowOrigin));
-        String metadataJson = metadata.isEmpty()
-            ? "{}"
-            : "{\"" + metadata.keySet().iterator().next() + "\":\""
-                + metadata.values().iterator().next() + "\"}";
-        return ("{\"formatMarker\":242,\"flowId\":" + flow + ",\"flowOrigin\":" + origin
-            + ",\"kind\":1,\"channelName\":\"orders\",\"messageName\":\"Request\","
-            + "\"contentType\":\"application/json\",\"correlationId\":\"" + correlationId
-            + "\",\"deadline\":" + (deadline == null ? "null" : "\"" + deadline + "\"")
-            + ",\"topic\":null,\"errorCode\":null,\"errorMessage\":null,\"source\":null,"
-            + "\"metadata\":" + metadataJson + "}").getBytes(StandardCharsets.UTF_8);
+        String origin =
+                flowOrigin == null
+                        ? "null"
+                        : String.valueOf(ZLinkChannelEnvelope.flowOriginWireValue(flowOrigin));
+        String metadataJson =
+                metadata.isEmpty()
+                        ? "{}"
+                        : "{\""
+                                + metadata.keySet().iterator().next()
+                                + "\":\""
+                                + metadata.values().iterator().next()
+                                + "\"}";
+        return ("{\"formatMarker\":242,\"flowId\":"
+                        + flow
+                        + ",\"flowOrigin\":"
+                        + origin
+                        + ",\"kind\":1,\"channelName\":\"orders\",\"messageName\":\"Request\","
+                        + "\"contentType\":\"application/json\",\"correlationId\":\""
+                        + correlationId
+                        + "\",\"deadline\":"
+                        + (deadline == null ? "null" : "\"" + deadline + "\"")
+                        + ",\"topic\":null,\"errorCode\":null,\"errorMessage\":null,\"source\":null,"
+                        + "\"metadata\":"
+                        + metadataJson
+                        + "}")
+                .getBytes(StandardCharsets.UTF_8);
     }
 
     private static byte[] encodeWithPreviousStringWriter(ZLinkChannelEnvelope.Header header)
-        throws IOException {
+            throws IOException {
         try (ByteArrayOutputStream bytes = new ByteArrayOutputStream();
-             JsonGenerator json = JSON.getFactory().createGenerator(bytes)) {
+                JsonGenerator json = JSON.getFactory().createGenerator(bytes)) {
             json.writeStartObject();
             json.writeNumberField("formatMarker", ZLinkChannelEnvelope.FORMAT_MARKER);
             writeNullableString(json, "flowId", header.flowId());
@@ -713,7 +812,8 @@ final class ZLinkChannelEnvelopeGoldenTest {
                 json.writeNullField("flowOrigin");
             } else {
                 json.writeNumberField(
-                    "flowOrigin", ZLinkChannelEnvelope.flowOriginWireValue(header.flowOrigin()));
+                        "flowOrigin",
+                        ZLinkChannelEnvelope.flowOriginWireValue(header.flowOrigin()));
             }
             json.writeNumberField("kind", header.kind());
             writeNullableString(json, "channelName", header.channelName());
@@ -737,7 +837,7 @@ final class ZLinkChannelEnvelopeGoldenTest {
     }
 
     private static void writeNullableString(JsonGenerator json, String field, String value)
-        throws IOException {
+            throws IOException {
         json.writeFieldName(field);
         if (value == null) {
             json.writeNull();
@@ -753,12 +853,10 @@ final class ZLinkChannelEnvelopeGoldenTest {
     }
 
     private static void assertProtocolError(String header, boolean captureFlow) {
-        ZLinkFrameworkException failure = assertThrows(
-            ZLinkFrameworkException.class,
-            () -> decode(header, captureFlow));
+        ZLinkFrameworkException failure =
+                assertThrows(ZLinkFrameworkException.class, () -> decode(header, captureFlow));
         assertEquals(ZLinkFrameworkErrorKind.PROTOCOL_ERROR, failure.kind());
     }
 
-    private record EncodedHeader(byte[] expected, byte[] actual) {
-    }
+    private record EncodedHeader(byte[] expected, byte[] actual) {}
 }

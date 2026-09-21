@@ -10,7 +10,7 @@ internal enum ZLinkMessageFlowOutcome
     ReplyReceived = 5,
     Admitted = 6,
     Completed = 7,
-    Backpressured = 8
+    Backpressured = 8,
 }
 
 internal enum ZLinkMessageFlowResult
@@ -20,7 +20,7 @@ internal enum ZLinkMessageFlowResult
     Backpressured = 2,
     Dropped = 3,
     Cancelled = 4,
-    Shutdown = 5
+    Shutdown = 5,
 }
 
 internal enum ZLinkMessageFlowReason
@@ -31,7 +31,7 @@ internal enum ZLinkMessageFlowReason
     Shutdown = 3,
     LocationUnavailable = 4,
     ActivationRejected = 5,
-    ActivationTimeout = 6
+    ActivationTimeout = 6,
 }
 
 internal sealed record ZLinkMessageFlowEvent(
@@ -58,7 +58,8 @@ internal sealed record ZLinkMessageFlowEvent(
     double? DurationSeconds = null,
     ulong? SourceMeshGeneration = null,
     ZLinkMessageFlowResult? Result = null,
-    ZLinkMessageFlowReason? Reason = null)
+    ZLinkMessageFlowReason? Reason = null
+)
 {
     public string FlowId { get; init; } = string.Empty;
 
@@ -76,7 +77,7 @@ internal enum ZLinkDispatchErrorSurface
     Node = 6,
     InstanceSpot = 7,
     ActorRelocation = 8,
-    ClassicFanout = 9
+    ClassicFanout = 9,
 }
 
 internal enum ZLinkDispatchMessageKind
@@ -88,7 +89,7 @@ internal enum ZLinkDispatchMessageKind
     Error = 4,
     ActorRequest = 5,
     ActorSend = 6,
-    Control = 7
+    Control = 7,
 }
 
 internal enum ZLinkDispatchErrorReason
@@ -101,12 +102,12 @@ internal enum ZLinkDispatchErrorReason
     UnexpectedReply = 5,
     Backpressure = 6,
     StaleTarget = 7,
-    Shutdown = 8
+    Shutdown = 8,
 }
 
 internal enum ZLinkDispatchErrorAction
 {
     ReplyError = 0,
     Drop = 1,
-    FailCaller = 2
+    FailCaller = 2,
 }

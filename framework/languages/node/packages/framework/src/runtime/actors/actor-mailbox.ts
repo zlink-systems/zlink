@@ -19,18 +19,13 @@ export class ZLinkActorSerialExecutor {
     private readonly sourceSpotId: unknown,
     options?: ZLinkSerialSchedulerOptions
   ) {
-    this.scheduler = new ZLinkSerialExecutionQueue(
-      (record) => this.runRecord(record),
-      options
-    );
+    this.scheduler = new ZLinkSerialExecutionQueue((record) => this.runRecord(record), options);
   }
 
-  execute<T>(
-    operation: () => Promise<T> | T,
-    workOptions?: ZLinkSerialWorkOptions
-  ): Promise<T> {
+  execute<T>(operation: () => Promise<T> | T, workOptions?: ZLinkSerialWorkOptions): Promise<T> {
     const boundOperation = bindApplicationJobPermit(() =>
-      runZLinkActorExecution(this.actorId, this.sourceSpotId, operation));
+      runZLinkActorExecution(this.actorId, this.sourceSpotId, operation)
+    );
     return hasApplicationJobPermit()
       ? this.scheduler.submitPreAdmitted(boundOperation, workOptions)
       : this.scheduler.submit(boundOperation, workOptions);
@@ -46,9 +41,7 @@ export class ZLinkActorSerialExecutor {
   admitDurablePrefix(
     records: readonly {
       readonly operation: (
-        executeChild: <TChild>(
-          child: () => Promise<TChild> | TChild
-        ) => Promise<TChild>
+        executeChild: <TChild>(child: () => Promise<TChild> | TChild) => Promise<TChild>
       ) => Promise<void>;
       readonly preparation?: ZLinkSerialWorkPreparation;
       readonly workOptions?: ZLinkSerialWorkOptions;
@@ -56,13 +49,17 @@ export class ZLinkActorSerialExecutor {
   ): readonly Promise<void>[] {
     // No await occurs in this map: the whole durable prefix is appended in
     // one event-loop turn before later ingress can observe the released hold.
-    return records.map(record => this.scheduler.admitDurablePrefix(
-      () => record.operation(child =>
-        runZLinkActorExecution(this.actorId, this.sourceSpotId, child)),
-      record.workOptions,
-      undefined,
-      record.preparation
-    ));
+    return records.map((record) =>
+      this.scheduler.admitDurablePrefix(
+        () =>
+          record.operation((child) =>
+            runZLinkActorExecution(this.actorId, this.sourceSpotId, child)
+          ),
+        record.workOptions,
+        undefined,
+        record.preparation
+      )
+    );
   }
 
   close(): Promise<void> {

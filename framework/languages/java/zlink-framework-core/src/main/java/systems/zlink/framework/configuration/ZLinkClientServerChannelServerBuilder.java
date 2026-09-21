@@ -17,13 +17,12 @@ public interface ZLinkClientServerChannelServerBuilder {
     ZLinkClientServerChannelServerBuilder addHandlerGroup(String groupName);
 
     <THandler extends ZLinkSendHandler<TMessage>, TMessage>
-    ZLinkClientServerChannelServerBuilder addSendHandler(
-        Class<THandler> handlerType,
-        Class<TMessage> messageType);
+            ZLinkClientServerChannelServerBuilder addSendHandler(
+                    Class<THandler> handlerType, Class<TMessage> messageType);
 
     <THandler extends ZLinkRequestHandler<TRequest, TReply>, TRequest, TReply>
-    ZLinkClientServerChannelServerBuilder addRequestHandler(
-        Class<THandler> handlerType,
-        Class<TRequest> requestType,
-        Class<TReply> replyType);
+            ZLinkClientServerChannelServerBuilder addRequestHandler(
+                    Class<THandler> handlerType,
+                    Class<TRequest> requestType,
+                    Class<TReply> replyType);
 }

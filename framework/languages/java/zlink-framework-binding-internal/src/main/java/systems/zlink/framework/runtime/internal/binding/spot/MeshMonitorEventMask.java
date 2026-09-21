@@ -17,19 +17,18 @@ final class MeshMonitorEventMask {
     public static final long PROTOCOL_ERROR = 1L << 12;
     public static final long CLAIM_REVOKED = 1L << 13;
     public static final long ALL =
-        STATE_CHANGED
-            | PEER_CONNECTING
-            | PEER_ADMITTED
-            | PEER_DRAINING
-            | PEER_CLOSED
-            | PEER_REJECTED
-            | CHANNEL_CHANGED
-            | MESSAGE_SUBMITTED
-            | BACKPRESSURED
-            | OPERATION_COMPLETED
-            | PROTOCOL_ERROR
-            | CLAIM_REVOKED;
+            STATE_CHANGED
+                    | PEER_CONNECTING
+                    | PEER_ADMITTED
+                    | PEER_DRAINING
+                    | PEER_CLOSED
+                    | PEER_REJECTED
+                    | CHANNEL_CHANGED
+                    | MESSAGE_SUBMITTED
+                    | BACKPRESSURED
+                    | OPERATION_COMPLETED
+                    | PROTOCOL_ERROR
+                    | CLAIM_REVOKED;
 
-    private MeshMonitorEventMask() {
-    }
+    private MeshMonitorEventMask() {}
 }

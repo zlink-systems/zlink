@@ -1,8 +1,7 @@
 package systems.zlink.stream.connector;
+
 import java.net.URI;
 import java.nio.charset.StandardCharsets;
-import java.util.function.Predicate;
-
 import java.time.Duration;
 import java.util.List;
 import java.util.Map;
@@ -17,27 +16,28 @@ import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.ThreadFactory;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.atomic.AtomicReference;
+import java.util.function.Predicate;
 import java.util.logging.Level;
 import java.util.logging.Logger;
-import systems.zlink.contracts.messaging.Message;
 
 final class DefaultZLinkStreamConnector implements ZLinkStreamConnector {
-    private static final Logger LOGGER = Logger.getLogger(DefaultZLinkStreamConnector.class.getName());
+    private static final Logger LOGGER =
+            Logger.getLogger(DefaultZLinkStreamConnector.class.getName());
     private static final String RESERVED_PACKET_NAME_PREFIX = "$zlink.";
     private static final String HEARTBEAT_PING_NAME = "$zlink.heartbeat.ping";
     private static final String HEARTBEAT_PONG_NAME = "$zlink.heartbeat.pong";
     private static final int MAX_PACKET_NAME_BYTES = 255;
     private static final boolean STREAM_TRACE =
-        "1".equals(System.getenv("ZLINK_JAVA_STREAM_TRACE"));
+            "1".equals(System.getenv("ZLINK_JAVA_STREAM_TRACE"));
     private final ScheduledExecutorService timeouts =
-        Executors.newSingleThreadScheduledExecutor(new DaemonThreadFactory());
+            Executors.newSingleThreadScheduledExecutor(new DaemonThreadFactory());
 
     private final ZLinkStreamConnectorConfiguration configuration;
     private final Map<String, List<ZLinkStreamMessageHandler<ZLinkStreamEncodedPayload>>> handlers =
-        new ConcurrentHashMap<>();
+            new ConcurrentHashMap<>();
     private final List<ZLinkStreamErrorHandler> errorHandlers = new CopyOnWriteArrayList<>();
     private final List<ZLinkStreamDisconnectedHandler> disconnectedHandlers =
-        new CopyOnWriteArrayList<>();
+            new CopyOnWriteArrayList<>();
     private final ZLinkStreamDispatchQueue dispatchQueue;
     private final ZLinkStreamConnectorPayloadCodec payloadCodec;
     private final AtomicLong nextRequestSeq = new AtomicLong();
@@ -57,38 +57,39 @@ final class DefaultZLinkStreamConnector implements ZLinkStreamConnector {
     //  `stagedCloseReason` holds the reason a specific ending already knows
     //  (client close, heartbeat timeout, a server `session-closing`) until
     //  the disconnect is published; anything else ends as TRANSPORT_ERROR.
-    private final AtomicReference<ZLinkStreamCloseReason> lastCloseReason =
-        new AtomicReference<>();
+    private final AtomicReference<ZLinkStreamCloseReason> lastCloseReason = new AtomicReference<>();
     //  Three threads stage a reason (heartbeat, receive, application) and
     //  two consume it, so the read-and-clear has to be one step.
     private final AtomicReference<ZLinkStreamCloseReason> stagedCloseReason =
-        new AtomicReference<>();
+            new AtomicReference<>();
 
     DefaultZLinkStreamConnector(ZLinkStreamConnectorOptions options) {
         this.configuration = ZLinkStreamConnectorConfiguration.from(options);
         this.dispatchQueue = new ZLinkStreamDispatchQueue(this::publishError);
         this.payloadCodec = new ZLinkStreamConnectorPayloadCodec(this.configuration);
-        this.receiveDispatcher = new ZLinkStreamReceiveDispatcher(
-            this.configuration,
-            handlers,
-            dispatchQueue,
-            pendingRequests,
-            payloadCodec,
-            this::publishError,
-            this::sendControl,
-            this::onSessionClosing);
-        this.lifecycle = new ZLinkStreamConnectionLifecycle(
-            this.configuration,
-            timeouts,
-            dispatchQueue,
-            pendingRequests,
-            receiveDispatcher,
-            this::publishError,
-            this::notifyDisconnected,
-            this::stageCloseReason,
-            this::recordConnectAttemptFailure,
-            this::sendControl,
-            sendChain::reset);
+        this.receiveDispatcher =
+                new ZLinkStreamReceiveDispatcher(
+                        this.configuration,
+                        handlers,
+                        dispatchQueue,
+                        pendingRequests,
+                        payloadCodec,
+                        this::publishError,
+                        this::sendControl,
+                        this::onSessionClosing);
+        this.lifecycle =
+                new ZLinkStreamConnectionLifecycle(
+                        this.configuration,
+                        timeouts,
+                        dispatchQueue,
+                        pendingRequests,
+                        receiveDispatcher,
+                        this::publishError,
+                        this::notifyDisconnected,
+                        this::stageCloseReason,
+                        this::recordConnectAttemptFailure,
+                        this::sendControl,
+                        sendChain::reset);
     }
 
     @Override
@@ -125,8 +126,7 @@ final class DefaultZLinkStreamConnector implements ZLinkStreamConnector {
     }
 
     @Override
-    public CompletionStage<Void> setDiagnosticsLevelAsync(
-        ZLinkStreamDiagnosticsLevel level) {
+    public CompletionStage<Void> setDiagnosticsLevelAsync(ZLinkStreamDiagnosticsLevel level) {
         setDiagnosticsLevel(level);
         return CompletableFuture.completedFuture(null);
     }
@@ -183,16 +183,12 @@ final class DefaultZLinkStreamConnector implements ZLinkStreamConnector {
     @Override
     public ZLinkStreamRequestCall request(ZLinkStreamEncodedPayload payload) {
         return new ZLinkStreamConnectorRequestCall(
-            this,
-            payloadCodec.copy(payload),
-            configuration.timeouts().request(),
-            false);
+                this, payloadCodec.copy(payload), configuration.timeouts().request(), false);
     }
 
     @Override
     public AutoCloseable on(
-        String name,
-        ZLinkStreamMessageHandler<ZLinkStreamEncodedPayload> handler) {
+            String name, ZLinkStreamMessageHandler<ZLinkStreamEncodedPayload> handler) {
         requirePacketName(name);
         Objects.requireNonNull(handler, "handler");
         handlers.computeIfAbsent(name, ignored -> new CopyOnWriteArrayList<>()).add(handler);
@@ -200,10 +196,9 @@ final class DefaultZLinkStreamConnector implements ZLinkStreamConnector {
     }
 
     CompletionStage<ZLinkStreamMessage<ZLinkStreamEncodedPayload>> awaitMessage(
-        String name,
-        Predicate<ZLinkStreamMessage<ZLinkStreamEncodedPayload>> predicate) {
+            String name, Predicate<ZLinkStreamMessage<ZLinkStreamEncodedPayload>> predicate) {
         CompletableFuture<ZLinkStreamMessage<ZLinkStreamEncodedPayload>> result =
-            new CompletableFuture<>();
+                new CompletableFuture<>();
         dispatchQueue.awaitMessage(name, predicate, result);
         return result;
     }
@@ -234,69 +229,74 @@ final class DefaultZLinkStreamConnector implements ZLinkStreamConnector {
         byte[] body = payloadCodec.encode(payload, compress);
         //  Spec 27 §2: a one-way Send has no reply, so no correlation_id is
         //  created and header flag 0x08 stays clear.
-        ZLinkStreamWireProtocol.Header header = new ZLinkStreamWireProtocol.Header(
-            ZLinkStreamWireProtocol.KIND_SEND,
-            ZLinkStreamConnectorPayloadCodec.toWireCodec(payload.codec()),
-            (payload.metadata().isEmpty() ? 0 : ZLinkStreamWireProtocol.FLAG_HAS_METADATA)
-                | (compress ? ZLinkStreamWireProtocol.FLAG_PAYLOAD_COMPRESSED : 0),
-            null,
-            payload.packetName(),
-            payload.metadata(),
-            null,
-            flow == null ? null : flow.flowId(),
-            flow == null ? 0 : flow.flowOrigin());
+        ZLinkStreamWireProtocol.Header header =
+                new ZLinkStreamWireProtocol.Header(
+                        ZLinkStreamWireProtocol.KIND_SEND,
+                        ZLinkStreamConnectorPayloadCodec.toWireCodec(payload.codec()),
+                        (payload.metadata().isEmpty()
+                                        ? 0
+                                        : ZLinkStreamWireProtocol.FLAG_HAS_METADATA)
+                                | (compress ? ZLinkStreamWireProtocol.FLAG_PAYLOAD_COMPRESSED : 0),
+                        null,
+                        payload.packetName(),
+                        payload.metadata(),
+                        null,
+                        flow == null ? null : flow.flowId(),
+                        flow == null ? 0 : flow.flowOrigin());
         return sendFrame(header, body);
     }
 
     /**
-     * Spec 27 §4: at Off no flow pair is created or copied onto outbound
-     * envelopes (flag 0x10 stays clear); otherwise the ambient flow is
-     * preserved or a new application flow starts on the first outbound call.
+     * Spec 27 §4: at Off no flow pair is created or copied onto outbound envelopes (flag 0x10 stays
+     * clear); otherwise the ambient flow is preserved or a new application flow starts on the first
+     * outbound call.
      */
     private ZLinkConnectorFlowContext.State outboundFlow() {
         //  Single atomic read of the level for this one outbound processing
         //  point; the boolean derived from it is used for every decision
         //  this submit/submitRequest call makes, never re-read mid-call.
-        return ZLinkStreamConnectorConfiguration.flowCaptureEnabled(configuration.diagnosticsLevel())
-            ? ZLinkConnectorFlowContext.currentOrApplication()
-            : null;
+        return ZLinkStreamConnectorConfiguration.flowCaptureEnabled(
+                        configuration.diagnosticsLevel())
+                ? ZLinkConnectorFlowContext.currentOrApplication()
+                : null;
     }
 
     CompletionStage<ZLinkStreamEncodedPayload> submitRequest(
-        ZLinkStreamEncodedPayload payload,
-        Duration timeout,
-        boolean compress) {
+            ZLinkStreamEncodedPayload payload, Duration timeout, boolean compress) {
         ensureConnected();
         ZLinkConnectorFlowContext.State flow = outboundFlow();
         long requestSeq = nextRequestSeq();
         CompletableFuture<ZLinkStreamEncodedPayload> pending =
-            pendingRequests.add(requestSeq, payload.packetName(), timeout, timeouts);
+                pendingRequests.add(requestSeq, payload.packetName(), timeout, timeouts);
 
         byte[] body = payloadCodec.encode(payload, compress);
-        ZLinkStreamWireProtocol.Header header = new ZLinkStreamWireProtocol.Header(
-            ZLinkStreamWireProtocol.KIND_REQUEST,
-            ZLinkStreamConnectorPayloadCodec.toWireCodec(payload.codec()),
-            ZLinkStreamWireProtocol.FLAG_HAS_REQUEST_SEQ
-                | (payload.metadata().isEmpty() ? 0 : ZLinkStreamWireProtocol.FLAG_HAS_METADATA)
-                | (compress ? ZLinkStreamWireProtocol.FLAG_PAYLOAD_COMPRESSED : 0),
-            requestSeq,
-            payload.packetName(),
-            payload.metadata(),
-            nextCorrelationId(),
-            flow == null ? null : flow.flowId(),
-            flow == null ? 0 : flow.flowOrigin());
+        ZLinkStreamWireProtocol.Header header =
+                new ZLinkStreamWireProtocol.Header(
+                        ZLinkStreamWireProtocol.KIND_REQUEST,
+                        ZLinkStreamConnectorPayloadCodec.toWireCodec(payload.codec()),
+                        ZLinkStreamWireProtocol.FLAG_HAS_REQUEST_SEQ
+                                | (payload.metadata().isEmpty()
+                                        ? 0
+                                        : ZLinkStreamWireProtocol.FLAG_HAS_METADATA)
+                                | (compress ? ZLinkStreamWireProtocol.FLAG_PAYLOAD_COMPRESSED : 0),
+                        requestSeq,
+                        payload.packetName(),
+                        payload.metadata(),
+                        nextCorrelationId(),
+                        flow == null ? null : flow.flowId(),
+                        flow == null ? 0 : flow.flowOrigin());
 
-        sendFrame(header, body).whenComplete((ignored, ex) -> {
-            if (ex != null) {
-                pendingRequests.fail(requestSeq, ex);
-            }
-        });
+        sendFrame(header, body)
+                .whenComplete(
+                        (ignored, ex) -> {
+                            if (ex != null) {
+                                pendingRequests.fail(requestSeq, ex);
+                            }
+                        });
         return pending;
     }
 
-    private CompletionStage<Void> sendFrame(
-        ZLinkStreamWireProtocol.Header header,
-        byte[] payload) {
+    private CompletionStage<Void> sendFrame(ZLinkStreamWireProtocol.Header header, byte[] payload) {
         //  The wire codec is internal and reports structural problems with
         //  plain exceptions. This is the connector boundary, so a rejection
         //  the caller can act on (metadata limits, correlation id, send
@@ -305,41 +305,63 @@ final class DefaultZLinkStreamConnector implements ZLinkStreamConnector {
         byte[] frame;
         try {
             encodedHeader = ZLinkStreamWireProtocol.encodeHeader(header);
-            frame = ZLinkStreamWireProtocol.encodeFrame(
-                encodedHeader,
-                payload,
-                configuration.limits().sendPayload());
+            frame =
+                    ZLinkStreamWireProtocol.encodeFrame(
+                            encodedHeader, payload, configuration.limits().sendPayload());
         } catch (ZLinkStreamException alreadyCoded) {
             throw alreadyCoded;
         } catch (IllegalArgumentException | IllegalStateException invalid) {
             throw ZLinkStreamException.validationFailed(
-                "outbound stream frame is invalid: " + invalid.getMessage(), invalid);
+                    "outbound stream frame is invalid: " + invalid.getMessage(), invalid);
         }
-        trace("connector write-start endpoint=" + configuration.endpoint()
-            + " kind=" + header.kind()
-            + " name=" + header.name()
-            + " requestSeq=" + header.requestSeq()
-            + " bytes=" + payload.length
-            + " correlation=" + header.correlationId()
-            + " flow=" + header.flowId()
-            + " origin=" + flowOriginName(header.flowOrigin()));
+        trace(
+                "connector write-start endpoint="
+                        + configuration.endpoint()
+                        + " kind="
+                        + header.kind()
+                        + " name="
+                        + header.name()
+                        + " requestSeq="
+                        + header.requestSeq()
+                        + " bytes="
+                        + payload.length
+                        + " correlation="
+                        + header.correlationId()
+                        + " flow="
+                        + header.flowId()
+                        + " origin="
+                        + flowOriginName(header.flowOrigin()));
         CompletableFuture<Void> publication = sendChain.enqueue(() -> writeFrame(frame));
-        return publication.whenComplete((ignored, ex) -> {
-            if (ex == null) {
-                trace("connector write-complete endpoint=" + configuration.endpoint()
-                    + " kind=" + header.kind()
-                    + " name=" + header.name()
-                    + " requestSeq=" + header.requestSeq()
-                    + " correlation=" + header.correlationId());
-            } else {
-                trace("connector write-failed endpoint=" + configuration.endpoint()
-                    + " kind=" + header.kind()
-                    + " name=" + header.name()
-                    + " requestSeq=" + header.requestSeq()
-                    + " correlation=" + header.correlationId()
-                    + " error=" + ex);
-            }
-        });
+        return publication.whenComplete(
+                (ignored, ex) -> {
+                    if (ex == null) {
+                        trace(
+                                "connector write-complete endpoint="
+                                        + configuration.endpoint()
+                                        + " kind="
+                                        + header.kind()
+                                        + " name="
+                                        + header.name()
+                                        + " requestSeq="
+                                        + header.requestSeq()
+                                        + " correlation="
+                                        + header.correlationId());
+                    } else {
+                        trace(
+                                "connector write-failed endpoint="
+                                        + configuration.endpoint()
+                                        + " kind="
+                                        + header.kind()
+                                        + " name="
+                                        + header.name()
+                                        + " requestSeq="
+                                        + header.requestSeq()
+                                        + " correlation="
+                                        + header.correlationId()
+                                        + " error="
+                                        + ex);
+                    }
+                });
     }
 
     private static String flowOriginName(int origin) {
@@ -357,16 +379,17 @@ final class DefaultZLinkStreamConnector implements ZLinkStreamConnector {
     }
 
     private CompletionStage<Void> sendControl(String name) {
-        ZLinkStreamWireProtocol.Header header = new ZLinkStreamWireProtocol.Header(
-            ZLinkStreamWireProtocol.KIND_CONTROL,
-            ZLinkStreamWireProtocol.CODEC_RAW,
-            0,
-            null,
-            name,
-            Map.of(),
-            null,
-            null,
-            0);
+        ZLinkStreamWireProtocol.Header header =
+                new ZLinkStreamWireProtocol.Header(
+                        ZLinkStreamWireProtocol.KIND_CONTROL,
+                        ZLinkStreamWireProtocol.CODEC_RAW,
+                        0,
+                        null,
+                        name,
+                        Map.of(),
+                        null,
+                        null,
+                        0);
         return sendFrame(header, new byte[0]);
     }
 
@@ -396,10 +419,9 @@ final class DefaultZLinkStreamConnector implements ZLinkStreamConnector {
     }
 
     /**
-     * Records why a connect attempt failed even though no connection had
-     * been established, so spec 32 6.2's "a failed first connect also leaves
-     * a reason" holds. Spec 32 9's impact table maps ConnectTimeout and
-     * TlsValidationFailed to TransportError.
+     * Records why a connect attempt failed even though no connection had been established, so spec
+     * 32 6.2's "a failed first connect also leaves a reason" holds. Spec 32 9's impact table maps
+     * ConnectTimeout and TlsValidationFailed to TransportError.
      */
     private void recordConnectAttemptFailure() {
         takeCloseReason();
@@ -408,7 +430,7 @@ final class DefaultZLinkStreamConnector implements ZLinkStreamConnector {
     private ZLinkStreamCloseReason takeCloseReason() {
         ZLinkStreamCloseReason staged = stagedCloseReason.getAndSet(null);
         ZLinkStreamCloseReason reason =
-            staged == null ? ZLinkStreamCloseReason.TRANSPORT_ERROR : staged;
+                staged == null ? ZLinkStreamCloseReason.TRANSPORT_ERROR : staged;
         lastCloseReason.set(reason);
         return reason;
     }
@@ -425,9 +447,7 @@ final class DefaultZLinkStreamConnector implements ZLinkStreamConnector {
     }
 
     private void dispatchErrorCallback(
-        ZLinkStreamErrorHandler handler,
-        ZLinkStreamError error,
-        boolean reportFailure) {
+            ZLinkStreamErrorHandler handler, ZLinkStreamError error, boolean reportFailure) {
         if (configuration.dispatchMode() == ZLinkStreamDispatchMode.IMMEDIATE) {
             invokeErrorCallback(handler, error, reportFailure);
         } else {
@@ -437,10 +457,12 @@ final class DefaultZLinkStreamConnector implements ZLinkStreamConnector {
 
     private CompletionStage<Void> invokeUserCallback(UserCallback callback) {
         try {
-            return callback.invoke().exceptionally(ex -> {
-                publishUserCallbackFailed(ex);
-                return null;
-            });
+            return callback.invoke()
+                    .exceptionally(
+                            ex -> {
+                                publishUserCallbackFailed(ex);
+                                return null;
+                            });
         } catch (Throwable ex) {
             publishUserCallbackFailed(ex);
             return CompletableFuture.completedFuture(null);
@@ -448,16 +470,16 @@ final class DefaultZLinkStreamConnector implements ZLinkStreamConnector {
     }
 
     private CompletionStage<Void> invokeErrorCallback(
-        ZLinkStreamErrorHandler handler,
-        ZLinkStreamError error,
-        boolean reportFailure) {
+            ZLinkStreamErrorHandler handler, ZLinkStreamError error, boolean reportFailure) {
         try {
-            return handler.handleAsync(error).exceptionally(ex -> {
-                if (reportFailure) {
-                    reportErrorCallbackFailure(handler, ex);
-                }
-                return null;
-            });
+            return handler.handleAsync(error)
+                    .exceptionally(
+                            ex -> {
+                                if (reportFailure) {
+                                    reportErrorCallbackFailure(handler, ex);
+                                }
+                                return null;
+                            });
         } catch (Throwable ex) {
             if (reportFailure) {
                 reportErrorCallbackFailure(handler, ex);
@@ -467,8 +489,7 @@ final class DefaultZLinkStreamConnector implements ZLinkStreamConnector {
     }
 
     private void reportErrorCallbackFailure(
-        ZLinkStreamErrorHandler failedHandler,
-        Throwable failure) {
+            ZLinkStreamErrorHandler failedHandler, Throwable failure) {
         LOGGER.log(Level.WARNING, "STREAM connector error callback failed", failure);
         ZLinkStreamError callbackError = userCallbackFailed(failure);
         for (ZLinkStreamErrorHandler handler : errorHandlers) {
@@ -480,9 +501,7 @@ final class DefaultZLinkStreamConnector implements ZLinkStreamConnector {
 
     static ZLinkStreamError userCallbackFailed(Throwable ex) {
         return new ZLinkStreamError(
-            ZLinkStreamErrorCode.USER_CALLBACK_FAILED,
-            "User callback failed.",
-            ex);
+                ZLinkStreamErrorCode.USER_CALLBACK_FAILED, "User callback failed.", ex);
     }
 
     private void publishUserCallbackFailed(Throwable ex) {
@@ -508,12 +527,11 @@ final class DefaultZLinkStreamConnector implements ZLinkStreamConnector {
             throw ZLinkStreamException.validationFailed("packetName is required");
         }
         if (packetName.startsWith(RESERVED_PACKET_NAME_PREFIX)) {
-            throw ZLinkStreamException.validationFailed(
-                "packetName uses a reserved zlink prefix");
+            throw ZLinkStreamException.validationFailed("packetName uses a reserved zlink prefix");
         }
         if (packetName.getBytes(StandardCharsets.UTF_8).length > MAX_PACKET_NAME_BYTES) {
             throw ZLinkStreamException.validationFailed(
-                "packetName must not exceed 255 UTF-8 bytes");
+                    "packetName must not exceed 255 UTF-8 bytes");
         }
         return packetName;
     }

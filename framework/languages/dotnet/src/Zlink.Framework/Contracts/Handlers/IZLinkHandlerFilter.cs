@@ -6,7 +6,7 @@ public enum ZLinkHandlerDispatchKind
     NodeDirectRequest = 1,
     ChannelSend = 2,
     ChannelRequest = 3,
-    ClassicFanout = 4
+    ClassicFanout = 4,
 }
 
 public interface IZLinkHandlerFilterContext : IZLinkMessageContext
@@ -21,5 +21,6 @@ public interface IZLinkHandlerFilter
     ValueTask InvokeAsync(
         IZLinkHandlerFilterContext context,
         ZLinkHandlerFilterNext next,
-        CancellationToken cancellationToken);
+        CancellationToken cancellationToken
+    );
 }

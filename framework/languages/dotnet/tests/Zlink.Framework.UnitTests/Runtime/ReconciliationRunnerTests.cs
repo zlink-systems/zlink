@@ -18,12 +18,13 @@ public sealed class ReconciliationRunnerTests
                 {
                     1 => ValueTask.FromException<int>(first),
                     2 => ValueTask.FromException<int>(second),
-                    _ => ValueTask.FromResult(42)
+                    _ => ValueTask.FromResult(42),
                 };
             },
             reported.Add,
             CancellationToken.None,
-            retryDelay: TimeSpan.Zero);
+            retryDelay: TimeSpan.Zero
+        );
 
         Assert.Equal(42, result);
         Assert.Equal(3, attempts);
@@ -47,7 +48,9 @@ public sealed class ReconciliationRunnerTests
                 reported.Add,
                 CancellationToken.None,
                 static exception => exception is FormatException,
-                TimeSpan.Zero));
+                TimeSpan.Zero
+            )
+        );
 
         Assert.Same(terminal, actual);
         Assert.Equal(1, attempts);
@@ -74,7 +77,9 @@ public sealed class ReconciliationRunnerTests
                     reported.Add(exception);
                     shutdown.Cancel();
                 },
-                shutdown.Token));
+                shutdown.Token
+            )
+        );
 
         Assert.Equal(1, attempts);
         Assert.Equal(new[] { failure }, reported);
@@ -97,7 +102,8 @@ public sealed class ReconciliationRunnerTests
             },
             reported.Add,
             CancellationToken.None,
-            retryDelay: TimeSpan.Zero);
+            retryDelay: TimeSpan.Zero
+        );
 
         Assert.Equal(2, attempts);
         Assert.Equal(new[] { transientCancellation }, reported);

@@ -16,36 +16,43 @@ internal sealed class ZLinkSpotActorJoinDispatcher(
     ILogger<ZLinkSpotActorJoinDispatcher>? logger = null,
     Func<IZLinkActor, CancellationToken, ValueTask>? commitAcceptedActorJoin = null,
     ZLinkDispatchErrorReporter? dispatchErrors = null,
-    bool acceptActorJoinWithoutHandler = false)
+    bool acceptActorJoinWithoutHandler = false
+)
 {
-    private readonly ZLinkDispatchErrorReporter _dispatchErrors = dispatchErrors ?? new(
-        runtime.Registration.DispatchOptions,
-        logger ?? NullLogger<ZLinkSpotActorJoinDispatcher>.Instance,
-        runtime);
+    private readonly ZLinkDispatchErrorReporter _dispatchErrors =
+        dispatchErrors
+        ?? new(
+            runtime.Registration.DispatchOptions,
+            logger ?? NullLogger<ZLinkSpotActorJoinDispatcher>.Instance,
+            runtime
+        );
 
     public async ValueTask DispatchAsync(
         ZLinkBackendActorJoinRequest joinRequest,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken
+    )
     {
-        using var applicationAdmission =
-            joinRequest.ApplicationJobAdmission is { } admission
-                ? ZLinkApplicationJobQueueInvocation.Enter(admission)
-                : null;
+        using var applicationAdmission = joinRequest.ApplicationJobAdmission is { } admission
+            ? ZLinkApplicationJobQueueInvocation.Enter(admission)
+            : null;
         var payload = DecodeJoinPayload(joinRequest);
         using var currentFlow = ZLinkFlowContext.Enter(
             payload.FlowId,
             payload.FlowOrigin,
             runtime.Flow.CaptureEnabled,
-            ZLinkFlowOrigin.Inbound);
+            ZLinkFlowOrigin.Inbound
+        );
         if (joinRequest.Canonical is { } canonical)
         {
             try
             {
-                var canonicalAdmission = await runtime.AdmitCanonicalActorJoinAsync(
+                var canonicalAdmission = await runtime
+                    .AdmitCanonicalActorJoinAsync(
                         joinRequest.TargetSpotId,
                         canonical.Request.Request,
                         canonical.Payload,
-                        cancellationToken)
+                        cancellationToken
+                    )
                     .ConfigureAwait(false);
                 ReplyCanonicalAdmission(joinRequest, canonicalAdmission);
             }
@@ -55,20 +62,19 @@ internal sealed class ZLinkSpotActorJoinDispatcher(
             }
             return;
         }
-        var hasHandler = actorJoins.TryResolve(out var descriptor)
-                         && descriptor is not null;
+        var hasHandler = actorJoins.TryResolve(out var descriptor) && descriptor is not null;
         if (!hasHandler && !acceptActorJoinWithoutHandler)
         {
             ReplyRejected(joinRequest, payload.MessageName, "no-join-handler");
             return;
         }
 
-        if (!actors.TryGetActor(
-                ZLinkActorId.FromBoundary(
-                    joinRequest.TargetActor.ActorId,
-                    nameof(joinRequest)),
-                out var actor)
-            || actor is null)
+        if (
+            !actors.TryGetActor(
+                ZLinkActorId.FromBoundary(joinRequest.TargetActor.ActorId, nameof(joinRequest)),
+                out var actor
+            ) || actor is null
+        )
             actor = runtime.GetOrCreateActorState(joinRequest.TargetActor.ActorId).Actor;
 
         if (actor is null)
@@ -79,11 +85,7 @@ internal sealed class ZLinkSpotActorJoinDispatcher(
 
         if (payload.Error is { } payloadError)
         {
-            ReplyRejected(
-                joinRequest,
-                payload.MessageName,
-                "payload-decode-failed",
-                payloadError);
+            ReplyRejected(joinRequest, payload.MessageName, "payload-decode-failed", payloadError);
             return;
         }
 
@@ -96,17 +98,14 @@ internal sealed class ZLinkSpotActorJoinDispatcher(
                         descriptor!,
                         actor.Context.ActorId,
                         payload.Request,
-                        cancellationToken)
+                        cancellationToken
+                    )
                     .ConfigureAwait(false)
                 : ZLinkSpotActorJoinResult.Accept();
         }
         catch (Exception ex)
         {
-            ReplyRejected(
-                joinRequest,
-                payload.MessageName,
-                "handler-exception",
-                ex);
+            ReplyRejected(joinRequest, payload.MessageName, "handler-exception", ex);
             return;
         }
 
@@ -114,16 +113,11 @@ internal sealed class ZLinkSpotActorJoinDispatcher(
         {
             try
             {
-                await commitAcceptedActorJoin(actor, cancellationToken)
-                    .ConfigureAwait(false);
+                await commitAcceptedActorJoin(actor, cancellationToken).ConfigureAwait(false);
             }
             catch (Exception ex)
             {
-                ReplyRejected(
-                    joinRequest,
-                    payload.MessageName,
-                    "join-commit-failed",
-                    ex);
+                ReplyRejected(joinRequest, payload.MessageName, "join-commit-failed", ex);
                 return;
             }
         }
@@ -135,7 +129,8 @@ internal sealed class ZLinkSpotActorJoinDispatcher(
                 nativeSpot.ReplyActorJoin(
                     joinRequest,
                     result.Accepted ? 0 : 1,
-                    Array.Empty<Message>());
+                    Array.Empty<Message>()
+                );
                 return;
             }
 
@@ -143,12 +138,10 @@ internal sealed class ZLinkSpotActorJoinDispatcher(
             var application = ZLinkApplicationPayloadEnvelopeCodec.Encode(
                 ZLinkMessageNameResolver.ResolveFromMessage(result.Reply),
                 encoded.ContentType,
-                encoded.Payload.Bytes.Span);
+                encoded.Payload.Bytes.Span
+            );
             using var reply = Message.From(application);
-            nativeSpot.ReplyActorJoin(
-                joinRequest,
-                result.Accepted ? 0 : 1,
-                reply);
+            nativeSpot.ReplyActorJoin(joinRequest, result.Accepted ? 0 : 1, reply);
             return;
         }
 
@@ -158,18 +151,12 @@ internal sealed class ZLinkSpotActorJoinDispatcher(
             {
                 var encodedReply = reply.Encode(runtime.Registration.Codecs);
                 using var replyMessage = Message.From(encodedReply.Payload.Bytes.Span);
-                nativeSpot.ReplyActorJoin(
-                    joinRequest,
-                    result.Accepted ? 0 : 1,
-                    replyMessage);
+                nativeSpot.ReplyActorJoin(joinRequest, result.Accepted ? 0 : 1, replyMessage);
                 return;
             }
 
             using var emptyReply = Message.From(ReadOnlySpan<byte>.Empty);
-            nativeSpot.ReplyActorJoin(
-                joinRequest,
-                result.Accepted ? 0 : 1,
-                emptyReply);
+            nativeSpot.ReplyActorJoin(joinRequest, result.Accepted ? 0 : 1, emptyReply);
             return;
         }
 
@@ -178,13 +165,11 @@ internal sealed class ZLinkSpotActorJoinDispatcher(
             payload.MessageName,
             result.Reply,
             typeof(ZLinkMessage),
-            runtime.Registration.Codecs);
+            runtime.Registration.Codecs
+        );
         try
         {
-            nativeSpot.ReplyActorJoin(
-                joinRequest,
-                result.Accepted ? 0 : 1,
-                replyParts);
+            nativeSpot.ReplyActorJoin(joinRequest, result.Accepted ? 0 : 1, replyParts);
         }
         finally
         {
@@ -203,7 +188,8 @@ internal sealed class ZLinkSpotActorJoinDispatcher(
                     ZLinkMessage.Empty,
                     null,
                     null,
-                    null);
+                    null
+                );
             try
             {
                 using var request = Message.From(application.Payload);
@@ -213,10 +199,12 @@ internal sealed class ZLinkSpotActorJoinDispatcher(
                     ZLinkMessage.FromEnvelopePayload(
                         application.ContentType,
                         request,
-                        runtime.Registration.Codecs),
+                        runtime.Registration.Codecs
+                    ),
                     null,
                     null,
-                    null);
+                    null
+                );
             }
             catch (Exception ex)
             {
@@ -226,14 +214,17 @@ internal sealed class ZLinkSpotActorJoinDispatcher(
                     ZLinkMessage.Empty,
                     ex,
                     null,
-                    null);
+                    null
+                );
             }
         }
         if (joinRequest.Parts.Count == 1)
         {
             try
             {
-                var envelope = ZLinkEnvelopeCodec.DecodePart<ZLinkActorJoinSinglePartEnvelope>(joinRequest.Parts[0]);
+                var envelope = ZLinkEnvelopeCodec.DecodePart<ZLinkActorJoinSinglePartEnvelope>(
+                    joinRequest.Parts[0]
+                );
                 using var request = Message.From(envelope.Payload);
                 return new JoinPayload(
                     true,
@@ -241,14 +232,14 @@ internal sealed class ZLinkSpotActorJoinDispatcher(
                     ZLinkMessage.FromEnvelopePayload(
                         envelope.ContentType,
                         request,
-                        runtime.Registration.Codecs),
+                        runtime.Registration.Codecs
+                    ),
                     null,
                     null,
-                    null);
+                    null
+                );
             }
-            catch
-            {
-            }
+            catch { }
 
             return new JoinPayload(
                 false,
@@ -256,10 +247,12 @@ internal sealed class ZLinkSpotActorJoinDispatcher(
                 ZLinkMessage.FromEnvelopePayload(
                     ZLinkEnvelopeCodec.DefaultContentType,
                     joinRequest.Parts[0],
-                    runtime.Registration.Codecs),
+                    runtime.Registration.Codecs
+                ),
                 null,
                 null,
-                null);
+                null
+            );
         }
 
         ZLinkEnvelopeHeader? header = null;
@@ -267,7 +260,8 @@ internal sealed class ZLinkSpotActorJoinDispatcher(
         {
             header = ZLinkEnvelopeCodec.DecodeHeader(
                 joinRequest.Parts,
-                runtime.Flow.CaptureEnabled);
+                runtime.Flow.CaptureEnabled
+            );
             if (joinRequest.Parts.Count <= 1)
                 throw new InvalidOperationException("Actor join request body part is missing.");
 
@@ -277,10 +271,12 @@ internal sealed class ZLinkSpotActorJoinDispatcher(
                 ZLinkMessage.FromEnvelopePayload(
                     header.ContentType,
                     joinRequest.Parts[1],
-                    runtime.Registration.Codecs),
+                    runtime.Registration.Codecs
+                ),
                 null,
                 header.FlowId,
-                header.FlowOrigin);
+                header.FlowOrigin
+            );
         }
         catch (Exception ex)
         {
@@ -293,7 +289,8 @@ internal sealed class ZLinkSpotActorJoinDispatcher(
                 ZLinkMessage.Empty,
                 ex,
                 validFlow.FlowId,
-                validFlow.FlowOrigin);
+                validFlow.FlowOrigin
+            );
         }
     }
 
@@ -301,39 +298,46 @@ internal sealed class ZLinkSpotActorJoinDispatcher(
         ZLinkBackendActorJoinRequest joinRequest,
         string messageName,
         string reason,
-        Exception? exception = null)
+        Exception? exception = null
+    )
     {
         var errorReason = reason switch
         {
             "payload-decode-failed" => ZLinkDispatchErrorReason.PayloadDecodeFailed,
-            "handler-exception" or "join-commit-failed" => ZLinkDispatchErrorReason.HandlerException,
-            _ => ZLinkDispatchErrorReason.HandlerMissing
+            "handler-exception" or "join-commit-failed" =>
+                ZLinkDispatchErrorReason.HandlerException,
+            _ => ZLinkDispatchErrorReason.HandlerMissing,
         };
         if (_dispatchErrors.Enabled)
-            _dispatchErrors.Report(new ZLinkDispatchFailure(
-                ZLinkDispatchErrorSurface.SpotActor,
-                ZLinkDispatchMessageKind.Request,
-                errorReason,
-                ZLinkDispatchErrorAction.ReplyError,
-                messageName,
-                channelName,
-                SpotId: joinRequest.TargetSpotId,
-                ActorId: joinRequest.TargetActor.ActorId,
-                Exception: exception));
+            _dispatchErrors.Report(
+                new ZLinkDispatchFailure(
+                    ZLinkDispatchErrorSurface.SpotActor,
+                    ZLinkDispatchMessageKind.Request,
+                    errorReason,
+                    ZLinkDispatchErrorAction.ReplyError,
+                    messageName,
+                    channelName,
+                    SpotId: joinRequest.TargetSpotId,
+                    ActorId: joinRequest.TargetActor.ActorId,
+                    Exception: exception
+                )
+            );
         using var emptyReply = Message.From(ReadOnlySpan<byte>.Empty);
         nativeSpot.ReplyActorJoin(joinRequest, 1, emptyReply);
     }
 
     private void ReplyCanonicalAdmission(
         ZLinkBackendActorJoinRequest joinRequest,
-        ZLinkRemoteActorAdmissionReply admission)
+        ZLinkRemoteActorAdmissionReply admission
+    )
     {
         if (admission.Reply.Length == 0)
         {
             nativeSpot.ReplyActorJoin(
                 joinRequest,
                 admission.Accepted ? 0 : 1,
-                Array.Empty<Message>());
+                Array.Empty<Message>()
+            );
             return;
         }
 
@@ -344,15 +348,13 @@ internal sealed class ZLinkSpotActorJoinDispatcher(
         // nested application envelope (see spec 51's Framework multipart
         // application profile note on actorJoin(28)).
         using var reply = Message.From(admission.Reply);
-        nativeSpot.ReplyActorJoin(
-            joinRequest,
-            admission.Accepted ? 0 : 1,
-            reply);
+        nativeSpot.ReplyActorJoin(joinRequest, admission.Accepted ? 0 : 1, reply);
     }
 
     private static void ReplyCanonicalTerminal(
         ZLinkBackendActorJoinRequest joinRequest,
-        Exception exception)
+        Exception exception
+    )
     {
         if (joinRequest is not ZLinkMeshActorJoinRequest meshRequest)
             return;
@@ -361,29 +363,37 @@ internal sealed class ZLinkSpotActorJoinDispatcher(
             {
                 ZLinkFrameworkErrorKind.TypeMismatch => (
                     RequestResult.Conflict,
-                    (uint)ServiceWireConstants.FrameworkErrorCode.ActorTypeMismatch),
+                    (uint)ServiceWireConstants.FrameworkErrorCode.ActorTypeMismatch
+                ),
                 ZLinkFrameworkErrorKind.ProtocolError => (
                     RequestResult.ProtocolError,
-                    (uint)ServiceWireConstants.FrameworkErrorCode.RequestProtocolError),
+                    (uint)ServiceWireConstants.FrameworkErrorCode.RequestProtocolError
+                ),
                 ZLinkFrameworkErrorKind.InvalidOperation => (
                     RequestResult.Conflict,
-                    (uint)ServiceWireConstants.FrameworkErrorCode.ActorLocationStale),
+                    (uint)ServiceWireConstants.FrameworkErrorCode.ActorLocationStale
+                ),
                 ZLinkFrameworkErrorKind.NotFound => (
                     RequestResult.NotFound,
-                    (uint)ServiceWireConstants.FrameworkErrorCode.ActorRouteNotFound),
+                    (uint)ServiceWireConstants.FrameworkErrorCode.ActorRouteNotFound
+                ),
                 ZLinkFrameworkErrorKind.Unavailable => (
                     RequestResult.InternalError,
-                    (uint)ServiceWireConstants.FrameworkErrorCode.RequestFailed),
+                    (uint)ServiceWireConstants.FrameworkErrorCode.RequestFailed
+                ),
                 ZLinkFrameworkErrorKind.Rejected => (
                     RequestResult.Rejected,
-                    (uint)ServiceWireConstants.FrameworkErrorCode.RequestRejected),
+                    (uint)ServiceWireConstants.FrameworkErrorCode.RequestRejected
+                ),
                 _ => (
                     RequestResult.InternalError,
-                    (uint)ServiceWireConstants.FrameworkErrorCode.RequestFailed)
+                    (uint)ServiceWireConstants.FrameworkErrorCode.RequestFailed
+                ),
             }
             : (
                 RequestResult.InternalError,
-                (uint)ServiceWireConstants.FrameworkErrorCode.RequestFailed);
+                (uint)ServiceWireConstants.FrameworkErrorCode.RequestFailed
+            );
         meshRequest.ReplyTerminal(terminal.Item1, terminal.Item2);
     }
 
@@ -393,5 +403,6 @@ internal sealed class ZLinkSpotActorJoinDispatcher(
         ZLinkMessage Request,
         Exception? Error,
         string? FlowId,
-        ZLinkFlowOrigin? FlowOrigin);
+        ZLinkFlowOrigin? FlowOrigin
+    );
 }

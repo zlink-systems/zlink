@@ -1,12 +1,13 @@
 package systems.zlink.framework.runtime.channels;
 
+import systems.zlink.framework.runtime.internal.backend.ZLinkBackendSpotRouteBridge;
+
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
 import java.util.function.BiConsumer;
 import java.util.function.BooleanSupplier;
-import systems.zlink.framework.runtime.internal.backend.ZLinkBackendSpotRouteBridge;
 
 final class ZLinkSpotRouteBridgeDrainer {
     private static final long DRAIN_INTERVAL_MILLIS = 10;
@@ -20,10 +21,10 @@ final class ZLinkSpotRouteBridgeDrainer {
     private volatile boolean started;
 
     ZLinkSpotRouteBridgeDrainer(
-        Map<String, ZLinkBackendSpotRouteBridge> bridges,
-        ScheduledExecutorService scheduler,
-        BooleanSupplier running,
-        BiConsumer<String, Throwable> failureReporter) {
+            Map<String, ZLinkBackendSpotRouteBridge> bridges,
+            ScheduledExecutorService scheduler,
+            BooleanSupplier running,
+            BiConsumer<String, Throwable> failureReporter) {
         this.bridges = bridges;
         this.scheduler = scheduler;
         this.running = running;
@@ -44,10 +45,7 @@ final class ZLinkSpotRouteBridgeDrainer {
             }
             started = true;
             scheduler.scheduleWithFixedDelay(
-                this::drainAll,
-                0,
-                DRAIN_INTERVAL_MILLIS,
-                TimeUnit.MILLISECONDS);
+                    this::drainAll, 0, DRAIN_INTERVAL_MILLIS, TimeUnit.MILLISECONDS);
         }
     }
 

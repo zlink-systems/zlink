@@ -1,14 +1,14 @@
 package systems.zlink.framework.spring;
-import systems.zlink.framework.spots.SpotRef;
 
-import systems.zlink.framework.spring.internal.runtime.ZLinkFrameworkLifecycle;
-
-import java.util.Optional;
-import java.util.concurrent.CompletionStage;
 import systems.zlink.framework.actors.ActorRef;
 import systems.zlink.framework.actors.ZLinkActorCreateCall;
 import systems.zlink.framework.actors.ZLinkActorGetOrCreateCall;
 import systems.zlink.framework.actors.ZLinkActorManager;
+import systems.zlink.framework.spots.SpotRef;
+import systems.zlink.framework.spring.internal.runtime.ZLinkFrameworkLifecycle;
+
+import java.util.Optional;
+import java.util.concurrent.CompletionStage;
 
 final class ZLinkFrameworkActorManagerBean implements ZLinkActorManager {
     private final ZLinkFrameworkLifecycle lifecycle;
@@ -28,8 +28,7 @@ final class ZLinkFrameworkActorManagerBean implements ZLinkActorManager {
     }
 
     @Override
-    public CompletionStage<Optional<SpotRef>> findSpot(
-        String actorId) {
+    public CompletionStage<Optional<SpotRef>> findSpot(String actorId) {
         return lifecycle.actorManager().findSpot(actorId);
     }
 
@@ -39,9 +38,7 @@ final class ZLinkFrameworkActorManagerBean implements ZLinkActorManager {
     }
 
     @Override
-    public ZLinkActorGetOrCreateCall getOrCreate(
-        String actorId,
-        String actorType) {
+    public ZLinkActorGetOrCreateCall getOrCreate(String actorId, String actorType) {
         return lifecycle.actorManager().getOrCreate(actorId, actorType);
     }
 }

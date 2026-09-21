@@ -13,10 +13,7 @@ import type {
   ZLinkSpotRouterPeerConnectionOptions,
   ZLinkWorkerOptions
 } from './RegistrationTypes';
-import {
-  isRouteClientEnabled,
-  isRouteTransportDeclared
-} from './RouteChannelInternalState';
+import { isRouteClientEnabled, isRouteTransportDeclared } from './RouteChannelInternalState';
 import { validateTimerRegistration } from './TimerRegistrationValidator';
 import { zlinkDefaultLocationOptions } from '../Locations';
 import { requireValidSendTimeoutMs } from './SendTimeoutValidation';
@@ -31,8 +28,9 @@ export function validateFrameworkRegistration(
     registration.network.bindHost,
     registration.network.advertiseHost
   );
-  const actorCapableSpotNodes = [...registration.spotNodes.values()]
-    .filter((spotNode) => toActorFactoryCount(spotNode.actorFactories) > 0);
+  const actorCapableSpotNodes = [...registration.spotNodes.values()].filter(
+    (spotNode) => toActorFactoryCount(spotNode.actorFactories) > 0
+  );
   if (actorCapableSpotNodes.length > 1) {
     throw new ZLinkConfigurationException(
       'Actor factory registration is ambiguous because more than one SpotNode owns actor factories.'
@@ -40,10 +38,7 @@ export function validateFrameworkRegistration(
   }
 
   const peerLocationConfigured = hasLocationStores(registration);
-  validateChannelCapabilities(
-    Object.fromEntries(registration.channels),
-    peerLocationConfigured
-  );
+  validateChannelCapabilities(Object.fromEntries(registration.channels), peerLocationConfigured);
   validateChannelTopologyNames(registration);
   validateSpotNodes(registration);
   validateRouteChannels(registration, peerLocationConfigured);
@@ -55,10 +50,13 @@ export function validateFrameworkRegistration(
 function validateChannelTopologyNames(registration: ZLinkFrameworkRegistration): void {
   const declaredChannelNames = new Set(
     [...registration.channels]
-      .filter(([, channel]) => channel.client !== undefined
-        || channel.server !== undefined
-        || channel.publisher !== undefined
-        || channel.subscriber !== undefined)
+      .filter(
+        ([, channel]) =>
+          channel.client !== undefined ||
+          channel.server !== undefined ||
+          channel.publisher !== undefined ||
+          channel.subscriber !== undefined
+      )
       .map(([channelName]) => channelName)
   );
   if (declaredChannelNames.size === 0) return;
@@ -86,8 +84,9 @@ function toActorFactoryCount(value: ZLinkSpotNodeOptions['actorFactories']): num
 }
 
 function hasLocationStores(registration: ZLinkFrameworkRegistration): boolean {
-  return registration.locations.useInMemoryStores
-    || registration.locations.storeInstance !== undefined;
+  return (
+    registration.locations.useInMemoryStores || registration.locations.storeInstance !== undefined
+  );
 }
 
 function validateWorkerOptions(worker: ZLinkWorkerOptions | undefined): void {
@@ -112,13 +111,13 @@ function validateLocationRegistration(registration: ZLinkFrameworkRegistration):
     );
   }
   const store = locations.storeInstance;
-  if (store !== undefined
-    && (typeof store.read !== 'function'
-      || typeof store.write !== 'function'
-      || typeof store.scan !== 'function')) {
-    throw new ZLinkConfigurationException(
-      'Location Store must implement read, write, and scan.'
-    );
+  if (
+    store !== undefined &&
+    (typeof store.read !== 'function' ||
+      typeof store.write !== 'function' ||
+      typeof store.scan !== 'function')
+  ) {
+    throw new ZLinkConfigurationException('Location Store must implement read, write, and scan.');
   }
   const options = { ...zlinkDefaultLocationOptions, ...locations.options };
   for (const [name, value] of Object.entries({
@@ -133,8 +132,8 @@ function validateLocationRegistration(registration: ZLinkFrameworkRegistration):
     }
   }
   if (
-    options.ownerLeaseRenewIntervalMs + options.ownerLeaseRenewTimeoutMs
-    >= options.ownerLeaseTtlMs - options.ownerLeaseFencingMarginMs
+    options.ownerLeaseRenewIntervalMs + options.ownerLeaseRenewTimeoutMs >=
+    options.ownerLeaseTtlMs - options.ownerLeaseFencingMarginMs
   ) {
     throw new ZLinkConfigurationException(
       'ownerLeaseRenewIntervalMs + ownerLeaseRenewTimeoutMs must be less than ownerLeaseTtlMs - ownerLeaseFencingMarginMs.'
@@ -172,9 +171,9 @@ function validateLocationRegistration(registration: ZLinkFrameworkRegistration):
     }
   }
   if (
-    options.routeCacheMaxAgeMs > 0
-    && options.messageFollowDurationMs > 0
-    && options.routeCacheMaxAgeMs > options.messageFollowDurationMs - 5000
+    options.routeCacheMaxAgeMs > 0 &&
+    options.messageFollowDurationMs > 0 &&
+    options.routeCacheMaxAgeMs > options.messageFollowDurationMs - 5000
   ) {
     throw new ZLinkConfigurationException(
       'routeCacheMaxAgeMs must be at least 5000 ms shorter than messageFollowDurationMs.'
@@ -212,9 +211,7 @@ function validateChannelCapabilities(
       );
     }
     if (channel.noDrop !== undefined && typeof channel.noDrop !== 'boolean') {
-      throw new ZLinkConfigurationException(
-        `Channel '${channelName}' NoDrop must be a boolean.`
-      );
+      throw new ZLinkConfigurationException(`Channel '${channelName}' NoDrop must be a boolean.`);
     }
     if (channel.noDrop !== undefined && channel.publisher === undefined) {
       throw new ZLinkConfigurationException(
@@ -257,7 +254,11 @@ function validateChannelCapabilities(
       requireSocketOptions(`channel '${channelName}' client`, channel.client);
     }
     if (channel.subscriber !== undefined) {
-      requirePeerSource(`channel '${channelName}' subscriber`, channel.subscriber.manualConnections, peerLocationConfigured);
+      requirePeerSource(
+        `channel '${channelName}' subscriber`,
+        channel.subscriber.manualConnections,
+        peerLocationConfigured
+      );
     }
     if ((channel.publishHandlers ?? []).length > 0 && channel.subscriber === undefined) {
       throw new ZLinkConfigurationException(
@@ -269,14 +270,17 @@ function validateChannelCapabilities(
         `Channel '${channelName}' subscriber must register at least one publish handler.`
       );
     }
-    if (((channel.requestHandlers ?? []).length > 0 || (channel.sendHandlers ?? []).length > 0) && channel.server === undefined) {
+    if (
+      ((channel.requestHandlers ?? []).length > 0 || (channel.sendHandlers ?? []).length > 0) &&
+      channel.server === undefined
+    ) {
       throw new ZLinkConfigurationException(
         `Channel '${channelName}' request/send handlers require a server capability.`
       );
     }
     if (
-      channel.server !== undefined
-      && (channel.requestHandlers ?? []).length + (channel.sendHandlers ?? []).length === 0
+      channel.server !== undefined &&
+      (channel.requestHandlers ?? []).length + (channel.sendHandlers ?? []).length === 0
     ) {
       throw new ZLinkConfigurationException(
         `Channel '${channelName}' server must register at least one request or send handler.`
@@ -298,7 +302,8 @@ function validateChannelCapabilities(
       validateRouteMeshCapability(
         `channel '${channelName}' route mesh`,
         channel.routeMesh,
-        peerLocationConfigured);
+        peerLocationConfigured
+      );
     }
   }
 }
@@ -339,11 +344,9 @@ function validateSpotNodes(registration: ZLinkFrameworkRegistration): void {
     validateSpotNodeFactories(spotNodeName, spotNode);
     validateSpotNodeTimers(spotNode);
     if (
-      spotNode.objectRole === 'client'
-      && (
-        (spotNode.routeSendHandlers?.length ?? 0) > 0
-        || (spotNode.routeRequestHandlers?.length ?? 0) > 0
-      )
+      spotNode.objectRole === 'client' &&
+      ((spotNode.routeSendHandlers?.length ?? 0) > 0 ||
+        (spotNode.routeRequestHandlers?.length ?? 0) > 0)
     ) {
       throw new ZLinkConfigurationException(
         `Object Client RouteMesh '${spotNodeName}' cannot register Node-direct handlers.`
@@ -367,8 +370,8 @@ function validateMeshChannels(
 ): void {
   for (const [channelName, channel] of Object.entries(meshChannels ?? {})) {
     requireName(`RouteMesh '${spotNodeName}' channel`, channelName);
-    const handlerCount = (channel.requestHandlers?.length ?? 0)
-      + (channel.sendHandlers?.length ?? 0);
+    const handlerCount =
+      (channel.requestHandlers?.length ?? 0) + (channel.sendHandlers?.length ?? 0);
     if (channel.client === true && channel.server === true) {
       throw new ZLinkConfigurationException(
         `RouteMesh '${spotNodeName}' channel '${channelName}' must register exactly one role.`
@@ -424,10 +427,19 @@ function validateSpotNodeCapability(
     return;
   }
   validateManualConnections(capabilityName, capability.manualConnections);
-  validateRouterPeerConnections(capabilityName, 'manualPeerConnections' in capability ? capability.manualPeerConnections : undefined);
+  validateRouterPeerConnections(
+    capabilityName,
+    'manualPeerConnections' in capability ? capability.manualPeerConnections : undefined
+  );
   requireEndpoint(capabilityName, capability.bind);
-  if (capability.routingId !== undefined && (capability.routingId.trim().length === 0 || capability.routingId.trim() !== capability.routingId)) {
-    throw new ZLinkConfigurationException(`${capabilityName} routingId must not be empty or padded.`);
+  if (
+    capability.routingId !== undefined &&
+    (capability.routingId.trim().length === 0 ||
+      capability.routingId.trim() !== capability.routingId)
+  ) {
+    throw new ZLinkConfigurationException(
+      `${capabilityName} routingId must not be empty or padded.`
+    );
   }
 }
 
@@ -450,15 +462,18 @@ function validateListenerNetworkIdentity(
 }
 
 function isWildcardHost(host: string): boolean {
-  const normalized = host.startsWith('[') && host.endsWith(']')
-    ? host.slice(1, -1)
-    : host;
+  const normalized = host.startsWith('[') && host.endsWith(']') ? host.slice(1, -1) : host;
   return normalized === '0.0.0.0' || normalized === '::';
 }
 
-function validateManualConnections(capabilityName: string, manualConnections: readonly string[] | undefined): void {
+function validateManualConnections(
+  capabilityName: string,
+  manualConnections: readonly string[] | undefined
+): void {
   if ((manualConnections ?? []).some((endpoint) => endpoint.trim().length === 0)) {
-    throw new ZLinkConfigurationException(`${capabilityName} manual connection endpoint must not be empty.`);
+    throw new ZLinkConfigurationException(
+      `${capabilityName} manual connection endpoint must not be empty.`
+    );
   }
 }
 
@@ -470,19 +485,28 @@ function validateRouterPeerConnections(
   for (const connection of manualPeerConnections ?? []) {
     const peerRid = String(connection.peerRid);
     if (peerRid.trim().length === 0) {
-      throw new ZLinkConfigurationException(`${capabilityName} manual peer routing id must not be empty.`);
+      throw new ZLinkConfigurationException(
+        `${capabilityName} manual peer routing id must not be empty.`
+      );
     }
     if (seenPeerRids.has(peerRid)) {
-      throw new ZLinkConfigurationException(`${capabilityName} manual peer routing id must be unique.`);
+      throw new ZLinkConfigurationException(
+        `${capabilityName} manual peer routing id must be unique.`
+      );
     }
     seenPeerRids.add(peerRid);
     if (connection.endpoint.trim().length === 0) {
-      throw new ZLinkConfigurationException(`${capabilityName} manual peer connection endpoint must not be empty.`);
+      throw new ZLinkConfigurationException(
+        `${capabilityName} manual peer connection endpoint must not be empty.`
+      );
     }
   }
 }
 
-function validateDuplicatePacketNames(label: string, packetNames: readonly string[] | undefined): void {
+function validateDuplicatePacketNames(
+  label: string,
+  packetNames: readonly string[] | undefined
+): void {
   const seen = new Set<string>();
   for (const packetName of packetNames ?? []) {
     requireName(label, packetName);
@@ -508,7 +532,9 @@ function requirePeerSource(
   if ((manualConnections ?? []).length > 0 || peerLocationConfigured) {
     return;
   }
-  throw new ZLinkConfigurationException(`${capabilityName} requires location stores or manual connections.`);
+  throw new ZLinkConfigurationException(
+    `${capabilityName} requires location stores or manual connections.`
+  );
 }
 
 function validateFanoutPublisherIdentity(
@@ -528,7 +554,8 @@ function validateFanoutPublisherIdentity(
       `channel '${channelName}' publisher must select a fixed routing id or an automatic routing id prefix.`
     );
   }
-  if (routingId !== undefined) requireName(`channel '${channelName}' publisher routingId`, routingId);
+  if (routingId !== undefined)
+    requireName(`channel '${channelName}' publisher routingId`, routingId);
 }
 
 function requireEndpoint(capabilityName: string, endpoint: string | undefined): void {
@@ -557,7 +584,10 @@ function validateStreamNodes(registration: ZLinkFrameworkRegistration): void {
       streamNode.advertiseHost
     );
     if (streamNode.tlsServer !== undefined) {
-      requireFilePath(`STREAM node '${streamNodeName}' TLS certificate`, streamNode.tlsServer.certificatePath);
+      requireFilePath(
+        `STREAM node '${streamNodeName}' TLS certificate`,
+        streamNode.tlsServer.certificatePath
+      );
       requireFilePath(`STREAM node '${streamNodeName}' TLS key`, streamNode.tlsServer.keyPath);
     }
     if (streamNode.session === undefined) {
@@ -579,7 +609,9 @@ function validateStreamNodes(registration: ZLinkFrameworkRegistration): void {
           `STREAM node '${streamNodeName}' enables Actor dispatch but no Location Store is registered.`
         );
       }
-      if (![...registration.spotNodes.values()].some((spotNode) => spotNode.objectRole !== undefined)) {
+      if (
+        ![...registration.spotNodes.values()].some((spotNode) => spotNode.objectRole !== undefined)
+      ) {
         throw new ZLinkConfigurationException(
           `STREAM node '${streamNodeName}' requires at least one local Object Client or Server MeshNode.`
         );
@@ -588,7 +620,10 @@ function validateStreamNodes(registration: ZLinkFrameworkRegistration): void {
   }
 }
 
-function validateRouteChannels(registration: ZLinkFrameworkRegistration, peerLocationConfigured: boolean): void {
+function validateRouteChannels(
+  registration: ZLinkFrameworkRegistration,
+  peerLocationConfigured: boolean
+): void {
   for (const routeChannel of registration.routeChannelOptions.values()) {
     if (!isRouteTransportDeclared(routeChannel) && !isRouteTransportConfigured(routeChannel)) {
       continue;
@@ -599,7 +634,11 @@ function validateRouteChannels(registration: ZLinkFrameworkRegistration, peerLoc
     ) {
       continue;
     }
-    validateRouteMeshCapability(`route channel '${routeChannel.routerChannelId}'`, routeChannel, peerLocationConfigured);
+    validateRouteMeshCapability(
+      `route channel '${routeChannel.routerChannelId}'`,
+      routeChannel,
+      peerLocationConfigured
+    );
     if (routeChannelHandlerCount(routeChannel) > 0 && !hasBind(routeChannel.bind)) {
       requireEndpoint(`route channel '${routeChannel.routerChannelId}' router`, routeChannel.bind);
     }
@@ -611,10 +650,12 @@ function isRouteTransportConfigured(routeChannel: ZLinkRouteChannelOptions): boo
 }
 
 function isRoutePacketCapabilityConfigured(routeChannel: ZLinkRouteChannelOptions): boolean {
-  return hasBind(routeChannel.bind)
-    || isRouteClientEnabled(routeChannel)
-    || (routeChannel.manualConnections ?? []).length > 0
-    || routeChannelHandlerCount(routeChannel) > 0;
+  return (
+    hasBind(routeChannel.bind) ||
+    isRouteClientEnabled(routeChannel) ||
+    (routeChannel.manualConnections ?? []).length > 0 ||
+    routeChannelHandlerCount(routeChannel) > 0
+  );
 }
 
 function isAcceptedSpotRouteChannel(
@@ -628,10 +669,14 @@ function isAcceptedSpotRouteChannel(
     return true;
   }
   if (routeChannel.routingId !== undefined) {
-    return [...registration.spotNodes.values()].some((spotNode) =>
-      spotNode.router?.routingId === routeChannel.routingId);
+    return [...registration.spotNodes.values()].some(
+      (spotNode) => spotNode.router?.routingId === routeChannel.routingId
+    );
   }
-  return [...registration.spotNodes.values()].filter((spotNode) => spotNode.router !== undefined).length === 1;
+  return (
+    [...registration.spotNodes.values()].filter((spotNode) => spotNode.router !== undefined)
+      .length === 1
+  );
 }
 
 function validateRouteMeshCapability(
@@ -639,10 +684,12 @@ function validateRouteMeshCapability(
   routeChannel: ZLinkRouteChannelOptions | ZLinkRouteMeshChannelOptions,
   peerLocationConfigured = false
 ): void {
-  const clientEnabled = isRouteClientEnabled(routeChannel)
-    || (routeChannel.manualConnections ?? []).length > 0;
+  const clientEnabled =
+    isRouteClientEnabled(routeChannel) || (routeChannel.manualConnections ?? []).length > 0;
   if (!hasBind(routeChannel.bind) && !clientEnabled) {
-    throw new ZLinkConfigurationException(`${capabilityName} must enable server or client capability.`);
+    throw new ZLinkConfigurationException(
+      `${capabilityName} must enable server or client capability.`
+    );
   }
   if (clientEnabled) {
     requirePeerSource(capabilityName, routeChannel.manualConnections, peerLocationConfigured);
@@ -652,9 +699,11 @@ function validateRouteMeshCapability(
 }
 
 function routeChannelHandlerCount(routeChannel: ZLinkRouteChannelOptions): number {
-  return (routeChannel.handlers ?? []).length +
+  return (
+    (routeChannel.handlers ?? []).length +
     (routeChannel.sendHandlers ?? []).length +
-    (routeChannel.requestHandlers ?? []).length;
+    (routeChannel.requestHandlers ?? []).length
+  );
 }
 
 function hasBind(endpoint: string | undefined): boolean {

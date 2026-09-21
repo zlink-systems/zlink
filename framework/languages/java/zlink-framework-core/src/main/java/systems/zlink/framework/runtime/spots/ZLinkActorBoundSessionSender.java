@@ -1,11 +1,5 @@
 package systems.zlink.framework.runtime.spots;
 
-import java.time.Duration;
-import java.util.List;
-import java.util.concurrent.CompletableFuture;
-import java.util.concurrent.CompletionStage;
-import java.util.concurrent.TimeUnit;
-import java.util.function.BooleanSupplier;
 import systems.zlink.contracts.errors.ZlinkSubmitException;
 import systems.zlink.contracts.messaging.Message;
 import systems.zlink.contracts.sockets.SubmitResult;
@@ -13,33 +7,39 @@ import systems.zlink.framework.errors.ZLinkConfigurationException;
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendActorRef;
 import systems.zlink.framework.runtime.internal.backend.ZLinkInternalSpotNode;
 
+import java.time.Duration;
+import java.util.List;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CompletionStage;
+import java.util.concurrent.TimeUnit;
+import java.util.function.BooleanSupplier;
+
 final class ZLinkActorBoundSessionSender {
     private static final long RETRY_DELAY_MILLIS = 25;
     private final Duration timeout;
     private final BooleanSupplier closing;
 
-    ZLinkActorBoundSessionSender(
-        Duration timeout,
-        BooleanSupplier closing) {
+    ZLinkActorBoundSessionSender(Duration timeout, BooleanSupplier closing) {
         this.timeout = timeout;
         this.closing = closing;
     }
 
     CompletionStage<Void> send(
-        ZLinkInternalSpotNode node,
-        ZLinkBackendActorRef actor,
-        String actorId,
-        byte[] frameBytes,
-        String failureMessage) {
+            ZLinkInternalSpotNode node,
+            ZLinkBackendActorRef actor,
+            String actorId,
+            byte[] frameBytes,
+            String failureMessage) {
         CompletableFuture<Void> result = new CompletableFuture<>();
-        CompletableFuture.runAsync(new SendAttempt(
-            node,
-            actor,
-            actorId,
-            frameBytes,
-            failureMessage,
-            System.nanoTime() + timeout.toNanos(),
-            result));
+        CompletableFuture.runAsync(
+                new SendAttempt(
+                        node,
+                        actor,
+                        actorId,
+                        frameBytes,
+                        failureMessage,
+                        System.nanoTime() + timeout.toNanos(),
+                        result));
         return result;
     }
 
@@ -53,13 +53,13 @@ final class ZLinkActorBoundSessionSender {
         private final CompletableFuture<Void> result;
 
         private SendAttempt(
-            ZLinkInternalSpotNode node,
-            ZLinkBackendActorRef actor,
-            String actorId,
-            byte[] frameBytes,
-            String failureMessage,
-            long deadline,
-            CompletableFuture<Void> result) {
+                ZLinkInternalSpotNode node,
+                ZLinkBackendActorRef actor,
+                String actorId,
+                byte[] frameBytes,
+                String failureMessage,
+                long deadline,
+                CompletableFuture<Void> result) {
             this.node = node;
             this.actor = actor;
             this.actorId = actorId;
@@ -91,12 +91,12 @@ final class ZLinkActorBoundSessionSender {
 
         private void scheduleLogicalRouteRetry() {
             if (System.nanoTime() >= deadline) {
-                result.completeExceptionally(new ZLinkConfigurationException(
-                    failureMessage + ": " + actorId));
+                result.completeExceptionally(
+                        new ZLinkConfigurationException(failureMessage + ": " + actorId));
                 return;
             }
             CompletableFuture.delayedExecutor(RETRY_DELAY_MILLIS, TimeUnit.MILLISECONDS)
-                .execute(this);
+                    .execute(this);
         }
 
         private void submitLocal() {
@@ -108,65 +108,68 @@ final class ZLinkActorBoundSessionSender {
             Message frame = Message.from(frameBytes);
             CompletionStage<Void> submission;
             try {
-                submission = node.sendLocalActorBoundSessionAsync(
-                    actor, List.of(frame), Duration.ofNanos(remainingNanos));
+                submission =
+                        node.sendLocalActorBoundSessionAsync(
+                                actor, List.of(frame), Duration.ofNanos(remainingNanos));
             } catch (RuntimeException failure) {
                 frame.close();
                 result.completeExceptionally(failure);
                 return;
             }
-            result.whenComplete((ignored, failure) -> {
-                if (result.isCancelled()) {
-                    submission.toCompletableFuture().cancel(true);
-                }
-            });
-            submission.whenComplete((ignored, failure) -> {
-                frame.close();
-                if (result.isDone()) {
-                    return;
-                }
-                if (closing.getAsBoolean()) {
-                    result.complete(null);
-                } else if (failure == null) {
-                    result.complete(null);
-                } else if (isMissingLogicalRoute(failure)) {
-                    scheduleLogicalRouteRetry();
-                } else {
-                    result.completeExceptionally(failure);
-                }
-            });
+            result.whenComplete(
+                    (ignored, failure) -> {
+                        if (result.isCancelled()) {
+                            submission.toCompletableFuture().cancel(true);
+                        }
+                    });
+            submission.whenComplete(
+                    (ignored, failure) -> {
+                        frame.close();
+                        if (result.isDone()) {
+                            return;
+                        }
+                        if (closing.getAsBoolean()) {
+                            result.complete(null);
+                        } else if (failure == null) {
+                            result.complete(null);
+                        } else if (isMissingLogicalRoute(failure)) {
+                            scheduleLogicalRouteRetry();
+                        } else {
+                            result.completeExceptionally(failure);
+                        }
+                    });
         }
 
         private boolean isMissingLogicalRoute(Throwable failure) {
             Throwable current = failure;
             while ((current instanceof java.util.concurrent.CompletionException
-                    || current instanceof java.util.concurrent.ExecutionException)
-                && current.getCause() != null) {
+                            || current instanceof java.util.concurrent.ExecutionException)
+                    && current.getCause() != null) {
                 current = current.getCause();
             }
             return current instanceof ZlinkSubmitException submit
-                && submit.getResult() == SubmitResult.NOT_FOUND;
+                    && submit.getResult() == SubmitResult.NOT_FOUND;
         }
 
         private void submitRemote() {
             Message frame = Message.from(frameBytes);
             CompletionStage<Void> submission;
             try {
-                submission = node.sendRemoteActorBoundSession(
-                    actor, List.of(frame));
+                submission = node.sendRemoteActorBoundSession(actor, List.of(frame));
             } catch (RuntimeException failure) {
                 Message.closeAll(List.of(frame));
                 result.completeExceptionally(failure);
                 return;
             }
-            submission.whenComplete((ignored, failure) -> {
-                Message.closeAll(List.of(frame));
-                if (failure == null) {
-                    result.complete(null);
-                } else {
-                    result.completeExceptionally(failure);
-                }
-            });
+            submission.whenComplete(
+                    (ignored, failure) -> {
+                        Message.closeAll(List.of(frame));
+                        if (failure == null) {
+                            result.complete(null);
+                        } else {
+                            result.completeExceptionally(failure);
+                        }
+                    });
         }
     }
 }

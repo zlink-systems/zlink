@@ -31,15 +31,17 @@ export class ZLinkPostCommitActorLocation {
     membershipEpoch: bigint,
     ownerNodeGeneration: bigint
   ): void {
-    this.enqueue(actorId, () => this.options.lifecycle.notifyActorJoinedSpot(
-      actorType,
-      actorId,
-      meshName,
-      spotId,
-      spotGeneration,
-      membershipEpoch,
-      ownerNodeGeneration
-    ));
+    this.enqueue(actorId, () =>
+      this.options.lifecycle.notifyActorJoinedSpot(
+        actorType,
+        actorId,
+        meshName,
+        spotId,
+        spotGeneration,
+        membershipEpoch,
+        ownerNodeGeneration
+      )
+    );
   }
 
   leftEventually(
@@ -50,14 +52,16 @@ export class ZLinkPostCommitActorLocation {
     membershipEpoch: bigint,
     ownerNodeGeneration: bigint
   ): void {
-    this.enqueue(actorId, () => this.options.lifecycle.notifyActorLeftSpot(
-      actorType,
-      actorId,
-      entrySpotId,
-      entrySpotGeneration,
-      membershipEpoch,
-      ownerNodeGeneration
-    ));
+    this.enqueue(actorId, () =>
+      this.options.lifecycle.notifyActorLeftSpot(
+        actorType,
+        actorId,
+        entrySpotId,
+        entrySpotGeneration,
+        membershipEpoch,
+        ownerNodeGeneration
+      )
+    );
   }
 
   private enqueue(actorId: string, operation: () => Promise<void>): void {
@@ -69,11 +73,14 @@ export class ZLinkPostCommitActorLocation {
       return;
     }
     let task!: Promise<void>;
-    task = this.run(actorId).finally(async () => await this.lane.run(() => {
-      if (this.tasks.get(actorId) === task) {
-        this.tasks.delete(actorId);
-      }
-    }));
+    task = this.run(actorId).finally(
+      async () =>
+        await this.lane.run(() => {
+          if (this.tasks.get(actorId) === task) {
+            this.tasks.delete(actorId);
+          }
+        })
+    );
     this.tasks.set(actorId, task);
   }
 
@@ -92,7 +99,7 @@ export class ZLinkPostCommitActorLocation {
         retryDelay.reset();
       } catch (error) {
         this.options.reportError?.(error);
-        if (!await retryDelay.wait(this.options.signal)) {
+        if (!(await retryDelay.wait(this.options.signal))) {
           return;
         }
       }

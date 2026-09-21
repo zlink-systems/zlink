@@ -243,11 +243,11 @@ class bingo_client_scenario_t
                                  }));
             std::vector<number_drawn_notify_t> drawn_numbers;
             for (int draw_seq = 1; draw_seq <= expected_draw_count; ++draw_seq) {
-                auto client1_drawn = (co_await
-                                        client1_draw_tasks[static_cast<std::size_t> (draw_seq - 1)])
+                auto client1_drawn = (co_await client1_draw_tasks[static_cast<std::size_t> (draw_seq
+                                                                                            - 1)])
                                        .payload;
-                auto client2_drawn = (co_await
-                                        client2_draw_tasks[static_cast<std::size_t> (draw_seq - 1)])
+                auto client2_drawn = (co_await client2_draw_tasks[static_cast<std::size_t> (draw_seq
+                                                                                            - 1)])
                                        .payload;
                 drawn_numbers.push_back (client1_drawn);
                 ensure (client1_drawn.draw_seq () == draw_seq);

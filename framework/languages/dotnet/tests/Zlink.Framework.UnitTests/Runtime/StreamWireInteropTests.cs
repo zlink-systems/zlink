@@ -1,8 +1,8 @@
 using System.Text;
 using Systems.Zlink.Stream.Connector.Contracts;
+using ConnectorClosingCodec = Systems.Zlink.Stream.Connector.Runtime.Protocol.ZlinkStreamSessionClosingCodec;
 using ConnectorFrameCodec = Systems.Zlink.Stream.Connector.Runtime.Protocol.Framing.ZlinkStreamFrameCodec;
 using ConnectorHeaderCodec = Systems.Zlink.Stream.Connector.Runtime.Protocol.ZlinkStreamHeaderCodec;
-using ConnectorClosingCodec = Systems.Zlink.Stream.Connector.Runtime.Protocol.ZlinkStreamSessionClosingCodec;
 using CoreFrameCodec = Zlink.Framework.Runtime.Streams.ZLinkStreamFrameCodec;
 using CoreHeaderCodec = Zlink.Framework.Runtime.Streams.ZLinkStreamHeaderCodec;
 
@@ -22,9 +22,14 @@ public sealed class StreamWireInteropTests
     {
         var legacyCorrelation = Convert.ToString(counter, 16);
         var header = new ZlinkStreamHeader(
-            ZlinkStreamMessageKind.Request, ZlinkStreamCodec.Json,
-            ZlinkStreamHeaderFlags.HasRequestSeq, new ZlinkStreamRequestSeq(7), "packet",
-            ZlinkStreamMetadata.Empty.With("key", "value"), legacyCorrelation);
+            ZlinkStreamMessageKind.Request,
+            ZlinkStreamCodec.Json,
+            ZlinkStreamHeaderFlags.HasRequestSeq,
+            new ZlinkStreamRequestSeq(7),
+            "packet",
+            ZlinkStreamMetadata.Empty.With("key", "value"),
+            legacyCorrelation
+        );
         var codec = new ConnectorHeaderCodec();
         var expected = CoreHeaderCodec.Encode(header);
         Span<char> correlation = stackalloc char[16];
@@ -40,11 +45,35 @@ public sealed class StreamWireInteropTests
     public void CorrelationText_IsWrittenIntoTheFinalHeaderWithIdenticalUtf8Bytes()
     {
         var header = new ZlinkStreamHeader(
-            ZlinkStreamMessageKind.Send, ZlinkStreamCodec.Json,
-            ZlinkStreamHeaderFlags.None, null, "packet",
-            ZlinkStreamMetadata.Empty, "a한é");
-        byte[] expected = [0xf2, 1, 1, 8, 6, 0x70, 0x61, 0x63, 0x6b, 0x65, 0x74,
-            6, 0x61, 0xed, 0x95, 0x9c, 0xc3, 0xa9];
+            ZlinkStreamMessageKind.Send,
+            ZlinkStreamCodec.Json,
+            ZlinkStreamHeaderFlags.None,
+            null,
+            "packet",
+            ZlinkStreamMetadata.Empty,
+            "a한é"
+        );
+        byte[] expected =
+        [
+            0xf2,
+            1,
+            1,
+            8,
+            6,
+            0x70,
+            0x61,
+            0x63,
+            0x6b,
+            0x65,
+            0x74,
+            6,
+            0x61,
+            0xed,
+            0x95,
+            0x9c,
+            0xc3,
+            0xa9,
+        ];
         var codec = new ConnectorHeaderCodec();
         Assert.Equal(expected, codec.Encode(header).ToArray());
         Assert.Equal("a한é", codec.Decode(expected).CorrelationId);
@@ -56,7 +85,9 @@ public sealed class StreamWireInteropTests
         var error = ZLinkStreamWireError.FromException(
             new ZLinkFrameworkException(
                 ZLinkFrameworkErrorKind.Unavailable,
-                "session binding is changing."));
+                "session binding is changing."
+            )
+        );
 
         Assert.Equal("unavailable", error.Code);
         Assert.Equal("session binding is changing.", error.Message);
@@ -79,7 +110,8 @@ public sealed class StreamWireInteropTests
             ZlinkStreamMetadata.Empty,
             "corr-request",
             requestFlowId,
-            ZlinkStreamFlowOrigin.Application);
+            ZlinkStreamFlowOrigin.Application
+        );
 
         var reply = ZLinkStreamReplyHeaders.CreateForRequest(
             request,
@@ -87,7 +119,8 @@ public sealed class StreamWireInteropTests
             ZlinkStreamCodec.Json,
             ZlinkStreamHeaderFlags.None,
             request.RequestSeq!.Value,
-            ZlinkStreamMetadata.Empty);
+            ZlinkStreamMetadata.Empty
+        );
 
         Assert.Equal(request.CorrelationId, reply.CorrelationId);
         Assert.Null(reply.FlowId);
@@ -95,9 +128,12 @@ public sealed class StreamWireInteropTests
         Assert.Equal(string.Empty, reply.Name);
 
         ZlinkStreamHeader encodedWithContext;
-        using (ZLinkFlowContext.EnterExisting(
-                   requestFlowId,
-                   Zlink.Framework.Runtime.Diagnostics.ZLinkFlowOrigin.Application))
+        using (
+            ZLinkFlowContext.EnterExisting(
+                requestFlowId,
+                Zlink.Framework.Runtime.Diagnostics.ZLinkFlowOrigin.Application
+            )
+        )
             encodedWithContext = CoreHeaderCodec.Decode(CoreHeaderCodec.Encode(reply));
         Assert.Equal(requestFlowId, encodedWithContext.FlowId);
         Assert.Equal(ZlinkStreamFlowOrigin.Application, encodedWithContext.FlowOrigin);
@@ -168,11 +204,11 @@ public sealed class StreamWireInteropTests
     [Fact]
     public void SessionClosingServerDrainPayload_DecodesInConnector()
     {
-        var header = ZLinkStreamProtocolDefaults.EncodeHeader(
-            ConnectorClosingCodec.CreateHeader());
+        var header = ZLinkStreamProtocolDefaults.EncodeHeader(ConnectorClosingCodec.CreateHeader());
         var decodedHeader = new ConnectorHeaderCodec().Decode(header);
         var closing = ConnectorClosingCodec.Decode(
-            ConnectorClosingCodec.EncodeServerDrain("rolling drain"));
+            ConnectorClosingCodec.EncodeServerDrain("rolling drain")
+        );
 
         Assert.Equal(ConnectorClosingCodec.ControlName, decodedHeader.Name);
         Assert.Equal(ZlinkStreamMessageKind.Control, decodedHeader.Kind);
@@ -187,7 +223,8 @@ public sealed class StreamWireInteropTests
     [InlineData("protocol", ZlinkStreamCloseReason.ProtocolError)]
     public void SessionClosingServerReasons_DecodeInConnector(
         string producer,
-        ZlinkStreamCloseReason expected)
+        ZlinkStreamCloseReason expected
+    )
     {
         var payload = producer switch
         {
@@ -195,7 +232,7 @@ public sealed class StreamWireInteropTests
             "heartbeat" => ConnectorClosingCodec.EncodeHeartbeatTimeout(),
             "drain" => ConnectorClosingCodec.EncodeServerDrain(),
             "protocol" => ConnectorClosingCodec.EncodeProtocolError(),
-            _ => throw new ArgumentOutOfRangeException(nameof(producer))
+            _ => throw new ArgumentOutOfRangeException(nameof(producer)),
         };
 
         Assert.Equal(expected, ConnectorClosingCodec.Decode(payload).Reason);
@@ -209,12 +246,11 @@ public sealed class StreamWireInteropTests
             ZlinkStreamHeaderFlags.HasRequestSeq | ZlinkStreamHeaderFlags.PayloadCompressed,
             new ZlinkStreamRequestSeq(42),
             "profile.get",
-            ZlinkStreamMetadata.Empty
-                .With("traceId", "abc")
-                .With("optional", ""),
+            ZlinkStreamMetadata.Empty.With("traceId", "abc").With("optional", ""),
             "corr-1",
             "0196f7c2-4cb4-7cc8-89d4-2d6aee6fca2d",
-            ZlinkStreamFlowOrigin.Application);
+            ZlinkStreamFlowOrigin.Application
+        );
     }
 
     [Fact]

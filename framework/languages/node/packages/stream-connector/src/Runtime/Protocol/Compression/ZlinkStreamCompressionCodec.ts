@@ -24,7 +24,10 @@ export function compressPayload(
 ): Uint8Array {
   const codec = resolveCompressionCodec(compression, compressionCodec);
   if (codec === undefined) {
-    throw connectorError(ZlinkStreamErrorCode.CompressionFailed, 'Compression codec is not configured.');
+    throw connectorError(
+      ZlinkStreamErrorCode.CompressionFailed,
+      'Compression codec is not configured.'
+    );
   }
 
   return codec.compress(payload);
@@ -42,7 +45,10 @@ export function decompressIfNeeded(
   }
   const codec = resolveCompressionCodec(compression, compressionCodec);
   if (codec === undefined) {
-    throw connectorError(ZlinkStreamErrorCode.DecompressionFailed, 'Compression codec is not configured.');
+    throw connectorError(
+      ZlinkStreamErrorCode.DecompressionFailed,
+      'Compression codec is not configured.'
+    );
   }
 
   try {

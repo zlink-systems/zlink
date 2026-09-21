@@ -9,80 +9,84 @@ namespace Zlink.Framework.Runtime.Host;
 // reaches the live IMeshNode through ZLinkSpotNodeRuntime.Node.
 internal sealed partial class ZLinkFrameworkRuntime
 {
-    internal IZLinkMeshPlacementRuntimeOptions ResolveMeshPlacementRuntimeOptions(
-        string meshName)
+    internal IZLinkMeshPlacementRuntimeOptions ResolveMeshPlacementRuntimeOptions(string meshName)
     {
         return ExecuteOperation<IZLinkMeshPlacementRuntimeOptions>(() =>
         {
             var (nodeRuntime, registration) = ResolveMeshNode(meshName);
-            return new ZLinkMeshPlacementRuntimeOptions(
-                this,
-                registration,
-                nodeRuntime.Node);
+            return new ZLinkMeshPlacementRuntimeOptions(this, registration, nodeRuntime.Node);
         });
     }
 
-    internal IZLinkMeshChannelRuntimeOptions ResolveMeshChannelRuntimeOptions(
-        string channelName)
+    internal IZLinkMeshChannelRuntimeOptions ResolveMeshChannelRuntimeOptions(string channelName)
     {
         return ExecuteOperation<IZLinkMeshChannelRuntimeOptions>(() =>
         {
             var state = GetOrStartState();
-            return AwaitStateLane(state.RunStateAsync(() =>
-            {
-                foreach (var registration in Registration.SpotNodes.Values)
+            return AwaitStateLane(
+                state.RunStateAsync(() =>
                 {
-                    var membership = registration.ChannelMemberships.FirstOrDefault(
-                        candidate => candidate.IsServer
+                    foreach (var registration in Registration.SpotNodes.Values)
+                    {
+                        var membership = registration.ChannelMemberships.FirstOrDefault(candidate =>
+                            candidate.IsServer
                             && string.Equals(
                                 candidate.ChannelName,
                                 channelName,
-                                StringComparison.Ordinal));
-                    if (membership is null)
-                        continue;
-                    if (!state.SpotNodes.TryGetValue(
+                                StringComparison.Ordinal
+                            )
+                        );
+                        if (membership is null)
+                            continue;
+                        if (
+                            !state.SpotNodes.TryGetValue(
+                                registration.SpotNodeName,
+                                out var nodeRuntime
+                            )
+                        )
+                            break;
+                        return new ZLinkMeshChannelRuntimeOptions(
+                            this,
+                            nodeRuntime.Node,
+                            membership,
                             registration.SpotNodeName,
-                            out var nodeRuntime))
-                        break;
-                    return new ZLinkMeshChannelRuntimeOptions(
-                        this,
-                        nodeRuntime.Node,
-                        membership,
-                        registration.SpotNodeName,
-                        null,
-                        null);
-                }
-                if (Registration.Channels.TryGetValue(channelName, out var channel)
-                    && channel.Server is { } server
-                    && state.ClientServerServerBundles.TryGetValue(
-                        channelName,
-                        out var bundle)
-                    && bundle.ClientServerServer is { } identity)
-                    return new ZLinkMeshChannelRuntimeOptions(
-                        this,
-                        null,
-                        null,
-                        null,
-                        server,
-                        identity);
-                throw new ZLinkConfigurationException(
-                    $"No local RouteMesh or ClientServer Server membership '{channelName}' is registered.");
-            }));
+                            null,
+                            null
+                        );
+                    }
+                    if (
+                        Registration.Channels.TryGetValue(channelName, out var channel)
+                        && channel.Server is { } server
+                        && state.ClientServerServerBundles.TryGetValue(channelName, out var bundle)
+                        && bundle.ClientServerServer is { } identity
+                    )
+                        return new ZLinkMeshChannelRuntimeOptions(
+                            this,
+                            null,
+                            null,
+                            null,
+                            server,
+                            identity
+                        );
+                    throw new ZLinkConfigurationException(
+                        $"No local RouteMesh or ClientServer Server membership '{channelName}' is registered."
+                    );
+                })
+            );
         });
     }
 
     internal void SetMeshPlacementWeight(
         IZLinkBackendSpotNode node,
         ZLinkSpotNodeRegistration registration,
-        int weight)
+        int weight
+    )
     {
         _ = node;
         ExecuteOperation(() =>
         {
             registration.PlacementWeight = weight;
-            _autoConnect?.SetLocalPlacementWeight(
-                registration.SpotNodeName,
-                weight);
+            _autoConnect?.SetLocalPlacementWeight(registration.SpotNodeName, weight);
             return true;
         });
     }
@@ -91,16 +95,14 @@ internal sealed partial class ZLinkFrameworkRuntime
         IZLinkBackendSpotNode node,
         ZLinkMeshChannelMembership membership,
         string meshName,
-        int weight)
+        int weight
+    )
     {
         ExecuteOperation(() =>
         {
             node.SetChannelWeight(membership.ChannelName, (uint)weight);
             membership.Weight = weight;
-            _autoConnect?.SetLocalChannelWeight(
-                meshName,
-                membership.ChannelName,
-                weight);
+            _autoConnect?.SetLocalChannelWeight(meshName, membership.ChannelName, weight);
             return true;
         });
     }
@@ -108,7 +110,8 @@ internal sealed partial class ZLinkFrameworkRuntime
     internal void SetClientServerWeight(
         ZLinkChannelServerCapabilityRegistration registration,
         ZLinkClientServerServerIdentity identity,
-        int weight)
+        int weight
+    )
     {
         ExecuteOperation(() =>
         {
@@ -119,21 +122,27 @@ internal sealed partial class ZLinkFrameworkRuntime
         });
     }
 
-    private (ZLinkSpotNodeRuntime NodeRuntime, ZLinkSpotNodeRegistration Registration) ResolveMeshNode(
-        string meshName)
+    private (
+        ZLinkSpotNodeRuntime NodeRuntime,
+        ZLinkSpotNodeRegistration Registration
+    ) ResolveMeshNode(string meshName)
     {
         if (!Registration.SpotNodes.TryGetValue(meshName, out var registration))
             throw new ZLinkConfigurationException(
-                $"RouteMesh '{meshName}' is not registered on this node.");
+                $"RouteMesh '{meshName}' is not registered on this node."
+            );
 
         var state = GetOrStartState();
-        return AwaitStateLane(state.RunStateAsync(() =>
-        {
-            if (!state.SpotNodes.TryGetValue(meshName, out var nodeRuntime))
-                throw new ZLinkConfigurationException(
-                    $"RouteMesh '{meshName}' is not running on this node.");
+        return AwaitStateLane(
+            state.RunStateAsync(() =>
+            {
+                if (!state.SpotNodes.TryGetValue(meshName, out var nodeRuntime))
+                    throw new ZLinkConfigurationException(
+                        $"RouteMesh '{meshName}' is not running on this node."
+                    );
 
-            return (nodeRuntime, registration);
-        }));
+                return (nodeRuntime, registration);
+            })
+        );
     }
 }

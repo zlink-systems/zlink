@@ -7,7 +7,8 @@ public sealed record ZLinkFanoutStatus(
     int ReadyPublisherCount,
     IReadOnlyList<ZLinkPeerStatus> Publishers,
     ulong Sequence,
-    DateTimeOffset ObservedAt);
+    DateTimeOffset ObservedAt
+);
 
 public interface IZLinkFanoutRuntime
 {
@@ -15,5 +16,6 @@ public interface IZLinkFanoutRuntime
 
     IAsyncEnumerable<ZLinkObservedStatus<ZLinkFanoutStatus>> ObserveAsync(
         string channelName,
-        CancellationToken cancellationToken = default);
+        CancellationToken cancellationToken = default
+    );
 }

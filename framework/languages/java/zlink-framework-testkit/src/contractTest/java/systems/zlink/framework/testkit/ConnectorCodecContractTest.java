@@ -1,13 +1,20 @@
 package systems.zlink.framework.testkit;
-import java.util.concurrent.BlockingQueue;
-import java.util.concurrent.CompletableFuture;
-import java.util.concurrent.LinkedBlockingQueue;
-import java.util.concurrent.TimeUnit;
-import java.util.function.Function;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 
 import com.google.protobuf.StringValue;
+
+import org.junit.jupiter.api.Test;
+
+import systems.zlink.framework.codecs.msgpack.ZLinkMessagePackCodec;
+import systems.zlink.framework.codecs.protobuf.ZLinkProtobufCodec;
+import systems.zlink.stream.connector.ZLinkStreamCodec;
+import systems.zlink.stream.connector.ZLinkStreamConnector;
+import systems.zlink.stream.connector.ZLinkStreamConnectorFactory;
+import systems.zlink.stream.connector.ZLinkStreamConnectorOptions;
+import systems.zlink.stream.connector.ZLinkStreamEncodedPayload;
+import systems.zlink.stream.connector.ZLinkStreamJson;
+
 import java.io.DataInputStream;
 import java.io.DataOutputStream;
 import java.io.IOException;
@@ -19,51 +26,46 @@ import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import java.util.ArrayList;
 import java.util.List;
-import org.junit.jupiter.api.Test;
-import systems.zlink.framework.codecs.msgpack.ZLinkMessagePackCodec;
-import systems.zlink.framework.codecs.protobuf.ZLinkProtobufCodec;
-import systems.zlink.stream.connector.ZLinkStreamConnector;
-import systems.zlink.stream.connector.ZLinkStreamConnectorFactory;
-import systems.zlink.stream.connector.ZLinkStreamConnectorOptions;
-import systems.zlink.stream.connector.ZLinkStreamPacketNameResolver;
-import systems.zlink.stream.connector.ZLinkStreamCodec;
-import systems.zlink.stream.connector.ZLinkStreamDispatchMode;
-import systems.zlink.stream.connector.ZLinkStreamEncodedPayload;
-import systems.zlink.stream.connector.ZLinkStreamJson;
+import java.util.concurrent.BlockingQueue;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.LinkedBlockingQueue;
+import java.util.concurrent.TimeUnit;
+import java.util.function.Function;
 
 final class ConnectorCodecContractTest {
     @Test
     void jsonMsgpackProtobufTypedHelperRoundtrip() {
         assertCodecRoundtrip(
-            "JsonPacket",
-            ZLinkStreamCodec.JSON,
-            ZLinkStreamJson.encode("JsonPacket", "json-body"),
-            "json-body",
-            payload -> ZLinkStreamJson.decode(payload, String.class));
+                "JsonPacket",
+                ZLinkStreamCodec.JSON,
+                ZLinkStreamJson.encode("JsonPacket", "json-body"),
+                "json-body",
+                payload -> ZLinkStreamJson.decode(payload, String.class));
         assertCodecRoundtrip(
-            "MsgpackPacket",
-            ZLinkStreamCodec.MESSAGE_PACK,
-            ZLinkMessagePackCodec.defaultCodec().encode("MsgpackPacket", "msgpack-body"),
-            "msgpack-body",
-            payload -> ZLinkMessagePackCodec.defaultCodec().decode(payload, String.class));
+                "MsgpackPacket",
+                ZLinkStreamCodec.MESSAGE_PACK,
+                ZLinkMessagePackCodec.defaultCodec().encode("MsgpackPacket", "msgpack-body"),
+                "msgpack-body",
+                payload -> ZLinkMessagePackCodec.defaultCodec().decode(payload, String.class));
         assertCodecRoundtrip(
-            "ProtobufPacket",
-            ZLinkStreamCodec.PROTOBUF,
-            ZLinkProtobufCodec.defaultCodec().encode("ProtobufPacket", "protobuf-body"),
-            "protobuf-body",
-            payload -> ZLinkProtobufCodec.defaultCodec().decode(payload, String.class));
+                "ProtobufPacket",
+                ZLinkStreamCodec.PROTOBUF,
+                ZLinkProtobufCodec.defaultCodec().encode("ProtobufPacket", "protobuf-body"),
+                "protobuf-body",
+                payload -> ZLinkProtobufCodec.defaultCodec().decode(payload, String.class));
     }
 
     @Test
     void protobufTypedHelperUsesMessageLiteBytes() throws Exception {
         StringValue original = StringValue.of("profile:42");
         ZLinkStreamEncodedPayload encoded =
-            ZLinkProtobufCodec.defaultCodec().encode("StringValue", original);
+                ZLinkProtobufCodec.defaultCodec().encode("StringValue", original);
         try {
             assertEquals("StringValue", encoded.packetName());
             assertEquals(ZLinkStreamCodec.PROTOBUF, encoded.codec());
             assertEquals(original, StringValue.parseFrom(encoded.payload().toByteArray()));
-            assertEquals(original, ZLinkProtobufCodec.defaultCodec().decode(encoded, StringValue.class));
+            assertEquals(
+                    original, ZLinkProtobufCodec.defaultCodec().decode(encoded, StringValue.class));
         } finally {
             encoded.payload().close();
         }
@@ -73,55 +75,60 @@ final class ConnectorCodecContractTest {
     void jsonTypedHelperUsesConnectorSendRequestAndOnSurface() throws Exception {
         try (TcpServer server = new TcpServer()) {
             ZLinkStreamConnector connector =
-                ZLinkStreamConnectorFactory.create(options(server.endpoint()));
+                    ZLinkStreamConnectorFactory.create(options(server.endpoint()));
             try {
-            List<String> handled = new ArrayList<>();
-            ZLinkStreamJson.on(connector, "String", String.class, message -> {
-                handled.add(message.payload());
-                return CompletableFuture.completedFuture(null);
-            });
+                List<String> handled = new ArrayList<>();
+                ZLinkStreamJson.on(
+                        connector,
+                        "String",
+                        String.class,
+                        message -> {
+                            handled.add(message.payload());
+                            return CompletableFuture.completedFuture(null);
+                        });
 
-            connector.connect().submit().toCompletableFuture().join();
-            ZLinkStreamJson.send(connector, "hello")
-                .compress()
-                .submit();
-            Frame sent = server.readFrame();
-            assertEquals(1, sent.kind());
-            assertEquals(1, sent.codec());
-            assertEquals("String", sent.name());
+                connector.connect().submit().toCompletableFuture().join();
+                ZLinkStreamJson.send(connector, "hello").compress().submit();
+                Frame sent = server.readFrame();
+                assertEquals(1, sent.kind());
+                assertEquals(1, sent.codec());
+                assertEquals("String", sent.name());
 
-            server.sendFrame(new Frame(
-                1,
-                1,
-                null,
-                "String",
-                "\"server\"".getBytes(StandardCharsets.UTF_8)));
-            awaitPendingDispatch(connector);
-            connector.dispatch().submit().toCompletableFuture().join();
+                server.sendFrame(
+                        new Frame(
+                                1,
+                                1,
+                                null,
+                                "String",
+                                "\"server\"".getBytes(StandardCharsets.UTF_8)));
+                awaitPendingDispatch(connector);
+                connector.dispatch().submit().toCompletableFuture().join();
 
-            var replyFuture = ZLinkStreamJson.request(connector, "reply")
-                .compress()
-                .submit()
-                .toCompletableFuture();
-            Frame request = server.readFrame();
-            assertEquals(2, request.kind());
-            assertEquals(1, request.codec());
-            assertEquals("String", request.name());
-            server.sendFrame(new Frame(
-                3,
-                1,
-                request.requestSeq(),
-                "",
-                "\"reply\"".getBytes(StandardCharsets.UTF_8)));
+                var replyFuture =
+                        ZLinkStreamJson.request(connector, "reply")
+                                .compress()
+                                .submit()
+                                .toCompletableFuture();
+                Frame request = server.readFrame();
+                assertEquals(2, request.kind());
+                assertEquals(1, request.codec());
+                assertEquals("String", request.name());
+                server.sendFrame(
+                        new Frame(
+                                3,
+                                1,
+                                request.requestSeq(),
+                                "",
+                                "\"reply\"".getBytes(StandardCharsets.UTF_8)));
 
-            ZLinkStreamEncodedPayload reply = replyFuture.join();
-            try {
-                assertEquals("reply", ZLinkStreamJson.decode(reply, String.class));
-            } finally {
-                reply.payload().close();
-            }
+                ZLinkStreamEncodedPayload reply = replyFuture.join();
+                try {
+                    assertEquals("reply", ZLinkStreamJson.decode(reply, String.class));
+                } finally {
+                    reply.payload().close();
+                }
 
-            assertEquals(List.of("server"), handled);
+                assertEquals(List.of("server"), handled);
             } finally {
                 connector.close().submit().toCompletableFuture().join();
             }
@@ -129,11 +136,11 @@ final class ConnectorCodecContractTest {
     }
 
     private static void assertCodecRoundtrip(
-        String packetName,
-        ZLinkStreamCodec codec,
-        ZLinkStreamEncodedPayload encoded,
-        String expected,
-        Function<ZLinkStreamEncodedPayload, String> decode) {
+            String packetName,
+            ZLinkStreamCodec codec,
+            ZLinkStreamEncodedPayload encoded,
+            String expected,
+            Function<ZLinkStreamEncodedPayload, String> decode) {
         try {
             assertEquals(packetName, encoded.packetName());
             assertEquals(codec, encoded.codec());
@@ -149,27 +156,27 @@ final class ConnectorCodecContractTest {
         //  전부 나열하면 record 구성이 늘 때마다 이 자리가 깨진다.
         ZLinkStreamConnectorOptions defaults = ZLinkStreamConnectorOptions.createDefault(endpoint);
         return new ZLinkStreamConnectorOptions(
-            defaults.endpoint(),
-            defaults.dispatchMode(),
-            Duration.ofSeconds(1),
-            Duration.ofSeconds(1),
-            1,
-            Duration.ofSeconds(1),
-            defaults.maxSendPayloadSize(),
-            defaults.maxReceivePayloadSize(),
-            defaults.heartbeatEnabled(),
-            defaults.heartbeatInterval(),
-            defaults.heartbeatTimeout(),
-            defaults.reconnectEnabled(),
-            defaults.reconnectInitialDelay(),
-            defaults.reconnectMaxDelay(),
-            defaults.reconnectBackoffFactor(),
-            defaults.skipServerCertificateValidation(),
-            defaults.compression(),
-            defaults.compressionCodec(),
-            defaults.nameResolver(),
-            defaults.typedCodec(),
-            defaults.diagnosticsLevel());
+                defaults.endpoint(),
+                defaults.dispatchMode(),
+                Duration.ofSeconds(1),
+                Duration.ofSeconds(1),
+                1,
+                Duration.ofSeconds(1),
+                defaults.maxSendPayloadSize(),
+                defaults.maxReceivePayloadSize(),
+                defaults.heartbeatEnabled(),
+                defaults.heartbeatInterval(),
+                defaults.heartbeatTimeout(),
+                defaults.reconnectEnabled(),
+                defaults.reconnectInitialDelay(),
+                defaults.reconnectMaxDelay(),
+                defaults.reconnectBackoffFactor(),
+                defaults.skipServerCertificateValidation(),
+                defaults.compression(),
+                defaults.compressionCodec(),
+                defaults.nameResolver(),
+                defaults.typedCodec(),
+                defaults.diagnosticsLevel());
     }
 
     private static void awaitPendingDispatch(ZLinkStreamConnector connector) {
@@ -183,34 +190,30 @@ final class ConnectorCodecContractTest {
         throw new AssertionError("connector did not queue inbound dispatch within 5s");
     }
 
-    private record Frame(
-        int kind,
-        int codec,
-        Long requestSeq,
-        String name,
-        byte[] payload) {
-    }
+    private record Frame(int kind, int codec, Long requestSeq, String name, byte[] payload) {}
 
     private static final class TcpServer implements AutoCloseable {
         private final ServerSocket server;
-        private final BlockingQueue<Socket> sockets =
-            new LinkedBlockingQueue<>();
+        private final BlockingQueue<Socket> sockets = new LinkedBlockingQueue<>();
         private final Thread acceptThread;
         private Socket current;
 
         TcpServer() throws IOException {
             server = new ServerSocket(0);
-            acceptThread = new Thread(() -> {
-                while (!server.isClosed()) {
-                    try {
-                        sockets.add(server.accept());
-                    } catch (IOException ex) {
-                        if (!server.isClosed()) {
-                            throw new RuntimeException(ex);
-                        }
-                    }
-                }
-            }, "zlink-connector-codec-contract-server");
+            acceptThread =
+                    new Thread(
+                            () -> {
+                                while (!server.isClosed()) {
+                                    try {
+                                        sockets.add(server.accept());
+                                    } catch (IOException ex) {
+                                        if (!server.isClosed()) {
+                                            throw new RuntimeException(ex);
+                                        }
+                                    }
+                                }
+                            },
+                            "zlink-connector-codec-contract-server");
             acceptThread.setDaemon(true);
             acceptThread.start();
         }
@@ -227,21 +230,18 @@ final class ConnectorCodecContractTest {
             byte[] payload = input.readNBytes(payloadLength);
             Header decoded = decodeHeader(header);
             return new Frame(
-                decoded.kind(),
-                decoded.codec(),
-                decoded.requestSeq(),
-                decoded.name(),
-                payload);
+                    decoded.kind(), decoded.codec(), decoded.requestSeq(), decoded.name(), payload);
         }
 
         void sendFrame(Frame frame) throws Exception {
             byte[] header = encodeHeader(frame);
-            byte[] encoded = ByteBuffer.allocate(6 + header.length + frame.payload().length)
-                .putShort((short) header.length)
-                .putInt(frame.payload().length)
-                .put(header)
-                .put(frame.payload())
-                .array();
+            byte[] encoded =
+                    ByteBuffer.allocate(6 + header.length + frame.payload().length)
+                            .putShort((short) header.length)
+                            .putInt(frame.payload().length)
+                            .put(header)
+                            .put(frame.payload())
+                            .array();
             DataOutputStream output = new DataOutputStream(socket().getOutputStream());
             output.write(encoded);
             output.flush();
@@ -272,11 +272,8 @@ final class ConnectorCodecContractTest {
             if (frame.requestSeq() != null) {
                 flags |= 0x01;
             }
-            ByteBuffer buffer = ByteBuffer.allocate(
-                4
-                    + (frame.requestSeq() == null ? 0 : 8)
-                    + 1
-                    + name.length);
+            ByteBuffer buffer =
+                    ByteBuffer.allocate(4 + (frame.requestSeq() == null ? 0 : 8) + 1 + name.length);
             buffer.put((byte) 0xF2);
             buffer.put((byte) frame.kind());
             buffer.put((byte) frame.codec());
@@ -299,18 +296,9 @@ final class ConnectorCodecContractTest {
             int nameLength = Byte.toUnsignedInt(buffer.get());
             byte[] name = new byte[nameLength];
             buffer.get(name);
-            return new Header(
-                kind,
-                codec,
-                requestSeq,
-                new String(name, StandardCharsets.UTF_8));
+            return new Header(kind, codec, requestSeq, new String(name, StandardCharsets.UTF_8));
         }
 
-        private record Header(
-            int kind,
-            int codec,
-            Long requestSeq,
-            String name) {
-        }
+        private record Header(int kind, int codec, Long requestSeq, String name) {}
     }
 }

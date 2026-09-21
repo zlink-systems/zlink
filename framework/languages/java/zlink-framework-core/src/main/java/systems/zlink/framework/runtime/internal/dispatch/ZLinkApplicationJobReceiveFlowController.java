@@ -1,5 +1,10 @@
 package systems.zlink.framework.runtime.internal.dispatch;
 
+import systems.zlink.contracts.errors.ConfigResult;
+import systems.zlink.contracts.errors.ZlinkConfigException;
+import systems.zlink.contracts.sockets.ReceiveFlowState;
+import systems.zlink.framework.monitoring.ZLinkApplicationJobQueuePressureState;
+
 import java.util.ArrayList;
 import java.util.IdentityHashMap;
 import java.util.List;
@@ -8,21 +13,15 @@ import java.util.Objects;
 import java.util.function.Consumer;
 import java.util.logging.Level;
 import java.util.logging.Logger;
-import systems.zlink.contracts.errors.ConfigResult;
-import systems.zlink.contracts.errors.ZlinkConfigException;
-import systems.zlink.contracts.sockets.ReceiveFlowState;
-import systems.zlink.framework.monitoring.ZLinkApplicationJobQueuePressureState;
 
 /** Applies the host queue's absolute pressure state to paired sockets. */
-public final class ZLinkApplicationJobReceiveFlowController
-    implements AutoCloseable {
-    private static final Logger LOGGER = Logger.getLogger(
-        ZLinkApplicationJobReceiveFlowController.class.getName());
+public final class ZLinkApplicationJobReceiveFlowController implements AutoCloseable {
+    private static final Logger LOGGER =
+            Logger.getLogger(ZLinkApplicationJobReceiveFlowController.class.getName());
 
     private final Object lock = new Object();
     private final ZLinkApplicationJobQueue queue;
-    private final Map<Consumer<ReceiveFlowState>, Target> targets =
-        new IdentityHashMap<>();
+    private final Map<Consumer<ReceiveFlowState>, Target> targets = new IdentityHashMap<>();
     private boolean closed;
 
     ZLinkApplicationJobReceiveFlowController(ZLinkApplicationJobQueue queue) {
@@ -43,8 +42,7 @@ public final class ZLinkApplicationJobReceiveFlowController
         try {
             target.apply(true);
             synchronized (lock) {
-                if (closed || target.closing
-                    || targets.get(setter) != target) {
+                if (closed || target.closing || targets.get(setter) != target) {
                     throw closedFailure();
                 }
             }
@@ -55,16 +53,14 @@ public final class ZLinkApplicationJobReceiveFlowController
         }
     }
 
-    void onPressureTransition(
-        ZLinkApplicationJobQueue.PressureSnapshot snapshot) {
+    void onPressureTransition(ZLinkApplicationJobQueue.PressureSnapshot snapshot) {
         List<Target> current;
         synchronized (lock) {
             if (closed) {
                 return;
             }
             for (Target target : targets.values()) {
-                if (target.desired == null
-                    || snapshot.sequence() > target.desired.sequence()) {
+                if (target.desired == null || snapshot.sequence() > target.desired.sequence()) {
                     target.desired = snapshot;
                 }
             }
@@ -90,8 +86,7 @@ public final class ZLinkApplicationJobReceiveFlowController
     }
 
     private static IllegalStateException closedFailure() {
-        return new IllegalStateException(
-            "application job receive-flow controller is closed");
+        return new IllegalStateException("application job receive-flow controller is closed");
     }
 
     public interface Registration extends AutoCloseable {
@@ -115,9 +110,11 @@ public final class ZLinkApplicationJobReceiveFlowController
                 while (true) {
                     ZLinkApplicationJobQueue.PressureSnapshot next;
                     synchronized (lock) {
-                        if (closing || closed || targets.get(setter) != this
-                            || desired == null
-                            || desired.sequence() <= appliedSequence) {
+                        if (closing
+                                || closed
+                                || targets.get(setter) != this
+                                || desired == null
+                                || desired.sequence() <= appliedSequence) {
                             return;
                         }
                         next = desired;
@@ -128,9 +125,10 @@ public final class ZLinkApplicationJobReceiveFlowController
                     } catch (RuntimeException failure) {
                         if (!closing || !isClosingInvalidState(failure)) {
                             queue.recordReceiveFlowConfigurationFailure();
-                            LOGGER.log(Level.WARNING,
-                                "Failed to apply application job receive-flow state",
-                                failure);
+                            LOGGER.log(
+                                    Level.WARNING,
+                                    "Failed to apply application job receive-flow state",
+                                    failure);
                             if (rethrowFailure) {
                                 throw failure;
                             }
@@ -156,14 +154,14 @@ public final class ZLinkApplicationJobReceiveFlowController
         }
     }
 
-    private static ReceiveFlowState toBindingState(
-        ZLinkApplicationJobQueuePressureState state) {
+    private static ReceiveFlowState toBindingState(ZLinkApplicationJobQueuePressureState state) {
         return state == ZLinkApplicationJobQueuePressureState.PAUSED
-            ? ReceiveFlowState.PAUSED : ReceiveFlowState.RUNNING;
+                ? ReceiveFlowState.PAUSED
+                : ReceiveFlowState.RUNNING;
     }
 
     private static boolean isClosingInvalidState(RuntimeException failure) {
         return failure instanceof ZlinkConfigException config
-            && config.getResult() == ConfigResult.INVALID_STATE;
+                && config.getResult() == ConfigResult.INVALID_STATE;
     }
 }

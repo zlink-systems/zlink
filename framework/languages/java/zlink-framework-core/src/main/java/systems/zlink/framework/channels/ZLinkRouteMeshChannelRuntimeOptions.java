@@ -1,4 +1,3 @@
 package systems.zlink.framework.channels;
 
-public interface ZLinkRouteMeshChannelRuntimeOptions {
-}
+public interface ZLinkRouteMeshChannelRuntimeOptions {}

@@ -11,9 +11,7 @@ internal sealed class ZLinkReceivedStoragePool
 
     internal Received Rent()
     {
-        return _available.TryTake(out var storage)
-            ? storage
-            : Received.Create();
+        return _available.TryTake(out var storage) ? storage : Received.Create();
     }
 
     internal void Return(Received storage)

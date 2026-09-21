@@ -6,14 +6,17 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+
+import org.junit.jupiter.api.Test;
+
+import systems.zlink.framework.runtime.binding.ZLinkJavaBackendAdapterFactory;
+import systems.zlink.framework.runtime.configuration.DefaultZLinkFrameworkOptions;
+
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.time.Duration;
 import java.util.Locale;
 import java.util.concurrent.TimeUnit;
-import org.junit.jupiter.api.Test;
-import systems.zlink.framework.runtime.binding.ZLinkJavaBackendAdapterFactory;
-import systems.zlink.framework.runtime.configuration.DefaultZLinkFrameworkOptions;
 
 final class ZLinkRuntimeStateConformanceTest {
     @Test
@@ -22,16 +25,19 @@ final class ZLinkRuntimeStateConformanceTest {
         assertEquals("zlink.framework.runtime-state", fixture.path("fixture").asText());
         assertEquals(1, fixture.path("version").asInt());
         assertTrue(
-            fixture.path("authorityInvariants")
-                .path("publicStateIsSingleReadinessAuthority").asBoolean());
+                fixture.path("authorityInvariants")
+                        .path("publicStateIsSingleReadinessAuthority")
+                        .asBoolean());
         assertFalse(
-            fixture.path("authorityInvariants")
-                .path("independentMutableReadinessAuthority").asBoolean());
+                fixture.path("authorityInvariants")
+                        .path("independentMutableReadinessAuthority")
+                        .asBoolean());
 
         int states = 0;
         for (JsonNode stateCase : fixture.path("publicStates")) {
-            ZLinkFrameworkRuntimeState state = ZLinkFrameworkRuntimeState.valueOf(
-                stateCase.path("name").asText().toUpperCase(Locale.ROOT));
+            ZLinkFrameworkRuntimeState state =
+                    ZLinkFrameworkRuntimeState.valueOf(
+                            stateCase.path("name").asText().toUpperCase(Locale.ROOT));
             assertEquals(stateCase.path("wireValue").asInt(), state.wireValue());
             assertEquals(stateCase.path("isReady").asBoolean(), state.isReadyState());
             states++;
@@ -39,21 +45,21 @@ final class ZLinkRuntimeStateConformanceTest {
         assertEquals(ZLinkFrameworkRuntimeState.values().length, states);
 
         for (JsonNode scenario : fixture.path("acceptingWorkScenarios")) {
-            ZLinkFrameworkRuntimeState state = ZLinkFrameworkRuntimeState.valueOf(
-                scenario.path("state").asText().toUpperCase(Locale.ROOT));
+            ZLinkFrameworkRuntimeState state =
+                    ZLinkFrameworkRuntimeState.valueOf(
+                            scenario.path("state").asText().toUpperCase(Locale.ROOT));
             assertEquals(
-                scenario.path("expected").asBoolean(),
-                state.acceptsWork(scenario.path("admissionOpen").asBoolean()),
-                scenario.toString());
+                    scenario.path("expected").asBoolean(),
+                    state.acceptsWork(scenario.path("admissionOpen").asBoolean()),
+                    scenario.toString());
         }
     }
 
     @Test
-    void startupAndShutdownNeverPublishAContradictoryReadinessProjection()
-        throws Exception {
-        ZLinkFrameworkRuntime runtime = ZLinkFrameworkRuntimeTestAccess.start(
-            new DefaultZLinkFrameworkOptions(),
-            new ZLinkJavaBackendAdapterFactory());
+    void startupAndShutdownNeverPublishAContradictoryReadinessProjection() throws Exception {
+        ZLinkFrameworkRuntime runtime =
+                ZLinkFrameworkRuntimeTestAccess.start(
+                        new DefaultZLinkFrameworkOptions(), new ZLinkJavaBackendAdapterFactory());
         try {
             long deadline = System.nanoTime() + Duration.ofSeconds(5).toNanos();
             while (!runtime.isReady() && System.nanoTime() < deadline) {
@@ -80,9 +86,7 @@ final class ZLinkRuntimeStateConformanceTest {
         boolean expectedReady = status.state() == ZLinkFrameworkRuntimeState.SERVING;
         assertEquals(expectedReady, status.isReady());
         assertEquals(expectedReady, runtime.isReady());
-        assertEquals(
-            status.state().acceptsWork(status.acceptingWork()),
-            status.acceptingWork());
+        assertEquals(status.state().acceptsWork(status.acceptingWork()), status.acceptingWork());
     }
 
     private static JsonNode fixture() throws Exception {
@@ -92,8 +96,7 @@ final class ZLinkRuntimeStateConformanceTest {
     private static Path sharedFixture() {
         Path current = Path.of(System.getProperty("user.dir")).toAbsolutePath();
         while (current != null) {
-            Path candidate = current.resolve(
-                "runtime/conformance/runtime-state-v1.json");
+            Path candidate = current.resolve("runtime/conformance/runtime-state-v1.json");
             if (Files.isRegularFile(candidate)) {
                 return candidate;
             }

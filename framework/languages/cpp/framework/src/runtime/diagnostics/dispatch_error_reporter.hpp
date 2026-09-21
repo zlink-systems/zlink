@@ -22,14 +22,11 @@ namespace zlink::framework::detail
 class dispatch_error_reporter_t
 {
   public:
-    explicit dispatch_error_reporter_t (const dispatch_options_t &options) : _options (&options)
-    {
-    }
+    explicit dispatch_error_reporter_t (const dispatch_options_t &options) : _options (&options) {}
 
     void report (message_dispatch_error_event_t event) const noexcept
     {
-        const auto effective_mode =
-          dispatch_options_access_t::effective_message_flow (*_options);
+        const auto effective_mode = dispatch_options_access_t::effective_message_flow (*_options);
         if (effective_mode == message_flow_log_mode_t::off) {
             return;
         }
@@ -59,8 +56,7 @@ class dispatch_error_reporter_t
         }
     }
 
-    template <typename Fn>
-    void report_lazy (Fn &&build_event) const noexcept
+    template <typename Fn> void report_lazy (Fn &&build_event) const noexcept
     {
         if (dispatch_options_access_t::effective_message_flow (*_options)
               == message_flow_log_mode_t::off
@@ -250,8 +246,8 @@ dispatch_reason_from_error (const framework_exception_t *error) noexcept
                 break;
         }
     }
-    return dispatch_reason_from_error (
-      error != nullptr ? error->kind () : framework_error_kind_t::internal_failure);
+    return dispatch_reason_from_error (error != nullptr ? error->kind ()
+                                                        : framework_error_kind_t::internal_failure);
 }
 
 } // namespace zlink::framework::detail

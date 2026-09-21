@@ -1,9 +1,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 
-import {
-  ApplicationIngressRecordOwner
-} from '../../packages/framework/src/runtime/application-jobs/application-ingress-record-owner';
+import { ApplicationIngressRecordOwner } from '../../packages/framework/src/runtime/application-jobs/application-ingress-record-owner';
 import {
   ApplicationJobQueue,
   resolveApplicationJobQueueConfiguration
@@ -13,22 +11,15 @@ import type {
   ZLinkRawHostPort,
   ZLinkRawRouterPort
 } from '../../packages/framework/src/runtime/backend/raw-binding-port';
-import {
-  RawServiceMeshRuntime
-} from '../../packages/framework/src/runtime/foundation/raw-service-mesh-runtime';
-import {
-  ServiceMailbox
-} from '../../packages/framework/src/runtime/foundation/service-mailbox';
+import { RawServiceMeshRuntime } from '../../packages/framework/src/runtime/foundation/raw-service-mesh-runtime';
+import { ServiceMailbox } from '../../packages/framework/src/runtime/foundation/service-mailbox';
 import { SERVICE_WIRE_REQUIRED_CAPABILITY } from '../../packages/framework/src/runtime/foundation/service-wire-constants.generated';
-import type {
-  ServiceNodeDescriptor
-} from '../../packages/framework/src/runtime/foundation/service-topology-registry';
+import type { ServiceNodeDescriptor } from '../../packages/framework/src/runtime/foundation/service-topology-registry';
 
 function queue(limit = 1n): ApplicationJobQueue {
-  return new ApplicationJobQueue(resolveApplicationJobQueueConfiguration(
-    { maxQueuedApplicationJobs: limit },
-    () => 1n
-  ));
+  return new ApplicationJobQueue(
+    resolveApplicationJobQueueConfiguration({ maxQueuedApplicationJobs: limit }, () => 1n)
+  );
 }
 
 function descriptor(): ServiceNodeDescriptor {
@@ -83,7 +74,7 @@ test('raw receive waits for the host permit before touching the binding', async 
   runtime.start();
   try {
     const pumping = runtime.pumpOne();
-    await new Promise(resolve => setImmediate(resolve));
+    await new Promise((resolve) => setImmediate(resolve));
     assert.equal(receives, 0);
 
     occupied.releaseAfterInternalProcessing();
@@ -111,11 +102,12 @@ test('raw shutdown cancels a pre-receive capacity wait without touching the bind
     close() {}
   } as unknown as ZLinkRawRouterPort;
   const binding = {
-    createHost: () => ({
-      createRouter: () => router,
-      close() {},
-      shutdown() {}
-    } as unknown as ZLinkRawHostPort)
+    createHost: () =>
+      ({
+        createRouter: () => router,
+        close() {},
+        shutdown() {}
+      }) as unknown as ZLinkRawHostPort
   } satisfies ZLinkRawBindingPort;
   const runtime = new RawServiceMeshRuntime({
     descriptor: descriptor(),
@@ -125,7 +117,7 @@ test('raw shutdown cancels a pre-receive capacity wait without touching the bind
   runtime.start();
 
   const pumping = runtime.pumpOne();
-  await new Promise(resolve => setImmediate(resolve));
+  await new Promise((resolve) => setImmediate(resolve));
   assert.equal(applicationJobs.snapshot().capacityWaiters, 1n);
   runtime.close();
   assert.equal(await pumping, 'noData');
@@ -161,11 +153,12 @@ test('raw protocol drop closes its retained Core record and permit exactly once'
     close() {}
   } as unknown as ZLinkRawRouterPort;
   const binding = {
-    createHost: () => ({
-      createRouter: () => router,
-      close() {},
-      shutdown() {}
-    } as unknown as ZLinkRawHostPort)
+    createHost: () =>
+      ({
+        createRouter: () => router,
+        close() {},
+        shutdown() {}
+      }) as unknown as ZLinkRawHostPort
   } satisfies ZLinkRawBindingPort;
   const runtime = new RawServiceMeshRuntime({
     descriptor: descriptor(),
@@ -188,11 +181,11 @@ test('logical 1:N children acquire sequential permits and share one Framework in
   const owner = ApplicationIngressRecordOwner.create(
     applicationJobs,
     await applicationJobs.acquire(),
-    { close: () => retainedCloseCount += 1 }
+    { close: () => (retainedCloseCount += 1) }
   );
   let drained = 0;
   let resolveDrained!: () => void;
-  const allDrained = new Promise<void>(resolve => resolveDrained = resolve);
+  const allDrained = new Promise<void>((resolve) => (resolveDrained = resolve));
   const mailbox = new ServiceMailbox(() => {
     setImmediate(() => {
       const claim = mailbox.tryClaim('application', 1, Number.MAX_SAFE_INTEGER);
@@ -208,12 +201,15 @@ test('logical 1:N children acquire sequential permits and share one Framework in
 
   for (const child of ['spot:first', 'spot:second']) {
     const applicationJob = await owner.acquire('application');
-    assert.equal(mailbox.tryEnqueue({
-      owner: child,
-      domain: 'application',
-      parts: [Buffer.from(child)],
-      applicationJob
-    }), true);
+    assert.equal(
+      mailbox.tryEnqueue({
+        owner: child,
+        domain: 'application',
+        parts: [Buffer.from(child)],
+        applicationJob
+      }),
+      true
+    );
     assert.equal(applicationJobs.snapshot().permitsInUse, 1n);
   }
   owner.close();
@@ -229,16 +225,19 @@ test('mailbox shutdown closes queued permits and ingress records without a leak'
   const owner = ApplicationIngressRecordOwner.create(
     applicationJobs,
     await applicationJobs.acquire(),
-    { close: () => retainedCloseCount += 1 }
+    { close: () => (retainedCloseCount += 1) }
   );
   const applicationJob = await owner.acquire('application');
   const mailbox = new ServiceMailbox();
-  assert.equal(mailbox.tryEnqueue({
-    owner: 'node:raw-job-queue-node',
-    domain: 'application',
-    parts: [Buffer.from('retained')],
-    applicationJob
-  }), true);
+  assert.equal(
+    mailbox.tryEnqueue({
+      owner: 'node:raw-job-queue-node',
+      domain: 'application',
+      parts: [Buffer.from('retained')],
+      applicationJob
+    }),
+    true
+  );
   owner.close();
 
   mailbox.close();

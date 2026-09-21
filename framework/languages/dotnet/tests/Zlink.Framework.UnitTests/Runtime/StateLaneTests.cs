@@ -29,8 +29,12 @@ public sealed class StateLaneTests
         await outer.RunAsync(() =>
         {
             Assert.True(outer.IsOnLane);
-            Assert.Throws<InvalidOperationException>(() => inner.RunAsync<int>(
-                () => throw new InvalidOperationException("inner")).GetAwaiter().GetResult());
+            Assert.Throws<InvalidOperationException>(() =>
+                inner
+                    .RunAsync<int>(() => throw new InvalidOperationException("inner"))
+                    .GetAwaiter()
+                    .GetResult()
+            );
             Assert.Same(outer, ZLinkStateLane.Current);
             Assert.Throws<InvalidOperationException>(() => outer.RunAsync(static () => 0));
         });
@@ -54,9 +58,9 @@ public sealed class StateLaneTests
     {
         await using var lane = new ZLinkStateLane();
 
-        await Assert.ThrowsAsync<InvalidOperationException>(
-            async () => await lane.RunAsync<int>(
-                () => throw new InvalidOperationException("boom")));
+        await Assert.ThrowsAsync<InvalidOperationException>(async () =>
+            await lane.RunAsync<int>(() => throw new InvalidOperationException("boom"))
+        );
     }
 
     [Fact]
@@ -64,8 +68,9 @@ public sealed class StateLaneTests
     {
         await using var lane = new ZLinkStateLane();
 
-        await Assert.ThrowsAsync<InvalidOperationException>(
-            async () => await lane.RunAsync<int>(() => throw new InvalidOperationException()));
+        await Assert.ThrowsAsync<InvalidOperationException>(async () =>
+            await lane.RunAsync<int>(() => throw new InvalidOperationException())
+        );
 
         Assert.Equal(7, await lane.RunAsync(() => 7));
     }
@@ -82,15 +87,20 @@ public sealed class StateLaneTests
         const int callers = 32;
         const int perCaller = 50;
 
-        await Task.WhenAll(Enumerable.Range(0, callers).Select(caller =>
-            Task.Run(async () =>
-            {
-                for (var i = 0; i < perCaller; i++)
-                {
-                    var key = (caller * perCaller) + i;
-                    await lane.RunAsync(() => state[key] = key);
-                }
-            })));
+        await Task.WhenAll(
+            Enumerable
+                .Range(0, callers)
+                .Select(caller =>
+                    Task.Run(async () =>
+                    {
+                        for (var i = 0; i < perCaller; i++)
+                        {
+                            var key = (caller * perCaller) + i;
+                            await lane.RunAsync(() => state[key] = key);
+                        }
+                    })
+                )
+        );
 
         Assert.Equal(callers * perCaller, await lane.RunAsync(() => state.Count));
     }
@@ -102,15 +112,22 @@ public sealed class StateLaneTests
         var inFlight = 0;
         var observedOverlap = false;
 
-        await Task.WhenAll(Enumerable.Range(0, 64).Select(_ =>
-            Task.Run(async () => await lane.RunAsync(() =>
-            {
-                if (Interlocked.Increment(ref inFlight) != 1)
-                    observedOverlap = true;
-                Thread.SpinWait(200);
-                Interlocked.Decrement(ref inFlight);
-                return 0;
-            }))));
+        await Task.WhenAll(
+            Enumerable
+                .Range(0, 64)
+                .Select(_ =>
+                    Task.Run(async () =>
+                        await lane.RunAsync(() =>
+                        {
+                            if (Interlocked.Increment(ref inFlight) != 1)
+                                observedOverlap = true;
+                            Thread.SpinWait(200);
+                            Interlocked.Decrement(ref inFlight);
+                            return 0;
+                        })
+                    )
+                )
+        );
 
         Assert.False(observedOverlap);
     }
@@ -124,11 +141,13 @@ public sealed class StateLaneTests
         for (var i = 0; i < 100; i++)
         {
             var value = i;
-            Assert.True(lane.TryPost(() =>
-            {
-                order.Add(value);
-                return ValueTask.CompletedTask;
-            }));
+            Assert.True(
+                lane.TryPost(() =>
+                {
+                    order.Add(value);
+                    return ValueTask.CompletedTask;
+                })
+            );
         }
 
         Assert.Equal(Enumerable.Range(0, 100), await lane.RunAsync(() => order.ToArray()));
@@ -143,7 +162,13 @@ public sealed class StateLaneTests
         var count = 0;
 
         for (var i = 0; i < 250; i++)
-            Assert.True(lane.TryPost(() => { count++; return ValueTask.CompletedTask; }));
+            Assert.True(
+                lane.TryPost(() =>
+                {
+                    count++;
+                    return ValueTask.CompletedTask;
+                })
+            );
 
         Assert.Equal(250, await lane.RunAsync(() => count));
     }
@@ -175,7 +200,8 @@ public sealed class StateLaneTests
         await using var lane = new ZLinkStateLane();
 
         var error = await lane.RunAsync(() =>
-            Assert.Throws<InvalidOperationException>(() => lane.RunAsync(() => 1)));
+            Assert.Throws<InvalidOperationException>(() => lane.RunAsync(() => 1))
+        );
 
         Assert.Contains("already runs on the state lane", error.Message);
     }
@@ -248,7 +274,11 @@ public sealed class StateLaneTests
         var completed = 0;
 
         for (var i = 0; i < 200; i++)
-            lane.TryPost(() => { completed++; return ValueTask.CompletedTask; });
+            lane.TryPost(() =>
+            {
+                completed++;
+                return ValueTask.CompletedTask;
+            });
 
         await lane.DisposeAsync();
 

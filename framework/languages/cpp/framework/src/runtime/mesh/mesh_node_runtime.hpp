@@ -67,43 +67,32 @@ enum class application_actor_session_bind_attempt_t : std::uint8_t
  * count), matching the dotnet/java bind-vs-authority-convergence retry
  * loops: stale_route and actor_not_ready are transient outcomes that a
  * later attempt can resolve once the authority converges. */
-constexpr bool can_retry_application_actor_session_bind (
-  application_actor_session_bind_outcome_t outcome) noexcept
+constexpr bool
+can_retry_application_actor_session_bind (application_actor_session_bind_outcome_t outcome) noexcept
 {
-    return outcome
-             == application_actor_session_bind_outcome_t::stale_route
-           || outcome
-                == application_actor_session_bind_outcome_t::
-                  actor_not_ready;
+    return outcome == application_actor_session_bind_outcome_t::stale_route
+           || outcome == application_actor_session_bind_outcome_t::actor_not_ready;
 }
 
 inline result_t<runtime::stateful::object_ref_t>
-make_local_application_actor_session_ref (
-  const runtime::stateful::object_ref_t &materialized,
-  const actor_ref_t &actor,
-  const runtime::spot_address_t &route)
+make_local_application_actor_session_ref (const runtime::stateful::object_ref_t &materialized,
+                                          const actor_ref_t &actor,
+                                          const runtime::spot_address_t &route)
 {
-    if (materialized.kind
-          != runtime::stateful::object_kind_t::actor
+    if (materialized.kind != runtime::stateful::object_kind_t::actor
         || materialized.key != actor.actor_id ().value ()
         || materialized.object_generation != actor.object_generation ()
         || route.object_generation != actor.object_generation ()
-        || route.authority_owner_generation == 0
-        || route.mesh_name.empty ()
-        || route.node_generation == 0
-        || route.owner.lease_generation <= 0) {
+        || route.authority_owner_generation == 0 || route.mesh_name.empty ()
+        || route.node_generation == 0 || route.owner.lease_generation <= 0) {
         return result_t<runtime::stateful::object_ref_t>::failure (
           framework_error_kind_t::unavailable,
           "Local Actor materialization does not match its Location route");
     }
-    return result_t<runtime::stateful::object_ref_t>::success (
-      runtime::stateful::object_ref_t{
-        runtime::stateful::object_kind_t::actor,
-        std::string (actor.actor_id ().value ()),
-        actor.object_generation (),
-        route.authority_owner_generation,
-        route.mesh_name,
-        route.node_rid.to_string ()});
+    return result_t<runtime::stateful::object_ref_t>::success (runtime::stateful::object_ref_t{
+      runtime::stateful::object_kind_t::actor, std::string (actor.actor_id ().value ()),
+      actor.object_generation (), route.authority_owner_generation, route.mesh_name,
+      route.node_rid.to_string ()});
 }
 
 namespace host = zlink::framework::runtime::host;
@@ -170,9 +159,8 @@ struct bound_session_relocation_route_t
     std::uint64_t binding_generation = 0;
     std::uint64_t observed_sequence = 0;
 
-    friend bool operator== (
-      const bound_session_relocation_route_t &,
-      const bound_session_relocation_route_t &) = default;
+    friend bool operator== (const bound_session_relocation_route_t &,
+                            const bound_session_relocation_route_t &) = default;
 };
 
 class mesh_node_runtime_t
@@ -271,75 +259,81 @@ class mesh_node_runtime_t
                               std::chrono::milliseconds timeout) const;
 
     task_t<zlink::submit_result_t> send_to_node (const zlink::routing_id_t &target,
-                                         const std::vector<zlink::message_t> &parts,
-                                         std::vector<std::uint8_t> metadata = {});
+                                                 const std::vector<zlink::message_t> &parts,
+                                                 std::vector<std::uint8_t> metadata = {});
     task_t<zlink::submit_result_t> send_to_node (const zlink::routing_id_t &target,
-                                         std::vector<zlink::message_t> &&parts,
-                                         std::vector<std::uint8_t> metadata = {});
-    task_t<zlink::submit_result_t> send_to_node (const zlink::routing_id_t &target,
-                                         const std::vector<zlink::message_t> &parts,
-                                         const std::map<std::string, std::string> &metadata);
+                                                 std::vector<zlink::message_t> &&parts,
+                                                 std::vector<std::uint8_t> metadata = {});
+    task_t<zlink::submit_result_t>
+    send_to_node (const zlink::routing_id_t &target,
+                  const std::vector<zlink::message_t> &parts,
+                  const std::map<std::string, std::string> &metadata);
     task_t<zlink::submit_result_t> request_to_node (const zlink::routing_id_t &target,
-                                            const std::vector<zlink::message_t> &parts,
-                                            host::pending_operation_t &operation_id,
-                                            std::chrono::milliseconds timeout,
-                                            std::vector<std::uint8_t> metadata = {});
-    task_t<zlink::submit_result_t> request_to_node (const zlink::routing_id_t &target,
-                                            const std::vector<zlink::message_t> &parts,
-                                            host::pending_operation_t &operation_id,
-                                            std::chrono::milliseconds timeout,
-                                            const std::map<std::string, std::string> &metadata);
+                                                    const std::vector<zlink::message_t> &parts,
+                                                    host::pending_operation_t &operation_id,
+                                                    std::chrono::milliseconds timeout,
+                                                    std::vector<std::uint8_t> metadata = {});
+    task_t<zlink::submit_result_t>
+    request_to_node (const zlink::routing_id_t &target,
+                     const std::vector<zlink::message_t> &parts,
+                     host::pending_operation_t &operation_id,
+                     std::chrono::milliseconds timeout,
+                     const std::map<std::string, std::string> &metadata);
     task_t<zlink::submit_result_t> send_to_channel (const std::string &channel_name,
-                                            const std::vector<zlink::message_t> &parts,
-                                            std::vector<std::uint8_t> metadata = {});
-    task_t<zlink::submit_result_t> send_to_channel (const std::string &channel_name,
-                                            const std::vector<zlink::message_t> &parts,
-                                            const std::map<std::string, std::string> &metadata);
+                                                    const std::vector<zlink::message_t> &parts,
+                                                    std::vector<std::uint8_t> metadata = {});
+    task_t<zlink::submit_result_t>
+    send_to_channel (const std::string &channel_name,
+                     const std::vector<zlink::message_t> &parts,
+                     const std::map<std::string, std::string> &metadata);
     task_t<zlink::submit_result_t> request_to_channel (const std::string &channel_name,
-                                               const std::vector<zlink::message_t> &parts,
-                                               host::pending_operation_t &operation_id,
-                                               std::chrono::milliseconds timeout,
-                                               std::vector<std::uint8_t> metadata = {});
-    task_t<zlink::submit_result_t> request_to_channel (const std::string &channel_name,
-                                               const std::vector<zlink::message_t> &parts,
-                                               host::pending_operation_t &operation_id,
-                                               std::chrono::milliseconds timeout,
-                                               const std::map<std::string, std::string> &metadata);
+                                                       const std::vector<zlink::message_t> &parts,
+                                                       host::pending_operation_t &operation_id,
+                                                       std::chrono::milliseconds timeout,
+                                                       std::vector<std::uint8_t> metadata = {});
+    task_t<zlink::submit_result_t>
+    request_to_channel (const std::string &channel_name,
+                        const std::vector<zlink::message_t> &parts,
+                        host::pending_operation_t &operation_id,
+                        std::chrono::milliseconds timeout,
+                        const std::map<std::string, std::string> &metadata);
     host::spot_handle_t get_or_create_spot (std::string spot_id);
     task_t<zlink::submit_result_t> send_to_spot (const std::string &source_spot_id,
-                                         const zlink::routing_id_t &target_node_rid,
-                                         const std::string &target_spot_id,
-                                         std::uint64_t target_spot_generation,
-                                         const std::vector<zlink::message_t> &parts,
-                                         std::vector<std::uint8_t> metadata = {});
+                                                 const zlink::routing_id_t &target_node_rid,
+                                                 const std::string &target_spot_id,
+                                                 std::uint64_t target_spot_generation,
+                                                 const std::vector<zlink::message_t> &parts,
+                                                 std::vector<std::uint8_t> metadata = {});
     task_t<zlink::submit_result_t> request_to_spot (const std::string &source_spot_id,
-                                            const zlink::routing_id_t &target_node_rid,
-                                            const std::string &target_spot_id,
-                                            std::uint64_t target_spot_generation,
-                                            const std::vector<zlink::message_t> &parts,
-                                            host::pending_operation_t &operation_id,
-                                            std::chrono::milliseconds timeout,
-                                            std::vector<std::uint8_t> metadata = {});
+                                                    const zlink::routing_id_t &target_node_rid,
+                                                    const std::string &target_spot_id,
+                                                    std::uint64_t target_spot_generation,
+                                                    const std::vector<zlink::message_t> &parts,
+                                                    host::pending_operation_t &operation_id,
+                                                    std::chrono::milliseconds timeout,
+                                                    std::vector<std::uint8_t> metadata = {});
     host::actor_handle_t create_actor (std::string actor_type,
                                        std::string actor_id,
                                        const std::vector<zlink::message_t> &creation_parts = {},
                                        std::chrono::milliseconds timeout = {});
-    task_t<zlink::submit_result_t> send_to_actor (const actor_ref_t &target,
-                                          const std::vector<zlink::message_t> &parts,
-                                          std::vector<std::uint8_t> metadata = {},
-                                          std::uint64_t authority_owner_generation = 0,
-                                          std::uint64_t owner_lease_generation = 0,
-                                          std::optional<runtime::protocol::actor_message_header_t::bound_session_source_t>
-                                            bound_session_source = std::nullopt);
-    task_t<zlink::submit_result_t> request_to_actor (const actor_ref_t &target,
-                                             const std::vector<zlink::message_t> &parts,
-                                             host::pending_operation_t &operation_id,
-                                             std::chrono::milliseconds timeout,
-                                             std::vector<std::uint8_t> metadata = {},
-                                             std::uint64_t authority_owner_generation = 0,
-                                             std::uint64_t owner_lease_generation = 0,
-                                             std::optional<runtime::protocol::actor_message_header_t::bound_session_source_t>
-                                               bound_session_source = std::nullopt);
+    task_t<zlink::submit_result_t>
+    send_to_actor (const actor_ref_t &target,
+                   const std::vector<zlink::message_t> &parts,
+                   std::vector<std::uint8_t> metadata = {},
+                   std::uint64_t authority_owner_generation = 0,
+                   std::uint64_t owner_lease_generation = 0,
+                   std::optional<runtime::protocol::actor_message_header_t::bound_session_source_t>
+                     bound_session_source = std::nullopt);
+    task_t<zlink::submit_result_t> request_to_actor (
+      const actor_ref_t &target,
+      const std::vector<zlink::message_t> &parts,
+      host::pending_operation_t &operation_id,
+      std::chrono::milliseconds timeout,
+      std::vector<std::uint8_t> metadata = {},
+      std::uint64_t authority_owner_generation = 0,
+      std::uint64_t owner_lease_generation = 0,
+      std::optional<runtime::protocol::actor_message_header_t::bound_session_source_t>
+        bound_session_source = std::nullopt);
     zlink::context_t &native_context ();
     host::public_host_runtime_t &native_node ();
     bool prepare_actor_transfer (const host::actor_transfer_prepare_t &prepare,
@@ -380,32 +374,30 @@ class mesh_node_runtime_t
       std::string application_content_type = {});
     result_t<std::shared_ptr<deferred_barrier_t>>
     reserve_application_actor_join_barrier (const actor_ref_t &actor);
-    task_t<std::optional<zlink::message_t>>
-    relay_application_actor (const actor_ref_t &actor,
-                             const stream_header_t &header,
-                             const zlink::message_t &payload,
-                             std::chrono::milliseconds timeout,
-                             bool await_remote_admission = false,
-                             std::optional<bound_session_relay_source_t>
-                               bound_session_source = std::nullopt);
+    task_t<std::optional<zlink::message_t>> relay_application_actor (
+      const actor_ref_t &actor,
+      const stream_header_t &header,
+      const zlink::message_t &payload,
+      std::chrono::milliseconds timeout,
+      bool await_remote_admission = false,
+      std::optional<bound_session_relay_source_t> bound_session_source = std::nullopt);
     task_t<std::optional<zlink::message_t>>
     relay_application_actor (const actor_ref_t &actor,
                              const runtime::messaging::envelope_header_t &header,
                              const zlink::message_t &payload,
                              std::chrono::milliseconds timeout);
-    task_t<std::optional<zlink::message_t>>
-    relay_application_actor (actor_ref_t actor,
-                             runtime::messaging::envelope_header_t header,
-                             zlink::message_t payload,
-                             std::chrono::milliseconds timeout,
-                             zlink::routing_id_t source_node,
-                             runtime::protocol::actor_route_fence_t stale_route,
-                             std::uint8_t hop_count,
-                             runtime::protocol::wire_operation_id_t operation,
-                             std::uint64_t reply_route_id,
-                             bool await_remote_admission = false,
-                             std::optional<bound_session_relay_source_t>
-                               bound_session_source = std::nullopt);
+    task_t<std::optional<zlink::message_t>> relay_application_actor (
+      actor_ref_t actor,
+      runtime::messaging::envelope_header_t header,
+      zlink::message_t payload,
+      std::chrono::milliseconds timeout,
+      zlink::routing_id_t source_node,
+      runtime::protocol::actor_route_fence_t stale_route,
+      std::uint8_t hop_count,
+      runtime::protocol::wire_operation_id_t operation,
+      std::uint64_t reply_route_id,
+      bool await_remote_admission = false,
+      std::optional<bound_session_relay_source_t> bound_session_source = std::nullopt);
     task_t<application_actor_session_bind_outcome_t>
     bind_application_actor_session (const actor_ref_t &actor,
                                     const zlink::routing_id_t &session_rid,
@@ -414,21 +406,18 @@ class mesh_node_runtime_t
                                     std::chrono::milliseconds timeout);
     /* Coroutine: parameters are taken by value because the caller's frame can
      * unwind before the first resume (arguments must survive suspension). */
-    task_t<void> retire_application_actor_session (
-      runtime::stateful::stream_binding_t binding,
-      zlink::routing_id_t session_rid,
-      std::chrono::milliseconds timeout);
+    task_t<void> retire_application_actor_session (runtime::stateful::stream_binding_t binding,
+                                                   zlink::routing_id_t session_rid,
+                                                   std::chrono::milliseconds timeout);
     std::optional<runtime::spot_address_t>
     resolve_application_actor_route (const actor_ref_t &actor) const;
     std::optional<runtime::spot_address_t>
-    refresh_application_actor_route (
-      const actor_ref_t &actor,
-      const runtime::spot_address_t &stale_route) const;
+    refresh_application_actor_route (const actor_ref_t &actor,
+                                     const runtime::spot_address_t &stale_route) const;
     task_t<std::optional<runtime::spot_address_t>>
-    wait_for_application_actor_route_change (
-      const actor_ref_t &actor,
-      const runtime::spot_address_t &stale_route,
-      std::chrono::milliseconds timeout) const;
+    wait_for_application_actor_route_change (const actor_ref_t &actor,
+                                             const runtime::spot_address_t &stale_route,
+                                             std::chrono::milliseconds timeout) const;
     task_t<void> notify_application_actor_disconnected (const actor_ref_t &actor,
                                                         const node_rid_t &target_node,
                                                         std::chrono::milliseconds timeout);
@@ -436,13 +425,13 @@ class mesh_node_runtime_t
     wait_for_completion (const host::pending_operation_t &operation,
                          std::chrono::milliseconds timeout,
                          std::optional<zlink::routing_id_t> target = std::nullopt);
-    task_t<operation_completion_t>
-    await_completion (const host::pending_operation_t &operation);
-    task_t<std::size_t> dispatch_ready (const std::function<void (const host::ready_record_t &,
-                                                          const host::receive_record_t &,
-                                                          std::vector<zlink::message_t>)> &dispatch,
-                                bool accept_application_receive = true,
-      const std::function<bool ()> &next_application_receive = {});
+    task_t<operation_completion_t> await_completion (const host::pending_operation_t &operation);
+    task_t<std::size_t>
+    dispatch_ready (const std::function<void (const host::ready_record_t &,
+                                              const host::receive_record_t &,
+                                              std::vector<zlink::message_t>)> &dispatch,
+                    bool accept_application_receive = true,
+                    const std::function<bool ()> &next_application_receive = {});
     host::node_status_t status () const;
     void dispatch_message_follow (const runtime::protocol::message_follow_notice_t &notice);
     /* Admitted RouteMesh membership size. Vertical and E2E checks wait on this
@@ -451,9 +440,8 @@ class mesh_node_runtime_t
     bool has_admitted_peer (const zlink::routing_id_t &peer_rid,
                             std::uint64_t lifecycle_generation) const;
     bool has_admitted_peer (const zlink::routing_id_t &peer_rid) const;
-    std::optional<std::uint64_t> admitted_peer_epoch (
-      const zlink::routing_id_t &peer_rid,
-      std::uint64_t lifecycle_generation) const;
+    std::optional<std::uint64_t> admitted_peer_epoch (const zlink::routing_id_t &peer_rid,
+                                                      std::uint64_t lifecycle_generation) const;
     struct observed_spot_authority_t
     {
         std::uint64_t target_node_generation = 0;
@@ -466,22 +454,21 @@ class mesh_node_runtime_t
     // testing this gate. Observing an authority is not sufficient on its own --
     // the target peer must also be admitted at exactly the observed
     // lifecycle generation (checked at the call site, not here).
-    void observe_spot_authority (
-      const zlink::routing_id_t &target_node_rid,
-      const std::string &target_spot_id,
-      std::uint64_t object_generation,
-      std::uint64_t target_node_generation,
-      std::uint64_t authority_owner_generation,
-      std::uint64_t owner_lease_generation);
+    void observe_spot_authority (const zlink::routing_id_t &target_node_rid,
+                                 const std::string &target_spot_id,
+                                 std::uint64_t object_generation,
+                                 std::uint64_t target_node_generation,
+                                 std::uint64_t authority_owner_generation,
+                                 std::uint64_t owner_lease_generation);
     // Read-only lookup exposed for verification: the gate's only input.
-    std::optional<observed_spot_authority_t> observed_spot_authority (
-      const zlink::routing_id_t &target_node_rid,
-      const std::string &target_spot_id,
-      std::uint64_t object_generation) const;
+    std::optional<observed_spot_authority_t>
+    observed_spot_authority (const zlink::routing_id_t &target_node_rid,
+                             const std::string &target_spot_id,
+                             std::uint64_t object_generation) const;
     // Negotiated receive chunk limit from an accepted actorJoin(28)
     // admission reply (spec 51 §9), keyed by actor identity.
-    std::optional<std::uint32_t> negotiated_receive_chunk_limit_bytes (
-      const actor_ref_t &actor) const;
+    std::optional<std::uint32_t>
+    negotiated_receive_chunk_limit_bytes (const actor_ref_t &actor) const;
     std::string mesh_name () const;
     std::optional<zlink::routing_id_t> routing_id () const;
     std::string listen_endpoint () const;
@@ -531,67 +518,59 @@ class mesh_node_runtime_t
     // sealed transfer each have a separate named coroutine frame.
     struct remote_actor_join_state_t;
 
-    task_t<actor_join_reply_t> join_remote_application_actor_to_spot (
-      std::shared_ptr<remote_actor_join_state_t> state);
-    task_t<actor_join_reply_t> admit_remote_application_actor_join (
-      std::shared_ptr<remote_actor_join_state_t> state);
-    task_t<actor_join_reply_t> seal_remote_application_actor_join (
-      std::shared_ptr<remote_actor_join_state_t> state);
-    task_t<actor_join_reply_t> seal_remote_application_actor_join_call (
-      std::shared_ptr<remote_actor_join_state_t> state);
-    task_t<actor_join_reply_t> prepare_remote_application_actor_join (
-      std::shared_ptr<remote_actor_join_state_t> state);
-    task_t<actor_join_reply_t> finalize_remote_application_actor_join (
-      std::shared_ptr<remote_actor_join_state_t> state);
-    result_t<void> deliver_remote_actor_join (
-      const remote_actor_join_state_t &state,
-      const result_t<actor_join_reply_t> &joined);
-    result_t<actor_join_reply_t> fail_remote_actor_join (
-      const remote_actor_join_state_t &state,
-      const result_t<actor_join_reply_t> &failed,
-      std::string message);
-    task_t<bool> abort_remote_actor_join_seal (
-      std::shared_ptr<remote_actor_join_state_t> state);
-    task_t<actor_join_reply_t> complete_remote_application_actor_join (
-      std::shared_ptr<remote_actor_join_state_t> state);
-    task_t<runtime::messaging::message_parts_t> request_actor_join_spot_route (
-      const runtime::spot_address_t &target,
-      runtime::messaging::message_parts_t encoded,
-      std::chrono::milliseconds timeout);
-    task_t<actor_join_reply_t> admit_remote_application_actor_join_via_wire (
-      std::shared_ptr<remote_actor_join_state_t> state,
-      observed_spot_authority_t observed);
+    task_t<actor_join_reply_t>
+    join_remote_application_actor_to_spot (std::shared_ptr<remote_actor_join_state_t> state);
+    task_t<actor_join_reply_t>
+    admit_remote_application_actor_join (std::shared_ptr<remote_actor_join_state_t> state);
+    task_t<actor_join_reply_t>
+    seal_remote_application_actor_join (std::shared_ptr<remote_actor_join_state_t> state);
+    task_t<actor_join_reply_t>
+    seal_remote_application_actor_join_call (std::shared_ptr<remote_actor_join_state_t> state);
+    task_t<actor_join_reply_t>
+    prepare_remote_application_actor_join (std::shared_ptr<remote_actor_join_state_t> state);
+    task_t<actor_join_reply_t>
+    finalize_remote_application_actor_join (std::shared_ptr<remote_actor_join_state_t> state);
+    result_t<void> deliver_remote_actor_join (const remote_actor_join_state_t &state,
+                                              const result_t<actor_join_reply_t> &joined);
+    result_t<actor_join_reply_t> fail_remote_actor_join (const remote_actor_join_state_t &state,
+                                                         const result_t<actor_join_reply_t> &failed,
+                                                         std::string message);
+    task_t<bool> abort_remote_actor_join_seal (std::shared_ptr<remote_actor_join_state_t> state);
+    task_t<actor_join_reply_t>
+    complete_remote_application_actor_join (std::shared_ptr<remote_actor_join_state_t> state);
+    task_t<runtime::messaging::message_parts_t>
+    request_actor_join_spot_route (const runtime::spot_address_t &target,
+                                   runtime::messaging::message_parts_t encoded,
+                                   std::chrono::milliseconds timeout);
+    task_t<actor_join_reply_t>
+    admit_remote_application_actor_join_via_wire (std::shared_ptr<remote_actor_join_state_t> state,
+                                                  observed_spot_authority_t observed);
 
   private:
-
     //  Coroutine: parameters are taken by value so the frame owns them for
     //  the whole suspended seal exchange (callers pass temporaries).
     task_t<session_relocation_seal_outcome_t> seal_bound_sessions (
-      std::vector<std::pair<runtime::stateful::object_ref_t,
-                            authority_snapshot_t>> participants,
+      std::vector<std::pair<runtime::stateful::object_ref_t, authority_snapshot_t>> participants,
       runtime::protocol::relocation_id_t relocation,
       runtime::protocol::relocation_coordinator_fence_t coordinator,
       std::chrono::milliseconds timeout);
-    task_t<std::optional<std::vector<
-      runtime::protocol::session_relocation_route_t>>>
+    task_t<std::optional<std::vector<runtime::protocol::session_relocation_route_t>>>
     capture_session_routes (
-      std::vector<std::pair<runtime::stateful::object_ref_t,
-                            authority_snapshot_t>> participants,
+      std::vector<std::pair<runtime::stateful::object_ref_t, authority_snapshot_t>> participants,
       runtime::protocol::relocation_id_t relocation,
       runtime::protocol::relocation_coordinator_fence_t coordinator,
       mesh_node_descriptor_t target,
       std::shared_ptr<session_relocation_seal_outcome_t> outcome,
       std::shared_ptr<bool> attempted);
-    runtime::protocol::session_relocation_route_t
-    make_session_relocation_route (
+    runtime::protocol::session_relocation_route_t make_session_relocation_route (
       const session_relocation_checkpoint_t &checkpoint,
       const zlink::routing_id_t &target_node,
       std::uint64_t target_node_generation,
       runtime::protocol::session_relocation_route_action_t action) const;
-    task_t<bool> route_bound_sessions (
-      const std::vector<session_relocation_checkpoint_t> &checkpoints,
-      const mesh_node_descriptor_t &target,
-      runtime::protocol::session_relocation_route_action_t action);
+    task_t<bool>
+    route_bound_sessions (const std::vector<session_relocation_checkpoint_t> &checkpoints,
+                          const mesh_node_descriptor_t &target,
+                          runtime::protocol::session_relocation_route_action_t action);
 
     struct peer_callback_gate_t
     {
@@ -608,9 +587,10 @@ class mesh_node_runtime_t
                                       const std::vector<zlink::message_t> &parts,
                                       const actor_ref_t &actor,
                                       const std::shared_ptr<mesh_node_builder_state_t> &state);
-    result_t<actor_join_reply_t> wait_for_join_completion (const host::pending_operation_t &operation,
-                                                           const actor_ref_t &actor,
-                                                           std::chrono::milliseconds timeout);
+    result_t<actor_join_reply_t>
+    wait_for_join_completion (const host::pending_operation_t &operation,
+                              const actor_ref_t &actor,
+                              std::chrono::milliseconds timeout);
     std::optional<zlink::submit_result_t>
     classify_node_direct_target (const zlink::routing_id_t &target) const;
     std::shared_ptr<mesh_node_builder_state_t> _state;
@@ -627,16 +607,16 @@ class mesh_node_runtime_t
       location_options_t{}.session_relocation_seal_timeout;
     host::actor_create_operation_target_t _actor_create_target;
     runtime::offload_executor_t _observed_spot_authority_lane_executor;
-    mutable runtime::state_lane_t
-      _observed_spot_authority_lane{_observed_spot_authority_lane_executor};
+    mutable runtime::state_lane_t _observed_spot_authority_lane{
+      _observed_spot_authority_lane_executor};
     std::map<std::string, observed_spot_authority_t> _observed_spot_authorities;
     void record_negotiated_receive_chunk_limit (const actor_ref_t &actor,
                                                 std::uint32_t limit_bytes);
     std::uint64_t negotiated_receive_chunk_limit_bytes (
       const std::vector<runtime::stateful::object_ref_t> &sources) const;
     runtime::offload_executor_t _negotiated_receive_chunk_limit_lane_executor;
-    mutable runtime::state_lane_t
-      _negotiated_receive_chunk_limit_lane{_negotiated_receive_chunk_limit_lane_executor};
+    mutable runtime::state_lane_t _negotiated_receive_chunk_limit_lane{
+      _negotiated_receive_chunk_limit_lane_executor};
     std::map<std::string, std::uint32_t> _negotiated_receive_chunk_limits;
     host::instance_spot_activation_materializer_t _instance_spot_materializer;
     std::shared_ptr<runtime::stateful::relocation_store_port_t> _instance_spot_relocations;
@@ -659,17 +639,15 @@ class mesh_node_runtime_t
     std::shared_ptr<peer_callback_gate_t> _peer_callback_gate =
       std::make_shared<peer_callback_gate_t> ();
     runtime::offload_executor_t _message_follow_subscription_lane_executor;
-    runtime::state_lane_t
-      _message_follow_subscription_lane{_message_follow_subscription_lane_executor};
+    runtime::state_lane_t _message_follow_subscription_lane{
+      _message_follow_subscription_lane_executor};
     message_follow_subscription_id_t _next_message_follow_subscription_id = 1;
-    std::map<message_follow_subscription_id_t,
-             std::shared_ptr<message_follow_subscription_state_t>>
+    std::map<message_follow_subscription_id_t, std::shared_ptr<message_follow_subscription_state_t>>
       _message_follow_subscriptions;
     std::map<std::string, host::spot_handle_t> _spots;
     std::map<std::string, host::actor_handle_t> _actors;
     runtime::offload_executor_t _peer_connection_intent_lane_executor;
-    runtime::state_lane_t
-      _peer_connection_intent_lane{_peer_connection_intent_lane_executor};
+    runtime::state_lane_t _peer_connection_intent_lane{_peer_connection_intent_lane_executor};
     std::atomic_uint64_t _pending_application_callbacks{0};
     std::atomic_uint64_t _active_application_callbacks{0};
     std::atomic_uint64_t _active_completion_waiters{0};
@@ -677,7 +655,6 @@ class mesh_node_runtime_t
     std::mutex _completion_mutex;
     std::condition_variable _completion_ready;
     std::atomic_bool _stopping{false};
-
 };
 
 // actorJoin(28) receiver admission, extracted so unit tests can pin its

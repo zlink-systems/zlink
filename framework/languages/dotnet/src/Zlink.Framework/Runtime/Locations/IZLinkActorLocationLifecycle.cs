@@ -12,15 +12,18 @@ internal interface IZLinkActorLocationLifecycle
         Func<CancellationToken, ValueTask>? deactivate,
         Func<CancellationToken, ValueTask<TActor>> activate,
         CancellationToken cancellationToken,
-        ZLinkActorClaimMode claimMode = ZLinkActorClaimMode.NewOwner)
+        ZLinkActorClaimMode claimMode = ZLinkActorClaimMode.NewOwner
+    )
         where TActor : class;
 
     ValueTask PublishActorRefAsync(
         ZLinkActorId actorId,
         ActorRef actorRef,
-        CancellationToken cancellationToken = default);
+        CancellationToken cancellationToken = default
+    );
 
     ValueTask ReleaseActorAsync(
         ZLinkActorId actorId,
-        CancellationToken cancellationToken = default);
+        CancellationToken cancellationToken = default
+    );
 }

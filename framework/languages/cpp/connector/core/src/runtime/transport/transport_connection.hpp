@@ -53,10 +53,7 @@ class transport_connect_control_t final
             handler ();
     }
 
-    bool cancelled () const noexcept
-    {
-        return _cancelled.load (std::memory_order_acquire);
-    }
+    bool cancelled () const noexcept { return _cancelled.load (std::memory_order_acquire); }
 
   private:
     mutable std::mutex _mutex;
@@ -76,21 +73,19 @@ auto run_serialized_sync (boost::asio::io_context &io_context,
 
     auto promise = std::make_shared<std::promise<result_type>> ();
     auto ready = promise->get_future ();
-    boost::asio::post (
-      strand,
-      [promise, function = std::move (function)] () mutable {
-          try {
-              if constexpr (std::is_void_v<result_type>) {
-                  function ();
-                  promise->set_value ();
-              } else {
-                  promise->set_value (function ());
-              }
-          }
-          catch (...) {
-              promise->set_exception (std::current_exception ());
-          }
-      });
+    boost::asio::post (strand, [promise, function = std::move (function)] () mutable {
+        try {
+            if constexpr (std::is_void_v<result_type>) {
+                function ();
+                promise->set_value ();
+            } else {
+                promise->set_value (function ());
+            }
+        }
+        catch (...) {
+            promise->set_exception (std::current_exception ());
+        }
+    });
     return ready.get ();
 }
 
@@ -109,9 +104,8 @@ class stream_connection_t : public std::enable_shared_from_this<stream_connectio
     // before Beast materializes it. Byte-stream transports do not need a
     // transport-level limit and keep the default implementation.
     virtual void set_read_message_limit (std::size_t) {}
-    virtual bool
-    wait_readable_until (std::chrono::steady_clock::time_point deadline,
-                         boost::system::error_code &error)
+    virtual bool wait_readable_until (std::chrono::steady_clock::time_point deadline,
+                                      boost::system::error_code &error)
     {
         (void) deadline;
         error.clear ();

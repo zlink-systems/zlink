@@ -3,6 +3,17 @@ package systems.zlink.framework.runtime.internal.locations;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertInstanceOf;
 
+import org.junit.jupiter.api.Test;
+
+import systems.zlink.contracts.core.RoutingId;
+import systems.zlink.framework.locations.ZLinkActivationConcurrency;
+import systems.zlink.framework.locations.ZLinkCapacityUsage;
+import systems.zlink.framework.locations.ZLinkMeshNodeObjectRole;
+import systems.zlink.framework.locations.ZLinkPageRequest;
+import systems.zlink.framework.locations.ZLinkPlacementCapacity;
+import systems.zlink.framework.runtime.host.ZLinkFrameworkRuntimeState;
+import systems.zlink.framework.runtime.locations.ZLinkInMemoryProviderLocationStore;
+
 import java.time.Clock;
 import java.time.Duration;
 import java.time.Instant;
@@ -11,297 +22,325 @@ import java.time.ZoneOffset;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
-import org.junit.jupiter.api.Test;
-import systems.zlink.contracts.core.RoutingId;
-import systems.zlink.framework.locations.ZLinkActivationConcurrency;
-import systems.zlink.framework.locations.ZLinkCapacityUsage;
-import systems.zlink.framework.runtime.internal.locations.ZLinkLocationWriteIntent;
-import systems.zlink.framework.runtime.internal.locations.ZLinkLocationWriteStatus;
-import systems.zlink.framework.runtime.internal.locations.ZLinkMeshNodeDescriptor;
-import systems.zlink.framework.runtime.internal.locations.ZLinkMeshNodeDescriptorKey;
-import systems.zlink.framework.locations.ZLinkMeshNodeObjectRole;
-import systems.zlink.framework.runtime.internal.locations.ZLinkOwnerLeaseClaimed;
-import systems.zlink.framework.locations.ZLinkPageRequest;
-import systems.zlink.framework.locations.ZLinkPlacementCapacity;
-import systems.zlink.framework.runtime.host.ZLinkFrameworkRuntimeState;
-import systems.zlink.framework.runtime.locations
-    .ZLinkInMemoryProviderLocationStore;
 
 class ZLinkProviderDescriptorRepositoryTest {
     @Test
-    void newClaimTakesOverDescriptorWhoseOwnerLeaseExpired()
-        throws Exception {
-        var clock = new MutableClock(
-            Instant.parse("2026-09-20T00:00:00Z"));
+    void newClaimTakesOverDescriptorWhoseOwnerLeaseExpired() throws Exception {
+        var clock = new MutableClock(Instant.parse("2026-09-20T00:00:00Z"));
         var provider = new ZLinkInMemoryProviderLocationStore(clock);
         var owners = new ZLinkProviderOwnerLeaseRepository(provider);
         var descriptors = new ZLinkProviderDescriptorRepository(provider);
-        var expiredOwner = assertInstanceOf(
-            ZLinkOwnerLeaseClaimed.class,
-            owners.claim("expired-descriptor-owner", Duration.ofMinutes(1))
-                .toCompletableFuture().get()).token();
+        var expiredOwner =
+                assertInstanceOf(
+                                ZLinkOwnerLeaseClaimed.class,
+                                owners.claim("expired-descriptor-owner", Duration.ofMinutes(1))
+                                        .toCompletableFuture()
+                                        .get())
+                        .token();
         assertEquals(
-            ZLinkLocationWriteStatus.STORED,
-            descriptors.updateMeshNode(
-                    descriptor(expiredOwner, 1),
-                    ZLinkLocationWriteIntent.NEW_CLAIM)
-                .toCompletableFuture().get().status());
+                ZLinkLocationWriteStatus.STORED,
+                descriptors
+                        .updateMeshNode(
+                                descriptor(expiredOwner, 1), ZLinkLocationWriteIntent.NEW_CLAIM)
+                        .toCompletableFuture()
+                        .get()
+                        .status());
 
         clock.advance(Duration.ofMinutes(1));
         assertInstanceOf(
-            ZLinkOwnerLeaseMissing.class,
-            owners.read(expiredOwner.ownerId()).toCompletableFuture().get());
-        var successor = assertInstanceOf(
-            ZLinkOwnerLeaseClaimed.class,
-            owners.claim("successor-descriptor-owner", Duration.ofMinutes(1))
-                .toCompletableFuture().get()).token();
+                ZLinkOwnerLeaseMissing.class,
+                owners.read(expiredOwner.ownerId()).toCompletableFuture().get());
+        var successor =
+                assertInstanceOf(
+                                ZLinkOwnerLeaseClaimed.class,
+                                owners.claim("successor-descriptor-owner", Duration.ofMinutes(1))
+                                        .toCompletableFuture()
+                                        .get())
+                        .token();
 
         assertEquals(
-            1,
-            Long.compareUnsigned(
-                successor.leaseGeneration(),
-                expiredOwner.leaseGeneration()));
+                1,
+                Long.compareUnsigned(successor.leaseGeneration(), expiredOwner.leaseGeneration()));
         assertEquals(
-            ZLinkLocationWriteStatus.STORED,
-            descriptors.updateMeshNode(
-                    descriptor(successor, 1),
-                    ZLinkLocationWriteIntent.NEW_CLAIM)
-                .toCompletableFuture().get().status());
+                ZLinkLocationWriteStatus.STORED,
+                descriptors
+                        .updateMeshNode(
+                                descriptor(successor, 1), ZLinkLocationWriteIntent.NEW_CLAIM)
+                        .toCompletableFuture()
+                        .get()
+                        .status());
     }
 
     @Test
-    void newClaimRejectsDescriptorWhoseOwnerLeaseIsLive()
-        throws Exception {
+    void newClaimRejectsDescriptorWhoseOwnerLeaseIsLive() throws Exception {
         var provider = new ZLinkInMemoryProviderLocationStore();
         var owners = new ZLinkProviderOwnerLeaseRepository(provider);
         var descriptors = new ZLinkProviderDescriptorRepository(provider);
-        var liveOwner = assertInstanceOf(
-            ZLinkOwnerLeaseClaimed.class,
-            owners.claim("live-descriptor-owner", Duration.ofMinutes(1))
-                .toCompletableFuture().get()).token();
+        var liveOwner =
+                assertInstanceOf(
+                                ZLinkOwnerLeaseClaimed.class,
+                                owners.claim("live-descriptor-owner", Duration.ofMinutes(1))
+                                        .toCompletableFuture()
+                                        .get())
+                        .token();
         assertEquals(
-            ZLinkLocationWriteStatus.STORED,
-            descriptors.updateMeshNode(
-                    descriptor(liveOwner, 1),
-                    ZLinkLocationWriteIntent.NEW_CLAIM)
-                .toCompletableFuture().get().status());
-        var contender = assertInstanceOf(
-            ZLinkOwnerLeaseClaimed.class,
-            owners.claim("contending-descriptor-owner", Duration.ofMinutes(1))
-                .toCompletableFuture().get()).token();
+                ZLinkLocationWriteStatus.STORED,
+                descriptors
+                        .updateMeshNode(
+                                descriptor(liveOwner, 1), ZLinkLocationWriteIntent.NEW_CLAIM)
+                        .toCompletableFuture()
+                        .get()
+                        .status());
+        var contender =
+                assertInstanceOf(
+                                ZLinkOwnerLeaseClaimed.class,
+                                owners.claim("contending-descriptor-owner", Duration.ofMinutes(1))
+                                        .toCompletableFuture()
+                                        .get())
+                        .token();
 
         assertEquals(
-            ZLinkLocationWriteStatus.REJECTED_CONFLICT,
-            descriptors.updateMeshNode(
-                    descriptor(contender, 1),
-                    ZLinkLocationWriteIntent.NEW_CLAIM)
-                .toCompletableFuture().get().status());
+                ZLinkLocationWriteStatus.REJECTED_CONFLICT,
+                descriptors
+                        .updateMeshNode(
+                                descriptor(contender, 1), ZLinkLocationWriteIntent.NEW_CLAIM)
+                        .toCompletableFuture()
+                        .get()
+                        .status());
     }
 
     @Test
-    void meshDescriptorUsesOwnerVersionFenceAndOpaqueSnapshot()
-        throws Exception {
+    void meshDescriptorUsesOwnerVersionFenceAndOpaqueSnapshot() throws Exception {
         var provider = new ZLinkInMemoryProviderLocationStore();
         var owners = new ZLinkProviderOwnerLeaseRepository(provider);
         var descriptors = new ZLinkProviderDescriptorRepository(provider);
-        var owner = assertInstanceOf(
-            ZLinkOwnerLeaseClaimed.class,
-            owners.claim("owner-a", Duration.ofMinutes(1))
-                .toCompletableFuture().get()).token();
+        var owner =
+                assertInstanceOf(
+                                ZLinkOwnerLeaseClaimed.class,
+                                owners.claim("owner-a", Duration.ofMinutes(1))
+                                        .toCompletableFuture()
+                                        .get())
+                        .token();
 
         var first = descriptor(owner, 1);
         assertEquals(
-            ZLinkLocationWriteStatus.STORED,
-            descriptors.updateMeshNode(
-                    first,
-                    ZLinkLocationWriteIntent.NEW_CLAIM)
-                .toCompletableFuture().get().status());
+                ZLinkLocationWriteStatus.STORED,
+                descriptors
+                        .updateMeshNode(first, ZLinkLocationWriteIntent.NEW_CLAIM)
+                        .toCompletableFuture()
+                        .get()
+                        .status());
         assertEquals(
-            first.rid(),
-            descriptors.listMeshNodes(
-                    "game",
-                    ZLinkPageRequest.firstPage())
-                .toCompletableFuture().get()
-                .items().getFirst().rid());
+                first.rid(),
+                descriptors
+                        .listMeshNodes("game", ZLinkPageRequest.firstPage())
+                        .toCompletableFuture()
+                        .get()
+                        .items()
+                        .getFirst()
+                        .rid());
 
         var renewed = descriptor(owner, 2);
         assertEquals(
-            ZLinkLocationWriteStatus.STORED,
-            descriptors.updateMeshNode(
-                    renewed,
-                    ZLinkLocationWriteIntent.RENEW)
-                .toCompletableFuture().get().status());
+                ZLinkLocationWriteStatus.STORED,
+                descriptors
+                        .updateMeshNode(renewed, ZLinkLocationWriteIntent.RENEW)
+                        .toCompletableFuture()
+                        .get()
+                        .status());
 
         owners.release(owner).toCompletableFuture().get();
         assertEquals(
-            ZLinkLocationWriteStatus.IGNORED_STALE,
-            descriptors.updateMeshNode(
-                    descriptor(owner, 3),
-                    ZLinkLocationWriteIntent.RENEW)
-                .toCompletableFuture().get().status());
+                ZLinkLocationWriteStatus.IGNORED_STALE,
+                descriptors
+                        .updateMeshNode(descriptor(owner, 3), ZLinkLocationWriteIntent.RENEW)
+                        .toCompletableFuture()
+                        .get()
+                        .status());
         assertEquals(
-            ZLinkLocationWriteStatus.STORED,
-            descriptors.removeMeshNode(
-                    new ZLinkMeshNodeDescriptorKey(
-                        "game",
-                        first.rid()),
-                    owner)
-                .toCompletableFuture().get());
+                ZLinkLocationWriteStatus.STORED,
+                descriptors
+                        .removeMeshNode(new ZLinkMeshNodeDescriptorKey("game", first.rid()), owner)
+                        .toCompletableFuture()
+                        .get());
     }
 
     @Test
-    void sameLifecycleRenewRejectsImmutableTopologyChanges()
-        throws Exception {
+    void sameLifecycleRenewRejectsImmutableTopologyChanges() throws Exception {
         var provider = new ZLinkInMemoryProviderLocationStore();
         var owners = new ZLinkProviderOwnerLeaseRepository(provider);
         var descriptors = new ZLinkProviderDescriptorRepository(provider);
-        var owner = assertInstanceOf(
-            ZLinkOwnerLeaseClaimed.class,
-            owners.claim("owner-a", Duration.ofMinutes(1))
-                .toCompletableFuture().get()).token();
+        var owner =
+                assertInstanceOf(
+                                ZLinkOwnerLeaseClaimed.class,
+                                owners.claim("owner-a", Duration.ofMinutes(1))
+                                        .toCompletableFuture()
+                                        .get())
+                        .token();
 
         assertEquals(
-            ZLinkLocationWriteStatus.STORED,
-            descriptors.updateMeshNode(
-                    descriptor(owner, 1),
-                    ZLinkLocationWriteIntent.NEW_CLAIM)
-                .toCompletableFuture().get().status());
+                ZLinkLocationWriteStatus.STORED,
+                descriptors
+                        .updateMeshNode(descriptor(owner, 1), ZLinkLocationWriteIntent.NEW_CLAIM)
+                        .toCompletableFuture()
+                        .get()
+                        .status());
 
-        for (ZLinkMeshNodeDescriptor changed : List.of(
-            descriptor(
-                owner, 2, "tcp://127.0.0.1:7001",
-                Map.of(), ZLinkMeshNodeObjectRole.SERVER, "security-a"),
-            descriptor(
-                owner, 2, "tcp://127.0.0.1:7000",
-                Map.of("events", 1), ZLinkMeshNodeObjectRole.SERVER,
-                "security-a"),
-            descriptor(
-                owner, 2, "tcp://127.0.0.1:7000",
-                Map.of(), ZLinkMeshNodeObjectRole.CLIENT, "security-a"),
-            descriptor(
-                owner, 2, "tcp://127.0.0.1:7000",
-                Map.of(), ZLinkMeshNodeObjectRole.SERVER, "security-b"))) {
+        for (ZLinkMeshNodeDescriptor changed :
+                List.of(
+                        descriptor(
+                                owner,
+                                2,
+                                "tcp://127.0.0.1:7001",
+                                Map.of(),
+                                ZLinkMeshNodeObjectRole.SERVER,
+                                "security-a"),
+                        descriptor(
+                                owner,
+                                2,
+                                "tcp://127.0.0.1:7000",
+                                Map.of("events", 1),
+                                ZLinkMeshNodeObjectRole.SERVER,
+                                "security-a"),
+                        descriptor(
+                                owner,
+                                2,
+                                "tcp://127.0.0.1:7000",
+                                Map.of(),
+                                ZLinkMeshNodeObjectRole.CLIENT,
+                                "security-a"),
+                        descriptor(
+                                owner,
+                                2,
+                                "tcp://127.0.0.1:7000",
+                                Map.of(),
+                                ZLinkMeshNodeObjectRole.SERVER,
+                                "security-b"))) {
             assertEquals(
-                ZLinkLocationWriteStatus.IGNORED_STALE,
-                descriptors.updateMeshNode(
-                        changed,
-                        ZLinkLocationWriteIntent.RENEW)
-                    .toCompletableFuture().get().status());
+                    ZLinkLocationWriteStatus.IGNORED_STALE,
+                    descriptors
+                            .updateMeshNode(changed, ZLinkLocationWriteIntent.RENEW)
+                            .toCompletableFuture()
+                            .get()
+                            .status());
         }
     }
 
     @Test
-    void fullRangeU64LifecycleGenerationRoundTripsThroughStore()
-        throws Exception {
+    void fullRangeU64LifecycleGenerationRoundTripsThroughStore() throws Exception {
         // dotnet issues lifecycleGeneration as a random full-range
         // unsigned 64-bit token (spec 13 section 7.1); values with bit 63
         // set must survive the decimal-string JSON encoding and the
         // signed-long parse on read (live failure:
         // "For input string: \"18282048283864059584\"").
-        long lifecycleGeneration =
-            Long.parseUnsignedLong("18282048283864059584");
+        long lifecycleGeneration = Long.parseUnsignedLong("18282048283864059584");
         var provider = new ZLinkInMemoryProviderLocationStore();
         var owners = new ZLinkProviderOwnerLeaseRepository(provider);
         var descriptors = new ZLinkProviderDescriptorRepository(provider);
-        var owner = assertInstanceOf(
-            ZLinkOwnerLeaseClaimed.class,
-            owners.claim("owner-a", Duration.ofMinutes(1))
-                .toCompletableFuture().get()).token();
+        var owner =
+                assertInstanceOf(
+                                ZLinkOwnerLeaseClaimed.class,
+                                owners.claim("owner-a", Duration.ofMinutes(1))
+                                        .toCompletableFuture()
+                                        .get())
+                        .token();
 
-        var published = new ZLinkMeshNodeDescriptor(
-            "game",
-            RoutingId.from("node-a"),
-            lifecycleGeneration,
-            1,
-            "tcp://127.0.0.1:7000",
-            Map.of(),
-            1,
-            List.of(),
-            ZLinkMeshNodeObjectRole.SERVER,
-            Optional.of(
-                "node-a-entry-00000000-0000-4000-8000-000000000001"),
-            100,
-            new ZLinkPlacementCapacity(
-                new ZLinkCapacityUsage(0, 0, 100),
-                new ZLinkCapacityUsage(0, 0, 100),
-                List.of()),
-            new ZLinkActivationConcurrency(0, 64),
-            Optional.empty(),
-            ZLinkFrameworkRuntimeState.SERVING,
-            "security-a",
-            owner.ownerId(),
-            owner.leaseGeneration(),
-            Instant.parse("2026-07-29T00:00:00Z"));
+        var published =
+                new ZLinkMeshNodeDescriptor(
+                        "game",
+                        RoutingId.from("node-a"),
+                        lifecycleGeneration,
+                        1,
+                        "tcp://127.0.0.1:7000",
+                        Map.of(),
+                        1,
+                        List.of(),
+                        ZLinkMeshNodeObjectRole.SERVER,
+                        Optional.of("node-a-entry-00000000-0000-4000-8000-000000000001"),
+                        100,
+                        new ZLinkPlacementCapacity(
+                                new ZLinkCapacityUsage(0, 0, 100),
+                                new ZLinkCapacityUsage(0, 0, 100),
+                                List.of()),
+                        new ZLinkActivationConcurrency(0, 64),
+                        Optional.empty(),
+                        ZLinkFrameworkRuntimeState.SERVING,
+                        "security-a",
+                        owner.ownerId(),
+                        owner.leaseGeneration(),
+                        Instant.parse("2026-07-29T00:00:00Z"));
         assertEquals(
-            ZLinkLocationWriteStatus.STORED,
-            descriptors.updateMeshNode(
-                    published,
-                    ZLinkLocationWriteIntent.NEW_CLAIM)
-                .toCompletableFuture().get().status());
+                ZLinkLocationWriteStatus.STORED,
+                descriptors
+                        .updateMeshNode(published, ZLinkLocationWriteIntent.NEW_CLAIM)
+                        .toCompletableFuture()
+                        .get()
+                        .status());
 
-        var listed = descriptors.listMeshNodes(
-                "game",
-                ZLinkPageRequest.firstPage())
-            .toCompletableFuture().get()
-            .items().getFirst();
+        var listed =
+                descriptors
+                        .listMeshNodes("game", ZLinkPageRequest.firstPage())
+                        .toCompletableFuture()
+                        .get()
+                        .items()
+                        .getFirst();
         assertEquals(lifecycleGeneration, listed.lifecycleGeneration());
-        assertEquals(
-            "18282048283864059584",
-            Long.toUnsignedString(listed.lifecycleGeneration()));
+        assertEquals("18282048283864059584", Long.toUnsignedString(listed.lifecycleGeneration()));
 
-        var read = descriptors.readMeshNode(
-                new ZLinkMeshNodeDescriptorKey("game", published.rid()),
-                () -> false)
-            .toCompletableFuture().get()
-            .orElseThrow();
+        var read =
+                descriptors
+                        .readMeshNode(
+                                new ZLinkMeshNodeDescriptorKey("game", published.rid()),
+                                () -> false)
+                        .toCompletableFuture()
+                        .get()
+                        .orElseThrow();
         assertEquals(lifecycleGeneration, read.lifecycleGeneration());
     }
 
     private static ZLinkMeshNodeDescriptor descriptor(
-        ZLinkLocationOwnerToken owner,
-        long revision) {
+            ZLinkLocationOwnerToken owner, long revision) {
         return descriptor(
-            owner,
-            revision,
-            "tcp://127.0.0.1:7000",
-            Map.of(),
-            ZLinkMeshNodeObjectRole.SERVER,
-            "security-a");
+                owner,
+                revision,
+                "tcp://127.0.0.1:7000",
+                Map.of(),
+                ZLinkMeshNodeObjectRole.SERVER,
+                "security-a");
     }
 
     private static ZLinkMeshNodeDescriptor descriptor(
-        ZLinkLocationOwnerToken owner,
-        long revision,
-        String endpoint,
-        Map<String, Integer> channels,
-        ZLinkMeshNodeObjectRole role,
-        String securityIdentity) {
+            ZLinkLocationOwnerToken owner,
+            long revision,
+            String endpoint,
+            Map<String, Integer> channels,
+            ZLinkMeshNodeObjectRole role,
+            String securityIdentity) {
         return new ZLinkMeshNodeDescriptor(
-            "game",
-            RoutingId.from("node-a"),
-            1,
-            revision,
-            endpoint,
-            channels,
-            1,
-            List.of(),
-            role,
-            role == ZLinkMeshNodeObjectRole.SERVER
-                ? Optional.of(
-                    "node-a-entry-00000000-0000-4000-8000-000000000001")
-                : Optional.empty(),
-            100,
-            new ZLinkPlacementCapacity(
-                new ZLinkCapacityUsage(0, 0, 100),
-                new ZLinkCapacityUsage(0, 0, 100),
-                List.of()),
-            new ZLinkActivationConcurrency(0, 64),
-            Optional.empty(),
-            ZLinkFrameworkRuntimeState.SERVING,
-            securityIdentity,
-            owner.ownerId(),
-            owner.leaseGeneration(),
-            Instant.parse("2026-07-29T00:00:00Z"));
+                "game",
+                RoutingId.from("node-a"),
+                1,
+                revision,
+                endpoint,
+                channels,
+                1,
+                List.of(),
+                role,
+                role == ZLinkMeshNodeObjectRole.SERVER
+                        ? Optional.of("node-a-entry-00000000-0000-4000-8000-000000000001")
+                        : Optional.empty(),
+                100,
+                new ZLinkPlacementCapacity(
+                        new ZLinkCapacityUsage(0, 0, 100),
+                        new ZLinkCapacityUsage(0, 0, 100),
+                        List.of()),
+                new ZLinkActivationConcurrency(0, 64),
+                Optional.empty(),
+                ZLinkFrameworkRuntimeState.SERVING,
+                securityIdentity,
+                owner.ownerId(),
+                owner.leaseGeneration(),
+                Instant.parse("2026-07-29T00:00:00Z"));
     }
 
     private static final class MutableClock extends Clock {

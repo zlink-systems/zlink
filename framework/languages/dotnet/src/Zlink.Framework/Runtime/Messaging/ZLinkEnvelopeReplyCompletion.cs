@@ -8,7 +8,8 @@ internal static class ZLinkEnvelopeReplyCompletion
         Action<TReply> complete,
         Action<Exception> fail,
         string operationName,
-        ZLinkCodecRegistryBuilder? codecs = null)
+        ZLinkCodecRegistryBuilder? codecs = null
+    )
     {
         try
         {
@@ -18,11 +19,14 @@ internal static class ZLinkEnvelopeReplyCompletion
                 return;
             }
 
-            complete(ZLinkEnvelopeReplyDecoder.Decode<TReply>(
-                reply,
-                $"{operationName} reply is empty.",
-                $"{operationName} failed.",
-                codecs));
+            complete(
+                ZLinkEnvelopeReplyDecoder.Decode<TReply>(
+                    reply,
+                    $"{operationName} reply is empty.",
+                    $"{operationName} failed.",
+                    codecs
+                )
+            );
         }
         catch (Exception exception)
         {

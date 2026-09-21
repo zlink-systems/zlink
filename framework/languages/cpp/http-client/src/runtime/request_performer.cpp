@@ -157,12 +157,11 @@ class request_performer_t
     }
 
     template <typename TBody>
-    http::request<TBody>
-    build_wire_request (const hop_target_t &origin,
-                        const hop_target_t &hop,
-                        http_method_t method,
-                        bool has_body,
-                        bool absolute_form) const
+    http::request<TBody> build_wire_request (const hop_target_t &origin,
+                                             const hop_target_t &hop,
+                                             http_method_t method,
+                                             bool has_body,
+                                             bool absolute_form) const
     {
         const auto wire_target =
           absolute_form ? "http://" + hop.host + ":" + hop.port + hop.target : hop.target;
@@ -172,9 +171,9 @@ class request_performer_t
                                   || (hop.scheme == "https" && hop.port == "443");
         wire.set (http::field::host, default_port ? hop.host : hop.host + ":" + hop.port);
         // Version identity: derived from contracts/types.hpp version constants (single source).
-        static const std::string user_agent = "zlink-http-client/"
-                                              + std::to_string (zlink::http_client::version_major) + "."
-                                              + std::to_string (zlink::http_client::version_minor);
+        static const std::string user_agent =
+          "zlink-http-client/" + std::to_string (zlink::http_client::version_major) + "."
+          + std::to_string (zlink::http_client::version_minor);
         wire.set (http::field::user_agent, user_agent);
         wire.set (http::field::accept, "application/json");
         if (_options.compression) {
@@ -243,8 +242,7 @@ class request_performer_t
             }
 
             try {
-                auto outcome =
-                  run_exchange (*connection, origin, hop, method, body, body_provider);
+                auto outcome = run_exchange (*connection, origin, hop, method, body, body_provider);
                 if (outcome.reusable && can_reuse) {
                     _pool.release (key, std::move (connection));
                 }
@@ -268,8 +266,8 @@ class request_performer_t
     {
         if (connection.plain) {
             connection.plain->expires_after (effective_timeout ());
-            return run_exchange_on (*connection.plain, connection.buffer, origin, hop, method,
-                                    body, body_provider);
+            return run_exchange_on (*connection.plain, connection.buffer, origin, hop, method, body,
+                                    body_provider);
         }
 #ifdef ZLINK_HTTP_CLIENT_WITH_OPENSSL
         if (connection.secure) {
@@ -294,15 +292,13 @@ class request_performer_t
         const bool has_body = body.has_value () || static_cast<bool> (body_provider);
 
         if (body_provider) {
-            auto wire = build_wire_request<http::buffer_body> (origin, hop, method,
-                                                               has_body,
-                                                               absolute_form);
+            auto wire =
+              build_wire_request<http::buffer_body> (origin, hop, method, has_body, absolute_form);
             wire.chunked (true);
             send_streamed (stream, wire, body_provider);
         } else {
-            auto wire = build_wire_request<http::string_body> (origin, hop, method,
-                                                               has_body,
-                                                               absolute_form);
+            auto wire =
+              build_wire_request<http::string_body> (origin, hop, method, has_body, absolute_form);
             if (body) {
                 wire.body () = *body;
                 wire.prepare_payload ();

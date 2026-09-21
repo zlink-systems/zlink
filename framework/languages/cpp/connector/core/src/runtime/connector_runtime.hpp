@@ -291,8 +291,7 @@ class flow_scope_t
 void post_runtime_operation (std::function<void ()> operation);
 void post_connect_operation (std::function<void ()> operation);
 std::shared_ptr<boost::asio::steady_timer>
-post_runtime_operation_after (std::chrono::milliseconds delay,
-                              std::function<void ()> operation);
+post_runtime_operation_after (std::chrono::milliseconds delay, std::function<void ()> operation);
 void change_state (std::shared_ptr<connector_state_t> state,
                    connection_state_t next,
                    std::optional<error_t> error = std::nullopt);

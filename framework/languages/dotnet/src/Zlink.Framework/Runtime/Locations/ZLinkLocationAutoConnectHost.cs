@@ -1,13 +1,14 @@
+using Zlink.Framework.Runtime.Execution;
 using Zlink.Framework.Runtime.Host;
 using Zlink.Framework.Runtime.Identifiers;
-using Zlink.Framework.Runtime.Execution;
 
 namespace Zlink.Framework.Runtime.Locations;
 
-internal sealed class ZLinkRetiringPublicationRollbackException(
-    IReadOnlyList<Exception> failures) : Exception(
-    "A partial Retiring publication could not be restored to Serving.",
-    failures.Count == 1 ? failures[0] : new AggregateException(failures));
+internal sealed class ZLinkRetiringPublicationRollbackException(IReadOnlyList<Exception> failures)
+    : Exception(
+        "A partial Retiring publication could not be restored to Serving.",
+        failures.Count == 1 ? failures[0] : new AggregateException(failures)
+    );
 
 /// <summary>
 /// Builds one reconcile loop per auto-connect capability from the framework
@@ -17,7 +18,9 @@ internal sealed class ZLinkRetiringPublicationRollbackException(
 /// never-called executor so their peer row is published and removed by the
 /// same lifecycle. Core discovery is never involved.
 /// </summary>
-internal sealed class ZLinkLocationAutoConnectHost : IAsyncDisposable, IZLinkAutoConnectTopologyQuery
+internal sealed class ZLinkLocationAutoConnectHost
+    : IAsyncDisposable,
+        IZLinkAutoConnectTopologyQuery
 {
     private readonly ZLinkLocationRuntime _runtime;
     private readonly IZLinkMeshNodeLocationResolver _peers;
@@ -29,14 +32,19 @@ internal sealed class ZLinkLocationAutoConnectHost : IAsyncDisposable, IZLinkAut
     private readonly SemaphoreSlim _lifecycleGate = new(1, 1);
     private readonly List<ZLinkAutoConnectLoop> _loops = [];
     private readonly List<ZLinkAutoConnectReconciler> _reconcilers = [];
-    private readonly System.Collections.Concurrent.ConcurrentDictionary<ZLinkMeshName, ZLinkAutoConnectReconciler>
-        _routeMeshReconcilers = new();
+    private readonly System.Collections.Concurrent.ConcurrentDictionary<
+        ZLinkMeshName,
+        ZLinkAutoConnectReconciler
+    > _routeMeshReconcilers = new();
     private readonly System.Collections.Concurrent.ConcurrentDictionary<
         (ZLinkLocationAutoConnectType Type, ZLinkMeshName MeshName, ZLinkLocationRole Role),
-        ZLinkAutoConnectReconciler> _localReconcilers = new();
+        ZLinkAutoConnectReconciler
+    > _localReconcilers = new();
     private readonly System.Collections.Concurrent.ConcurrentDictionary<
         (ZLinkLocationAutoConnectType Type, ZLinkMeshName MeshName, ZLinkLocationRole Role),
-        ZLinkAutoConnectLoop> _localLoops = new();
+        ZLinkAutoConnectLoop
+    > _localLoops = new();
+
     // _lifecycleGate serializes the external start/stop/dispose protocol. The
     // dispose-task memoization itself is component state and belongs to _lane.
     private readonly ZLinkStateLane _lane = new();
@@ -53,7 +61,8 @@ internal sealed class ZLinkLocationAutoConnectHost : IAsyncDisposable, IZLinkAut
         IZLinkLocationWatchStore? watchStore = null,
         TimeProvider? timeProvider = null,
         ZLinkOwnerLeaseTracker? leaseTracker = null,
-        IZLinkLocationRepository? store = null)
+        IZLinkLocationRepository? store = null
+    )
     {
         _runtime = runtime;
         _peers = peers;
@@ -67,15 +76,18 @@ internal sealed class ZLinkLocationAutoConnectHost : IAsyncDisposable, IZLinkAut
 
     internal async ValueTask StartAsync(
         ZLinkFrameworkComponentState state,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default
+    )
     {
         ObjectDisposedException.ThrowIf(Volatile.Read(ref _disposed) != 0, this);
         await _lifecycleGate.WaitAsync(cancellationToken).ConfigureAwait(false);
         try
         {
-            if (_loops.Count != 0
+            if (
+                _loops.Count != 0
                 || _clientServerDiscovery is not null
-                || _fanoutDiscovery is not null)
+                || _fanoutDiscovery is not null
+            )
                 return;
             if (!_runtime.IsOwnerAdmissionOpen)
             {
@@ -86,83 +98,96 @@ internal sealed class ZLinkLocationAutoConnectHost : IAsyncDisposable, IZLinkAut
             }
             Interlocked.Exchange(ref _deferredStartState, null);
             var registration = state.Registration;
-            if (registration.Channels.Values.Any(static channel =>
-                    channel.ClientServerRole is not null))
+            if (
+                registration.Channels.Values.Any(static channel =>
+                    channel.ClientServerRole is not null
+                )
+            )
             {
                 _clientServerDiscovery = new ZLinkClientServerDiscovery(
                     _store,
                     _runtime,
                     _options,
-                    _leaseTracker);
-                await _clientServerDiscovery.StartAsync(state, cancellationToken)
+                    _leaseTracker
+                );
+                await _clientServerDiscovery
+                    .StartAsync(state, cancellationToken)
                     .ConfigureAwait(false);
             }
 
-            if (registration.Channels.Values.Any(static channel =>
+            if (
+                registration.Channels.Values.Any(static channel =>
                     channel.AutoConnectType == ZLinkLocationAutoConnectType.Fanout
-                    && (channel.Publisher is not null
+                    && (
+                        channel.Publisher is not null
                         || channel.Subscriber?.AcquisitionMode
-                            == ZLinkPeerAcquisitionMode.AutoConnect)))
+                            == ZLinkPeerAcquisitionMode.AutoConnect
+                    )
+                )
+            )
             {
                 _fanoutDiscovery = new ZLinkFanoutDiscovery(
                     _store,
                     _runtime,
                     _options,
-                    _leaseTracker);
-                await _fanoutDiscovery.StartAsync(state, cancellationToken)
-                    .ConfigureAwait(false);
+                    _leaseTracker
+                );
+                await _fanoutDiscovery.StartAsync(state, cancellationToken).ConfigureAwait(false);
             }
 
-        foreach (var (name, spot) in registration.SpotNodes)
-        {
-            if (!state.SpotNodes.TryGetValue(name, out var node) || spot.Router is null) continue;
-            if (node.StartupState is not { } startupState) continue;
+            foreach (var (name, spot) in registration.SpotNodes)
+            {
+                if (!state.SpotNodes.TryGetValue(name, out var node) || spot.Router is null)
+                    continue;
+                if (node.StartupState is not { } startupState)
+                    continue;
 
-            var meshName = ZLinkMeshName.FromBoundary(
-                spot.SpotMeshChannelName ?? spot.SpotNodeName,
-                nameof(spot.SpotMeshChannelName));
-            AddLoop(
-                ZLinkLocationAutoConnectType.SpotMesh,
-                meshName,
-                ZLinkLocationRole.Spot,
-                startupState.RoutingId,
-                startupState.Descriptor.Endpoint,
-                (uint)spot.Router.SocketConfig.Weight,
-                new SpotRouterExecutor(
-                    node,
-                    spot.Router.AcquisitionMode == ZLinkPeerAcquisitionMode.AutoConnect),
-                retainRemovedMembers:
-                    spot.Router.AcquisitionMode == ZLinkPeerAcquisitionMode.Manual,
-                // The row carries Core's nonzero lifecycle token verbatim.
-                // Admission compares this opaque token for exact equality.
-                lifecycleGeneration: node.Node.MeshStatus().LifecycleGeneration,
-                objectRole: spot.ObjectRole,
-                objectCapabilities: BuildObjectCapabilities(spot),
-                applicationVersion: registration.ApplicationVersion,
-                maintenanceWave: registration.MaintenanceWave,
-                entrySpotId: spot.EntrySpotId,
-                placementWeight: spot.PlacementWeight,
-                capacity: new ZLinkPlacementCapacity(
-                    new ZLinkPopulationCapacity(
+                var meshName = ZLinkMeshName.FromBoundary(
+                    spot.SpotMeshChannelName ?? spot.SpotNodeName,
+                    nameof(spot.SpotMeshChannelName)
+                );
+                AddLoop(
+                    ZLinkLocationAutoConnectType.SpotMesh,
+                    meshName,
+                    ZLinkLocationRole.Spot,
+                    startupState.RoutingId,
+                    startupState.Descriptor.Endpoint,
+                    (uint)spot.Router.SocketConfig.Weight,
+                    new SpotRouterExecutor(
+                        node,
+                        spot.Router.AcquisitionMode == ZLinkPeerAcquisitionMode.AutoConnect
+                    ),
+                    retainRemovedMembers: spot.Router.AcquisitionMode
+                        == ZLinkPeerAcquisitionMode.Manual,
+                    // The row carries Core's nonzero lifecycle token verbatim.
+                    // Admission compares this opaque token for exact equality.
+                    lifecycleGeneration: node.Node.MeshStatus().LifecycleGeneration,
+                    objectRole: spot.ObjectRole,
+                    objectCapabilities: BuildObjectCapabilities(spot),
+                    applicationVersion: registration.ApplicationVersion,
+                    maintenanceWave: registration.MaintenanceWave,
+                    entrySpotId: spot.EntrySpotId,
+                    placementWeight: spot.PlacementWeight,
+                    capacity: new ZLinkPlacementCapacity(
+                        new ZLinkPopulationCapacity(0, 0, spot.ActorLimit),
+                        new ZLinkPopulationCapacity(0, 0, spot.SpotLimit),
+                        BuildSpotTypeCapacities(spot)
+                    ),
+                    activationConcurrency: new ZLinkActivationConcurrency(
                         0,
-                        0,
-                        spot.ActorLimit),
-                    new ZLinkPopulationCapacity(
-                        0,
-                        0,
-                        spot.SpotLimit),
-                    BuildSpotTypeCapacities(spot)),
-                activationConcurrency: new ZLinkActivationConcurrency(
-                    0,
-                    spot.ActivationConcurrencyLimit),
-                channelWeights: spot.ChannelMemberships
-                    .Where(static membership => membership.IsServer)
-                    .ToDictionary(
-                        static membership => membership.ChannelName,
-                        static membership => membership.Weight,
-                        StringComparer.Ordinal),
-                startupState: startupState);
-        }
+                        spot.ActivationConcurrencyLimit
+                    ),
+                    channelWeights: spot.ChannelMemberships.Where(static membership =>
+                            membership.IsServer
+                        )
+                        .ToDictionary(
+                            static membership => membership.ChannelName,
+                            static membership => membership.Weight,
+                            StringComparer.Ordinal
+                        ),
+                    startupState: startupState
+                );
+            }
 
             try
             {
@@ -170,10 +195,10 @@ internal sealed class ZLinkLocationAutoConnectHost : IAsyncDisposable, IZLinkAut
                     await loop.StartAsync(cancellationToken).ConfigureAwait(false);
                 foreach (var reconciler in _reconcilers)
                 {
-                    if (!await reconciler.MarkServingAsync(cancellationToken)
-                            .ConfigureAwait(false))
+                    if (!await reconciler.MarkServingAsync(cancellationToken).ConfigureAwait(false))
                         throw new ZLinkConfigurationException(
-                            "The claimed MeshNode descriptor could not enter Serving state.");
+                            "The claimed MeshNode descriptor could not enter Serving state."
+                        );
                 }
             }
             catch (Exception startFailure)
@@ -198,7 +223,8 @@ internal sealed class ZLinkLocationAutoConnectHost : IAsyncDisposable, IZLinkAut
 
     internal async ValueTask StopAsync(CancellationToken cancellationToken = default)
     {
-        if (Volatile.Read(ref _disposed) != 0) return;
+        if (Volatile.Read(ref _disposed) != 0)
+            return;
         await _lifecycleGate.WaitAsync(cancellationToken).ConfigureAwait(false);
         try
         {
@@ -210,8 +236,7 @@ internal sealed class ZLinkLocationAutoConnectHost : IAsyncDisposable, IZLinkAut
         }
     }
 
-    internal async ValueTask<bool> MarkDrainingAsync(
-        CancellationToken cancellationToken = default)
+    internal async ValueTask<bool> MarkDrainingAsync(CancellationToken cancellationToken = default)
     {
         ObjectDisposedException.ThrowIf(Volatile.Read(ref _disposed) != 0, this);
         await _lifecycleGate.WaitAsync(cancellationToken).ConfigureAwait(false);
@@ -227,7 +252,9 @@ internal sealed class ZLinkLocationAutoConnectHost : IAsyncDisposable, IZLinkAut
                     .MarkDrainingAsync(cancellationToken)
                     .ConfigureAwait(false);
             foreach (var reconciler in _reconcilers)
-                published &= await reconciler.MarkDrainingAsync(cancellationToken).ConfigureAwait(false);
+                published &= await reconciler
+                    .MarkDrainingAsync(cancellationToken)
+                    .ConfigureAwait(false);
             return published;
         }
         finally
@@ -236,8 +263,7 @@ internal sealed class ZLinkLocationAutoConnectHost : IAsyncDisposable, IZLinkAut
         }
     }
 
-    internal async ValueTask<bool> MarkRetiringAsync(
-        CancellationToken cancellationToken = default)
+    internal async ValueTask<bool> MarkRetiringAsync(CancellationToken cancellationToken = default)
     {
         ObjectDisposedException.ThrowIf(Volatile.Read(ref _disposed) != 0, this);
         await _lifecycleGate.WaitAsync(cancellationToken).ConfigureAwait(false);
@@ -247,15 +273,19 @@ internal sealed class ZLinkLocationAutoConnectHost : IAsyncDisposable, IZLinkAut
             {
                 var published = true;
                 if (_clientServerDiscovery is not null)
-                    published &= await _clientServerDiscovery.MarkRetiringAsync(cancellationToken)
+                    published &= await _clientServerDiscovery
+                        .MarkRetiringAsync(cancellationToken)
                         .ConfigureAwait(false);
                 if (_fanoutDiscovery is not null)
-                    published &= await _fanoutDiscovery.MarkRetiringAsync(cancellationToken)
+                    published &= await _fanoutDiscovery
+                        .MarkRetiringAsync(cancellationToken)
                         .ConfigureAwait(false);
                 foreach (var reconciler in _reconcilers)
-                    published &= await reconciler.MarkRetiringAsync(cancellationToken)
+                    published &= await reconciler
+                        .MarkRetiringAsync(cancellationToken)
                         .ConfigureAwait(false);
-                if (published) return true;
+                if (published)
+                    return true;
             }
             catch (Exception publicationFailure)
             {
@@ -280,21 +310,21 @@ internal sealed class ZLinkLocationAutoConnectHost : IAsyncDisposable, IZLinkAut
                     await RestoreAsync(_clientServerDiscovery.MarkServingAsync)
                         .ConfigureAwait(false);
                 if (_fanoutDiscovery is not null)
-                    await RestoreAsync(_fanoutDiscovery.MarkServingAsync)
-                        .ConfigureAwait(false);
+                    await RestoreAsync(_fanoutDiscovery.MarkServingAsync).ConfigureAwait(false);
                 foreach (var reconciler in _reconcilers)
-                    await RestoreAsync(reconciler.MarkServingAsync)
-                        .ConfigureAwait(false);
+                    await RestoreAsync(reconciler.MarkServingAsync).ConfigureAwait(false);
                 return failures;
 
-                async ValueTask RestoreAsync(
-                    Func<CancellationToken, ValueTask<bool>> restore)
+                async ValueTask RestoreAsync(Func<CancellationToken, ValueTask<bool>> restore)
                 {
                     try
                     {
                         if (!await restore(CancellationToken.None).ConfigureAwait(false))
-                            failures.Add(new InvalidOperationException(
-                                "A descriptor did not confirm its Serving rollback."));
+                            failures.Add(
+                                new InvalidOperationException(
+                                    "A descriptor did not confirm its Serving rollback."
+                                )
+                            );
                     }
                     catch (Exception error)
                     {
@@ -309,8 +339,7 @@ internal sealed class ZLinkLocationAutoConnectHost : IAsyncDisposable, IZLinkAut
         }
     }
 
-    internal async ValueTask<bool> MarkServingAsync(
-        CancellationToken cancellationToken = default)
+    internal async ValueTask<bool> MarkServingAsync(CancellationToken cancellationToken = default)
     {
         ObjectDisposedException.ThrowIf(Volatile.Read(ref _disposed) != 0, this);
         await _lifecycleGate.WaitAsync(cancellationToken).ConfigureAwait(false);
@@ -318,13 +347,16 @@ internal sealed class ZLinkLocationAutoConnectHost : IAsyncDisposable, IZLinkAut
         {
             var restored = true;
             if (_clientServerDiscovery is not null)
-                restored &= await _clientServerDiscovery.MarkServingAsync(cancellationToken)
+                restored &= await _clientServerDiscovery
+                    .MarkServingAsync(cancellationToken)
                     .ConfigureAwait(false);
             if (_fanoutDiscovery is not null)
-                restored &= await _fanoutDiscovery.MarkServingAsync(cancellationToken)
+                restored &= await _fanoutDiscovery
+                    .MarkServingAsync(cancellationToken)
                     .ConfigureAwait(false);
             foreach (var reconciler in _reconcilers)
-                restored &= await reconciler.MarkServingAsync(cancellationToken)
+                restored &= await reconciler
+                    .MarkServingAsync(cancellationToken)
                     .ConfigureAwait(false);
             return restored;
         }
@@ -334,8 +366,7 @@ internal sealed class ZLinkLocationAutoConnectHost : IAsyncDisposable, IZLinkAut
         }
     }
 
-    internal async ValueTask FreezeOwnerWritesAsync(
-        CancellationToken cancellationToken = default)
+    internal async ValueTask FreezeOwnerWritesAsync(CancellationToken cancellationToken = default)
     {
         ObjectDisposedException.ThrowIf(Volatile.Read(ref _disposed) != 0, this);
         await _lifecycleGate.WaitAsync(cancellationToken).ConfigureAwait(false);
@@ -352,19 +383,22 @@ internal sealed class ZLinkLocationAutoConnectHost : IAsyncDisposable, IZLinkAut
 
     public ValueTask DisposeAsync()
     {
-        var (task, start) = AwaitStateLane(_lane.RunAsync(() =>
-        {
-            if (_disposeTask is null)
+        var (task, start) = AwaitStateLane(
+            _lane.RunAsync(() =>
             {
-                Volatile.Write(ref _disposed, 1);
-                var gate = new TaskCompletionSource(
-                    TaskCreationOptions.RunContinuationsAsynchronously);
-                using (ExecutionContext.SuppressFlow())
-                    _disposeTask = DisposeCoreAsync(gate.Task);
-                return (_disposeTask!, gate);
-            }
-            return (_disposeTask!, (TaskCompletionSource?)null);
-        }));
+                if (_disposeTask is null)
+                {
+                    Volatile.Write(ref _disposed, 1);
+                    var gate = new TaskCompletionSource(
+                        TaskCreationOptions.RunContinuationsAsynchronously
+                    );
+                    using (ExecutionContext.SuppressFlow())
+                        _disposeTask = DisposeCoreAsync(gate.Task);
+                    return (_disposeTask!, gate);
+                }
+                return (_disposeTask!, (TaskCompletionSource?)null);
+            })
+        );
         start?.TrySetResult();
         return new ValueTask(task);
     }
@@ -435,11 +469,12 @@ internal sealed class ZLinkLocationAutoConnectHost : IAsyncDisposable, IZLinkAut
 
         if (failures is { Count: 1 })
             System.Runtime.ExceptionServices.ExceptionDispatchInfo.Capture(failures[0]).Throw();
-        if (failures is { Count: > 1 }) throw new AggregateException(failures);
+        if (failures is { Count: > 1 })
+            throw new AggregateException(failures);
     }
 
-    private void OnOwnerLeaseRenewed(ZLinkOwnerLeaseRenewal _renewal)
-        => ResumeDeferredDescriptorPublication();
+    private void OnOwnerLeaseRenewed(ZLinkOwnerLeaseRenewal _renewal) =>
+        ResumeDeferredDescriptorPublication();
 
     private void ResumeDeferredDescriptorPublication()
     {
@@ -449,8 +484,7 @@ internal sealed class ZLinkLocationAutoConnectHost : IAsyncDisposable, IZLinkAut
         _ = ResumeDescriptorPublicationAsync(state);
     }
 
-    private async Task ResumeDescriptorPublicationAsync(
-        ZLinkFrameworkComponentState state)
+    private async Task ResumeDescriptorPublicationAsync(ZLinkFrameworkComponentState state)
     {
         try
         {
@@ -462,7 +496,8 @@ internal sealed class ZLinkLocationAutoConnectHost : IAsyncDisposable, IZLinkAut
                 Interlocked.CompareExchange(ref _deferredStartState, state, null);
             state.ErrorSink.ReportRuntimeTaskException(
                 "location-descriptor-publication",
-                exception);
+                exception
+            );
         }
     }
 
@@ -485,11 +520,13 @@ internal sealed class ZLinkLocationAutoConnectHost : IAsyncDisposable, IZLinkAut
         ZLinkPlacementCapacity? capacity = null,
         ZLinkActivationConcurrency? activationConcurrency = null,
         IReadOnlyDictionary<string, int>? channelWeights = null,
-        ZLinkMeshNodeStartupState? startupState = null)
+        ZLinkMeshNodeStartupState? startupState = null
+    )
     {
         // MeshNode descriptors always require a physical node identity.
         var advertisable = nodeRid is { Size: > 0 };
-        if (!advertisable) return;
+        if (!advertisable)
+            return;
 
         var local = new ZLinkAutoConnectLocal(
             type,
@@ -498,63 +535,85 @@ internal sealed class ZLinkLocationAutoConnectHost : IAsyncDisposable, IZLinkAut
             nodeRid,
             endpoint,
             objectRole,
-            channelWeights?.Count > 0);
-        var effectiveLifecycleGeneration = lifecycleGeneration == 0
-            ? CreateLifecycleNonce()
-            : lifecycleGeneration;
-        var row = startupState?.Descriptor ?? (advertisable
-            ? new ZLinkMeshNodeDescriptor(
-                meshName.Value, nodeRid!.Value,
-                effectiveLifecycleGeneration, DescriptorRevision: 1,
-                endpoint,
-                channelWeights is null
-                    ? new Dictionary<string, int>(StringComparer.Ordinal)
+            channelWeights?.Count > 0
+        );
+        var effectiveLifecycleGeneration =
+            lifecycleGeneration == 0 ? CreateLifecycleNonce() : lifecycleGeneration;
+        var row =
+            startupState?.Descriptor
+            ?? (
+                advertisable
+                    ? new ZLinkMeshNodeDescriptor(
+                        meshName.Value,
+                        nodeRid!.Value,
+                        effectiveLifecycleGeneration,
+                        DescriptorRevision: 1,
+                        endpoint,
+                        channelWeights is null
+                            ? new Dictionary<string, int>(StringComparer.Ordinal)
+                            {
+                                [meshName.Value] = (int)weight,
+                            }
+                            : new Dictionary<string, int>(channelWeights, StringComparer.Ordinal),
+                        SecurityIdentity: ZLinkTransportSecurityIdentity.Plaintext,
+                        OwnerId: string.Empty,
+                        LeaseGeneration: 0,
+                        UpdatedAt: default
+                    )
                     {
-                        [meshName.Value] = (int)weight
+                        ApplicationVersion = applicationVersion,
+                        ObjectRole = objectRole,
+                        ObjectCapabilities =
+                            objectCapabilities ?? Array.Empty<ZLinkObjectCapability>(),
+                        MaintenanceWave = maintenanceWave,
+                        EntrySpotId = entrySpotId,
+                        State = ZLinkFrameworkRuntimeState.Serving,
+                        PlacementWeight = placementWeight,
+                        Capacity =
+                            capacity
+                            ?? new ZLinkPlacementCapacity(
+                                new ZLinkPopulationCapacity(0, 0, 0),
+                                new ZLinkPopulationCapacity(0, 0, 0),
+                                Array.Empty<ZLinkSpotTypeCapacity>()
+                            ),
+                        ActivationConcurrency =
+                            activationConcurrency ?? new ZLinkActivationConcurrency(0, 128),
                     }
-                    : new Dictionary<string, int>(
-                        channelWeights,
-                        StringComparer.Ordinal),
-                SecurityIdentity: ZLinkTransportSecurityIdentity.Plaintext,
-                OwnerId: string.Empty,
-                LeaseGeneration: 0,
-                UpdatedAt: default)
-            {
-                ApplicationVersion = applicationVersion,
-                ObjectRole = objectRole,
-                ObjectCapabilities =
-                    objectCapabilities ?? Array.Empty<ZLinkObjectCapability>(),
-                MaintenanceWave = maintenanceWave,
-                EntrySpotId = entrySpotId,
-                State = ZLinkFrameworkRuntimeState.Serving,
-                PlacementWeight = placementWeight,
-                Capacity = capacity ?? new ZLinkPlacementCapacity(
-                    new ZLinkPopulationCapacity(0, 0, 0),
-                    new ZLinkPopulationCapacity(0, 0, 0),
-                    Array.Empty<ZLinkSpotTypeCapacity>()),
-                ActivationConcurrency = activationConcurrency
-                    ?? new ZLinkActivationConcurrency(0, 128)
-            }
-            : null);
+                    : null
+            );
         var reconciler = new ZLinkAutoConnectReconciler(
-            local, row, _runtime, _peers, executor, _options, _time,
+            local,
+            row,
+            _runtime,
+            _peers,
+            executor,
+            _options,
+            _time,
             retainRemovedMembers,
             initiallyPublished: startupState is not null,
-            initialStoreGeneration: startupState?.StoreGeneration ?? 0);
+            initialStoreGeneration: startupState?.StoreGeneration ?? 0
+        );
         _reconcilers.Add(reconciler);
         _localReconcilers[(type, meshName, role)] = reconciler;
-        if (type is ZLinkLocationAutoConnectType.RouteMesh
-            or ZLinkLocationAutoConnectType.SpotMesh)
+        if (type is ZLinkLocationAutoConnectType.RouteMesh or ZLinkLocationAutoConnectType.SpotMesh)
             _routeMeshReconcilers[meshName] = reconciler;
         var loop = new ZLinkAutoConnectLoop(
-            reconciler, local, _options, _store, _watchStore, _time, _leaseTracker);
+            reconciler,
+            local,
+            _options,
+            _store,
+            _watchStore,
+            _time,
+            _leaseTracker
+        );
         _loops.Add(loop);
         _localLoops[(type, meshName, role)] = loop;
     }
 
     public ZLinkRouteMeshTargetClassification ClassifyRouteMeshTarget(
         string meshName,
-        RoutingId nodeRid)
+        RoutingId nodeRid
+    )
     {
         var meshKey = ZLinkMeshName.FromBoundary(meshName, nameof(meshName));
         return _routeMeshReconcilers.TryGetValue(meshKey, out var reconciler)
@@ -562,8 +621,7 @@ internal sealed class ZLinkLocationAutoConnectHost : IAsyncDisposable, IZLinkAut
             : ZLinkRouteMeshTargetClassification.Unknown;
     }
 
-    public IReadOnlyList<ZLinkRouteMeshPeerIdentity>? GetCompleteRouteMeshPeers(
-        string meshName)
+    public IReadOnlyList<ZLinkRouteMeshPeerIdentity>? GetCompleteRouteMeshPeers(string meshName)
     {
         var meshKey = ZLinkMeshName.FromBoundary(meshName, nameof(meshName));
         return _routeMeshReconcilers.TryGetValue(meshKey, out var reconciler)
@@ -583,13 +641,12 @@ internal sealed class ZLinkLocationAutoConnectHost : IAsyncDisposable, IZLinkAut
         ZLinkLocationAutoConnectType type,
         string meshName,
         ZLinkLocationRole role,
-        Action<ZLinkAutoConnectReconciler> mutation)
+        Action<ZLinkAutoConnectReconciler> mutation
+    )
     {
-        var key = (
-            type,
-            ZLinkMeshName.FromBoundary(meshName, nameof(meshName)),
-            role);
-        if (!_localReconcilers.TryGetValue(key, out var reconciler)) return;
+        var key = (type, ZLinkMeshName.FromBoundary(meshName, nameof(meshName)), role);
+        if (!_localReconcilers.TryGetValue(key, out var reconciler))
+            return;
 
         mutation(reconciler);
         if (_localLoops.TryGetValue(key, out var loop))
@@ -600,36 +657,38 @@ internal sealed class ZLinkLocationAutoConnectHost : IAsyncDisposable, IZLinkAut
         ZLinkLocationAutoConnectType type,
         string meshName,
         ZLinkLocationRole role,
-        uint weight) =>
+        uint weight
+    ) =>
         MutateLocalDescriptor(
             type,
             meshName,
             role,
-            reconciler => reconciler.SetLocalWeight(weight));
+            reconciler => reconciler.SetLocalWeight(weight)
+        );
 
     internal void SetLocalPlacementWeight(string meshName, int weight) =>
         MutateLocalDescriptor(
             ZLinkLocationAutoConnectType.SpotMesh,
             meshName,
             ZLinkLocationRole.Spot,
-            reconciler => reconciler.SetLocalPlacementWeight(weight));
+            reconciler => reconciler.SetLocalPlacementWeight(weight)
+        );
 
     internal void SetLocalActivationConcurrency(string meshName, int active) =>
         MutateLocalDescriptor(
             ZLinkLocationAutoConnectType.SpotMesh,
             meshName,
             ZLinkLocationRole.Spot,
-            reconciler => reconciler.SetLocalActivationConcurrency(active));
+            reconciler => reconciler.SetLocalActivationConcurrency(active)
+        );
 
-    internal void SetLocalChannelWeight(
-        string meshName,
-        string channelName,
-        int weight) =>
+    internal void SetLocalChannelWeight(string meshName, string channelName, int weight) =>
         MutateLocalDescriptor(
             ZLinkLocationAutoConnectType.SpotMesh,
             meshName,
             ZLinkLocationRole.Spot,
-            reconciler => reconciler.SetLocalChannelWeight(channelName, weight));
+            reconciler => reconciler.SetLocalChannelWeight(channelName, weight)
+        );
 
     internal void SetClientServerWeight(string channelName, int weight)
     {
@@ -641,7 +700,8 @@ internal sealed class ZLinkLocationAutoConnectHost : IAsyncDisposable, IZLinkAut
         string meshName,
         ZLinkLocationRole role,
         uint weight,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken
+    )
     {
         var meshKey = ZLinkMeshName.FromBoundary(meshName, nameof(meshName));
         if (!_localReconcilers.TryGetValue((type, meshKey, role), out var reconciler))
@@ -660,31 +720,35 @@ internal sealed class ZLinkLocationAutoConnectHost : IAsyncDisposable, IZLinkAut
         do
         {
             System.Security.Cryptography.RandomNumberGenerator.Fill(bytes);
-            value = System.Buffers.Binary.BinaryPrimitives
-                .ReadUInt64BigEndian(bytes);
+            value = System.Buffers.Binary.BinaryPrimitives.ReadUInt64BigEndian(bytes);
         } while (value is 0 or > long.MaxValue);
         return value;
     }
 
     private static IReadOnlyList<ZLinkObjectCapability> BuildObjectCapabilities(
-        ZLinkSpotNodeRegistration registration)
+        ZLinkSpotNodeRegistration registration
+    )
     {
         var capabilities = new List<ZLinkObjectCapability>(
             registration.SpotRelocations.Count
-            + registration.InstanceSpotRelocations.Count
-            + registration.ActorRelocations.Count);
+                + registration.InstanceSpotRelocations.Count
+                + registration.ActorRelocations.Count
+        );
         AddCapabilities(
             capabilities,
             ZLinkPlacementObjectKind.UserSpot,
-            registration.SpotRelocations);
+            registration.SpotRelocations
+        );
         AddCapabilities(
             capabilities,
             ZLinkPlacementObjectKind.InstanceSpot,
-            registration.InstanceSpotRelocations);
+            registration.InstanceSpotRelocations
+        );
         AddCapabilities(
             capabilities,
             ZLinkPlacementObjectKind.Actor,
-            registration.ActorRelocations);
+            registration.ActorRelocations
+        );
         return capabilities
             .OrderBy(static capability => capability.ObjectKind)
             .ThenBy(static capability => capability.StableType, StringComparer.Ordinal)
@@ -694,57 +758,65 @@ internal sealed class ZLinkLocationAutoConnectHost : IAsyncDisposable, IZLinkAut
     private static void AddCapabilities(
         ICollection<ZLinkObjectCapability> capabilities,
         ZLinkPlacementObjectKind objectKind,
-        IReadOnlyDictionary<string, ZLinkObjectRelocationRegistration>
-            registrations)
+        IReadOnlyDictionary<string, ZLinkObjectRelocationRegistration> registrations
+    )
     {
         foreach (var (stableType, registration) in registrations)
         {
-            capabilities.Add(new ZLinkObjectCapability(
-                objectKind,
-                stableType,
-                registration.PolicyKind switch
-                {
-                    0 => ZLinkObjectMaintenancePolicyKind.Disabled,
-                    1 => ZLinkObjectMaintenancePolicyKind.Recreate,
-                    2 => ZLinkObjectMaintenancePolicyKind.Snapshot,
-                    _ => throw new ZLinkConfigurationException(
-                        $"Unknown relocation policy kind '{registration.PolicyKind}'.")
-                },
-                registration.AdapterType is not null,
-                objectKind == ZLinkPlacementObjectKind.Actor
-                    ? 0
-                    : registration.Placement.MaxActiveObjects ?? 0));
+            capabilities.Add(
+                new ZLinkObjectCapability(
+                    objectKind,
+                    stableType,
+                    registration.PolicyKind switch
+                    {
+                        0 => ZLinkObjectMaintenancePolicyKind.Disabled,
+                        1 => ZLinkObjectMaintenancePolicyKind.Recreate,
+                        2 => ZLinkObjectMaintenancePolicyKind.Snapshot,
+                        _ => throw new ZLinkConfigurationException(
+                            $"Unknown relocation policy kind '{registration.PolicyKind}'."
+                        ),
+                    },
+                    registration.AdapterType is not null,
+                    objectKind == ZLinkPlacementObjectKind.Actor
+                        ? 0
+                        : registration.Placement.MaxActiveObjects ?? 0
+                )
+            );
         }
     }
 
-    private static IReadOnlyList<ZLinkSpotTypeCapacity>
-        BuildSpotTypeCapacities(ZLinkSpotNodeRegistration registration) =>
+    private static IReadOnlyList<ZLinkSpotTypeCapacity> BuildSpotTypeCapacities(
+        ZLinkSpotNodeRegistration registration
+    ) =>
         BuildObjectCapabilities(registration)
             .Where(static capability =>
-                capability.ObjectKind is ZLinkPlacementObjectKind.UserSpot
-                    or ZLinkPlacementObjectKind.InstanceSpot)
+                capability.ObjectKind
+                    is ZLinkPlacementObjectKind.UserSpot
+                        or ZLinkPlacementObjectKind.InstanceSpot
+            )
             .Select(static capability => new ZLinkSpotTypeCapacity(
                 capability.ObjectKind,
                 capability.StableType,
                 0,
                 0,
-                capability.Limit))
+                capability.Limit
+            ))
             .ToArray();
 
-    private sealed class SpotRouterExecutor(
-        ZLinkSpotNodeRuntime node,
-        bool connectRouter) : IZLinkAutoConnectExecutor
+    private sealed class SpotRouterExecutor(ZLinkSpotNodeRuntime node, bool connectRouter)
+        : IZLinkAutoConnectExecutor
     {
         public bool Connect(ZLinkAutoConnectTarget target)
         {
             node.ObserveRequestSourceFence(target);
             node.ObservePeerExpectation(target);
-            if (!connectRouter || !target.InitiatesConnection) return true;
+            if (!connectRouter || !target.InitiatesConnection)
+                return true;
             return node.ConnectPeerAuto(
                 target.NodeRid,
                 target.Endpoint,
-                ZLinkTransportSecurityIdentity.ToAdmissionIdentity(
-                    target.SecurityIdentity));
+                ZLinkTransportSecurityIdentity.ToAdmissionIdentity(target.SecurityIdentity)
+            );
         }
 
         public bool Disconnect(ZLinkAutoConnectTarget target)
@@ -756,12 +828,12 @@ internal sealed class ZLinkLocationAutoConnectHost : IAsyncDisposable, IZLinkAut
             node.ForgetPeerExpectation(target);
             if (!target.InitiatesConnection)
                 return node.DisconnectPeerBeforeAdmission(target);
-            if (!connectRouter) return true;
+            if (!connectRouter)
+                return true;
             return node.DisconnectPeerAuto(target.NodeRid, target.Endpoint);
         }
     }
 
     private static T AwaitStateLane<T>(ValueTask<T> operation) =>
         operation.GetAwaiter().GetResult();
-
 }

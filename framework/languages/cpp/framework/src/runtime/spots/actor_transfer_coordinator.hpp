@@ -124,8 +124,7 @@ struct handoff_packet_t
 /* These framework-owned metadata keys preserve the routing context needed by
  * a late handoff relay. They never enter application metadata because the
  * public context projection filters the __zlink namespace. */
-inline constexpr std::string_view actor_handoff_source_node_key =
-  "__zlink.actorHandoffSourceNode";
+inline constexpr std::string_view actor_handoff_source_node_key = "__zlink.actorHandoffSourceNode";
 /* The node that parked the request and holds its pending handoff entry (the
  * original reply token). The handoff terminal must return HERE — the source
  * node key above names the original requester, which only coincides with the
@@ -145,14 +144,12 @@ inline constexpr std::string_view actor_handoff_route_authority_generation_key =
   "__zlink.actorHandoffRouteAuthorityGeneration";
 inline constexpr std::string_view actor_handoff_route_lease_generation_key =
   "__zlink.actorHandoffRouteLeaseGeneration";
-inline constexpr std::string_view actor_handoff_hop_count_key =
-  "__zlink.actorHandoffHopCount";
+inline constexpr std::string_view actor_handoff_hop_count_key = "__zlink.actorHandoffHopCount";
 inline constexpr std::string_view actor_handoff_operation_high_key =
   "__zlink.actorHandoffOperationHigh";
 inline constexpr std::string_view actor_handoff_operation_low_key =
   "__zlink.actorHandoffOperationLow";
-inline constexpr std::string_view actor_handoff_reply_route_key =
-  "__zlink.actorHandoffReplyRoute";
+inline constexpr std::string_view actor_handoff_reply_route_key = "__zlink.actorHandoffReplyRoute";
 
 struct actor_move_completion_t
 {
@@ -193,15 +190,13 @@ class actor_transfer_coordinator_t
     // The reservation may carry the transfer ID that the deferred join will
     // use, so packets preserved before transfer-out already emit their
     // handoff markers under the final transfer correlation.
-    bool try_reserve_source (
-      const std::string &actor_key,
-      std::string transfer_id = {});
+    bool try_reserve_source (const std::string &actor_key, std::string transfer_id = {});
     bool try_begin_local (const std::string &actor_key);
     bool try_begin_source_remote (const std::string &actor_key, std::string transfer_id = {});
     void cancel_move (const std::string &actor_key);
     void mark_reconcile (const std::string &actor_key,
-                        std::chrono::steady_clock::duration bound,
-                        std::optional<reconcile_target_context_t> context = std::nullopt);
+                         std::chrono::steady_clock::duration bound,
+                         std::optional<reconcile_target_context_t> context = std::nullopt);
     // Takes due reconcile moves with the captured target identity and advances
     // their existing deadline to the next management attempt.
     // The caller reconciles against the Location Store's authority (spec 28
@@ -213,8 +208,7 @@ class actor_transfer_coordinator_t
     // Returns the out→commit-ack elapsed time when the completed move was a
     // source-remote transfer (runtime-metrics §4.3 duration window); local
     // moves complete with nullopt.
-    std::optional<std::chrono::steady_clock::duration>
-    complete_move (const std::string &actor_key);
+    std::optional<std::chrono::steady_clock::duration> complete_move (const std::string &actor_key);
     // Completes a source move while atomically taking packets that arrived
     // after the first handoff snapshot. The caller relays the retained batch
     // after the owner transition without leaving a race between queue drain
@@ -230,8 +224,7 @@ class actor_transfer_coordinator_t
     std::optional<std::string> transfer_id (const std::string &actor_key) const;
     bool matches_source_remote_transfer (const std::string &actor_key,
                                          const std::string &transfer_id) const;
-    bool try_submit_source_leave (const std::string &actor_key,
-                                  const std::string &transfer_id);
+    bool try_submit_source_leave (const std::string &actor_key, const std::string &transfer_id);
     bool source_leave_submitted (const std::string &actor_key,
                                  const std::string &transfer_id) const;
 
@@ -242,11 +235,11 @@ class actor_transfer_coordinator_t
     // Projects the fresh Message Follow/transfer state and makes the backlog
     // admission decision in the same coordinator turn. A packet already on a
     // committed source edge bypasses the local moving backlog.
-    actor_transfer_packet_admission_t admit_dispatch_packet (
-      const std::string &actor_key,
-      const runtime::protocol::actor_route_fence_t *source_fence,
-      bool targets_current_authority,
-      handoff_packet_t packet);
+    actor_transfer_packet_admission_t
+    admit_dispatch_packet (const std::string &actor_key,
+                           const runtime::protocol::actor_route_fence_t *source_fence,
+                           bool targets_current_authority,
+                           handoff_packet_t packet);
     // Stages one source-retained batch without allowing live target traffic to
     // interleave between its packets. The exact committing transfer owns the
     // append or the whole batch is rejected.
@@ -269,12 +262,12 @@ class actor_transfer_coordinator_t
       const runtime::protocol::actor_route_fence_t &source_fence) const;
     // Both values decide one dispatch admission phase. Project them in one
     // coordinator turn; callers take a fresh snapshot for a later phase.
-    actor_transfer_dispatch_state_snapshot_t project_dispatch_state (
-      const std::string &actor_key,
-      const runtime::protocol::actor_route_fence_t *source_fence) const;
-    std::optional<actor_message_follow_target_t> message_follow_target (
-      const std::string &actor_key,
-      const runtime::protocol::actor_route_fence_t &source_fence) const;
+    actor_transfer_dispatch_state_snapshot_t
+    project_dispatch_state (const std::string &actor_key,
+                            const runtime::protocol::actor_route_fence_t *source_fence) const;
+    std::optional<actor_message_follow_target_t>
+    message_follow_target (const std::string &actor_key,
+                           const runtime::protocol::actor_route_fence_t &source_fence) const;
     bool has_message_follow_route (const std::string &actor_key) const;
     // True when any active Message Follow route for actor_key points at the
     // given node. A pending handoff request recorded without a route fence
@@ -313,14 +306,12 @@ class actor_transfer_coordinator_t
     std::vector<removed_actor_message_follow_t>
     remove_expired_message_follow (std::chrono::steady_clock::time_point now);
     std::optional<removed_actor_message_follow_t>
-    remove_message_follow (
-      const std::string &actor_key,
-      const runtime::protocol::actor_route_fence_t &source_fence,
-      const runtime::protocol::actor_route_fence_t &target_fence);
+    remove_message_follow (const std::string &actor_key,
+                           const runtime::protocol::actor_route_fence_t &source_fence,
+                           const runtime::protocol::actor_route_fence_t &target_fence);
 
     bool try_add_admission (std::string transfer_id, pending_actor_admission_t admission);
-    std::optional<pending_actor_admission_t> admission (
-      const std::string &transfer_id) const;
+    std::optional<pending_actor_admission_t> admission (const std::string &transfer_id) const;
     // True iff transfer_id is still the move actor_key is tracking. A
     // caller that unlocks around external side effects (e.g. the joined
     // callback in prepare_remote_actor_to_spot) re-checks this immediately
@@ -330,14 +321,13 @@ class actor_transfer_coordinator_t
     std::optional<pending_actor_admission_t> begin_commit (const std::string &transfer_id,
                                                            const actor_ref_t &source_actor,
                                                            const spot_id_t &target_spot_id);
-    std::optional<pending_actor_admission_t> pending_commit (
-      const std::string &transfer_id,
-      const actor_ref_t &source_actor,
-      const spot_id_t &target_spot_id) const;
-    std::optional<pending_actor_admission_t> completed_commit (
-      const std::string &transfer_id,
-      const actor_ref_t &source_actor,
-      const spot_id_t &target_spot_id) const;
+    std::optional<pending_actor_admission_t> pending_commit (const std::string &transfer_id,
+                                                             const actor_ref_t &source_actor,
+                                                             const spot_id_t &target_spot_id) const;
+    std::optional<pending_actor_admission_t>
+    completed_commit (const std::string &transfer_id,
+                      const actor_ref_t &source_actor,
+                      const spot_id_t &target_spot_id) const;
     // Atomically closes the exact target move, publishes its completed
     // admission, and transfers every retained packet to the active Actor turn.
     // A missing value means the transfer or generation fence no longer matches.
@@ -345,15 +335,14 @@ class actor_transfer_coordinator_t
     complete_commit_and_take_backlog (const std::string &transfer_id,
                                       const actor_ref_t &source_actor,
                                       const spot_id_t &target_spot_id);
-    bool stage_session_relocation_route (
-      const std::string &transfer_id,
-      std::vector<std::uint8_t> route,
-      std::string actor_type,
-      std::uint64_t target_owner_lease_generation);
-    bool commit_session_relocation_route_authority (
-      const std::string &transfer_id,
-      std::uint64_t previous_authority_owner_generation,
-      std::uint64_t target_authority_owner_generation);
+    bool stage_session_relocation_route (const std::string &transfer_id,
+                                         std::vector<std::uint8_t> route,
+                                         std::string actor_type,
+                                         std::uint64_t target_owner_lease_generation);
+    bool
+    commit_session_relocation_route_authority (const std::string &transfer_id,
+                                               std::uint64_t previous_authority_owner_generation,
+                                               std::uint64_t target_authority_owner_generation);
     std::optional<pending_actor_admission_t>
     session_relocation_admission (const std::string &transfer_id) const;
     void fail_commit (const std::string &transfer_id, bool reconcile);
@@ -404,10 +393,10 @@ class actor_transfer_coordinator_t
       const std::string &actor_key,
       const runtime::protocol::actor_route_fence_t &source_fence,
       std::chrono::steady_clock::time_point now) const;
-    actor_transfer_dispatch_state_snapshot_t project_dispatch_state_unlocked (
-      const std::string &actor_key,
-      const runtime::protocol::actor_route_fence_t *source_fence,
-      std::chrono::steady_clock::time_point now) const;
+    actor_transfer_dispatch_state_snapshot_t
+    project_dispatch_state_unlocked (const std::string &actor_key,
+                                     const runtime::protocol::actor_route_fence_t *source_fence,
+                                     std::chrono::steady_clock::time_point now) const;
     // Consumes packet only when the result is `appended`; otherwise the packet
     // is left intact for the caller to hand back.
     handoff_append_result_t try_append_backlog_unlocked (const std::string &actor_key,

@@ -16,7 +16,7 @@ public sealed class GeneratedNodeIdentityTests
         {
             SpotNodeName = "mesh",
             RoutingId = explicitId,
-            PreparedRoutingId = generatedId
+            PreparedRoutingId = generatedId,
         };
 
         Assert.Equal(generatedId, registration.EffectiveRoutingId);
@@ -29,7 +29,7 @@ public sealed class GeneratedNodeIdentityTests
         var registration = new ZLinkSpotNodeRegistration
         {
             SpotNodeName = "mesh",
-            RoutingId = explicitId
+            RoutingId = explicitId,
         };
 
         Assert.Equal(explicitId, registration.EffectiveRoutingId);
@@ -43,13 +43,9 @@ public sealed class GeneratedNodeIdentityTests
         var registration = new ZLinkSpotNodeRegistration
         {
             SpotNodeName = "observability.play",
-            PreparedRoutingId = source
+            PreparedRoutingId = source,
         };
-        ZLinkRouteMeshPeerIdentity[] descriptors =
-        [
-            new(source, 11, false),
-            new(target, 22, false)
-        ];
+        ZLinkRouteMeshPeerIdentity[] descriptors = [new(source, 11, false), new(target, 22, false)];
         MeshNodePeer[] peers =
         [
             new(
@@ -62,13 +58,17 @@ public sealed class GeneratedNodeIdentityTests
                 Endpoint: "tcp://127.0.0.1:20002",
                 ChannelCount: 1,
                 LastError: 0,
-                LastChangedMs: 1)
+                LastChangedMs: 1
+            ),
         ];
 
-        Assert.True(ZLinkFrameworkRuntime.HasExactPeerReadiness(
-            descriptors,
-            peers,
-            new HashSet<RoutingId> { registration.EffectiveRoutingId }));
+        Assert.True(
+            ZLinkFrameworkRuntime.HasExactPeerReadiness(
+                descriptors,
+                peers,
+                new HashSet<RoutingId> { registration.EffectiveRoutingId }
+            )
+        );
     }
 
     [Fact]
@@ -76,10 +76,7 @@ public sealed class GeneratedNodeIdentityTests
     {
         var sourceRid = RoutingId.From("generated-source");
         var targetRid = RoutingId.From("generated-target");
-        var source = new ZLinkFrameworkRegistration
-        {
-            MaintenanceWave = "wave-a"
-        };
+        var source = new ZLinkFrameworkRegistration { MaintenanceWave = "wave-a" };
         var capabilities = new[]
         {
             new ZLinkObjectCapability(
@@ -87,19 +84,22 @@ public sealed class GeneratedNodeIdentityTests
                 "observability-room",
                 ZLinkObjectMaintenancePolicyKind.Snapshot,
                 true,
-                128),
+                128
+            ),
             new ZLinkObjectCapability(
                 ZLinkPlacementObjectKind.InstanceSpot,
                 "observability-instance",
                 ZLinkObjectMaintenancePolicyKind.Snapshot,
                 true,
-                128),
+                128
+            ),
             new ZLinkObjectCapability(
                 ZLinkPlacementObjectKind.Actor,
                 "observability-player",
                 ZLinkObjectMaintenancePolicyKind.Snapshot,
                 true,
-                0)
+                0
+            ),
         };
         var target = new ZLinkMeshNodeDescriptor(
             "observability.play",
@@ -111,7 +111,8 @@ public sealed class GeneratedNodeIdentityTests
             ZLinkTransportSecurityIdentity.Plaintext,
             "target-owner",
             7,
-            DateTimeOffset.UtcNow)
+            DateTimeOffset.UtcNow
+        )
         {
             State = ZLinkFrameworkRuntimeState.Serving,
             ApplicationVersion = 2,
@@ -128,15 +129,18 @@ public sealed class GeneratedNodeIdentityTests
                         "observability-room",
                         0,
                         0,
-                        128),
+                        128
+                    ),
                     new ZLinkSpotTypeCapacity(
                         ZLinkPlacementObjectKind.InstanceSpot,
                         "observability-instance",
                         0,
                         0,
-                        128)
-                ]),
-            ActivationConcurrency = new ZLinkActivationConcurrency(0, 32)
+                        128
+                    ),
+                ]
+            ),
+            ActivationConcurrency = new ZLinkActivationConcurrency(0, 32),
         };
         var owner = new ZLinkLocationOwnerToken("source-owner", 5);
         var room = new ZLinkSpotRetireInventory(
@@ -151,7 +155,8 @@ public sealed class GeneratedNodeIdentityTests
             false,
             1,
             ["actor-1"],
-            [capabilities[0], capabilities[2]]);
+            [capabilities[0], capabilities[2]]
+        );
         var instance = new ZLinkSpotRetireInventory(
             "observability.play",
             sourceRid,
@@ -164,40 +169,58 @@ public sealed class GeneratedNodeIdentityTests
             false,
             1,
             [],
-            [capabilities[1]]);
+            [capabilities[1]]
+        );
         var selection = new ZLinkRelocationTargetSelection(
             ZLinkFrameworkRelocationMode.RollingUpdate,
-            2);
+            2
+        );
         var plan = new ZLinkRetirePreflightPlan();
 
         Assert.True(selection.Matches(target));
-        Assert.True(ZLinkSpotRetireTargetRuntime.IsCompatibleTarget(
-            target,
-            source,
-            room,
-            ZLinkPlacementObjectKind.UserSpot));
-        Assert.True(plan.TryReserve(
-            target,
-            new ZLinkCapacityVector(
-                1,
-                1,
-                new ZLinkSpotTypeCapacityDelta(
-                    ZLinkPlacementObjectKind.UserSpot,
-                    "observability-room",
-                    1))));
-        Assert.True(ZLinkSpotRetireTargetRuntime.IsCompatibleTarget(
-            target,
-            source,
-            instance,
-            ZLinkPlacementObjectKind.InstanceSpot));
-        Assert.True(plan.TryReserve(
-            target,
-            new ZLinkCapacityVector(
-                0,
-                1,
-                new ZLinkSpotTypeCapacityDelta(
-                    ZLinkPlacementObjectKind.InstanceSpot,
-                    "observability-instance",
-                    1))));
+        Assert.True(
+            ZLinkSpotRetireTargetRuntime.IsCompatibleTarget(
+                target,
+                source,
+                room,
+                ZLinkPlacementObjectKind.UserSpot
+            )
+        );
+        Assert.True(
+            plan.TryReserve(
+                target,
+                new ZLinkCapacityVector(
+                    1,
+                    1,
+                    new ZLinkSpotTypeCapacityDelta(
+                        ZLinkPlacementObjectKind.UserSpot,
+                        "observability-room",
+                        1
+                    )
+                )
+            )
+        );
+        Assert.True(
+            ZLinkSpotRetireTargetRuntime.IsCompatibleTarget(
+                target,
+                source,
+                instance,
+                ZLinkPlacementObjectKind.InstanceSpot
+            )
+        );
+        Assert.True(
+            plan.TryReserve(
+                target,
+                new ZLinkCapacityVector(
+                    0,
+                    1,
+                    new ZLinkSpotTypeCapacityDelta(
+                        ZLinkPlacementObjectKind.InstanceSpot,
+                        "observability-instance",
+                        1
+                    )
+                )
+            )
+        );
     }
 }

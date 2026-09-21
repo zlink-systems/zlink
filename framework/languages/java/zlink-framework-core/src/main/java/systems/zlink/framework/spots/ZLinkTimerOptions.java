@@ -1,7 +1,6 @@
 package systems.zlink.framework.spots;
 
 public record ZLinkTimerOptions(
-    ZLinkTimerOverrunPolicy overrunPolicy,
-    int maxCatchUpTicks,
-    boolean stopOnUnhandledException) {
-}
+        ZLinkTimerOverrunPolicy overrunPolicy,
+        int maxCatchUpTicks,
+        boolean stopOnUnhandledException) {}

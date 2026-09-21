@@ -31,17 +31,24 @@ public sealed partial class StreamConnectorTests
                 ZlinkStreamHeaderFlags.HasRequestSeq,
                 requestHeader.RequestSeq,
                 string.Empty,
-                ZlinkStreamMetadata.Empty);
+                ZlinkStreamMetadata.Empty
+            );
             var responsePayload = JsonSerializer.SerializeToUtf8Bytes(new Pong("pong"));
-            await WritePacketAsync(stream, headerCodec.Encode(responseHeader).ToArray(), responsePayload);
+            await WritePacketAsync(
+                stream,
+                headerCodec.Encode(responseHeader).ToArray(),
+                responsePayload
+            );
         });
 
-        await using var connector = ZlinkStreamConnectorFactory.Create(new ZlinkStreamConnectorOptions
-        {
-            Endpoint = new Uri($"tcp://127.0.0.1:{endpoint.Port}"),
-            Heartbeat = DisabledHeartbeat(),
-            DispatchMode = ZlinkStreamDispatchMode.Immediate
-        });
+        await using var connector = ZlinkStreamConnectorFactory.Create(
+            new ZlinkStreamConnectorOptions
+            {
+                Endpoint = new Uri($"tcp://127.0.0.1:{endpoint.Port}"),
+                Heartbeat = DisabledHeartbeat(),
+                DispatchMode = ZlinkStreamDispatchMode.Immediate,
+            }
+        );
         await connector.Connect.Async();
 
         var reply = await connector
@@ -73,24 +80,30 @@ public sealed partial class StreamConnectorTests
                 ZlinkStreamHeaderFlags.HasRequestSeq,
                 requestHeader.RequestSeq,
                 string.Empty,
-                ZlinkStreamMetadata.Empty);
+                ZlinkStreamMetadata.Empty
+            );
             await WritePacketAsync(
                 stream,
                 headerCodec.Encode(responseHeader).ToArray(),
-                JsonSerializer.SerializeToUtf8Bytes(new Pong("callback")));
+                JsonSerializer.SerializeToUtf8Bytes(new Pong("callback"))
+            );
         });
 
-        await using var connector = ZlinkStreamConnectorFactory.Create(new ZlinkStreamConnectorOptions
-        {
-            Endpoint = new Uri($"tcp://127.0.0.1:{endpoint.Port}"),
-            Heartbeat = DisabledHeartbeat(),
-            DispatchMode = ZlinkStreamDispatchMode.Immediate
-        });
+        await using var connector = ZlinkStreamConnectorFactory.Create(
+            new ZlinkStreamConnectorOptions
+            {
+                Endpoint = new Uri($"tcp://127.0.0.1:{endpoint.Port}"),
+                Heartbeat = DisabledHeartbeat(),
+                DispatchMode = ZlinkStreamDispatchMode.Immediate,
+            }
+        );
         await connector.Connect.Async();
 
-        var completed =
-            new TaskCompletionSource<ZlinkStreamResult<Pong>>(TaskCreationOptions.RunContinuationsAsynchronously);
-        connector.Request(new Ping("hello"))
+        var completed = new TaskCompletionSource<ZlinkStreamResult<Pong>>(
+            TaskCreationOptions.RunContinuationsAsynchronously
+        );
+        connector
+            .Request(new Ping("hello"))
             .PacketName("ping")
             .Submit<Pong>(result => completed.SetResult(result));
 
@@ -116,11 +129,13 @@ public sealed partial class StreamConnectorTests
             Assert.Equal("custom.packet", header.Name);
         });
 
-        await using var connector = ZlinkStreamConnectorFactory.Create(new ZlinkStreamConnectorOptions
-        {
-            Endpoint = new Uri($"tcp://127.0.0.1:{endpoint.Port}"),
-            Heartbeat = DisabledHeartbeat()
-        });
+        await using var connector = ZlinkStreamConnectorFactory.Create(
+            new ZlinkStreamConnectorOptions
+            {
+                Endpoint = new Uri($"tcp://127.0.0.1:{endpoint.Port}"),
+                Heartbeat = DisabledHeartbeat(),
+            }
+        );
         await connector.Connect.Async();
 
         await connector.Send(new NamedPacket("name")).Async();
@@ -139,18 +154,22 @@ public sealed partial class StreamConnectorTests
             await Task.Delay(TimeSpan.FromMilliseconds(100));
         });
 
-        await using var connector = ZlinkStreamConnectorFactory.Create(new ZlinkStreamConnectorOptions
-        {
-            Endpoint = new Uri($"tcp://127.0.0.1:{endpoint.Port}"),
-            Heartbeat = DisabledHeartbeat()
-        });
+        await using var connector = ZlinkStreamConnectorFactory.Create(
+            new ZlinkStreamConnectorOptions
+            {
+                Endpoint = new Uri($"tcp://127.0.0.1:{endpoint.Port}"),
+                Heartbeat = DisabledHeartbeat(),
+            }
+        );
         await connector.Connect.Async();
 
         var exception = Assert.Throws<ZlinkStreamException>(() =>
-            connector.Send(new Ping("hello"))
+            connector
+                .Send(new Ping("hello"))
                 .PacketName("ping")
                 .Metadata("traceId", new string('x', 1014))
-                .Async());
+                .Async()
+        );
 
         Assert.Equal(ZlinkStreamErrorCode.ValidationFailed, exception.Error.Code);
         await server;
@@ -176,23 +195,24 @@ public sealed partial class StreamConnectorTests
             var compressedHeader = headerCodec.Decode(compressedPacket.Header);
             Assert.True(compressedHeader.Flags.HasFlag(ZlinkStreamHeaderFlags.PayloadCompressed));
             var payload = compressionCodec.Decompress(compressedPacket.Payload, 64 * 1024);
-            var decoded =
-                JsonSerializer.Deserialize<Ping>(payload.Span, new JsonSerializerOptions(JsonSerializerDefaults.Web));
+            var decoded = JsonSerializer.Deserialize<Ping>(
+                payload.Span,
+                new JsonSerializerOptions(JsonSerializerDefaults.Web)
+            );
             Assert.Equal("compressed", decoded?.Text);
         });
 
-        await using var connector = ZlinkStreamConnectorFactory.Create(new ZlinkStreamConnectorOptions
-        {
-            Endpoint = new Uri($"tcp://127.0.0.1:{endpoint.Port}"),
-            Heartbeat = DisabledHeartbeat()
-        });
+        await using var connector = ZlinkStreamConnectorFactory.Create(
+            new ZlinkStreamConnectorOptions
+            {
+                Endpoint = new Uri($"tcp://127.0.0.1:{endpoint.Port}"),
+                Heartbeat = DisabledHeartbeat(),
+            }
+        );
         await connector.Connect.Async();
 
-        await connector.Send(new Ping("plain"))
-            .PacketName("plain").Async();
-        await connector.Send(new Ping("compressed"))
-            .PacketName("compressed")
-            .Compress().Async();
+        await connector.Send(new Ping("plain")).PacketName("plain").Async();
+        await connector.Send(new Ping("compressed")).PacketName("compressed").Compress().Async();
         await server;
     }
 }

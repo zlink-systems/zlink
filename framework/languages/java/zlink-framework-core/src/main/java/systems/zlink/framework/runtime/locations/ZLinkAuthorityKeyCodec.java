@@ -1,39 +1,35 @@
 package systems.zlink.framework.runtime.locations;
+
 import java.io.ByteArrayOutputStream;
 import java.nio.charset.StandardCharsets;
 
 public final class ZLinkAuthorityKeyCodec {
     private static final char[] HEX = "0123456789ABCDEF".toCharArray();
-    private ZLinkAuthorityKeyCodec() {
-    }
+
+    private ZLinkAuthorityKeyCodec() {}
 
     public static String spot(String spotId) {
-        byte[] identity = systems.zlink.framework.runtime.internal.spots
-            .ZLinkSpotIdValidator.requireValid(spotId)
-            .getBytes(StandardCharsets.UTF_8);
+        byte[] identity =
+                systems.zlink.framework.runtime.internal.spots.ZLinkSpotIdValidator.requireValid(
+                                spotId)
+                        .getBytes(StandardCharsets.UTF_8);
         return encode("zla1:s:", identity, "Spot");
     }
 
     public static String actor(String actorId) {
-        if (actorId == null || actorId.isBlank()
-            || actorId.indexOf('\0') >= 0) {
+        if (actorId == null || actorId.isBlank() || actorId.indexOf('\0') >= 0) {
             throw new IllegalArgumentException("actorId is required");
         }
-        byte[] identity = actorId.getBytes(
-            StandardCharsets.UTF_8);
+        byte[] identity = actorId.getBytes(StandardCharsets.UTF_8);
         return encode("zla1:a:", identity, "Actor");
     }
 
-    private static String encode(
-        String prefix,
-        byte[] identity,
-        String kind) {
+    private static String encode(String prefix, byte[] identity, String kind) {
         if (identity.length == 0 || identity.length > 0xff) {
             throw new IllegalArgumentException(
-                kind + " authority identity must contain 1..255 bytes");
+                    kind + " authority identity must contain 1..255 bytes");
         }
-        StringBuilder encoded = new StringBuilder(
-            prefix + identity.length + ":");
+        StringBuilder encoded = new StringBuilder(prefix + identity.length + ":");
         for (byte item : identity) {
             int value = Byte.toUnsignedInt(item);
             if (isUnreserved(value)) {
@@ -48,16 +44,13 @@ public final class ZLinkAuthorityKeyCodec {
     }
 
     /**
-     * The canonical cross-language logical key preimage
-     * (21-location-runtime.md#2.4) collapses every Spot kind
-     * (Entry | User | Instance) onto one {@code "spot"} segment -- one Id
-     * has exactly one authority row regardless of Spot kind. {@code kind}
-     * is either {@code "actor"} or {@code "spot"}; {@code id} is the raw
-     * UTF-8 identity (the global ActorId or SpotId), not the {@code
-     * "zla1:..."} wire form.
+     * The canonical cross-language logical key preimage (21-location-runtime.md#2.4) collapses
+     * every Spot kind (Entry | User | Instance) onto one {@code "spot"} segment -- one Id has
+     * exactly one authority row regardless of Spot kind. {@code kind} is either {@code "actor"} or
+     * {@code "spot"}; {@code id} is the raw UTF-8 identity (the global ActorId or SpotId), not the
+     * {@code "zla1:..."} wire form.
      */
-    public record AuthorityIdentity(String kind, String id) {
-    }
+    public record AuthorityIdentity(String kind, String id) {}
 
     public static AuthorityIdentity decode(String key) {
         if (key != null && key.startsWith(actorPrefix())) {
@@ -89,8 +82,7 @@ public final class ZLinkAuthorityKeyCodec {
         if (key == null || !key.startsWith(prefix))
             throw new IllegalArgumentException("invalid " + kind + " authority key");
         int lengthEnd = key.indexOf(':', prefix.length());
-        if (lengthEnd < 0)
-            throw new IllegalArgumentException("invalid " + kind + " authority key");
+        if (lengthEnd < 0) throw new IllegalArgumentException("invalid " + kind + " authority key");
         int length;
         try {
             length = Integer.parseInt(key.substring(prefix.length(), lengthEnd));
@@ -99,7 +91,7 @@ public final class ZLinkAuthorityKeyCodec {
         }
         String encoded = key.substring(lengthEnd + 1);
         ByteArrayOutputStream bytes = new ByteArrayOutputStream(length);
-        for (int index = 0; index < encoded.length();) {
+        for (int index = 0; index < encoded.length(); ) {
             char value = encoded.charAt(index++);
             if (value != '%') {
                 if (value > 0x7f)
@@ -122,11 +114,11 @@ public final class ZLinkAuthorityKeyCodec {
 
     private static boolean isUnreserved(int value) {
         return value >= 'A' && value <= 'Z'
-            || value >= 'a' && value <= 'z'
-            || value >= '0' && value <= '9'
-            || value == '-'
-            || value == '.'
-            || value == '_'
-            || value == '~';
+                || value >= 'a' && value <= 'z'
+                || value >= '0' && value <= '9'
+                || value == '-'
+                || value == '.'
+                || value == '_'
+                || value == '~';
     }
 }

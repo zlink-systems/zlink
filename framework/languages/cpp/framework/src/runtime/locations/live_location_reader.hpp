@@ -57,8 +57,8 @@ class live_location_reader_t final
         if (found == nullptr || found->lease_expires_at <= found->store_now) {
             return std::nullopt;
         }
-        const auto remaining = found->lease_expires_at - found->store_now
-                               - _options.owner_lease_fencing_margin;
+        const auto remaining =
+          found->lease_expires_at - found->store_now - _options.owner_lease_fencing_margin;
         if (remaining <= std::chrono::system_clock::duration::zero ()) {
             return std::nullopt;
         }
@@ -66,15 +66,12 @@ class live_location_reader_t final
     }
 
   public:
-
     task_t<location_page_t<mesh_node_descriptor_t>>
     list_mesh_nodes (std::string mesh_name, location_page_request_t page = {})
     {
         try {
             auto result =
-              _store->list_mesh_nodes (std::move (mesh_name), std::move (page))
-                .result ()
-                .value ();
+              _store->list_mesh_nodes (std::move (mesh_name), std::move (page)).result ().value ();
             filter_live (result.items);
             return completed (std::move (result));
         }
@@ -94,24 +91,21 @@ class live_location_reader_t final
     {
         auto result = _store->read_owner_lease (owner.owner_id).result ();
         if (!result.has_value ()) {
-            return task_t<bool> (detail::propagate_failure<bool> (
-              result, "owner lease lookup failed"));
+            return task_t<bool> (
+              detail::propagate_failure<bool> (result, "owner lease lookup failed"));
         }
         const auto *found = std::get_if<owner_lease_found_t> (&result.value ());
         const auto available = found != nullptr
-                               && found->token.lease_generation
-                                    == owner.lease_generation
+                               && found->token.lease_generation == owner.lease_generation
                                && found->lease_expires_at > found->store_now;
         return completed (available);
     }
 
-    task_t<authority_scan_result_t>
-    list_authorities (std::string prefix,
-                      std::optional<authority_scan_cursor_t> cursor,
-                      std::size_t limit)
+    task_t<authority_scan_result_t> list_authorities (std::string prefix,
+                                                      std::optional<authority_scan_cursor_t> cursor,
+                                                      std::size_t limit)
     {
-        return _store->list_authorities (
-          std::move (prefix), std::move (cursor), limit);
+        return _store->list_authorities (std::move (prefix), std::move (cursor), limit);
     }
 
   private:
@@ -120,20 +114,13 @@ class live_location_reader_t final
         return task_t<T> (result_t<T>::success (std::move (value)));
     }
 
-    std::set<std::string> live_owners (
-      const std::set<std::string> &owner_ids)
+    std::set<std::string> live_owners (const std::set<std::string> &owner_ids)
     {
         std::set<std::string> owners;
         for (const auto &owner_id : owner_ids) {
-            const auto lease =
-              _store->read_owner_lease (owner_id)
-                .result ()
-                .value ();
-            const auto *found =
-              std::get_if<owner_lease_found_t> (&lease);
-            if (found != nullptr
-                && found->lease_expires_at
-                     > found->store_now)
+            const auto lease = _store->read_owner_lease (owner_id).result ().value ();
+            const auto *found = std::get_if<owner_lease_found_t> (&lease);
+            if (found != nullptr && found->lease_expires_at > found->store_now)
                 owners.insert (owner_id);
         }
         return owners;
@@ -144,8 +131,7 @@ class live_location_reader_t final
         if (!row) {
             return std::nullopt;
         }
-        const auto owners =
-          live_owners ({row->owner_id});
+        const auto owners = live_owners ({row->owner_id});
         return owners.contains (row->owner_id) ? std::move (row) : std::nullopt;
     }
 
@@ -155,8 +141,7 @@ class live_location_reader_t final
         for (const auto &row : rows)
             owner_ids.insert (row.owner_id);
         const auto owners = live_owners (owner_ids);
-        std::erase_if (rows,
-                       [&owners] (const T &row) { return !owners.contains (row.owner_id); });
+        std::erase_if (rows, [&owners] (const T &row) { return !owners.contains (row.owner_id); });
     }
 
     location_repository_t *_store;

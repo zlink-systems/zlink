@@ -28,9 +28,9 @@ internal static class ZlinkStreamFlowId
     public static bool IsValid(string? value)
     {
         return value is { Length: EncodedLength }
-               && value == value.ToLowerInvariant()
-               && value[14] == '7'
-               && value[19] is '8' or '9' or 'a' or 'b'
-               && Guid.TryParseExact(value, "D", out _);
+            && value == value.ToLowerInvariant()
+            && value[14] == '7'
+            && value[19] is '8' or '9' or 'a' or 'b'
+            && Guid.TryParseExact(value, "D", out _);
     }
 }

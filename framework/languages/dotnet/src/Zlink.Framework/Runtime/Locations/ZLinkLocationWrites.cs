@@ -4,7 +4,7 @@ internal enum ZLinkLocationWriteIntent
 {
     NewClaim = 1,
     Renew = 2,
-    Takeover = 3
+    Takeover = 3,
 }
 
 /// <summary>
@@ -15,7 +15,7 @@ internal enum ZLinkLocationWriteStatus
 {
     Stored = 1,
     IgnoredStale = 2,
-    RejectedConflict = 3
+    RejectedConflict = 3,
 }
 
 /// <summary>
@@ -26,7 +26,8 @@ internal enum ZLinkLocationWriteStatus
 internal sealed record ZLinkLocationWriteResult(
     ZLinkLocationWriteStatus Status,
     ulong Generation,
-    DateTimeOffset UpdatedAt)
+    DateTimeOffset UpdatedAt
+)
 {
     public static ZLinkLocationWriteResult IgnoredStale { get; } =
         new(ZLinkLocationWriteStatus.IgnoredStale, 0, default);
@@ -38,14 +39,10 @@ internal sealed record ZLinkLocationWriteResult(
         new(ZLinkLocationWriteStatus.Stored, generation, updatedAt);
 }
 
-internal readonly record struct ZLinkLocationOwnerToken(
-    string OwnerId,
-    long LeaseGeneration)
+internal readonly record struct ZLinkLocationOwnerToken(string OwnerId, long LeaseGeneration)
 {
     public ZLinkLocationOwnerToken(string ownerId, ulong generation)
-        : this(ownerId, checked((long)generation))
-    {
-    }
+        : this(ownerId, checked((long)generation)) { }
 
     public long Generation => LeaseGeneration;
 }
@@ -57,7 +54,8 @@ internal abstract record ZLinkOwnerLeaseClaimResult
     public sealed record Claimed(
         ZLinkLocationOwnerToken Token,
         DateTimeOffset LeaseExpiresAt,
-        DateTimeOffset StoreNow) : ZLinkOwnerLeaseClaimResult;
+        DateTimeOffset StoreNow
+    ) : ZLinkOwnerLeaseClaimResult;
 
     public sealed record Conflict : ZLinkOwnerLeaseClaimResult;
 
@@ -68,9 +66,8 @@ internal abstract record ZLinkOwnerLeaseRenewResult
 {
     private protected ZLinkOwnerLeaseRenewResult() { }
 
-    public sealed record Renewed(
-        DateTimeOffset LeaseExpiresAt,
-        DateTimeOffset StoreNow) : ZLinkOwnerLeaseRenewResult;
+    public sealed record Renewed(DateTimeOffset LeaseExpiresAt, DateTimeOffset StoreNow)
+        : ZLinkOwnerLeaseRenewResult;
 
     public sealed record Stale : ZLinkOwnerLeaseRenewResult;
 }
@@ -78,7 +75,7 @@ internal abstract record ZLinkOwnerLeaseRenewResult
 internal enum ZLinkOwnerLeaseReleaseResult
 {
     Released = 0,
-    Stale = 1
+    Stale = 1,
 }
 
 internal abstract record ZLinkOwnerLeaseReadResult
@@ -88,7 +85,8 @@ internal abstract record ZLinkOwnerLeaseReadResult
     public sealed record Found(
         ZLinkLocationOwnerToken Token,
         DateTimeOffset LeaseExpiresAt,
-        DateTimeOffset StoreNow) : ZLinkOwnerLeaseReadResult;
+        DateTimeOffset StoreNow
+    ) : ZLinkOwnerLeaseReadResult;
 
     public sealed record Missing : ZLinkOwnerLeaseReadResult;
 }

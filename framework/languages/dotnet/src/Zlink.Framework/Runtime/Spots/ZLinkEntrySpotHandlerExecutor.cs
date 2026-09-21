@@ -1,21 +1,17 @@
 namespace Zlink.Framework.Runtime.Spots;
 
-internal sealed class ZLinkEntrySpotHandlerExecutor(
-    ZLinkSpotHandlerInvoker invoker)
+internal sealed class ZLinkEntrySpotHandlerExecutor(ZLinkSpotHandlerInvoker invoker)
 {
     public async ValueTask InvokeActorPacketAsync(
         ZLinkSpotActorPacketDescriptor descriptor,
         IZLinkActor actor,
         ZlinkStreamHeader header,
         Message body,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken
+    )
     {
-        await invoker.InvokeActorPacketAsync(
-                descriptor,
-                actor,
-                header,
-                body,
-                cancellationToken)
+        await invoker
+            .InvokeActorPacketAsync(descriptor, actor, header, body, cancellationToken)
             .ConfigureAwait(false);
     }
 
@@ -24,14 +20,11 @@ internal sealed class ZLinkEntrySpotHandlerExecutor(
         IZLinkActor actor,
         ZlinkStreamHeader header,
         Message body,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken
+    )
     {
-        return await invoker.InvokeActorPacketForReplyAsync(
-                descriptor,
-                actor,
-                header,
-                body,
-                cancellationToken)
+        return await invoker
+            .InvokeActorPacketForReplyAsync(descriptor, actor, header, body, cancellationToken)
             .ConfigureAwait(false);
     }
 }

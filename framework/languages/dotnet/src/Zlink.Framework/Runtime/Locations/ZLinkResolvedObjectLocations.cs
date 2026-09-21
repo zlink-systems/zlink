@@ -11,7 +11,8 @@ internal sealed record ZLinkResolvedSpotLocation(
     string OwnerId,
     long LeaseGeneration,
     DateTimeOffset UpdatedAt,
-    ulong AuthorityOwnerGeneration)
+    ulong AuthorityOwnerGeneration
+)
 {
     internal ZLinkSpotLocation ToPublic() =>
         new(
@@ -24,7 +25,8 @@ internal sealed record ZLinkResolvedSpotLocation(
             SpotType,
             OwnerId,
             LeaseGeneration,
-            UpdatedAt);
+            UpdatedAt
+        );
 }
 
 internal sealed record ZLinkResolvedActorLocation(
@@ -41,7 +43,8 @@ internal sealed record ZLinkResolvedActorLocation(
     string OwnerId,
     long LeaseGeneration,
     DateTimeOffset UpdatedAt,
-    ulong AuthorityOwnerGeneration)
+    ulong AuthorityOwnerGeneration
+)
 {
     internal ZLinkActorLocation ToPublic() =>
         new(
@@ -56,5 +59,6 @@ internal sealed record ZLinkResolvedActorLocation(
             SpotKind,
             OwnerId,
             LeaseGeneration,
-            UpdatedAt);
+            UpdatedAt
+        );
 }

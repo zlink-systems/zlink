@@ -9,12 +9,15 @@ public sealed class MessageFollowSuppressionRegistryTests
         var fence = Fence("target-a", targetNodeGeneration: 2);
         using var start = new ManualResetEventSlim();
 
-        var attempts = Enumerable.Range(0, 64)
-            .Select(_ => Task.Run(() =>
-            {
-                start.Wait();
-                return registry.TryBegin(fence);
-            }))
+        var attempts = Enumerable
+            .Range(0, 64)
+            .Select(_ =>
+                Task.Run(() =>
+                {
+                    start.Wait();
+                    return registry.TryBegin(fence);
+                })
+            )
             .ToArray();
 
         start.Set();
@@ -98,9 +101,7 @@ public sealed class MessageFollowSuppressionRegistryTests
         Assert.False(lease.TryBeginMessageFollowNotice(fence));
     }
 
-    private static ZLinkMessageFollowFence Fence(
-        string targetId,
-        ulong targetNodeGeneration) =>
+    private static ZLinkMessageFollowFence Fence(string targetId, ulong targetNodeGeneration) =>
         new(
             ZLinkMessageFollowObjectKind.Actor,
             "actor-1",
@@ -114,5 +115,6 @@ public sealed class MessageFollowSuppressionRegistryTests
             SourceAuthorityOwnerGeneration: 11,
             TargetAuthorityOwnerGeneration: 12,
             SourceOwnerLeaseGeneration: 21,
-            TargetOwnerLeaseGeneration: 22);
+            TargetOwnerLeaseGeneration: 22
+        );
 }

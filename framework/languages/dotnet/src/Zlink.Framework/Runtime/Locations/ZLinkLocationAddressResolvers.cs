@@ -23,7 +23,8 @@ internal sealed class ZLinkLocationAddressResolvers
 
     internal ZLinkLocationAddressResolvers(
         ZLinkStoreLocationResolvers rows,
-        ZLinkSpotHandleRegistry handles)
+        ZLinkSpotHandleRegistry handles
+    )
         : this(rows)
     {
         _handles = handles;
@@ -31,22 +32,24 @@ internal sealed class ZLinkLocationAddressResolvers
 
     internal async ValueTask<ZLinkResolvedSpotHandle?> ResolveSpotHandleAsync(
         string spotId,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default
+    )
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(spotId);
         var key = new ZLinkSpotLocationKey(spotId);
-        var resolution = await _rows.ResolveSpotRowWithStatusAsync(
-                key,
-                cancellationToken)
+        var resolution = await _rows
+            .ResolveSpotRowWithStatusAsync(key, cancellationToken)
             .ConfigureAwait(false);
         ThrowIfKnownUnavailable(resolution.Kind, $"Spot '{spotId}'");
         var row = resolution.Row;
-        if (row is null) return null;
+        if (row is null)
+            return null;
         var handle = new ZLinkResolvedSpotHandle(
             ToSnapshot(row),
             row.SpotGeneration,
             ct => RefreshSpotAsync(key, ct),
-            () => _rows.InvalidateSpotRoute(key));
+            () => _rows.InvalidateSpotRoute(key)
+        );
         if (_handles is not null)
             await _handles.RegisterSpotAsync(key, handle).ConfigureAwait(false);
         return handle;
@@ -54,13 +57,13 @@ internal sealed class ZLinkLocationAddressResolvers
 
     internal async ValueTask<ZLinkResolvedSpotHandle?> ResolveActorSpotHandleAsync(
         string actorId,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default
+    )
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(actorId);
         var key = new ZLinkActorLocationKey(actorId);
-        var resolution = await _rows.ResolveActorRowWithStatusAsync(
-                key,
-                cancellationToken)
+        var resolution = await _rows
+            .ResolveActorRowWithStatusAsync(key, cancellationToken)
             .ConfigureAwait(false);
         ThrowIfKnownUnavailable(resolution.Kind, $"Actor '{actorId}'");
         var row = resolution.Row;
@@ -77,7 +80,8 @@ internal sealed class ZLinkLocationAddressResolvers
             ToSnapshot(row),
             row.MembershipEpoch,
             ct => RefreshActorAsync(key, ct),
-            () => _rows.InvalidateActorRoute(key));
+            () => _rows.InvalidateActorRoute(key)
+        );
         if (_handles is not null)
             await _handles.RegisterActorAsync(key, handle).ConfigureAwait(false);
         return handle;
@@ -85,45 +89,40 @@ internal sealed class ZLinkLocationAddressResolvers
 
     private async ValueTask<(ZLinkSpotHandleSnapshot Snapshot, ulong Version)?> RefreshSpotAsync(
         ZLinkSpotLocationKey key,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken
+    )
     {
-        var resolution = await _rows.ResolveSpotRowWithStatusAsync(
-                key,
-                cancellationToken)
+        var resolution = await _rows
+            .ResolveSpotRowWithStatusAsync(key, cancellationToken)
             .ConfigureAwait(false);
         ThrowIfKnownUnavailable(resolution.Kind, $"Spot '{key.SpotId}'");
-        return resolution.Row is not { } row
-            ? null
-            : (ToSnapshot(row), row.SpotGeneration);
+        return resolution.Row is not { } row ? null : (ToSnapshot(row), row.SpotGeneration);
     }
 
     private async ValueTask<(ZLinkSpotHandleSnapshot Snapshot, ulong Version)?> RefreshActorAsync(
         ZLinkActorLocationKey key,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken
+    )
     {
-        var resolution = await _rows.ResolveActorRowWithStatusAsync(
-                key,
-                cancellationToken)
+        var resolution = await _rows
+            .ResolveActorRowWithStatusAsync(key, cancellationToken)
             .ConfigureAwait(false);
         ThrowIfKnownUnavailable(resolution.Kind, $"Actor '{key.ActorId}'");
-        return resolution.Row is not { } row
-            ? null
-            : (ToSnapshot(row), row.MembershipEpoch);
+        return resolution.Row is not { } row ? null : (ToSnapshot(row), row.MembershipEpoch);
     }
 
-    private static void ThrowIfKnownUnavailable(
-        ZLinkLocationResolutionKind kind,
-        string target)
+    private static void ThrowIfKnownUnavailable(ZLinkLocationResolutionKind kind, string target)
     {
         if (kind != ZLinkLocationResolutionKind.KnownUnavailable)
             return;
         throw new ZLinkFrameworkException(
             ZLinkFrameworkErrorKind.Unavailable,
-            $"{target} is currently unavailable.");
+            $"{target} is currently unavailable."
+        );
     }
 
-    private ZLinkSpotHandleSnapshot ToSnapshot(ZLinkResolvedSpotLocation row)
-        => new(
+    private ZLinkSpotHandleSnapshot ToSnapshot(ZLinkResolvedSpotLocation row) =>
+        new(
             row.MeshName,
             row.OwnerNodeRid,
             row.SpotId,
@@ -131,10 +130,11 @@ internal sealed class ZLinkLocationAddressResolvers
             row.SpotKind,
             row.AuthorityOwnerGeneration,
             row.OwnerNodeGeneration,
-            checked((ulong)row.LeaseGeneration));
+            checked((ulong)row.LeaseGeneration)
+        );
 
-    internal ZLinkSpotHandleSnapshot ToSnapshot(ZLinkResolvedActorLocation row)
-        => row.SpotKind == ZLinkSpotKind.Entry || string.IsNullOrEmpty(row.SpotId)
+    internal ZLinkSpotHandleSnapshot ToSnapshot(ZLinkResolvedActorLocation row) =>
+        row.SpotKind == ZLinkSpotKind.Entry || string.IsNullOrEmpty(row.SpotId)
             ? new ZLinkSpotHandleSnapshot(
                 row.MeshName,
                 row.OwnerNodeRid,
@@ -143,7 +143,8 @@ internal sealed class ZLinkLocationAddressResolvers
                 ZLinkSpotKind.Entry,
                 row.AuthorityOwnerGeneration,
                 row.OwnerNodeGeneration,
-                checked((ulong)row.LeaseGeneration))
+                checked((ulong)row.LeaseGeneration)
+            )
             : new ZLinkSpotHandleSnapshot(
                 row.MeshName,
                 row.OwnerNodeRid,
@@ -152,7 +153,8 @@ internal sealed class ZLinkLocationAddressResolvers
                 ZLinkSpotKind.User,
                 row.AuthorityOwnerGeneration,
                 row.OwnerNodeGeneration,
-                checked((ulong)row.LeaseGeneration));
+                checked((ulong)row.LeaseGeneration)
+            );
 }
 
 internal readonly record struct ZLinkSpotHandleSnapshot(
@@ -163,11 +165,15 @@ internal readonly record struct ZLinkSpotHandleSnapshot(
     ZLinkSpotKind SpotKind = ZLinkSpotKind.User,
     ulong AuthorityOwnerGeneration = 0,
     ulong NodeGeneration = 0,
-    ulong OwnerLeaseGeneration = 0);
+    ulong OwnerLeaseGeneration = 0
+);
 
 internal sealed class ZLinkResolvedSpotHandle
 {
-    private readonly Func<CancellationToken, ValueTask<(ZLinkSpotHandleSnapshot Snapshot, ulong Version)?>> _refresh;
+    private readonly Func<
+        CancellationToken,
+        ValueTask<(ZLinkSpotHandleSnapshot Snapshot, ulong Version)?>
+    > _refresh;
     private readonly Action? _invalidateRoute;
     private readonly ZLinkStateLane _lane = new();
     private ZLinkHandleAvailability _availability = ZLinkHandleAvailability.Available;
@@ -177,8 +183,12 @@ internal sealed class ZLinkResolvedSpotHandle
     internal ZLinkResolvedSpotHandle(
         ZLinkSpotHandleSnapshot initialSnapshot,
         ulong version,
-        Func<CancellationToken, ValueTask<(ZLinkSpotHandleSnapshot Snapshot, ulong Version)?>> refresh,
-        Action? invalidateRoute = null)
+        Func<
+            CancellationToken,
+            ValueTask<(ZLinkSpotHandleSnapshot Snapshot, ulong Version)?>
+        > refresh,
+        Action? invalidateRoute = null
+    )
     {
         _refresh = refresh;
         _invalidateRoute = invalidateRoute;
@@ -188,14 +198,18 @@ internal sealed class ZLinkResolvedSpotHandle
 
     internal ZLinkSpotHandleSnapshot Snapshot
     {
-        get => AwaitStateLane(_lane.RunAsync(() =>
-        {
-            if (_availability != ZLinkHandleAvailability.Available)
-                throw new ZLinkFrameworkException(
-                    ZLinkFrameworkErrorKind.NotFound,
-                    "The resolved spot handle is no longer available.");
-            return _snapshot;
-        }));
+        get =>
+            AwaitStateLane(
+                _lane.RunAsync(() =>
+                {
+                    if (_availability != ZLinkHandleAvailability.Available)
+                        throw new ZLinkFrameworkException(
+                            ZLinkFrameworkErrorKind.NotFound,
+                            "The resolved spot handle is no longer available."
+                        );
+                    return _snapshot;
+                })
+            );
     }
 
     internal string MeshName => AwaitStateLane(_lane.RunAsync(() => _snapshot.RouterChannelId));
@@ -204,25 +218,32 @@ internal sealed class ZLinkResolvedSpotHandle
 
     internal void Update(ZLinkSpotHandleSnapshot snapshot, ulong version)
     {
-        AwaitStateLane(_lane.RunAsync(() =>
-        {
-            if (version < _version
-                || (version == _version
-                    && _availability == ZLinkHandleAvailability.Removed)) return;
-            _snapshot = snapshot;
-            _version = version;
-            _availability = ZLinkHandleAvailability.Available;
-        }));
+        AwaitStateLane(
+            _lane.RunAsync(() =>
+            {
+                if (
+                    version < _version
+                    || (version == _version && _availability == ZLinkHandleAvailability.Removed)
+                )
+                    return;
+                _snapshot = snapshot;
+                _version = version;
+                _availability = ZLinkHandleAvailability.Available;
+            })
+        );
     }
 
     internal void Invalidate(ulong version)
     {
-        AwaitStateLane(_lane.RunAsync(() =>
-        {
-            if (version < _version) return;
-            _version = version;
-            _availability = ZLinkHandleAvailability.Removed;
-        }));
+        AwaitStateLane(
+            _lane.RunAsync(() =>
+            {
+                if (version < _version)
+                    return;
+                _version = version;
+                _availability = ZLinkHandleAvailability.Removed;
+            })
+        );
     }
 
     /// <summary>Invalidates at the current version: a later update with a
@@ -230,16 +251,19 @@ internal sealed class ZLinkResolvedSpotHandle
     /// same version does not.</summary>
     internal void InvalidateCurrent()
     {
-        AwaitStateLane(_lane.RunAsync(() =>
-        {
-            _availability = ZLinkHandleAvailability.Removed;
-        }));
+        AwaitStateLane(
+            _lane.RunAsync(() =>
+            {
+                _availability = ZLinkHandleAvailability.Removed;
+            })
+        );
     }
 
     internal async ValueTask<bool> RefreshAsync(CancellationToken cancellationToken)
     {
         var refreshed = await _refresh(cancellationToken).ConfigureAwait(false);
-        if (refreshed is not { } current) return false;
+        if (refreshed is not { } current)
+            return false;
         Update(current.Snapshot, current.Version);
         return true;
     }
@@ -249,14 +273,13 @@ internal sealed class ZLinkResolvedSpotHandle
     private static T AwaitStateLane<T>(ValueTask<T> operation) =>
         operation.GetAwaiter().GetResult();
 
-    private static void AwaitStateLane(ValueTask operation) =>
-        operation.GetAwaiter().GetResult();
+    private static void AwaitStateLane(ValueTask operation) => operation.GetAwaiter().GetResult();
 }
 
 internal enum ZLinkHandleAvailability
 {
     Available,
-    Removed
+    Removed,
 }
 
 internal static class ZLinkSpotHandleRequestExecution
@@ -264,7 +287,8 @@ internal static class ZLinkSpotHandleRequestExecution
     internal static async ValueTask<T> ExecuteAsync<T>(
         ZLinkResolvedSpotHandle handle,
         Func<ZLinkSpotHandleSnapshot, ValueTask<T>> operation,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken
+    )
     {
         cancellationToken.ThrowIfCancellationRequested();
         // The target may already have accepted the operation before a stale
@@ -289,7 +313,6 @@ internal static class ZLinkSpotHandleRequestExecution
     // Unavailable must not invalidate the cached route. Local failures
     // (Unspecified origin: resolution, transport) keep invalidating as before.
     internal static bool IsStaleRoute(ZLinkFrameworkException error) =>
-        error.Kind is ZLinkFrameworkErrorKind.NotFound
-            or ZLinkFrameworkErrorKind.Unavailable
+        error.Kind is ZLinkFrameworkErrorKind.NotFound or ZLinkFrameworkErrorKind.Unavailable
         && error.Origin != ZLinkErrorOrigin.Application;
 }

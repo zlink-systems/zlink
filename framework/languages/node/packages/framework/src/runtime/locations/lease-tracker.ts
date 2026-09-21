@@ -53,9 +53,12 @@ export class ZLinkOwnerLeaseTracker {
   async remainingLeaseMs(ownerId: string, signal?: AbortSignal): Promise<number> {
     const snapshot = await this.getSnapshot(ownerId, signal);
     if (snapshot.result.kind !== 'found') return 0;
-    return Math.max(0, snapshot.result.leaseExpiresAt.getTime()
-      - snapshot.result.storeNow.getTime()
-      - (this.monotonicNowMs() - snapshot.fetchedAtMs));
+    return Math.max(
+      0,
+      snapshot.result.leaseExpiresAt.getTime() -
+        snapshot.result.storeNow.getTime() -
+        (this.monotonicNowMs() - snapshot.fetchedAtMs)
+    );
   }
 
   async remainingOwnerTokenLeaseMs(
@@ -64,21 +67,25 @@ export class ZLinkOwnerLeaseTracker {
   ): Promise<number> {
     const snapshot = await this.getSnapshot(owner.ownerId, signal);
     if (
-      snapshot.result.kind !== 'found'
-      || snapshot.result.token.leaseGeneration !== owner.leaseGeneration
-    ) return 0;
-    return Math.max(0, snapshot.result.leaseExpiresAt.getTime()
-      - snapshot.result.storeNow.getTime()
-      - (this.monotonicNowMs() - snapshot.fetchedAtMs));
+      snapshot.result.kind !== 'found' ||
+      snapshot.result.token.leaseGeneration !== owner.leaseGeneration
+    )
+      return 0;
+    return Math.max(
+      0,
+      snapshot.result.leaseExpiresAt.getTime() -
+        snapshot.result.storeNow.getTime() -
+        (this.monotonicNowMs() - snapshot.fetchedAtMs)
+    );
   }
 
   async getLiveOwnerSetVersion(signal?: AbortSignal): Promise<number> {
     const owners = await this.lane.run(() => [...this.snapshots.keys()]);
-    const refreshed = await Promise.all(owners.map(ownerId => this.getSnapshot(ownerId, signal)));
+    const refreshed = await Promise.all(owners.map((ownerId) => this.getSnapshot(ownerId, signal)));
     const live = refreshed
-      .filter(snapshot => this.isLive(snapshot))
-      .map(snapshot => snapshot.result.kind === 'found' ? snapshot.result.token.ownerId : '')
-      .filter(ownerId => ownerId.length > 0)
+      .filter((snapshot) => this.isLive(snapshot))
+      .map((snapshot) => (snapshot.result.kind === 'found' ? snapshot.result.token.ownerId : ''))
+      .filter((ownerId) => ownerId.length > 0)
       .sort()
       .join('\n');
     return await this.lane.run(() => {
@@ -108,12 +115,18 @@ export class ZLinkOwnerLeaseTracker {
     readonly start: boolean;
   } {
     const current = this.snapshots.get(ownerId);
-    if (current !== undefined
-      && this.monotonicNowMs() - current.fetchedAtMs < this.options.pollingIntervalMs
-      && this.isLive(current)) {
+    if (
+      current !== undefined &&
+      this.monotonicNowMs() - current.fetchedAtMs < this.options.pollingIntervalMs &&
+      this.isLive(current)
+    ) {
       return {
         snapshot: current,
-        refresh: { promise: Promise.resolve(current), resolve: () => undefined, reject: () => undefined },
+        refresh: {
+          promise: Promise.resolve(current),
+          resolve: () => undefined,
+          reject: () => undefined
+        },
         start: false
       };
     }
@@ -158,11 +171,7 @@ export class ZLinkOwnerLeaseTracker {
     refresh.resolve(snapshot);
   }
 
-  private failSnapshotRefresh(
-    ownerId: string,
-    refresh: OwnerLeaseRefresh,
-    error: unknown
-  ): void {
+  private failSnapshotRefresh(ownerId: string, refresh: OwnerLeaseRefresh, error: unknown): void {
     if (this.refreshes.get(ownerId) !== refresh) return;
     this.refreshes.delete(ownerId);
     refresh.reject(error);
@@ -171,9 +180,9 @@ export class ZLinkOwnerLeaseTracker {
   private isLive(snapshot: OwnerLeaseTrackerSnapshot): boolean {
     if (snapshot.result.kind !== 'found') return false;
     const elapsedMs = this.monotonicNowMs() - snapshot.fetchedAtMs;
-    return snapshot.result.leaseExpiresAt.getTime()
-      - snapshot.result.storeNow.getTime()
-      - elapsedMs > 0;
+    return (
+      snapshot.result.leaseExpiresAt.getTime() - snapshot.result.storeNow.getTime() - elapsedMs > 0
+    );
   }
 }
 
@@ -188,7 +197,7 @@ export class ZLinkLiveRowFilter {
   ): Promise<TRow[]> {
     const live: TRow[] = [];
     for (const row of rows) {
-      if ((include === undefined || include(row)) && await this.isLive(row, ownerIdOf, signal)) {
+      if ((include === undefined || include(row)) && (await this.isLive(row, ownerIdOf, signal))) {
         live.push(row);
       }
     }
@@ -204,7 +213,7 @@ export class ZLinkLiveRowFilter {
     if (row === undefined || (include !== undefined && !include(row))) {
       return undefined;
     }
-    return await this.isLive(row, ownerIdOf, signal) ? row : undefined;
+    return (await this.isLive(row, ownerIdOf, signal)) ? row : undefined;
   }
 
   private async isLive<TRow>(

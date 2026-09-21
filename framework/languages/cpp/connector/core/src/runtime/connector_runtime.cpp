@@ -39,7 +39,8 @@ void cancel_timer (const std::shared_ptr<boost::asio::steady_timer> &timer)
     }
     try {
         (void) timer->cancel ();
-    } catch (const boost::system::system_error &) {
+    }
+    catch (const boost::system::system_error &) {
     }
 }
 
@@ -136,31 +137,28 @@ class shared_operation_runner_t
         });
     }
 
-    std::shared_ptr<boost::asio::steady_timer>
-    post_after (std::chrono::milliseconds delay, std::function<void ()> operation)
+    std::shared_ptr<boost::asio::steady_timer> post_after (std::chrono::milliseconds delay,
+                                                           std::function<void ()> operation)
     {
         auto timer = std::make_shared<boost::asio::steady_timer> (_io_context);
         timer->expires_after (delay);
-        timer->async_wait (
-          [timer, operation = std::move (operation)] (const boost::system::error_code &error) mutable {
-              if (error) {
-                  return;
-              }
-              try {
-                  operation ();
-              }
-              catch (const std::exception &) {
-              }
-              catch (...) {
-              }
-          });
+        timer->async_wait ([timer, operation = std::move (operation)] (
+                             const boost::system::error_code &error) mutable {
+            if (error) {
+                return;
+            }
+            try {
+                operation ();
+            }
+            catch (const std::exception &) {
+            }
+            catch (...) {
+            }
+        });
         return timer;
     }
 
-    boost::asio::io_context &io_context () noexcept
-    {
-        return _io_context;
-    }
+    boost::asio::io_context &io_context () noexcept { return _io_context; }
 
   private:
     boost::asio::io_context _io_context;
@@ -360,8 +358,8 @@ result_t<transport_t> validate_options (const connector_options_t &options)
         case dispatch_mode_t::immediate:
             break;
         default:
-            return result_t<transport_t>::failure (error_code_t::validation_failed,
-                                                   "stream connector dispatch_mode is out of range");
+            return result_t<transport_t>::failure (
+              error_code_t::validation_failed, "stream connector dispatch_mode is out of range");
     }
     switch (options.diagnostics_level) {
         case diagnostics_level_t::off:
@@ -371,7 +369,8 @@ result_t<transport_t> validate_options (const connector_options_t &options)
             break;
         default:
             return result_t<transport_t>::failure (
-              error_code_t::validation_failed, "stream connector diagnostics_level is out of range");
+              error_code_t::validation_failed,
+              "stream connector diagnostics_level is out of range");
     }
     if (options.typed_codec) {
         switch (options.typed_codec->codec_id ()) {
@@ -440,14 +439,13 @@ void schedule_delivery (std::shared_ptr<connector_state_t> state, std::function<
         // are frequently invoked from the connector's own read pump; running user
         // callbacks inline there lets a slow or blocking callback starve the pump
         // (and deadlock when the callback waits on a later inbound frame).
-        boost::asio::post (state->delivery_strand,
-                           [callback = std::move (callback)] () mutable {
-                               try {
-                                   callback ();
-                               }
-                               catch (...) {
-                               }
-                           });
+        boost::asio::post (state->delivery_strand, [callback = std::move (callback)] () mutable {
+            try {
+                callback ();
+            }
+            catch (...) {
+            }
+        });
         return;
     }
     std::lock_guard<std::mutex> lock (state->delivery_mutex);
@@ -465,17 +463,16 @@ void publish_error (connector_state_t &state, error_t error) noexcept
     if (handlers.empty ()) {
         return;
     }
-    schedule_lifecycle_delivery (
-      state.shared_from_this (),
-      [handlers = std::move (handlers), error = std::move (error)] {
-          for (const auto &entry : handlers) {
-              try {
-                  entry.handler (error);
-              }
-              catch (...) {
-              }
-          }
-      });
+    schedule_lifecycle_delivery (state.shared_from_this (),
+                                 [handlers = std::move (handlers), error = std::move (error)] {
+                                     for (const auto &entry : handlers) {
+                                         try {
+                                             entry.handler (error);
+                                         }
+                                         catch (...) {
+                                         }
+                                     }
+                                 });
 }
 
 zlink::message_t encode_typed_payload (const std::shared_ptr<void> &state_handle,
@@ -555,7 +552,8 @@ std::chrono::milliseconds jittered_delay (std::chrono::milliseconds base)
         return base;
     }
     static thread_local std::mt19937_64 engine (
-      std::random_device{}() ^ static_cast<std::uint64_t> (
+      std::random_device{}()
+      ^ static_cast<std::uint64_t> (
         std::chrono::steady_clock::now ().time_since_epoch ().count ()));
     std::uniform_real_distribution<double> fraction (0.5, 1.0);
     const auto scaled =
@@ -620,8 +618,7 @@ void post_connect_operation (std::function<void ()> operation)
 }
 
 std::shared_ptr<boost::asio::steady_timer>
-post_runtime_operation_after (std::chrono::milliseconds delay,
-                              std::function<void ()> operation)
+post_runtime_operation_after (std::chrono::milliseconds delay, std::function<void ()> operation)
 {
     return shared_operation_runner ().post_after (delay, std::move (operation));
 }
@@ -691,8 +688,8 @@ void change_state (std::shared_ptr<connector_state_t> state,
                   << " stage=state previous=" << connection_state_name (previous)
                   << " next=" << connection_state_name (next);
         if (error) {
-            std::cerr << " error_code=" << static_cast<int> (error->code)
-                      << " error=\"" << error->message << "\"";
+            std::cerr << " error_code=" << static_cast<int> (error->code) << " error=\""
+                      << error->message << "\"";
         }
         std::cerr << '\n';
     }
@@ -926,9 +923,8 @@ void connector_t::set_diagnostics_level (diagnostics_level_t level)
     detail::state_from (_state)->diagnostics_level_cell.store (level, std::memory_order_release);
 }
 
-void connector_t::set_diagnostics_level_async (
-  diagnostics_level_t level,
-  std::function<void (result_t<void>)> callback)
+void connector_t::set_diagnostics_level_async (diagnostics_level_t level,
+                                               std::function<void (result_t<void>)> callback)
 {
     detail::state_from (_state)->diagnostics_level_cell.store (level, std::memory_order_release);
     callback (result_t<void>::success ());
@@ -1019,9 +1015,8 @@ begin_connect_attempt (const std::shared_ptr<detail::connector_state_t> &state,
         state->reconnect_scheduled = false;
         state->reconnect_timer.reset ();
     } else if (state->connect_attempt_active || state->reconnect_scheduled) {
-        state->lifecycle_changed.wait (lock, [&] {
-            return !state->connect_attempt_active && !state->reconnect_scheduled;
-        });
+        state->lifecycle_changed.wait (
+          lock, [&] { return !state->connect_attempt_active && !state->reconnect_scheduled; });
         if (state->state == connection_state_t::connected) {
             return result_t<void>::success ();
         }
@@ -1030,16 +1025,15 @@ begin_connect_attempt (const std::shared_ptr<detail::connector_state_t> &state,
                                             "stream connector is closed");
         }
         const auto error = state->last_disconnect_error;
-        return result_t<void>::failure (
-          error ? error->code : error_code_t::disconnected,
-          error ? error->message : "stream connector is not connected");
+        return result_t<void>::failure (error ? error->code : error_code_t::disconnected,
+                                        error ? error->message
+                                              : "stream connector is not connected");
     }
     if (state->state == connection_state_t::connected) {
         return result_t<void>::success ();
     }
     if (state->state == connection_state_t::closed || state->close_requested.load ()) {
-        return result_t<void>::failure (error_code_t::disconnected,
-                                        "stream connector is closed");
+        return result_t<void>::failure (error_code_t::disconnected, "stream connector is closed");
     }
     state->connect_attempt_active = true;
     return std::nullopt;
@@ -1116,30 +1110,27 @@ connect_transport (const std::shared_ptr<detail::connector_state_t> &state,
         control->cancel ();
         operation->complete (boost::asio::error::timed_out, nullptr);
     });
-    auto completion = [operation] (
-                        boost::system::error_code error,
-                        std::unique_ptr<detail::stream_connection_t> connection) mutable {
-        operation->complete (error, std::move (connection));
-    };
+    auto completion =
+      [operation] (boost::system::error_code error,
+                   std::unique_ptr<detail::stream_connection_t> connection) mutable {
+          operation->complete (error, std::move (connection));
+      };
 
     if (state->effective_transport == transport_t::websocket) {
-        detail::connect_websocket_async (state->io_context, *parsed.websocket,
-                                         control,
+        detail::connect_websocket_async (state->io_context, *parsed.websocket, control,
                                          std::move (completion));
     } else if (state->effective_transport == transport_t::websocket_secure) {
 #ifdef ZLINK_STREAM_CONNECTOR_WITH_OPENSSL
-        detail::connect_websocket_secure_async (
-          state->io_context, *parsed.websocket_secure,
-          state->options.skip_server_certificate_validation, control,
-          std::move (completion));
+        detail::connect_websocket_secure_async (state->io_context, *parsed.websocket_secure,
+                                                state->options.skip_server_certificate_validation,
+                                                control, std::move (completion));
 #else
         operation->complete (boost::asio::error::operation_not_supported, nullptr);
 #endif
     } else if (state->effective_transport == transport_t::tls) {
 #ifdef ZLINK_STREAM_CONNECTOR_WITH_OPENSSL
         detail::connect_tls_async (state->io_context, *parsed.tls,
-                                   state->options.skip_server_certificate_validation,
-                                   control,
+                                   state->options.skip_server_certificate_validation, control,
                                    std::move (completion));
 #else
         operation->complete (boost::asio::error::operation_not_supported, nullptr);
@@ -1179,8 +1170,8 @@ connect_transport (const std::shared_ptr<detail::connector_state_t> &state,
                         completion (connect_error, nullptr);
                         return;
                     }
-                    completion ({}, detail::make_tcp_connection (state->io_context,
-                                                                  std::move (*socket)));
+                    completion (
+                      {}, detail::make_tcp_connection (state->io_context, std::move (*socket)));
                 });
           });
     }
@@ -1197,15 +1188,13 @@ connect_transport (const std::shared_ptr<detail::connector_state_t> &state,
           error_code_t::connect_timeout,
           error ? error.message () : "stream connector transport connect failed");
     }
-    return result_t<std::unique_ptr<detail::stream_connection_t>>::success (
-      std::move (connection));
+    return result_t<std::unique_ptr<detail::stream_connection_t>>::success (std::move (connection));
 }
 
 void schedule_start_read_loop (std::shared_ptr<detail::connector_state_t> state)
 {
-    detail::post_runtime_operation ([state = std::move (state)] {
-        detail::start_read_loop (state);
-    });
+    detail::post_runtime_operation (
+      [state = std::move (state)] { detail::start_read_loop (state); });
 }
 
 result_t<void> connect_state (std::shared_ptr<detail::connector_state_t> state,
@@ -1218,8 +1207,8 @@ result_t<void> connect_state (std::shared_ptr<detail::connector_state_t> state,
     state->connect_started = true;
     auto parsed = parse_connect_options (state);
     if (!parsed) {
-        const auto message = parsed.error () ? parsed.error ()->message
-                                             : "stream connector endpoint is invalid";
+        const auto message =
+          parsed.error () ? parsed.error ()->message : "stream connector endpoint is invalid";
         /* stream-connector §9: configuration_error and validation_failed keep
          * the state the connector had before the attempt and leave no close
          * reason. Only the attempt fails. */
@@ -1234,12 +1223,11 @@ result_t<void> connect_state (std::shared_ptr<detail::connector_state_t> state,
     std::string last_error;
     const auto deadline = std::chrono::steady_clock::now () + state->options.connect_timeout;
 
-    for (int attempt_number = 1;
-         !max_attempts || attempt_number <= std::max (1, *max_attempts);
+    for (int attempt_number = 1; !max_attempts || attempt_number <= std::max (1, *max_attempts);
          ++attempt_number) {
         if (state->close_requested.load (std::memory_order_acquire))
-            return result_t<void>::failure (
-              error_code_t::disconnected, "stream connector is closed");
+            return result_t<void>::failure (error_code_t::disconnected,
+                                            "stream connector is closed");
         const auto now = std::chrono::steady_clock::now ();
         if (now >= deadline) {
             last_error = "stream connector connect timed out";
@@ -1259,13 +1247,12 @@ result_t<void> connect_state (std::shared_ptr<detail::connector_state_t> state,
                       std::move (connected.value ()));
                     owned->shutdown_and_close_async ();
                 }
-                return result_t<void>::failure (
-                    error_code_t::disconnected, "stream connector is closed");
+                return result_t<void>::failure (error_code_t::disconnected,
+                                                "stream connector is closed");
             }
             connected.value ()->set_read_message_limit (
               state->options.max_receive_payload_size
-              + static_cast<std::size_t> (std::numeric_limits<std::uint16_t>::max ())
-              + 6u);
+              + static_cast<std::size_t> (std::numeric_limits<std::uint16_t>::max ()) + 6u);
             {
                 std::lock_guard<std::mutex> lock (state->transport_mutex);
                 state->connection = std::move (connected.value ());
@@ -1291,25 +1278,23 @@ result_t<void> connect_state (std::shared_ptr<detail::connector_state_t> state,
         last_error = connected.error () ? connected.error ()->message
                                         : "stream connector transport connect failed";
         if (state->close_requested.load (std::memory_order_acquire))
-            return result_t<void>::failure (
-              error_code_t::disconnected, "stream connector is closed");
+            return result_t<void>::failure (error_code_t::disconnected,
+                                            "stream connector is closed");
         if (max_attempts && attempt_number >= std::max (1, *max_attempts)) {
             break;
         }
-        const auto delay = std::min (
-          detail::jittered_delay (retry_delay),
-          std::chrono::duration_cast<std::chrono::milliseconds> (
-            deadline - std::chrono::steady_clock::now ()));
+        const auto delay = std::min (detail::jittered_delay (retry_delay),
+                                     std::chrono::duration_cast<std::chrono::milliseconds> (
+                                       deadline - std::chrono::steady_clock::now ()));
         if (delay > std::chrono::milliseconds::zero ()) {
             std::mutex retry_mutex;
             std::condition_variable retry_ready;
             std::unique_lock<std::mutex> retry_lock (retry_mutex);
             retry_ready.wait_for (retry_lock, delay);
         }
-        retry_delay =
-          std::min (state->options.reconnect.max_delay,
-                    std::chrono::milliseconds (static_cast<int> (
-                      retry_delay.count () * state->options.reconnect.backoff_factor)));
+        retry_delay = std::min (state->options.reconnect.max_delay,
+                                std::chrono::milliseconds (static_cast<int> (
+                                  retry_delay.count () * state->options.reconnect.backoff_factor)));
     }
 
     detail::change_state (state, connection_state_t::disconnected,
@@ -1393,9 +1378,7 @@ result_t<void> close_state (std::shared_ptr<detail::connector_state_t> state)
         connect_control->cancel ();
     {
         std::unique_lock<std::mutex> lock (state->lifecycle_mutex);
-        state->lifecycle_changed.wait (lock, [&] {
-            return !state->connect_attempt_active;
-        });
+        state->lifecycle_changed.wait (lock, [&] { return !state->connect_attempt_active; });
     }
     detail::cancel_timer (reconnect_timer);
     state->lifecycle_changed.notify_all ();
@@ -1410,8 +1393,8 @@ result_t<void> close_state (std::shared_ptr<detail::connector_state_t> state)
     if (active_write_callback) {
         closed_write_callbacks.push_back (
           [callback = std::move (active_write_callback)] () mutable {
-              callback (result_t<void>::failure (
-                error_code_t::disconnected, "stream connector is closed"));
+              callback (
+                result_t<void>::failure (error_code_t::disconnected, "stream connector is closed"));
           });
     }
     {
@@ -1432,11 +1415,10 @@ result_t<void> close_state (std::shared_ptr<detail::connector_state_t> state)
             auto send = std::move (state->pending_sends.front ());
             state->pending_sends.pop_front ();
             if (send.callback) {
-                closed_send_callbacks.push_back (
-                  [callback = std::move (send.callback)] () mutable {
-                      callback (result_t<void>::failure (error_code_t::disconnected,
-                                                         "stream connector is closed"));
-                  });
+                closed_send_callbacks.push_back ([callback = std::move (send.callback)] () mutable {
+                    callback (result_t<void>::failure (error_code_t::disconnected,
+                                                       "stream connector is closed"));
+                });
             }
         }
         while (!state->pending_writes.empty ()) {
@@ -1534,8 +1516,8 @@ result_t<void> connector_t::dispatch ()
 result_t<packet_t> connector_t::wait_for (std::string packet_name,
                                           std::chrono::milliseconds timeout)
 {
-    return detail::wait_for_packet (
-      detail::state_from (_state), std::move (packet_name), nullptr, timeout);
+    return detail::wait_for_packet (detail::state_from (_state), std::move (packet_name), nullptr,
+                                    timeout);
 }
 
 subscription_t connector_t::on_connection_state_changed (

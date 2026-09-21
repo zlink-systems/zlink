@@ -44,19 +44,22 @@ public sealed class ZLinkRedisLocationOptions
         {
             throw new ArgumentException(
                 "ZLinkRedisLocationOptions.KeyPrefix is required. Pick a namespace such as \"zlink:e2e\".",
-                nameof(KeyPrefix));
+                nameof(KeyPrefix)
+            );
         }
 
         if (ConfigurationOptions is null && string.IsNullOrEmpty(ConnectionString))
         {
             throw new ArgumentException(
                 "ZLinkRedisLocationOptions requires ConnectionString or ConfigurationOptions.",
-                nameof(ConnectionString));
+                nameof(ConnectionString)
+            );
         }
 
         if (OperationTimeout <= TimeSpan.Zero)
             throw new ArgumentOutOfRangeException(
                 nameof(OperationTimeout),
-                "OperationTimeout must be greater than zero.");
+                "OperationTimeout must be greater than zero."
+            );
     }
 }

@@ -10,7 +10,8 @@ internal sealed class ZLinkManagedStream : IZLinkStream
         IZLinkBackendStreamSocket socket,
         RoutingId routingId,
         ZLinkCodecRegistryBuilder codecs,
-        string transport)
+        string transport
+    )
     {
         _socket = socket;
         _routingId = routingId;
@@ -29,9 +30,7 @@ internal sealed class ZLinkManagedStream : IZLinkStream
 
     public string? RemoteAddr { get; private set; }
 
-    public bool Write(
-        ZLinkMessage payload,
-        SendFlags flags = SendFlags.None)
+    public bool Write(ZLinkMessage payload, SendFlags flags = SendFlags.None)
     {
         ArgumentNullException.ThrowIfNull(payload);
         if (flags is not (SendFlags.None or SendFlags.DontWait))
@@ -52,9 +51,7 @@ internal sealed class ZLinkManagedStream : IZLinkStream
         return true;
     }
 
-    internal Task SubmitRawAsync(
-        Message payload,
-        CancellationToken cancellationToken)
+    internal Task SubmitRawAsync(Message payload, CancellationToken cancellationToken)
     {
         return _socket.SendAsync(_routingId, payload, cancellationToken);
     }
@@ -68,25 +65,30 @@ internal sealed class ZLinkManagedStream : IZLinkStream
     internal async ValueTask BindActorAsync(
         ZLinkBackendActorRef actor,
         TimeSpan timeout,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken
+    )
     {
-        await _socket.BindActorAsync(_routingId, actor, timeout, cancellationToken)
+        await _socket
+            .BindActorAsync(_routingId, actor, timeout, cancellationToken)
             .ConfigureAwait(false);
     }
 
     internal async ValueTask UnbindActorAsync(
         string actorId,
         TimeSpan timeout,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken
+    )
     {
-        await _socket.UnbindActorAsync(_routingId, actorId, timeout, cancellationToken)
+        await _socket
+            .UnbindActorAsync(_routingId, actorId, timeout, cancellationToken)
             .ConfigureAwait(false);
     }
 
     internal bool SendBoundActor(
         string actorId,
         IReadOnlyList<Message> parts,
-        SendFlags flags = SendFlags.None)
+        SendFlags flags = SendFlags.None
+    )
     {
         return _socket.SendBoundActor(_routingId, actorId, parts, flags);
     }

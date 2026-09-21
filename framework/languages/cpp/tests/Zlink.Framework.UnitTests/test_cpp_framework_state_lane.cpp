@@ -47,15 +47,12 @@ struct reference_work_t
     int &operator() ();
 };
 
-static_assert (std::is_same_v<
-               decltype (std::declval<state_lane_t &> ().run (int_work_t{})),
-               std::future<int>>);
-static_assert (std::is_same_v<
-               decltype (std::declval<state_lane_t &> ().run (void_work_t{})),
-               std::future<void>>);
-static_assert (std::is_same_v<
-               decltype (std::declval<state_lane_t &> ().run (reference_work_t{})),
-               std::future<int &>>);
+static_assert (
+  std::is_same_v<decltype (std::declval<state_lane_t &> ().run (int_work_t{})), std::future<int>>);
+static_assert (std::is_same_v<decltype (std::declval<state_lane_t &> ().run (void_work_t{})),
+                              std::future<void>>);
+static_assert (std::is_same_v<decltype (std::declval<state_lane_t &> ().run (reference_work_t{})),
+                              std::future<int &>>);
 
 TEST (ZLinkStateLane, RunReturnsTheResultOfTheWork)
 {
@@ -99,11 +96,13 @@ TEST (ZLinkStateLane, ConcurrentSubmissionsKeepTheirPlaceBehindTheCurrentTurn)
     auto released = release.get_future ();
     std::vector<int> order;
     std::thread owner ([&] {
-        lane.run ([&] {
-            entered.set_value ();
-            released.wait ();
-            order.push_back (0);
-        }).get ();
+        lane
+          .run ([&] {
+              entered.set_value ();
+              released.wait ();
+              order.push_back (0);
+          })
+          .get ();
     });
     entered.get_future ().wait ();
     auto second = lane.run ([&] { order.push_back (1); });
@@ -155,9 +154,7 @@ TEST (ZLinkStateLane, RunSurfacesAFailureToItsOwnCaller)
     offload_executor_t executor (2);
     state_lane_t lane (executor);
 
-    auto result = lane.run ([] () -> int {
-        throw std::invalid_argument ("boom");
-    });
+    auto result = lane.run ([] () -> int { throw std::invalid_argument ("boom"); });
     EXPECT_THROW (result.get (), std::invalid_argument);
 }
 
@@ -206,13 +203,15 @@ TEST (ZLinkStateLane, WorkItemsNeverOverlap)
 
     for (int index = 0; index < 64; ++index) {
         threads.emplace_back ([&] {
-            lane.run ([&] {
-                if (++in_flight != 1) {
-                    observed_overlap = true;
-                }
-                std::this_thread::yield ();
-                --in_flight;
-            }).get ();
+            lane
+              .run ([&] {
+                  if (++in_flight != 1) {
+                      observed_overlap = true;
+                  }
+                  std::this_thread::yield ();
+                  --in_flight;
+              })
+              .get ();
         });
     }
     for (auto &thread : threads) {
@@ -255,15 +254,17 @@ TEST (ZLinkStateLane, ReenteringTheSameLaneFailsInsteadOfHanging)
     offload_executor_t executor (2);
     state_lane_t lane (executor);
 
-    const auto message = lane.run ([&lane] {
-        try {
-            (void) lane.run ([] { return 1; });
-        }
-        catch (const std::logic_error &error) {
-            return std::string (error.what ());
-        }
-        return std::string ();
-    }).get ();
+    const auto message = lane
+                           .run ([&lane] {
+                               try {
+                                   (void) lane.run ([] { return 1; });
+                               }
+                               catch (const std::logic_error &error) {
+                                   return std::string (error.what ());
+                               }
+                               return std::string ();
+                           })
+                           .get ();
 
     EXPECT_NE (std::string::npos, message.find ("already runs on the state lane"));
 }
@@ -310,11 +311,13 @@ TEST (ZLinkStateLane, CloseRejectsNewWorkWhileDrainingAcceptedTurns)
     auto released = release.get_future ();
     std::vector<int> order;
     std::thread owner ([&] {
-        lane.run ([&] {
-            entered.set_value ();
-            released.wait ();
-            order.push_back (0);
-        }).get ();
+        lane
+          .run ([&] {
+              entered.set_value ();
+              released.wait ();
+              order.push_back (0);
+          })
+          .get ();
     });
     entered.get_future ().wait ();
     EXPECT_TRUE (lane.try_post ([&] { order.push_back (1); }));

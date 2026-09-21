@@ -6,10 +6,13 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+
+import org.junit.jupiter.api.Test;
+
+import systems.zlink.contracts.core.RoutingId;
+
 import java.nio.file.Files;
 import java.nio.file.Path;
-import org.junit.jupiter.api.Test;
-import systems.zlink.contracts.core.RoutingId;
 
 final class ZLinkCompletionTerminalConformanceTest {
     @Test
@@ -22,31 +25,34 @@ final class ZLinkCompletionTerminalConformanceTest {
 
         ZLinkServiceM6BWireCodec codec = new ZLinkServiceM6BWireCodec();
         for (JsonNode operation : fixture.path("operations")) {
-            long high = Long.parseUnsignedLong(
-                operation.path("operationId").path("high").asText());
-            long low = Long.parseUnsignedLong(
-                operation.path("operationId").path("low").asText());
-            long replyRoute = Long.parseUnsignedLong(
-                operation.path("replyRouteId").asText());
+            long high = Long.parseUnsignedLong(operation.path("operationId").path("high").asText());
+            long low = Long.parseUnsignedLong(operation.path("operationId").path("low").asText());
+            long replyRoute = Long.parseUnsignedLong(operation.path("replyRouteId").asText());
             assertTrue(high != 0 || low != 0);
             assertNotEquals(0, replyRoute);
 
             ZLinkServiceM6BWireCodec.InstanceSpotMessage expected =
-                new ZLinkServiceM6BWireCodec.InstanceSpotMessage(
-                    0,
-                    new ZLinkServiceM6BWireCodec.InstanceRouteFence(
-                        RoutingId.from("target"), 2, "spot", 3,
-                        "owner", 4, 5, "version"),
-                    "stable.Type",
-                    6,
-                    RoutingId.from("source"),
-                    "source-spot",
-                    true,
-                    high,
-                    low,
-                    replyRoute);
+                    new ZLinkServiceM6BWireCodec.InstanceSpotMessage(
+                            0,
+                            new ZLinkServiceM6BWireCodec.InstanceRouteFence(
+                                    RoutingId.from("target"),
+                                    2,
+                                    "spot",
+                                    3,
+                                    "owner",
+                                    4,
+                                    5,
+                                    "version"),
+                            "stable.Type",
+                            6,
+                            RoutingId.from("source"),
+                            "source-spot",
+                            true,
+                            high,
+                            low,
+                            replyRoute);
             ZLinkServiceM6BWireCodec.InstanceSpotMessage decoded =
-                codec.decodeInstanceSpotHeader(codec.encodeInstanceSpotHeader(expected));
+                    codec.decodeInstanceSpotHeader(codec.encodeInstanceSpotHeader(expected));
             assertEquals(high, decoded.operationHigh());
             assertEquals(low, decoded.operationLow());
             assertEquals(replyRoute, decoded.replyRouteId());
@@ -58,13 +64,13 @@ final class ZLinkCompletionTerminalConformanceTest {
         JsonNode fixture = fixture();
         for (JsonNode scenario : fixture.path("raceScenarios")) {
             assertTrue(
-                scenario.path("applicationCompletionCount").asInt() <= 1,
-                scenario.path("name").asText());
+                    scenario.path("applicationCompletionCount").asInt() <= 1,
+                    scenario.path("name").asText());
             if (!scenario.path("applicationTerminal").isNull()) {
                 assertEquals(
-                    1,
-                    scenario.path("applicationCompletionCount").asInt(),
-                    scenario.path("name").asText());
+                        1,
+                        scenario.path("applicationCompletionCount").asInt(),
+                        scenario.path("name").asText());
             }
         }
     }
@@ -76,8 +82,7 @@ final class ZLinkCompletionTerminalConformanceTest {
     private static Path sharedFixture() {
         Path current = Path.of(System.getProperty("user.dir")).toAbsolutePath();
         while (current != null) {
-            Path candidate = current.resolve(
-                "runtime/conformance/completion-terminal-v1.json");
+            Path candidate = current.resolve("runtime/conformance/completion-terminal-v1.json");
             if (Files.isRegularFile(candidate)) {
                 return candidate;
             }

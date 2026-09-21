@@ -28,8 +28,7 @@ public sealed class ZLinkLocationOptions
     /// Time reserved for local authority fencing before the owner lease
     /// expires.
     /// </summary>
-    public TimeSpan OwnerLeaseFencingMargin { get; set; } =
-        TimeSpan.FromSeconds(5);
+    public TimeSpan OwnerLeaseFencingMargin { get; set; } = TimeSpan.FromSeconds(5);
 
     /// <summary>
     /// Maximum time allowed for one owner-lease renewal attempt.
@@ -52,8 +51,7 @@ public sealed class ZLinkLocationOptions
     /// Maximum time a relocated Session route seal may wait for its exact
     /// route update before the physical Session is closed.
     /// </summary>
-    public TimeSpan SessionRelocationSealTimeout { get; set; } =
-        TimeSpan.FromSeconds(3);
+    public TimeSpan SessionRelocationSealTimeout { get; set; } = TimeSpan.FromSeconds(3);
 
     /// <summary>
     /// Maximum size in bytes of one encoded relocation payload chunk sent as
@@ -66,8 +64,7 @@ public sealed class ZLinkLocationOptions
     /// Upper bound on the sum of relocation chunk bytes in flight on one peer
     /// connection. Zero disables the budget.
     /// </summary>
-    public long RelocationInFlightPayloadBudget { get; set; } =
-        16 * 1024 * 1024;
+    public long RelocationInFlightPayloadBudget { get; set; } = 16 * 1024 * 1024;
 
     /// <summary>
     /// Upper bound on the sum of relocation chunk bytes in flight across the
@@ -80,6 +77,5 @@ public sealed class ZLinkLocationOptions
     /// the time the source retains the boundary batch copy for
     /// retransmission after the cutover submit reaches a terminal state.
     /// </summary>
-    public TimeSpan RelocationCutoverWaitTimeout { get; set; } =
-        TimeSpan.FromSeconds(1);
+    public TimeSpan RelocationCutoverWaitTimeout { get; set; } = TimeSpan.FromSeconds(1);
 }

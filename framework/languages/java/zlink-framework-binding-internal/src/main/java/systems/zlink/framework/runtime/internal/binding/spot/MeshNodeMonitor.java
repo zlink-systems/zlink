@@ -7,7 +7,13 @@ import systems.zlink.contracts.sockets.RecvFlags;
 /** Pull receiver for one MeshNode monitor stream. */
 public interface MeshNodeMonitor extends AutoCloseable {
     MeshMonitorEvent recv(RecvFlags flags);
-    default MeshMonitorEvent recv() { return recv(RecvFlags.NONE); }
+
+    default MeshMonitorEvent recv() {
+        return recv(RecvFlags.NONE);
+    }
+
     MeshMonitorStatus status();
-    @Override void close();
+
+    @Override
+    void close();
 }

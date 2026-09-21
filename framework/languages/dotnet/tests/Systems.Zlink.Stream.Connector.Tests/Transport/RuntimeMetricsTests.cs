@@ -28,14 +28,21 @@ public sealed partial class StreamConnectorTests
         var endpoint = (IPEndPoint)listener.LocalEndpoint;
         var headerCodec = new ZlinkStreamHeaderCodec();
         var inboundPayload = "inbound"u8.ToArray();
-        var inboundHeader = headerCodec.Encode(new ZlinkStreamHeader(
-            ZlinkStreamMessageKind.Send,
-            ZlinkStreamCodec.Raw,
-            ZlinkStreamHeaderFlags.None,
-            null,
-            "metric.inbound",
-            ZlinkStreamMetadata.Empty)).ToArray();
-        var outboundSize = new TaskCompletionSource<long>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var inboundHeader = headerCodec
+            .Encode(
+                new ZlinkStreamHeader(
+                    ZlinkStreamMessageKind.Send,
+                    ZlinkStreamCodec.Raw,
+                    ZlinkStreamHeaderFlags.None,
+                    null,
+                    "metric.inbound",
+                    ZlinkStreamMetadata.Empty
+                )
+            )
+            .ToArray();
+        var outboundSize = new TaskCompletionSource<long>(
+            TaskCreationOptions.RunContinuationsAsynchronously
+        );
         var server = Task.Run(async () =>
         {
             using var tcp = await listener.AcceptTcpClientAsync();
@@ -45,22 +52,28 @@ public sealed partial class StreamConnectorTests
             await WritePacketAsync(stream, inboundHeader, inboundPayload);
         });
 
-        await using var connector = ZlinkStreamConnectorFactory.Create(new ZlinkStreamConnectorOptions
-        {
-            Endpoint = new Uri($"tcp://127.0.0.1:{endpoint.Port}"),
-            Heartbeat = DisabledHeartbeat(),
-            DispatchMode = ZlinkStreamDispatchMode.Immediate,
-            Reconnect = new ZlinkStreamReconnectOptions { Enabled = false }
-        });
+        await using var connector = ZlinkStreamConnectorFactory.Create(
+            new ZlinkStreamConnectorOptions
+            {
+                Endpoint = new Uri($"tcp://127.0.0.1:{endpoint.Port}"),
+                Heartbeat = DisabledHeartbeat(),
+                DispatchMode = ZlinkStreamDispatchMode.Immediate,
+                Reconnect = new ZlinkStreamReconnectOptions { Enabled = false },
+            }
+        );
         var received = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
-        connector.On("metric.inbound", (_, _) =>
-        {
-            received.TrySetResult();
-            return ValueTask.CompletedTask;
-        });
+        connector.On(
+            "metric.inbound",
+            (_, _) =>
+            {
+                received.TrySetResult();
+                return ValueTask.CompletedTask;
+            }
+        );
 
         await connector.Connect.Async();
-        await connector.Send(new ZlinkStreamEncodedPayload(ZlinkStreamCodec.Raw, "outbound"u8.ToArray()))
+        await connector
+            .Send(new ZlinkStreamEncodedPayload(ZlinkStreamCodec.Raw, "outbound"u8.ToArray()))
             .PacketName("metric.outbound")
             .Async();
 
@@ -81,28 +94,33 @@ public sealed partial class StreamConnectorTests
         using var listener = new TcpListener(IPAddress.Loopback, 0);
         listener.Start();
         var endpoint = (IPEndPoint)listener.LocalEndpoint;
-        var reconnected = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var reconnected = new TaskCompletionSource(
+            TaskCreationOptions.RunContinuationsAsynchronously
+        );
         var server = Task.Run(async () =>
         {
-            using (var first = await listener.AcceptTcpClientAsync()) first.Close();
+            using (var first = await listener.AcceptTcpClientAsync())
+                first.Close();
             using var second = await listener.AcceptTcpClientAsync();
             reconnected.SetResult();
             await Task.Delay(TimeSpan.FromMilliseconds(100));
         });
 
-        await using var connector = ZlinkStreamConnectorFactory.Create(new ZlinkStreamConnectorOptions
-        {
-            Endpoint = new Uri($"tcp://127.0.0.1:{endpoint.Port}"),
-            Heartbeat = DisabledHeartbeat(),
-            DispatchMode = ZlinkStreamDispatchMode.Immediate,
-            Reconnect = new ZlinkStreamReconnectOptions
+        await using var connector = ZlinkStreamConnectorFactory.Create(
+            new ZlinkStreamConnectorOptions
             {
-                InitialDelay = TimeSpan.FromMilliseconds(10),
-                MaxDelay = TimeSpan.FromMilliseconds(10),
-                BackoffFactor = 1,
-                MaxAttempts = 3
+                Endpoint = new Uri($"tcp://127.0.0.1:{endpoint.Port}"),
+                Heartbeat = DisabledHeartbeat(),
+                DispatchMode = ZlinkStreamDispatchMode.Immediate,
+                Reconnect = new ZlinkStreamReconnectOptions
+                {
+                    InitialDelay = TimeSpan.FromMilliseconds(10),
+                    MaxDelay = TimeSpan.FromMilliseconds(10),
+                    BackoffFactor = 1,
+                    MaxAttempts = 3,
+                },
             }
-        });
+        );
 
         await connector.Connect.Async();
         await reconnected.Task.WaitAsync(TimeSpan.FromSeconds(5));
@@ -130,13 +148,17 @@ public sealed partial class StreamConnectorTests
             await Task.Delay(TimeSpan.FromMilliseconds(100));
         });
 
-        await using (var connector = ZlinkStreamConnectorFactory.Create(new ZlinkStreamConnectorOptions
-                     {
-                         Endpoint = new Uri($"tls://127.0.0.1:{successEndpoint.Port}"),
-                         Heartbeat = DisabledHeartbeat(),
-                         Reconnect = new ZlinkStreamReconnectOptions { Enabled = false },
-                         SkipServerCertificateValidation = true
-                     }))
+        await using (
+            var connector = ZlinkStreamConnectorFactory.Create(
+                new ZlinkStreamConnectorOptions
+                {
+                    Endpoint = new Uri($"tls://127.0.0.1:{successEndpoint.Port}"),
+                    Heartbeat = DisabledHeartbeat(),
+                    Reconnect = new ZlinkStreamReconnectOptions { Enabled = false },
+                    SkipServerCertificateValidation = true,
+                }
+            )
+        )
             await connector.Connect.Async();
         await successServer;
 
@@ -154,17 +176,19 @@ public sealed partial class StreamConnectorTests
             await webSocket.CloseOutputAsync(
                 WebSocketCloseStatus.NormalClosure,
                 "closed",
-                CancellationToken.None);
+                CancellationToken.None
+            );
         });
         var webSocketOptions = new ZlinkStreamConnectorOptions
         {
             Endpoint = new Uri($"ws://127.0.0.1:{webSocketPort}/metrics/"),
             Heartbeat = DisabledHeartbeat(),
-            Reconnect = new ZlinkStreamReconnectOptions { Enabled = false }
+            Reconnect = new ZlinkStreamReconnectOptions { Enabled = false },
         };
         var webSocketConnection = await ZlinkStreamTransportFactory.ConnectAsync(
             webSocketOptions,
-            CancellationToken.None);
+            CancellationToken.None
+        );
         await webSocketConnection.CloseAsync(CancellationToken.None);
         await webSocketServer;
 
@@ -176,14 +200,20 @@ public sealed partial class StreamConnectorTests
             using var tcp = await failureListener.AcceptTcpClientAsync();
             tcp.Close();
         });
-        await using (var connector = ZlinkStreamConnectorFactory.Create(new ZlinkStreamConnectorOptions
-                     {
-                         Endpoint = new Uri($"tls://127.0.0.1:{failureEndpoint.Port}"),
-                         Heartbeat = DisabledHeartbeat(),
-                         Reconnect = new ZlinkStreamReconnectOptions { Enabled = false },
-                         SkipServerCertificateValidation = true
-                     }))
-            await Assert.ThrowsAsync<ZlinkStreamException>(async () => await connector.Connect.Async());
+        await using (
+            var connector = ZlinkStreamConnectorFactory.Create(
+                new ZlinkStreamConnectorOptions
+                {
+                    Endpoint = new Uri($"tls://127.0.0.1:{failureEndpoint.Port}"),
+                    Heartbeat = DisabledHeartbeat(),
+                    Reconnect = new ZlinkStreamReconnectOptions { Enabled = false },
+                    SkipServerCertificateValidation = true,
+                }
+            )
+        )
+            await Assert.ThrowsAsync<ZlinkStreamException>(async () =>
+                await connector.Connect.Async()
+            );
         await failureServer;
 
         Assert.Equal(0, metrics.Count("zlink.stream.handshake.duration"));
@@ -211,20 +241,24 @@ public sealed partial class StreamConnectorTests
                 ZlinkStreamHeaderFlags.HasRequestSeq,
                 requestHeader.RequestSeq,
                 string.Empty,
-                ZlinkStreamMetadata.Empty);
+                ZlinkStreamMetadata.Empty
+            );
             await WritePacketAsync(
                 stream,
                 headerCodec.Encode(responseHeader).ToArray(),
-                "reply"u8.ToArray());
+                "reply"u8.ToArray()
+            );
         });
 
-        await using var connector = ZlinkStreamConnectorFactory.Create(new ZlinkStreamConnectorOptions
-        {
-            Endpoint = new Uri($"tcp://127.0.0.1:{endpoint.Port}"),
-            Heartbeat = DisabledHeartbeat(),
-            DispatchMode = ZlinkStreamDispatchMode.Immediate,
-            Reconnect = new ZlinkStreamReconnectOptions { Enabled = false }
-        });
+        await using var connector = ZlinkStreamConnectorFactory.Create(
+            new ZlinkStreamConnectorOptions
+            {
+                Endpoint = new Uri($"tcp://127.0.0.1:{endpoint.Port}"),
+                Heartbeat = DisabledHeartbeat(),
+                DispatchMode = ZlinkStreamDispatchMode.Immediate,
+                Reconnect = new ZlinkStreamReconnectOptions { Enabled = false },
+            }
+        );
         await connector.Connect.Async();
 
         var reply = await connector
@@ -255,18 +289,22 @@ public sealed partial class StreamConnectorTests
 
         Assert.Equal(
             ConnectorMetricCollector.MaxRetainedSamples,
-            metrics.Count("zlink.stream.reconnects"));
+            metrics.Count("zlink.stream.reconnects")
+        );
         Assert.InRange(
             ConnectorMetrics.StoredSampleCount,
             1,
-            ConnectorMetricCollector.MaxRetainedSamples);
+            ConnectorMetricCollector.MaxRetainedSamples
+        );
     }
 
     private sealed class ConnectorMetricCollector
     {
         internal const int MaxRetainedSamples = 4096;
         private static readonly AsyncLocal<bool> ThrowCurrentMeasurement = new();
-        private readonly ConcurrentDictionary<string, Instrument> _instruments = new(StringComparer.Ordinal);
+        private readonly ConcurrentDictionary<string, Instrument> _instruments = new(
+            StringComparer.Ordinal
+        );
         private readonly object _samplesGate = new();
         private readonly Queue<MetricSample> _samples = new();
         private readonly MeterListener _listener = new();
@@ -276,7 +314,8 @@ public sealed partial class StreamConnectorTests
         {
             _listener.InstrumentPublished = (instrument, meterListener) =>
             {
-                if (instrument.Meter.Name != RemovedConnectorMeterName) return;
+                if (instrument.Meter.Name != RemovedConnectorMeterName)
+                    return;
                 _instruments[instrument.Name] = instrument;
                 meterListener.EnableMeasurementEvents(instrument);
             };
@@ -291,7 +330,8 @@ public sealed partial class StreamConnectorTests
         {
             get
             {
-                lock (_samplesGate) return _samples.Count;
+                lock (_samplesGate)
+                    return _samples.Count;
             }
         }
 
@@ -320,21 +360,27 @@ public sealed partial class StreamConnectorTests
             Instrument instrument,
             T measurement,
             ReadOnlySpan<KeyValuePair<string, object?>> tags,
-            object? state)
+            object? state
+        )
             where T : struct
         {
             _ = state;
 
             var copiedTags = new Dictionary<string, string>(StringComparer.Ordinal);
-            foreach (var tag in tags) copiedTags[tag.Key] = tag.Value?.ToString() ?? string.Empty;
+            foreach (var tag in tags)
+                copiedTags[tag.Key] = tag.Value?.ToString() ?? string.Empty;
             lock (_samplesGate)
             {
-                _samples.Enqueue(new MetricSample(
-                    Interlocked.Increment(ref _nextSequence),
-                    instrument.Name,
-                    measurement,
-                    copiedTags));
-                while (_samples.Count > MaxRetainedSamples) _samples.Dequeue();
+                _samples.Enqueue(
+                    new MetricSample(
+                        Interlocked.Increment(ref _nextSequence),
+                        instrument.Name,
+                        measurement,
+                        copiedTags
+                    )
+                );
+                while (_samples.Count > MaxRetainedSamples)
+                    _samples.Dequeue();
             }
             if (ThrowCurrentMeasurement.Value)
                 throw new InvalidOperationException("metrics listener failed");
@@ -345,15 +391,21 @@ public sealed partial class StreamConnectorTests
             public int Count(string name) => Samples(name).Count;
 
             public int Count(string name, string tag, string value) =>
-                Samples(name).Count(sample => sample.Tags.TryGetValue(tag, out var actual) && actual == value);
+                Samples(name)
+                    .Count(sample =>
+                        sample.Tags.TryGetValue(tag, out var actual) && actual == value
+                    );
 
             public long SumLong(string name, string? tag = null, string? value = null) =>
                 Samples(name)
-                    .Where(sample => tag is null
-                                     || sample.Tags.TryGetValue(tag, out var actual) && actual == value)
+                    .Where(sample =>
+                        tag is null
+                        || sample.Tags.TryGetValue(tag, out var actual) && actual == value
+                    )
                     .Sum(sample => Convert.ToInt64(sample.Value));
 
-            public IReadOnlyList<MetricSample> Samples(string name) => collector.Samples(name, afterSequence);
+            public IReadOnlyList<MetricSample> Samples(string name) =>
+                collector.Samples(name, afterSequence);
 
             public void AssertInstrument(string name, string unit, Type instrumentType) =>
                 collector.AssertInstrument(name, unit, instrumentType);
@@ -369,5 +421,6 @@ public sealed partial class StreamConnectorTests
         long Sequence,
         string Name,
         object Value,
-        IReadOnlyDictionary<string, string> Tags);
+        IReadOnlyDictionary<string, string> Tags
+    );
 }

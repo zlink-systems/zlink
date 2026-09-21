@@ -47,7 +47,7 @@ class actor_id_t final
     }
 
     std::string_view value () const noexcept { return _value; }
-    auto operator<=>(const actor_id_t &) const = default;
+    auto operator<=> (const actor_id_t &) const = default;
 
   private:
     std::string _value;
@@ -196,7 +196,9 @@ class actor_t
     }
 };
 
-template <typename TActor> requires std::derived_from<TActor, actor_t> class actor_factory_t
+template <typename TActor>
+    requires std::derived_from<TActor, actor_t>
+class actor_factory_t
 {
   public:
     virtual ~actor_factory_t () = default;
@@ -231,8 +233,8 @@ template <typename TActor> class actor_factory_builder_t
     }
 
     template <typename TAdapter>
-    requires std::derived_from<TAdapter, actor_relocation_adapter_t<TActor>> void
-    preserve_state_with ()
+        requires std::derived_from<TAdapter, actor_relocation_adapter_t<TActor>>
+    void preserve_state_with ()
     {
         ensure_mutable ();
         static_assert (std::is_default_constructible_v<TAdapter>,
@@ -432,9 +434,9 @@ class actor_create_call_t
     actor_create_call_t &in_mesh (std::string mesh_name);
     actor_create_call_t &creation_request (message_t request);
     template <typename TCreation>
-    requires (!std::is_same_v<std::remove_cvref_t<TCreation>, zlink::message_t>
-              && !std::is_same_v<std::remove_cvref_t<TCreation>, message_t>)
-      actor_create_call_t &creation_request (TCreation request)
+        requires (!std::is_same_v<std::remove_cvref_t<TCreation>, zlink::message_t>
+                  && !std::is_same_v<std::remove_cvref_t<TCreation>, message_t>)
+    actor_create_call_t &creation_request (TCreation request)
     {
         return creation_request (message_t::from (std::move (request)));
     }
@@ -527,8 +529,8 @@ class actor_join_call_t
             barrier = std::move (reserved.value ());
         }
         auto registered = detail::defer_current_serial_turn (
-          [deferred = std::move (_deferred),
-           async_deferred = std::move (_async_deferred), deadline, barrier] () mutable {
+          [deferred = std::move (_deferred), async_deferred = std::move (_async_deferred), deadline,
+           barrier] () mutable {
               auto run = [deferred = std::move (deferred), deadline] () mutable {
                   const auto now = std::chrono::steady_clock::now ();
                   if (now >= deadline) {
@@ -545,8 +547,8 @@ class actor_join_call_t
                         "Deferred Actor join async operation requires a join barrier");
                   }
                   const auto activated = barrier->activate_async (
-                    [async_deferred = std::move (async_deferred), deadline] (
-                      detail::deferred_barrier_t::async_completion_t complete) mutable {
+                    [async_deferred = std::move (async_deferred),
+                     deadline] (detail::deferred_barrier_t::async_completion_t complete) mutable {
                         try {
                             const auto now = std::chrono::steady_clock::now ();
                             if (now >= deadline) {
@@ -556,13 +558,12 @@ class actor_join_call_t
                                 return;
                             }
                             auto pending = async_deferred (
-                              std::chrono::duration_cast<std::chrono::milliseconds> (
-                                deadline - now));
+                              std::chrono::duration_cast<std::chrono::milliseconds> (deadline
+                                                                                     - now));
                             detail::observe_task_terminal (
                               pending,
-                              [complete = std::move (complete)] (const result_t<void> &result) mutable {
-                                  complete (result);
-                              });
+                              [complete = std::move (complete)] (
+                                const result_t<void> &result) mutable { complete (result); });
                         }
                         catch (const framework_exception_t &error) {
                             complete (detail::result_access_t::failure<void> (error));
@@ -646,10 +647,7 @@ class relay_request_call_t : private detail::call_facade_t<relay_request_call_t,
   private:
     friend class session_actor_t;
 
-    explicit relay_request_call_t (task_t<zlink::message_t> task) : base_t (
-      std::move (task))
-    {
-    }
+    explicit relay_request_call_t (task_t<zlink::message_t> task) : base_t (std::move (task)) {}
 };
 
 class bound_session_t
@@ -666,17 +664,17 @@ class bound_session_t
     bound_session_send_call_t send (const message_t &payload);
 
     template <typename TMessage>
-    requires (!std::is_same_v<std::remove_cvref_t<TMessage>, message_t>
-              && !std::is_same_v<std::remove_cvref_t<TMessage>, zlink::message_t>)
-      bound_session_send_call_t send (const TMessage &message)
+        requires (!std::is_same_v<std::remove_cvref_t<TMessage>, message_t>
+                  && !std::is_same_v<std::remove_cvref_t<TMessage>, zlink::message_t>)
+    bound_session_send_call_t send (const TMessage &message)
     {
         using message_type = std::remove_cvref_t<TMessage>;
-        return send_typed (detail::message_name<message_type> (),
-                           std::type_index (typeid (message_type)),
-                           [&message] (serializer_registry_t &serializers) {
-                               return serializers.template get<message_type> ()
-                                 .serialize_with_content_type (message);
-                           });
+        return send_typed (
+          detail::message_name<message_type> (), std::type_index (typeid (message_type)),
+          [&message] (serializer_registry_t &serializers) {
+              return serializers.template get<message_type> ().serialize_with_content_type (
+                message);
+          });
     }
     task_t<void> disconnect ();
 
@@ -736,8 +734,7 @@ class actor_context_t
                                                 std::chrono::milliseconds timeout)
     {
         (void) co_await context->join_spot_erased (
-          std::move (spot_id), request, std::move (packet_name),
-          std::move (content_type), timeout);
+          std::move (spot_id), request, std::move (packet_name), std::move (content_type), timeout);
         co_return;
     }
 
@@ -751,14 +748,13 @@ class actor_context_t
         context->_actor_ref = _actor_ref;
         return actor_join_call_t (
           actor_join_call_t::async_deferred_fn_t{
-          [context, spot_id = std::move (spot_id), request,
-           packet_name = std::move (packet_name),
-           content_type = std::move (content_type)] (
-            std::chrono::milliseconds timeout) mutable -> task_t<void> {
-              return run_deferred_spot_join (
-                std::move (context), std::move (spot_id), std::move (request),
-                std::move (packet_name), std::move (content_type), timeout);
-          }},
+            [context, spot_id = std::move (spot_id), request, packet_name = std::move (packet_name),
+             content_type = std::move (content_type)] (
+              std::chrono::milliseconds timeout) mutable -> task_t<void> {
+                return run_deferred_spot_join (std::move (context), std::move (spot_id),
+                                               std::move (request), std::move (packet_name),
+                                               std::move (content_type), timeout);
+            }},
           [context] { return context->reserve_join_barrier (); });
     }
 
@@ -770,17 +766,15 @@ class actor_context_t
             throw framework_exception_t (framework_error_kind_t::protocol_error,
                                          "actor join spot requires a serializer registry");
         }
-        const auto content_type = request._packet_name.empty ()
-                                    ? std::string{}
-                                    : serializers->content_type (request._type);
-        return join_spot_payload (
-          std::move (spot_id), request.to_raw (*serializers),
-          request._packet_name, content_type);
+        const auto content_type =
+          request._packet_name.empty () ? std::string{} : serializers->content_type (request._type);
+        return join_spot_payload (std::move (spot_id), request.to_raw (*serializers),
+                                  request._packet_name, content_type);
     }
 
     template <typename TRequest>
-    requires (!std::is_same_v<std::remove_cvref_t<TRequest>, message_t>) actor_join_call_t
-      join_spot (spot_id_t spot_id, const TRequest &request)
+        requires (!std::is_same_v<std::remove_cvref_t<TRequest>, message_t>)
+    actor_join_call_t join_spot (spot_id_t spot_id, const TRequest &request)
     {
         auto *serializers = serializer_registry ();
         if (serializers == nullptr) {
@@ -788,10 +782,9 @@ class actor_context_t
                                          "actor join spot requires a serializer registry");
         }
         const auto serializer = serializers->get<TRequest> ();
-        return join_spot_payload (
-          std::move (spot_id),
-          detail::encoded_payload_to_raw (serializer.serialize (request)),
-          detail::message_name<TRequest> (), serializer.content_type ());
+        return join_spot_payload (std::move (spot_id),
+                                  detail::encoded_payload_to_raw (serializer.serialize (request)),
+                                  detail::message_name<TRequest> (), serializer.content_type ());
     }
 
     actor_join_call_t join_spot (spot_id_t spot_id)
@@ -814,8 +807,8 @@ class actor_context_t
     }
 
     template <typename TRequest>
-    requires (!std::is_same_v<std::remove_cvref_t<TRequest>, message_t>) actor_join_call_t
-      join_entry_spot (const TRequest &request)
+        requires (!std::is_same_v<std::remove_cvref_t<TRequest>, message_t>)
+    actor_join_call_t join_entry_spot (const TRequest &request)
     {
         auto *serializers = serializer_registry ();
         if (serializers == nullptr) {
@@ -911,11 +904,10 @@ class session_actor_manager_t
     result_t<session_actor_t>
     create (std::string actor_type, std::string actor_id, const message_t &request);
     template <typename TRequest>
-    requires (!std::is_same_v<std::remove_cvref_t<TRequest>, zlink::message_t>
-              && !std::is_same_v<std::remove_cvref_t<TRequest>, message_t>)
-      result_t<session_actor_t> create (std::string actor_type,
-                                        std::string actor_id,
-                                        const TRequest &request)
+        requires (!std::is_same_v<std::remove_cvref_t<TRequest>, zlink::message_t>
+                  && !std::is_same_v<std::remove_cvref_t<TRequest>, message_t>)
+    result_t<session_actor_t>
+    create (std::string actor_type, std::string actor_id, const TRequest &request)
     {
         try {
             return create (std::move (actor_type), std::move (actor_id), message_t::from (request));
@@ -931,11 +923,10 @@ class session_actor_manager_t
     result_t<session_actor_t>
     get_or_create (std::string actor_type, std::string actor_id, const message_t &request);
     template <typename TRequest>
-    requires (!std::is_same_v<std::remove_cvref_t<TRequest>, zlink::message_t>
-              && !std::is_same_v<std::remove_cvref_t<TRequest>, message_t>)
-      result_t<session_actor_t> get_or_create (std::string actor_type,
-                                               std::string actor_id,
-                                               const TRequest &request)
+        requires (!std::is_same_v<std::remove_cvref_t<TRequest>, zlink::message_t>
+                  && !std::is_same_v<std::remove_cvref_t<TRequest>, message_t>)
+    result_t<session_actor_t>
+    get_or_create (std::string actor_type, std::string actor_id, const TRequest &request)
     {
         try {
             return get_or_create (std::move (actor_type), std::move (actor_id),
@@ -959,8 +950,7 @@ class session_actor_manager_t
                                                     std::string actor_id,
                                                     std::optional<zlink::message_t> request);
     zlink::message_t serialize_request (std::type_index request_type, const void *request) const;
-    task_t<session_actor_t> bind_current_session (actor_ref_t actor_ref,
-                                                  bool reuse_current);
+    task_t<session_actor_t> bind_current_session (actor_ref_t actor_ref, bool reuse_current);
 
     std::shared_ptr<detail::actor_gateway_state_t> _state;
     std::shared_ptr<detail::session_actor_binding_context_t> _binding_context;

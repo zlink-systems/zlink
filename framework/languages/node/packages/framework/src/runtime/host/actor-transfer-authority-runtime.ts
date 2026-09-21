@@ -4,10 +4,7 @@ import {
   type ActorTransferControlPayload
 } from '../foundation/service-runtime-contracts';
 import type { ServiceActorRef } from '../foundation/service-stateful-registry';
-import type {
-  ActorRef,
-  RoutingId
-} from '../../contracts';
+import type { ActorRef, RoutingId } from '../../contracts';
 import type { ZLinkActorLocation } from '../../contracts/Locations/Rows';
 import type { ZLinkActorLocationStore } from '../locations/internal-store-contracts';
 import type {
@@ -16,8 +13,7 @@ import type {
 } from '../../contracts/Locations/ActorTransfer';
 import { toFrameworkActorRef } from '../actors';
 
-export type ZLinkActorTransferAuthorityStore =
-  ZLinkActorTransferStore & ZLinkActorLocationStore;
+export type ZLinkActorTransferAuthorityStore = ZLinkActorTransferStore & ZLinkActorLocationStore;
 
 export interface ZLinkActorTransferAuthorityRuntimeOptions {
   readonly store: () => ZLinkActorTransferAuthorityStore | undefined;
@@ -52,8 +48,9 @@ export class ZLinkActorTransferAuthorityRuntime {
     const transferId = transferIdString(control.transferId.high, control.transferId.low);
 
     if (
-      control.role === ActorTransferRole.Target
-      && (control.phase === ActorTransferPhase.Preparing || control.phase === ActorTransferPhase.Fenced)
+      control.role === ActorTransferRole.Target &&
+      (control.phase === ActorTransferPhase.Preparing ||
+        control.phase === ActorTransferPhase.Fenced)
     ) {
       await this.prepare(
         store,
@@ -97,23 +94,25 @@ export class ZLinkActorTransferAuthorityRuntime {
     }
     const target = toFrameworkActorRef(nativeTarget as never, meshName);
     validateTarget(location, target, membershipEpoch, transferId);
-    const result = await store.prepareActorTransfer({
-      meshName,
-      actorId,
-      transferId,
-      source: location.actorRef,
-      target,
-      expectedActorGeneration: location.actorRef.objectGeneration,
-      expectedMembershipEpoch: location.membershipEpoch,
-      participants: new Set<RoutingId>([
-        location.actorRef.nodeRid,
-        target.nodeRid
-      ]),
-      recoveryOwnerId: ownerId,
-      recoveryLeaseTtlMs: this.options.recoveryLeaseTtlMs
-    }, signal);
+    const result = await store.prepareActorTransfer(
+      {
+        meshName,
+        actorId,
+        transferId,
+        source: location.actorRef,
+        target,
+        expectedActorGeneration: location.actorRef.objectGeneration,
+        expectedMembershipEpoch: location.membershipEpoch,
+        participants: new Set<RoutingId>([location.actorRef.nodeRid, target.nodeRid]),
+        recoveryOwnerId: ownerId,
+        recoveryLeaseTtlMs: this.options.recoveryLeaseTtlMs
+      },
+      signal
+    );
     if (result.status !== 'stored') {
-      throw new Error(`Actor transfer '${transferId}' prepare was rejected with status '${result.status}'.`);
+      throw new Error(
+        `Actor transfer '${transferId}' prepare was rejected with status '${result.status}'.`
+      );
     }
   }
 
@@ -146,21 +145,26 @@ export class ZLinkActorTransferAuthorityRuntime {
         signal
       );
       if (takeover.status !== 'stored' || takeover.record === undefined) {
-        throw new Error(`Actor transfer '${transferId}' recovery takeover failed with status '${takeover.status}'.`);
+        throw new Error(
+          `Actor transfer '${transferId}' recovery takeover failed with status '${takeover.status}'.`
+        );
       }
       record = takeover.record;
     }
 
     if (targetState === 'activated' && record.state === 'prepared') {
-      record = requireStored(await store.commitActorTransfer(
-        meshName, actorId, transferId, ownerId, signal
-      ), transferId, 'commit');
+      record = requireStored(
+        await store.commitActorTransfer(meshName, actorId, transferId, ownerId, signal),
+        transferId,
+        'commit'
+      );
     }
-    const result = targetState === 'committed'
-      ? await store.commitActorTransfer(meshName, actorId, transferId, ownerId, signal)
-      : targetState === 'activated'
-        ? await store.activateActorTransfer(meshName, actorId, transferId, ownerId, signal)
-        : await store.abortActorTransfer(meshName, actorId, transferId, ownerId, signal);
+    const result =
+      targetState === 'committed'
+        ? await store.commitActorTransfer(meshName, actorId, transferId, ownerId, signal)
+        : targetState === 'activated'
+          ? await store.activateActorTransfer(meshName, actorId, transferId, ownerId, signal)
+          : await store.abortActorTransfer(meshName, actorId, transferId, ownerId, signal);
     requireStored(result, transferId, targetState);
   }
 
@@ -188,11 +192,13 @@ function validateTarget(
   transferId: string
 ): void {
   if (
-    target.actorId !== location.actorId
-    || target.objectGeneration !== location.actorRef.objectGeneration
-    || membershipEpoch !== location.membershipEpoch
+    target.actorId !== location.actorId ||
+    target.objectGeneration !== location.actorRef.objectGeneration ||
+    membershipEpoch !== location.membershipEpoch
   ) {
-    throw new Error(`Actor transfer '${transferId}' does not match the source Actor generation and membership epoch.`);
+    throw new Error(
+      `Actor transfer '${transferId}' does not match the source Actor generation and membership epoch.`
+    );
   }
 }
 
@@ -202,7 +208,9 @@ function requireStored(
   operation: string
 ): ZLinkActorTransferRecord {
   if (result.status !== 'stored' || result.record === undefined) {
-    throw new Error(`Actor transfer '${transferId}' ${operation} failed with status '${result.status}'.`);
+    throw new Error(
+      `Actor transfer '${transferId}' ${operation} failed with status '${result.status}'.`
+    );
   }
   return result.record;
 }

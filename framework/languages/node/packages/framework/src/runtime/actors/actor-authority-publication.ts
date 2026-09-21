@@ -1,7 +1,5 @@
 import { createHash } from 'node:crypto';
-import type {
-  ActorRef
-} from '../../contracts';
+import type { ActorRef } from '../../contracts';
 import { ZLinkSpotKind } from '../../contracts';
 import type { ZLinkLocationOwnerToken } from '../../contracts/Locations';
 import type { ZLinkAuthoritySnapshot } from '../locations/internal-location-contracts';
@@ -53,18 +51,21 @@ export async function publishInitialActorAuthority(
     nodeLifecycleGeneration: identity.ownerNodeGeneration,
     owner: identity.owner
   };
-  const reserved = await store.reserve({
-    key: { kind: 'actor', globalId: identity.actor.actorId },
-    intent: {
-      stableType: identity.actorType,
-      requestContentReference: `sha256:${digest.toString('hex')}`,
-      requestSha256: digest,
-      requestEncodedSize: BigInt(readyPayload.byteLength)
+  const reserved = await store.reserve(
+    {
+      key: { kind: 'actor', globalId: identity.actor.actorId },
+      intent: {
+        stableType: identity.actorType,
+        requestContentReference: `sha256:${digest.toString('hex')}`,
+        requestSha256: digest,
+        requestEncodedSize: BigInt(readyPayload.byteLength)
+      },
+      target,
+      creatingPayload,
+      capacity: { actors: 1, spots: 0 }
     },
-    target,
-    creatingPayload,
-    capacity: { actors: 1, spots: 0 }
-  }, signal);
+    signal
+  );
   if (reserved.kind === 'alreadyExists') {
     requireActorAuthority(reserved.current, identity);
     return reserved.current;
@@ -76,39 +77,47 @@ export async function publishInitialActorAuthority(
   }
 
   try {
-    const terminalEnvelope = Buffer.from(encodeCreationOperationTerminalV1({
-      terminalResult: 'ok',
-      failureCode: 'none',
-      hasCreation: 'true',
-      creation: {
-        createResult: 'created',
-        actor: {
-          actorId: identity.actor.actorId,
-          objectGeneration: identity.actor.objectGeneration
+    const terminalEnvelope = Buffer.from(
+      encodeCreationOperationTerminalV1(
+        {
+          terminalResult: 'ok',
+          failureCode: 'none',
+          hasCreation: 'true',
+          creation: {
+            createResult: 'created',
+            actor: {
+              actorId: identity.actor.actorId,
+              objectGeneration: identity.actor.objectGeneration
+            }
+          },
+          hasApplicationPayload: 'false'
+        },
+        { runtimePredicates: {} }
+      )
+    );
+    const operationId = randomOperationId();
+    const completed = await store.completeCreation(
+      {
+        key: { kind: 'actor', globalId: identity.actor.actorId },
+        reservationId: reserved.reservationId,
+        expectedStoreVersion: reserved.creating.storeVersion.value,
+        target,
+        completion: {
+          kind: 'created',
+          readyPayload,
+          terminal: {
+            operation: {
+              sourceNodeRid: identity.actor.nodeRid,
+              sourceNodeGeneration: identity.ownerNodeGeneration,
+              operationId
+            },
+            terminalEnvelope,
+            operationDeadline: new Date(Date.now() + CREATION_OPERATION_TIMEOUT_MS)
+          }
         }
       },
-      hasApplicationPayload: 'false'
-    }, { runtimePredicates: {} }));
-    const operationId = randomOperationId();
-    const completed = await store.completeCreation({
-      key: { kind: 'actor', globalId: identity.actor.actorId },
-      reservationId: reserved.reservationId,
-      expectedStoreVersion: reserved.creating.storeVersion.value,
-      target,
-      completion: {
-        kind: 'created',
-        readyPayload,
-        terminal: {
-          operation: {
-            sourceNodeRid: identity.actor.nodeRid,
-            sourceNodeGeneration: identity.ownerNodeGeneration,
-            operationId
-          },
-          terminalEnvelope,
-          operationDeadline: new Date(Date.now() + CREATION_OPERATION_TIMEOUT_MS)
-        }
-      }
-    }, signal);
+      signal
+    );
     if (completed.kind !== 'created') {
       throw new Error(
         `Actor '${identity.actor.actorId}' authority completion failed with '${completed.kind}'.`
@@ -117,20 +126,21 @@ export async function publishInitialActorAuthority(
     requireActorAuthority(completed.ready, identity);
     return completed.ready;
   } catch (error) {
-    const aborted = await store.abort({
-      key: { kind: 'actor', globalId: identity.actor.actorId },
-      reservationId: reserved.reservationId,
-      expectedStoreVersion: reserved.creating.storeVersion.value,
-      target
-    }, signal);
+    const aborted = await store.abort(
+      {
+        key: { kind: 'actor', globalId: identity.actor.actorId },
+        reservationId: reserved.reservationId,
+        expectedStoreVersion: reserved.creating.storeVersion.value,
+        target
+      },
+      signal
+    );
     if (aborted.kind === 'stale') throw error;
     throw error;
   }
 }
 
-export function encodeActorAuthorityIdentity(
-  identity: ZLinkActorAuthorityIdentity
-): Buffer {
+export function encodeActorAuthorityIdentity(identity: ZLinkActorAuthorityIdentity): Buffer {
   return encodeActorAuthorityPayload({
     state: identity.state ?? 'ready',
     stableType: identity.actorType,
@@ -203,7 +213,7 @@ export function rewriteActorAuthorityRoute(
   ownerNodeGeneration?: bigint,
   owner?: ZLinkLocationOwnerToken
 ): Buffer {
-  return rewriteActorAuthorityPayload(payload, value => {
+  return rewriteActorAuthorityPayload(payload, (value) => {
     if (value.actorId !== actor.actorId) {
       throw new Error(`Actor '${actor.actorId}' authority identity is invalid.`);
     }
@@ -225,18 +235,21 @@ export function rewriteActorAuthorityOwner(
   payload: Uint8Array,
   owner: ZLinkLocationOwnerToken
 ): Buffer {
-  return rewriteActorAuthorityPayload(payload, value => encodeActorAuthorityPayload({
-    ...value,
-    ownerId: owner.ownerId,
-    ownerLeaseGeneration: owner.leaseGeneration
-  }));
+  return rewriteActorAuthorityPayload(payload, (value) =>
+    encodeActorAuthorityPayload({
+      ...value,
+      ownerId: owner.ownerId,
+      ownerLeaseGeneration: owner.leaseGeneration
+    })
+  );
 }
 
 export function isActorAuthorityPayload(payload: Uint8Array): boolean {
   const outerApplication = serviceRelocationAuthorityApplicationPayload(payload);
-  return decodeActorAuthorityPayload(
-    relocatingActorAuthorityApplicationPayload(outerApplication)
-  ) !== undefined;
+  return (
+    decodeActorAuthorityPayload(relocatingActorAuthorityApplicationPayload(outerApplication)) !==
+    undefined
+  );
 }
 
 function rewriteActorAuthorityPayload(
@@ -261,20 +274,22 @@ function requireActorAuthority(
 ): void {
   const actual = decodeActorAuthorityIdentity(snapshot.payload, snapshot.objectGeneration);
   if (
-    snapshot.allocation.state !== 'active'
-    || snapshot.allocation.objectKind !== 'actor'
-    || snapshot.allocation.stableType !== expected.actorType
-    || snapshot.allocation.descriptor.meshName !== expected.meshName
-    || String(snapshot.allocation.descriptor.rid) !== String(expected.actor.nodeRid)
-    || snapshot.allocation.descriptorLifecycleGeneration !== expected.ownerNodeGeneration
-    || snapshot.ownerId !== expected.owner.ownerId
-    || snapshot.ownerLeaseGeneration !== expected.owner.leaseGeneration
-    || actual === undefined
-    || actual.actorType !== expected.actorType
-    || actual.actor.actorId !== expected.actor.actorId
-    || actual.actor.objectGeneration !== expected.actor.objectGeneration
-    || String(actual.actor.nodeRid) !== String(expected.actor.nodeRid)
+    snapshot.allocation.state !== 'active' ||
+    snapshot.allocation.objectKind !== 'actor' ||
+    snapshot.allocation.stableType !== expected.actorType ||
+    snapshot.allocation.descriptor.meshName !== expected.meshName ||
+    String(snapshot.allocation.descriptor.rid) !== String(expected.actor.nodeRid) ||
+    snapshot.allocation.descriptorLifecycleGeneration !== expected.ownerNodeGeneration ||
+    snapshot.ownerId !== expected.owner.ownerId ||
+    snapshot.ownerLeaseGeneration !== expected.owner.leaseGeneration ||
+    actual === undefined ||
+    actual.actorType !== expected.actorType ||
+    actual.actor.actorId !== expected.actor.actorId ||
+    actual.actor.objectGeneration !== expected.actor.objectGeneration ||
+    String(actual.actor.nodeRid) !== String(expected.actor.nodeRid)
   ) {
-    throw new Error(`Actor '${expected.actor.actorId}' authority fence does not match its ActorRef.`);
+    throw new Error(
+      `Actor '${expected.actor.actorId}' authority fence does not match its ActorRef.`
+    );
   }
 }

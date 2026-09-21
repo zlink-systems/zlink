@@ -1,7 +1,4 @@
-import type {
-  ServiceNodeDescriptor,
-  ServiceObjectRole
-} from './service-topology-registry';
+import type { ServiceNodeDescriptor, ServiceObjectRole } from './service-topology-registry';
 
 export function routeMeshConnectionNotRequired(
   localObjectRole: ServiceObjectRole,
@@ -9,10 +6,12 @@ export function routeMeshConnectionNotRequired(
   remoteObjectRole: ServiceObjectRole,
   remoteHasServerChannel: boolean
 ): boolean {
-  return localObjectRole === 'client'
-    && !localHasServerChannel
-    && remoteObjectRole === 'client'
-    && !remoteHasServerChannel;
+  return (
+    localObjectRole === 'client' &&
+    !localHasServerChannel &&
+    remoteObjectRole === 'client' &&
+    !remoteHasServerChannel
+  );
 }
 
 export function descriptorConnectionNotRequired(

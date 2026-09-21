@@ -10,5 +10,5 @@ internal enum ZLinkLocationResolutionKind
 {
     Missing,
     Ready,
-    KnownUnavailable
+    KnownUnavailable,
 }

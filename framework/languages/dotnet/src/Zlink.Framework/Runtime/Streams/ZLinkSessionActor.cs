@@ -15,7 +15,8 @@ internal sealed class ZLinkSessionActor : IZLinkSessionActor
         ZLinkSessionContext context,
         string actorId,
         RoutingId sessionRid,
-        string bindingToken)
+        string bindingToken
+    )
     {
         Context = context;
         ActorId = actorId;
@@ -23,7 +24,8 @@ internal sealed class ZLinkSessionActor : IZLinkSessionActor
         BindingToken = bindingToken;
         _disconnectTask = new Lazy<Task>(
             () => Context.NotifyActorRefDisconnectedAsync(this, CancellationToken.None).AsTask(),
-            LazyThreadSafetyMode.ExecutionAndPublication);
+            LazyThreadSafetyMode.ExecutionAndPublication
+        );
     }
 
     public ActorRef Ref => Route.Ref;
@@ -37,27 +39,21 @@ internal sealed class ZLinkSessionActor : IZLinkSessionActor
             throw new ZLinkFrameworkException(
                 ZLinkFrameworkErrorKind.InvalidOperation,
                 $"Actor '{ActorId}' session binding is stale.",
-                ZLinkRetryAdvice.RetryAfterBackoff);
+                ZLinkRetryAdvice.RetryAfterBackoff
+            );
         }
     }
 
     internal bool TryGetRoute(out ZLinkSessionBindingRoute route) =>
-        Context.Runtime.TryGetSessionActorRoute(
-            ActorId,
-            BindingToken,
-            this,
-            out route);
+        Context.Runtime.TryGetSessionActorRoute(ActorId, BindingToken, this, out route);
 
-    public ValueTask RelayAsync(
-        ZLinkMessage payload,
-        CancellationToken cancellationToken = default)
+    public ValueTask RelayAsync(ZLinkMessage payload, CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(payload);
         var raw = payload.ToRawMessage(Context.Runtime.Registration.Codecs);
-        return Context.RelayActorRefAsync(this, raw, cancellationToken)
-            .EnsureAcceptedAsync(
-                "Session Actor relay",
-                ZLinkFrameworkErrorKind.NotFound);
+        return Context
+            .RelayActorRefAsync(this, raw, cancellationToken)
+            .EnsureAcceptedAsync("Session Actor relay", ZLinkFrameworkErrorKind.NotFound);
     }
 
     public ValueTask NotifyDisconnectedAsync(CancellationToken cancellationToken = default)

@@ -14,78 +14,97 @@ internal static class ZLinkCanonicalSpotRelocationWriter
         string spotId,
         string stableType,
         RoutingId targetNodeRid,
-        long applicationVersion)
+        long applicationVersion
+    )
     {
         if (applicationVersion < 0)
             throw new ArgumentOutOfRangeException(nameof(applicationVersion));
-        var ordered = inventory.Participants
-            .OrderBy(static participant => participant.ObjectKind
-                is ZLinkPlacementObjectKind.UserSpot
-                or ZLinkPlacementObjectKind.InstanceSpot ? 0 : 1)
-            .ThenBy(static participant => participant.AuthorityKey.Value,
-                StringComparer.Ordinal)
+        var ordered = inventory
+            .Participants.OrderBy(static participant =>
+                participant.ObjectKind
+                    is ZLinkPlacementObjectKind.UserSpot
+                        or ZLinkPlacementObjectKind.InstanceSpot
+                    ? 0
+                    : 1
+            )
+            .ThenBy(static participant => participant.AuthorityKey.Value, StringComparer.Ordinal)
             .ToArray();
         var spot = ordered[0];
-        if (spot.ObjectKind is not (ZLinkPlacementObjectKind.UserSpot
-                or ZLinkPlacementObjectKind.InstanceSpot))
-            throw new ArgumentException("Canonical SPOT relocation has no root SPOT.", nameof(inventory));
+        if (
+            spot.ObjectKind
+            is not (ZLinkPlacementObjectKind.UserSpot or ZLinkPlacementObjectKind.InstanceSpot)
+        )
+            throw new ArgumentException(
+                "Canonical SPOT relocation has no root SPOT.",
+                nameof(inventory)
+            );
         ServiceWirePilotCodec.RelocationObjectIdentity identity;
         if (spot.ObjectKind == ZLinkPlacementObjectKind.InstanceSpot)
         {
             identity = new ServiceWirePilotCodec.RelocationInstanceSpotIdentity(
                 stableType,
                 spotId,
-                spot.ObjectGeneration);
+                spot.ObjectGeneration
+            );
         }
         else
         {
             identity = new ServiceWirePilotCodec.RelocationUserSpotIdentity(
                 spotId,
                 spot.ObjectGeneration,
-                spot.AuthorityOwnerGeneration);
+                spot.AuthorityOwnerGeneration
+            );
         }
-        var states = ordered.Select((participant, index) =>
-                new ServiceWirePilotCodec.RelocationApplicationState(
-                    checked((ulong)index + 1),
-                    HasState: true,
-                    participant.ApplicationState.ToArray()))
+        var states = ordered
+            .Select(
+                (participant, index) =>
+                    new ServiceWirePilotCodec.RelocationApplicationState(
+                        checked((ulong)index + 1),
+                        HasState: true,
+                        participant.ApplicationState.ToArray()
+                    )
+            )
             .ToArray();
         var savedWork = new List<ServiceWirePilotCodec.RelocationSavedWork>();
         for (var index = 0; index < ordered.Length; index++)
         {
             var participant = ordered[index];
-            foreach (var job in participant.AcceptedJobs.OrderBy(
-                         static job => job.AcceptedSequence))
+            foreach (
+                var job in participant.AcceptedJobs.OrderBy(static job => job.AcceptedSequence)
+            )
             {
                 byte[] frozenRecord;
                 if (index == 0)
                 {
                     using var record = new MemoryStream();
-                    WriteAcceptedRequest(
-                        record,
-                        job,
-                        spotId,
-                        spot,
-                        targetNodeRid);
+                    WriteAcceptedRequest(record, job, spotId, spot, targetNodeRid);
                     frozenRecord = record.ToArray();
                 }
                 else
                 {
-                    if (!ZLinkRelocationEnvelopeCodec
-                            .TryValidateCanonicalFrozenRecord(job.Payload.Span))
+                    if (
+                        !ZLinkRelocationEnvelopeCodec.TryValidateCanonicalFrozenRecord(
+                            job.Payload.Span
+                        )
+                    )
                         throw new ZLinkRelocationDataLostException(
-                            $"Actor participant '{participant.AuthorityKey.Value}' accepted journal is malformed.");
+                            $"Actor participant '{participant.AuthorityKey.Value}' accepted journal is malformed."
+                        );
                     frozenRecord = job.Payload.ToArray();
                 }
-                savedWork.Add(new ServiceWirePilotCodec.RelocationSavedWork(
-                    checked((ulong)index + 1),
-                    job.AcceptedSequence,
-                    frozenRecord));
+                savedWork.Add(
+                    new ServiceWirePilotCodec.RelocationSavedWork(
+                        checked((ulong)index + 1),
+                        job.AcceptedSequence,
+                        frozenRecord
+                    )
+                );
             }
         }
-        var snapshots = spot.LogicalTimers
-            .Select(timer => (Timer: timer,
-                Snapshot: ZLinkSpotTimerRelocationCodec.Decode(timer)))
+        var snapshots = spot
+            .LogicalTimers.Select(timer =>
+                (Timer: timer, Snapshot: ZLinkSpotTimerRelocationCodec.Decode(timer))
+            )
             .ToArray();
         var timers = snapshots
             .OrderBy(static item => item.Timer.TimerId, StringComparer.Ordinal)
@@ -96,19 +115,21 @@ internal static class ZLinkCanonicalSpotRelocationWriter
                     ParticipantId: 1,
                     timer.Name,
                     item.Snapshot.HandlerType.AssemblyQualifiedName
-                    ?? item.Snapshot.HandlerType.FullName
-                    ?? item.Snapshot.HandlerType.Name,
-                    checked((ulong)Math.Max(1,
-                        Math.Ceiling(timer.Period.TotalMilliseconds))),
+                        ?? item.Snapshot.HandlerType.FullName
+                        ?? item.Snapshot.HandlerType.Name,
+                    checked((ulong)Math.Max(1, Math.Ceiling(timer.Period.TotalMilliseconds))),
                     (byte)timer.Options.OverrunPolicy,
-                    checked((ulong)Math.Max(1,
-                        timer.Options.MaxCatchUpTicks)),
+                    checked((ulong)Math.Max(1, timer.Options.MaxCatchUpTicks)),
                     timer.Options.StopOnUnhandledException,
                     timer.DeliveryIndex,
                     timer.LastScheduledIndex,
-                    checked((ulong)(timer.NextScheduledAt
-                        ?? timer.StartedAt + timer.Period)
-                        .ToUnixTimeMilliseconds()));
+                    checked(
+                        (ulong)
+                            (
+                                timer.NextScheduledAt ?? timer.StartedAt + timer.Period
+                            ).ToUnixTimeMilliseconds()
+                    )
+                );
             })
             .ToArray();
         var pending = snapshots
@@ -124,40 +145,47 @@ internal static class ZLinkCanonicalSpotRelocationWriter
                     tick.DeliveryIndex,
                     tick.ScheduledIndex,
                     checked((ulong)tick.ScheduledAt.ToUnixTimeMilliseconds()),
-                    tick.SkippedTicks);
+                    tick.SkippedTicks
+                );
             })
             .ToArray();
         var aggregateId = inventory.AggregateId.ToByteArray(bigEndian: true);
-        var encoded = ServiceWirePilotCodec.EncodeRelocationEnvelopeV1(new(
-            BinaryPrimitives.ReadUInt64BigEndian(aggregateId.AsSpan(0, 8)),
-            BinaryPrimitives.ReadUInt64BigEndian(aggregateId.AsSpan(8, 8)),
-            identity,
-            applicationVersion,
-            states,
-            savedWork,
-            timers,
-            pending));
+        var encoded = ServiceWirePilotCodec.EncodeRelocationEnvelopeV1(
+            new(
+                BinaryPrimitives.ReadUInt64BigEndian(aggregateId.AsSpan(0, 8)),
+                BinaryPrimitives.ReadUInt64BigEndian(aggregateId.AsSpan(8, 8)),
+                identity,
+                applicationVersion,
+                states,
+                savedWork,
+                timers,
+                pending
+            )
+        );
         using var stream = new MemoryStream(encoded, writable: false);
-        var canonical = ZLinkRelocationEnvelopeCodec.Decode(
-            stream, inventory.InventoryDigest);
-        var projected = ordered.Select((participant, index) =>
-        {
-            var state = canonical.Participants[index];
-            return participant with
-            {
-                AcceptedJobs = state.AcceptedJobs,
-                LogicalTimers = state.LogicalTimers,
-                CompletionPayload = participant.CompletionPayload,
-                CanonicalParticipantId = state.CanonicalParticipantId
-            };
-        }).ToArray();
+        var canonical = ZLinkRelocationEnvelopeCodec.Decode(stream, inventory.InventoryDigest);
+        var projected = ordered
+            .Select(
+                (participant, index) =>
+                {
+                    var state = canonical.Participants[index];
+                    return participant with
+                    {
+                        AcceptedJobs = state.AcceptedJobs,
+                        LogicalTimers = state.LogicalTimers,
+                        CompletionPayload = participant.CompletionPayload,
+                        CanonicalParticipantId = state.CanonicalParticipantId,
+                    };
+                }
+            )
+            .ToArray();
         return inventory with
         {
             Participants = projected,
             CanonicalLogicalStream = canonical.CanonicalLogicalStream,
             CanonicalRelocationHigh = canonical.CanonicalRelocationHigh,
             CanonicalRelocationLow = canonical.CanonicalRelocationLow,
-            CanonicalApplicationVersion = canonical.CanonicalApplicationVersion
+            CanonicalApplicationVersion = canonical.CanonicalApplicationVersion,
         };
     }
 
@@ -166,15 +194,19 @@ internal static class ZLinkCanonicalSpotRelocationWriter
         ZLinkRelocationQueuedJob job,
         string targetSpotId,
         ZLinkRelocationParticipantEnvelope spot,
-        RoutingId targetNodeRid)
+        RoutingId targetNodeRid
+    )
     {
         var journal = ZLinkSpotAcceptedJournal.Decode(job.Payload.Span);
-        var source = job.RequestSource
-                     ?? throw new ZLinkRelocationDataLostException(
-                         "Accepted request source fence was not captured.");
+        var source =
+            job.RequestSource
+            ?? throw new ZLinkRelocationDataLostException(
+                "Accepted request source fence was not captured."
+            );
         if (journal.OperationId == default || journal.SourceNodeGeneration == 0)
             throw new ZLinkRelocationDataLostException(
-                "Accepted request operation fence was not captured.");
+                "Accepted request operation fence was not captured."
+            );
         var parts = journal.Parts.Select(static part => Message.From(part.Span)).ToArray();
         ZLinkEnvelopeHeader header;
         byte[] payload;
@@ -183,7 +215,8 @@ internal static class ZLinkCanonicalSpotRelocationWriter
             header = ZLinkEnvelopeCodec.DecodeHeader(parts);
             if (parts.Length != 2)
                 throw new InvalidDataException(
-                    "Canonical accepted application payload must contain header and body parts.");
+                    "Canonical accepted application payload must contain header and body parts."
+                );
             payload = parts[1].ToArray();
         }
         finally
@@ -233,8 +266,9 @@ internal static class ZLinkCanonicalSpotRelocationWriter
         stream.WriteByte(1);
         stream.WriteByte(1);
         stream.WriteByte(checked((byte)metadata.Values.Count));
-        foreach (var pair in metadata.Values.OrderBy(static pair => pair.Key,
-                     StringComparer.Ordinal))
+        foreach (
+            var pair in metadata.Values.OrderBy(static pair => pair.Key, StringComparer.Ordinal)
+        )
         {
             Text8(stream, pair.Key);
             Text16(stream, pair.Value);
@@ -242,7 +276,11 @@ internal static class ZLinkCanonicalSpotRelocationWriter
     }
 
     private static void WriteApplicationPayload(
-        Stream stream, string packetName, string contentType, ReadOnlySpan<byte> payload)
+        Stream stream,
+        string packetName,
+        string contentType,
+        ReadOnlySpan<byte> payload
+    )
     {
         using var body = new MemoryStream();
         Text8(body, packetName);
@@ -279,12 +317,14 @@ internal static class ZLinkCanonicalSpotRelocationWriter
         BinaryPrimitives.WriteUInt16BigEndian(bytes, value);
         stream.Write(bytes);
     }
+
     private static void U32(Stream stream, uint value)
     {
         Span<byte> bytes = stackalloc byte[4];
         BinaryPrimitives.WriteUInt32BigEndian(bytes, value);
         stream.Write(bytes);
     }
+
     private static void U64(Stream stream, ulong value)
     {
         Span<byte> bytes = stackalloc byte[8];

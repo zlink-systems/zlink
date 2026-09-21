@@ -7,9 +7,7 @@ namespace Zlink.Framework.Runtime.Locations;
 // accidentally enter User/Instance relocation rules.
 internal abstract record ZLinkSpotLifecycleKind
 {
-    private ZLinkSpotLifecycleKind()
-    {
-    }
+    private ZLinkSpotLifecycleKind() { }
 
     internal abstract ZLinkPlacementObjectKind? PlacementKind { get; }
 
@@ -19,7 +17,8 @@ internal abstract record ZLinkSpotLifecycleKind
         ZLinkSpotId spotId,
         string? stableType,
         RoutingId nodeRid,
-        ulong nodeGeneration);
+        ulong nodeGeneration
+    );
 
     internal abstract bool MatchesTracked(
         ZLinkAuthoritySnapshot snapshot,
@@ -27,7 +26,8 @@ internal abstract record ZLinkSpotLifecycleKind
         ZLinkMeshName meshName,
         string? stableType,
         RoutingId nodeRid,
-        ulong nodeGeneration);
+        ulong nodeGeneration
+    );
 
     internal static ZLinkSpotLifecycleKind FromBoundary(ZLinkSpotKind kind) =>
         kind switch
@@ -35,16 +35,16 @@ internal abstract record ZLinkSpotLifecycleKind
             ZLinkSpotKind.Entry => Entry.Value,
             ZLinkSpotKind.User => User.Value,
             ZLinkSpotKind.Instance => Instance.Value,
-            _ => throw new ArgumentOutOfRangeException(nameof(kind))
+            _ => throw new ArgumentOutOfRangeException(nameof(kind)),
         };
 
-    internal static ZLinkSpotLifecycleKind RelocatableFromBoundary(
-        ZLinkSpotKind kind)
+    internal static ZLinkSpotLifecycleKind RelocatableFromBoundary(ZLinkSpotKind kind)
     {
         var mapped = FromBoundary(kind);
         return mapped is Entry
             ? throw new InvalidOperationException(
-                "An Entry Spot cannot enter the relocatable Spot lifecycle.")
+                "An Entry Spot cannot enter the relocatable Spot lifecycle."
+            )
             : mapped;
     }
 
@@ -52,9 +52,7 @@ internal abstract record ZLinkSpotLifecycleKind
     {
         internal static Entry Value { get; } = new();
 
-        private Entry()
-        {
-        }
+        private Entry() { }
 
         internal override ZLinkPlacementObjectKind? PlacementKind => null;
 
@@ -64,7 +62,8 @@ internal abstract record ZLinkSpotLifecycleKind
             ZLinkSpotId spotId,
             string? stableType,
             RoutingId nodeRid,
-            ulong nodeGeneration) => false;
+            ulong nodeGeneration
+        ) => false;
 
         internal override bool MatchesTracked(
             ZLinkAuthoritySnapshot snapshot,
@@ -72,16 +71,15 @@ internal abstract record ZLinkSpotLifecycleKind
             ZLinkMeshName meshName,
             string? stableType,
             RoutingId nodeRid,
-            ulong nodeGeneration) => false;
+            ulong nodeGeneration
+        ) => false;
     }
 
     internal sealed record User : ZLinkSpotLifecycleKind
     {
         internal static User Value { get; } = new();
 
-        private User()
-        {
-        }
+        private User() { }
 
         internal override ZLinkPlacementObjectKind? PlacementKind =>
             ZLinkPlacementObjectKind.UserSpot;
@@ -92,10 +90,9 @@ internal abstract record ZLinkSpotLifecycleKind
             ZLinkSpotId spotId,
             string? stableType,
             RoutingId nodeRid,
-            ulong nodeGeneration) =>
-            ZLinkUserSpotAuthorityPayloadCodec.TryDecode(
-                snapshot.Payload.Span,
-                out var user)
+            ulong nodeGeneration
+        ) =>
+            ZLinkUserSpotAuthorityPayloadCodec.TryDecode(snapshot.Payload.Span, out var user)
             && user.State == ZLinkUserSpotAuthorityState.Ready
             && user.SpotId == spotId.Value
             && user.MeshName == meshName.Value
@@ -109,10 +106,9 @@ internal abstract record ZLinkSpotLifecycleKind
             ZLinkMeshName meshName,
             string? stableType,
             RoutingId nodeRid,
-            ulong nodeGeneration) =>
-            ZLinkUserSpotAuthorityPayloadCodec.TryDecode(
-                snapshot.Payload.Span,
-                out var user)
+            ulong nodeGeneration
+        ) =>
+            ZLinkUserSpotAuthorityPayloadCodec.TryDecode(snapshot.Payload.Span, out var user)
             && user.SpotId == spotId.Value
             && user.MeshName == meshName.Value
             && user.StableType == stableType
@@ -124,9 +120,7 @@ internal abstract record ZLinkSpotLifecycleKind
     {
         internal static Instance Value { get; } = new();
 
-        private Instance()
-        {
-        }
+        private Instance() { }
 
         internal override ZLinkPlacementObjectKind? PlacementKind =>
             ZLinkPlacementObjectKind.InstanceSpot;
@@ -137,10 +131,12 @@ internal abstract record ZLinkSpotLifecycleKind
             ZLinkSpotId spotId,
             string? stableType,
             RoutingId nodeRid,
-            ulong nodeGeneration) =>
+            ulong nodeGeneration
+        ) =>
             ZLinkInstanceSpotAuthorityPayloadCodec.TryDecode(
                 snapshot.Payload.Span,
-                out var instance)
+                out var instance
+            )
             && instance.State == ZLinkInstanceSpotAuthorityState.Ready
             && instance.SpotId == spotId.Value
             && instance.MeshName == meshName.Value
@@ -154,10 +150,12 @@ internal abstract record ZLinkSpotLifecycleKind
             ZLinkMeshName meshName,
             string? stableType,
             RoutingId nodeRid,
-            ulong nodeGeneration) =>
+            ulong nodeGeneration
+        ) =>
             ZLinkInstanceSpotAuthorityPayloadCodec.TryDecode(
                 snapshot.Payload.Span,
-                out var instance)
+                out var instance
+            )
             && instance.SpotId == spotId.Value
             && instance.MeshName == meshName.Value
             && instance.StableType == stableType

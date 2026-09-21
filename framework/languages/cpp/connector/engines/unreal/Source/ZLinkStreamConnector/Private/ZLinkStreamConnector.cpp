@@ -56,19 +56,19 @@ zlink::message_t to_payload (const FString &json)
 EZLinkStreamConnectionState to_unreal_state (zlink::stream_connector::connection_state_t state)
 {
     switch (state) {
-    case zlink::stream_connector::connection_state_t::connecting:
-        return EZLinkStreamConnectionState::Connecting;
-    case zlink::stream_connector::connection_state_t::connected:
-        return EZLinkStreamConnectionState::Connected;
-    case zlink::stream_connector::connection_state_t::reconnecting:
-        return EZLinkStreamConnectionState::Reconnecting;
-    case zlink::stream_connector::connection_state_t::disconnected:
-        return EZLinkStreamConnectionState::Disconnected;
-    case zlink::stream_connector::connection_state_t::closed:
-        return EZLinkStreamConnectionState::Closed;
-    case zlink::stream_connector::connection_state_t::created:
-    default:
-        return EZLinkStreamConnectionState::Created;
+        case zlink::stream_connector::connection_state_t::connecting:
+            return EZLinkStreamConnectionState::Connecting;
+        case zlink::stream_connector::connection_state_t::connected:
+            return EZLinkStreamConnectionState::Connected;
+        case zlink::stream_connector::connection_state_t::reconnecting:
+            return EZLinkStreamConnectionState::Reconnecting;
+        case zlink::stream_connector::connection_state_t::disconnected:
+            return EZLinkStreamConnectionState::Disconnected;
+        case zlink::stream_connector::connection_state_t::closed:
+            return EZLinkStreamConnectionState::Closed;
+        case zlink::stream_connector::connection_state_t::created:
+        default:
+            return EZLinkStreamConnectionState::Created;
     }
 }
 
@@ -187,16 +187,16 @@ class FZLinkStreamConnectorRuntime
         auto pending = Pending;
         request.submit<zlink::stream_connector::packet_t> (
           [pending] (zlink::stream_connector::result_t<zlink::stream_connector::packet_t> result) {
-            if (!result) {
-                return;
-            }
-            FZLinkStreamPacket packet = ToUnrealPacket (result.value ());
-            std::lock_guard<std::mutex> lock (pending->Mutex);
-            if (pending->CancelCallbacks) {
-                return;
-            }
-            pending->Requests.push_back (std::move (packet));
-        });
+              if (!result) {
+                  return;
+              }
+              FZLinkStreamPacket packet = ToUnrealPacket (result.value ());
+              std::lock_guard<std::mutex> lock (pending->Mutex);
+              if (pending->CancelCallbacks) {
+                  return;
+              }
+              pending->Requests.push_back (std::move (packet));
+          });
     }
 
     void Dispatch ()
@@ -251,8 +251,8 @@ class FZLinkStreamConnectorRuntime
         std::size_t local_count = 0;
         {
             std::lock_guard<std::mutex> lock (Pending->Mutex);
-            local_count = Pending->States.size () + Pending->Packets.size ()
-                          + Pending->Requests.size ();
+            local_count =
+              Pending->States.size () + Pending->Packets.size () + Pending->Requests.size ();
         }
         return static_cast<int> (local_count + Connector.pending_dispatch_count ());
     }
@@ -351,7 +351,8 @@ class FZLinkStreamConnectorRuntime
 } // namespace UE::ZLinkStreamConnector::Private
 
 UZLinkStreamConnector::UZLinkStreamConnector () :
-    _runtime (std::make_unique<UE::ZLinkStreamConnector::Private::FZLinkStreamConnectorRuntime> (*this))
+    _runtime (
+      std::make_unique<UE::ZLinkStreamConnector::Private::FZLinkStreamConnectorRuntime> (*this))
 {
 }
 

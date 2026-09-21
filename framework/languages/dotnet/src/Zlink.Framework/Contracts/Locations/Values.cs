@@ -11,5 +11,5 @@ public enum ZLinkLocationRole : ushort
     Router = 3,
     Dealer = 4,
     Pub = 5,
-    Sub = 6
+    Sub = 6,
 }

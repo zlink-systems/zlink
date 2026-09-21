@@ -1,9 +1,5 @@
 package systems.zlink.framework.runtime.diagnostics;
 
-import java.util.concurrent.Executor;
-import java.util.concurrent.atomic.AtomicLong;
-import java.util.logging.Level;
-import java.util.logging.Logger;
 import systems.zlink.framework.configuration.ZLinkLogLevel;
 import systems.zlink.framework.configuration.ZLinkMessageFlowLogMode;
 import systems.zlink.framework.errors.ZLinkFrameworkErrorKind;
@@ -19,10 +15,14 @@ import systems.zlink.framework.runtime.internal.diagnostics.ZLinkTraceEventId;
 import systems.zlink.framework.runtime.internal.handlers.ZLinkHandlerActivator;
 import systems.zlink.framework.runtime.internal.monitoring.ZLinkRuntimeEventDispatcher;
 
+import java.util.concurrent.Executor;
+import java.util.concurrent.atomic.AtomicLong;
+import java.util.logging.Level;
+import java.util.logging.Logger;
+
 /** Internal Spec 26 message-flow tracer. */
 public final class ZLinkMessageFlowTracer {
-    private static final Logger LOGGER =
-        Logger.getLogger(ZLinkMessageFlowTracer.class.getName());
+    private static final Logger LOGGER = Logger.getLogger(ZLinkMessageFlowTracer.class.getName());
     private static final AtomicLong NEXT_SOURCE_GENERATION = new AtomicLong();
 
     private final ZLinkDispatchOptionsRegistration options;
@@ -33,17 +33,17 @@ public final class ZLinkMessageFlowTracer {
     private final AtomicLong providerFailureCount = new AtomicLong();
 
     public ZLinkMessageFlowTracer(
-        ZLinkDispatchOptionsRegistration options,
-        ZLinkHandlerActivator handlerFactory,
-        Executor executor) {
+            ZLinkDispatchOptionsRegistration options,
+            ZLinkHandlerActivator handlerFactory,
+            Executor executor) {
         this(options, handlerFactory, executor, null);
     }
 
     public ZLinkMessageFlowTracer(
-        ZLinkDispatchOptionsRegistration options,
-        ZLinkHandlerActivator handlerFactory,
-        Executor executor,
-        ZLinkRuntimeEventDispatcher eventDispatcher) {
+            ZLinkDispatchOptionsRegistration options,
+            ZLinkHandlerActivator handlerFactory,
+            Executor executor,
+            ZLinkRuntimeEventDispatcher eventDispatcher) {
         this.options = options;
         this.eventDispatcher = eventDispatcher;
     }
@@ -55,22 +55,19 @@ public final class ZLinkMessageFlowTracer {
     }
 
     /**
-     * Spec 27 §4 capture gate: flow context is created, installed and copied
-     * forward at every level except Off. At Off the processing point must not
-     * validate, install or propagate flow state (correlation_id is unaffected).
+     * Spec 27 §4 capture gate: flow context is created, installed and copied forward at every level
+     * except Off. At Off the processing point must not validate, install or propagate flow state
+     * (correlation_id is unaffected).
      */
     public boolean captureEnabled() {
-        return options.diagnostics().effectiveMessageFlow()
-            != ZLinkMessageFlowLogMode.OFF;
+        return options.diagnostics().effectiveMessageFlow() != ZLinkMessageFlowLogMode.OFF;
     }
 
     public TracePoint begin(ZLinkMessageFlowOutcome phase) {
         return begin(phase, defaultResult(phase));
     }
 
-    public TracePoint begin(
-        ZLinkMessageFlowOutcome phase,
-        ZLinkMessageFlowResult result) {
+    public TracePoint begin(ZLinkMessageFlowOutcome phase, ZLinkMessageFlowResult result) {
         ZLinkMessageFlowLogMode mode = options.diagnostics().effectiveMessageFlow();
         if (!accepts(mode, result)) {
             return null;
@@ -87,24 +84,20 @@ public final class ZLinkMessageFlowTracer {
     }
 
     /**
-     * Captures the live level before doing terminal-only classification work.
-     * The returned point owns the request's one terminal message-flow record.
+     * Captures the live level before doing terminal-only classification work. The returned point
+     * owns the request's one terminal message-flow record.
      */
     public TerminalTracePoint beginRequestTerminal(
-        Throwable failure,
-        java.util.concurrent.Future<?> request) {
+            Throwable failure, java.util.concurrent.Future<?> request) {
         ZLinkMessageFlowLogMode mode = options.diagnostics().effectiveMessageFlow();
         if (mode == ZLinkMessageFlowLogMode.OFF) {
             return null;
         }
-        return beginRequestTerminalAtMode(
-            failure, request != null && request.isCancelled(), mode);
+        return beginRequestTerminalAtMode(failure, request != null && request.isCancelled(), mode);
     }
 
     private TerminalTracePoint beginRequestTerminalAtMode(
-        Throwable failure,
-        boolean cancelled,
-        ZLinkMessageFlowLogMode mode) {
+            Throwable failure, boolean cancelled, ZLinkMessageFlowLogMode mode) {
         ZLinkMessageFlowResult result = requestTerminalResult(failure, cancelled);
         if (!accepts(mode, result)) {
             return null;
@@ -120,12 +113,10 @@ public final class ZLinkMessageFlowTracer {
         traceAtMode(flow, mode);
     }
 
-    private void traceAtMode(
-        ZLinkMessageFlowEvent event,
-        ZLinkMessageFlowLogMode mode) {
+    private void traceAtMode(ZLinkMessageFlowEvent event, ZLinkMessageFlowLogMode mode) {
         ZLinkMessageFlowEvent tracedFlow = attachAmbientFlow(event);
-        if (sampled(tracedFlow) && !sample(
-            tracedFlow.flowId(), tracedFlow.sourceMeshGeneration())) {
+        if (sampled(tracedFlow)
+                && !sample(tracedFlow.flowId(), tracedFlow.sourceMeshGeneration())) {
             return;
         }
         tracedCount.incrementAndGet();
@@ -152,12 +143,11 @@ public final class ZLinkMessageFlowTracer {
         return providerFailureCount.get();
     }
 
-    private static boolean accepts(
-        ZLinkMessageFlowLogMode mode,
-        ZLinkMessageFlowResult result) {
-        ZLinkMessageFlowLogMode required = result == ZLinkMessageFlowResult.SUCCEEDED
-            ? ZLinkMessageFlowLogMode.NORMAL
-            : ZLinkMessageFlowLogMode.ERRORS;
+    private static boolean accepts(ZLinkMessageFlowLogMode mode, ZLinkMessageFlowResult result) {
+        ZLinkMessageFlowLogMode required =
+                result == ZLinkMessageFlowResult.SUCCEEDED
+                        ? ZLinkMessageFlowLogMode.NORMAL
+                        : ZLinkMessageFlowLogMode.ERRORS;
         return mode.value() >= required.value();
     }
 
@@ -171,15 +161,13 @@ public final class ZLinkMessageFlowTracer {
         return ZLinkMessageFlowResult.SUCCEEDED;
     }
 
-    static ZLinkMessageFlowResult requestTerminalResult(
-        Throwable failure,
-        boolean cancelled) {
+    static ZLinkMessageFlowResult requestTerminalResult(Throwable failure, boolean cancelled) {
         if (cancelled || failure instanceof java.util.concurrent.CancellationException) {
             return ZLinkMessageFlowResult.CANCELLED;
         }
         Throwable actual = failure;
         while (actual instanceof java.util.concurrent.CompletionException
-            && actual.getCause() != null) {
+                && actual.getCause() != null) {
             actual = actual.getCause();
         }
         if (actual instanceof ZLinkFrameworkException frameworkFailure) {
@@ -187,14 +175,12 @@ public final class ZLinkMessageFlowTracer {
                 return ZLinkMessageFlowResult.SHUTDOWN;
             }
         }
-        return actual == null
-            ? ZLinkMessageFlowResult.SUCCEEDED
-            : ZLinkMessageFlowResult.FAILED;
+        return actual == null ? ZLinkMessageFlowResult.SUCCEEDED : ZLinkMessageFlowResult.FAILED;
     }
 
     private static boolean sampled(ZLinkMessageFlowEvent flow) {
         return flow.eventId() == ZLinkTraceEventId.MESSAGE_FLOW
-            && flow.outcome() == ZLinkMessageFlowResult.SUCCEEDED;
+                && flow.outcome() == ZLinkMessageFlowResult.SUCCEEDED;
     }
 
     private boolean sample(String flowId, Long eventSourceGeneration) {
@@ -207,8 +193,10 @@ public final class ZLinkMessageFlowTracer {
         }
         String samplingKey = flowId;
         if (samplingKey == null) {
-            long generation = eventSourceGeneration == null
-                ? sourceMeshGeneration : eventSourceGeneration.longValue();
+            long generation =
+                    eventSourceGeneration == null
+                            ? sourceMeshGeneration
+                            : eventSourceGeneration.longValue();
             samplingKey = generation + ":" + localSamplingSequence.incrementAndGet();
         }
         long unsignedHash = Integer.toUnsignedLong(fnv1a(samplingKey));
@@ -225,10 +213,9 @@ public final class ZLinkMessageFlowTracer {
                 hash = fnv1aByte(hash, 0xc0 | current >>> 6);
                 hash = fnv1aByte(hash, 0x80 | current & 0x3f);
             } else if (Character.isHighSurrogate(current)
-                && index + 1 < value.length()
-                && Character.isLowSurrogate(value.charAt(index + 1))) {
-                int codePoint = Character.toCodePoint(
-                    current, value.charAt(++index));
+                    && index + 1 < value.length()
+                    && Character.isLowSurrogate(value.charAt(index + 1))) {
+                int codePoint = Character.toCodePoint(current, value.charAt(++index));
                 hash = fnv1aByte(hash, 0xf0 | codePoint >>> 18);
                 hash = fnv1aByte(hash, 0x80 | codePoint >>> 12 & 0x3f);
                 hash = fnv1aByte(hash, 0x80 | codePoint >>> 6 & 0x3f);
@@ -253,17 +240,14 @@ public final class ZLinkMessageFlowTracer {
         if (eventDispatcher == null) {
             return;
         }
-        eventDispatcher.publishObserverFailure(
-            "message-flow", "standard-logger", error);
+        eventDispatcher.publishObserverFailure("message-flow", "standard-logger", error);
     }
 
-    private void logDefault(
-        ZLinkMessageFlowEvent flow,
-        ZLinkMessageFlowLogMode mode) {
+    private void logDefault(ZLinkMessageFlowEvent flow, ZLinkMessageFlowLogMode mode) {
         Long size = null;
         if (flow.messageSize() != null
-            && mode.value() >= ZLinkMessageFlowLogMode.DETAILED.value()
-            && options.diagnostics().includeMessageSizes()) {
+                && mode.value() >= ZLinkMessageFlowLogMode.DETAILED.value()
+                && options.diagnostics().includeMessageSizes()) {
             size = flow.messageSize();
         }
         LOGGER.log(logLevel(flow), ZLinkTraceFormat.flowLine(flow, size));
@@ -271,7 +255,7 @@ public final class ZLinkMessageFlowTracer {
 
     Level logLevel(ZLinkMessageFlowEvent flow) {
         if (flow.eventId() == ZLinkTraceEventId.MESSAGE_FLOW
-            && flow.outcome() == ZLinkMessageFlowResult.SUCCEEDED) {
+                && flow.outcome() == ZLinkMessageFlowResult.SUCCEEDED) {
             return Level.INFO;
         }
         if (flow.errorReason() == ZLinkDispatchErrorReason.HANDLER_EXCEPTION) {
@@ -281,7 +265,7 @@ public final class ZLinkMessageFlowTracer {
             return julLevel(options.unhandled().publishLogLevel());
         }
         if (flow.messageKind() == ZLinkDispatchMessageKind.SEND
-            || flow.messageKind() == ZLinkDispatchMessageKind.ACTOR_SEND) {
+                || flow.messageKind() == ZLinkDispatchMessageKind.ACTOR_SEND) {
             return julLevel(options.unhandled().sendLogLevel());
         }
         return Level.SEVERE;

@@ -30,7 +30,8 @@ public sealed class BuilderContracts
         typeof(IZLinkRouteConfig),
         typeof(IZLinkOutboundRouteConfig),
         typeof(IZLinkSpotPublisherConfig),
-        typeof(IZLinkSpotSubscriberConfig))]
+        typeof(IZLinkSpotSubscriberConfig)
+    )]
     public void Framework_options_expose_the_10_0_registration_surface()
     {
         var methods = typeof(IZLinkFrameworkOptions)
@@ -39,9 +40,7 @@ public sealed class BuilderContracts
             .ToHashSet(StringComparer.Ordinal);
 
         Assert.Contains(nameof(IZLinkFrameworkOptions.AddRouteMesh), methods);
-        Assert.Contains(
-            nameof(IZLinkFrameworkOptions.ConfigureInboundDispatch),
-            methods);
+        Assert.Contains(nameof(IZLinkFrameworkOptions.ConfigureInboundDispatch), methods);
         Assert.Contains(nameof(IZLinkFrameworkOptions.AddFanoutChannel), methods);
         Assert.Contains(nameof(IZLinkFrameworkOptions.AddStreamNode), methods);
     }
@@ -50,7 +49,8 @@ public sealed class BuilderContracts
     [ContractExample(
         typeof(IZLinkMeshNodeBuilder),
         typeof(IZLinkMeshNodeSocketConfig),
-        typeof(IZLinkMeshPeerConnections))]
+        typeof(IZLinkMeshPeerConnections)
+    )]
     public void Mesh_node_builder_owns_transport_identity_and_direct_route_handlers()
     {
         var methods = typeof(IZLinkMeshNodeBuilder)
@@ -72,26 +72,31 @@ public sealed class BuilderContracts
         Assert.DoesNotContain("ChannelName", methods);
         Assert.DoesNotContain("UseAllocatedRoutingId", methods);
         Assert.DoesNotContain("SetObjectCapacity", methods);
-        Assert.NotNull(typeof(IZLinkMeshNodeBuilder).GetProperty(nameof(IZLinkMeshNodeBuilder.PeerConnections)));
+        Assert.NotNull(
+            typeof(IZLinkMeshNodeBuilder).GetProperty(nameof(IZLinkMeshNodeBuilder.PeerConnections))
+        );
     }
 
     [Fact]
     [ContractExample(
         typeof(IZLinkMeshChannelRoleBuilder),
         typeof(IZLinkMeshChannelClientBuilder),
-        typeof(IZLinkMeshChannelServerBuilder))]
+        typeof(IZLinkMeshChannelServerBuilder)
+    )]
     public void Mesh_channel_role_separates_client_from_server_configuration()
     {
         Assert.Equal(
             typeof(IZLinkMeshChannelClientBuilder),
             typeof(IZLinkMeshChannelRoleBuilder)
                 .GetMethod(nameof(IZLinkMeshChannelRoleBuilder.Client))!
-                .ReturnType);
+                .ReturnType
+        );
         Assert.Equal(
             typeof(IZLinkMeshChannelServerBuilder),
             typeof(IZLinkMeshChannelRoleBuilder)
                 .GetMethod(nameof(IZLinkMeshChannelRoleBuilder.Server))!
-                .ReturnType);
+                .ReturnType
+        );
 
         Assert.Empty(typeof(IZLinkMeshChannelClientBuilder).GetMethods());
         var serverMethods = typeof(IZLinkMeshChannelServerBuilder)
@@ -102,5 +107,4 @@ public sealed class BuilderContracts
         Assert.Contains(nameof(IZLinkMeshChannelServerBuilder.AddSendHandler), serverMethods);
         Assert.Contains(nameof(IZLinkMeshChannelServerBuilder.AddRequestHandler), serverMethods);
     }
-
 }

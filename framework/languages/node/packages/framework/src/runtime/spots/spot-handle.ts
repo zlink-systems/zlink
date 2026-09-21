@@ -1,8 +1,4 @@
-import type {
-  RoutingId,
-  ZLinkFrameworkRuntimeState,
-  ZLinkSpotKind
-} from '../../contracts';
+import type { RoutingId, ZLinkFrameworkRuntimeState, ZLinkSpotKind } from '../../contracts';
 
 declare const spotHandleBrand: unique symbol;
 
@@ -64,9 +60,12 @@ export function createSpotHandle(
     meshName: initial?.meshName ?? '',
     spotId
   }) as SpotHandle;
-  handleStates.set(handle, typeof initialOrRefresh === 'function'
-    ? { current: undefined, refresh: initialOrRefresh }
-    : { current: initialOrRefresh, refresh: refresh! });
+  handleStates.set(
+    handle,
+    typeof initialOrRefresh === 'function'
+      ? { current: undefined, refresh: initialOrRefresh }
+      : { current: initialOrRefresh, refresh: refresh! }
+  );
   return handle;
 }
 
@@ -75,7 +74,7 @@ export async function resolveSpotHandle(
   signal?: AbortSignal
 ): Promise<ResolvedSpotHandle | undefined> {
   const state = requireHandleState(handle);
-  return state.current ?? await refreshSpotHandle(handle, signal);
+  return state.current ?? (await refreshSpotHandle(handle, signal));
 }
 
 export async function refreshSpotHandle(
@@ -83,12 +82,15 @@ export async function refreshSpotHandle(
   signal?: AbortSignal
 ): Promise<ResolvedSpotHandle | undefined> {
   const state = requireHandleState(handle);
-  state.refreshing ??= state.refresh(signal).then((resolved) => {
-    state.current = resolved;
-    return resolved;
-  }).finally(() => {
-    state.refreshing = undefined;
-  });
+  state.refreshing ??= state
+    .refresh(signal)
+    .then((resolved) => {
+      state.current = resolved;
+      return resolved;
+    })
+    .finally(() => {
+      state.refreshing = undefined;
+    });
   return await state.refreshing;
 }
 

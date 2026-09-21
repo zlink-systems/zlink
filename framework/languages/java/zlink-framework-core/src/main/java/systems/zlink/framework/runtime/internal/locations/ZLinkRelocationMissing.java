@@ -1,5 +1,3 @@
 package systems.zlink.framework.runtime.internal.locations;
 
-public record ZLinkRelocationMissing()
-    implements ZLinkRelocationReadResult {
-}
+public record ZLinkRelocationMissing() implements ZLinkRelocationReadResult {}

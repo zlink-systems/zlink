@@ -21,9 +21,8 @@ TEST_F (ZLinkFrameworkRedisBlobBound, Accepts64MiBPlus23ByteEnvelope)
 {
     const std::vector<std::byte> payload (64u * 1024u * 1024u + 23u, std::byte{0xa5});
     std::size_t eval_calls = 0;
-    sw::redis::Redis::on_eval = [&] (std::string_view,
-                                    std::span<const std::string> keys,
-                                    std::span<const std::string> args) {
+    sw::redis::Redis::on_eval = [&] (std::string_view, std::span<const std::string> keys,
+                                     std::span<const std::string> args) {
         ++eval_calls;
         EXPECT_EQ (keys.size (), 1u);
         EXPECT_EQ (args.size (), 2u);
@@ -31,15 +30,14 @@ TEST_F (ZLinkFrameworkRedisBlobBound, Accepts64MiBPlus23ByteEnvelope)
             throw sw::redis::Error ("unexpected relocation PUT arguments");
         EXPECT_EQ (keys[0], "zlink:test:bound:{zlink-relocation-v1}:blob:max-encoded");
         EXPECT_EQ (args[0].size (), payload.size ());
-        EXPECT_EQ (std::string_view (args[0]),
-                   (std::string_view {reinterpret_cast<const char *> (payload.data ()),
-                                      payload.size ()}));
+        EXPECT_EQ (
+          std::string_view (args[0]),
+          (std::string_view{reinterpret_cast<const char *> (payload.data ()), payload.size ()}));
         EXPECT_EQ (args[1], "30000");
         return std::vector<std::string>{"stored", "1000", "31000"};
     };
-    redis_relocation_store_t store ({
-      .connection_string = "tcp://fake-redis:6379",
-      .key_prefix = "zlink:test:bound"});
+    redis_relocation_store_t store (
+      {.connection_string = "tcp://fake-redis:6379", .key_prefix = "zlink:test:bound"});
     relocation_store_t &provider = store;
 
     const auto result = provider.put ({"max-encoded"}, payload, 30s).result ();
@@ -56,15 +54,13 @@ TEST_F (ZLinkFrameworkRedisBlobBound, Rejects64MiBPlus24BytesBeforeRedisCall)
 {
     const std::vector<std::byte> payload (64u * 1024u * 1024u + 24u, std::byte{0xa5});
     std::size_t eval_calls = 0;
-    sw::redis::Redis::on_eval = [&] (std::string_view,
-                                    std::span<const std::string>,
-                                    std::span<const std::string>) {
+    sw::redis::Redis::on_eval = [&] (std::string_view, std::span<const std::string>,
+                                     std::span<const std::string>) {
         ++eval_calls;
         return std::vector<std::string>{"stored", "1000", "31000"};
     };
-    redis_relocation_store_t store ({
-      .connection_string = "tcp://fake-redis:6379",
-      .key_prefix = "zlink:test:bound"});
+    redis_relocation_store_t store (
+      {.connection_string = "tcp://fake-redis:6379", .key_prefix = "zlink:test:bound"});
     relocation_store_t &provider = store;
 
     EXPECT_THROW ((void) provider.put ({"oversized"}, payload, 30s).result (),

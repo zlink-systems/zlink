@@ -11,15 +11,9 @@ import {
   ZLinkFormalRemoteActorAdmissionRegistry,
   type ZLinkParkedActorArrival
 } from '../../packages/framework/src/runtime/spots/formal-remote-actor-admission-registry';
-import {
-  ZLinkFormalRemoteActorTransferRegistry
-} from '../../packages/framework/src/runtime/spots/formal-remote-actor-transfer-registry';
-import {
-  ZLinkPostCommitActorBinder
-} from '../../packages/framework/src/runtime/actors/post-commit-actor-binder';
-import {
-  ZLinkPostCommitActorLocation
-} from '../../packages/framework/src/runtime/actors/post-commit-actor-location';
+import { ZLinkFormalRemoteActorTransferRegistry } from '../../packages/framework/src/runtime/spots/formal-remote-actor-transfer-registry';
+import { ZLinkPostCommitActorBinder } from '../../packages/framework/src/runtime/actors/post-commit-actor-binder';
+import { ZLinkPostCommitActorLocation } from '../../packages/framework/src/runtime/actors/post-commit-actor-location';
 import {
   ZLinkSpotActorPacketDispatch,
   type ZLinkActorPacketDelivery,
@@ -107,7 +101,9 @@ test('formal transfer rechecks its exact entry after target lifecycle await', as
 
 test('post-commit binder retains a newer desired ref across bind await', async () => {
   let releaseFirstBind!: () => void;
-  const firstBind = new Promise<void>((resolve) => { releaseFirstBind = resolve; });
+  const firstBind = new Promise<void>((resolve) => {
+    releaseFirstBind = resolve;
+  });
   const attempts: ActorRef[] = [];
   const binder = new ZLinkPostCommitActorBinder({
     bind: async (actorRef) => {
@@ -128,10 +124,14 @@ test('post-commit binder retains a newer desired ref across bind await', async (
 
 test('post-commit location completes one queue head after its callback await', async () => {
   let releaseJoined!: () => void;
-  const joined = new Promise<void>((resolve) => { releaseJoined = resolve; });
+  const joined = new Promise<void>((resolve) => {
+    releaseJoined = resolve;
+  });
   const events: string[] = [];
   let resolveLeft!: () => void;
-  const left = new Promise<void>((resolve) => { resolveLeft = resolve; });
+  const left = new Promise<void>((resolve) => {
+    resolveLeft = resolve;
+  });
   const location = new ZLinkPostCommitActorLocation({
     lifecycle: {
       async notifyActorJoinedSpot() {
@@ -174,72 +174,78 @@ function pendingCanonicalJoinHarness() {
   };
   const request = Message.from(Buffer.from('canonical-request'));
   const failures: Array<{ readonly terminal: number; readonly code: number }> = [];
-  const join = DefaultZLinkSpotManager.prototype.dispatchMeshActorJoin.call(
-    manager as never,
-    MESH_NAME,
-    { spotId: SPOT_ID } as never,
-    {
-      kindData: {
-        kind: 'actorControl',
-        lifecycleKind: 2,
-        previousActor: {
-          actorId: ACTOR_ID,
-          generation: OBJECT_GENERATION,
-          nodeRid: NODE_RID
+  const join = DefaultZLinkSpotManager.prototype.dispatchMeshActorJoin
+    .call(
+      manager as never,
+      MESH_NAME,
+      { spotId: SPOT_ID } as never,
+      {
+        kindData: {
+          kind: 'actorControl',
+          lifecycleKind: 2,
+          previousActor: {
+            actorId: ACTOR_ID,
+            generation: OBJECT_GENERATION,
+            nodeRid: NODE_RID
+          },
+          currentActor: {
+            actorId: ACTOR_ID,
+            generation: OBJECT_GENERATION,
+            nodeRid: SPOT_ID
+          },
+          previousSpotId: 'source-spot',
+          currentSpotId: SPOT_ID,
+          previousSpotGeneration: 1n,
+          currentSpotGeneration: 2n,
+          previousMembershipEpoch: 3n,
+          currentMembershipEpoch: 4n,
+          resultCode: 0,
+          canonicalActorJoin: {
+            handoffId: 'canonical-await',
+            actorNodeRid: String(NODE_RID),
+            actorGeneration: OBJECT_GENERATION,
+            actorNodeGeneration: 7n,
+            authorityOwnerGeneration: 8n,
+            ownerLeaseGeneration: 9n
+          }
         },
-        currentActor: {
-          actorId: ACTOR_ID,
-          generation: OBJECT_GENERATION,
-          nodeRid: SPOT_ID
-        },
-        previousSpotId: 'source-spot',
-        currentSpotId: SPOT_ID,
-        previousSpotGeneration: 1n,
-        currentSpotGeneration: 2n,
-        previousMembershipEpoch: 3n,
-        currentMembershipEpoch: 4n,
-        resultCode: 0,
-        canonicalActorJoin: {
-          handoffId: 'canonical-await',
-          actorNodeRid: String(NODE_RID),
-          actorGeneration: OBJECT_GENERATION,
-          actorNodeGeneration: 7n,
-          authorityOwnerGeneration: 8n,
-          ownerLeaseGeneration: 9n
+        parts: [request],
+        contentType: 'application/json',
+        isPending: () => true,
+        replyActorJoin: () => 0,
+        replyFailure(terminal: number, code: number) {
+          failures.push({ terminal, code });
+          return 0;
         }
-      },
-      parts: [request],
-      contentType: 'application/json',
-      isPending: () => true,
-      replyActorJoin: () => 0,
-      replyFailure(terminal: number, code: number) {
-        failures.push({ terminal, code });
-        return 0;
-      }
-    } as never
-  ).finally(() => request.close());
+      } as never
+    )
+    .finally(() => request.close());
   return { registry, join, failures, resolveValidation, rejectValidation };
 }
 
 function sendHeaderBytes(packetName: string): Buffer {
-  return Buffer.from(encodeStreamHeader({
-    kind: ZLinkStreamMessageKind.Send,
-    codec: ZLinkStreamCodec.Raw,
-    flags: 0,
-    name: packetName,
-    metadata: new Map()
-  }));
+  return Buffer.from(
+    encodeStreamHeader({
+      kind: ZLinkStreamMessageKind.Send,
+      codec: ZLinkStreamCodec.Raw,
+      flags: 0,
+      name: packetName,
+      metadata: new Map()
+    })
+  );
 }
 
 function requestHeaderBytes(packetName: string, requestSeq: bigint): Buffer {
-  return Buffer.from(encodeStreamHeader({
-    kind: ZLinkStreamMessageKind.Request,
-    codec: ZLinkStreamCodec.Raw,
-    flags: 0x01,
-    requestSeq,
-    name: packetName,
-    metadata: new Map()
-  }));
+  return Buffer.from(
+    encodeStreamHeader({
+      kind: ZLinkStreamMessageKind.Request,
+      codec: ZLinkStreamCodec.Raw,
+      flags: 0x01,
+      requestSeq,
+      name: packetName,
+      metadata: new Map()
+    })
+  );
 }
 
 test('an arrival parked between Accepted and cutover delivers in order once relocation completes', async () => {
@@ -300,7 +306,11 @@ test('an arrival parked between Accepted and cutover delivers in order once relo
       arrival.requestTerminal
     );
   }
-  assert.deepEqual(delivered, ['EARLY-1', 'EARLY-2'], 'parked arrivals must migrate in the order they parked');
+  assert.deepEqual(
+    delivered,
+    ['EARLY-1', 'EARLY-2'],
+    'parked arrivals must migrate in the order they parked'
+  );
 
   // A further arrival after migration reaches the Actor directly — the
   // attempt no longer parks anything for this object.
@@ -349,7 +359,9 @@ test('command 28 registers prewarm before Store validation so early Send and Req
     false,
     undefined,
     fallbackRef(),
-    response => { replies.push(response); }
+    (response) => {
+      replies.push(response);
+    }
   );
   await flushMicrotasks();
   assert.equal(harness.registry.get('canonical-await')?.state, 'provisional');
@@ -360,7 +372,7 @@ test('command 28 registers prewarm before Store validation so early Send and Req
 
   const drained = harness.registry.completeMigration('canonical-await');
   assert.deepEqual(
-    drained.map(value => value.payload.toString('utf8')),
+    drained.map((value) => value.payload.toString('utf8')),
     ['EARLY-SEND', 'EARLY-REQUEST']
   );
   actorReady = true;
@@ -384,13 +396,18 @@ test('command 28 validation failure releases provisional parked ingress with the
     'authority read unavailable'
   );
   let parkedFailure: unknown;
-  assert.equal(harness.registry.routeIngress(ACTOR_ID, OBJECT_GENERATION, {
-    header: requestHeaderBytes('early-request', 3n),
-    payload: Buffer.from('EARLY-REQUEST'),
-    returnResponse: false,
-    resolve: () => undefined,
-    reject: error => { parkedFailure = error; }
-  }), 'parked');
+  assert.equal(
+    harness.registry.routeIngress(ACTOR_ID, OBJECT_GENERATION, {
+      header: requestHeaderBytes('early-request', 3n),
+      payload: Buffer.from('EARLY-REQUEST'),
+      returnResponse: false,
+      resolve: () => undefined,
+      reject: (error) => {
+        parkedFailure = error;
+      }
+    }),
+    'parked'
+  );
 
   harness.rejectValidation(failure);
   await harness.join;
@@ -398,13 +415,16 @@ test('command 28 validation failure releases provisional parked ingress with the
   assert.equal(parkedFailure, failure);
   assert.equal(harness.registry.get('canonical-await')?.state, 'failed');
   assert.equal(harness.failures.length, 1);
-  assert.equal(harness.registry.routeIngress(ACTOR_ID, OBJECT_GENERATION, {
-    header: sendHeaderBytes('after-failure'),
-    payload: Buffer.from('AFTER'),
-    returnResponse: false,
-    resolve: () => undefined,
-    reject: () => undefined
-  }), 'not-found');
+  assert.equal(
+    harness.registry.routeIngress(ACTOR_ID, OBJECT_GENERATION, {
+      header: sendHeaderBytes('after-failure'),
+      payload: Buffer.from('AFTER'),
+      returnResponse: false,
+      resolve: () => undefined,
+      reject: () => undefined
+    }),
+    'not-found'
+  );
 });
 
 test('a parked Request replies through the original mailbox correlation once migrated', async () => {
@@ -601,7 +621,9 @@ test('Rejected admission and explicit abort fail every parked arrival exactly on
     payload: Buffer.from('DOOMED'),
     returnResponse: false,
     resolve: () => undefined,
-    reject: () => { rejectCount += 1; }
+    reject: () => {
+      rejectCount += 1;
+    }
   });
   assert.equal(parkedRoute, 'parked');
 
@@ -632,7 +654,9 @@ test('Rejected admission and explicit abort fail every parked arrival exactly on
     payload: Buffer.from('ABORTED'),
     returnResponse: false,
     resolve: () => undefined,
-    reject: () => { abortedRejectCount += 1; }
+    reject: () => {
+      abortedRejectCount += 1;
+    }
   });
   assert.equal(abortedRoute, 'parked');
   registry.abort(abortedTransferId);
@@ -680,5 +704,9 @@ test('disabling the ingress prewarm consult reproduces the pre-fix silent drop',
   // Nothing was parked, so there is nothing to migrate — the arrival is
   // gone. This is the failure this whole mechanism exists to prevent.
   assert.equal(registry.completeMigration(transferId).length, 0);
-  assert.deepEqual(delivered, [], 'without the prewarm consult the arrival is silently dropped, not parked');
+  assert.deepEqual(
+    delivered,
+    [],
+    'without the prewarm consult the arrival is silently dropped, not parked'
+  );
 });

@@ -1,6 +1,4 @@
 package systems.zlink.stream.connector;
-import java.time.Duration;
-import java.util.concurrent.TimeUnit;
 
 import java.io.BufferedReader;
 import java.io.Closeable;
@@ -14,22 +12,25 @@ import java.net.URI;
 import java.nio.ByteBuffer;
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
+import java.time.Duration;
 import java.util.Base64;
 import java.util.Locale;
-import java.util.Map;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+import java.util.concurrent.TimeUnit;
 
 final class WebSocketStreamConnectorTestServer implements Closeable {
     private static final String MAGIC = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11";
 
     private final ServerSocket server;
-    private final ExecutorService executor = Executors.newCachedThreadPool(runnable -> {
-        Thread thread = new Thread(runnable, "zlink-ws-test-server");
-        thread.setDaemon(true);
-        return thread;
-    });
+    private final ExecutorService executor =
+            Executors.newCachedThreadPool(
+                    runnable -> {
+                        Thread thread = new Thread(runnable, "zlink-ws-test-server");
+                        thread.setDaemon(true);
+                        return thread;
+                    });
     private volatile Socket current;
 
     WebSocketStreamConnectorTestServer() throws IOException {
@@ -42,62 +43,65 @@ final class WebSocketStreamConnectorTestServer implements Closeable {
     }
 
     CompletableFuture<TcpStreamConnectorTestServer.ReceivedFrame> readFrameAsync() {
-        return CompletableFuture.supplyAsync(() -> {
-            try {
-                byte[] message = readBinaryMessage(socket());
-                ZLinkStreamWireProtocol.Frame frame =
-                    ZLinkStreamWireProtocol.decodeFrame(message);
-                return new TcpStreamConnectorTestServer.ReceivedFrame(
-                    ZLinkStreamWireProtocol.decodeHeader(frame.header()),
-                    frame.payload());
-            } catch (Exception ex) {
-                throw new RuntimeException(ex);
-            }
-        }, executor);
+        return CompletableFuture.supplyAsync(
+                () -> {
+                    try {
+                        byte[] message = readBinaryMessage(socket());
+                        ZLinkStreamWireProtocol.Frame frame =
+                                ZLinkStreamWireProtocol.decodeFrame(message);
+                        return new TcpStreamConnectorTestServer.ReceivedFrame(
+                                ZLinkStreamWireProtocol.decodeHeader(frame.header()),
+                                frame.payload());
+                    } catch (Exception ex) {
+                        throw new RuntimeException(ex);
+                    }
+                },
+                executor);
     }
 
-    CompletableFuture<Void> sendAsync(
-        ZLinkStreamWireProtocol.Header header,
-        byte[] payload) {
-        return CompletableFuture.runAsync(() -> {
-            try {
-                byte[] encodedHeader = ZLinkStreamWireProtocol.encodeHeader(header);
-                byte[] frame = ZLinkStreamWireProtocol.encodeFrame(
-                    encodedHeader,
-                    payload,
-                    64 * 1024);
-                writeBinaryMessage(socket().getOutputStream(), frame);
-            } catch (Exception ex) {
-                throw new RuntimeException(ex);
-            }
-        }, executor);
+    CompletableFuture<Void> sendAsync(ZLinkStreamWireProtocol.Header header, byte[] payload) {
+        return CompletableFuture.runAsync(
+                () -> {
+                    try {
+                        byte[] encodedHeader = ZLinkStreamWireProtocol.encodeHeader(header);
+                        byte[] frame =
+                                ZLinkStreamWireProtocol.encodeFrame(
+                                        encodedHeader, payload, 64 * 1024);
+                        writeBinaryMessage(socket().getOutputStream(), frame);
+                    } catch (Exception ex) {
+                        throw new RuntimeException(ex);
+                    }
+                },
+                executor);
     }
 
     CompletableFuture<Void> sendRawAsync(byte[] payload) {
-        return CompletableFuture.runAsync(() -> {
-            try {
-                writeBinaryMessage(socket().getOutputStream(), payload);
-            } catch (Exception ex) {
-                throw new RuntimeException(ex);
-            }
-        }, executor);
+        return CompletableFuture.runAsync(
+                () -> {
+                    try {
+                        writeBinaryMessage(socket().getOutputStream(), payload);
+                    } catch (Exception ex) {
+                        throw new RuntimeException(ex);
+                    }
+                },
+                executor);
     }
 
     ZLinkStreamConnectorOptions options(ZLinkStreamDispatchMode dispatchMode) {
         return new ZLinkStreamConnectorOptions(
-            endpoint(),
-            dispatchMode,
-            Duration.ofSeconds(1),
-            1,
-            Duration.ofSeconds(1),
-            64 * 1024,
-            false,
-            Duration.ofMillis(25),
-            Duration.ofMillis(500),
-            true,
-            Duration.ofMillis(10),
-            Duration.ofMillis(250),
-            2.0);
+                endpoint(),
+                dispatchMode,
+                Duration.ofSeconds(1),
+                1,
+                Duration.ofSeconds(1),
+                64 * 1024,
+                false,
+                Duration.ofMillis(25),
+                Duration.ofMillis(500),
+                true,
+                Duration.ofMillis(10),
+                Duration.ofMillis(250),
+                2.0);
     }
 
     @Override
@@ -139,9 +143,9 @@ final class WebSocketStreamConnectorTestServer implements Closeable {
     }
 
     private static void completeHandshake(Socket socket) throws IOException {
-        BufferedReader reader = new BufferedReader(new InputStreamReader(
-            socket.getInputStream(),
-            StandardCharsets.US_ASCII));
+        BufferedReader reader =
+                new BufferedReader(
+                        new InputStreamReader(socket.getInputStream(), StandardCharsets.US_ASCII));
         String key = null;
         String line;
         while ((line = reader.readLine()) != null && !line.isEmpty()) {
@@ -154,10 +158,13 @@ final class WebSocketStreamConnectorTestServer implements Closeable {
             throw new IOException("missing websocket key");
         }
         String accept = acceptKey(key);
-        String response = "HTTP/1.1 101 Switching Protocols\r\n"
-            + "Upgrade: websocket\r\n"
-            + "Connection: Upgrade\r\n"
-            + "Sec-WebSocket-Accept: " + accept + "\r\n\r\n";
+        String response =
+                "HTTP/1.1 101 Switching Protocols\r\n"
+                        + "Upgrade: websocket\r\n"
+                        + "Connection: Upgrade\r\n"
+                        + "Sec-WebSocket-Accept: "
+                        + accept
+                        + "\r\n\r\n";
         socket.getOutputStream().write(response.getBytes(StandardCharsets.US_ASCII));
         socket.getOutputStream().flush();
     }

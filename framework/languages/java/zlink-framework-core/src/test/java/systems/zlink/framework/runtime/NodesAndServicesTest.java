@@ -1,11 +1,4 @@
 package systems.zlink.framework.runtime.host;
-import systems.zlink.framework.actors.ZLinkActorCreateResult;
-
-import systems.zlink.framework.spots.SpotHandleResolver;
-
-import systems.zlink.framework.runtime.configuration.DefaultZLinkFrameworkOptions;
-
-import systems.zlink.framework.runtime.internal.backend.*;
 
 import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
 import static org.junit.jupiter.api.Assertions.assertEquals;
@@ -14,23 +7,15 @@ import static org.junit.jupiter.api.Assertions.assertNotEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
-import java.time.Duration;
-import java.util.List;
-import java.util.Set;
-import java.util.concurrent.CompletableFuture;
-import java.util.concurrent.CompletionException;
-import java.util.concurrent.CompletionStage;
-import java.util.concurrent.CopyOnWriteArrayList;
-import java.util.concurrent.TimeUnit;
-import java.util.concurrent.TimeoutException;
-import java.util.concurrent.atomic.AtomicInteger;
 import org.junit.jupiter.api.Test;
+
 import systems.zlink.contracts.core.RoutingId;
 import systems.zlink.framework.actors.ActorRef;
 import systems.zlink.framework.actors.ZLinkActor;
 import systems.zlink.framework.actors.ZLinkActorContext;
+import systems.zlink.framework.actors.ZLinkActorCreateResult;
 import systems.zlink.framework.actors.ZLinkActorFactory;
-import systems.zlink.framework.runtime.InMemoryRelocationStore;
+import systems.zlink.framework.actors.ZLinkRelocationCancellation;
 import systems.zlink.framework.configuration.ZLinkMessageFlowLogMode;
 import systems.zlink.framework.configuration.ZLinkSpotRelocationCoordinationMode;
 import systems.zlink.framework.configuration.ZLinkUserSpotExecutionMode;
@@ -38,6 +23,12 @@ import systems.zlink.framework.configuration.ZLinkUserSpotFactoryBuilder;
 import systems.zlink.framework.errors.ZLinkConfigurationException;
 import systems.zlink.framework.errors.ZLinkFrameworkErrorKind;
 import systems.zlink.framework.errors.ZLinkFrameworkException;
+import systems.zlink.framework.runtime.InMemoryRelocationStore;
+import systems.zlink.framework.runtime.binding.ZLinkJavaBackendAdapterFactory;
+import systems.zlink.framework.runtime.configuration.DefaultZLinkFrameworkOptions;
+import systems.zlink.framework.runtime.internal.backend.*;
+import systems.zlink.framework.runtime.locations.ZLinkInMemoryLocationStore;
+import systems.zlink.framework.spots.SpotHandleResolver;
 import systems.zlink.framework.spots.ZLinkEntrySpot;
 import systems.zlink.framework.spots.ZLinkEntrySpotContext;
 import systems.zlink.framework.spots.ZLinkInstanceSpot;
@@ -45,20 +36,25 @@ import systems.zlink.framework.spots.ZLinkInstanceSpotContext;
 import systems.zlink.framework.spots.ZLinkSpot;
 import systems.zlink.framework.spots.ZLinkSpotContext;
 import systems.zlink.framework.spots.ZLinkSpotRelocationAdapter;
-import systems.zlink.framework.actors.ZLinkRelocationCancellation;
-import systems.zlink.framework.runtime.locations.ZLinkInMemoryLocationStore;
-import systems.zlink.framework.spots.ZLinkSpotKind;
 import systems.zlink.framework.spots.ZLinkSpotRequestHandler;
-import systems.zlink.framework.runtime.binding.ZLinkJavaBackendAdapterFactory;
 import systems.zlink.framework.streams.ZLinkSession;
 import systems.zlink.framework.streams.ZLinkSessionContext;
 import systems.zlink.framework.streams.ZLinkStreamError;
 
+import java.time.Duration;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CompletionException;
+import java.util.concurrent.CompletionStage;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.TimeoutException;
+import java.util.concurrent.atomic.AtomicInteger;
+
 final class NodesAndServicesTest {
     @Test
     void messageFlowAsyncAndSyncControlsCompleteBeforeObservation() {
-        try (ZLinkFrameworkRuntime runtime = ZLinkFrameworkRuntimeTestAccess.start(
-                 new DefaultZLinkFrameworkOptions(), new ZLinkJavaBackendAdapterFactory())) {
+        try (ZLinkFrameworkRuntime runtime =
+                ZLinkFrameworkRuntimeTestAccess.start(
+                        new DefaultZLinkFrameworkOptions(), new ZLinkJavaBackendAdapterFactory())) {
             runtime.setMessageFlowModeAsync(ZLinkMessageFlowLogMode.NORMAL).join();
             assertEquals(ZLinkMessageFlowLogMode.NORMAL, runtime.messageFlowMode());
 
@@ -70,208 +66,206 @@ final class NodesAndServicesTest {
     @Test
     void factoryBuilderRequiresOneRelocationChoiceAndKeepsDocumentedDefaults() {
         var missing = new DefaultZLinkFrameworkOptions();
-        var missingObjects = missing.addRouteMesh("missing-policy")
-            .objects()
-            .server();
+        var missingObjects = missing.addRouteMesh("missing-policy").objects().server();
         assertThrows(
-            ZLinkConfigurationException.class,
-            () -> missingObjects.addSpotFactory(
-                "room",
-                RoomSpot.class,
-                factory -> factory.stableTypeLimit(12)));
+                ZLinkConfigurationException.class,
+                () ->
+                        missingObjects.addSpotFactory(
+                                "room", RoomSpot.class, factory -> factory.stableTypeLimit(12)));
 
         var duplicate = new DefaultZLinkFrameworkOptions();
-        var duplicateObjects = duplicate.addRouteMesh("duplicate-policy")
-            .objects()
-            .server();
+        var duplicateObjects = duplicate.addRouteMesh("duplicate-policy").objects().server();
         assertThrows(
-            ZLinkConfigurationException.class,
-            () -> duplicateObjects.addSpotFactory(
-                "room",
-                RoomSpot.class,
-                factory -> {
-                    factory.disableRelocation();
-                    factory.recreateOnRelocation();
-                }));
+                ZLinkConfigurationException.class,
+                () ->
+                        duplicateObjects.addSpotFactory(
+                                "room",
+                                RoomSpot.class,
+                                factory -> {
+                                    factory.disableRelocation();
+                                    factory.recreateOnRelocation();
+                                }));
 
         var perActor = new DefaultZLinkFrameworkOptions();
-        var perActorObjects = perActor.addRouteMesh("per-actor-readiness")
-            .objects()
-            .server();
+        var perActorObjects = perActor.addRouteMesh("per-actor-readiness").objects().server();
         assertThrows(
-            ZLinkConfigurationException.class,
-            () -> perActorObjects.addSpotFactory(
-                "room",
-                RoomSpot.class,
-                factory -> {
-                    factory.executionMode(ZLinkUserSpotExecutionMode.PER_ACTOR);
-                    factory.relocationCoordinationMode(
-                        ZLinkSpotRelocationCoordinationMode.APPLICATION_SIGNALED);
-                    factory.disableRelocation();
-                }));
+                ZLinkConfigurationException.class,
+                () ->
+                        perActorObjects.addSpotFactory(
+                                "room",
+                                RoomSpot.class,
+                                factory -> {
+                                    factory.executionMode(ZLinkUserSpotExecutionMode.PER_ACTOR);
+                                    factory.relocationCoordinationMode(
+                                            ZLinkSpotRelocationCoordinationMode
+                                                    .APPLICATION_SIGNALED);
+                                    factory.disableRelocation();
+                                }));
 
         var perActorDisabled = new DefaultZLinkFrameworkOptions();
         assertThrows(
-            ZLinkConfigurationException.class,
-            () -> perActorDisabled.addRouteMesh("per-actor-disabled")
-                .objects()
-                .server()
-                .addSpotFactory(
-                    "room",
-                    RoomSpot.class,
-                    factory -> {
-                        factory.executionMode(ZLinkUserSpotExecutionMode.PER_ACTOR);
-                        factory.disableRelocation();
-                    }));
+                ZLinkConfigurationException.class,
+                () ->
+                        perActorDisabled
+                                .addRouteMesh("per-actor-disabled")
+                                .objects()
+                                .server()
+                                .addSpotFactory(
+                                        "room",
+                                        RoomSpot.class,
+                                        factory -> {
+                                            factory.executionMode(
+                                                    ZLinkUserSpotExecutionMode.PER_ACTOR);
+                                            factory.disableRelocation();
+                                        }));
 
         var perActorPreserved = new DefaultZLinkFrameworkOptions();
         assertThrows(
-            ZLinkConfigurationException.class,
-            () -> perActorPreserved.addRouteMesh("per-actor-preserved")
-                .objects()
-                .server()
-                .addSpotFactory(
-                    "room",
-                    RoomSpot.class,
-                    factory -> {
-                        factory.executionMode(ZLinkUserSpotExecutionMode.PER_ACTOR);
-                        factory.preserveStateWith(RoomRelocationAdapter.class);
-                    }));
+                ZLinkConfigurationException.class,
+                () ->
+                        perActorPreserved
+                                .addRouteMesh("per-actor-preserved")
+                                .objects()
+                                .server()
+                                .addSpotFactory(
+                                        "room",
+                                        RoomSpot.class,
+                                        factory -> {
+                                            factory.executionMode(
+                                                    ZLinkUserSpotExecutionMode.PER_ACTOR);
+                                            factory.preserveStateWith(RoomRelocationAdapter.class);
+                                        }));
 
         var nullAdapter = new DefaultZLinkFrameworkOptions();
         assertThrows(
-            ZLinkConfigurationException.class,
-            () -> nullAdapter.addRouteMesh("null-adapter")
-                .objects()
-                .server()
-                .addSpotFactory(
-                    "room",
-                    RoomSpot.class,
-                    factory -> factory.preserveStateWith(null)));
+                ZLinkConfigurationException.class,
+                () ->
+                        nullAdapter
+                                .addRouteMesh("null-adapter")
+                                .objects()
+                                .server()
+                                .addSpotFactory(
+                                        "room",
+                                        RoomSpot.class,
+                                        factory -> factory.preserveStateWith(null)));
 
         var invalidLimit = new DefaultZLinkFrameworkOptions();
-        var invalidLimitObjects = invalidLimit.addRouteMesh("invalid-limit")
-            .objects()
-            .server();
+        var invalidLimitObjects = invalidLimit.addRouteMesh("invalid-limit").objects().server();
         assertThrows(
-            ZLinkConfigurationException.class,
-            () -> invalidLimitObjects.addSpotFactory(
-                "room-zero",
-                RoomSpot.class,
-                factory -> factory
-                    .stableTypeLimit(0)
-                    .disableRelocation()));
+                ZLinkConfigurationException.class,
+                () ->
+                        invalidLimitObjects.addSpotFactory(
+                                "room-zero",
+                                RoomSpot.class,
+                                factory -> factory.stableTypeLimit(0).disableRelocation()));
         assertThrows(
-            ZLinkConfigurationException.class,
-            () -> invalidLimitObjects.addSpotFactory(
-                "room-negative",
-                RoomSpot.class,
-                factory -> factory
-                    .stableTypeLimit(-1)
-                    .disableRelocation()));
+                ZLinkConfigurationException.class,
+                () ->
+                        invalidLimitObjects.addSpotFactory(
+                                "room-negative",
+                                RoomSpot.class,
+                                factory -> factory.stableTypeLimit(-1).disableRelocation()));
         assertThrows(
-            ZLinkConfigurationException.class,
-            () -> invalidLimitObjects.addInstanceSpotFactory(
-                "instance-zero",
-                RoomInstanceSpot.class,
-                factory -> factory
-                    .stableTypeLimit(0)
-                    .disableRelocation()));
+                ZLinkConfigurationException.class,
+                () ->
+                        invalidLimitObjects.addInstanceSpotFactory(
+                                "instance-zero",
+                                RoomInstanceSpot.class,
+                                factory -> factory.stableTypeLimit(0).disableRelocation()));
 
         @SuppressWarnings("unchecked")
         ZLinkUserSpotFactoryBuilder<RoomSpot>[] escaped =
-            (ZLinkUserSpotFactoryBuilder<RoomSpot>[]) new ZLinkUserSpotFactoryBuilder<?>[1];
+                (ZLinkUserSpotFactoryBuilder<RoomSpot>[]) new ZLinkUserSpotFactoryBuilder<?>[1];
         var escapedBuilder = new DefaultZLinkFrameworkOptions();
-        escapedBuilder.addRouteMesh("escaped-builder")
-            .objects()
-            .server()
-            .addSpotFactory(
-                "room",
-                RoomSpot.class,
-                factory -> {
-                    escaped[0] = factory;
-                    factory.disableRelocation();
-                });
-        assertThrows(
-            ZLinkConfigurationException.class,
-            () -> escaped[0].stableTypeLimit(5));
+        escapedBuilder
+                .addRouteMesh("escaped-builder")
+                .objects()
+                .server()
+                .addSpotFactory(
+                        "room",
+                        RoomSpot.class,
+                        factory -> {
+                            escaped[0] = factory;
+                            factory.disableRelocation();
+                        });
+        assertThrows(ZLinkConfigurationException.class, () -> escaped[0].stableTypeLimit(5));
 
         var callbackFailure = new DefaultZLinkFrameworkOptions();
-        var callbackFailureObjects = callbackFailure
-            .addRouteMesh("callback-failure")
-            .objects()
-            .server();
+        var callbackFailureObjects =
+                callbackFailure.addRouteMesh("callback-failure").objects().server();
         var originalFailure = new IllegalStateException("configure failed");
         assertEquals(
-            originalFailure,
-            assertThrows(
-                IllegalStateException.class,
-                () -> callbackFailureObjects.addSpotFactory(
-                    "room",
-                    RoomSpot.class,
-                    factory -> {
-                        factory.disableRelocation();
-                        throw originalFailure;
-                    })));
-        assertTrue(callbackFailure.registration()
-            .meshNodes()
-            .getFirst()
-            .relocatableSpotFactories()
-            .isEmpty());
+                originalFailure,
+                assertThrows(
+                        IllegalStateException.class,
+                        () ->
+                                callbackFailureObjects.addSpotFactory(
+                                        "room",
+                                        RoomSpot.class,
+                                        factory -> {
+                                            factory.disableRelocation();
+                                            throw originalFailure;
+                                        })));
+        assertTrue(
+                callbackFailure
+                        .registration()
+                        .meshNodes()
+                        .getFirst()
+                        .relocatableSpotFactories()
+                        .isEmpty());
 
         var defaults = new DefaultZLinkFrameworkOptions();
         defaults.addRouteMesh("factory-defaults")
-            .objects()
-            .server()
-            .addSpotFactory(
-                "room",
-                RoomSpot.class,
-                factory -> factory.disableRelocation());
-        var configuration = defaults.registration()
-            .meshNodes()
-            .getFirst()
-            .relocatableSpotFactories()
-            .get("room")
-            .options();
+                .objects()
+                .server()
+                .addSpotFactory("room", RoomSpot.class, factory -> factory.disableRelocation());
+        var configuration =
+                defaults.registration()
+                        .meshNodes()
+                        .getFirst()
+                        .relocatableSpotFactories()
+                        .get("room")
+                        .options();
         assertEquals(0, configuration.stableTypeLimit());
+        assertEquals(ZLinkUserSpotExecutionMode.SPOT_WIDE, configuration.executionMode());
         assertEquals(
-            ZLinkUserSpotExecutionMode.SPOT_WIDE,
-            configuration.executionMode());
-        assertEquals(
-            ZLinkSpotRelocationCoordinationMode.FRAMEWORK_MANAGED,
-            configuration.relocationCoordinationMode());
+                ZLinkSpotRelocationCoordinationMode.FRAMEWORK_MANAGED,
+                configuration.relocationCoordinationMode());
     }
 
     @Test
     void addZLinkFramework_throws_whenSpotFactoryTypeIsDuplicatedOnMeshNode() {
         DefaultZLinkFrameworkOptions options = new DefaultZLinkFrameworkOptions();
 
-        assertThrows(ZLinkConfigurationException.class, () ->
-            { var objects = options.addRouteMesh("game")
-                    .listen("inproc://duplicate-spot")
-                    .objects()
-                    .server();
-                objects.addSpotFactory(
-                    "game",
-                    GameSpot.class,
-                    factory -> factory.disableRelocation());
-                objects.addSpotFactory(
-                    "game",
-                    GameSpot.class,
-                    factory -> factory.disableRelocation());
-                options.validate(); });
+        assertThrows(
+                ZLinkConfigurationException.class,
+                () -> {
+                    var objects =
+                            options.addRouteMesh("game")
+                                    .listen("inproc://duplicate-spot")
+                                    .objects()
+                                    .server();
+                    objects.addSpotFactory(
+                            "game", GameSpot.class, factory -> factory.disableRelocation());
+                    objects.addSpotFactory(
+                            "game", GameSpot.class, factory -> factory.disableRelocation());
+                    options.validate();
+                });
     }
 
     @Test
     void addZLinkFramework_throws_whenMeshNodeRegistersMultipleEntrySpots() {
         DefaultZLinkFrameworkOptions options = new DefaultZLinkFrameworkOptions();
 
-        { var objects = options.addRouteMesh("game")
-                .listen("inproc://multiple-entry-spots")
-                .objects()
-                .server();
+        {
+            var objects =
+                    options.addRouteMesh("game")
+                            .listen("inproc://multiple-entry-spots")
+                            .objects()
+                            .server();
             objects.addEntrySpot(EntrySpotA.class);
-            objects.addEntrySpot(EntrySpotB.class); }
+            objects.addEntrySpot(EntrySpotB.class);
+        }
 
         assertThrows(ZLinkConfigurationException.class, options::validate);
     }
@@ -281,23 +275,23 @@ final class NodesAndServicesTest {
         DefaultZLinkFrameworkOptions options = new DefaultZLinkFrameworkOptions();
 
         options.addRouteMesh("alpha")
-            .listen("inproc://actor-alpha")
-            .objects()
-            .server()
-            .addActorFactory(
-                "player",
-                PlayerActor.class,
-                PlayerActorFactory.class,
-                factory -> factory.disableRelocation());
+                .listen("inproc://actor-alpha")
+                .objects()
+                .server()
+                .addActorFactory(
+                        "player",
+                        PlayerActor.class,
+                        PlayerActorFactory.class,
+                        factory -> factory.disableRelocation());
         options.addRouteMesh("beta")
-            .listen("inproc://actor-beta")
-            .objects()
-            .server()
-            .addActorFactory(
-                "mage",
-                PlayerActor.class,
-                PlayerActorFactory.class,
-                factory -> factory.disableRelocation());
+                .listen("inproc://actor-beta")
+                .objects()
+                .server()
+                .addActorFactory(
+                        "mage",
+                        PlayerActor.class,
+                        PlayerActorFactory.class,
+                        factory -> factory.disableRelocation());
 
         assertThrows(ZLinkConfigurationException.class, options::validate);
     }
@@ -307,23 +301,24 @@ final class NodesAndServicesTest {
         DefaultZLinkFrameworkOptions options = optionsWithSpotNodeAndActorFactory();
 
         try (ZLinkFrameworkRuntime runtime =
-                 ZLinkFrameworkRuntimeTestAccess.start(options, new ZLinkJavaBackendAdapterFactory())) {
-            ZLinkActorCreateResult result = runtime.actorManager()
-                .create("player-1", "player")
-                .submit()
-                .toCompletableFuture()
-                .join();
-            ActorRef actor = ((ZLinkActorCreateResult.Created) result)
-                .actor();
+                ZLinkFrameworkRuntimeTestAccess.start(
+                        options, new ZLinkJavaBackendAdapterFactory())) {
+            ZLinkActorCreateResult result =
+                    runtime.actorManager()
+                            .create("player-1", "player")
+                            .submit()
+                            .toCompletableFuture()
+                            .join();
+            ActorRef actor = ((ZLinkActorCreateResult.Created) result).actor();
 
             assertEquals("player-1", actor.actorId());
             assertTrue(
-                runtime.actorManager()
-                    .getOrCreate("player-1", "player")
-                    .submit()
-                    .toCompletableFuture()
-                    .join()
-                    instanceof ZLinkActorCreateResult.Existing);
+                    runtime.actorManager()
+                                    .getOrCreate("player-1", "player")
+                                    .submit()
+                                    .toCompletableFuture()
+                                    .join()
+                            instanceof ZLinkActorCreateResult.Existing);
         }
     }
 
@@ -332,29 +327,41 @@ final class NodesAndServicesTest {
         DefaultZLinkFrameworkOptions options = optionsWithSpotNodeAndActorFactory();
 
         try (ZLinkFrameworkRuntime runtime =
-                 ZLinkFrameworkRuntimeTestAccess.start(options, new ZLinkJavaBackendAdapterFactory())) {
-            ActorRef first = ((ZLinkActorCreateResult.Created)
-                runtime.actorManager().create("player-destroy", "player")
-                    .submit().toCompletableFuture().join()).actor();
+                ZLinkFrameworkRuntimeTestAccess.start(
+                        options, new ZLinkJavaBackendAdapterFactory())) {
+            ActorRef first =
+                    ((ZLinkActorCreateResult.Created)
+                                    runtime.actorManager()
+                                            .create("player-destroy", "player")
+                                            .submit()
+                                            .toCompletableFuture()
+                                            .join())
+                            .actor();
 
-            assertTrue(runtime.actorManager().destroy(first)
-                .toCompletableFuture().join());
-            assertFalse(runtime.actorManager().destroy(first)
-                .toCompletableFuture().join());
+            assertTrue(runtime.actorManager().destroy(first).toCompletableFuture().join());
+            assertFalse(runtime.actorManager().destroy(first).toCompletableFuture().join());
 
-            ActorRef second = ((ZLinkActorCreateResult.Created)
-                runtime.actorManager().create("player-destroy", "player")
-                    .submit().toCompletableFuture().join()).actor();
+            ActorRef second =
+                    ((ZLinkActorCreateResult.Created)
+                                    runtime.actorManager()
+                                            .create("player-destroy", "player")
+                                            .submit()
+                                            .toCompletableFuture()
+                                            .join())
+                            .actor();
             assertNotEquals(first.objectGeneration(), second.objectGeneration());
-            CompletionException error = assertThrows(
-                CompletionException.class,
-                () -> runtime.actorManager().destroy(first)
-                    .toCompletableFuture().join());
+            CompletionException error =
+                    assertThrows(
+                            CompletionException.class,
+                            () ->
+                                    runtime.actorManager()
+                                            .destroy(first)
+                                            .toCompletableFuture()
+                                            .join());
             assertEquals(
-                ZLinkFrameworkErrorKind.INVALID_OPERATION,
-                ((ZLinkFrameworkException) error.getCause()).kind());
-            assertTrue(runtime.actorManager().destroy(second)
-                .toCompletableFuture().join());
+                    ZLinkFrameworkErrorKind.INVALID_OPERATION,
+                    ((ZLinkFrameworkException) error.getCause()).kind());
+            assertTrue(runtime.actorManager().destroy(second).toCompletableFuture().join());
         }
     }
 
@@ -363,42 +370,40 @@ final class NodesAndServicesTest {
         BlockingPlayerActorFactory.reset();
         DefaultZLinkFrameworkOptions options = new DefaultZLinkFrameworkOptions();
         options.addLocationStore(new ZLinkInMemoryLocationStore());
-        var mesh = options.addRouteMesh("game")
-            .listen("inproc://creating-actor")
-            .setRoutingIdPrefix("creating-node");
+        var mesh =
+                options.addRouteMesh("game")
+                        .listen("inproc://creating-actor")
+                        .setRoutingIdPrefix("creating-node");
         mesh.channelName("game").server();
         mesh.objects()
-            .server()
-            .addActorFactory(
-                "blocking-player",
-                PlayerActor.class,
-                BlockingPlayerActorFactory.class,
-                factory -> factory.disableRelocation());
+                .server()
+                .addActorFactory(
+                        "blocking-player",
+                        PlayerActor.class,
+                        BlockingPlayerActorFactory.class,
+                        factory -> factory.disableRelocation());
 
         try (ZLinkFrameworkRuntime runtime =
-                 ZLinkFrameworkRuntimeTestAccess.start(
-                     options,
-                     new ZLinkJavaBackendAdapterFactory())) {
-            CompletionStage<ZLinkActorCreateResult>
-                first = runtime.actorManager().getOrCreate(
-                    "player-serial",
-                    "blocking-player").submit();
-            CompletionStage<ZLinkActorCreateResult>
-                second = runtime.actorManager().getOrCreate(
-                    "player-serial",
-                    "blocking-player").submit();
+                ZLinkFrameworkRuntimeTestAccess.start(
+                        options, new ZLinkJavaBackendAdapterFactory())) {
+            CompletionStage<ZLinkActorCreateResult> first =
+                    runtime.actorManager().getOrCreate("player-serial", "blocking-player").submit();
+            CompletionStage<ZLinkActorCreateResult> second =
+                    runtime.actorManager().getOrCreate("player-serial", "blocking-player").submit();
 
             assertEquals(1, BlockingPlayerActorFactory.invocations.get());
             assertTrue(!second.toCompletableFuture().isDone());
 
             BlockingPlayerActorFactory.release.complete(null);
 
-            assertTrue(first.toCompletableFuture().join()
-                instanceof systems.zlink.framework.actors
-                    .ZLinkActorCreateResult.Created);
-            assertTrue(second.toCompletableFuture().join()
-                instanceof systems.zlink.framework.actors
-                    .ZLinkActorCreateResult.Existing);
+            assertTrue(
+                    first.toCompletableFuture().join()
+                            instanceof
+                            systems.zlink.framework.actors.ZLinkActorCreateResult.Created);
+            assertTrue(
+                    second.toCompletableFuture().join()
+                            instanceof
+                            systems.zlink.framework.actors.ZLinkActorCreateResult.Existing);
             assertEquals(1, BlockingPlayerActorFactory.invocations.get());
         }
     }
@@ -409,13 +414,10 @@ final class NodesAndServicesTest {
         options.addLocationStore(new ZLinkInMemoryLocationStore());
 
         options.addRouteMesh("game")
-            .listen("inproc://standalone-local-mesh")
-            .objects()
-            .server()
-            .addSpotFactory(
-                "game",
-                GameSpot.class,
-                factory -> factory.disableRelocation());
+                .listen("inproc://standalone-local-mesh")
+                .objects()
+                .server()
+                .addSpotFactory("game", GameSpot.class, factory -> factory.disableRelocation());
 
         assertDoesNotThrow(options::validate);
     }
@@ -435,44 +437,37 @@ final class NodesAndServicesTest {
         ZLinkInMemoryLocationStore sharedLocations = new ZLinkInMemoryLocationStore();
         options.addLocationStore(sharedLocations);
         options.addRelocationStore(new InMemoryRelocationStore());
-        var mesh = options.addRouteMesh("game-" + suffix)
-            .setRoutingIdPrefix(nodeRid.toString())
-            .listen("inproc://route-mesh-request-" + suffix);
+        var mesh =
+                options.addRouteMesh("game-" + suffix)
+                        .setRoutingIdPrefix(nodeRid.toString())
+                        .listen("inproc://route-mesh-request-" + suffix);
         mesh.channelName("game").server();
-        mesh.objects().server()
-            .addSpotFactory(
-                "room",
-                RoomSpot.class,
-                factory -> factory.disableRelocation())
-            .addSpotFactory(
-                "client",
-                ClientSpot.class,
-                factory -> factory.disableRelocation());
+        mesh.objects()
+                .server()
+                .addSpotFactory("room", RoomSpot.class, factory -> factory.disableRelocation())
+                .addSpotFactory("client", ClientSpot.class, factory -> factory.disableRelocation());
 
         try (ZLinkFrameworkRuntime runtime =
-                 ZLinkFrameworkRuntimeTestAccess.start(options, new ZLinkJavaBackendAdapterFactory())) {
+                ZLinkFrameworkRuntimeTestAccess.start(
+                        options, new ZLinkJavaBackendAdapterFactory())) {
             runtime.spotManager()
-                .getOrCreate(roomRid.toString(), "room")
-                .submit()
-                .toCompletableFuture()
-                .get(2, TimeUnit.SECONDS);
+                    .getOrCreate(roomRid.toString(), "room")
+                    .submit()
+                    .toCompletableFuture()
+                    .get(2, TimeUnit.SECONDS);
 
             runtime.spotManager()
-                .create("client")
-                .submit()
-                .toCompletableFuture()
-                .get(2, TimeUnit.SECONDS);
+                    .create("client")
+                    .submit()
+                    .toCompletableFuture()
+                    .get(2, TimeUnit.SECONDS);
 
             try {
                 assertEquals("ping", PingHandler.received.get(2, TimeUnit.SECONDS));
             } catch (TimeoutException ex) {
-                throw new AssertionError(
-                    "source reply: " + futureState(ClientSpot.reply),
-                    ex);
+                throw new AssertionError("source reply: " + futureState(ClientSpot.reply), ex);
             }
-            assertEquals(
-                "pong:ping",
-                ClientSpot.reply.get(2, TimeUnit.SECONDS).value());
+            assertEquals("pong:ping", ClientSpot.reply.get(2, TimeUnit.SECONDS).value());
         }
     }
 
@@ -491,38 +486,39 @@ final class NodesAndServicesTest {
     void addZLinkFramework_throws_whenStreamNodeRegistersMultipleSessions() {
         DefaultZLinkFrameworkOptions options = new DefaultZLinkFrameworkOptions();
 
-        assertThrows(ZLinkConfigurationException.class, () ->
-            { var stream = options.addStreamNode("gateway"); stream.bind("inproc://gateway");
-                stream.registerSession(GameSession.class);
-                stream.registerSession(GameSession.class); });
+        assertThrows(
+                ZLinkConfigurationException.class,
+                () -> {
+                    var stream = options.addStreamNode("gateway");
+                    stream.bind("inproc://gateway");
+                    stream.registerSession(GameSession.class);
+                    stream.registerSession(GameSession.class);
+                });
     }
 
     private static DefaultZLinkFrameworkOptions optionsWithSpotNodeAndActorFactory() {
         DefaultZLinkFrameworkOptions options = new DefaultZLinkFrameworkOptions();
         options.addLocationStore(new ZLinkInMemoryLocationStore());
-        var mesh = options.addRouteMesh("game")
-            .listen("inproc://play-router")
-            .setRoutingIdPrefix("play-node");
+        var mesh =
+                options.addRouteMesh("game")
+                        .listen("inproc://play-router")
+                        .setRoutingIdPrefix("play-node");
         mesh.channelName("game").server();
         mesh.objects()
-            .server()
-            .addSpotFactory(
-                "game",
-                GameSpot.class,
-                factory -> factory.disableRelocation())
-            .addActorFactory(
-                "player",
-                PlayerActor.class,
-                PlayerActorFactory.class,
-                factory -> factory.disableRelocation());
+                .server()
+                .addSpotFactory("game", GameSpot.class, factory -> factory.disableRelocation())
+                .addActorFactory(
+                        "player",
+                        PlayerActor.class,
+                        PlayerActorFactory.class,
+                        factory -> factory.disableRelocation());
         return options;
     }
 
     private static DefaultZLinkFrameworkOptions routeMeshOptions() {
         DefaultZLinkFrameworkOptions options = new DefaultZLinkFrameworkOptions();
         options.setDefaultRequestTimeout(Duration.ofSeconds(2));
-        options.configureDispatch()
-            .messageFlow(ZLinkMessageFlowLogMode.NORMAL);
+        options.configureDispatch().messageFlow(ZLinkMessageFlowLogMode.NORMAL);
         return options;
     }
 
@@ -532,19 +528,20 @@ final class NodesAndServicesTest {
             return null;
         }
 
-        @Override public CompletionStage<Void> onJoinedActor(ZLinkActor actor) {
+        @Override
+        public CompletionStage<Void> onJoinedActor(ZLinkActor actor) {
             return CompletableFuture.completedFuture(null);
         }
-        @Override public CompletionStage<Void> onLeaveActor(ZLinkActor actor) {
+
+        @Override
+        public CompletionStage<Void> onLeaveActor(ZLinkActor actor) {
             return CompletableFuture.completedFuture(null);
         }
     }
 
-    public record Ping(String value) {
-    }
+    public record Ping(String value) {}
 
-    public record Pong(String value) {
-    }
+    public record Pong(String value) {}
 
     public static final class RoomSpot implements ZLinkSpot<ZLinkActor> {
         private final ZLinkSpotContext context;
@@ -563,10 +560,13 @@ final class NodesAndServicesTest {
             context.handlers().addHandler(PingHandler.class);
         }
 
-        @Override public CompletionStage<Void> onJoinedActor(ZLinkActor actor) {
+        @Override
+        public CompletionStage<Void> onJoinedActor(ZLinkActor actor) {
             return CompletableFuture.completedFuture(null);
         }
-        @Override public CompletionStage<Void> onLeaveActor(ZLinkActor actor) {
+
+        @Override
+        public CompletionStage<Void> onLeaveActor(ZLinkActor actor) {
             return CompletableFuture.completedFuture(null);
         }
     }
@@ -579,25 +579,21 @@ final class NodesAndServicesTest {
     }
 
     public static final class RoomRelocationAdapter
-        implements ZLinkSpotRelocationAdapter<RoomSpot> {
+            implements ZLinkSpotRelocationAdapter<RoomSpot> {
         @Override
         public CompletionStage<byte[]> capture(
-            RoomSpot spot,
-            ZLinkRelocationCancellation cancellation) {
+                RoomSpot spot, ZLinkRelocationCancellation cancellation) {
             return CompletableFuture.completedFuture(new byte[0]);
         }
 
         @Override
         public CompletionStage<Void> restore(
-            RoomSpot spot,
-            byte[] state,
-            ZLinkRelocationCancellation cancellation) {
+                RoomSpot spot, byte[] state, ZLinkRelocationCancellation cancellation) {
             return CompletableFuture.completedFuture(null);
         }
     }
 
-    public static final class PingHandler
-        implements ZLinkSpotRequestHandler<RoomSpot, Ping, Pong> {
+    public static final class PingHandler implements ZLinkSpotRequestHandler<RoomSpot, Ping, Pong> {
         static CompletableFuture<String> received = new CompletableFuture<>();
 
         @Override
@@ -628,28 +624,35 @@ final class NodesAndServicesTest {
         @Override
         public CompletionStage<Void> onInitialize() {
             return handles.resolveSpotHandle(targetMeshName, targetRoomRid.toString())
-                .thenCompose(handle -> {
-                    handle.orElseThrow(() ->
-                        new IllegalStateException("target Spot handle not found"));
-                    return context.outbound()
-                        .requestToSpot(targetRoomRid.toString(), new Ping("ping"))
-                        .timeout(Duration.ofSeconds(2))
-                        .submit(Pong.class);
-                })
-                .whenComplete((value, error) -> {
-                    if (error != null) {
-                        reply.completeExceptionally(error);
-                    } else {
-                        reply.complete(value);
-                    }
-                })
-                .thenApply(ignored -> null);
+                    .thenCompose(
+                            handle -> {
+                                handle.orElseThrow(
+                                        () ->
+                                                new IllegalStateException(
+                                                        "target Spot handle not found"));
+                                return context.outbound()
+                                        .requestToSpot(targetRoomRid.toString(), new Ping("ping"))
+                                        .timeout(Duration.ofSeconds(2))
+                                        .submit(Pong.class);
+                            })
+                    .whenComplete(
+                            (value, error) -> {
+                                if (error != null) {
+                                    reply.completeExceptionally(error);
+                                } else {
+                                    reply.complete(value);
+                                }
+                            })
+                    .thenApply(ignored -> null);
         }
 
-        @Override public CompletionStage<Void> onJoinedActor(ZLinkActor actor) {
+        @Override
+        public CompletionStage<Void> onJoinedActor(ZLinkActor actor) {
             return CompletableFuture.completedFuture(null);
         }
-        @Override public CompletionStage<Void> onLeaveActor(ZLinkActor actor) {
+
+        @Override
+        public CompletionStage<Void> onLeaveActor(ZLinkActor actor) {
             return CompletableFuture.completedFuture(null);
         }
     }
@@ -660,10 +663,13 @@ final class NodesAndServicesTest {
             return null;
         }
 
-        @Override public CompletionStage<Void> onJoinedActor(ZLinkActor actor) {
+        @Override
+        public CompletionStage<Void> onJoinedActor(ZLinkActor actor) {
             return CompletableFuture.completedFuture(null);
         }
-        @Override public CompletionStage<Void> onLeaveActor(ZLinkActor actor) {
+
+        @Override
+        public CompletionStage<Void> onLeaveActor(ZLinkActor actor) {
             return CompletableFuture.completedFuture(null);
         }
     }
@@ -674,10 +680,13 @@ final class NodesAndServicesTest {
             return null;
         }
 
-        @Override public CompletionStage<Void> onJoinedActor(ZLinkActor actor) {
+        @Override
+        public CompletionStage<Void> onJoinedActor(ZLinkActor actor) {
             return CompletableFuture.completedFuture(null);
         }
-        @Override public CompletionStage<Void> onLeaveActor(ZLinkActor actor) {
+
+        @Override
+        public CompletionStage<Void> onLeaveActor(ZLinkActor actor) {
             return CompletableFuture.completedFuture(null);
         }
     }
@@ -700,13 +709,11 @@ final class NodesAndServicesTest {
     public static final class PlayerActorFactory implements ZLinkActorFactory {
         @Override
         public CompletionStage<ZLinkActor> create(ZLinkActorContext context) {
-            return CompletableFuture.completedFuture(
-                new PlayerActor(context.actorId(), context));
+            return CompletableFuture.completedFuture(new PlayerActor(context.actorId(), context));
         }
     }
 
-    public static final class BlockingPlayerActorFactory
-        implements ZLinkActorFactory {
+    public static final class BlockingPlayerActorFactory implements ZLinkActorFactory {
         static final AtomicInteger invocations = new AtomicInteger();
         static CompletableFuture<Void> release;
 
@@ -718,8 +725,7 @@ final class NodesAndServicesTest {
         @Override
         public CompletionStage<ZLinkActor> create(ZLinkActorContext context) {
             invocations.incrementAndGet();
-            return release.thenApply(
-                ignored -> new PlayerActor(context.actorId(), context));
+            return release.thenApply(ignored -> new PlayerActor(context.actorId(), context));
         }
     }
 

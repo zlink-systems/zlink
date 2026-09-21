@@ -46,15 +46,11 @@ void await_task (zlink::framework::task_t<void> task)
 
 using namespace zlink::framework::runtime::stateful;
 
-static_assert (requires (zlink::framework::spot_context_t & context) {
-    {
-        context.relocation_ready ()
-    } -> std::same_as<zlink::framework::spot_relocation_ready_call_t>;
+static_assert (requires (zlink::framework::spot_context_t &context) {
+    { context.relocation_ready () } -> std::same_as<zlink::framework::spot_relocation_ready_call_t>;
 });
-static_assert (requires (zlink::framework::spot_relocation_ready_call_t & call) {
-    {
-        call.defer ()
-    } -> std::same_as<void>;
+static_assert (requires (zlink::framework::spot_relocation_ready_call_t &call) {
+    { call.defer () } -> std::same_as<void>;
 });
 static_assert (!std::copy_constructible<zlink::framework::spot_relocation_ready_call_t>);
 
@@ -606,9 +602,7 @@ void test_relocation_ready_completion_runs_once_on_spot_turn (test_context_t &te
       "readiness without a prepared relocation must complete "
       "continued exactly once on the next Spot serial turn");
 
-    state->node->lane.run ([state] {
-        state->relocation_boundary_active = true;
-    }).get ();
+    state->node->lane.run ([state] { state->relocation_boundary_active = true; }).get ();
     const auto prepared_deferred = state->run_serial_sync (
       "defer-prepared-relocation", [&] { context.relocation_ready ().defer (); });
     state->complete_relocation_ready (spot_relocation_ready_outcome_t::relocated);
@@ -2598,8 +2592,8 @@ void test_source_relocation_failure_stops_state_chunks_and_unseals (test_context
       .send_cutover = [] (const protocol::relocation_cutover_t &)
         -> framework::task_t<
           eligible_relocation_unit_t::canonical_wire_context_t::cutover_enqueue_t> {
-          co_return
-            eligible_relocation_unit_t::canonical_wire_context_t::cutover_enqueue_t::enqueued;
+          co_return eligible_relocation_unit_t::canonical_wire_context_t::cutover_enqueue_t::
+            enqueued;
       },
       .abort_target_before_cutover = [] { return true; }};
 
@@ -4009,8 +4003,7 @@ void test_stateful_application_queue_accepts_active_backlog (test_context_t &tes
                     && count_second->sequence == 2,
                   "queued work must remain available after the active turn completes");
     if (count_second)
-        test.require (count_limited.complete_claim (
-                        count_actor, turn_domain_t::application)
+        test.require (count_limited.complete_claim (count_actor, turn_domain_t::application)
                         == stateful_error_t::none,
                       "queued count-regression turn must complete");
 
@@ -4038,8 +4031,7 @@ void test_stateful_application_queue_accepts_active_backlog (test_context_t &tes
                     && byte_second->sequence == 2,
                   "byte-regression work must remain queued after completion");
     if (byte_second)
-        test.require (byte_limited.complete_claim (
-                        byte_actor, turn_domain_t::application)
+        test.require (byte_limited.complete_claim (byte_actor, turn_domain_t::application)
                         == stateful_error_t::none,
                       "queued byte-regression turn must complete");
 
@@ -4064,16 +4056,15 @@ void test_stateful_application_queue_accepts_active_backlog (test_context_t &tes
           "multipart payload reservation must release at completion");
     }
     const auto [multipart_second_error, multipart_second] =
-      multipart_accounting.try_claim (
-        multipart_actor, turn_domain_t::application);
-    test.require (multipart_second_error == stateful_error_t::none
-                    && multipart_second && multipart_second->sequence == 2,
+      multipart_accounting.try_claim (multipart_actor, turn_domain_t::application);
+    test.require (multipart_second_error == stateful_error_t::none && multipart_second
+                    && multipart_second->sequence == 2,
                   "multipart backlog must survive the active turn");
     if (multipart_second)
-        test.require (multipart_accounting.complete_claim (
-                        multipart_actor, turn_domain_t::application)
-                        == stateful_error_t::none,
-                      "multipart backlog turn must complete");
+        test.require (
+          multipart_accounting.complete_claim (multipart_actor, turn_domain_t::application)
+            == stateful_error_t::none,
+          "multipart backlog turn must complete");
 
     stateful_object_runtime_t progressive_restore;
     bool materialized = false;
@@ -4475,8 +4466,9 @@ void test_relocation_hold_restores_without_dedicated_limits (test_context_t &tes
               && source_abort_fifo;
         }
     }
-    test.require (source_abort_fifo,
-                  "source relocation abort must restore a hold beyond the former capacity in FIFO order");
+    test.require (
+      source_abort_fifo,
+      "source relocation abort must restore a hold beyond the former capacity in FIFO order");
 
     stateful_object_runtime_t byte_limited;
     const auto byte_first = create_spot (byte_limited, object_kind_t::user_spot, "held-byte-first");

@@ -12,7 +12,8 @@ public sealed class ActorJoinPrewarmRegistryTests
             "actor-1",
             1,
             () => Frame("body"),
-            onFailed: () => Assert.Fail("must not fail an arrival with no attempt"));
+            onFailed: () => Assert.Fail("must not fail an arrival with no attempt")
+        );
 
         Assert.Equal(ZLinkActorJoinPrewarmRegistry.IngressRoute.NotFound, route);
     }
@@ -28,7 +29,8 @@ public sealed class ActorJoinPrewarmRegistryTests
             "actor-1",
             1,
             () => Frame("body"),
-            onFailed: () => failed = true);
+            onFailed: () => failed = true
+        );
 
         Assert.Equal(ZLinkActorJoinPrewarmRegistry.IngressRoute.Parked, route);
         Assert.False(failed);
@@ -39,10 +41,8 @@ public sealed class ActorJoinPrewarmRegistryTests
     {
         var registry = new ZLinkActorJoinPrewarmRegistry();
         registry.Register("handoff-1", "actor-1", actorGeneration: 1);
-        registry.ParkOrDeliver(
-            "actor-1", 1, () => Frame("first"), onFailed: () => Assert.Fail());
-        registry.ParkOrDeliver(
-            "actor-1", 1, () => Frame("second"), onFailed: () => Assert.Fail());
+        registry.ParkOrDeliver("actor-1", 1, () => Frame("first"), onFailed: () => Assert.Fail());
+        registry.ParkOrDeliver("actor-1", 1, () => Frame("second"), onFailed: () => Assert.Fail());
 
         IReadOnlyList<ZLinkActorHandoffFrame>? delivered = null;
         registry.CompleteMigration("handoff-1", frames => delivered = frames);
@@ -53,7 +53,11 @@ public sealed class ActorJoinPrewarmRegistryTests
         //  The attempt no longer exists: ingress for the object now falls
         //  through to the caller's normal (post-migration) actor lookup.
         var route = registry.ParkOrDeliver(
-            "actor-1", 1, () => Frame("late"), onFailed: () => Assert.Fail());
+            "actor-1",
+            1,
+            () => Frame("late"),
+            onFailed: () => Assert.Fail()
+        );
         Assert.Equal(ZLinkActorJoinPrewarmRegistry.IngressRoute.NotFound, route);
     }
 
@@ -74,8 +78,9 @@ public sealed class ActorJoinPrewarmRegistryTests
     {
         var registry = new ZLinkActorJoinPrewarmRegistry();
 
-        Assert.Throws<InvalidOperationException>(
-            () => registry.CompleteMigration("missing", _ => { }));
+        Assert.Throws<InvalidOperationException>(() =>
+            registry.CompleteMigration("missing", _ => { })
+        );
     }
 
     [Fact]
@@ -84,27 +89,32 @@ public sealed class ActorJoinPrewarmRegistryTests
         var registry = new ZLinkActorJoinPrewarmRegistry();
         registry.Register("handoff-old", "actor-1", actorGeneration: 1);
         var failedCount = 0;
-        registry.ParkOrDeliver(
-            "actor-1", 1, () => Frame("stale"), onFailed: () => failedCount++);
+        registry.ParkOrDeliver("actor-1", 1, () => Frame("stale"), onFailed: () => failedCount++);
 
         string? evicted = null;
         registry.Register(
             "handoff-new",
             "actor-1",
             actorGeneration: 1,
-            onEvicted: id => evicted = id);
+            onEvicted: id => evicted = id
+        );
 
         Assert.Equal("handoff-old", evicted);
         Assert.Equal(1, failedCount);
 
         //  The evicted identity's late PREPARE must be discarded, not
         //  installed (spec 15 §4.2).
-        Assert.Throws<InvalidOperationException>(
-            () => registry.CompleteMigration("handoff-old", _ => { }));
+        Assert.Throws<InvalidOperationException>(() =>
+            registry.CompleteMigration("handoff-old", _ => { })
+        );
 
         //  The newer identity owns the object now.
         var route = registry.ParkOrDeliver(
-            "actor-1", 1, () => Frame("fresh"), onFailed: () => Assert.Fail());
+            "actor-1",
+            1,
+            () => Frame("fresh"),
+            onFailed: () => Assert.Fail()
+        );
         Assert.Equal(ZLinkActorJoinPrewarmRegistry.IngressRoute.Parked, route);
     }
 
@@ -113,8 +123,7 @@ public sealed class ActorJoinPrewarmRegistryTests
     {
         var registry = new ZLinkActorJoinPrewarmRegistry();
         registry.Register("handoff-1", "actor-1", actorGeneration: 1);
-        registry.ParkOrDeliver(
-            "actor-1", 1, () => Frame("first"), onFailed: () => Assert.Fail());
+        registry.ParkOrDeliver("actor-1", 1, () => Frame("first"), onFailed: () => Assert.Fail());
 
         //  A retried admission of the same exact identity must not evict
         //  its own already-parked arrival.
@@ -131,8 +140,7 @@ public sealed class ActorJoinPrewarmRegistryTests
         var registry = new ZLinkActorJoinPrewarmRegistry();
         registry.Register("handoff-1", "actor-1", actorGeneration: 1);
         var failedCount = 0;
-        registry.ParkOrDeliver(
-            "actor-1", 1, () => Frame("expired"), onFailed: () => failedCount++);
+        registry.ParkOrDeliver("actor-1", 1, () => Frame("expired"), onFailed: () => failedCount++);
 
         registry.Release("handoff-1");
         Assert.Equal(1, failedCount);
@@ -148,7 +156,11 @@ public sealed class ActorJoinPrewarmRegistryTests
         var registry = new ZLinkActorJoinPrewarmRegistry();
         registry.Register("handoff-1", "actor-1", actorGeneration: 1);
         registry.ParkOrDeliver(
-            "actor-1", 1, () => Frame("migrated"), onFailed: () => Assert.Fail());
+            "actor-1",
+            1,
+            () => Frame("migrated"),
+            onFailed: () => Assert.Fail()
+        );
         registry.CompleteMigration("handoff-1", _ => { });
 
         //  Must not throw and must not resurrect the attempt.
@@ -165,12 +177,12 @@ public sealed class ActorJoinPrewarmRegistryTests
 
         Assert.Equal(
             ZLinkActorJoinPrewarmRegistry.IngressRoute.Parked,
-            registry.ParkOrDeliver(
-                "actor-1", 1, () => Frame("g1"), onFailed: () => Assert.Fail()));
+            registry.ParkOrDeliver("actor-1", 1, () => Frame("g1"), onFailed: () => Assert.Fail())
+        );
         Assert.Equal(
             ZLinkActorJoinPrewarmRegistry.IngressRoute.Parked,
-            registry.ParkOrDeliver(
-                "actor-1", 2, () => Frame("g2"), onFailed: () => Assert.Fail()));
+            registry.ParkOrDeliver("actor-1", 2, () => Frame("g2"), onFailed: () => Assert.Fail())
+        );
     }
 
     private static ZLinkActorHandoffFrame Frame(string body) =>
@@ -183,7 +195,8 @@ public sealed class ActorJoinPrewarmRegistryTests
             Flags: 0,
             Header: [],
             Body: System.Text.Encoding.UTF8.GetBytes(body),
-            ArrivalIndex: 0);
+            ArrivalIndex: 0
+        );
 
     private static string Body(ZLinkActorHandoffFrame frame) =>
         System.Text.Encoding.UTF8.GetString(frame.Body);

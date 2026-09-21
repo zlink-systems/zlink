@@ -12,14 +12,16 @@ export function encodeSpotDirectEnvelope(
   payload: unknown,
   metadata?: ReadonlyMap<string, string>
 ): MessageLike {
-  return Buffer.from(JSON.stringify({
-    marker: SPOT_DIRECT_ENVELOPE,
-    kind,
-    channelName,
-    packetName,
-    payload,
-    metadata: Object.fromEntries(metadata ?? [])
-  }));
+  return Buffer.from(
+    JSON.stringify({
+      marker: SPOT_DIRECT_ENVELOPE,
+      kind,
+      channelName,
+      packetName,
+      payload,
+      metadata: Object.fromEntries(metadata ?? [])
+    })
+  );
 }
 
 export function decodeSpotDirectReply<TReply>(parts: readonly Message[]): TReply {

@@ -1,8 +1,9 @@
 package systems.zlink.framework.runtime.locations;
 
-import java.util.HexFormat;
 import systems.zlink.contracts.core.RoutingId;
 import systems.zlink.framework.runtime.internal.locations.ZLinkFanoutPublisherDescriptorKey;
+
+import java.util.HexFormat;
 
 /*
  * Framework-internal row key codec for in-memory bookkeeping and runtime
@@ -13,11 +14,9 @@ import systems.zlink.framework.runtime.internal.locations.ZLinkFanoutPublisherDe
 final class ZLinkLocationKeyCodec {
     private static final HexFormat HEX = HexFormat.of();
 
-    private ZLinkLocationKeyCodec() {
-    }
+    private ZLinkLocationKeyCodec() {}
 
-    static String encodeFanoutPublisherKey(
-        ZLinkFanoutPublisherDescriptorKey key) {
+    static String encodeFanoutPublisherKey(ZLinkFanoutPublisherDescriptorKey key) {
         return encode(key.channelName(), toHex(key.publisherRid()));
     }
 
@@ -37,5 +36,4 @@ final class ZLinkLocationKeyCodec {
     private static String toHex(RoutingId routingId) {
         return HEX.formatHex(routingId.toBytes());
     }
-
 }

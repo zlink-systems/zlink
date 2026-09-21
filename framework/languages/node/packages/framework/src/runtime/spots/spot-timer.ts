@@ -37,7 +37,7 @@ const systemTimerClock: ZLinkTimerClock = {
   now: () => performance.now(),
   utcNow: () => Date.now(),
   setTimeout: (callback, delayMs) => setTimeout(callback, delayMs),
-  clearTimeout: handle => clearTimeout(handle as NodeJS.Timeout)
+  clearTimeout: (handle) => clearTimeout(handle as NodeJS.Timeout)
 };
 
 type ZLinkTimerOwnerSpot = ZLinkSpot | ZLinkEntrySpot;
@@ -56,7 +56,8 @@ interface ZLinkTimerFinalizationStart {
 type ZLinkTimerFailureReporter = (
   tick: ZLinkTimerTick,
   cause: unknown,
-  event?: ZLinkSpotEventKind.TimerHandlerFailed | ZLinkSpotEventKind.TimerStoppedAfterUnhandledException
+  event?:
+    ZLinkSpotEventKind.TimerHandlerFailed | ZLinkSpotEventKind.TimerStoppedAfterUnhandledException
 ) => Promise<void> | void;
 
 export interface ZLinkTimerRelocationState {
@@ -82,11 +83,14 @@ export interface ZLinkTimerRelocationPendingTick {
 
 export class ZLinkSpotTimerRegistry {
   private readonly lane = new ZLinkStateLane();
-  private readonly timers = new Map<string, {
-    readonly generation: bigint;
-    readonly handlerType: string;
-    readonly timer: ZLinkManagedTimer;
-  }>();
+  private readonly timers = new Map<
+    string,
+    {
+      readonly generation: bigint;
+      readonly handlerType: string;
+      readonly timer: ZLinkManagedTimer;
+    }
+  >();
   private readonly generations = new Map<string, bigint>();
   private executionBarrier: ZLinkExecutionBarrier | undefined;
 
@@ -133,43 +137,49 @@ export class ZLinkSpotTimerRegistry {
     const handler = await resolveLifecycleHandler(spot, handlerType, providerResolver);
     const prepared = await this.lane.run(() => this.prepareAddCore(name));
     if (prepared.previous !== undefined) await prepared.previous.timer.cancel(signal);
-    const executionSerial = this.executeTimer === undefined
-      ? this.executionSerialForTimer?.(name, serial) ?? serial
-      : undefined;
-    if (this.executionBarrier !== undefined) executionSerial?.setExecutionBarrier(this.executionBarrier);
+    const executionSerial =
+      this.executeTimer === undefined
+        ? (this.executionSerialForTimer?.(name, serial) ?? serial)
+        : undefined;
+    if (this.executionBarrier !== undefined)
+      executionSerial?.setExecutionBarrier(this.executionBarrier);
     let callbackStarted = false;
-    const timer = startOutsideStateLane(() => new ZLinkManagedTimer(
-      name,
-      periodMs,
-      normalizeTimerOptions(options),
-      async (tick) => {
-        callbackStarted = false;
-        const timerFlow = createInboundFlow(undefined, 'Timer', this.flowCreationEnabled());
-        const operation = () => {
-          const current = this.timers.get(name);
-          if (current === undefined || current.generation !== prepared.generation || current.timer !== timer) {
-            return undefined;
-          }
-          if (!this.executionAllowed()) return undefined;
-          callbackStarted = true;
-          return runWithFlow(timerFlow, () => handler.handle(spot, tick));
-        };
-        if (this.executeTimer !== undefined) {
-          await this.executeTimer(name, operation);
-        } else {
-          await executionSerial!.execute(operation);
-        }
-      },
-      reportFailure,
-      () => callbackStarted,
-      this.clock
-    ));
-    const registered = await this.lane.run(() => this.completeAddCore(
-      name,
-      prepared.generation,
-      handlerType.name,
-      timer
-    ));
+    const timer = startOutsideStateLane(
+      () =>
+        new ZLinkManagedTimer(
+          name,
+          periodMs,
+          normalizeTimerOptions(options),
+          async (tick) => {
+            callbackStarted = false;
+            const timerFlow = createInboundFlow(undefined, 'Timer', this.flowCreationEnabled());
+            const operation = () => {
+              const current = this.timers.get(name);
+              if (
+                current === undefined ||
+                current.generation !== prepared.generation ||
+                current.timer !== timer
+              ) {
+                return undefined;
+              }
+              if (!this.executionAllowed()) return undefined;
+              callbackStarted = true;
+              return runWithFlow(timerFlow, () => handler.handle(spot, tick));
+            };
+            if (this.executeTimer !== undefined) {
+              await this.executeTimer(name, operation);
+            } else {
+              await executionSerial!.execute(operation);
+            }
+          },
+          reportFailure,
+          () => callbackStarted,
+          this.clock
+        )
+    );
+    const registered = await this.lane.run(() =>
+      this.completeAddCore(name, prepared.generation, handlerType.name, timer)
+    );
     if (!registered) await timer.cancel(signal);
     return new ZLinkRegisteredTimer(this, name, prepared.generation, timer);
   }
@@ -179,9 +189,7 @@ export class ZLinkSpotTimerRegistry {
       const active = [...this.timers.entries()].map(([name, entry]) => ({
         name,
         timer: entry.timer,
-        wait: this.executeTimer === undefined
-          ? true
-          : this.isTimerExecuting?.(name) !== true
+        wait: this.executeTimer === undefined ? true : this.isTimerExecuting?.(name) !== true
       }));
       this.timers.clear();
       return active;
@@ -191,8 +199,9 @@ export class ZLinkSpotTimerRegistry {
   }
 
   async captureRelocation(): Promise<readonly ZLinkTimerRelocationState[]> {
-    const timers = await this.lane.run(() => [...this.timers.entries()].sort(([left], [right]) =>
-      left.localeCompare(right)));
+    const timers = await this.lane.run(() =>
+      [...this.timers.entries()].sort(([left], [right]) => left.localeCompare(right))
+    );
     const states: ZLinkTimerRelocationState[] = [];
     for (const [name, entry] of timers) {
       const state = await entry.timer.captureRelocation(entry.handlerType);
@@ -203,7 +212,7 @@ export class ZLinkSpotTimerRegistry {
   }
 
   restoreRelocation(states: readonly ZLinkTimerRelocationState[]): void {
-    const byName = new Map(states.map(state => [state.name, state]));
+    const byName = new Map(states.map((state) => [state.name, state]));
     if (byName.size !== states.length || byName.size !== this.timers.size) {
       throw new Error('Timer relocation inventory does not match registered handlers.');
     }
@@ -236,7 +245,13 @@ export class ZLinkSpotTimerRegistry {
   }
 
   private prepareAddCore(name: string): {
-    readonly previous: { readonly generation: bigint; readonly handlerType: string; readonly timer: ZLinkManagedTimer } | undefined;
+    readonly previous:
+      | {
+          readonly generation: bigint;
+          readonly handlerType: string;
+          readonly timer: ZLinkManagedTimer;
+        }
+      | undefined;
     readonly generation: bigint;
   } {
     const previous = this.timers.get(name);
@@ -286,11 +301,7 @@ class ZLinkRegisteredTimer implements ZLinkTimer {
     } catch (failure) {
       return Promise.reject(failure);
     }
-    this.finalization = this.registry.cancel(
-      this.name,
-      this.generation,
-      this.timer
-    );
+    this.finalization = this.registry.cancel(this.name, this.generation, this.timer);
     return this.finalization;
   }
 
@@ -344,12 +355,9 @@ export class ZLinkManagedTimer implements ZLinkTimer {
 
     try {
       const preparation = this.lane.run(() => this.cancelCore());
-      void preparation.then(
-        start => {
-          void this.completeFinalization(start, finalization).then(undefined, reject);
-        },
-        reject
-      );
+      void preparation.then((start) => {
+        void this.completeFinalization(start, finalization).then(undefined, reject);
+      }, reject);
     } catch (failure) {
       reject(failure);
     }
@@ -381,19 +389,19 @@ export class ZLinkManagedTimer implements ZLinkTimer {
   restoreRelocation(state: ZLinkTimerRelocationState, handlerType = ''): void {
     if (this.disposed) throw new Error(`Timer '${this.name}' is disposed.`);
     if (
-      state.name !== this.name
-      || state.handlerType !== handlerType
-      || state.periodMs !== this.periodMs
-      || state.overrunPolicy !== this.options.overrunPolicy
-      || state.maxCatchUpTicks !== this.options.maxCatchUpTicks
-      || state.stopOnUnhandledException !== this.options.stopOnUnhandledException
-      || !Number.isSafeInteger(state.startedAtUnixMs)
-      || state.deliveryIndex < 0n
-      || state.lastScheduledIndex < 0n
-      || !Number.isSafeInteger(state.nextDueAtUnixMs)
-      || state.nextDueAtUnixMs !== state.startedAtUnixMs
-        + Number(state.lastScheduledIndex + 1n) * state.periodMs
-      || state.pendingTicks.length !== 0
+      state.name !== this.name ||
+      state.handlerType !== handlerType ||
+      state.periodMs !== this.periodMs ||
+      state.overrunPolicy !== this.options.overrunPolicy ||
+      state.maxCatchUpTicks !== this.options.maxCatchUpTicks ||
+      state.stopOnUnhandledException !== this.options.stopOnUnhandledException ||
+      !Number.isSafeInteger(state.startedAtUnixMs) ||
+      state.deliveryIndex < 0n ||
+      state.lastScheduledIndex < 0n ||
+      !Number.isSafeInteger(state.nextDueAtUnixMs) ||
+      state.nextDueAtUnixMs !==
+        state.startedAtUnixMs + Number(state.lastScheduledIndex + 1n) * state.periodMs ||
+      state.pendingTicks.length !== 0
     ) {
       throw new Error(`Timer '${this.name}' relocation contract does not match its registration.`);
     }
@@ -412,17 +420,19 @@ export class ZLinkManagedTimer implements ZLinkTimer {
       return;
     }
 
-    const delayMs = this.options.overrunPolicy === ZLinkTimerOverrunPolicy.DelayNextTick
-      ? this.periodMs
-      : Math.max(0, Number(this.lastScheduledIndex + 1n) * this.periodMs - this.elapsedMs());
+    const delayMs =
+      this.options.overrunPolicy === ZLinkTimerOverrunPolicy.DelayNextTick
+        ? this.periodMs
+        : Math.max(0, Number(this.lastScheduledIndex + 1n) * this.periodMs - this.elapsedMs());
     this.timeout = this.clock.setTimeout(() => {
       this.timeout = undefined;
       const execution = startOutsideStateLane(() => this.fire());
       this.running = execution.then(
         () => undefined,
-        cause => this.lane.run(() => {
-          this.dispatchFailure ??= { cause };
-        })
+        (cause) =>
+          this.lane.run(() => {
+            this.dispatchFailure ??= { cause };
+          })
       );
     }, delayMs);
   }
@@ -454,9 +464,7 @@ export class ZLinkManagedTimer implements ZLinkTimer {
     this.timeout = undefined;
     return {
       timeout,
-      running: this.shouldWaitForRunningOnCancel()
-        ? this.running
-        : Promise.resolve()
+      running: this.shouldWaitForRunningOnCancel() ? this.running : Promise.resolve()
     };
   }
 
@@ -499,7 +507,8 @@ export class ZLinkManagedTimer implements ZLinkTimer {
     return { running: this.shouldWaitForRunningOnCancel() ? this.running : Promise.resolve() };
   }
 
-  private prepareFireCore(): { readonly tick: ZLinkTimerTick; readonly scheduledIndex: bigint } | undefined {
+  private prepareFireCore():
+    { readonly tick: ZLinkTimerTick; readonly scheduledIndex: bigint } | undefined {
     if (this.disposed) return undefined;
     const scheduledIndex = this.selectScheduledIndex();
     const skippedTicks = scheduledIndex - this.lastScheduledIndex - 1n;
@@ -593,8 +602,7 @@ export function createTimerDiagnostics(
           exceptionMessage: exceptionMessage(cause)
         }
       });
-    } catch {
-    }
+    } catch {}
   };
 }
 
@@ -657,10 +665,7 @@ export async function addSpotTimerRegistrations(
   }
 ): Promise<void> {
   for (const handler of registrations.timerHandlers ?? []) {
-    if (
-      handler.spotType === spotType
-      || spotType.prototype instanceof handler.spotType
-    ) {
+    if (handler.spotType === spotType || spotType.prototype instanceof handler.spotType) {
       await timers.add(
         handler.name,
         handler.periodMs,
@@ -683,7 +688,9 @@ export async function addSpotTimerRegistrations(
   }
 }
 
-function normalizeTimerOptions(options: ZLinkTimerOptions | undefined): Required<ZLinkTimerOptions> {
+function normalizeTimerOptions(
+  options: ZLinkTimerOptions | undefined
+): Required<ZLinkTimerOptions> {
   return {
     overrunPolicy: options?.overrunPolicy ?? ZLinkTimerOverrunPolicy.SkipLateTicks,
     maxCatchUpTicks: options?.maxCatchUpTicks ?? 1,

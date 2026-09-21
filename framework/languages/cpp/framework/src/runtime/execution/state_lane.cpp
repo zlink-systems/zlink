@@ -9,8 +9,7 @@ namespace zlink::framework::runtime
 
 thread_local state_lane_t *state_lane_t::_current_lane = nullptr;
 
-state_lane_t::state_lane_t (offload_executor_t &executor) noexcept :
-    _executor (executor)
+state_lane_t::state_lane_t (offload_executor_t &executor) noexcept : _executor (executor)
 {
 }
 
@@ -66,15 +65,12 @@ void state_lane_t::close ()
     schedule_drain (true);
 
     std::unique_lock lock (_mailbox_mutex);
-    _drained.wait (lock, [this] {
-        return _mailbox.empty ()
-               && !_scheduled.load (std::memory_order_acquire);
-    });
+    _drained.wait (
+      lock, [this] { return _mailbox.empty () && !_scheduled.load (std::memory_order_acquire); });
 }
 
-bool state_lane_t::enqueue (
-  std::function<void ()> work,
-  std::function<void (std::exception_ptr)> abandon)
+bool state_lane_t::enqueue (std::function<void ()> work,
+                            std::function<void (std::exception_ptr)> abandon)
 {
     {
         std::lock_guard lock (_mailbox_mutex);
@@ -89,8 +85,8 @@ bool state_lane_t::enqueue (
 void state_lane_t::schedule_drain (bool inline_drain)
 {
     bool expected = false;
-    if (!_scheduled.compare_exchange_strong (
-          expected, true, std::memory_order_acq_rel, std::memory_order_acquire)) {
+    if (!_scheduled.compare_exchange_strong (expected, true, std::memory_order_acq_rel,
+                                             std::memory_order_acquire)) {
         return;
     }
     // Run and Close may execute the FIFO they own. TryPost keeps its existing
@@ -104,8 +100,8 @@ void state_lane_t::schedule_drain (bool inline_drain)
 
     _scheduled.store (false, std::memory_order_release);
     _closed.store (true, std::memory_order_release);
-    abandon_pending (std::make_exception_ptr (
-      std::runtime_error ("state lane executor is stopping")));
+    abandon_pending (
+      std::make_exception_ptr (std::runtime_error ("state lane executor is stopping")));
 }
 
 void state_lane_t::drain_loop ()

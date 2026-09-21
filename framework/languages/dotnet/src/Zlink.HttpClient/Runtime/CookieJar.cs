@@ -24,14 +24,17 @@ internal sealed class CookieJar
     {
         var remaining = setCookieHeader.AsSpan();
         var pair = TakeSegment(ref remaining);
-        if (pair is null) return;
+        if (pair is null)
+            return;
 
         var equals = pair.IndexOf('=');
-        if (equals < 0) return;
+        if (equals < 0)
+            return;
 
         var name = pair[..equals].Trim();
         var value = pair[(equals + 1)..].Trim();
-        if (name.Length == 0) return;
+        if (name.Length == 0)
+            return;
 
         var path = "/";
         var secure = false;
@@ -45,23 +48,28 @@ internal sealed class CookieJar
                 path = attrValue;
             else if (attrName.Equals("secure", StringComparison.OrdinalIgnoreCase))
                 secure = true;
-            else if (attrName.Equals("max-age", StringComparison.OrdinalIgnoreCase)
-                     && long.TryParse(attrValue, out var maxAge))
+            else if (
+                attrName.Equals("max-age", StringComparison.OrdinalIgnoreCase)
+                && long.TryParse(attrValue, out var maxAge)
+            )
                 expired = maxAge <= 0;
         }
 
         lock (_lock)
         {
             _cookies.RemoveAll(existing =>
-                existing.Host == host && existing.Name == name && existing.Path == path);
-            if (expired) return;
+                existing.Host == host && existing.Name == name && existing.Path == path
+            );
+            if (expired)
+                return;
 
             _cookies.Add(new Cookie(host, name, value, path, secure));
             var countForHost = _cookies.Count(stored => stored.Host == host);
             while (countForHost > MaxCookiesPerHost)
             {
                 var oldest = _cookies.FindIndex(stored => stored.Host == host);
-                if (oldest < 0) break;
+                if (oldest < 0)
+                    break;
 
                 _cookies.RemoveAt(oldest);
                 --countForHost;
@@ -77,11 +85,15 @@ internal sealed class CookieJar
             var header = new StringBuilder();
             foreach (var cookie in _cookies)
             {
-                if (cookie.Host != host || (cookie.Secure && !secure)
-                                        || !PathMatches(path, cookie.Path))
+                if (
+                    cookie.Host != host
+                    || (cookie.Secure && !secure)
+                    || !PathMatches(path, cookie.Path)
+                )
                     continue;
 
-                if (header.Length > 0) header.Append("; ");
+                if (header.Length > 0)
+                    header.Append("; ");
 
                 header.Append(cookie.Name).Append('=').Append(cookie.Value);
             }
@@ -92,18 +104,22 @@ internal sealed class CookieJar
 
     private static bool PathMatches(string requestPath, string cookiePath)
     {
-        if (cookiePath.Length == 0 || cookiePath == "/") return true;
+        if (cookiePath.Length == 0 || cookiePath == "/")
+            return true;
 
-        if (requestPath == cookiePath) return true;
+        if (requestPath == cookiePath)
+            return true;
 
-        if (!requestPath.StartsWith(cookiePath, StringComparison.Ordinal)) return false;
+        if (!requestPath.StartsWith(cookiePath, StringComparison.Ordinal))
+            return false;
 
         return cookiePath[^1] == '/' || requestPath[cookiePath.Length] == '/';
     }
 
     private static string? TakeSegment(ref ReadOnlySpan<char> remaining)
     {
-        if (remaining.IsEmpty) return null;
+        if (remaining.IsEmpty)
+            return null;
 
         var semicolon = remaining.IndexOf(';');
         var segment = (semicolon < 0 ? remaining : remaining[..semicolon]).Trim();

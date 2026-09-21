@@ -12,8 +12,7 @@ final class ZLinkSessionClosingControl {
     static final int PROTOCOL_ERROR = 5;
     private static final int MAX_DIAGNOSTIC_BYTES = 512;
 
-    private ZLinkSessionClosingControl() {
-    }
+    private ZLinkSessionClosingControl() {}
 
     static byte[] serverDrain(String diagnostic) {
         return encode(SERVER_DRAIN, diagnostic);
@@ -23,17 +22,16 @@ final class ZLinkSessionClosingControl {
         if (reason < 1 || reason > 6) {
             throw new IllegalArgumentException("session-closing reason is invalid");
         }
-        byte[] text = diagnostic == null
-            ? new byte[0]
-            : diagnostic.getBytes(StandardCharsets.UTF_8);
+        byte[] text =
+                diagnostic == null ? new byte[0] : diagnostic.getBytes(StandardCharsets.UTF_8);
         if (text.length > MAX_DIAGNOSTIC_BYTES) {
             throw new IllegalArgumentException("session-closing diagnostic exceeds 512 bytes");
         }
         return ByteBuffer.allocate(4 + text.length)
-            .put((byte) VERSION)
-            .put((byte) reason)
-            .putShort((short) text.length)
-            .put(text)
-            .array();
+                .put((byte) VERSION)
+                .put((byte) reason)
+                .putShort((short) text.length)
+                .put(text)
+                .array();
     }
 }

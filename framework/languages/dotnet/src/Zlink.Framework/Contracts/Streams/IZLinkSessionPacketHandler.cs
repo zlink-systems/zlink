@@ -11,7 +11,8 @@ public interface IZLinkSessionHandlerRegistry
     ValueTask<bool> TryHandleAsync(
         ZLinkSessionDispatchContext dispatch,
         ZLinkMessage payload,
-        CancellationToken cancellationToken = default);
+        CancellationToken cancellationToken = default
+    );
 }
 
 public interface IZLinkSessionPacketHandler<in TSessionContext, TMessage>
@@ -20,5 +21,6 @@ public interface IZLinkSessionPacketHandler<in TSessionContext, TMessage>
         TSessionContext context,
         ZLinkSessionDispatchContext dispatch,
         TMessage message,
-        CancellationToken cancellationToken);
+        CancellationToken cancellationToken
+    );
 }

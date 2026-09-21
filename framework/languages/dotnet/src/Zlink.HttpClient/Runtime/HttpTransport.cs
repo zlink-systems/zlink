@@ -6,7 +6,8 @@ namespace Zlink.HttpClient.Runtime;
 
 internal sealed class HttpTransport(
     SocketsHttpHandler handler,
-    IReadOnlyList<X509Certificate2> ownedCertificates) : IDisposable
+    IReadOnlyList<X509Certificate2> ownedCertificates
+) : IDisposable
 {
     public SocketsHttpHandler Handler { get; } = handler;
 

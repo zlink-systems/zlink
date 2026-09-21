@@ -71,11 +71,11 @@ public final class AuthenticatePlaySessionHandler
                                                                                         resolvedActor)) {
                                                                             throw new IllegalStateException(
                                                                                     "Bound ActorRef"
-                                                                                        + " does"
-                                                                                        + " not match"
-                                                                                        + " the resolved"
-                                                                                        + " ActorRef"
-                                                                                        + " for '"
+                                                                                            + " does"
+                                                                                            + " not match"
+                                                                                            + " the resolved"
+                                                                                            + " ActorRef"
+                                                                                            + " for '"
                                                                                             + authenticated
                                                                                                     .player()
                                                                                                     .actorId()
@@ -87,8 +87,8 @@ public final class AuthenticatePlaySessionHandler
                                                                                         .Existing) {
                                                                             LOGGER.info(
                                                                                     "tictactoe-lifecycle"
-                                                                                        + " actor-bound"
-                                                                                        + " actor={}",
+                                                                                            + " actor-bound"
+                                                                                            + " actor={}",
                                                                                     boundActor
                                                                                             .actorId());
                                                                         }

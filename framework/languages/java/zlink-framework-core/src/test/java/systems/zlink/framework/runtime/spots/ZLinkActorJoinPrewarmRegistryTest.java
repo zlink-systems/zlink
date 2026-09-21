@@ -6,22 +6,21 @@ import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
+import org.junit.jupiter.api.Test;
+
 import java.util.ArrayList;
 import java.util.List;
 import java.util.UUID;
 import java.util.concurrent.atomic.AtomicReference;
-import org.junit.jupiter.api.Test;
 
 /**
- * Covers spec 15 §4.2 registry mechanics: attempt registration before the
- * Accepted reply, reuse at PREPARE, Rejected/expiry cleanup, newest-
- * attempt-wins eviction (placeholder and live), and the atomic
- * install-and-migrate transition. Ingress arrivals are always driven
- * through {@link ZLinkActorJoinPrewarmRegistry#parkOrDeliver} — the
- * production ingress entry point — never through a private queue poke;
- * the equivalent end-to-end coverage through
- * {@code ZLinkUserSpotRetireTargetEndpoint#handleActor} lives in
- * {@code ZLinkCanonicalDirectJoinHostIntegrationTest}.
+ * Covers spec 15 §4.2 registry mechanics: attempt registration before the Accepted reply, reuse at
+ * PREPARE, Rejected/expiry cleanup, newest- attempt-wins eviction (placeholder and live), and the
+ * atomic install-and-migrate transition. Ingress arrivals are always driven through {@link
+ * ZLinkActorJoinPrewarmRegistry#parkOrDeliver} — the production ingress entry point — never through
+ * a private queue poke; the equivalent end-to-end coverage through {@code
+ * ZLinkUserSpotRetireTargetEndpoint#handleActor} lives in {@code
+ * ZLinkCanonicalDirectJoinHostIntegrationTest}.
  */
 final class ZLinkActorJoinPrewarmRegistryTest {
     private static final String ACTOR_ID = "actor-a";
@@ -33,23 +32,29 @@ final class ZLinkActorJoinPrewarmRegistryTest {
         ZLinkActorJoinPrewarmRegistry registry = new ZLinkActorJoinPrewarmRegistry();
         UUID relocationId = UUID.randomUUID();
 
-        ZLinkActorJoinPrewarmRegistry.Attempt attempt = registry.register(
-            relocationId, ACTOR_ID, OBJECT_GENERATION, ACTOR_TYPE,
-            String.class, evicted -> { });
+        ZLinkActorJoinPrewarmRegistry.Attempt attempt =
+                registry.register(
+                        relocationId,
+                        ACTOR_ID,
+                        OBJECT_GENERATION,
+                        ACTOR_TYPE,
+                        String.class,
+                        evicted -> {});
 
         assertTrue(registry.find(relocationId).isPresent());
         assertSame(attempt, registry.find(relocationId).orElseThrow());
         assertEquals(
-            new ZLinkActorJoinPrewarmRegistry.ObjectKey(
-                ACTOR_ID, OBJECT_GENERATION),
-            attempt.objectKey());
+                new ZLinkActorJoinPrewarmRegistry.ObjectKey(ACTOR_ID, OBJECT_GENERATION),
+                attempt.objectKey());
 
         //  Production ingress parks an arrival for this object before any
         //  real stage is installed.
-        var route = registry.parkOrDeliver(
-            ACTOR_ID, OBJECT_GENERATION,
-            new ZLinkActorJoinPrewarmRegistry.ParkedMessage(
-                new byte[] {1}, null, null));
+        var route =
+                registry.parkOrDeliver(
+                        ACTOR_ID,
+                        OBJECT_GENERATION,
+                        new ZLinkActorJoinPrewarmRegistry.ParkedMessage(
+                                new byte[] {1}, null, null));
         assertEquals(ZLinkActorJoinPrewarmRegistry.IngressRoute.PARKED, route);
     }
 
@@ -59,20 +64,30 @@ final class ZLinkActorJoinPrewarmRegistryTest {
         UUID relocationId = UUID.randomUUID();
         List<ZLinkActorJoinPrewarmRegistry.Attempt> evictions = new ArrayList<>();
 
-        ZLinkActorJoinPrewarmRegistry.Attempt first = registry.register(
-            relocationId, ACTOR_ID, OBJECT_GENERATION, ACTOR_TYPE,
-            String.class, evictions::add);
+        ZLinkActorJoinPrewarmRegistry.Attempt first =
+                registry.register(
+                        relocationId,
+                        ACTOR_ID,
+                        OBJECT_GENERATION,
+                        ACTOR_TYPE,
+                        String.class,
+                        evictions::add);
         registry.parkOrDeliver(
-            ACTOR_ID, OBJECT_GENERATION,
-            new ZLinkActorJoinPrewarmRegistry.ParkedMessage(
-                new byte[] {1}, null, null));
+                ACTOR_ID,
+                OBJECT_GENERATION,
+                new ZLinkActorJoinPrewarmRegistry.ParkedMessage(new byte[] {1}, null, null));
 
         //  A retried admission round trip (or the PREPARE-time lookup)
         //  for the exact same RelocationId must observe the same
         //  instance — not a fresh, empty attempt.
-        ZLinkActorJoinPrewarmRegistry.Attempt second = registry.register(
-            relocationId, ACTOR_ID, OBJECT_GENERATION, ACTOR_TYPE,
-            String.class, evictions::add);
+        ZLinkActorJoinPrewarmRegistry.Attempt second =
+                registry.register(
+                        relocationId,
+                        ACTOR_ID,
+                        OBJECT_GENERATION,
+                        ACTOR_TYPE,
+                        String.class,
+                        evictions::add);
 
         assertSame(first, second);
         assertTrue(evictions.isEmpty());
@@ -81,7 +96,7 @@ final class ZLinkActorJoinPrewarmRegistryTest {
         //  migrated by the same completeMigration call below.
         List<byte[]> delivered = new ArrayList<>();
         registry.completeMigration(
-            relocationId, parked -> delivered.add(parked.record()), () -> { }, () -> { });
+                relocationId, parked -> delivered.add(parked.record()), () -> {}, () -> {});
         assertEquals(1, delivered.size());
         assertArrayRecord(new byte[] {1}, delivered.getFirst());
     }
@@ -91,8 +106,7 @@ final class ZLinkActorJoinPrewarmRegistryTest {
         ZLinkActorJoinPrewarmRegistry registry = new ZLinkActorJoinPrewarmRegistry();
         UUID relocationId = UUID.randomUUID();
         registry.register(
-            relocationId, ACTOR_ID, OBJECT_GENERATION, ACTOR_TYPE,
-            String.class, evicted -> { });
+                relocationId, ACTOR_ID, OBJECT_GENERATION, ACTOR_TYPE, String.class, evicted -> {});
         assertTrue(registry.find(relocationId).isPresent());
 
         //  OnActorJoin returned Rejected: the target cleans up the
@@ -104,11 +118,12 @@ final class ZLinkActorJoinPrewarmRegistryTest {
         //  A late PREPARE/Restore for the rejected identity finds nothing
         //  to reuse and cannot resurrect the discarded attempt.
         assertEquals(
-            ZLinkActorJoinPrewarmRegistry.IngressRoute.NOT_FOUND,
-            registry.parkOrDeliver(
-                ACTOR_ID, OBJECT_GENERATION,
-                new ZLinkActorJoinPrewarmRegistry.ParkedMessage(
-                    new byte[] {1}, null, null)));
+                ZLinkActorJoinPrewarmRegistry.IngressRoute.NOT_FOUND,
+                registry.parkOrDeliver(
+                        ACTOR_ID,
+                        OBJECT_GENERATION,
+                        new ZLinkActorJoinPrewarmRegistry.ParkedMessage(
+                                new byte[] {1}, null, null)));
     }
 
     @Test
@@ -116,13 +131,12 @@ final class ZLinkActorJoinPrewarmRegistryTest {
         ZLinkActorJoinPrewarmRegistry registry = new ZLinkActorJoinPrewarmRegistry();
         UUID relocationId = UUID.randomUUID();
         registry.register(
-            relocationId, ACTOR_ID, OBJECT_GENERATION, ACTOR_TYPE,
-            String.class, evicted -> { });
+                relocationId, ACTOR_ID, OBJECT_GENERATION, ACTOR_TYPE, String.class, evicted -> {});
         AtomicReference<Throwable> failed = new AtomicReference<>();
         registry.parkOrDeliver(
-            ACTOR_ID, OBJECT_GENERATION,
-            new ZLinkActorJoinPrewarmRegistry.ParkedMessage(
-                new byte[] {1}, null, failed::set));
+                ACTOR_ID,
+                OBJECT_GENERATION,
+                new ZLinkActorJoinPrewarmRegistry.ParkedMessage(new byte[] {1}, null, failed::set));
 
         registry.release(relocationId);
 
@@ -136,18 +150,28 @@ final class ZLinkActorJoinPrewarmRegistryTest {
         UUID newRelocationId = UUID.randomUUID();
         List<ZLinkActorJoinPrewarmRegistry.Attempt> evictions = new ArrayList<>();
 
-        ZLinkActorJoinPrewarmRegistry.Attempt oldAttempt = registry.register(
-            oldRelocationId, ACTOR_ID, OBJECT_GENERATION, ACTOR_TYPE,
-            String.class, evictions::add);
+        ZLinkActorJoinPrewarmRegistry.Attempt oldAttempt =
+                registry.register(
+                        oldRelocationId,
+                        ACTOR_ID,
+                        OBJECT_GENERATION,
+                        ACTOR_TYPE,
+                        String.class,
+                        evictions::add);
         AtomicReference<Throwable> failed = new AtomicReference<>();
         registry.parkOrDeliver(
-            ACTOR_ID, OBJECT_GENERATION,
-            new ZLinkActorJoinPrewarmRegistry.ParkedMessage(
-                new byte[] {1}, null, failed::set));
+                ACTOR_ID,
+                OBJECT_GENERATION,
+                new ZLinkActorJoinPrewarmRegistry.ParkedMessage(new byte[] {1}, null, failed::set));
 
-        ZLinkActorJoinPrewarmRegistry.Attempt newAttempt = registry.register(
-            newRelocationId, ACTOR_ID, OBJECT_GENERATION, ACTOR_TYPE,
-            String.class, evictions::add);
+        ZLinkActorJoinPrewarmRegistry.Attempt newAttempt =
+                registry.register(
+                        newRelocationId,
+                        ACTOR_ID,
+                        OBJECT_GENERATION,
+                        ACTOR_TYPE,
+                        String.class,
+                        evictions::add);
 
         //  Only one relocation temporary queue exists per object: the
         //  older exact identity is aborted, its parked arrival is failed
@@ -168,12 +192,16 @@ final class ZLinkActorJoinPrewarmRegistryTest {
         List<ZLinkActorJoinPrewarmRegistry.Attempt> evictions = new ArrayList<>();
 
         registry.register(
-            oldRelocationId, ACTOR_ID, OBJECT_GENERATION, ACTOR_TYPE,
-            String.class, evictions::add);
+                oldRelocationId,
+                ACTOR_ID,
+                OBJECT_GENERATION,
+                ACTOR_TYPE,
+                String.class,
+                evictions::add);
         //  PREPARE installs the real stage for the old identity.
         AtomicReference<Boolean> aborted = new AtomicReference<>(false);
         registry.completeMigration(
-            oldRelocationId, parked -> { }, () -> { }, () -> aborted.set(true));
+                oldRelocationId, parked -> {}, () -> {}, () -> aborted.set(true));
 
         //  A newer exact identity for the same object arrives before the
         //  old identity publishes: the installed-but-not-yet-published
@@ -181,13 +209,18 @@ final class ZLinkActorJoinPrewarmRegistryTest {
         //  admission-bookkeeping callback (which never fires for an
         //  already-installed attempt).
         registry.register(
-            newRelocationId, ACTOR_ID, OBJECT_GENERATION, ACTOR_TYPE,
-            String.class, evictions::add);
+                newRelocationId,
+                ACTOR_ID,
+                OBJECT_GENERATION,
+                ACTOR_TYPE,
+                String.class,
+                evictions::add);
 
         assertTrue(aborted.get());
-        assertTrue(evictions.isEmpty(),
-            "an installed live stage is torn down through liveAbort, not "
-                + "the placeholder eviction callback");
+        assertTrue(
+                evictions.isEmpty(),
+                "an installed live stage is torn down through liveAbort, not "
+                        + "the placeholder eviction callback");
         assertFalse(registry.find(oldRelocationId).isPresent());
         assertTrue(registry.find(newRelocationId).isPresent());
     }
@@ -197,8 +230,7 @@ final class ZLinkActorJoinPrewarmRegistryTest {
         ZLinkActorJoinPrewarmRegistry registry = new ZLinkActorJoinPrewarmRegistry();
         UUID relocationId = UUID.randomUUID();
         registry.register(
-            relocationId, ACTOR_ID, OBJECT_GENERATION, ACTOR_TYPE,
-            String.class, evicted -> { });
+                relocationId, ACTOR_ID, OBJECT_GENERATION, ACTOR_TYPE, String.class, evicted -> {});
         assertTrue(registry.find(relocationId).isPresent());
 
         //  Accepted, but the move never started at the source
@@ -216,38 +248,42 @@ final class ZLinkActorJoinPrewarmRegistryTest {
         ZLinkActorJoinPrewarmRegistry registry = new ZLinkActorJoinPrewarmRegistry();
         UUID relocationId = UUID.randomUUID();
         registry.register(
-            relocationId, ACTOR_ID, OBJECT_GENERATION, ACTOR_TYPE,
-            String.class, evicted -> { });
+                relocationId, ACTOR_ID, OBJECT_GENERATION, ACTOR_TYPE, String.class, evicted -> {});
         registry.parkOrDeliver(
-            ACTOR_ID, OBJECT_GENERATION,
-            new ZLinkActorJoinPrewarmRegistry.ParkedMessage(
-                new byte[] {1}, null, null));
+                ACTOR_ID,
+                OBJECT_GENERATION,
+                new ZLinkActorJoinPrewarmRegistry.ParkedMessage(new byte[] {1}, null, null));
         registry.parkOrDeliver(
-            ACTOR_ID, OBJECT_GENERATION,
-            new ZLinkActorJoinPrewarmRegistry.ParkedMessage(
-                new byte[] {2}, null, null));
+                ACTOR_ID,
+                OBJECT_GENERATION,
+                new ZLinkActorJoinPrewarmRegistry.ParkedMessage(new byte[] {2}, null, null));
 
         List<String> transitions = new ArrayList<>();
         registry.completeMigration(
-            relocationId,
-            parked -> transitions.add("deliver:" + parked.record()[0]),
-            () -> transitions.add("actorStages:insert"),
-            () -> { });
+                relocationId,
+                parked -> transitions.add("deliver:" + parked.record()[0]),
+                () -> transitions.add("actorStages:insert"),
+                () -> {});
 
-        assertEquals(List.of(
-            "deliver:1", "deliver:2", "actorStages:insert"), transitions,
-            "the real stage is published only after every parked arrival is "
-                + "migrated while the registry monitor remains held");
+        assertEquals(
+                List.of("deliver:1", "deliver:2", "actorStages:insert"),
+                transitions,
+                "the real stage is published only after every parked arrival is "
+                        + "migrated while the registry monitor remains held");
 
         //  Once installed, a further arrival for the same object is
         //  delivered straight through the installed sink — not re-parked.
-        var route = registry.parkOrDeliver(
-            ACTOR_ID, OBJECT_GENERATION,
-            new ZLinkActorJoinPrewarmRegistry.ParkedMessage(
-                new byte[] {3}, null, null));
-        assertEquals(ZLinkActorJoinPrewarmRegistry.IngressRoute.DELIVERED, route,
-            "once the real stage is installed, further arrivals for the "
-                + "same object are delivered straight through, not parked");
+        var route =
+                registry.parkOrDeliver(
+                        ACTOR_ID,
+                        OBJECT_GENERATION,
+                        new ZLinkActorJoinPrewarmRegistry.ParkedMessage(
+                                new byte[] {3}, null, null));
+        assertEquals(
+                ZLinkActorJoinPrewarmRegistry.IngressRoute.DELIVERED,
+                route,
+                "once the real stage is installed, further arrivals for the "
+                        + "same object are delivered straight through, not parked");
     }
 
     @Test
@@ -256,17 +292,27 @@ final class ZLinkActorJoinPrewarmRegistryTest {
         UUID oldRelocationId = UUID.randomUUID();
         UUID newRelocationId = UUID.randomUUID();
         registry.register(
-            oldRelocationId, ACTOR_ID, OBJECT_GENERATION, ACTOR_TYPE,
-            String.class, evicted -> { });
+                oldRelocationId,
+                ACTOR_ID,
+                OBJECT_GENERATION,
+                ACTOR_TYPE,
+                String.class,
+                evicted -> {});
         registry.register(
-            newRelocationId, ACTOR_ID, OBJECT_GENERATION, ACTOR_TYPE,
-            String.class, evicted -> { });
+                newRelocationId,
+                ACTOR_ID,
+                OBJECT_GENERATION,
+                ACTOR_TYPE,
+                String.class,
+                evicted -> {});
 
         //  A late PREPARE for the evicted old identity must be discarded,
         //  not installed (spec 15 §4.2).
-        assertThrows(IllegalStateException.class, () ->
-            registry.completeMigration(
-                oldRelocationId, parked -> { }, () -> { }, () -> { }));
+        assertThrows(
+                IllegalStateException.class,
+                () ->
+                        registry.completeMigration(
+                                oldRelocationId, parked -> {}, () -> {}, () -> {}));
     }
 
     private static void assertArrayRecord(byte[] expected, byte[] actual) {

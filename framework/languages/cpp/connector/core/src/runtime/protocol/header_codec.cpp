@@ -123,8 +123,8 @@ result_t<void> validate_header (const stream_header_t &header, bool validate_flo
                                             "Control packet must use raw codec and no flags.");
         }
     }
-    const bool is_reply = header.kind == message_kind_t::response
-                          || header.kind == message_kind_t::error;
+    const bool is_reply =
+      header.kind == message_kind_t::response || header.kind == message_kind_t::error;
     if ((!is_reply && header.name.empty ())
         || header.name.size () > std::numeric_limits<std::uint8_t>::max ()) {
         return result_t<void>::failure (error_code_t::validation_failed,
@@ -151,8 +151,7 @@ result_t<void> validate_header (const stream_header_t &header, bool validate_flo
                                         "Flow id and flow origin must be present together.");
     }
     if (has_flow && !flow_id_codec_t::is_valid (header.flow_id)) {
-        return result_t<void>::failure (error_code_t::validation_failed,
-                                        "Flow id must be UUIDv7.");
+        return result_t<void>::failure (error_code_t::validation_failed, "Flow id must be UUIDv7.");
     }
     if (header.flow_origin) {
         const auto raw_origin = static_cast<std::uint8_t> (*header.flow_origin);
@@ -199,8 +198,8 @@ result_t<std::vector<std::uint8_t>> header_codec_t::encode (const stream_header_
         clear_flag (header.flags, header_flags_t::has_flow_id);
     }
     if (header.correlation_id.size () > std::numeric_limits<std::uint8_t>::max ()) {
-        return result_t<std::vector<std::uint8_t>>::failure (
-          error_code_t::validation_failed, "Correlation id is too large.");
+        return result_t<std::vector<std::uint8_t>>::failure (error_code_t::validation_failed,
+                                                             "Correlation id is too large.");
     }
     if (auto validation = validate_header (header); !validation) {
         return result_t<std::vector<std::uint8_t>>::failure (validation.error ()->code,
@@ -309,18 +308,18 @@ result_t<stream_header_t> header_codec_t::decode (const std::vector<std::uint8_t
         }
         const auto correlation_size = bytes[offset++];
         if (correlation_size == 0 || bytes.size () - offset < correlation_size) {
-            return result_t<stream_header_t>::failure (
-              error_code_t::frame_decode_failed, "Helper header correlation id is invalid.");
+            return result_t<stream_header_t>::failure (error_code_t::frame_decode_failed,
+                                                       "Helper header correlation id is invalid.");
         }
-        header.correlation_id = std::string (
-          bytes.begin () + static_cast<std::ptrdiff_t> (offset),
-          bytes.begin () + static_cast<std::ptrdiff_t> (offset + correlation_size));
+        header.correlation_id =
+          std::string (bytes.begin () + static_cast<std::ptrdiff_t> (offset),
+                       bytes.begin () + static_cast<std::ptrdiff_t> (offset + correlation_size));
         offset += correlation_size;
     }
     if (has_flag (header.flags, header_flags_t::has_flow_id)) {
         if (bytes.size () - offset < flow_id_codec_t::encoded_length + 1) {
-            return result_t<stream_header_t>::failure (
-              error_code_t::frame_decode_failed, "Helper header flow fields are incomplete.");
+            return result_t<stream_header_t>::failure (error_code_t::frame_decode_failed,
+                                                       "Helper header flow fields are incomplete.");
         }
         header.flow_id = std::string (
           bytes.begin () + static_cast<std::ptrdiff_t> (offset),
@@ -339,7 +338,8 @@ result_t<stream_header_t> header_codec_t::decode (const std::vector<std::uint8_t
     return result_t<stream_header_t>::success (std::move (header));
 }
 
-result_t<std::vector<std::uint8_t>> session_closing_codec_t::encode (const session_closing_t &closing)
+result_t<std::vector<std::uint8_t>>
+session_closing_codec_t::encode (const session_closing_t &closing)
 {
     const auto raw_reason = static_cast<std::uint8_t> (closing.reason);
     if (raw_reason < 1 || raw_reason > 6) {
@@ -368,18 +368,17 @@ session_closing_codec_t::decode (const std::vector<std::uint8_t> &payload)
                                                      "Session-closing payload is truncated.");
     }
     if (payload[0] != version) {
-        return result_t<session_closing_t>::failure (
-          error_code_t::frame_decode_failed, "Session-closing version is not supported.");
+        return result_t<session_closing_t>::failure (error_code_t::frame_decode_failed,
+                                                     "Session-closing version is not supported.");
     }
     if (payload[1] < 1 || payload[1] > 6) {
-        return result_t<session_closing_t>::failure (
-          error_code_t::frame_decode_failed, "Session-closing reason is not supported.");
+        return result_t<session_closing_t>::failure (error_code_t::frame_decode_failed,
+                                                     "Session-closing reason is not supported.");
     }
-    const auto diagnostic_length =
-      static_cast<std::size_t> ((payload[2] << 8) | payload[3]);
+    const auto diagnostic_length = static_cast<std::size_t> ((payload[2] << 8) | payload[3]);
     if (diagnostic_length > max_diagnostic_bytes) {
-        return result_t<session_closing_t>::failure (
-          error_code_t::frame_decode_failed, "Session-closing diagnostic is too large.");
+        return result_t<session_closing_t>::failure (error_code_t::frame_decode_failed,
+                                                     "Session-closing diagnostic is too large.");
     }
     if (payload.size () != 4 + diagnostic_length) {
         return result_t<session_closing_t>::failure (
@@ -401,8 +400,7 @@ session_closing_codec_t::decode (const std::vector<std::uint8_t> &payload)
             continuation = 3;
         } else {
             return result_t<session_closing_t>::failure (
-              error_code_t::frame_decode_failed,
-              "Session-closing diagnostic is not valid UTF-8.");
+              error_code_t::frame_decode_failed, "Session-closing diagnostic is not valid UTF-8.");
         }
         for (std::size_t j = 1; j <= continuation; ++j) {
             if (i + j >= diagnostic.size ()
@@ -420,7 +418,7 @@ session_closing_codec_t::decode (const std::vector<std::uint8_t> &payload)
 
 std::string flow_id_codec_t::create ()
 {
-    thread_local std::mt19937_64 engine{std::random_device{} ()};
+    thread_local std::mt19937_64 engine{std::random_device{}()};
     std::array<std::uint8_t, 16> raw{};
     const auto high = engine ();
     const auto low = engine ();
@@ -428,10 +426,9 @@ std::string flow_id_codec_t::create ()
         raw[static_cast<std::size_t> (i)] = static_cast<std::uint8_t> (high >> (56 - i * 8));
         raw[static_cast<std::size_t> (8 + i)] = static_cast<std::uint8_t> (low >> (56 - i * 8));
     }
-    const auto milliseconds =
-      std::chrono::duration_cast<std::chrono::milliseconds> (
-        std::chrono::system_clock::now ().time_since_epoch ())
-        .count ();
+    const auto milliseconds = std::chrono::duration_cast<std::chrono::milliseconds> (
+                                std::chrono::system_clock::now ().time_since_epoch ())
+                                .count ();
     raw[0] = static_cast<std::uint8_t> (milliseconds >> 40);
     raw[1] = static_cast<std::uint8_t> (milliseconds >> 32);
     raw[2] = static_cast<std::uint8_t> (milliseconds >> 24);

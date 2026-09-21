@@ -1,4 +1,3 @@
 package systems.zlink.framework.locationprovider;
 
-public record ZLinkStoreReadFound(ZLinkStoreValue value)
-    implements ZLinkStoreReadResult {}
+public record ZLinkStoreReadFound(ZLinkStoreValue value) implements ZLinkStoreReadResult {}

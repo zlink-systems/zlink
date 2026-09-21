@@ -1,8 +1,4 @@
 package systems.zlink.framework.runtime.binding;
-import java.nio.ByteBuffer;
-import java.util.concurrent.CompletionException;
-import java.util.concurrent.ExecutionException;
-import java.util.stream.IntStream;
 
 import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertEquals;
@@ -12,191 +8,209 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
+
+import org.junit.jupiter.api.Test;
+
+import systems.zlink.contracts.core.Context;
+import systems.zlink.contracts.core.RoutingId;
+import systems.zlink.contracts.core.Zlink;
+import systems.zlink.contracts.errors.ZlinkRequestException;
+import systems.zlink.contracts.eventing.MonitorEvent;
+import systems.zlink.contracts.eventing.MonitorEventType;
+import systems.zlink.contracts.messaging.Message;
+import systems.zlink.contracts.sockets.RequestResult;
+import systems.zlink.contracts.sockets.SubmitResult;
+import systems.zlink.framework.configuration.ZLinkApplicationJobQueueProfile;
+import systems.zlink.framework.errors.ZLinkConfigurationException;
+import systems.zlink.framework.locations.ZLinkMeshNodeObjectRole;
+import systems.zlink.framework.runtime.internal.backend.ZLinkBackendActorRef;
+import systems.zlink.framework.runtime.internal.backend.ZLinkBackendReceived;
+import systems.zlink.framework.runtime.internal.backend.ZLinkBackendRequestResult;
+import systems.zlink.framework.runtime.internal.backend.ZLinkInternalMeshNode;
+import systems.zlink.framework.runtime.internal.backend.ZLinkMeshDispatchRecord;
+import systems.zlink.framework.runtime.internal.binding.spot.MeshPeerEntry;
+import systems.zlink.framework.runtime.internal.binding.spot.MeshPeerState;
+import systems.zlink.framework.runtime.internal.binding.spot.RecordKind;
+import systems.zlink.framework.runtime.internal.calls.ZLinkOneWayCalls;
+import systems.zlink.framework.runtime.internal.dispatch.ZLinkApplicationJobQueue;
+import systems.zlink.framework.runtime.internal.service.ZLinkServiceAdmissionGuard;
+import systems.zlink.framework.runtime.internal.service.ZLinkServiceM6AWireCodec;
+import systems.zlink.framework.runtime.internal.service.ZLinkServiceM6BWireCodec;
+import systems.zlink.framework.runtime.internal.service.ZLinkServiceMessageFollowWireCodec;
+import systems.zlink.framework.runtime.internal.service.ZLinkServiceNodeDescriptor;
+import systems.zlink.framework.runtime.internal.service.ZLinkServiceTopologyRegistry;
+import systems.zlink.framework.runtime.internal.transport.ZLinkEndpointNotation;
+import systems.zlink.framework.runtime.protocol.ServiceWireConstants;
+
 import java.lang.reflect.Method;
+import java.nio.ByteBuffer;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.time.Duration;
 import java.util.HexFormat;
 import java.util.List;
 import java.util.Map;
-import java.util.concurrent.ConcurrentLinkedQueue;
 import java.util.Optional;
+import java.util.OptionalLong;
 import java.util.concurrent.CompletableFuture;
-import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.CompletionStage;
+import java.util.concurrent.ConcurrentLinkedQueue;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.ExecutionException;
 import java.util.concurrent.TimeUnit;
-import java.util.concurrent.TimeoutException;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.logging.Handler;
 import java.util.logging.LogRecord;
 import java.util.logging.Logger;
-import org.junit.jupiter.api.Test;
-import java.util.OptionalLong;
-import systems.zlink.contracts.core.Context;
-import systems.zlink.contracts.core.RoutingId;
-import systems.zlink.contracts.core.Zlink;
-import systems.zlink.framework.configuration.ZLinkApplicationJobQueueProfile;
-import systems.zlink.framework.runtime.internal.dispatch.ZLinkApplicationJobQueue;
-import systems.zlink.contracts.eventing.MonitorEvent;
-import systems.zlink.contracts.eventing.MonitorEventType;
-import systems.zlink.contracts.messaging.Message;
-import systems.zlink.contracts.errors.ZlinkRequestException;
-import systems.zlink.framework.runtime.internal.binding.spot.RecordKind;
-import systems.zlink.contracts.sockets.SendFlags;
-import systems.zlink.contracts.sockets.RequestResult;
-import systems.zlink.contracts.sockets.SubmitResult;
-import systems.zlink.framework.runtime.internal.backend.ZLinkMeshDispatchRecord;
-import systems.zlink.framework.runtime.internal.backend.ZLinkBackendReceived;
-import systems.zlink.framework.runtime.internal.backend.ZLinkBackendActorRef;
-import systems.zlink.framework.runtime.internal.backend.ZLinkBackendRequestResult;
-import systems.zlink.framework.runtime.internal.backend.ZLinkBackendTopicMessage;
-import systems.zlink.framework.runtime.internal.backend.ZLinkInternalMeshNode;
-import systems.zlink.framework.runtime.internal.service.ZLinkServiceM6AWireCodec;
-import systems.zlink.framework.runtime.internal.service.ZLinkServiceM6BWireCodec;
-import systems.zlink.framework.runtime.internal.service.ZLinkServiceMessageFollowWireCodec;
-import systems.zlink.framework.runtime.internal.service.ZLinkServiceAdmissionGuard;
-import systems.zlink.framework.runtime.internal.service.ZLinkServiceNodeDescriptor;
-import systems.zlink.framework.runtime.internal.service.ZLinkServiceTopologyRegistry;
-import systems.zlink.framework.runtime.protocol.ServiceWireConstants;
-import systems.zlink.framework.locations.ZLinkMeshNodeObjectRole;
-import systems.zlink.framework.runtime.internal.binding.spot.MeshPeerEntry;
-import systems.zlink.framework.runtime.internal.binding.spot.MeshPeerState;
-import systems.zlink.framework.runtime.internal.calls.ZLinkOneWayCalls;
-import systems.zlink.framework.runtime.internal.transport.ZLinkEndpointNotation;
-import systems.zlink.framework.errors.ZLinkConfigurationException;
+import java.util.stream.IntStream;
 
 final class ZLinkJavaRawMeshNodeM6ATest {
     @Test
     void oneWayAdapterClassifiesNativeSubmitRejection() {
-        for (var rejected : List.of(
-                systems.zlink.contracts.sockets.SubmitResult.BACKPRESSURED,
-                systems.zlink.contracts.sockets.SubmitResult.NOT_ADMITTED,
-                systems.zlink.contracts.sockets.SubmitResult.NOT_CONNECTED)) {
-            var failure = assertThrows(
-                ExecutionException.class,
-                () -> ZLinkOneWayCalls.adaptOneWay(
-                    CompletableFuture.failedFuture(
-                        new systems.zlink.contracts.errors.ZlinkSubmitException(
-                            rejected)))
-                    .toCompletableFuture()
-                    .get());
-            assertTrue(failure.getCause()
-                instanceof systems.zlink.framework.errors.ZLinkFrameworkException);
-            var framework = (systems.zlink.framework.errors.ZLinkFrameworkException)
-                failure.getCause();
+        for (var rejected :
+                List.of(
+                        systems.zlink.contracts.sockets.SubmitResult.BACKPRESSURED,
+                        systems.zlink.contracts.sockets.SubmitResult.NOT_ADMITTED,
+                        systems.zlink.contracts.sockets.SubmitResult.NOT_CONNECTED)) {
+            var failure =
+                    assertThrows(
+                            ExecutionException.class,
+                            () ->
+                                    ZLinkOneWayCalls.adaptOneWay(
+                                                    CompletableFuture.failedFuture(
+                                                            new systems.zlink.contracts.errors
+                                                                    .ZlinkSubmitException(
+                                                                    rejected)))
+                                            .toCompletableFuture()
+                                            .get());
+            assertTrue(
+                    failure.getCause()
+                            instanceof systems.zlink.framework.errors.ZLinkFrameworkException);
+            var framework =
+                    (systems.zlink.framework.errors.ZLinkFrameworkException) failure.getCause();
             assertEquals(
-                rejected == systems.zlink.contracts.sockets.SubmitResult.NOT_CONNECTED
-                    ? systems.zlink.framework.errors.ZLinkFrameworkErrorKind.UNAVAILABLE
-                    : systems.zlink.framework.errors.ZLinkFrameworkErrorKind.DEADLINE_EXCEEDED,
-                framework.kind());
+                    rejected == systems.zlink.contracts.sockets.SubmitResult.NOT_CONNECTED
+                            ? systems.zlink.framework.errors.ZLinkFrameworkErrorKind.UNAVAILABLE
+                            : systems.zlink.framework.errors.ZLinkFrameworkErrorKind
+                                    .DEADLINE_EXCEEDED,
+                    framework.kind());
         }
     }
 
     @Test
     void oneWayAdapterDistinguishesRouteLossFromAdmissionTimeout() {
-        var routeLoss = assertThrows(
-            ExecutionException.class,
-            () -> ZLinkOneWayCalls.adaptOneWay(
-                CompletableFuture.failedFuture(
-                    new systems.zlink.contracts.errors.ZlinkSubmitException(
-                        SubmitResult.NOT_ADMITTED, 113)))
-                .toCompletableFuture()
-                .get());
+        var routeLoss =
+                assertThrows(
+                        ExecutionException.class,
+                        () ->
+                                ZLinkOneWayCalls.adaptOneWay(
+                                                CompletableFuture.failedFuture(
+                                                        new systems.zlink.contracts.errors
+                                                                .ZlinkSubmitException(
+                                                                SubmitResult.NOT_ADMITTED, 113)))
+                                        .toCompletableFuture()
+                                        .get());
         assertEquals(
-            systems.zlink.framework.errors.ZLinkFrameworkErrorKind.UNAVAILABLE,
-            ((systems.zlink.framework.errors.ZLinkFrameworkException)
-                routeLoss.getCause()).kind());
+                systems.zlink.framework.errors.ZLinkFrameworkErrorKind.UNAVAILABLE,
+                ((systems.zlink.framework.errors.ZLinkFrameworkException) routeLoss.getCause())
+                        .kind());
 
-        var admissionTimeout = assertThrows(
-            ExecutionException.class,
-            () -> ZLinkOneWayCalls.adaptOneWay(
-                CompletableFuture.failedFuture(
-                    new systems.zlink.contracts.errors.ZlinkSubmitException(
-                        SubmitResult.NOT_ADMITTED, 110)))
-                .toCompletableFuture()
-                .get());
+        var admissionTimeout =
+                assertThrows(
+                        ExecutionException.class,
+                        () ->
+                                ZLinkOneWayCalls.adaptOneWay(
+                                                CompletableFuture.failedFuture(
+                                                        new systems.zlink.contracts.errors
+                                                                .ZlinkSubmitException(
+                                                                SubmitResult.NOT_ADMITTED, 110)))
+                                        .toCompletableFuture()
+                                        .get());
         assertEquals(
-            systems.zlink.framework.errors.ZLinkFrameworkErrorKind.DEADLINE_EXCEEDED,
-            ((systems.zlink.framework.errors.ZLinkFrameworkException)
-                admissionTimeout.getCause()).kind());
+                systems.zlink.framework.errors.ZLinkFrameworkErrorKind.DEADLINE_EXCEEDED,
+                ((systems.zlink.framework.errors.ZLinkFrameworkException)
+                                admissionTimeout.getCause())
+                        .kind());
     }
 
     @Test
     void monitorConnectionKeyIgnoresEventSpecificValue() {
-        var ready = new MonitorEvent(
-            MonitorEventType.CONNECTION_READY,
-            1,
-            Optional.of(RoutingId.from("peer")),
-            "tcp://127.0.0.1:4000",
-            "tcp://127.0.0.1:5000");
-        var disconnected = new MonitorEvent(
-            MonitorEventType.DISCONNECTED,
-            4,
-            Optional.of(RoutingId.from("peer")),
-            "tcp://127.0.0.1:4000",
-            "tcp://127.0.0.1:5000");
+        var ready =
+                new MonitorEvent(
+                        MonitorEventType.CONNECTION_READY,
+                        1,
+                        Optional.of(RoutingId.from("peer")),
+                        "tcp://127.0.0.1:4000",
+                        "tcp://127.0.0.1:5000");
+        var disconnected =
+                new MonitorEvent(
+                        MonitorEventType.DISCONNECTED,
+                        4,
+                        Optional.of(RoutingId.from("peer")),
+                        "tcp://127.0.0.1:4000",
+                        "tcp://127.0.0.1:5000");
 
         assertEquals(
-            ZLinkJavaRawMeshNode.transportEventKey(ready),
-            ZLinkJavaRawMeshNode.transportEventKey(disconnected));
+                ZLinkJavaRawMeshNode.transportEventKey(ready),
+                ZLinkJavaRawMeshNode.transportEventKey(disconnected));
     }
 
     @Test
-    void connectionIdForAdmissionReusesCoreSelectedRouteAcrossCommands()
-        throws Exception {
+    void connectionIdForAdmissionReusesCoreSelectedRouteAcrossCommands() throws Exception {
         // Some binding lanes cannot report a transport-pair identity. They
         // still carry HELLO and ADMIT for the same single physical route, but
         // those commands infer opposite directions. A delayed ADMIT must not
         // manufacture a replacement connectionId and reset peer liveness.
         try (var context = Zlink.createContext();
-             var node = new ZLinkJavaRawMeshNode(context, "mesh")) {
-            node.setRoutingId(RoutingId.from(
-                "single-lane-reuse-local-" + System.nanoTime()));
-            node.setBind(
-                "inproc://jvm-single-lane-reuse-" + System.nanoTime());
+                var node = new ZLinkJavaRawMeshNode(context, "mesh")) {
+            node.setRoutingId(RoutingId.from("single-lane-reuse-local-" + System.nanoTime()));
+            node.setBind("inproc://jvm-single-lane-reuse-" + System.nanoTime());
             node.start();
             RoutingId peer = RoutingId.from("single-lane-reuse-peer");
 
-            Method connectionIdForAdmission = ZLinkJavaRawMeshNode.class
-                .getDeclaredMethod(
-                    "connectionIdForAdmission",
-                    RoutingId.class,
-                    int.class,
-                    ZLinkServiceAdmissionGuard.ConnectionDirection.class);
+            Method connectionIdForAdmission =
+                    ZLinkJavaRawMeshNode.class.getDeclaredMethod(
+                            "connectionIdForAdmission",
+                            RoutingId.class,
+                            int.class,
+                            ZLinkServiceAdmissionGuard.ConnectionDirection.class);
             connectionIdForAdmission.setAccessible(true);
 
-            String first = (String) connectionIdForAdmission.invoke(
-                node,
-                peer,
-                ServiceWireConstants.COMMAND_HELLO,
-                ZLinkServiceAdmissionGuard.ConnectionDirection.INBOUND);
+            String first =
+                    (String)
+                            connectionIdForAdmission.invoke(
+                                    node,
+                                    peer,
+                                    ServiceWireConstants.COMMAND_HELLO,
+                                    ZLinkServiceAdmissionGuard.ConnectionDirection.INBOUND);
 
-            var topologyField = ZLinkJavaRawMeshNode.class
-                .getDeclaredField("topology");
+            var topologyField = ZLinkJavaRawMeshNode.class.getDeclaredField("topology");
             topologyField.setAccessible(true);
             var topology = (ZLinkServiceTopologyRegistry) topologyField.get(node);
             assertEquals(
-                ZLinkServiceTopologyRegistry.AdmissionResult.ADMITTED,
-                topology.admit(
-                    descriptor(peer),
-                    new ZLinkServiceTopologyRegistry.Connection(
-                        first,
-                        ZLinkServiceAdmissionGuard.ConnectionDirection.INBOUND,
-                        "single-lane")));
+                    ZLinkServiceTopologyRegistry.AdmissionResult.ADMITTED,
+                    topology.admit(
+                            descriptor(peer),
+                            new ZLinkServiceTopologyRegistry.Connection(
+                                    first,
+                                    ZLinkServiceAdmissionGuard.ConnectionDirection.INBOUND,
+                                    "single-lane")));
 
-            String retransmitted = (String) connectionIdForAdmission.invoke(
-                node,
-                peer,
-                ServiceWireConstants.COMMAND_ADMIT,
-                ZLinkServiceAdmissionGuard.ConnectionDirection.OUTBOUND);
+            String retransmitted =
+                    (String)
+                            connectionIdForAdmission.invoke(
+                                    node,
+                                    peer,
+                                    ServiceWireConstants.COMMAND_ADMIT,
+                                    ZLinkServiceAdmissionGuard.ConnectionDirection.OUTBOUND);
             assertEquals(first, retransmitted);
         }
     }
 
     @Test
     void updateAddressesTheAdmittedConnectionAndLeavesPendingCandidatesToTheHandshake()
-        throws Exception {
+            throws Exception {
         // Bilateral manual connect: the peer's reciprocal connect into this
         // node's bind reports a CONNECTION_READY edge after the HELLO/ADMIT
         // handshake already admitted the peer, so a pending physical candidate
@@ -204,67 +218,68 @@ final class ZLinkJavaRawMeshNodeM6ATest {
         // address the admitted connection (mesh-node §7.2); only the next
         // HELLO/ADMIT may bind the pending candidate (§7.1).
         try (var context = Zlink.createContext();
-             var node = new ZLinkJavaRawMeshNode(context, "mesh")) {
-            node.setRoutingId(RoutingId.from(
-                "update-admitted-local-" + System.nanoTime()));
-            node.setBind(
-                "inproc://jvm-update-admitted-" + System.nanoTime());
+                var node = new ZLinkJavaRawMeshNode(context, "mesh")) {
+            node.setRoutingId(RoutingId.from("update-admitted-local-" + System.nanoTime()));
+            node.setBind("inproc://jvm-update-admitted-" + System.nanoTime());
             node.start();
             RoutingId peer = RoutingId.from("update-admitted-peer");
             String admitted = "admitted-by-handshake";
             String pendingCandidate = "ready-edge-of-reciprocal-connect";
 
-            var topologyField = ZLinkJavaRawMeshNode.class
-                .getDeclaredField("topology");
+            var topologyField = ZLinkJavaRawMeshNode.class.getDeclaredField("topology");
             topologyField.setAccessible(true);
             var topology = (ZLinkServiceTopologyRegistry) topologyField.get(node);
             assertEquals(
-                ZLinkServiceTopologyRegistry.AdmissionResult.ADMITTED,
-                topology.admit(
-                    descriptor(peer),
-                    new ZLinkServiceTopologyRegistry.Connection(
-                        admitted,
-                        ZLinkServiceAdmissionGuard.ConnectionDirection.INBOUND,
-                        "inbound:hello")));
-            var candidateClass = Class.forName(
-                ZLinkJavaRawMeshNode.class.getName() + "$ConnectionCandidate");
-            var candidateConstructor = candidateClass.getDeclaredConstructor(
-                RoutingId.class,
-                ZLinkServiceAdmissionGuard.ConnectionDirection.class);
+                    ZLinkServiceTopologyRegistry.AdmissionResult.ADMITTED,
+                    topology.admit(
+                            descriptor(peer),
+                            new ZLinkServiceTopologyRegistry.Connection(
+                                    admitted,
+                                    ZLinkServiceAdmissionGuard.ConnectionDirection.INBOUND,
+                                    "inbound:hello")));
+            var candidateClass =
+                    Class.forName(ZLinkJavaRawMeshNode.class.getName() + "$ConnectionCandidate");
+            var candidateConstructor =
+                    candidateClass.getDeclaredConstructor(
+                            RoutingId.class, ZLinkServiceAdmissionGuard.ConnectionDirection.class);
             candidateConstructor.setAccessible(true);
-            Object candidate = candidateConstructor.newInstance(
-                peer, ZLinkServiceAdmissionGuard.ConnectionDirection.INBOUND);
-            var pendingField = ZLinkJavaRawMeshNode.class
-                .getDeclaredField("pendingConnectionIds");
+            Object candidate =
+                    candidateConstructor.newInstance(
+                            peer, ZLinkServiceAdmissionGuard.ConnectionDirection.INBOUND);
+            var pendingField = ZLinkJavaRawMeshNode.class.getDeclaredField("pendingConnectionIds");
             pendingField.setAccessible(true);
             @SuppressWarnings("unchecked")
-            var pending = (Map<Object, ConcurrentLinkedQueue<String>>)
-                pendingField.get(node);
-            pending.put(candidate, new ConcurrentLinkedQueue<>(
-                List.of(pendingCandidate)));
+            var pending = (Map<Object, ConcurrentLinkedQueue<String>>) pendingField.get(node);
+            pending.put(candidate, new ConcurrentLinkedQueue<>(List.of(pendingCandidate)));
 
-            Method connectionIdForAdmission = ZLinkJavaRawMeshNode.class
-                .getDeclaredMethod(
-                    "connectionIdForAdmission",
-                    RoutingId.class,
-                    int.class,
-                    ZLinkServiceAdmissionGuard.ConnectionDirection.class);
+            Method connectionIdForAdmission =
+                    ZLinkJavaRawMeshNode.class.getDeclaredMethod(
+                            "connectionIdForAdmission",
+                            RoutingId.class,
+                            int.class,
+                            ZLinkServiceAdmissionGuard.ConnectionDirection.class);
             connectionIdForAdmission.setAccessible(true);
 
-            assertEquals(admitted, connectionIdForAdmission.invoke(
-                node,
-                peer,
-                ServiceWireConstants.COMMAND_UPDATE,
-                ZLinkServiceAdmissionGuard.ConnectionDirection.INBOUND),
-                "an UPDATE addresses the admitted connection");
-            assertEquals(List.of(pendingCandidate), List.copyOf(pending.get(candidate)),
-                "an UPDATE leaves the pending physical candidate to the handshake");
-            assertEquals(pendingCandidate, connectionIdForAdmission.invoke(
-                node,
-                peer,
-                ServiceWireConstants.COMMAND_HELLO,
-                ZLinkServiceAdmissionGuard.ConnectionDirection.INBOUND),
-                "the handshake binds the pending physical candidate");
+            assertEquals(
+                    admitted,
+                    connectionIdForAdmission.invoke(
+                            node,
+                            peer,
+                            ServiceWireConstants.COMMAND_UPDATE,
+                            ZLinkServiceAdmissionGuard.ConnectionDirection.INBOUND),
+                    "an UPDATE addresses the admitted connection");
+            assertEquals(
+                    List.of(pendingCandidate),
+                    List.copyOf(pending.get(candidate)),
+                    "an UPDATE leaves the pending physical candidate to the handshake");
+            assertEquals(
+                    pendingCandidate,
+                    connectionIdForAdmission.invoke(
+                            node,
+                            peer,
+                            ServiceWireConstants.COMMAND_HELLO,
+                            ZLinkServiceAdmissionGuard.ConnectionDirection.INBOUND),
+                    "the handshake binds the pending physical candidate");
         }
     }
 
@@ -272,50 +287,52 @@ final class ZLinkJavaRawMeshNodeM6ATest {
     void sourceWideAdmissionReadySelectsOnlyReadyPeers() {
         RoutingId readyRid = RoutingId.from("ready-peer");
         RoutingId pendingRid = RoutingId.from("pending-peer");
-        var ready = new ZLinkServiceTopologyRegistry.Peer(
-            descriptor(readyRid),
-            new ZLinkServiceTopologyRegistry.Connection(
-                "ready-connection",
-                ZLinkServiceAdmissionGuard.ConnectionDirection.OUTBOUND,
-                "ready-discriminator"));
-        var pending = new ZLinkServiceTopologyRegistry.Peer(
-            descriptor(pendingRid),
-            new ZLinkServiceTopologyRegistry.Connection(
-                "pending-connection",
-                ZLinkServiceAdmissionGuard.ConnectionDirection.OUTBOUND,
-                "pending-discriminator"));
+        var ready =
+                new ZLinkServiceTopologyRegistry.Peer(
+                        descriptor(readyRid),
+                        new ZLinkServiceTopologyRegistry.Connection(
+                                "ready-connection",
+                                ZLinkServiceAdmissionGuard.ConnectionDirection.OUTBOUND,
+                                "ready-discriminator"));
+        var pending =
+                new ZLinkServiceTopologyRegistry.Peer(
+                        descriptor(pendingRid),
+                        new ZLinkServiceTopologyRegistry.Connection(
+                                "pending-connection",
+                                ZLinkServiceAdmissionGuard.ConnectionDirection.OUTBOUND,
+                                "pending-discriminator"));
 
         assertEquals(
-            List.of(readyRid),
-            ZLinkJavaRawMeshNode.readyAdmissionPeerIds(
-                List.of(ready, pending),
-                peer -> peer.connectionId().equals("ready-connection")));
+                List.of(readyRid),
+                ZLinkJavaRawMeshNode.readyAdmissionPeerIds(
+                        List.of(ready, pending),
+                        peer -> peer.connectionId().equals("ready-connection")));
     }
 
     private static ZLinkServiceNodeDescriptor descriptor(RoutingId rid) {
         return new ZLinkServiceNodeDescriptor(
-            "mesh",
-            rid,
-            1,
-            1,
-            "inproc://" + rid,
-            List.of(),
-            ZLinkServiceNodeDescriptor.State.SERVING,
-            "test-security",
-            1,
-            List.of(ZLinkServiceNodeDescriptor.REQUIRED_CAPABILITY),
-            ZLinkServiceNodeDescriptor.ObjectRole.NONE,
-            1,
-            1,
-            0,
-            0,
-            0);
+                "mesh",
+                rid,
+                1,
+                1,
+                "inproc://" + rid,
+                List.of(),
+                ZLinkServiceNodeDescriptor.State.SERVING,
+                "test-security",
+                1,
+                List.of(ZLinkServiceNodeDescriptor.REQUIRED_CAPABILITY),
+                ZLinkServiceNodeDescriptor.ObjectRole.NONE,
+                1,
+                1,
+                0,
+                0,
+                0);
     }
 
     @Test
     void ephemeralBindPublishesTheActualListenerEndpoint() {
         try (var context = Zlink.createContext();
-             var node = meshNode(context)) {
+                var node = meshNode(context)) {
             node.setRoutingId(RoutingId.from("jvm-ephemeral-endpoint"));
             node.setBind("tcp://127.0.0.1:0");
             node.start();
@@ -327,13 +344,12 @@ final class ZLinkJavaRawMeshNodeM6ATest {
     }
 
     @Test
-    void wildcardListenerAdvertisesLoopbackForExpectedRouteAndMessaging()
-        throws Exception {
+    void wildcardListenerAdvertisesLoopbackForExpectedRouteAndMessaging() throws Exception {
         RoutingId targetRid = RoutingId.from("jvm-wildcard-target");
         RoutingId sourceRid = RoutingId.from("jvm-wildcard-source");
         try (var context = Zlink.createContext();
-             var target = meshNode(context);
-             var source = meshNode(context)) {
+                var target = meshNode(context);
+                var source = meshNode(context)) {
             target.setRoutingId(targetRid);
             target.setBind("tcp://0.0.0.0:0");
             target.addChannel("game");
@@ -343,36 +359,37 @@ final class ZLinkJavaRawMeshNodeM6ATest {
             target.start();
             source.start();
 
-            String connectEndpoint = ZLinkEndpointNotation.withHost(
-                target.status().localEndpoint(), "127.0.0.1");
+            String connectEndpoint =
+                    ZLinkEndpointNotation.withHost(target.status().localEndpoint(), "127.0.0.1");
             source.connectPeer(connectEndpoint, targetRid);
             awaitState(source, MeshPeerState.ADMITTED);
 
             var received = new ConcurrentLinkedQueue<ZLinkMeshDispatchRecord>();
             CountDownLatch dispatched = new CountDownLatch(2);
-            target.startDispatch(record -> {
-                received.add(record);
-                dispatched.countDown();
-            });
+            target.startDispatch(
+                    record -> {
+                        received.add(record);
+                        dispatched.countDown();
+                    });
             try (Message packet = Message.from("wildcard.test");
-                 Message payload = Message.from(new byte[] {1})) {
-                source.spotNode().sendToNode(
-                        targetRid, List.of(packet, payload))
-                    .toCompletableFuture().get(2, TimeUnit.SECONDS);
+                    Message payload = Message.from(new byte[] {1})) {
+                source.spotNode()
+                        .sendToNode(targetRid, List.of(packet, payload))
+                        .toCompletableFuture()
+                        .get(2, TimeUnit.SECONDS);
             }
             try (Message packet = Message.from("wildcard.channel");
-                 Message payload = Message.from(new byte[] {2})) {
-                source.spotNode().sendToChannel(
-                        "game", List.of(packet, payload))
-                    .toCompletableFuture().get(2, TimeUnit.SECONDS);
+                    Message payload = Message.from(new byte[] {2})) {
+                source.spotNode()
+                        .sendToChannel("game", List.of(packet, payload))
+                        .toCompletableFuture()
+                        .get(2, TimeUnit.SECONDS);
             }
 
             assertTrue(dispatched.await(2, TimeUnit.SECONDS));
             assertEquals(
-                List.of(RecordKind.NODE_SEND, RecordKind.CHANNEL_SEND),
-                received.stream()
-                    .map(record -> record.receive().kind())
-                    .toList());
+                    List.of(RecordKind.NODE_SEND, RecordKind.CHANNEL_SEND),
+                    received.stream().map(record -> record.receive().kind()).toList());
             received.forEach(ZLinkMeshDispatchRecord::close);
         }
     }
@@ -380,7 +397,7 @@ final class ZLinkJavaRawMeshNodeM6ATest {
     @Test
     void wildcardAdvertiseHostFailsListenerStartup() {
         try (var context = Zlink.createContext();
-             var node = meshNode(context)) {
+                var node = meshNode(context)) {
             node.setRoutingId(RoutingId.from("jvm-wildcard-advertise"));
             node.setBind("tcp://127.0.0.1:0");
             node.setAdvertiseHost("0.0.0.0");
@@ -393,35 +410,31 @@ final class ZLinkJavaRawMeshNodeM6ATest {
     void endpointOnlyAdmittedPeerIsANodeDirectTarget() throws Exception {
         RoutingId targetRid = RoutingId.from("jvm-endpoint-only-target");
         RoutingId sourceRid = RoutingId.from("jvm-endpoint-only-source");
-        String targetEndpoint =
-            "inproc://jvm-endpoint-only-target-" + System.nanoTime();
+        String targetEndpoint = "inproc://jvm-endpoint-only-target-" + System.nanoTime();
         try (var context = Zlink.createContext();
-             var target = meshNode(context);
-             var source = meshNode(context)) {
+                var target = meshNode(context);
+                var source = meshNode(context)) {
             target.setRoutingId(targetRid);
             target.setBind(targetEndpoint);
             source.setRoutingId(sourceRid);
-            source.setBind(
-                "inproc://jvm-endpoint-only-source-" + System.nanoTime());
+            source.setBind("inproc://jvm-endpoint-only-source-" + System.nanoTime());
             target.start();
             source.start();
 
             source.connectPeer(targetEndpoint);
             awaitState(source, MeshPeerState.ADMITTED);
-            assertTrue(
-                source.spotNode().classifyNodeSendTarget(targetRid).isEmpty());
+            assertTrue(source.spotNode().classifyNodeSendTarget(targetRid).isEmpty());
 
-            CompletableFuture<ZLinkMeshDispatchRecord> received =
-                new CompletableFuture<>();
+            CompletableFuture<ZLinkMeshDispatchRecord> received = new CompletableFuture<>();
             target.startDispatch(received::complete);
             try (Message packet = Message.from("endpoint-only.test");
-                 Message payload = Message.from(new byte[] {1})) {
-                source.spotNode().sendToNode(
-                        targetRid, List.of(packet, payload))
-                    .toCompletableFuture().get(2, TimeUnit.SECONDS);
+                    Message payload = Message.from(new byte[] {1})) {
+                source.spotNode()
+                        .sendToNode(targetRid, List.of(packet, payload))
+                        .toCompletableFuture()
+                        .get(2, TimeUnit.SECONDS);
             }
-            try (ZLinkMeshDispatchRecord record =
-                received.get(2, TimeUnit.SECONDS)) {
+            try (ZLinkMeshDispatchRecord record = received.get(2, TimeUnit.SECONDS)) {
                 assertEquals(RecordKind.NODE_SEND, record.receive().kind());
             }
         }
@@ -429,13 +442,13 @@ final class ZLinkJavaRawMeshNodeM6ATest {
 
     @Test
     void manualObjectClientPairIsNotRequiredButWeightZeroServerMembershipConnects()
-        throws Exception {
+            throws Exception {
         RoutingId leftRid = RoutingId.from("jvm-client-left");
         RoutingId rightRid = RoutingId.from("jvm-client-right");
         String endpoint = "inproc://jvm-client-pair-" + System.nanoTime();
         try (var context = Zlink.createContext();
-             var left = meshNode(context);
-             var right = meshNode(context)) {
+                var left = meshNode(context);
+                var right = meshNode(context)) {
             left.setRoutingId(leftRid);
             left.setBind(endpoint);
             left.setObjectRole(ZLinkMeshNodeObjectRole.CLIENT);
@@ -448,16 +461,14 @@ final class ZLinkJavaRawMeshNodeM6ATest {
 
             awaitState(right, MeshPeerState.NOT_REQUIRED);
             assertEquals(
-                ZLinkOneWayCalls.TARGET_NOT_FOUND,
-                right.spotNode().classifyNodeSendTarget(leftRid)
-                    .orElseThrow());
+                    ZLinkOneWayCalls.TARGET_NOT_FOUND,
+                    right.spotNode().classifyNodeSendTarget(leftRid).orElseThrow());
         }
 
-        String serverEndpoint =
-            "inproc://jvm-client-server-channel-" + System.nanoTime();
+        String serverEndpoint = "inproc://jvm-client-server-channel-" + System.nanoTime();
         try (var context = Zlink.createContext();
-             var left = meshNode(context);
-             var right = meshNode(context)) {
+                var left = meshNode(context);
+                var right = meshNode(context)) {
             left.setRoutingId(leftRid);
             left.setBind(serverEndpoint);
             left.setObjectRole(ZLinkMeshNodeObjectRole.CLIENT);
@@ -479,36 +490,30 @@ final class ZLinkJavaRawMeshNodeM6ATest {
         RoutingId localRid = RoutingId.from("jvm-auto-client-local");
         RoutingId peerRid = RoutingId.from("jvm-auto-client-peer");
         try (var context = Zlink.createContext();
-             var local = meshNode(context)) {
+                var local = meshNode(context)) {
             local.setRoutingId(localRid);
             local.setBind("inproc://jvm-auto-client-local-" + System.nanoTime());
             local.setObjectRole(ZLinkMeshNodeObjectRole.CLIENT);
             local.start();
 
-            local.markPeerConnectionNotRequired(
-                peerRid,
-                "inproc://jvm-auto-client-peer",
-                7);
+            local.markPeerConnectionNotRequired(peerRid, "inproc://jvm-auto-client-peer", 7);
 
             assertEquals(MeshPeerState.NOT_REQUIRED, local.peers().getFirst().state());
             assertEquals(
-                ZLinkOneWayCalls.TARGET_NOT_FOUND,
-                local.spotNode().classifyNodeSendTarget(peerRid).orElseThrow());
+                    ZLinkOneWayCalls.TARGET_NOT_FOUND,
+                    local.spotNode().classifyNodeSendTarget(peerRid).orElseThrow());
         }
     }
 
     @Test
-    void bilateralManualConnectKeepsOneReadyPeer()
-        throws Exception {
+    void bilateralManualConnectKeepsOneReadyPeer() throws Exception {
         RoutingId lowerRid = RoutingId.from("a");
         RoutingId higherRid = RoutingId.from("z");
-        String lowerEndpoint =
-            "inproc://jvm-bilateral-lower-" + System.nanoTime();
-        String higherEndpoint =
-            "inproc://jvm-bilateral-higher-" + System.nanoTime();
+        String lowerEndpoint = "inproc://jvm-bilateral-lower-" + System.nanoTime();
+        String higherEndpoint = "inproc://jvm-bilateral-higher-" + System.nanoTime();
         try (var context = Zlink.createContext();
-             var lower = meshNode(context);
-             var higher = meshNode(context)) {
+                var lower = meshNode(context);
+                var higher = meshNode(context)) {
             lower.setRoutingId(lowerRid);
             lower.setBind(lowerEndpoint);
             higher.setRoutingId(higherRid);
@@ -533,19 +538,16 @@ final class ZLinkJavaRawMeshNodeM6ATest {
             assertTrue(lower.isPeerTransportConnected(higherRid));
             assertTrue(higher.isPeerTransportConnected(lowerRid));
 
-            CompletableFuture<ZLinkMeshDispatchRecord> received =
-                new CompletableFuture<>();
+            CompletableFuture<ZLinkMeshDispatchRecord> received = new CompletableFuture<>();
             higher.startDispatch(received::complete);
             try (Message packet = Message.from("bilateral");
-                 Message payload = Message.from(new byte[] {4, 2})) {
-                lower.spotNode().sendToNode(
-                        higherRid,
-                        List.of(packet, payload))
-                    .toCompletableFuture()
-                    .get(2, TimeUnit.SECONDS);
+                    Message payload = Message.from(new byte[] {4, 2})) {
+                lower.spotNode()
+                        .sendToNode(higherRid, List.of(packet, payload))
+                        .toCompletableFuture()
+                        .get(2, TimeUnit.SECONDS);
             }
-            try (ZLinkMeshDispatchRecord record =
-                received.get(2, TimeUnit.SECONDS)) {
+            try (ZLinkMeshDispatchRecord record = received.get(2, TimeUnit.SECONDS)) {
                 assertEquals(RecordKind.NODE_SEND, record.receive().kind());
                 assertEquals(lowerRid, record.receive().sourceNodeRid());
             }
@@ -553,25 +555,26 @@ final class ZLinkJavaRawMeshNodeM6ATest {
     }
 
     @Test
-    void closedExpectedPeerClassifiesDirectSendAsRouteNotConnected()
-        throws Exception {
+    void closedExpectedPeerClassifiesDirectSendAsRouteNotConnected() throws Exception {
         RoutingId localRid = RoutingId.from("jvm-closed-local");
         RoutingId peerRid = RoutingId.from("jvm-closed-peer");
         String localEndpoint = "inproc://jvm-closed-local-" + System.nanoTime();
         String peerEndpoint = "inproc://jvm-closed-peer-" + System.nanoTime();
         try (var context = Zlink.createContext();
-             var local = new ZLinkJavaRawMeshNode(
-                 context,
-                 "mesh",
-                 System::currentTimeMillis,
-                 Duration.ofMillis(10),
-                 Duration.ofMillis(50));
-             var peer = new ZLinkJavaRawMeshNode(
-                 context,
-                 "mesh",
-                 System::currentTimeMillis,
-                 Duration.ofMillis(10),
-                 Duration.ofMillis(50))) {
+                var local =
+                        new ZLinkJavaRawMeshNode(
+                                context,
+                                "mesh",
+                                System::currentTimeMillis,
+                                Duration.ofMillis(10),
+                                Duration.ofMillis(50));
+                var peer =
+                        new ZLinkJavaRawMeshNode(
+                                context,
+                                "mesh",
+                                System::currentTimeMillis,
+                                Duration.ofMillis(10),
+                                Duration.ofMillis(50))) {
             local.setRoutingId(localRid);
             local.setBind(localEndpoint);
             peer.setRoutingId(peerRid);
@@ -586,31 +589,32 @@ final class ZLinkJavaRawMeshNodeM6ATest {
             assertFalse(local.isPeerTransportConnected(peerRid));
 
             assertEquals(
-                ZLinkOneWayCalls.ROUTE_NOT_CONNECTED,
-                local.spotNode().classifyNodeSendTarget(peerRid).orElseThrow());
+                    ZLinkOneWayCalls.ROUTE_NOT_CONNECTED,
+                    local.spotNode().classifyNodeSendTarget(peerRid).orElseThrow());
         }
     }
 
     @Test
-    void disconnectedChannelRemainsUnavailableUntilAutoTargetIsRemoved()
-        throws Exception {
+    void disconnectedChannelRemainsUnavailableUntilAutoTargetIsRemoved() throws Exception {
         RoutingId localRid = RoutingId.from("jvm-channel-local");
         RoutingId peerRid = RoutingId.from("jvm-channel-peer");
         String localEndpoint = "inproc://jvm-channel-local-" + System.nanoTime();
         String peerEndpoint = "inproc://jvm-channel-peer-" + System.nanoTime();
         try (var context = Zlink.createContext();
-             var local = new ZLinkJavaRawMeshNode(
-                 context,
-                 "mesh",
-                 System::currentTimeMillis,
-                 Duration.ofMillis(10),
-                 Duration.ofMillis(50));
-             var peer = new ZLinkJavaRawMeshNode(
-                 context,
-                 "mesh",
-                 System::currentTimeMillis,
-                 Duration.ofMillis(10),
-                 Duration.ofMillis(50))) {
+                var local =
+                        new ZLinkJavaRawMeshNode(
+                                context,
+                                "mesh",
+                                System::currentTimeMillis,
+                                Duration.ofMillis(10),
+                                Duration.ofMillis(50));
+                var peer =
+                        new ZLinkJavaRawMeshNode(
+                                context,
+                                "mesh",
+                                System::currentTimeMillis,
+                                Duration.ofMillis(10),
+                                Duration.ofMillis(50))) {
             local.setRoutingId(localRid);
             local.setBind(localEndpoint);
             peer.setRoutingId(peerRid);
@@ -620,10 +624,10 @@ final class ZLinkJavaRawMeshNodeM6ATest {
             local.start();
             peer.start();
             local.observePeerAdmissionExpectation(
-                peerRid,
-                peerEndpoint,
-                peer.status().lifecycleGeneration(),
-                ZLinkServiceNodeDescriptor.PLAINTEXT_SECURITY_IDENTITY);
+                    peerRid,
+                    peerEndpoint,
+                    peer.status().lifecycleGeneration(),
+                    ZLinkServiceNodeDescriptor.PLAINTEXT_SECURITY_IDENTITY);
             long intent = local.connectPeer(peerEndpoint, peerRid);
             awaitState(local, MeshPeerState.ADMITTED);
             assertTrue(local.classifyChannelTarget("game.api").isEmpty());
@@ -631,8 +635,8 @@ final class ZLinkJavaRawMeshNodeM6ATest {
             peer.close();
             awaitState(local, MeshPeerState.CLOSED);
             assertEquals(
-                ZLinkOneWayCalls.ROUTE_NOT_CONNECTED,
-                local.classifyChannelTarget("game.api").orElseThrow());
+                    ZLinkOneWayCalls.ROUTE_NOT_CONNECTED,
+                    local.classifyChannelTarget("game.api").orElseThrow());
 
             local.forgetPeerAdmissionExpectation(peerRid);
             try {
@@ -642,23 +646,20 @@ final class ZLinkJavaRawMeshNodeM6ATest {
                 // cleanup still removes its last-admitted channel knowledge.
             }
             assertEquals(
-                ZLinkOneWayCalls.TARGET_NOT_FOUND,
-                local.classifyChannelTarget("game.api").orElseThrow());
+                    ZLinkOneWayCalls.TARGET_NOT_FOUND,
+                    local.classifyChannelTarget("game.api").orElseThrow());
         }
     }
 
     @Test
-    void descriptorBackedPeerIntentRequiresLifecycleAndSecurityFence()
-        throws Exception {
+    void descriptorBackedPeerIntentRequiresLifecycleAndSecurityFence() throws Exception {
         RoutingId localRid = RoutingId.from("jvm-descriptor-fence-local");
         RoutingId peerRid = RoutingId.from("jvm-descriptor-fence-peer");
-        String localEndpoint = "inproc://jvm-descriptor-fence-local-"
-            + System.nanoTime();
-        String peerEndpoint = "inproc://jvm-descriptor-fence-peer-"
-            + System.nanoTime();
+        String localEndpoint = "inproc://jvm-descriptor-fence-local-" + System.nanoTime();
+        String peerEndpoint = "inproc://jvm-descriptor-fence-peer-" + System.nanoTime();
         try (var context = Zlink.createContext();
-             var local = meshNode(context);
-             var peer = meshNode(context)) {
+                var local = meshNode(context);
+                var peer = meshNode(context)) {
             local.setRoutingId(localRid);
             local.setBind(localEndpoint);
             peer.setRoutingId(peerRid);
@@ -666,53 +667,65 @@ final class ZLinkJavaRawMeshNodeM6ATest {
             local.start();
             peer.start();
 
-            long intent = local.connectPeer(
-                peerEndpoint,
-                peerRid,
-                peer.status().lifecycleGeneration() + 1,
-                ZLinkServiceNodeDescriptor.PLAINTEXT_SECURITY_IDENTITY);
+            long intent =
+                    local.connectPeer(
+                            peerEndpoint,
+                            peerRid,
+                            peer.status().lifecycleGeneration() + 1,
+                            ZLinkServiceNodeDescriptor.PLAINTEXT_SECURITY_IDENTITY);
             awaitState(local, MeshPeerState.ERROR);
-            assertFalse(local.peers().stream().anyMatch(peerEntry ->
-                peerEntry.state() == MeshPeerState.ADMITTED));
+            assertFalse(
+                    local.peers().stream()
+                            .anyMatch(peerEntry -> peerEntry.state() == MeshPeerState.ADMITTED));
 
-            assertThrows(IllegalStateException.class,
-                () -> local.replacePeerConnection(peerEndpoint, peerRid,
-                    peer.status().lifecycleGeneration(), "wrong-security-identity"));
+            assertThrows(
+                    IllegalStateException.class,
+                    () ->
+                            local.replacePeerConnection(
+                                    peerEndpoint,
+                                    peerRid,
+                                    peer.status().lifecycleGeneration(),
+                                    "wrong-security-identity"));
             awaitIntentClosed(local, intent);
-            intent = local.replacePeerConnection(
-                peerEndpoint,
-                peerRid,
-                peer.status().lifecycleGeneration(),
-                "wrong-security-identity");
+            intent =
+                    local.replacePeerConnection(
+                            peerEndpoint,
+                            peerRid,
+                            peer.status().lifecycleGeneration(),
+                            "wrong-security-identity");
             awaitState(local, MeshPeerState.ERROR);
-            assertFalse(local.peers().stream().anyMatch(peerEntry ->
-                peerEntry.state() == MeshPeerState.ADMITTED));
+            assertFalse(
+                    local.peers().stream()
+                            .anyMatch(peerEntry -> peerEntry.state() == MeshPeerState.ADMITTED));
 
-            assertThrows(IllegalStateException.class,
-                () -> local.replacePeerConnection(peerEndpoint, peerRid,
-                    peer.status().lifecycleGeneration(), ZLinkServiceNodeDescriptor.PLAINTEXT_SECURITY_IDENTITY));
+            assertThrows(
+                    IllegalStateException.class,
+                    () ->
+                            local.replacePeerConnection(
+                                    peerEndpoint,
+                                    peerRid,
+                                    peer.status().lifecycleGeneration(),
+                                    ZLinkServiceNodeDescriptor.PLAINTEXT_SECURITY_IDENTITY));
             awaitIntentClosed(local, intent);
-            intent = local.replacePeerConnection(
-                peerEndpoint,
-                peerRid,
-                peer.status().lifecycleGeneration(),
-                ZLinkServiceNodeDescriptor.PLAINTEXT_SECURITY_IDENTITY);
+            intent =
+                    local.replacePeerConnection(
+                            peerEndpoint,
+                            peerRid,
+                            peer.status().lifecycleGeneration(),
+                            ZLinkServiceNodeDescriptor.PLAINTEXT_SECURITY_IDENTITY);
             awaitState(local, MeshPeerState.ADMITTED);
         }
     }
 
     @Test
-    void inboundHelloFromStoreExpectedPeerIsAdmittedWithoutLocalDial()
-        throws Exception {
+    void inboundHelloFromStoreExpectedPeerIsAdmittedWithoutLocalDial() throws Exception {
         RoutingId localRid = RoutingId.from("jvm-store-expected-local");
         RoutingId peerRid = RoutingId.from("jvm-store-expected-peer");
-        String localEndpoint = "inproc://jvm-store-expected-local-"
-            + System.nanoTime();
-        String peerEndpoint = "inproc://jvm-store-expected-peer-"
-            + System.nanoTime();
+        String localEndpoint = "inproc://jvm-store-expected-local-" + System.nanoTime();
+        String peerEndpoint = "inproc://jvm-store-expected-peer-" + System.nanoTime();
         try (var context = Zlink.createContext();
-             var local = meshNode(context);
-             var peer = meshNode(context)) {
+                var local = meshNode(context);
+                var peer = meshNode(context)) {
             local.setRoutingId(localRid);
             local.setBind(localEndpoint);
             peer.setRoutingId(peerRid);
@@ -725,10 +738,10 @@ final class ZLinkJavaRawMeshNodeM6ATest {
             // remote peer therefore dials us and its HELLO must still pass
             // the descriptor fence and receive ADMIT.
             local.observePeerAdmissionExpectation(
-                peerRid,
-                peerEndpoint,
-                peer.status().lifecycleGeneration(),
-                ZLinkServiceNodeDescriptor.PLAINTEXT_SECURITY_IDENTITY);
+                    peerRid,
+                    peerEndpoint,
+                    peer.status().lifecycleGeneration(),
+                    ZLinkServiceNodeDescriptor.PLAINTEXT_SECURITY_IDENTITY);
             peer.connectPeer(localEndpoint, localRid);
 
             awaitState(local, MeshPeerState.ADMITTED);
@@ -738,46 +751,40 @@ final class ZLinkJavaRawMeshNodeM6ATest {
 
     @Test
     void expectedRouteMismatchDiagnosticNamesEveryDifferentField() {
-        ZLinkServiceNodeDescriptor incoming =
-            descriptor(RoutingId.from("jvm-mismatch-peer"));
+        ZLinkServiceNodeDescriptor incoming = descriptor(RoutingId.from("jvm-mismatch-peer"));
 
         assertEquals(
-            "endpoint,security-identity,lifecycle-generation",
-            ZLinkJavaRawMeshNode.expectedRouteMismatchFields(
-                "inproc://jvm-other-peer",
-                "unexpected-identity",
-                2,
-                incoming));
+                "endpoint,security-identity,lifecycle-generation",
+                ZLinkJavaRawMeshNode.expectedRouteMismatchFields(
+                        "inproc://jvm-other-peer", "unexpected-identity", 2, incoming));
     }
 
     @Test
     void expectedRouteMismatchLogsReasonAndBothEndpoints() throws Exception {
         RoutingId localRid = RoutingId.from("jvm-log-mismatch-local");
         RoutingId peerRid = RoutingId.from("jvm-log-mismatch-peer");
-        String localEndpoint =
-            "inproc://jvm-log-mismatch-local-" + System.nanoTime();
-        String peerEndpoint =
-            "inproc://jvm-log-mismatch-peer-" + System.nanoTime();
-        String expectedEndpoint =
-            "inproc://jvm-log-mismatch-expected-" + System.nanoTime();
+        String localEndpoint = "inproc://jvm-log-mismatch-local-" + System.nanoTime();
+        String peerEndpoint = "inproc://jvm-log-mismatch-peer-" + System.nanoTime();
+        String expectedEndpoint = "inproc://jvm-log-mismatch-expected-" + System.nanoTime();
         ConcurrentLinkedQueue<String> warnings = new ConcurrentLinkedQueue<>();
-        Handler handler = new Handler() {
-            @Override
-            public void publish(LogRecord record) {
-                warnings.add(record.getMessage());
-            }
+        Handler handler =
+                new Handler() {
+                    @Override
+                    public void publish(LogRecord record) {
+                        warnings.add(record.getMessage());
+                    }
 
-            @Override public void flush() {
-            }
+                    @Override
+                    public void flush() {}
 
-            @Override public void close() {
-            }
-        };
+                    @Override
+                    public void close() {}
+                };
         Logger logger = Logger.getLogger(ZLinkJavaRawMeshNode.class.getName());
         logger.addHandler(handler);
         try (var context = Zlink.createContext();
-             var local = meshNode(context);
-             var peer = meshNode(context)) {
+                var local = meshNode(context);
+                var peer = meshNode(context)) {
             local.setRoutingId(localRid);
             local.setBind(localEndpoint);
             peer.setRoutingId(peerRid);
@@ -785,22 +792,26 @@ final class ZLinkJavaRawMeshNodeM6ATest {
             local.start();
             peer.start();
             local.observePeerAdmissionExpectation(
-                peerRid,
-                expectedEndpoint,
-                peer.status().lifecycleGeneration(),
-                ZLinkServiceNodeDescriptor.PLAINTEXT_SECURITY_IDENTITY);
+                    peerRid,
+                    expectedEndpoint,
+                    peer.status().lifecycleGeneration(),
+                    ZLinkServiceNodeDescriptor.PLAINTEXT_SECURITY_IDENTITY);
 
             peer.connectPeer(localEndpoint, localRid);
-            long deadline =
-                System.nanoTime() + Duration.ofSeconds(2).toNanos();
+            long deadline = System.nanoTime() + Duration.ofSeconds(2).toNanos();
             boolean observed = false;
             while (!observed && System.nanoTime() < deadline) {
-                observed = warnings.stream().anyMatch(message ->
-                    message.contains("reason=expected-route-mismatch")
-                        && message.contains(
-                            "intentEndpoint=" + expectedEndpoint)
-                        && message.contains(
-                            "advertisedEndpoint=" + peerEndpoint));
+                observed =
+                        warnings.stream()
+                                .anyMatch(
+                                        message ->
+                                                message.contains("reason=expected-route-mismatch")
+                                                        && message.contains(
+                                                                "intentEndpoint="
+                                                                        + expectedEndpoint)
+                                                        && message.contains(
+                                                                "advertisedEndpoint="
+                                                                        + peerEndpoint));
                 if (!observed) {
                     Thread.sleep(1);
                 }
@@ -815,13 +826,11 @@ final class ZLinkJavaRawMeshNodeM6ATest {
     void descriptorFenceReplacesEndpointOnlyIntent() throws Exception {
         RoutingId localRid = RoutingId.from("jvm-descriptor-replace-local");
         RoutingId peerRid = RoutingId.from("jvm-descriptor-replace-peer");
-        String localEndpoint = "inproc://jvm-descriptor-replace-local-"
-            + System.nanoTime();
-        String peerEndpoint = "inproc://jvm-descriptor-replace-peer-"
-            + System.nanoTime();
+        String localEndpoint = "inproc://jvm-descriptor-replace-local-" + System.nanoTime();
+        String peerEndpoint = "inproc://jvm-descriptor-replace-peer-" + System.nanoTime();
         try (var context = Zlink.createContext();
-             var local = meshNode(context);
-             var peer = meshNode(context)) {
+                var local = meshNode(context);
+                var peer = meshNode(context)) {
             local.setRoutingId(localRid);
             local.setBind(localEndpoint);
             peer.setRoutingId(peerRid);
@@ -832,55 +841,53 @@ final class ZLinkJavaRawMeshNodeM6ATest {
             long intent = local.connectPeer(peerEndpoint);
             awaitTransport(local, peerEndpoint);
             assertThrows(
-                IllegalStateException.class,
-                () -> local.replacePeerConnection(
-                    peerEndpoint,
-                    peerRid,
-                    peer.status().lifecycleGeneration(),
-                    ZLinkServiceNodeDescriptor.PLAINTEXT_SECURITY_IDENTITY));
+                    IllegalStateException.class,
+                    () ->
+                            local.replacePeerConnection(
+                                    peerEndpoint,
+                                    peerRid,
+                                    peer.status().lifecycleGeneration(),
+                                    ZLinkServiceNodeDescriptor.PLAINTEXT_SECURITY_IDENTITY));
 
             peer.close();
-            try (var replacementPeer = new ZLinkJavaRawMeshNode(
-                     context, "mesh")) {
+            try (var replacementPeer = new ZLinkJavaRawMeshNode(context, "mesh")) {
                 replacementPeer.setRoutingId(peerRid);
                 replacementPeer.setBind(peerEndpoint);
                 replacementPeer.start();
                 awaitIntentClosed(local, intent);
-                long fencedIntent = local.replacePeerConnection(
-                    peerEndpoint,
-                    peerRid,
-                    replacementPeer.status().lifecycleGeneration(),
-                    ZLinkServiceNodeDescriptor.PLAINTEXT_SECURITY_IDENTITY);
+                long fencedIntent =
+                        local.replacePeerConnection(
+                                peerEndpoint,
+                                peerRid,
+                                replacementPeer.status().lifecycleGeneration(),
+                                ZLinkServiceNodeDescriptor.PLAINTEXT_SECURITY_IDENTITY);
 
-                MeshPeerEntry admitted =
-                    awaitState(local, MeshPeerState.ADMITTED);
+                MeshPeerEntry admitted = awaitState(local, MeshPeerState.ADMITTED);
                 assertEquals(fencedIntent, admitted.connectionIntentId());
                 assertEquals(
-                    replacementPeer.status().lifecycleGeneration(),
-                    admitted.lifecycleGeneration());
+                        replacementPeer.status().lifecycleGeneration(),
+                        admitted.lifecycleGeneration());
                 assertThrows(
-                    IllegalStateException.class,
-                    () -> local.replacePeerConnection(
-                        peerEndpoint,
-                        peerRid,
-                        replacementPeer.status().lifecycleGeneration() + 1,
-                        ZLinkServiceNodeDescriptor.PLAINTEXT_SECURITY_IDENTITY));
+                        IllegalStateException.class,
+                        () ->
+                                local.replacePeerConnection(
+                                        peerEndpoint,
+                                        peerRid,
+                                        replacementPeer.status().lifecycleGeneration() + 1,
+                                        ZLinkServiceNodeDescriptor.PLAINTEXT_SECURITY_IDENTITY));
             }
         }
     }
 
     @Test
-    void observedInprocCloseDoesNotFenceDescriptorReplacement()
-        throws Exception {
+    void observedInprocCloseDoesNotFenceDescriptorReplacement() throws Exception {
         RoutingId localRid = RoutingId.from("jvm-observed-close-local");
         RoutingId peerRid = RoutingId.from("jvm-observed-close-peer");
-        String localEndpoint = "inproc://jvm-observed-close-local-"
-            + System.nanoTime();
-        String peerEndpoint = "inproc://jvm-observed-close-peer-"
-            + System.nanoTime();
+        String localEndpoint = "inproc://jvm-observed-close-local-" + System.nanoTime();
+        String peerEndpoint = "inproc://jvm-observed-close-peer-" + System.nanoTime();
         try (var context = Zlink.createContext();
-             var local = meshNode(context);
-             var peer = meshNode(context)) {
+                var local = meshNode(context);
+                var peer = meshNode(context)) {
             local.setRoutingId(localRid);
             local.setBind(localEndpoint);
             peer.setRoutingId(peerRid);
@@ -894,22 +901,19 @@ final class ZLinkJavaRawMeshNodeM6ATest {
             awaitState(local, MeshPeerState.CLOSED);
             awaitTransportClosed(local, peerEndpoint);
 
-            try (var replacementPeer = new ZLinkJavaRawMeshNode(
-                     context, "mesh")) {
+            try (var replacementPeer = new ZLinkJavaRawMeshNode(context, "mesh")) {
                 replacementPeer.setRoutingId(peerRid);
                 replacementPeer.setBind(peerEndpoint);
                 replacementPeer.start();
-                long replacementIntent = local.replacePeerConnection(
-                    peerEndpoint,
-                    peerRid,
-                    replacementPeer.status().lifecycleGeneration(),
-                    ZLinkServiceNodeDescriptor.PLAINTEXT_SECURITY_IDENTITY);
+                long replacementIntent =
+                        local.replacePeerConnection(
+                                peerEndpoint,
+                                peerRid,
+                                replacementPeer.status().lifecycleGeneration(),
+                                ZLinkServiceNodeDescriptor.PLAINTEXT_SECURITY_IDENTITY);
 
-                MeshPeerEntry admitted =
-                    awaitState(local, MeshPeerState.ADMITTED);
-                assertEquals(
-                    replacementIntent,
-                    admitted.connectionIntentId());
+                MeshPeerEntry admitted = awaitState(local, MeshPeerState.ADMITTED);
+                assertEquals(replacementIntent, admitted.connectionIntentId());
             }
         }
     }
@@ -918,13 +922,11 @@ final class ZLinkJavaRawMeshNodeM6ATest {
     void replacementDoesNotSkipAConnectionBeforeItsReadyEvent() throws Exception {
         RoutingId localRid = RoutingId.from("jvm-pre-ready-replace-local");
         RoutingId peerRid = RoutingId.from("jvm-pre-ready-replace-peer");
-        String localEndpoint = "inproc://jvm-pre-ready-replace-local-"
-            + System.nanoTime();
-        String peerEndpoint = "inproc://jvm-pre-ready-replace-peer-"
-            + System.nanoTime();
+        String localEndpoint = "inproc://jvm-pre-ready-replace-local-" + System.nanoTime();
+        String peerEndpoint = "inproc://jvm-pre-ready-replace-peer-" + System.nanoTime();
         try (var context = Zlink.createContext();
-             var local = meshNode(context);
-             var peer = meshNode(context)) {
+                var local = meshNode(context);
+                var peer = meshNode(context)) {
             local.setRoutingId(localRid);
             local.setBind(localEndpoint);
             peer.setRoutingId(peerRid);
@@ -934,86 +936,90 @@ final class ZLinkJavaRawMeshNodeM6ATest {
 
             long intent = local.connectPeer(peerEndpoint);
             assertThrows(
-                IllegalStateException.class,
-                () -> local.replacePeerConnection(
-                    peerEndpoint,
-                    peerRid,
-                    peer.status().lifecycleGeneration(),
-                    ZLinkServiceNodeDescriptor.PLAINTEXT_SECURITY_IDENTITY));
+                    IllegalStateException.class,
+                    () ->
+                            local.replacePeerConnection(
+                                    peerEndpoint,
+                                    peerRid,
+                                    peer.status().lifecycleGeneration(),
+                                    ZLinkServiceNodeDescriptor.PLAINTEXT_SECURITY_IDENTITY));
 
             peer.close();
-            try (var replacementPeer = new ZLinkJavaRawMeshNode(
-                     context, "mesh")) {
+            try (var replacementPeer = new ZLinkJavaRawMeshNode(context, "mesh")) {
                 replacementPeer.setRoutingId(peerRid);
                 replacementPeer.setBind(peerEndpoint);
                 replacementPeer.start();
                 awaitIntentClosed(local, intent);
-                long replacementIntent = local.replacePeerConnection(
-                    peerEndpoint,
-                    peerRid,
-                    replacementPeer.status().lifecycleGeneration(),
-                    ZLinkServiceNodeDescriptor.PLAINTEXT_SECURITY_IDENTITY);
+                long replacementIntent =
+                        local.replacePeerConnection(
+                                peerEndpoint,
+                                peerRid,
+                                replacementPeer.status().lifecycleGeneration(),
+                                ZLinkServiceNodeDescriptor.PLAINTEXT_SECURITY_IDENTITY);
 
-                MeshPeerEntry admitted =
-                    awaitState(local, MeshPeerState.ADMITTED);
-                assertEquals(
-                    replacementIntent,
-                    admitted.connectionIntentId());
+                MeshPeerEntry admitted = awaitState(local, MeshPeerState.ADMITTED);
+                assertEquals(replacementIntent, admitted.connectionIntentId());
             }
         }
     }
 
     @Test
-    void command42ReceivesCommand43ThroughInfrastructureDispatcher()
-        throws Exception {
+    void command42ReceivesCommand43ThroughInfrastructureDispatcher() throws Exception {
         String endpoint = "inproc://jvm-m6c-session-seal-" + System.nanoTime();
         RoutingId sourceRid = RoutingId.from("jvm-m6c-seal-source");
         RoutingId sessionOwnerRid = RoutingId.from("jvm-m6c-seal-owner");
         RoutingId sessionRid = RoutingId.from("jvm-m6c-seal-session");
         var codec = new ZLinkServiceM6BWireCodec();
-        var seal = new ZLinkServiceM6BWireCodec.SessionRelocationSeal(
-            new ZLinkServiceM6BWireCodec.RelocationIdentity(1, 2),
-            new ZLinkServiceM6BWireCodec.RelocationCoordinatorFence(
-                "coordinator", 3, sourceRid, 4, "store-v5"),
-            ZLinkServiceM6BWireCodec.RelocationRole.SOURCE,
-            new ZLinkServiceM6BWireCodec.ActorRouteFence(
-                new systems.zlink.framework.runtime.internal.backend
-                    .ZLinkBackendActorRef(sourceRid, "actor", 6),
-                4, 10, 11),
-            new ZLinkServiceM6BWireCodec.SessionOwnerFence(
-                sessionOwnerRid, 7, "session-owner", 8, sessionRid, 9));
+        var seal =
+                new ZLinkServiceM6BWireCodec.SessionRelocationSeal(
+                        new ZLinkServiceM6BWireCodec.RelocationIdentity(1, 2),
+                        new ZLinkServiceM6BWireCodec.RelocationCoordinatorFence(
+                                "coordinator", 3, sourceRid, 4, "store-v5"),
+                        ZLinkServiceM6BWireCodec.RelocationRole.SOURCE,
+                        new ZLinkServiceM6BWireCodec.ActorRouteFence(
+                                new systems.zlink.framework.runtime.internal.backend
+                                        .ZLinkBackendActorRef(sourceRid, "actor", 6),
+                                4,
+                                10,
+                                11),
+                        new ZLinkServiceM6BWireCodec.SessionOwnerFence(
+                                sessionOwnerRid, 7, "session-owner", 8, sessionRid, 9));
         try (var context = Zlink.createContext();
-             var source = meshNode(context);
-             var sessionOwner = meshNode(context)) {
+                var source = meshNode(context);
+                var sessionOwner = meshNode(context)) {
             source.setRoutingId(sourceRid);
             source.setBind("inproc://jvm-m6c-seal-source-" + System.nanoTime());
             sessionOwner.setRoutingId(sessionOwnerRid);
             sessionOwner.setBind(endpoint);
             AtomicInteger applicationDispatches = new AtomicInteger();
-            sessionOwner.startDispatch(record -> {
-                applicationDispatches.incrementAndGet();
-                record.close();
-            });
-            sessionOwner.setSessionRelocationSealHandler((actualSource, encoded) -> {
-                assertEquals(sourceRid, actualSource);
-                assertEquals(seal, codec.decodeSessionRelocationSeal(encoded));
-                return CompletableFuture.completedFuture(
-                    codec.encodeSessionRelocationSealed(
-                        new ZLinkServiceM6BWireCodec.SessionRelocationSealed(
-                            seal.relocation(), seal.coordinator(),
-                            seal.actor(), seal.session())));
-            });
+            sessionOwner.startDispatch(
+                    record -> {
+                        applicationDispatches.incrementAndGet();
+                        record.close();
+                    });
+            sessionOwner.setSessionRelocationSealHandler(
+                    (actualSource, encoded) -> {
+                        assertEquals(sourceRid, actualSource);
+                        assertEquals(seal, codec.decodeSessionRelocationSeal(encoded));
+                        return CompletableFuture.completedFuture(
+                                codec.encodeSessionRelocationSealed(
+                                        new ZLinkServiceM6BWireCodec.SessionRelocationSealed(
+                                                seal.relocation(), seal.coordinator(),
+                                                seal.actor(), seal.session())));
+                    });
             source.start();
             sessionOwner.start();
             source.connectPeer(endpoint, sessionOwnerRid);
             awaitAdmitted(source);
 
-            var sealed = codec.decodeSessionRelocationSealed(
-                source.requestSessionRelocationSeal(
-                        sessionOwnerRid,
-                        codec.encodeSessionRelocationSeal(seal),
-                        Duration.ofSeconds(2))
-                    .toCompletableFuture().get(2, TimeUnit.SECONDS));
+            var sealed =
+                    codec.decodeSessionRelocationSealed(
+                            source.requestSessionRelocationSeal(
+                                            sessionOwnerRid,
+                                            codec.encodeSessionRelocationSeal(seal),
+                                            Duration.ofSeconds(2))
+                                    .toCompletableFuture()
+                                    .get(2, TimeUnit.SECONDS));
 
             assertEquals(seal.relocation(), sealed.relocation());
             assertEquals(seal.session(), sealed.session());
@@ -1022,89 +1028,92 @@ final class ZLinkJavaRawMeshNodeM6ATest {
     }
 
     @Test
-    void command44UsesOneWayInfrastructureDispatch()
-        throws Exception {
+    void command44UsesOneWayInfrastructureDispatch() throws Exception {
         String endpoint = "inproc://jvm-m6c-session-route-" + System.nanoTime();
         RoutingId sourceRid = RoutingId.from("jvm-m6c-target-owner");
         RoutingId sessionOwnerRid = RoutingId.from("jvm-m6c-session-owner");
         RoutingId sessionRid = RoutingId.from("jvm-m6c-session");
         var codec = new ZLinkServiceM6BWireCodec();
-        var command = new ZLinkServiceM6BWireCodec.SessionRelocationRoute(
-            new ZLinkServiceM6BWireCodec.RelocationIdentity(1, 2),
-            new ZLinkServiceM6BWireCodec.RelocationCoordinatorFence(
-                "coordinator", 3, sourceRid, 4, "store-v5"),
-            ZLinkServiceM6BWireCodec.RelocationRole.TARGET,
-            new ZLinkServiceM6BWireCodec.ActorIdentity("actor", 6),
-            new ZLinkServiceM6BWireCodec.SessionOwnerFence(
-                sessionOwnerRid, 7, "session-owner", 8, sessionRid, 9),
-            ZLinkServiceM6BWireCodec.SessionRelocationRouteAction.COMMIT,
-            10, 11, sourceRid, 12);
+        var command =
+                new ZLinkServiceM6BWireCodec.SessionRelocationRoute(
+                        new ZLinkServiceM6BWireCodec.RelocationIdentity(1, 2),
+                        new ZLinkServiceM6BWireCodec.RelocationCoordinatorFence(
+                                "coordinator", 3, sourceRid, 4, "store-v5"),
+                        ZLinkServiceM6BWireCodec.RelocationRole.TARGET,
+                        new ZLinkServiceM6BWireCodec.ActorIdentity("actor", 6),
+                        new ZLinkServiceM6BWireCodec.SessionOwnerFence(
+                                sessionOwnerRid, 7, "session-owner", 8, sessionRid, 9),
+                        ZLinkServiceM6BWireCodec.SessionRelocationRouteAction.COMMIT,
+                        10,
+                        11,
+                        sourceRid,
+                        12);
         try (var context = Zlink.createContext();
-             var source = meshNode(context);
-             var sessionOwner = meshNode(context)) {
+                var source = meshNode(context);
+                var sessionOwner = meshNode(context)) {
             source.setRoutingId(sourceRid);
             source.setBind("inproc://jvm-m6c-target-owner-" + System.nanoTime());
             sessionOwner.setRoutingId(sessionOwnerRid);
             sessionOwner.setBind(endpoint);
             AtomicInteger applicationDispatches = new AtomicInteger();
-            sessionOwner.startDispatch(record -> {
-                applicationDispatches.incrementAndGet();
-                record.close();
-            });
-            sessionOwner.setSessionRelocationRouteHandler((actualSource, encoded) -> {
-                assertEquals(sourceRid, actualSource);
-                assertEquals(command, codec.decodeSessionRelocationRoute(encoded));
-                return CompletableFuture.completedFuture(null);
-            });
+            sessionOwner.startDispatch(
+                    record -> {
+                        applicationDispatches.incrementAndGet();
+                        record.close();
+                    });
+            sessionOwner.setSessionRelocationRouteHandler(
+                    (actualSource, encoded) -> {
+                        assertEquals(sourceRid, actualSource);
+                        assertEquals(command, codec.decodeSessionRelocationRoute(encoded));
+                        return CompletableFuture.completedFuture(null);
+                    });
             source.start();
             sessionOwner.start();
             source.connectPeer(endpoint, sessionOwnerRid);
             awaitAdmitted(source);
 
             source.sendSessionRelocationRoute(
-                    sessionOwnerRid,
-                    codec.encodeSessionRelocationRoute(command))
-                .toCompletableFuture().get(2, TimeUnit.SECONDS);
+                            sessionOwnerRid, codec.encodeSessionRelocationRoute(command))
+                    .toCompletableFuture()
+                    .get(2, TimeUnit.SECONDS);
             assertEquals(0, applicationDispatches.get());
         }
     }
 
     @Test
-    void relocationControlUsesAdmittedPeerAndBypassesApplicationMailbox()
-        throws Exception {
+    void relocationControlUsesAdmittedPeerAndBypassesApplicationMailbox() throws Exception {
         String endpoint = "inproc://jvm-m6c-relocation-" + System.nanoTime();
         RoutingId sourceRid = RoutingId.from("jvm-m6c-relocation-source");
         RoutingId targetRid = RoutingId.from("jvm-m6c-relocation-target");
         try (var context = Zlink.createContext();
-             var source = meshNode(context);
-             var target = meshNode(context)) {
+                var source = meshNode(context);
+                var target = meshNode(context)) {
             source.setRoutingId(sourceRid);
-            source.setBind("inproc://jvm-m6c-relocation-source-"
-                + System.nanoTime());
+            source.setBind("inproc://jvm-m6c-relocation-source-" + System.nanoTime());
             target.setRoutingId(targetRid);
             target.setBind(endpoint);
             AtomicInteger applicationDispatches = new AtomicInteger();
-            target.startDispatch(record -> {
-                applicationDispatches.incrementAndGet();
-                record.close();
-            });
-            target.setRelocationControlHandler((actualSource, command) -> {
-                assertEquals(sourceRid, actualSource);
-                assertArrayEquals(new byte[] {1, 2, 3}, command);
-                return CompletableFuture.completedFuture(
-                    new byte[] {9, 8, 7});
-            });
+            target.startDispatch(
+                    record -> {
+                        applicationDispatches.incrementAndGet();
+                        record.close();
+                    });
+            target.setRelocationControlHandler(
+                    (actualSource, command) -> {
+                        assertEquals(sourceRid, actualSource);
+                        assertArrayEquals(new byte[] {1, 2, 3}, command);
+                        return CompletableFuture.completedFuture(new byte[] {9, 8, 7});
+                    });
             source.start();
             target.start();
             source.connectPeer(endpoint, targetRid);
             awaitAdmitted(source);
 
-            byte[] reply = source.requestRelocationControl(
-                    targetRid,
-                    new byte[] {1, 2, 3},
-                    Duration.ofSeconds(2))
-                .toCompletableFuture()
-                .get(2, TimeUnit.SECONDS);
+            byte[] reply =
+                    source.requestRelocationControl(
+                                    targetRid, new byte[] {1, 2, 3}, Duration.ofSeconds(2))
+                            .toCompletableFuture()
+                            .get(2, TimeUnit.SECONDS);
 
             assertArrayEquals(new byte[] {9, 8, 7}, reply);
             assertEquals(0, applicationDispatches.get());
@@ -1112,146 +1121,134 @@ final class ZLinkJavaRawMeshNodeM6ATest {
     }
 
     @Test
-    void canonicalRelocationControlUsesRawInfrastructureLane()
-        throws Exception {
-        String endpoint =
-            "inproc://jvm-m6c-canonical-relocation-" + System.nanoTime();
-        RoutingId sourceRid =
-            RoutingId.from("jvm-m6c-canonical-source");
-        RoutingId targetRid =
-            RoutingId.from("jvm-m6c-canonical-target");
+    void canonicalRelocationControlUsesRawInfrastructureLane() throws Exception {
+        String endpoint = "inproc://jvm-m6c-canonical-relocation-" + System.nanoTime();
+        RoutingId sourceRid = RoutingId.from("jvm-m6c-canonical-source");
+        RoutingId targetRid = RoutingId.from("jvm-m6c-canonical-target");
         byte[] command30 = canonicalRelocationCommand(30);
         try (var context = Zlink.createContext();
-             var source = meshNode(context);
-             var target = meshNode(context)) {
+                var source = meshNode(context);
+                var target = meshNode(context)) {
             source.setRoutingId(sourceRid);
-            source.setBind(
-                "inproc://jvm-m6c-canonical-source-" + System.nanoTime());
+            source.setBind("inproc://jvm-m6c-canonical-source-" + System.nanoTime());
             target.setRoutingId(targetRid);
             target.setBind(endpoint);
             AtomicInteger applicationDispatches = new AtomicInteger();
-            target.startDispatch(record -> {
-                applicationDispatches.incrementAndGet();
-                record.close();
-            });
+            target.startDispatch(
+                    record -> {
+                        applicationDispatches.incrementAndGet();
+                        record.close();
+                    });
             CompletableFuture<byte[]> received = new CompletableFuture<>();
             target.setCanonicalRelocationControlHandler(
-                (actualSource, requestSequence, command) -> {
-                    assertEquals(sourceRid, actualSource);
-                    assertTrue(requestSequence == null);
-                    received.complete(command);
-                    return CompletableFuture.completedFuture(null);
-                });
+                    (actualSource, requestSequence, command) -> {
+                        assertEquals(sourceRid, actualSource);
+                        assertTrue(requestSequence == null);
+                        received.complete(command);
+                        return CompletableFuture.completedFuture(null);
+                    });
             source.start();
             target.start();
             source.connectPeer(endpoint, targetRid);
             awaitAdmitted(source);
 
             source.sendCanonicalRelocationControl(targetRid, command30)
-                .toCompletableFuture()
-                .get(2, TimeUnit.SECONDS);
+                    .toCompletableFuture()
+                    .get(2, TimeUnit.SECONDS);
 
-            assertArrayEquals(
-                command30,
-                received.get(2, TimeUnit.SECONDS));
+            assertArrayEquals(command30, received.get(2, TimeUnit.SECONDS));
             assertEquals(0, applicationDispatches.get());
         }
     }
 
     @Test
-    void canonicalRelocationPrepareUsesItsRequestReplyLeg()
-        throws Exception {
-        String endpoint =
-            "inproc://jvm-m6c-canonical-prepare-" + System.nanoTime();
+    void canonicalRelocationPrepareUsesItsRequestReplyLeg() throws Exception {
+        String endpoint = "inproc://jvm-m6c-canonical-prepare-" + System.nanoTime();
         RoutingId sourceRid = RoutingId.from("jvm-m6c-prepare-source");
         RoutingId targetRid = RoutingId.from("jvm-m6c-prepare-target");
         byte[] command40 = canonicalRelocationCommand(40);
         byte[] command30 = canonicalRelocationCommand(30);
         try (var context = Zlink.createContext();
-             var source = meshNode(context);
-             var target = meshNode(context)) {
+                var source = meshNode(context);
+                var target = meshNode(context)) {
             source.setRoutingId(sourceRid);
-            source.setBind(
-                "inproc://jvm-m6c-prepare-source-" + System.nanoTime());
+            source.setBind("inproc://jvm-m6c-prepare-source-" + System.nanoTime());
             target.setRoutingId(targetRid);
             target.setBind(endpoint);
             target.startDispatch(record -> record.close());
             target.setCanonicalRelocationControlHandler(
-                (actualSource, requestSequence, command) -> {
-                    assertEquals(sourceRid, actualSource);
-                    assertNotNull(requestSequence);
-                    assertArrayEquals(command40, command);
-                    return CompletableFuture.completedFuture(command30);
-                });
+                    (actualSource, requestSequence, command) -> {
+                        assertEquals(sourceRid, actualSource);
+                        assertNotNull(requestSequence);
+                        assertArrayEquals(command40, command);
+                        return CompletableFuture.completedFuture(command30);
+                    });
             source.start();
             target.start();
             source.connectPeer(endpoint, targetRid);
             awaitAdmitted(source);
 
-            assertArrayEquals(command30, source.requestCanonicalRelocationPrepare(
-                    targetRid, command40, Duration.ofSeconds(2))
-                .toCompletableFuture().get(2, TimeUnit.SECONDS));
+            assertArrayEquals(
+                    command30,
+                    source.requestCanonicalRelocationPrepare(
+                                    targetRid, command40, Duration.ofSeconds(2))
+                            .toCompletableFuture()
+                            .get(2, TimeUnit.SECONDS));
         }
     }
 
     @Test
-    void infrastructureControlProgressesWhileApplicationDispatchIsBlocked()
-        throws Exception {
-        String endpoint =
-            "inproc://jvm-infrastructure-control-" + System.nanoTime();
+    void infrastructureControlProgressesWhileApplicationDispatchIsBlocked() throws Exception {
+        String endpoint = "inproc://jvm-infrastructure-control-" + System.nanoTime();
         RoutingId sourceRid = RoutingId.from("jvm-infrastructure-source");
         RoutingId targetRid = RoutingId.from("jvm-infrastructure-target");
         byte[] command30 = canonicalRelocationCommand(30);
         CountDownLatch applicationEntered = new CountDownLatch(1);
         CountDownLatch releaseApplication = new CountDownLatch(1);
         try (var context = Zlink.createContext();
-             var source = meshNode(context);
-             var target = meshNode(context)) {
+                var source = meshNode(context);
+                var target = meshNode(context)) {
             source.setRoutingId(sourceRid);
-            source.setBind(
-                "inproc://jvm-infrastructure-source-" + System.nanoTime());
+            source.setBind("inproc://jvm-infrastructure-source-" + System.nanoTime());
             target.setRoutingId(targetRid);
             target.setBind(endpoint);
-            target.startDispatch(record -> {
-                applicationEntered.countDown();
-                try {
-                    releaseApplication.await(2, TimeUnit.SECONDS);
-                } catch (InterruptedException interrupted) {
-                    Thread.currentThread().interrupt();
-                } finally {
-                    record.close();
-                }
-            });
-            CompletableFuture<byte[]> controlReceived =
-                new CompletableFuture<>();
+            target.startDispatch(
+                    record -> {
+                        applicationEntered.countDown();
+                        try {
+                            releaseApplication.await(2, TimeUnit.SECONDS);
+                        } catch (InterruptedException interrupted) {
+                            Thread.currentThread().interrupt();
+                        } finally {
+                            record.close();
+                        }
+                    });
+            CompletableFuture<byte[]> controlReceived = new CompletableFuture<>();
             target.setCanonicalRelocationControlHandler(
-                (actualSource, requestSequence, command) -> {
-                    assertEquals(sourceRid, actualSource);
-                    assertTrue(requestSequence == null);
-                    controlReceived.complete(command);
-                    return CompletableFuture.completedFuture(null);
-                });
+                    (actualSource, requestSequence, command) -> {
+                        assertEquals(sourceRid, actualSource);
+                        assertTrue(requestSequence == null);
+                        controlReceived.complete(command);
+                        return CompletableFuture.completedFuture(null);
+                    });
             source.start();
             target.start();
             source.connectPeer(endpoint, targetRid);
             awaitAdmitted(source);
 
             try (Message packet = Message.from("application.block");
-                 Message payload = Message.from(new byte[] {1})) {
-                source.spotNode().sendToNode(
-                        targetRid,
-                        List.of(packet, payload))
-                    .toCompletableFuture()
-                    .get(2, TimeUnit.SECONDS);
+                    Message payload = Message.from(new byte[] {1})) {
+                source.spotNode()
+                        .sendToNode(targetRid, List.of(packet, payload))
+                        .toCompletableFuture()
+                        .get(2, TimeUnit.SECONDS);
             }
             assertTrue(applicationEntered.await(2, TimeUnit.SECONDS));
 
             source.sendCanonicalRelocationControl(targetRid, command30)
-                .toCompletableFuture()
-                .get(2, TimeUnit.SECONDS);
-            assertArrayEquals(
-                command30,
-                controlReceived.get(2, TimeUnit.SECONDS));
+                    .toCompletableFuture()
+                    .get(2, TimeUnit.SECONDS);
+            assertArrayEquals(command30, controlReceived.get(2, TimeUnit.SECONDS));
         } finally {
             releaseApplication.countDown();
         }
@@ -1259,56 +1256,54 @@ final class ZLinkJavaRawMeshNodeM6ATest {
 
     @Test
     void ingressReservesPermitBeforeReceiveAndCapsEachBatch() throws Exception {
-        String endpoint = "inproc://jvm-permit-before-receive-"
-            + System.nanoTime();
+        String endpoint = "inproc://jvm-permit-before-receive-" + System.nanoTime();
         RoutingId sourceRid = RoutingId.from("jvm-permit-source");
         RoutingId targetRid = RoutingId.from("jvm-permit-target");
-        var queue = new ZLinkApplicationJobQueue(
-            ZLinkApplicationJobQueueProfile.BALANCED,
-            OptionalLong.of(1),
-            new ZLinkApplicationJobQueue.ProcessorCandidates(
-                1, null, null, null));
+        var queue =
+                new ZLinkApplicationJobQueue(
+                        ZLinkApplicationJobQueueProfile.BALANCED,
+                        OptionalLong.of(1),
+                        new ZLinkApplicationJobQueue.ProcessorCandidates(1, null, null, null));
         CountDownLatch firstEntered = new CountDownLatch(1);
         CountDownLatch releaseFirst = new CountDownLatch(1);
         CountDownLatch secondEntered = new CountDownLatch(1);
         AtomicInteger received = new AtomicInteger();
         try (var context = Zlink.createContext();
-             var source = meshNode(context);
-             var target = new ZLinkJavaRawMeshNode(context, "mesh")) {
+                var source = meshNode(context);
+                var target = new ZLinkJavaRawMeshNode(context, "mesh")) {
             target.setApplicationJobQueue(queue);
             source.setRoutingId(sourceRid);
             source.setBind("inproc://jvm-permit-source-" + System.nanoTime());
             target.setRoutingId(targetRid);
             target.setBind(endpoint);
-            target.startDispatch(record -> {
-                int ordinal = received.incrementAndGet();
-                if (ordinal == 1) {
-                    firstEntered.countDown();
-                    try {
-                        releaseFirst.await(2, TimeUnit.SECONDS);
-                    } catch (InterruptedException interrupted) {
-                        Thread.currentThread().interrupt();
-                    }
-                } else {
-                    secondEntered.countDown();
-                }
-                record.close();
-            });
+            target.startDispatch(
+                    record -> {
+                        int ordinal = received.incrementAndGet();
+                        if (ordinal == 1) {
+                            firstEntered.countDown();
+                            try {
+                                releaseFirst.await(2, TimeUnit.SECONDS);
+                            } catch (InterruptedException interrupted) {
+                                Thread.currentThread().interrupt();
+                            }
+                        } else {
+                            secondEntered.countDown();
+                        }
+                        record.close();
+                    });
             source.start();
             target.start();
             source.connectPeer(endpoint, targetRid);
             awaitAdmitted(source);
 
-            sendNodeMarker(source, targetRid, (byte) 1)
-                .get(2, TimeUnit.SECONDS);
+            sendNodeMarker(source, targetRid, (byte) 1).get(2, TimeUnit.SECONDS);
             assertTrue(firstEntered.await(2, TimeUnit.SECONDS));
             sendNodeMarker(source, targetRid, (byte) 2);
             Thread.sleep(100);
             assertEquals(1, queue.snapshot().permitsInUse());
             assertEquals(
-                systems.zlink.framework.monitoring
-                    .ZLinkApplicationJobQueuePressureState.PAUSED,
-                queue.snapshot().pressureState());
+                    systems.zlink.framework.monitoring.ZLinkApplicationJobQueuePressureState.PAUSED,
+                    queue.snapshot().pressureState());
             assertEquals(1, received.get());
             assertEquals(64, ZLinkJavaRawMeshNode.ingressBatchLimit());
 
@@ -1321,66 +1316,52 @@ final class ZLinkJavaRawMeshNodeM6ATest {
     }
 
     private static CompletableFuture<Void> sendNodeMarker(
-        ZLinkJavaRawMeshNode source,
-        RoutingId target,
-        byte marker) {
+            ZLinkJavaRawMeshNode source, RoutingId target, byte marker) {
         try (Message packet = Message.from("permit.test");
-             Message payload = Message.from(new byte[] {marker})) {
-            return source.spotNode().sendToNode(
-                target, List.of(packet, payload)).toCompletableFuture();
+                Message payload = Message.from(new byte[] {marker})) {
+            return source.spotNode()
+                    .sendToNode(target, List.of(packet, payload))
+                    .toCompletableFuture();
         }
     }
 
     @Test
-    void messageFollowIsDeliveredAsInfrastructureWithoutApplicationDispatch()
-        throws Exception {
-        String endpoint =
-            "inproc://jvm-message-follow-target-" + System.nanoTime();
+    void messageFollowIsDeliveredAsInfrastructureWithoutApplicationDispatch() throws Exception {
+        String endpoint = "inproc://jvm-message-follow-target-" + System.nanoTime();
         RoutingId sourceRid = RoutingId.from("jvm-message-follow-source");
         RoutingId targetRid = RoutingId.from("jvm-message-follow-target");
-        var route = new ZLinkServiceMessageFollowWireCodec.SpotRoute(
-            "spot",
-            7,
-            targetRid,
-            9,
-            11,
-            13);
-        var notice = new ZLinkServiceMessageFollowWireCodec.Notice(
-            route,
-            route,
-            1,
-            2,
-            1024,
-            17,
-            19,
-            0);
+        var route =
+                new ZLinkServiceMessageFollowWireCodec.SpotRoute("spot", 7, targetRid, 9, 11, 13);
+        var notice =
+                new ZLinkServiceMessageFollowWireCodec.Notice(route, route, 1, 2, 1024, 17, 19, 0);
         try (var context = Zlink.createContext();
-             var source = meshNode(context);
-             var target = meshNode(context)) {
+                var source = meshNode(context);
+                var target = meshNode(context)) {
             source.setRoutingId(sourceRid);
-            source.setBind(
-                "inproc://jvm-message-follow-source-" + System.nanoTime());
+            source.setBind("inproc://jvm-message-follow-source-" + System.nanoTime());
             target.setRoutingId(targetRid);
             target.setBind(endpoint);
             AtomicInteger applicationDispatches = new AtomicInteger();
-            target.startDispatch(record -> {
-                applicationDispatches.incrementAndGet();
-                record.close();
-            });
-            CompletableFuture<ZLinkServiceMessageFollowWireCodec.Notice>
-                received = new CompletableFuture<>();
-            target.setMessageFollowHandler((actualSource, actualNotice) -> {
-                assertEquals(sourceRid, actualSource);
-                received.complete(actualNotice);
-            });
+            target.startDispatch(
+                    record -> {
+                        applicationDispatches.incrementAndGet();
+                        record.close();
+                    });
+            CompletableFuture<ZLinkServiceMessageFollowWireCodec.Notice> received =
+                    new CompletableFuture<>();
+            target.setMessageFollowHandler(
+                    (actualSource, actualNotice) -> {
+                        assertEquals(sourceRid, actualSource);
+                        received.complete(actualNotice);
+                    });
             source.start();
             target.start();
             source.connectPeer(endpoint, targetRid);
             awaitAdmitted(source);
 
             source.sendMessageFollow(targetRid, notice)
-                .toCompletableFuture()
-                .get(2, TimeUnit.SECONDS);
+                    .toCompletableFuture()
+                    .get(2, TimeUnit.SECONDS);
 
             assertEquals(notice, received.get(2, TimeUnit.SECONDS));
             assertEquals(0, applicationDispatches.get());
@@ -1390,76 +1371,71 @@ final class ZLinkJavaRawMeshNodeM6ATest {
     @Test
     void infrastructureControlRejectsApplicationAndUnboundedMultipart() {
         var codec = new ZLinkServiceM6AWireCodec();
-        try (Message liveness = Message.from(
-                new systems.zlink.framework.runtime.internal.service
-                    .ZLinkServiceWireCodec()
-                    .encode(new systems.zlink.framework.runtime.internal.service
-                        .ZLinkServiceWireFrame(
-                            systems.zlink.framework.runtime.protocol
-                                .ServiceWireConstants.COMMAND_LIVENESS_PROBE,
-                            0,
-                            List.of(ByteBuffer
-                                .allocate(Long.BYTES)
-                                .putLong(1)
-                                .array()))).getFirst());
-             Message application =
-                 Message.from(codec.encodeNodeSendHeader(0));
-             Message reply = Message.from(
-                 new byte[] {90, 77, 1, 20, 0});
-             Message relocationData = Message.from(
-                 new byte[] {90, 77, 1, 31, 0});
-             Message replyRelay = Message.from(
-                 new byte[] {90, 77, 1, 33, 0});
-             Message relayPayload = Message.from(new byte[] {1})) {
+        try (Message liveness =
+                        Message.from(
+                                new systems.zlink.framework.runtime.internal.service
+                                                .ZLinkServiceWireCodec()
+                                        .encode(
+                                                new systems.zlink.framework.runtime.internal.service
+                                                        .ZLinkServiceWireFrame(
+                                                        systems.zlink.framework.runtime.protocol
+                                                                .ServiceWireConstants
+                                                                .COMMAND_LIVENESS_PROBE,
+                                                        0,
+                                                        List.of(
+                                                                ByteBuffer.allocate(Long.BYTES)
+                                                                        .putLong(1)
+                                                                        .array())))
+                                        .getFirst());
+                Message application = Message.from(codec.encodeNodeSendHeader(0));
+                Message reply = Message.from(new byte[] {90, 77, 1, 20, 0});
+                Message relocationData = Message.from(new byte[] {90, 77, 1, 31, 0});
+                Message replyRelay = Message.from(new byte[] {90, 77, 1, 33, 0});
+                Message relayPayload = Message.from(new byte[] {1})) {
             assertEquals(
-                systems.zlink.framework.runtime.protocol
-                    .ServiceWireConstants.COMMAND_LIVENESS_PROBE,
-                ZLinkJavaRawMeshNode.allowedInfrastructureControlCommand(
-                    List.of(liveness.toByteArray())));
+                    systems.zlink.framework.runtime.protocol.ServiceWireConstants
+                            .COMMAND_LIVENESS_PROBE,
+                    ZLinkJavaRawMeshNode.allowedInfrastructureControlCommand(
+                            List.of(liveness.toByteArray())));
             assertEquals(
-                -1,
-                ZLinkJavaRawMeshNode.allowedInfrastructureControlCommand(
-                    List.of(application.toByteArray())));
+                    -1,
+                    ZLinkJavaRawMeshNode.allowedInfrastructureControlCommand(
+                            List.of(application.toByteArray())));
             assertEquals(
-                systems.zlink.framework.runtime.protocol
-                    .ServiceWireConstants.COMMAND_REPLY,
-                ZLinkJavaRawMeshNode.allowedInfrastructureControlCommand(
-                    List.of(reply.toByteArray())));
+                    systems.zlink.framework.runtime.protocol.ServiceWireConstants.COMMAND_REPLY,
+                    ZLinkJavaRawMeshNode.allowedInfrastructureControlCommand(
+                            List.of(reply.toByteArray())));
             assertEquals(
-                systems.zlink.framework.runtime.protocol
-                    .ServiceWireConstants.COMMAND_RELOCATION_DATA,
-                ZLinkJavaRawMeshNode.allowedInfrastructureControlCommand(
-                    List.of(relocationData.toByteArray())));
+                    systems.zlink.framework.runtime.protocol.ServiceWireConstants
+                            .COMMAND_RELOCATION_DATA,
+                    ZLinkJavaRawMeshNode.allowedInfrastructureControlCommand(
+                            List.of(relocationData.toByteArray())));
             assertEquals(
-                systems.zlink.framework.runtime.protocol
-                    .ServiceWireConstants.COMMAND_REPLY_RELAY,
-                ZLinkJavaRawMeshNode.allowedInfrastructureControlCommand(
-                    List.of(replyRelay.toByteArray())));
+                    systems.zlink.framework.runtime.protocol.ServiceWireConstants
+                            .COMMAND_REPLY_RELAY,
+                    ZLinkJavaRawMeshNode.allowedInfrastructureControlCommand(
+                            List.of(replyRelay.toByteArray())));
             assertEquals(
-                systems.zlink.framework.runtime.protocol
-                    .ServiceWireConstants.COMMAND_REPLY_RELAY,
-                ZLinkJavaRawMeshNode.allowedInfrastructureControlCommand(
-                    List.of(
-                        replyRelay.toByteArray(),
-                        relayPayload.toByteArray())));
+                    systems.zlink.framework.runtime.protocol.ServiceWireConstants
+                            .COMMAND_REPLY_RELAY,
+                    ZLinkJavaRawMeshNode.allowedInfrastructureControlCommand(
+                            List.of(replyRelay.toByteArray(), relayPayload.toByteArray())));
         }
 
-        try (Message oversized =
-                Message.from(new byte[(256 * 1024) + 1])) {
+        try (Message oversized = Message.from(new byte[(256 * 1024) + 1])) {
             assertEquals(
-                -1,
-                ZLinkJavaRawMeshNode.allowedInfrastructureControlCommand(
-                    List.of(oversized.toByteArray())));
+                    -1,
+                    ZLinkJavaRawMeshNode.allowedInfrastructureControlCommand(
+                            List.of(oversized.toByteArray())));
         }
 
-        List<Message> tooMany = IntStream.range(0, 65)
-            .mapToObj(ignored -> Message.from(new byte[0]))
-            .toList();
+        List<Message> tooMany =
+                IntStream.range(0, 65).mapToObj(ignored -> Message.from(new byte[0])).toList();
         try {
             assertEquals(
-                -1,
-                ZLinkJavaRawMeshNode.allowedInfrastructureControlCommand(
-                    tooMany.stream().map(Message::toByteArray).toList()));
+                    -1,
+                    ZLinkJavaRawMeshNode.allowedInfrastructureControlCommand(
+                            tooMany.stream().map(Message::toByteArray).toList()));
         } finally {
             tooMany.forEach(Message::close);
         }
@@ -1471,8 +1447,8 @@ final class ZLinkJavaRawMeshNodeM6ATest {
         RoutingId leftRid = RoutingId.from("jvm-m6a-left");
         RoutingId rightRid = RoutingId.from("jvm-m6a-right");
         try (var context = Zlink.createContext();
-             var left = meshNode(context);
-             var right = meshNode(context)) {
+                var left = meshNode(context);
+                var right = meshNode(context)) {
             context.options().autoHwmEnabled(false);
             left.setRoutingId(leftRid);
             left.setBind(endpoint);
@@ -1483,23 +1459,22 @@ final class ZLinkJavaRawMeshNodeM6ATest {
             right.connectPeer(endpoint, leftRid);
             awaitAdmitted(right);
 
-            CompletableFuture<ZLinkMeshDispatchRecord> received =
-                new CompletableFuture<>();
-            AtomicReference<CompletableFuture<ZLinkMeshDispatchRecord>>
-                nextDispatch = new AtomicReference<>(received);
-            left.startDispatch(record -> {
-                if (!nextDispatch.get().complete(record)) {
-                    record.close();
-                }
-            });
+            CompletableFuture<ZLinkMeshDispatchRecord> received = new CompletableFuture<>();
+            AtomicReference<CompletableFuture<ZLinkMeshDispatchRecord>> nextDispatch =
+                    new AtomicReference<>(received);
+            left.startDispatch(
+                    record -> {
+                        if (!nextDispatch.get().complete(record)) {
+                            record.close();
+                        }
+                    });
             Message packet = Message.from("packet");
             Message payload = Message.from(new byte[] {1, 2, 3});
             try {
-                right.spotNode().sendToNode(
-                        leftRid,
-                        List.of(packet, payload))
-                    .toCompletableFuture()
-                    .get(2, TimeUnit.SECONDS);
+                right.spotNode()
+                        .sendToNode(leftRid, List.of(packet, payload))
+                        .toCompletableFuture()
+                        .get(2, TimeUnit.SECONDS);
             } finally {
                 packet.close();
                 payload.close();
@@ -1511,29 +1486,23 @@ final class ZLinkJavaRawMeshNodeM6ATest {
                 assertEquals(rightRid, record.receive().sourceNodeRid());
                 assertEquals("application/json", record.receive().contentType());
                 assertEquals("packet", record.parts().getFirst().toUtf8String());
-                assertArrayEquals(
-                    new byte[] {1, 2, 3},
-                    record.parts().get(1).toByteArray());
-                assertEquals(0L, context.coreHwmBudgetSnapshot()
-                    .outstandingApplicationLeaseCount());
+                assertArrayEquals(new byte[] {1, 2, 3}, record.parts().get(1).toByteArray());
+                assertEquals(
+                        0L, context.coreHwmBudgetSnapshot().outstandingApplicationLeaseCount());
             } finally {
                 record.close();
             }
-            assertEquals(0L, context.coreHwmBudgetSnapshot()
-                .outstandingApplicationLeaseCount());
-            CompletableFuture<ZLinkMeshDispatchRecord> progressed =
-                new CompletableFuture<>();
+            assertEquals(0L, context.coreHwmBudgetSnapshot().outstandingApplicationLeaseCount());
+            CompletableFuture<ZLinkMeshDispatchRecord> progressed = new CompletableFuture<>();
             nextDispatch.set(progressed);
             sendNodePayload(right, leftRid, new byte[] {4});
-            try (ZLinkMeshDispatchRecord next =
-                progressed.get(2, TimeUnit.SECONDS)) {
+            try (ZLinkMeshDispatchRecord next = progressed.get(2, TimeUnit.SECONDS)) {
                 assertEquals(RecordKind.NODE_SEND, next.receive().kind());
             }
-    }
+        }
     }
 
-    private static void closeCompletedRecord(
-        CompletableFuture<ZLinkMeshDispatchRecord> future) {
+    private static void closeCompletedRecord(CompletableFuture<ZLinkMeshDispatchRecord> future) {
         if (!future.isDone() || future.isCompletedExceptionally()) {
             return;
         }
@@ -1544,16 +1513,14 @@ final class ZLinkJavaRawMeshNodeM6ATest {
     }
 
     private static void sendNodePayload(
-        ZLinkJavaRawMeshNode source,
-        RoutingId targetRid,
-        byte[] payloadBytes) throws Exception {
+            ZLinkJavaRawMeshNode source, RoutingId targetRid, byte[] payloadBytes)
+            throws Exception {
         try (Message packet = Message.from("hwm.packet");
-             Message payload = Message.from(payloadBytes)) {
-            source.spotNode().sendToNode(
-                    targetRid,
-                    List.of(packet, payload))
-                .toCompletableFuture()
-                .get(2, TimeUnit.SECONDS);
+                Message payload = Message.from(payloadBytes)) {
+            source.spotNode()
+                    .sendToNode(targetRid, List.of(packet, payload))
+                    .toCompletableFuture()
+                    .get(2, TimeUnit.SECONDS);
         }
     }
 
@@ -1562,11 +1529,12 @@ final class ZLinkJavaRawMeshNodeM6ATest {
         String endpoint = "inproc://jvm-single-operation-" + System.nanoTime();
         RoutingId targetRid = RoutingId.from("single-operation-target");
         try (var context = Zlink.createContext();
-             var target = meshNode(context);
-             var source = meshNode(context);
-             var scheduler = java.util.concurrent.Executors.newSingleThreadScheduledExecutor();
-             var caller = new systems.zlink.framework.runtime.internal.service
-                 .ZLinkServiceOperationRegistry(scheduler)) {
+                var target = meshNode(context);
+                var source = meshNode(context);
+                var scheduler = java.util.concurrent.Executors.newSingleThreadScheduledExecutor();
+                var caller =
+                        new systems.zlink.framework.runtime.internal.service
+                                .ZLinkServiceOperationRegistry(scheduler)) {
             target.setRoutingId(targetRid);
             target.setBind(endpoint);
             target.addChannel("orders");
@@ -1579,27 +1547,50 @@ final class ZLinkJavaRawMeshNodeM6ATest {
             awaitAdmitted(source);
             CompletableFuture<ZLinkMeshDispatchRecord> incoming = new CompletableFuture<>();
             target.startDispatch(incoming::complete);
-            var id = systems.zlink.framework.runtime.internal.service.ZLinkServiceOperationIds.next();
-            var header = systems.zlink.framework.runtime.messaging.ZLinkChannelEnvelope.create(
-                1, "orders", "request", "application/json", null,
-                java.util.Map.of(), null, id);
-            try (Message encodedHeader = systems.zlink.framework.runtime.messaging
-                    .ZLinkChannelEnvelope.encodeHeader(header);
-                 Message body = Message.from("request")) {
-                var result = source.spotNode().requestToChannel("orders", new byte[0],
-                    List.of(encodedHeader, body), Duration.ofSeconds(2), caller, id)
-                    .toCompletableFuture();
+            var id =
+                    systems.zlink.framework.runtime.internal.service.ZLinkServiceOperationIds
+                            .next();
+            var header =
+                    systems.zlink.framework.runtime.messaging.ZLinkChannelEnvelope.create(
+                            1,
+                            "orders",
+                            "request",
+                            "application/json",
+                            null,
+                            java.util.Map.of(),
+                            null,
+                            id);
+            try (Message encodedHeader =
+                            systems.zlink.framework.runtime.messaging.ZLinkChannelEnvelope
+                                    .encodeHeader(header);
+                    Message body = Message.from("request")) {
+                var result =
+                        source.spotNode()
+                                .requestToChannel(
+                                        "orders",
+                                        new byte[0],
+                                        List.of(encodedHeader, body),
+                                        Duration.ofSeconds(2),
+                                        caller,
+                                        id)
+                                .toCompletableFuture();
                 try (var record = incoming.get(2, TimeUnit.SECONDS)) {
                     assertEquals(1, caller.pendingCount());
                     var field = ZLinkJavaRawMeshNode.class.getDeclaredField("operations");
                     field.setAccessible(true);
-                    var meshRegistry = (systems.zlink.framework.runtime.internal.service
-                        .ZLinkServiceOperationRegistry) field.get(source);
-                    assertEquals(0, meshRegistry.pendingCount(),
-                        "the service node must not register the channel operation again");
-                    assertEquals(header.correlationId(), systems.zlink.framework.runtime.messaging
-                        .ZLinkChannelEnvelope.decodeHeader(record.parts().getFirst(), false)
-                        .correlationId());
+                    var meshRegistry =
+                            (systems.zlink.framework.runtime.internal.service
+                                            .ZLinkServiceOperationRegistry)
+                                    field.get(source);
+                    assertEquals(
+                            0,
+                            meshRegistry.pendingCount(),
+                            "the service node must not register the channel operation again");
+                    assertEquals(
+                            header.correlationId(),
+                            systems.zlink.framework.runtime.messaging.ZLinkChannelEnvelope
+                                    .decodeHeader(record.parts().getFirst(), false)
+                                    .correlationId());
                     try (Message reply = Message.from("reply")) {
                         record.reply(List.of(reply));
                     }
@@ -1618,8 +1609,8 @@ final class ZLinkJavaRawMeshNodeM6ATest {
         RoutingId leftRid = RoutingId.from("jvm-m6a-request-left");
         RoutingId rightRid = RoutingId.from("jvm-m6a-request-right");
         try (var context = Zlink.createContext();
-             var left = meshNode(context);
-             var right = meshNode(context)) {
+                var left = meshNode(context);
+                var right = meshNode(context)) {
             left.setRoutingId(leftRid);
             left.setBind(endpoint);
             right.setRoutingId(rightRid);
@@ -1628,103 +1619,97 @@ final class ZLinkJavaRawMeshNodeM6ATest {
             right.start();
             right.connectPeer(endpoint, leftRid);
             awaitAdmitted(right);
-            left.startDispatch(record -> {
-                try (record;
-                     Message packet = Message.from("reply");
-                     Message payload = Message.from(new byte[] {9, 8, 7})) {
-                    assertEquals(RecordKind.NODE_REQUEST, record.receive().kind());
-                    assertNotNull(record.receive().applicationCorrelation());
-                    record.reply(List.of(packet, payload));
-                }
-            });
+            left.startDispatch(
+                    record -> {
+                        try (record;
+                                Message packet = Message.from("reply");
+                                Message payload = Message.from(new byte[] {9, 8, 7})) {
+                            assertEquals(RecordKind.NODE_REQUEST, record.receive().kind());
+                            assertNotNull(record.receive().applicationCorrelation());
+                            record.reply(List.of(packet, payload));
+                        }
+                    });
 
-            CompletableFuture<ZLinkBackendReceived> completed =
-                new CompletableFuture<>();
+            CompletableFuture<ZLinkBackendReceived> completed = new CompletableFuture<>();
             try (Message packet = Message.from("request");
-                 Message payload = Message.from(new byte[] {1})) {
-                completed = right.spotNode().requestToNode(
-                        leftRid,
-                        List.of(packet, payload),
-                        Duration.ofSeconds(2))
-                    .toCompletableFuture();
+                    Message payload = Message.from(new byte[] {1})) {
+                completed =
+                        right.spotNode()
+                                .requestToNode(
+                                        leftRid, List.of(packet, payload), Duration.ofSeconds(2))
+                                .toCompletableFuture();
             }
 
-            try (ZLinkBackendReceived reply =
-                completed.get(2, TimeUnit.SECONDS)) {
+            try (ZLinkBackendReceived reply = completed.get(2, TimeUnit.SECONDS)) {
                 assertEquals(ZLinkBackendRequestResult.OK, reply.result());
                 assertEquals(2, reply.parts().size());
                 assertEquals("reply", reply.parts().getFirst().toUtf8String());
-                assertArrayEquals(
-                    new byte[] {9, 8, 7},
-                    reply.parts().get(1).toByteArray());
+                assertArrayEquals(new byte[] {9, 8, 7}, reply.parts().get(1).toByteArray());
             }
         }
     }
 
     @Test
     void boundActorRequestDecodesOneFrameTerminalError() throws Exception {
-        String endpoint = "inproc://jvm-m6a-bound-error-"
-            + System.nanoTime();
+        String endpoint = "inproc://jvm-m6a-bound-error-" + System.nanoTime();
         RoutingId sourceRid = RoutingId.from("jvm-m6a-bound-error-source");
         RoutingId targetRid = RoutingId.from("jvm-m6a-bound-error-target");
         try (var context = Zlink.createContext();
-             var source = meshNode(context);
-             var target = meshNode(context)) {
+                var source = meshNode(context);
+                var target = meshNode(context)) {
             source.setRoutingId(sourceRid);
-            source.setBind(
-                "inproc://jvm-m6a-bound-error-source-" + System.nanoTime());
+            source.setBind("inproc://jvm-m6a-bound-error-source-" + System.nanoTime());
             target.setRoutingId(targetRid);
             target.setBind(endpoint);
             target.setPeerAuthorityResolver(
-                (meshName, candidateRid, candidateGeneration) ->
-                    CompletableFuture.completedFuture(
-                        Optional.of(new ZLinkInternalMeshNode.PeerAuthorityFence(
-                            candidateRid,
-                            candidateGeneration,
-                            "test-owner",
-                            1))));
+                    (meshName, candidateRid, candidateGeneration) ->
+                            CompletableFuture.completedFuture(
+                                    Optional.of(
+                                            new ZLinkInternalMeshNode.PeerAuthorityFence(
+                                                    candidateRid,
+                                                    candidateGeneration,
+                                                    "test-owner",
+                                                    1))));
             source.start();
             target.start();
             source.connectPeer(endpoint, targetRid);
             awaitAdmitted(source);
 
-            var actor = new ZLinkBackendActorRef(
-                targetRid, "missing-bound-actor", 1);
+            var actor = new ZLinkBackendActorRef(targetRid, "missing-bound-actor", 1);
             source.spotNode().rememberActorAuthority(actor, 1, 1);
             CompletionStage<List<Message>> request;
             try (Message payload = Message.from("bound-request")) {
-                request = source.requestBoundActorAsync(
-                    actor,
-                    RoutingId.from("bound-session"),
-                    1,
-                    1,
-                    1,
-                    List.of(payload),
-                    Duration.ofSeconds(2));
+                request =
+                        source.requestBoundActorAsync(
+                                actor,
+                                RoutingId.from("bound-session"),
+                                1,
+                                1,
+                                1,
+                                List.of(payload),
+                                Duration.ofSeconds(2));
             }
 
-            var failure = assertThrows(
-                ExecutionException.class,
-                () -> request.toCompletableFuture().get(2, TimeUnit.SECONDS));
+            var failure =
+                    assertThrows(
+                            ExecutionException.class,
+                            () -> request.toCompletableFuture().get(2, TimeUnit.SECONDS));
             //  The bound-Actor reply decode now classifies the carried
             //  terminal via the ownership-aware translator (spec
             //  32-framework-error-model:83-118) instead of surfacing the raw
             //  ZlinkRequestException; the original transport exception is
             //  preserved as the cause for terminal-shape probes.
             assertTrue(
-                failure.getCause()
-                    instanceof systems.zlink.framework.errors.ZLinkFrameworkException);
+                    failure.getCause()
+                            instanceof systems.zlink.framework.errors.ZLinkFrameworkException);
             assertEquals(
-                systems.zlink.framework.errors.ZLinkFrameworkErrorKind.NOT_FOUND,
-                ((systems.zlink.framework.errors.ZLinkFrameworkException)
-                        failure.getCause())
-                    .kind());
-            assertTrue(
-                failure.getCause().getCause() instanceof ZlinkRequestException);
+                    systems.zlink.framework.errors.ZLinkFrameworkErrorKind.NOT_FOUND,
+                    ((systems.zlink.framework.errors.ZLinkFrameworkException) failure.getCause())
+                            .kind());
+            assertTrue(failure.getCause().getCause() instanceof ZlinkRequestException);
             assertEquals(
-                RequestResult.NOT_FOUND,
-                ((ZlinkRequestException) failure.getCause().getCause())
-                    .getResult());
+                    RequestResult.NOT_FOUND,
+                    ((ZlinkRequestException) failure.getCause().getCause()).getResult());
         }
     }
 
@@ -1735,52 +1720,45 @@ final class ZLinkJavaRawMeshNodeM6ATest {
     // production wiring.
     private static ZLinkJavaRawMeshNode meshNode(Context context) {
         ZLinkJavaRawMeshNode node = new ZLinkJavaRawMeshNode(context, "mesh");
-        node.setApplicationJobQueue(new ZLinkApplicationJobQueue(
-            ZLinkApplicationJobQueueProfile.BALANCED,
-            OptionalLong.empty(),
-            new ZLinkApplicationJobQueue.ProcessorCandidates(1, null, null, null)));
+        node.setApplicationJobQueue(
+                new ZLinkApplicationJobQueue(
+                        ZLinkApplicationJobQueueProfile.BALANCED,
+                        OptionalLong.empty(),
+                        new ZLinkApplicationJobQueue.ProcessorCandidates(1, null, null, null)));
         return node;
     }
 
     private static MeshPeerEntry awaitAdmitted(ZLinkJavaRawMeshNode node)
-        throws InterruptedException {
+            throws InterruptedException {
         return awaitState(node, MeshPeerState.ADMITTED);
     }
 
-    private static byte[] canonicalRelocationCommand(int command)
-        throws Exception {
+    private static byte[] canonicalRelocationCommand(int command) throws Exception {
         Path current = Path.of(System.getProperty("user.dir")).toAbsolutePath();
         while (current != null) {
-            Path fixture = current.resolve(
-                "runtime/protocol/golden/relocation-control-v1.json");
+            Path fixture = current.resolve("runtime/protocol/golden/relocation-control-v1.json");
             if (Files.isRegularFile(fixture)) {
-                var canonical = new ObjectMapper()
-                    .readTree(Files.readString(fixture))
-                    .path("canonical");
+                var canonical =
+                        new ObjectMapper().readTree(Files.readString(fixture)).path("canonical");
                 for (var entry : canonical) {
                     if (entry.path("command").asInt() == command) {
-                        return HexFormat.of().parseHex(
-                            entry.path("hex").asText());
+                        return HexFormat.of().parseHex(entry.path("hex").asText());
                     }
                 }
                 throw new IllegalStateException(
-                    "canonical relocation command is unavailable: " + command);
+                        "canonical relocation command is unavailable: " + command);
             }
             current = current.getParent();
         }
-        throw new IllegalStateException(
-            "shared relocation fixture was not found");
+        throw new IllegalStateException("shared relocation fixture was not found");
     }
 
-    private static MeshPeerEntry awaitState(
-        ZLinkJavaRawMeshNode node,
-        MeshPeerState state) throws InterruptedException {
-        long deadline =
-            System.nanoTime() + Duration.ofSeconds(2).toNanos();
+    private static MeshPeerEntry awaitState(ZLinkJavaRawMeshNode node, MeshPeerState state)
+            throws InterruptedException {
+        long deadline = System.nanoTime() + Duration.ofSeconds(2).toNanos();
         while (System.nanoTime() < deadline) {
-            Optional<MeshPeerEntry> matched = node.peers().stream()
-                .filter(peer -> peer.state() == state)
-                .findFirst();
+            Optional<MeshPeerEntry> matched =
+                    node.peers().stream().filter(peer -> peer.state() == state).findFirst();
             if (matched.isPresent()) {
                 return matched.orElseThrow();
             }
@@ -1789,13 +1767,11 @@ final class ZLinkJavaRawMeshNodeM6ATest {
         throw new AssertionError("peer state was not observed: " + state);
     }
 
-    private static void awaitIntentClosed(
-        ZLinkJavaRawMeshNode node,
-        long intent) throws Exception {
+    private static void awaitIntentClosed(ZLinkJavaRawMeshNode node, long intent) throws Exception {
         // ERROR and endpoint-only fixtures do not expose a CLOSED peer row.
         // Observe the same terminal fact that replacePeerConnection reads.
-        Method isClosed = ZLinkJavaRawMeshNode.class.getDeclaredMethod(
-            "peerIntentIsClosed", long.class);
+        Method isClosed =
+                ZLinkJavaRawMeshNode.class.getDeclaredMethod("peerIntentIsClosed", long.class);
         isClosed.setAccessible(true);
         long deadline = System.nanoTime() + Duration.ofSeconds(2).toNanos();
         while (!(boolean) isClosed.invoke(node, intent)) {
@@ -1806,9 +1782,8 @@ final class ZLinkJavaRawMeshNodeM6ATest {
         }
     }
 
-    private static void awaitTransport(
-        ZLinkJavaRawMeshNode node,
-        String endpoint) throws InterruptedException {
+    private static void awaitTransport(ZLinkJavaRawMeshNode node, String endpoint)
+            throws InterruptedException {
         long deadline = System.nanoTime() + Duration.ofSeconds(2).toNanos();
         boolean live = node.hasLivePeerIntent(endpoint);
         while (!live && System.nanoTime() < deadline) {
@@ -1818,11 +1793,8 @@ final class ZLinkJavaRawMeshNodeM6ATest {
         assertTrue(live);
     }
 
-    private static void awaitTransportClosed(
-        ZLinkJavaRawMeshNode node,
-        String endpoint) {
-        long deadline =
-            System.nanoTime() + Duration.ofSeconds(2).toNanos();
+    private static void awaitTransportClosed(ZLinkJavaRawMeshNode node, String endpoint) {
+        long deadline = System.nanoTime() + Duration.ofSeconds(2).toNanos();
         boolean live = node.hasLivePeerIntent(endpoint);
         while (live && System.nanoTime() < deadline) {
             Thread.onSpinWait();
@@ -1830,5 +1802,4 @@ final class ZLinkJavaRawMeshNodeM6ATest {
         }
         assertFalse(live);
     }
-
 }

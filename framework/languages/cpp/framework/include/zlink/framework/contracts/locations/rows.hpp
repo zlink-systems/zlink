@@ -12,11 +12,9 @@ namespace zlink::framework
 
 struct object_capability_t
 {
-    placement_object_kind_t object_kind =
-      placement_object_kind_t::actor;
+    placement_object_kind_t object_kind = placement_object_kind_t::actor;
     std::string stable_type;
-    maintenance_policy_kind_t policy =
-      maintenance_policy_kind_t::disabled;
+    maintenance_policy_kind_t policy = maintenance_policy_kind_t::disabled;
     bool has_snapshot_adapter = false;
     std::int32_t spot_limit = 0;
 };
@@ -30,8 +28,7 @@ struct capacity_usage_t
 
 struct spot_type_capacity_t
 {
-    placement_object_kind_t object_kind =
-      placement_object_kind_t::user_spot;
+    placement_object_kind_t object_kind = placement_object_kind_t::user_spot;
     std::string stable_type;
     capacity_usage_t usage;
 };

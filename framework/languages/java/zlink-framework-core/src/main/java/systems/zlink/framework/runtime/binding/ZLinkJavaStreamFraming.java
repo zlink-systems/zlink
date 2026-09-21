@@ -1,9 +1,5 @@
 package systems.zlink.framework.runtime.binding;
-import java.util.Map;
 
-import java.util.EnumSet;
-import java.util.List;
-import java.util.Optional;
 import systems.zlink.contracts.messaging.Message;
 import systems.zlink.contracts.messaging.SendOperation;
 import systems.zlink.contracts.sockets.SendFlags;
@@ -14,58 +10,60 @@ import systems.zlink.framework.runtime.streams.ZLinkStreamHeaderFlag;
 import systems.zlink.framework.streams.ZLinkStreamCodec;
 import systems.zlink.framework.streams.ZLinkStreamMessageKind;
 
+import java.util.EnumSet;
+import java.util.List;
+import java.util.Map;
+import java.util.Optional;
+
 final class ZLinkJavaStreamFraming {
-    private ZLinkJavaStreamFraming() {
-    }
+    private ZLinkJavaStreamFraming() {}
 
     static boolean submit(
-        SendOperation operation,
-        int kind,
-        Long requestSeq,
-        String packetName,
-        List<Message> parts,
-        SendFlags flags) {
+            SendOperation operation,
+            int kind,
+            Long requestSeq,
+            String packetName,
+            List<Message> parts,
+            SendFlags flags) {
         StreamPayload payload = streamPayload(packetName, parts);
-        Message frame = Message.from(ZLinkStreamFrameCodec.encode(
-            new ZLinkStreamHeader(
-                ZLinkStreamMessageKind.fromValue(kind),
-                ZLinkStreamCodec.RAW,
-                EnumSet.noneOf(ZLinkStreamHeaderFlag.class),
-                Optional.ofNullable(requestSeq),
-                payload.packetName(),
-                Map.of()),
-            payload.body()));
+        Message frame =
+                Message.from(
+                        ZLinkStreamFrameCodec.encode(
+                                new ZLinkStreamHeader(
+                                        ZLinkStreamMessageKind.fromValue(kind),
+                                        ZLinkStreamCodec.RAW,
+                                        EnumSet.noneOf(ZLinkStreamHeaderFlag.class),
+                                        Optional.ofNullable(requestSeq),
+                                        payload.packetName(),
+                                        Map.of()),
+                                payload.body()));
         try {
-            return ZLinkJavaSocketSupport.submitSync(
-                operation, List.of(frame));
+            return ZLinkJavaSocketSupport.submitSync(operation, List.of(frame));
         } finally {
             frame.close();
         }
     }
 
     static boolean submit(
-        SendOperation operation,
-        ZLinkStreamHeader header,
-        List<Message> parts,
-        SendFlags flags) {
+            SendOperation operation,
+            ZLinkStreamHeader header,
+            List<Message> parts,
+            SendFlags flags) {
         Message frame = frame(header, parts);
         try {
-            return ZLinkJavaSocketSupport.submitSync(
-                operation, List.of(frame));
+            return ZLinkJavaSocketSupport.submitSync(operation, List.of(frame));
         } finally {
             frame.close();
         }
     }
 
-    static Message frame(
-        ZLinkStreamHeader header,
-        List<Message> parts) {
+    static Message frame(ZLinkStreamHeader header, List<Message> parts) {
         if (parts == null || parts.size() != 1) {
             throw new IllegalArgumentException("stream frame requires exactly one payload part");
         }
-        return Message.from(ZLinkStreamFrameCodec.encode(
-            ZLinkStreamHeaderCodec.encode(header),
-            parts.get(0).toByteArray()));
+        return Message.from(
+                ZLinkStreamFrameCodec.encode(
+                        ZLinkStreamHeaderCodec.encode(header), parts.get(0).toByteArray()));
     }
 
     private static StreamPayload streamPayload(String packetName, List<Message> parts) {
@@ -81,5 +79,5 @@ final class ZLinkJavaStreamFraming {
         return new StreamPayload(parts.get(0).toUtf8String(), parts.get(1).toByteArray());
     }
 
-    private record StreamPayload(String packetName, byte[] body) { }
+    private record StreamPayload(String packetName, byte[] body) {}
 }

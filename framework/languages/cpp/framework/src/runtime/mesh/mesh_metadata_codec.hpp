@@ -12,8 +12,7 @@ namespace zlink::framework::detail
 class mesh_metadata_codec_t
 {
   public:
-    static std::vector<std::uint8_t>
-    encode (const std::map<std::string, std::string> &metadata);
+    static std::vector<std::uint8_t> encode (const std::map<std::string, std::string> &metadata);
 
     static bool decode (const std::vector<std::uint8_t> &encoded,
                         std::map<std::string, std::string> &metadata);

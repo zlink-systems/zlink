@@ -1,13 +1,10 @@
 package systems.zlink.stream.connector;
-import java.net.InetSocketAddress;
-import java.util.concurrent.TimeUnit;
 
 import io.netty.bootstrap.ServerBootstrap;
 import io.netty.buffer.ByteBuf;
 import io.netty.buffer.Unpooled;
 import io.netty.channel.Channel;
 import io.netty.channel.ChannelHandlerContext;
-import io.netty.channel.ChannelInboundHandlerAdapter;
 import io.netty.channel.ChannelInitializer;
 import io.netty.channel.EventLoopGroup;
 import io.netty.channel.SimpleChannelInboundHandler;
@@ -17,42 +14,52 @@ import io.netty.channel.socket.nio.NioServerSocketChannel;
 import io.netty.handler.codec.ByteToMessageDecoder;
 import io.netty.handler.ssl.SslContext;
 import io.netty.handler.ssl.SslContextBuilder;
+
 import java.io.Closeable;
+import java.net.InetSocketAddress;
 import java.net.URI;
 import java.time.Duration;
 import java.util.ArrayDeque;
 import java.util.List;
 import java.util.Queue;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.TimeUnit;
 
 final class TlsStreamConnectorTestServer implements Closeable {
     private final EventLoopGroup boss = new NioEventLoopGroup(1);
     private final EventLoopGroup worker = new NioEventLoopGroup(1);
     private final Queue<CompletableFuture<TcpStreamConnectorTestServer.ReceivedFrame>> waiters =
-        new ArrayDeque<>();
+            new ArrayDeque<>();
     private final Queue<TcpStreamConnectorTestServer.ReceivedFrame> frames = new ArrayDeque<>();
     private final Channel serverChannel;
     private volatile Channel clientChannel;
 
     TlsStreamConnectorTestServer() throws Exception {
-        SslContext sslContext = SslContextBuilder
-            .forServer(TlsTestCertificates.certificate(), TlsTestCertificates.privateKey())
-            .build();
-        serverChannel = new ServerBootstrap()
-            .group(boss, worker)
-            .channel(NioServerSocketChannel.class)
-            .childHandler(new ChannelInitializer<SocketChannel>() {
-                @Override
-                protected void initChannel(SocketChannel channel) {
-                    clientChannel = channel;
-                    channel.pipeline().addLast(sslContext.newHandler(channel.alloc()));
-                    channel.pipeline().addLast(new FrameDecoder());
-                    channel.pipeline().addLast(new FrameHandler(TlsStreamConnectorTestServer.this));
-                }
-            })
-            .bind("127.0.0.1", 0)
-            .sync()
-            .channel();
+        SslContext sslContext =
+                SslContextBuilder.forServer(
+                                TlsTestCertificates.certificate(), TlsTestCertificates.privateKey())
+                        .build();
+        serverChannel =
+                new ServerBootstrap()
+                        .group(boss, worker)
+                        .channel(NioServerSocketChannel.class)
+                        .childHandler(
+                                new ChannelInitializer<SocketChannel>() {
+                                    @Override
+                                    protected void initChannel(SocketChannel channel) {
+                                        clientChannel = channel;
+                                        channel.pipeline()
+                                                .addLast(sslContext.newHandler(channel.alloc()));
+                                        channel.pipeline().addLast(new FrameDecoder());
+                                        channel.pipeline()
+                                                .addLast(
+                                                        new FrameHandler(
+                                                                TlsStreamConnectorTestServer.this));
+                                    }
+                                })
+                        .bind("127.0.0.1", 0)
+                        .sync()
+                        .channel();
     }
 
     URI endpoint() {
@@ -61,20 +68,20 @@ final class TlsStreamConnectorTestServer implements Closeable {
 
     ZLinkStreamConnectorOptions options(ZLinkStreamDispatchMode dispatchMode) {
         return new ZLinkStreamConnectorOptions(
-            endpoint(),
-            dispatchMode,
-            Duration.ofSeconds(1),
-            1,
-            Duration.ofSeconds(1),
-            64 * 1024,
-            false,
-            Duration.ofMillis(25),
-            Duration.ofMillis(500),
-            true,
-            Duration.ofMillis(10),
-            Duration.ofMillis(250),
-            2.0,
-            true);
+                endpoint(),
+                dispatchMode,
+                Duration.ofSeconds(1),
+                1,
+                Duration.ofSeconds(1),
+                64 * 1024,
+                false,
+                Duration.ofMillis(25),
+                Duration.ofMillis(500),
+                true,
+                Duration.ofMillis(10),
+                Duration.ofMillis(250),
+                2.0,
+                true);
     }
 
     CompletableFuture<TcpStreamConnectorTestServer.ReceivedFrame> readFrameAsync() {
@@ -83,39 +90,41 @@ final class TlsStreamConnectorTestServer implements Closeable {
                 return CompletableFuture.completedFuture(frames.remove());
             }
             CompletableFuture<TcpStreamConnectorTestServer.ReceivedFrame> waiter =
-                new CompletableFuture<>();
+                    new CompletableFuture<>();
             waiters.add(waiter);
             return waiter;
         }
     }
 
-    CompletableFuture<Void> sendAsync(
-        ZLinkStreamWireProtocol.Header header,
-        byte[] payload) {
+    CompletableFuture<Void> sendAsync(ZLinkStreamWireProtocol.Header header, byte[] payload) {
         CompletableFuture<Void> result = new CompletableFuture<>();
         byte[] encodedHeader = ZLinkStreamWireProtocol.encodeHeader(header);
         byte[] frame = ZLinkStreamWireProtocol.encodeFrame(encodedHeader, payload, 64 * 1024);
         Channel channel = awaitClientChannel();
-        channel.writeAndFlush(Unpooled.wrappedBuffer(frame)).addListener(write -> {
-            if (write.isSuccess()) {
-                result.complete(null);
-            } else {
-                result.completeExceptionally(write.cause());
-            }
-        });
+        channel.writeAndFlush(Unpooled.wrappedBuffer(frame))
+                .addListener(
+                        write -> {
+                            if (write.isSuccess()) {
+                                result.complete(null);
+                            } else {
+                                result.completeExceptionally(write.cause());
+                            }
+                        });
         return result;
     }
 
     CompletableFuture<Void> sendBytesAsync(byte[] bytes) {
         CompletableFuture<Void> result = new CompletableFuture<>();
         Channel channel = awaitClientChannel();
-        channel.writeAndFlush(Unpooled.wrappedBuffer(bytes)).addListener(write -> {
-            if (write.isSuccess()) {
-                result.complete(null);
-            } else {
-                result.completeExceptionally(write.cause());
-            }
-        });
+        channel.writeAndFlush(Unpooled.wrappedBuffer(bytes))
+                .addListener(
+                        write -> {
+                            if (write.isSuccess()) {
+                                result.complete(null);
+                            } else {
+                                result.completeExceptionally(write.cause());
+                            }
+                        });
         return result;
     }
 
@@ -182,7 +191,7 @@ final class TlsStreamConnectorTestServer implements Closeable {
     }
 
     private static final class FrameHandler
-        extends SimpleChannelInboundHandler<ZLinkStreamWireProtocol.Frame> {
+            extends SimpleChannelInboundHandler<ZLinkStreamWireProtocol.Frame> {
         private final TlsStreamConnectorTestServer server;
 
         private FrameHandler(TlsStreamConnectorTestServer server) {
@@ -191,11 +200,10 @@ final class TlsStreamConnectorTestServer implements Closeable {
 
         @Override
         protected void channelRead0(
-            ChannelHandlerContext context,
-            ZLinkStreamWireProtocol.Frame frame) {
-            server.enqueue(new TcpStreamConnectorTestServer.ReceivedFrame(
-                ZLinkStreamWireProtocol.decodeHeader(frame.header()),
-                frame.payload()));
+                ChannelHandlerContext context, ZLinkStreamWireProtocol.Frame frame) {
+            server.enqueue(
+                    new TcpStreamConnectorTestServer.ReceivedFrame(
+                            ZLinkStreamWireProtocol.decodeHeader(frame.header()), frame.payload()));
         }
 
         @Override

@@ -6,8 +6,9 @@ namespace Zlink.Framework.Runtime.Channels;
 
 internal sealed class ZLinkFanoutPacketDispatcher
 {
-    private static readonly IReadOnlySet<string> EmptyGroups =
-        new HashSet<string>(StringComparer.Ordinal);
+    private static readonly IReadOnlySet<string> EmptyGroups = new HashSet<string>(
+        StringComparer.Ordinal
+    );
     private readonly ZLinkDispatchErrorReporter _dispatchErrors;
     private readonly ZLinkChannelPublishDispatchPipeline _publishPipeline;
     private readonly ZLinkFrameworkRuntime? _runtime;
@@ -17,7 +18,8 @@ internal sealed class ZLinkFanoutPacketDispatcher
         ZLinkHandlerDispatcher dispatcher,
         ZLinkFrameworkRegistration registration,
         ZLinkFrameworkRuntime? runtime,
-        ILogger<ZLinkFanoutPacketDispatcher>? logger = null)
+        ILogger<ZLinkFanoutPacketDispatcher>? logger = null
+    )
     {
         _runtime = runtime;
         _dispatchErrors = new ZLinkDispatchErrorReporter(
@@ -26,28 +28,33 @@ internal sealed class ZLinkFanoutPacketDispatcher
                 ? logger
                 : ZLinkMessageFlowTracer.CreateLogger(
                     runtime.Services.GetService<ILoggerFactory>(),
-                    logger),
-            runtime);
+                    logger
+                ),
+            runtime
+        );
         _publishPipeline = new ZLinkChannelPublishDispatchPipeline(
             null,
             handlerRegistry,
             dispatcher,
             channelName => ResolveMappedGroups(registration, channelName),
             _dispatchErrors,
-            registration.Codecs);
+            registration.Codecs
+        );
     }
 
     public async Task DispatchEventMessageAsync(
         string channelName,
         TopicMessage topicMessage,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken
+    )
     {
         if (topicMessage.Parts.Count == 0)
         {
             ReportPublishProtocolError(
                 channelName,
                 topicMessage,
-                ZLinkEnvelopeCodec.MissingHeader());
+                ZLinkEnvelopeCodec.MissingHeader()
+            );
             return;
         }
 
@@ -56,7 +63,8 @@ internal sealed class ZLinkFanoutPacketDispatcher
         {
             header = ZLinkEnvelopeCodec.DecodeHeader(
                 topicMessage.Parts,
-                _dispatchErrors.Flow.CaptureEnabled);
+                _dispatchErrors.Flow.CaptureEnabled
+            );
             ZLinkEnvelopeCodec.ValidateDispatchHeader(header);
         }
         catch (ZLinkEnvelopeProtocolException protocolError)
@@ -68,11 +76,11 @@ internal sealed class ZLinkFanoutPacketDispatcher
         var admission = _runtime is null
             ? new ZLinkInboundOperationAdmission(
                 true,
-                ZLinkFrameworkRuntime.ZLinkRuntimeOperationLease.None)
-        //  Delivering a fanout record to its handler changes nothing in the
-        //  Location Store, so it is not object work (spec 21 §4).
-            : _runtime.TryEnterInboundOperation(
-                countAsRequest: false, ownsObjectWork: false);
+                ZLinkFrameworkRuntime.ZLinkRuntimeOperationLease.None
+            )
+            //  Delivering a fanout record to its handler changes nothing in the
+            //  Location Store, so it is not object work (spec 21 §4).
+            : _runtime.TryEnterInboundOperation(countAsRequest: false, ownsObjectWork: false);
         if (!admission.Accepted)
             return;
         using (admission.Lease)
@@ -81,13 +89,11 @@ internal sealed class ZLinkFanoutPacketDispatcher
                 header.FlowId,
                 header.FlowOrigin,
                 _dispatchErrors.Flow.CaptureEnabled,
-                ZLinkFlowOrigin.Inbound);
+                ZLinkFlowOrigin.Inbound
+            );
 
-            await _publishPipeline.DispatchAsync(
-                    channelName,
-                    topicMessage,
-                    header,
-                    cancellationToken)
+            await _publishPipeline
+                .DispatchAsync(channelName, topicMessage, header, cancellationToken)
                 .ConfigureAwait(false);
         }
     }
@@ -95,9 +101,11 @@ internal sealed class ZLinkFanoutPacketDispatcher
     private void ReportPublishProtocolError(
         string channelName,
         TopicMessage topicMessage,
-        ZLinkEnvelopeProtocolException protocolError)
+        ZLinkEnvelopeProtocolException protocolError
+    )
     {
-        if (!_dispatchErrors.Enabled) return;
+        if (!_dispatchErrors.Enabled)
+            return;
 
         // Keep whatever flow the invalid frame carried in readable form,
         // but never fabricate a fresh id for its failure record (spec 27 §7).
@@ -107,23 +115,28 @@ internal sealed class ZLinkFanoutPacketDispatcher
             validFlow.FlowOrigin,
             _dispatchErrors.Flow.CaptureEnabled,
             ZLinkFlowOrigin.Inbound,
-            createIfAbsent: false);
-        _dispatchErrors.Report(new ZLinkDispatchFailure(
-            ZLinkDispatchErrorSurface.ClassicFanout,
-            ZLinkDispatchMessageKind.Send,
-            ZLinkDispatchErrorReason.InvalidFrame,
-            ZLinkDispatchErrorAction.Drop,
-            protocolError.Header.MessageName,
-            channelName,
-            topicMessage.Topic,
-            SourceRid: protocolError.Header.Source,
-            CorrelationId: protocolError.Header.CorrelationId,
-            Exception: protocolError));
+            createIfAbsent: false
+        );
+        _dispatchErrors.Report(
+            new ZLinkDispatchFailure(
+                ZLinkDispatchErrorSurface.ClassicFanout,
+                ZLinkDispatchMessageKind.Send,
+                ZLinkDispatchErrorReason.InvalidFrame,
+                ZLinkDispatchErrorAction.Drop,
+                protocolError.Header.MessageName,
+                channelName,
+                topicMessage.Topic,
+                SourceRid: protocolError.Header.Source,
+                CorrelationId: protocolError.Header.CorrelationId,
+                Exception: protocolError
+            )
+        );
     }
 
     private static IReadOnlySet<string> ResolveMappedGroups(
         ZLinkFrameworkRegistration registration,
-        string channelName)
+        string channelName
+    )
     {
         return registration.Channels.TryGetValue(channelName, out var channel)
             ? channel.HandlerGroups

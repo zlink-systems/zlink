@@ -17,7 +17,9 @@ interface Deferred<T> {
 
 function deferred<T>(): Deferred<T> {
   let resolve!: (value: T) => void;
-  const promise = new Promise<T>(complete => { resolve = complete; });
+  const promise = new Promise<T>((complete) => {
+    resolve = complete;
+  });
   return { promise, resolve };
 }
 
@@ -52,10 +54,13 @@ test('owner-local work waits for terminal progress and does not block another ow
   const otherOwner = scheduler([], options);
   const started = deferred<void>();
   const terminal = deferred<void>();
-  const first = serial.submit(async () => {
-    started.resolve();
-    await terminal.promise;
-  }, { payloadBytes: 128 });
+  const first = serial.submit(
+    async () => {
+      started.resolve();
+      await terminal.promise;
+    },
+    { payloadBytes: 128 }
+  );
   await started.promise;
   assert.deepEqual(serial.snapshot(), {
     applicationMessages: 1,
@@ -85,16 +90,22 @@ test('a transferred record remains queued until terminal completion', async () =
   const localTerminal = deferred<void>();
   const transferredStarted = deferred<void>();
   const transferredTerminal = deferred<void>();
-  const local = serial.submit(async () => {
-    localStarted.resolve();
-    await localTerminal.promise;
-  }, { payloadBytes: 32, metadataBytes: 16 });
+  const local = serial.submit(
+    async () => {
+      localStarted.resolve();
+      await localTerminal.promise;
+    },
+    { payloadBytes: 32, metadataBytes: 16 }
+  );
   await localStarted.promise;
 
-  const transferred = serial.submitPreAdmitted(async () => {
-    transferredStarted.resolve();
-    await transferredTerminal.promise;
-  }, { payloadBytes: 48, metadataBytes: 16 });
+  const transferred = serial.submitPreAdmitted(
+    async () => {
+      transferredStarted.resolve();
+      await transferredTerminal.promise;
+    },
+    { payloadBytes: 48, metadataBytes: 16 }
+  );
   assert.deepEqual(serial.snapshot(), {
     applicationMessages: 2,
     applicationBytes: 0,
@@ -126,7 +137,9 @@ test('durable readiness yields to lifecycle arbitration without claiming the ser
   const events: string[] = [];
   let attempts = 0;
   const durable = serial.admitDurablePrefix(
-    () => { events.push('durable'); },
+    () => {
+      events.push('durable');
+    },
     {},
     undefined,
     {
@@ -151,7 +164,9 @@ test('durable readiness yields to lifecycle arbitration without claiming the ser
   await firstPreparationStarted.promise;
 
   const lifecycle = serial.submit(
-    () => { events.push('lifecycle'); },
+    () => {
+      events.push('lifecycle');
+    },
     { lane: 'lifecycle' }
   );
   await Promise.all([lifecycle, durable]);
@@ -183,7 +198,9 @@ test('a yielded Spot owner retains its reservation until the actual owner termin
   resume.resolve();
   await Promise.all([owner, following]);
   let progressed = false;
-  await serial.post(() => { progressed = true; });
+  await serial.post(() => {
+    progressed = true;
+  });
   assert.equal(progressed, true);
 });
 
@@ -199,15 +216,17 @@ test('terminal completion permits following application progress without framewo
     events.push('first-terminal');
   });
   await started.promise;
-  const queued = Array.from({ length: 32 }, (_, index) => serial.submit(() => {
-    events.push(`queued-${index}`);
-  }));
+  const queued = Array.from({ length: 32 }, (_, index) =>
+    serial.submit(() => {
+      events.push(`queued-${index}`);
+    })
+  );
   terminal.resolve();
   await Promise.all([first, ...queued]);
   const following = serial.submit(() => events.push('following'));
   await following;
   assert.equal(events.at(-1), 'following');
-  assert.equal(events.filter(value => value === 'first-terminal').length, 1);
+  assert.equal(events.filter((value) => value === 'first-terminal').length, 1);
 });
 
 test('application and lifecycle lanes preserve FIFO order', async () => {
@@ -219,12 +238,14 @@ test('application and lifecycle lanes preserve FIFO order', async () => {
     serial.submit(() => selected.push('lifecycle-a'), { lane: 'lifecycle' }),
     serial.submit(() => selected.push('lifecycle-b'), { lane: 'lifecycle' })
   ]);
-  assert.deepEqual(selected.filter(value => value.startsWith('application')), [
-    'application-a', 'application-b'
-  ]);
-  assert.deepEqual(selected.filter(value => value.startsWith('lifecycle')), [
-    'lifecycle-a', 'lifecycle-b'
-  ]);
+  assert.deepEqual(
+    selected.filter((value) => value.startsWith('application')),
+    ['application-a', 'application-b']
+  );
+  assert.deepEqual(
+    selected.filter((value) => value.startsWith('lifecycle')),
+    ['lifecycle-a', 'lifecycle-b']
+  );
 });
 
 test('an empty scheduler schedules new work without polling', async () => {
@@ -261,12 +282,16 @@ test('Spot one-way turns report the terminal handler error and continue', async 
   const serial = new ZLinkSpotSerialTurnExecutor(false);
   const reported = deferred<unknown>();
   await serial.postOneWay(
-    () => { throw new Error('terminal'); },
-    error => reported.resolve(error)
+    () => {
+      throw new Error('terminal');
+    },
+    (error) => reported.resolve(error)
   );
   const error = await reported.promise;
   assert.equal(error instanceof Error && error.message, 'terminal');
   let progressed = false;
-  await serial.post(() => { progressed = true; });
+  await serial.post(() => {
+    progressed = true;
+  });
   assert.equal(progressed, true);
 });

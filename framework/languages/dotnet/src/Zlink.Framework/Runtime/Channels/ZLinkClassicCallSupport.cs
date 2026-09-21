@@ -9,7 +9,8 @@ internal static class ZLinkClassicCallSupport
     {
         return new NotSupportedException(
             "Application metadata rides the RouteMesh service wire only; the "
-            + "classic channel plane does not carry it. Use the RouteMesh "
-            + "route/spot clients for metadata-bearing calls.");
+                + "classic channel plane does not carry it. Use the RouteMesh "
+                + "route/spot clients for metadata-bearing calls."
+        );
     }
 }

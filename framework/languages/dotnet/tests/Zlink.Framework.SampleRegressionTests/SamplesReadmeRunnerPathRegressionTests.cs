@@ -14,15 +14,15 @@ public sealed partial class RegressionTests
     [Fact]
     public void Samples_Readmes_Name_Runner_Scripts_That_Exist()
     {
-        var repositoryRoot = Path.GetFullPath(Path.Combine(
-            ResolveDotnetRoot(), "..", "..", ".."));
+        var repositoryRoot = Path.GetFullPath(Path.Combine(ResolveDotnetRoot(), "..", "..", ".."));
         var languagesRoot = Path.Combine(repositoryRoot, "framework", "languages");
 
         // A path is a token that carries a directory separator; a bare `run_sample.sh` in prose
         // names the file class, not a command, and resolves nowhere.
         var runnerPath = new Regex(
             @"(?<path>[A-Za-z0-9_.\-]+(?:[\\/][A-Za-z0-9_.\-]+)*[\\/]run_samples?\.(?:sh|ps1))",
-            RegexOptions.CultureInvariant);
+            RegexOptions.CultureInvariant
+        );
 
         var samplesDirectories = Directory
             .EnumerateDirectories(languagesRoot)
@@ -56,16 +56,19 @@ public sealed partial class RegressionTests
                     {
                         repositoryRoot,
                         samplesDirectory,
-                        Directory.GetParent(samplesDirectory)!.FullName
+                        Directory.GetParent(samplesDirectory)!.FullName,
                     };
                     if (!bases.Any(root => File.Exists(Path.Combine(root, relative))))
                         unresolved.Add(
-                            $"{NormalizeRelativePath(Path.GetRelativePath(repositoryRoot, readme))}: {quoted}");
+                            $"{NormalizeRelativePath(Path.GetRelativePath(repositoryRoot, readme))}: {quoted}"
+                        );
                 }
             }
 
             if (named == 0)
-                silent.Add(NormalizeRelativePath(Path.GetRelativePath(repositoryRoot, samplesDirectory)));
+                silent.Add(
+                    NormalizeRelativePath(Path.GetRelativePath(repositoryRoot, samplesDirectory))
+                );
         }
 
         Assert.Empty(unresolved);

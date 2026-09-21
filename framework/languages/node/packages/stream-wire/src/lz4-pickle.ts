@@ -13,10 +13,7 @@ export function lz4PickleUncompressed(payload: Uint8Array): Uint8Array {
   return pickled;
 }
 
-export function lz4UnpicklePayload(
-  payload: Uint8Array,
-  maxSize?: number
-): Uint8Array {
+export function lz4UnpicklePayload(payload: Uint8Array, maxSize?: number): Uint8Array {
   const maxDecompressedSize = maxSize ?? defaultMaxDecompressedPayloadSize;
   if (payload.length === 0) {
     return new Uint8Array();
@@ -55,10 +52,10 @@ function readLittleEndian(source: Uint8Array, offset: number, size: number): num
   }
   if (size === 4) {
     return (
-      source[offset]
-      | (source[offset + 1] << 8)
-      | (source[offset + 2] << 16)
-      | (source[offset + 3] * 0x1000000)
+      source[offset] |
+      (source[offset + 1] << 8) |
+      (source[offset + 2] << 16) |
+      (source[offset + 3] * 0x1000000)
     );
   }
   throw new Error(`Unexpected LZ4 pickle field size: ${size}`);

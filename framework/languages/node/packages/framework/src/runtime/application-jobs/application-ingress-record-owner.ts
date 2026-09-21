@@ -1,7 +1,4 @@
-import type {
-  ApplicationJobPermitPort,
-  ApplicationJobQueuePort
-} from './contracts';
+import type { ApplicationJobPermitPort, ApplicationJobQueuePort } from './contracts';
 
 export type ApplicationJobRecordDomain = 'application' | 'infrastructure';
 
@@ -53,9 +50,8 @@ export class ApplicationIngressRecordOwner {
     const initial = this.shared.takeInitialPermit(domain);
     if (initial !== undefined) return initial;
 
-    const waitSignal = signal === undefined
-      ? this.stop.signal
-      : AbortSignal.any([this.stop.signal, signal]);
+    const waitSignal =
+      signal === undefined ? this.stop.signal : AbortSignal.any([this.stop.signal, signal]);
     const permit = await this.shared.acquirePermit(waitSignal);
     if (this.closed) {
       permit.releaseAfterInternalProcessing();
@@ -125,11 +121,7 @@ export class ApplicationJobRecordLease implements ApplicationJobPermitPort {
   }
 
   private releaseJobIfTerminal(): void {
-    if (
-      this.jobReleased
-      || !this.ingressClosed
-      || !this.processingTerminal
-    ) return;
+    if (this.jobReleased || !this.ingressClosed || !this.processingTerminal) return;
     this.jobReleased = true;
     this.shared.releaseJob();
   }
@@ -160,9 +152,7 @@ class SharedIngressRecordState {
     this.tryCloseIngressRecord();
   }
 
-  takeInitialPermit(
-    domain: ApplicationJobRecordDomain
-  ): ApplicationJobRecordLease | undefined {
+  takeInitialPermit(domain: ApplicationJobRecordDomain): ApplicationJobRecordLease | undefined {
     const permit = this.initialPermit;
     if (permit === undefined) return undefined;
     this.initialPermit = undefined;

@@ -69,18 +69,14 @@ export class ZLinkSpotSerialTurnExecutor {
 
   /** Distinguishes a gate-owning turn from a suspended AsyncLocalStorage tail. */
   isActiveTurn(turn: ZLinkSpotSerialTurn, turnId: number): boolean {
-    return this.depth > 0
-      && (
-        this.resumedOwnerTurn === turn
-        || (turnId === this.activeTurnId && !turn.isSuspended)
-      );
+    return (
+      this.depth > 0 &&
+      (this.resumedOwnerTurn === turn || (turnId === this.activeTurnId && !turn.isSuspended))
+    );
   }
 
   setExecutionBarrier(barrier: ZLinkExecutionBarrier): void {
-    if (
-      this.executionBarrier !== undefined
-      && this.executionBarrier !== barrier
-    ) {
+    if (this.executionBarrier !== undefined && this.executionBarrier !== barrier) {
       throw new Error('ZLink Spot serial executor already belongs to another execution barrier.');
     }
     if (this.turnSequence !== 0 && this.executionBarrier === undefined) {
@@ -90,10 +86,7 @@ export class ZLinkSpotSerialTurnExecutor {
   }
 
   /** Runs `operation` in serial order, one turn at a time. */
-  execute<T>(
-    operation: () => Promise<T> | T,
-    workOptions?: ZLinkSerialWorkOptions
-  ): Promise<T> {
+  execute<T>(operation: () => Promise<T> | T, workOptions?: ZLinkSerialWorkOptions): Promise<T> {
     if (this.isCurrentTurn) {
       throw createInternalFrameworkException(
         ZLinkFrameworkInternalErrorKind.InvalidOperation,
@@ -108,10 +101,7 @@ export class ZLinkSpotSerialTurnExecutor {
    * from within the currently active turn. Detached completion callbacks use
    * this so they never run inline inside another callback's turn.
    */
-  post<T>(
-    operation: () => Promise<T> | T,
-    workOptions?: ZLinkSerialWorkOptions
-  ): Promise<T> {
+  post<T>(operation: () => Promise<T> | T, workOptions?: ZLinkSerialWorkOptions): Promise<T> {
     return this.enqueueApplicationTurn(operation, workOptions);
   }
 
@@ -142,7 +132,7 @@ export class ZLinkSpotSerialTurnExecutor {
       const submitted = hasApplicationJobPermit()
         ? this.scheduler.submitPreAdmitted(boundOperation, options, barrierClaim)
         : this.scheduler.submit(boundOperation, options, barrierClaim);
-      void submitted.catch(error => {
+      void submitted.catch((error) => {
         barrierClaim?.release();
         onError(error);
       });
@@ -194,9 +184,7 @@ export class ZLinkSpotSerialTurnExecutor {
     return await this.submitQueuedTurn(operation, workOptions);
   }
 
-  private async enqueueContinuationTurn<T>(
-    operation: () => Promise<T> | T
-  ): Promise<T> {
+  private async enqueueContinuationTurn<T>(operation: () => Promise<T> | T): Promise<T> {
     this.lastActivityAtMs = performance.now();
     await Promise.resolve();
     return await this.scheduler.submitContinuation(operation);
@@ -274,7 +262,10 @@ export class ZLinkSpotSerialTurnExecutor {
     );
     owner.then(resolve, reject);
     return Promise.race([
-      owner.then(() => undefined, () => undefined),
+      owner.then(
+        () => undefined,
+        () => undefined
+      ),
       turn.suspended
     ]);
   }
@@ -287,10 +278,12 @@ export class ZLinkSpotSerialTurnExecutor {
     const barrier = this.executionBarrier;
     const resumeClaim = barrier?.tryEnter();
     if (barrier !== undefined && resumeClaim === undefined) {
-      reject(createInternalFrameworkException(
-        ZLinkFrameworkInternalErrorKind.SpotMoving,
-        'The yielded Spot turn cannot resume after its execution unit was sealed.'
-      ));
+      reject(
+        createInternalFrameworkException(
+          ZLinkFrameworkInternalErrorKind.SpotMoving,
+          'The yielded Spot turn cannot resume after its execution unit was sealed.'
+        )
+      );
       return true;
     }
     turn.bindExecutionClaim(resumeClaim);

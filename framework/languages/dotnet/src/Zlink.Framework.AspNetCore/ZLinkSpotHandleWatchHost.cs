@@ -9,7 +9,8 @@ internal sealed class ZLinkSpotHandleWatchHost(
     IZLinkLocationWatchStore? watchStore,
     ZLinkStoreLocationResolvers rows,
     ZLinkSpotHandleRegistry? handles,
-    ZLinkLocationOptions options) : IHostedService, IAsyncDisposable
+    ZLinkLocationOptions options
+) : IHostedService, IAsyncDisposable
 {
     private readonly object _lifecycleGate = new();
     private CancellationTokenSource? _stop;
@@ -21,7 +22,9 @@ internal sealed class ZLinkSpotHandleWatchHost(
         lock (_lifecycleGate)
         {
             if (_stop is not null || _shutdown is not null)
-                throw new InvalidOperationException("The location watch host cannot be started more than once.");
+                throw new InvalidOperationException(
+                    "The location watch host cannot be started more than once."
+                );
 
             _stop = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
             var watches = new List<Task>();
@@ -51,20 +54,17 @@ internal sealed class ZLinkSpotHandleWatchHost(
     {
         lock (_lifecycleGate)
         {
-            if (_shutdown is not null) return _shutdown;
+            if (_shutdown is not null)
+                return _shutdown;
             var stop = _stop;
             var watches = _watches;
             _stop = null;
             _watches = [];
-            return _shutdown = stop is null
-                ? Task.CompletedTask
-                : ShutdownCoreAsync(stop, watches);
+            return _shutdown = stop is null ? Task.CompletedTask : ShutdownCoreAsync(stop, watches);
         }
     }
 
-    private static async Task ShutdownCoreAsync(
-        CancellationTokenSource stop,
-        Task[] watches)
+    private static async Task ShutdownCoreAsync(CancellationTokenSource stop, Task[] watches)
     {
         try
         {
@@ -73,9 +73,7 @@ internal sealed class ZLinkSpotHandleWatchHost(
             {
                 await Task.WhenAll(watches).ConfigureAwait(false);
             }
-            catch (OperationCanceledException)
-            {
-            }
+            catch (OperationCanceledException) { }
         }
         finally
         {
@@ -89,9 +87,11 @@ internal sealed class ZLinkSpotHandleWatchHost(
         {
             try
             {
-                await foreach (var change in watchStore!.WatchAsync(
-                                   new ZLinkLocationWatchFilter(kind), cancellationToken)
-                                   .ConfigureAwait(false))
+                await foreach (
+                    var change in watchStore!
+                        .WatchAsync(new ZLinkLocationWatchFilter(kind), cancellationToken)
+                        .ConfigureAwait(false)
+                )
                     await ApplyAsync(change, cancellationToken).ConfigureAwait(false);
             }
             catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
@@ -100,9 +100,10 @@ internal sealed class ZLinkSpotHandleWatchHost(
             }
             catch
             {
-                var retryDelay = options.PollingInterval > TimeSpan.Zero
-                    ? options.PollingInterval
-                    : TimeSpan.FromMilliseconds(100);
+                var retryDelay =
+                    options.PollingInterval > TimeSpan.Zero
+                        ? options.PollingInterval
+                        : TimeSpan.FromMilliseconds(100);
                 await Task.Delay(retryDelay, cancellationToken).ConfigureAwait(false);
             }
         }
@@ -110,9 +111,10 @@ internal sealed class ZLinkSpotHandleWatchHost(
 
     private async Task PollAsync(CancellationToken cancellationToken)
     {
-        var interval = options.PollingInterval > TimeSpan.Zero
-            ? options.PollingInterval
-            : TimeSpan.FromMilliseconds(100);
+        var interval =
+            options.PollingInterval > TimeSpan.Zero
+                ? options.PollingInterval
+                : TimeSpan.FromMilliseconds(100);
         while (!cancellationToken.IsCancellationRequested)
         {
             try
@@ -143,7 +145,8 @@ internal sealed class ZLinkSpotHandleWatchHost(
 
     internal async ValueTask ApplyAsync(
         ZLinkLocationChanged change,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken
+    )
     {
         // Watch is an optimization only: a lost or lagging event is always
         // corrected by the polling refresh, so an upsert whose row is not
@@ -154,21 +157,26 @@ internal sealed class ZLinkSpotHandleWatchHost(
             // the positive route before resolving so the update cannot be
             // satisfied by the older cached StoreVersion.
             rows.InvalidateSpotRoute(spotKey);
-            if (change.ChangeType is ZLinkLocationChangeType.Removed or ZLinkLocationChangeType.Expired)
+            if (
+                change.ChangeType
+                is ZLinkLocationChangeType.Removed
+                    or ZLinkLocationChangeType.Expired
+            )
             {
                 if (handles is not null)
-                    await handles.RemoveSpotAsync(spotKey, change.Generation)
-                        .ConfigureAwait(false);
+                    await handles.RemoveSpotAsync(spotKey, change.Generation).ConfigureAwait(false);
                 return;
             }
 
-            var row = await rows.ResolveSpotRowAsync(spotKey, cancellationToken).ConfigureAwait(false);
+            var row = await rows.ResolveSpotRowAsync(spotKey, cancellationToken)
+                .ConfigureAwait(false);
             if (row is not null && handles is not null)
                 await handles.UpdateSpotAsync(row).ConfigureAwait(false);
             return;
         }
 
-        if (change.Key is not ZLinkLocationKey.Actor(var actorKey)) return;
+        if (change.Key is not ZLinkLocationKey.Actor(var actorKey))
+            return;
         rows.InvalidateActorRoute(actorKey);
         if (change.ChangeType is ZLinkLocationChangeType.Removed or ZLinkLocationChangeType.Expired)
         {
@@ -177,7 +185,8 @@ internal sealed class ZLinkSpotHandleWatchHost(
             return;
         }
 
-        var actor = await rows.ResolveActorRowAsync(actorKey, cancellationToken).ConfigureAwait(false);
+        var actor = await rows.ResolveActorRowAsync(actorKey, cancellationToken)
+            .ConfigureAwait(false);
         if (actor is not null && handles is not null)
             await handles.UpdateActorAsync(actor).ConfigureAwait(false);
     }

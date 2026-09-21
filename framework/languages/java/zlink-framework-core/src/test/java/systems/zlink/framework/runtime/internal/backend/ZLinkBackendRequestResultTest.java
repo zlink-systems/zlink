@@ -3,81 +3,113 @@ package systems.zlink.framework.runtime.internal.backend;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 
 import org.junit.jupiter.api.Test;
+
 import systems.zlink.framework.errors.ZLinkFrameworkErrorKind;
 
 class ZLinkBackendRequestResultTest {
 
     @Test
     void coarseTerminalUsesRemoteOwnershipClassification() {
-        assertEquals(ZLinkFrameworkErrorKind.DEADLINE_EXCEEDED,
-            ZLinkBackendRequestResult.TIMED_OUT.toFrameworkErrorKind());
-        assertEquals(ZLinkFrameworkErrorKind.NOT_FOUND,
-            ZLinkBackendRequestResult.NOT_FOUND.toFrameworkErrorKind());
-        assertEquals(ZLinkFrameworkErrorKind.SHUTTING_DOWN,
-            ZLinkBackendRequestResult.TERMINATED.toFrameworkErrorKind());
-        assertEquals(ZLinkFrameworkErrorKind.PROTOCOL_ERROR,
-            ZLinkBackendRequestResult.PROTOCOL_ERROR.toFrameworkErrorKind());
-        assertEquals(ZLinkFrameworkErrorKind.REJECTED,
-            ZLinkBackendRequestResult.REJECTED.toFrameworkErrorKind());
+        assertEquals(
+                ZLinkFrameworkErrorKind.DEADLINE_EXCEEDED,
+                ZLinkBackendRequestResult.TIMED_OUT.toFrameworkErrorKind());
+        assertEquals(
+                ZLinkFrameworkErrorKind.NOT_FOUND,
+                ZLinkBackendRequestResult.NOT_FOUND.toFrameworkErrorKind());
+        assertEquals(
+                ZLinkFrameworkErrorKind.SHUTTING_DOWN,
+                ZLinkBackendRequestResult.TERMINATED.toFrameworkErrorKind());
+        assertEquals(
+                ZLinkFrameworkErrorKind.PROTOCOL_ERROR,
+                ZLinkBackendRequestResult.PROTOCOL_ERROR.toFrameworkErrorKind());
+        assertEquals(
+                ZLinkFrameworkErrorKind.REJECTED,
+                ZLinkBackendRequestResult.REJECTED.toFrameworkErrorKind());
         //  A remote reply's conflict/busy is the target's owner/queue state:
         //  Unavailable, not a source-owned queue-capacity error (spec 32:99-103).
-        assertEquals(ZLinkFrameworkErrorKind.UNAVAILABLE,
-            ZLinkBackendRequestResult.CONFLICT.toFrameworkErrorKind());
-        assertEquals(ZLinkFrameworkErrorKind.UNAVAILABLE,
-            ZLinkBackendRequestResult.BUSY.toFrameworkErrorKind());
-        assertEquals(ZLinkFrameworkErrorKind.UNAVAILABLE,
-            ZLinkBackendRequestResult.NOT_CONNECTED.toFrameworkErrorKind());
-        assertEquals(ZLinkFrameworkErrorKind.INVALID_OPERATION,
-            ZLinkBackendRequestResult.INVALID_ARGUMENT.toFrameworkErrorKind());
-        assertEquals(ZLinkFrameworkErrorKind.INVALID_OPERATION,
-            ZLinkBackendRequestResult.INVALID_STATE.toFrameworkErrorKind());
-        assertEquals(ZLinkFrameworkErrorKind.INTERNAL_FAILURE,
-            ZLinkBackendRequestResult.NOT_SUPPORTED.toFrameworkErrorKind());
-        assertEquals(ZLinkFrameworkErrorKind.INTERNAL_FAILURE,
-            ZLinkBackendRequestResult.INTERNAL_ERROR.toFrameworkErrorKind());
-        assertEquals(ZLinkFrameworkErrorKind.UNAVAILABLE,
-            ZLinkBackendRequestResult.BACKPRESSURED.toFrameworkErrorKind());
-        assertEquals(ZLinkBackendRequestResult.BACKPRESSURED,
-            ZLinkBackendRequestResult.fromWireTerminal(113));
+        assertEquals(
+                ZLinkFrameworkErrorKind.UNAVAILABLE,
+                ZLinkBackendRequestResult.CONFLICT.toFrameworkErrorKind());
+        assertEquals(
+                ZLinkFrameworkErrorKind.UNAVAILABLE,
+                ZLinkBackendRequestResult.BUSY.toFrameworkErrorKind());
+        assertEquals(
+                ZLinkFrameworkErrorKind.UNAVAILABLE,
+                ZLinkBackendRequestResult.NOT_CONNECTED.toFrameworkErrorKind());
+        assertEquals(
+                ZLinkFrameworkErrorKind.INVALID_OPERATION,
+                ZLinkBackendRequestResult.INVALID_ARGUMENT.toFrameworkErrorKind());
+        assertEquals(
+                ZLinkFrameworkErrorKind.INVALID_OPERATION,
+                ZLinkBackendRequestResult.INVALID_STATE.toFrameworkErrorKind());
+        assertEquals(
+                ZLinkFrameworkErrorKind.INTERNAL_FAILURE,
+                ZLinkBackendRequestResult.NOT_SUPPORTED.toFrameworkErrorKind());
+        assertEquals(
+                ZLinkFrameworkErrorKind.INTERNAL_FAILURE,
+                ZLinkBackendRequestResult.INTERNAL_ERROR.toFrameworkErrorKind());
+        assertEquals(
+                ZLinkFrameworkErrorKind.UNAVAILABLE,
+                ZLinkBackendRequestResult.BACKPRESSURED.toFrameworkErrorKind());
+        assertEquals(
+                ZLinkBackendRequestResult.BACKPRESSURED,
+                ZLinkBackendRequestResult.fromWireTerminal(113));
     }
 
     @Test
     void fineFailureCodeCoversTypeAndExistenceAndSession() {
-        assertEquals(ZLinkFrameworkErrorKind.ALREADY_EXISTS,
-            ZLinkBackendRequestResult.CONFLICT.toFrameworkErrorKind(3)); // actorAlreadyExists
-        assertEquals(ZLinkFrameworkErrorKind.TYPE_MISMATCH,
-            ZLinkBackendRequestResult.CONFLICT.toFrameworkErrorKind(4)); // actorTypeMismatch
-        assertEquals(ZLinkFrameworkErrorKind.TYPE_MISMATCH,
-            ZLinkBackendRequestResult.CONFLICT.toFrameworkErrorKind(7)); // spotTypeMismatch
-        assertEquals(ZLinkFrameworkErrorKind.INVALID_OPERATION,
-            ZLinkBackendRequestResult.CONFLICT.toFrameworkErrorKind(8)); // actorSessionNotBound
+        assertEquals(
+                ZLinkFrameworkErrorKind.ALREADY_EXISTS,
+                ZLinkBackendRequestResult.CONFLICT.toFrameworkErrorKind(3)); // actorAlreadyExists
+        assertEquals(
+                ZLinkFrameworkErrorKind.TYPE_MISMATCH,
+                ZLinkBackendRequestResult.CONFLICT.toFrameworkErrorKind(4)); // actorTypeMismatch
+        assertEquals(
+                ZLinkFrameworkErrorKind.TYPE_MISMATCH,
+                ZLinkBackendRequestResult.CONFLICT.toFrameworkErrorKind(7)); // spotTypeMismatch
+        assertEquals(
+                ZLinkFrameworkErrorKind.INVALID_OPERATION,
+                ZLinkBackendRequestResult.CONFLICT.toFrameworkErrorKind(8)); // actorSessionNotBound
     }
 
     @Test
     void fineFailureCodeRefinesCoarseTerminal() {
         //  A generic Conflict terminal (107) carrying a fine framework failure
         //  code is classified precisely instead of collapsing to the coarse kind.
-        assertEquals(ZLinkFrameworkErrorKind.UNAVAILABLE,
-            ZLinkBackendRequestResult.CONFLICT.toFrameworkErrorKind(34)); // spotMoving
-        assertEquals(ZLinkFrameworkErrorKind.UNAVAILABLE,
-            ZLinkBackendRequestResult.CONFLICT.toFrameworkErrorKind(21)); // actorLocationStale
-        assertEquals(ZLinkFrameworkErrorKind.INVALID_OPERATION,
-            ZLinkBackendRequestResult.CONFLICT.toFrameworkErrorKind(33)); // spotGenerationStale
-        assertEquals(ZLinkFrameworkErrorKind.DATA_LOST,
-            ZLinkBackendRequestResult.INTERNAL_ERROR.toFrameworkErrorKind(35)); // relocationDataLost
-        assertEquals(ZLinkFrameworkErrorKind.DEADLINE_EXCEEDED,
-            ZLinkBackendRequestResult.REJECTED.toFrameworkErrorKind(19)); // workerTimedOut
-        assertEquals(ZLinkFrameworkErrorKind.INTERNAL_FAILURE,
-            ZLinkBackendRequestResult.REJECTED.toFrameworkErrorKind(20)); // workerFailed
-        assertEquals(ZLinkFrameworkErrorKind.UNAVAILABLE,
-            ZLinkBackendRequestResult.REJECTED.toFrameworkErrorKind(18)); // workerQueueFull (remote)
-        assertEquals(ZLinkFrameworkErrorKind.PROTOCOL_ERROR,
-            ZLinkBackendRequestResult.INTERNAL_ERROR.toFrameworkErrorKind(12)); // payloadDecodeFailed
+        assertEquals(
+                ZLinkFrameworkErrorKind.UNAVAILABLE,
+                ZLinkBackendRequestResult.CONFLICT.toFrameworkErrorKind(34)); // spotMoving
+        assertEquals(
+                ZLinkFrameworkErrorKind.UNAVAILABLE,
+                ZLinkBackendRequestResult.CONFLICT.toFrameworkErrorKind(21)); // actorLocationStale
+        assertEquals(
+                ZLinkFrameworkErrorKind.INVALID_OPERATION,
+                ZLinkBackendRequestResult.CONFLICT.toFrameworkErrorKind(33)); // spotGenerationStale
+        assertEquals(
+                ZLinkFrameworkErrorKind.DATA_LOST,
+                ZLinkBackendRequestResult.INTERNAL_ERROR.toFrameworkErrorKind(
+                        35)); // relocationDataLost
+        assertEquals(
+                ZLinkFrameworkErrorKind.DEADLINE_EXCEEDED,
+                ZLinkBackendRequestResult.REJECTED.toFrameworkErrorKind(19)); // workerTimedOut
+        assertEquals(
+                ZLinkFrameworkErrorKind.INTERNAL_FAILURE,
+                ZLinkBackendRequestResult.REJECTED.toFrameworkErrorKind(20)); // workerFailed
+        assertEquals(
+                ZLinkFrameworkErrorKind.UNAVAILABLE,
+                ZLinkBackendRequestResult.REJECTED.toFrameworkErrorKind(
+                        18)); // workerQueueFull (remote)
+        assertEquals(
+                ZLinkFrameworkErrorKind.PROTOCOL_ERROR,
+                ZLinkBackendRequestResult.INTERNAL_ERROR.toFrameworkErrorKind(
+                        12)); // payloadDecodeFailed
         //  failureCode 0 (absent) falls back to the coarse terminal.
-        assertEquals(ZLinkFrameworkErrorKind.UNAVAILABLE,
-            ZLinkBackendRequestResult.CONFLICT.toFrameworkErrorKind(0));
-        assertEquals(ZLinkFrameworkErrorKind.NOT_FOUND,
-            ZLinkBackendRequestResult.NOT_FOUND.toFrameworkErrorKind(0));
+        assertEquals(
+                ZLinkFrameworkErrorKind.UNAVAILABLE,
+                ZLinkBackendRequestResult.CONFLICT.toFrameworkErrorKind(0));
+        assertEquals(
+                ZLinkFrameworkErrorKind.NOT_FOUND,
+                ZLinkBackendRequestResult.NOT_FOUND.toFrameworkErrorKind(0));
     }
 
     @Test
@@ -87,22 +119,27 @@ class ZLinkBackendRequestResultTest {
         //  completeUserSpotClose now classify them through
         //  fromWireTerminal(terminal).toFrameworkErrorKind(failureCode) instead
         //  of collapsing to a generic rejection (spec 32:81-118, 99-108).
-        assertEquals(ZLinkFrameworkErrorKind.INVALID_OPERATION,
-            ZLinkBackendRequestResult.fromWireTerminal(107)
-                .toFrameworkErrorKind(33)); // conflict + spotGenerationStale
-        assertEquals(ZLinkFrameworkErrorKind.INVALID_OPERATION,
-            ZLinkBackendRequestResult.fromWireTerminal(110)
-                .toFrameworkErrorKind(0));  // invalidArgument
-        assertEquals(ZLinkFrameworkErrorKind.DEADLINE_EXCEEDED,
-            ZLinkBackendRequestResult.fromWireTerminal(101)
-                .toFrameworkErrorKind(0));  // timedOut
-        assertEquals(ZLinkFrameworkErrorKind.UNAVAILABLE,
-            ZLinkBackendRequestResult.fromWireTerminal(108)
-                .toFrameworkErrorKind(0));  // busy: remote queue -> Unavailable
+        assertEquals(
+                ZLinkFrameworkErrorKind.INVALID_OPERATION,
+                ZLinkBackendRequestResult.fromWireTerminal(107)
+                        .toFrameworkErrorKind(33)); // conflict + spotGenerationStale
+        assertEquals(
+                ZLinkFrameworkErrorKind.INVALID_OPERATION,
+                ZLinkBackendRequestResult.fromWireTerminal(110)
+                        .toFrameworkErrorKind(0)); // invalidArgument
+        assertEquals(
+                ZLinkFrameworkErrorKind.DEADLINE_EXCEEDED,
+                ZLinkBackendRequestResult.fromWireTerminal(101)
+                        .toFrameworkErrorKind(0)); // timedOut
+        assertEquals(
+                ZLinkFrameworkErrorKind.UNAVAILABLE,
+                ZLinkBackendRequestResult.fromWireTerminal(108)
+                        .toFrameworkErrorKind(0)); // busy: remote queue -> Unavailable
         //  A generic conflict terminal carrying a remote-queue fine code stays
         //  Unavailable rather than collapsing.
-        assertEquals(ZLinkFrameworkErrorKind.UNAVAILABLE,
-            ZLinkBackendRequestResult.fromWireTerminal(107)
-                .toFrameworkErrorKind(18)); // conflict + workerQueueFull
+        assertEquals(
+                ZLinkFrameworkErrorKind.UNAVAILABLE,
+                ZLinkBackendRequestResult.fromWireTerminal(107)
+                        .toFrameworkErrorKind(18)); // conflict + workerQueueFull
     }
 }

@@ -7,14 +7,8 @@ import static org.junit.jupiter.api.Assertions.assertNotSame;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
-import java.lang.reflect.Proxy;
-import java.nio.charset.StandardCharsets;
-import java.time.Duration;
-import java.util.List;
-import java.util.Optional;
-import java.util.concurrent.CompletableFuture;
-import java.util.concurrent.atomic.AtomicReference;
 import org.junit.jupiter.api.Test;
+
 import systems.zlink.contracts.core.RoutingId;
 import systems.zlink.contracts.messaging.Message;
 import systems.zlink.framework.configuration.ZLinkMessageFlowLogMode;
@@ -26,11 +20,18 @@ import systems.zlink.framework.runtime.internal.diagnostics.ZLinkFlowContext;
 import systems.zlink.framework.runtime.internal.handlers.ZLinkHandlerActivator;
 import systems.zlink.framework.runtime.messaging.ZLinkStringMessageSerializer;
 
+import java.lang.reflect.Proxy;
+import java.nio.charset.StandardCharsets;
+import java.time.Duration;
+import java.util.List;
+import java.util.Optional;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.atomic.AtomicReference;
+
 /**
- * R1 value-passing contract for spot publish/direct-outbound APPLICATION
- * flow: the flow state is captured as a value and consumed only at encode
- * time. Outside a serial turn the publish stage stays the bare public
- * admission stage; pending completion inside a turn may add only the serial
+ * R1 value-passing contract for spot publish/direct-outbound APPLICATION flow: the flow state is
+ * captured as a value and consumed only at encode time. Outside a serial turn the publish stage
+ * stays the bare public admission stage; pending completion inside a turn may add only the serial
  * continuation wrapper.
  */
 final class ZLinkSpotOutboundApplicationFlowTest {
@@ -41,9 +42,16 @@ final class ZLinkSpotOutboundApplicationFlowTest {
         var outbound = outbound(ZLinkMessageFlowLogMode.NORMAL);
 
         try (Message payload = message("payload")) {
-            outbound.send(spot, RoutingId.from("target"), "spot-1", 1L,
-                    payload, Optional.of("Move"))
-                .submit().toCompletableFuture().join();
+            outbound.send(
+                            spot,
+                            RoutingId.from("target"),
+                            "spot-1",
+                            1L,
+                            payload,
+                            Optional.of("Move"))
+                    .submit()
+                    .toCompletableFuture()
+                    .join();
         }
 
         ZLinkFlowContext.State flow = ZLinkSpotFlowFrame.decode(sentParts.get());
@@ -57,14 +65,20 @@ final class ZLinkSpotOutboundApplicationFlowTest {
         AtomicReference<List<Message>> sentParts = new AtomicReference<>();
         ZLinkBackendSpot spot = spotCapturing("sendToSpot", sentParts);
         var outbound = outbound(ZLinkMessageFlowLogMode.NORMAL);
-        ZLinkFlowContext.State ambient =
-            ZLinkFlowContext.create(ZLinkFlowOrigin.INBOUND);
+        ZLinkFlowContext.State ambient = ZLinkFlowContext.create(ZLinkFlowOrigin.INBOUND);
 
         try (Message payload = message("payload");
-             ZLinkFlowContext.Scope ignored = ZLinkFlowContext.enter(ambient)) {
-            outbound.send(spot, RoutingId.from("target"), "spot-1", 1L,
-                    payload, Optional.of("Move"))
-                .submit().toCompletableFuture().join();
+                ZLinkFlowContext.Scope ignored = ZLinkFlowContext.enter(ambient)) {
+            outbound.send(
+                            spot,
+                            RoutingId.from("target"),
+                            "spot-1",
+                            1L,
+                            payload,
+                            Optional.of("Move"))
+                    .submit()
+                    .toCompletableFuture()
+                    .join();
         }
 
         ZLinkFlowContext.State flow = ZLinkSpotFlowFrame.decode(sentParts.get());
@@ -80,9 +94,16 @@ final class ZLinkSpotOutboundApplicationFlowTest {
         var outbound = outbound(ZLinkMessageFlowLogMode.OFF);
 
         try (Message payload = message("payload")) {
-            outbound.send(spot, RoutingId.from("target"), "spot-1", 1L,
-                    payload, Optional.of("Move"))
-                .submit().toCompletableFuture().join();
+            outbound.send(
+                            spot,
+                            RoutingId.from("target"),
+                            "spot-1",
+                            1L,
+                            payload,
+                            Optional.of("Move"))
+                    .submit()
+                    .toCompletableFuture()
+                    .join();
         }
 
         assertNull(ZLinkSpotFlowFrame.decode(sentParts.get()));
@@ -93,27 +114,28 @@ final class ZLinkSpotOutboundApplicationFlowTest {
     void publishTurnReturnsBareAdmissionEvenWithTracingOn() {
         CompletableFuture<Void> admission = new CompletableFuture<>();
         AtomicReference<List<Message>> publishedParts = new AtomicReference<>();
-        ZLinkBackendSpot spot = (ZLinkBackendSpot) Proxy.newProxyInstance(
-            ZLinkBackendSpot.class.getClassLoader(),
-            new Class<?>[] {ZLinkBackendSpot.class},
-            (proxy, method, arguments) -> {
-                if (method.getName().equals("publishAsync")) {
-                    publishedParts.set(copyParts(arguments));
-                    return admission;
-                }
-                return defaultValue(method.getReturnType());
-            });
+        ZLinkBackendSpot spot =
+                (ZLinkBackendSpot)
+                        Proxy.newProxyInstance(
+                                ZLinkBackendSpot.class.getClassLoader(),
+                                new Class<?>[] {ZLinkBackendSpot.class},
+                                (proxy, method, arguments) -> {
+                                    if (method.getName().equals("publishAsync")) {
+                                        publishedParts.set(copyParts(arguments));
+                                        return admission;
+                                    }
+                                    return defaultValue(method.getReturnType());
+                                });
         var outbound = outbound(ZLinkMessageFlowLogMode.NORMAL);
 
         try (Message payload = message("payload")) {
-            var publicStage = outbound.publish(
-                    spot, "events", "orders", payload, Optional.of("Move"))
-                .submit()
-                .toCompletableFuture();
+            var publicStage =
+                    outbound.publish(spot, "events", "orders", payload, Optional.of("Move"))
+                            .submit()
+                            .toCompletableFuture();
 
             //  The flow frame is attached at encode time by value passing…
-            ZLinkFlowContext.State flow =
-                ZLinkSpotFlowFrame.decode(publishedParts.get());
+            ZLinkFlowContext.State flow = ZLinkSpotFlowFrame.decode(publishedParts.get());
             assertNotNull(flow);
             assertEquals(ZLinkFlowOrigin.APPLICATION, flow.origin());
 
@@ -130,41 +152,38 @@ final class ZLinkSpotOutboundApplicationFlowTest {
         var options = new ZLinkDispatchOptionsRegistration();
         options.messageFlow(mode);
         return new ZLinkSpotDirectOutbound(
-            new ZLinkSpotRouteMessages(new ZLinkStringMessageSerializer()),
-            Runnable::run,
-            new ZLinkMessageFlowTracer(
-                options,
-                ZLinkHandlerActivator.reflection(),
-                Runnable::run));
+                new ZLinkSpotRouteMessages(new ZLinkStringMessageSerializer()),
+                Runnable::run,
+                new ZLinkMessageFlowTracer(
+                        options, ZLinkHandlerActivator.reflection(), Runnable::run));
     }
 
     private static ZLinkBackendSpot spotCapturing(
-        String methodName,
-        AtomicReference<List<Message>> parts) {
-        return (ZLinkBackendSpot) Proxy.newProxyInstance(
-            ZLinkBackendSpot.class.getClassLoader(),
-            new Class<?>[] {ZLinkBackendSpot.class},
-            (proxy, method, arguments) -> {
-                if (method.getName().equals(methodName)) {
-                    parts.set(copyParts(arguments));
-                    return CompletableFuture.completedFuture(null);
-                }
-                if (method.getName().equals("admissionTimeout")) {
-                    return Duration.ofSeconds(1);
-                }
-                return defaultValue(method.getReturnType());
-            });
+            String methodName, AtomicReference<List<Message>> parts) {
+        return (ZLinkBackendSpot)
+                Proxy.newProxyInstance(
+                        ZLinkBackendSpot.class.getClassLoader(),
+                        new Class<?>[] {ZLinkBackendSpot.class},
+                        (proxy, method, arguments) -> {
+                            if (method.getName().equals(methodName)) {
+                                parts.set(copyParts(arguments));
+                                return CompletableFuture.completedFuture(null);
+                            }
+                            if (method.getName().equals("admissionTimeout")) {
+                                return Duration.ofSeconds(1);
+                            }
+                            return defaultValue(method.getReturnType());
+                        });
     }
 
     private static List<Message> copyParts(Object[] arguments) {
         for (Object argument : arguments) {
             if (argument instanceof List<?> list
-                && !list.isEmpty()
-                && list.get(0) instanceof Message) {
+                    && !list.isEmpty()
+                    && list.get(0) instanceof Message) {
                 @SuppressWarnings("unchecked")
                 List<Message> parts = (List<Message>) list;
-                return parts.stream().map(part ->
-                    Message.from(part.toByteArray())).toList();
+                return parts.stream().map(part -> Message.from(part.toByteArray())).toList();
             }
         }
         return List.of();

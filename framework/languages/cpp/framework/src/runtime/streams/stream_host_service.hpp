@@ -39,8 +39,7 @@ struct stream_host_core_test_faults_t
 };
 stream_host_core_test_faults_t &stream_host_core_test_faults () noexcept;
 
-class stream_host_service_t final : public hosted_service_t,
-                                     public hosted_service_lifecycle_t
+class stream_host_service_t final : public hosted_service_t, public hosted_service_lifecycle_t
 {
   public:
     stream_host_service_t (
@@ -82,16 +81,13 @@ class stream_host_service_t final : public hosted_service_t,
 
     /* graceful-drain-handoff §7 forced teardown: notifies and closes every
      * active session so the client-visible reason stays the forced one. */
-    void force_close_sessions (stream_close_reason_t reason,
-                               std::string_view diagnostic) noexcept;
+    void force_close_sessions (stream_close_reason_t reason, std::string_view diagnostic) noexcept;
 
     int shutdown_stop_priority () const noexcept override { return 90; }
-    bool drain_sessions_until (
-      std::chrono::steady_clock::time_point deadline) noexcept override;
+    bool drain_sessions_until (std::chrono::steady_clock::time_point deadline) noexcept override;
     void force_close_sessions () noexcept override
     {
-        force_close_sessions (stream_close_reason_t::server_drain,
-                              "drain force stop");
+        force_close_sessions (stream_close_reason_t::server_drain, "drain force stop");
     }
 
   private:

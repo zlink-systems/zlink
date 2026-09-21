@@ -35,8 +35,7 @@ struct relocation_envelope_application_state_t
     std::vector<std::uint8_t> state;
 
     friend bool operator== (const relocation_envelope_application_state_t &,
-                            const relocation_envelope_application_state_t &)
-      = default;
+                            const relocation_envelope_application_state_t &) = default;
 };
 
 struct relocation_envelope_saved_work_t
@@ -48,8 +47,7 @@ struct relocation_envelope_saved_work_t
     frozen_record_t record;
 
     friend bool operator== (const relocation_envelope_saved_work_t &,
-                            const relocation_envelope_saved_work_t &)
-      = default;
+                            const relocation_envelope_saved_work_t &) = default;
 };
 
 struct relocation_envelope_timer_t
@@ -80,8 +78,7 @@ struct relocation_envelope_pending_tick_t
     std::uint64_t skipped_ticks = 0;
 
     friend bool operator== (const relocation_envelope_pending_tick_t &,
-                            const relocation_envelope_pending_tick_t &)
-      = default;
+                            const relocation_envelope_pending_tick_t &) = default;
 };
 
 struct relocation_envelope_t
@@ -97,16 +94,13 @@ struct relocation_envelope_t
     std::vector<relocation_envelope_timer_t> timer_registrations;
     std::vector<relocation_envelope_pending_tick_t> pending_timer_ticks;
 
-    friend bool operator== (const relocation_envelope_t &,
-                            const relocation_envelope_t &) = default;
+    friend bool operator== (const relocation_envelope_t &, const relocation_envelope_t &) = default;
 };
 
 /* Both throw service_wire_error_t on any contract violation. Encoding
  * revalidates the same invariants decoding enforces, so an encoded stream
  * is always decodable and byte-identical on re-encode. */
-std::vector<std::uint8_t> encode_relocation_envelope (
-  const relocation_envelope_t &envelope);
-relocation_envelope_t decode_relocation_envelope (
-  std::span<const std::uint8_t> bytes);
+std::vector<std::uint8_t> encode_relocation_envelope (const relocation_envelope_t &envelope);
+relocation_envelope_t decode_relocation_envelope (std::span<const std::uint8_t> bytes);
 
 } // namespace zlink::framework::runtime::protocol

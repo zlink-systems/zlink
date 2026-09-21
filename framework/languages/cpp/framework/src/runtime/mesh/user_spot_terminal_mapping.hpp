@@ -9,9 +9,8 @@
 namespace zlink::framework::runtime::user_spot_terminal
 {
 
-inline framework_error_kind_t map_user_spot_wire_failure (
-  const protocol::reply_header_t &header,
-  bool creation)
+inline framework_error_kind_t map_user_spot_wire_failure (const protocol::reply_header_t &header,
+                                                          bool creation)
 {
     if (header.terminal_result == 101)
         return framework_error_kind_t::deadline_exceeded;
@@ -24,9 +23,7 @@ inline framework_error_kind_t map_user_spot_wire_failure (
         return framework_error_kind_t::unavailable;
     // No eligible node can host the Spot; waiting on a queue cannot make a
     // placement target appear.
-    if (creation
-        && header.terminal_result == 113
-        && header.failure_code == 0)
+    if (creation && header.terminal_result == 113 && header.failure_code == 0)
         return framework_error_kind_t::unavailable;
     //  Spec 32-framework-error-model:99-103 — a remote target's operation-table/
     //  queue saturation (Conflict(107)/Busy(108)+None) is the target's own
@@ -36,9 +33,7 @@ inline framework_error_kind_t map_user_spot_wire_failure (
         && header.failure_code == 0)
         return framework_error_kind_t::unavailable;
 
-    switch (
-      static_cast<protocol::framework_error_code> (
-        header.failure_code)) {
+    switch (static_cast<protocol::framework_error_code> (header.failure_code)) {
         case protocol::framework_error_code::spotCreateFailed:
             return framework_error_kind_t::internal_failure;
         case protocol::framework_error_code::spotRouteNotFound:
@@ -79,14 +74,11 @@ inline framework_error_kind_t map_user_spot_wire_failure (
 }
 
 inline framework_error_kind_t map_user_spot_operation_failure (
-  foundation::operation_terminal_t terminal,
-  const protocol::reply_header_t &header,
-  bool creation)
+  foundation::operation_terminal_t terminal, const protocol::reply_header_t &header, bool creation)
 {
     switch (terminal) {
         case foundation::operation_terminal_t::completed:
-            return map_user_spot_wire_failure (
-              header, creation);
+            return map_user_spot_wire_failure (header, creation);
         case foundation::operation_terminal_t::timed_out:
             return framework_error_kind_t::deadline_exceeded;
         case foundation::operation_terminal_t::protocol_error:

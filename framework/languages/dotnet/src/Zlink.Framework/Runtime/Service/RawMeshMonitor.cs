@@ -30,7 +30,8 @@ internal sealed class RawMeshMonitor : IMeshNodeMonitor
             checked((ulong)Math.Max(0, Interlocked.Read(ref _completed))),
             checked((ulong)Math.Max(0, Interlocked.Read(ref _protocolErrors))),
             checked((ulong)Math.Max(0, Interlocked.Read(ref _backpressured))),
-            checked((ulong)Math.Max(0, Interlocked.Read(ref _sequence))));
+            checked((ulong)Math.Max(0, Interlocked.Read(ref _sequence)))
+        );
 
     public MeshMonitorEvent? Recv(RecvFlags flags = RecvFlags.None)
     {
@@ -46,7 +47,8 @@ internal sealed class RawMeshMonitor : IMeshNodeMonitor
         string channelName = "",
         MeshOperationId operationId = default,
         int resultCode = 0,
-        int failureErrno = 0)
+        int failureErrno = 0
+    )
     {
         _state = state;
         switch (kind)
@@ -74,22 +76,25 @@ internal sealed class RawMeshMonitor : IMeshNodeMonitor
         if (Volatile.Read(ref _disposed) != 0 || !Includes(kind))
             return;
         var sequence = checked((ulong)Interlocked.Increment(ref _sequence));
-        _events.Enqueue(new MeshMonitorEvent(
-            kind,
-            checked((ulong)Environment.TickCount64),
-            0,
-            0,
-            state,
-            peerRid,
-            0,
-            0,
-            MeshOwnerKind.Node,
-            string.Empty,
-            default,
-            channelName,
-            operationId,
-            resultCode,
-            failureErrno));
+        _events.Enqueue(
+            new MeshMonitorEvent(
+                kind,
+                checked((ulong)Environment.TickCount64),
+                0,
+                0,
+                state,
+                peerRid,
+                0,
+                0,
+                MeshOwnerKind.Node,
+                string.Empty,
+                default,
+                channelName,
+                operationId,
+                resultCode,
+                failureErrno
+            )
+        );
         _ = sequence;
     }
 
@@ -97,9 +102,7 @@ internal sealed class RawMeshMonitor : IMeshNodeMonitor
     {
         if (Interlocked.Exchange(ref _disposed, 1) != 0)
             return;
-        while (_events.TryDequeue(out _))
-        {
-        }
+        while (_events.TryDequeue(out _)) { }
     }
 
     public ValueTask DisposeAsync()
@@ -125,7 +128,7 @@ internal sealed class RawMeshMonitor : IMeshNodeMonitor
             MeshMonitorEventKind.ProtocolError => MeshMonitorEventMask.ProtocolError,
             MeshMonitorEventKind.ClaimRevoked => MeshMonitorEventMask.ClaimRevoked,
             MeshMonitorEventKind.PeerNotRequired => MeshMonitorEventMask.PeerNotRequired,
-            _ => MeshMonitorEventMask.None
+            _ => MeshMonitorEventMask.None,
         };
         return (_mask & bit) != 0;
     }

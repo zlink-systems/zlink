@@ -51,7 +51,9 @@ export enum ZLinkFrameworkInternalErrorKind {
   ActorRouteUnavailable = 'actorRouteUnavailable'
 }
 
-const INTERNAL_TO_PUBLIC: Readonly<Record<ZLinkFrameworkInternalErrorKind, ZLinkFrameworkErrorKind>> = Object.freeze({
+const INTERNAL_TO_PUBLIC: Readonly<
+  Record<ZLinkFrameworkInternalErrorKind, ZLinkFrameworkErrorKind>
+> = Object.freeze({
   [ZLinkFrameworkInternalErrorKind.ActorRouteNotFound]: ZLinkFrameworkErrorKind.NotFound,
   [ZLinkFrameworkInternalErrorKind.ActorCreateFailed]: ZLinkFrameworkErrorKind.InternalFailure,
   [ZLinkFrameworkInternalErrorKind.ActorAlreadyExists]: ZLinkFrameworkErrorKind.AlreadyExists,
@@ -74,7 +76,8 @@ const INTERNAL_TO_PUBLIC: Readonly<Record<ZLinkFrameworkInternalErrorKind, ZLink
   [ZLinkFrameworkInternalErrorKind.WorkerFailed]: ZLinkFrameworkErrorKind.InternalFailure,
   [ZLinkFrameworkInternalErrorKind.ActorLocationStale]: ZLinkFrameworkErrorKind.Unavailable,
   [ZLinkFrameworkInternalErrorKind.ActorCreateRejected]: ZLinkFrameworkErrorKind.Rejected,
-  [ZLinkFrameworkInternalErrorKind.ObjectClientNotConfigured]: ZLinkFrameworkErrorKind.NotConfigured,
+  [ZLinkFrameworkInternalErrorKind.ObjectClientNotConfigured]:
+    ZLinkFrameworkErrorKind.NotConfigured,
   [ZLinkFrameworkInternalErrorKind.MeshSelectionRequired]: ZLinkFrameworkErrorKind.NotConfigured,
   [ZLinkFrameworkInternalErrorKind.MeshNotFound]: ZLinkFrameworkErrorKind.NotFound,
   [ZLinkFrameworkInternalErrorKind.InvalidConfiguration]: ZLinkFrameworkErrorKind.NotConfigured,
@@ -90,13 +93,16 @@ const INTERNAL_TO_PUBLIC: Readonly<Record<ZLinkFrameworkInternalErrorKind, ZLink
   [ZLinkFrameworkInternalErrorKind.SpotIdConflict]: ZLinkFrameworkErrorKind.AlreadyExists,
   [ZLinkFrameworkInternalErrorKind.RuntimeShutdown]: ZLinkFrameworkErrorKind.ShuttingDown,
   [ZLinkFrameworkInternalErrorKind.RelocationDisabled]: ZLinkFrameworkErrorKind.Rejected,
-  [ZLinkFrameworkInternalErrorKind.RelocationTargetUnavailable]: ZLinkFrameworkErrorKind.Unavailable,
+  [ZLinkFrameworkInternalErrorKind.RelocationTargetUnavailable]:
+    ZLinkFrameworkErrorKind.Unavailable,
   [ZLinkFrameworkInternalErrorKind.RelocationFailed]: ZLinkFrameworkErrorKind.InternalFailure,
   [ZLinkFrameworkInternalErrorKind.InvalidOperation]: ZLinkFrameworkErrorKind.InvalidOperation,
   [ZLinkFrameworkInternalErrorKind.ActorRouteUnavailable]: ZLinkFrameworkErrorKind.Unavailable
 });
 
-export const ZLINK_FRAMEWORK_INTERNAL_ERROR_KIND_VALUES: Readonly<Record<ZLinkFrameworkInternalErrorKind, number>> = Object.freeze({
+export const ZLINK_FRAMEWORK_INTERNAL_ERROR_KIND_VALUES: Readonly<
+  Record<ZLinkFrameworkInternalErrorKind, number>
+> = Object.freeze({
   [ZLinkFrameworkInternalErrorKind.ActorRouteNotFound]: 0,
   [ZLinkFrameworkInternalErrorKind.ActorCreateFailed]: 1,
   [ZLinkFrameworkInternalErrorKind.ActorAlreadyExists]: 2,
@@ -141,20 +147,22 @@ export const ZLINK_FRAMEWORK_INTERNAL_ERROR_KIND_VALUES: Readonly<Record<ZLinkFr
   [ZLinkFrameworkInternalErrorKind.ActorRouteUnavailable]: 41
 });
 
-const INTERNAL_KIND_BY_WIRE_FAILURE_CODE: ReadonlyMap<number, ZLinkFrameworkInternalErrorKind> = new Map<number, ZLinkFrameworkInternalErrorKind>([
-  ...Object.entries(ZLINK_FRAMEWORK_INTERNAL_ERROR_KIND_VALUES)
-    .map(([kind, code]) => [code + 1, kind as ZLinkFrameworkInternalErrorKind] as const),
-  //  Spec 32-framework-error-model:99-103 — a workerQueueFull(18) received in a
-  //  remote reply is the target's queue state and maps to Unavailable.
-  [18, ZLinkFrameworkInternalErrorKind.RouteNotConnected]
-]);
+const INTERNAL_KIND_BY_WIRE_FAILURE_CODE: ReadonlyMap<number, ZLinkFrameworkInternalErrorKind> =
+  new Map<number, ZLinkFrameworkInternalErrorKind>([
+    ...Object.entries(ZLINK_FRAMEWORK_INTERNAL_ERROR_KIND_VALUES).map(
+      ([kind, code]) => [code + 1, kind as ZLinkFrameworkInternalErrorKind] as const
+    ),
+    //  Spec 32-framework-error-model:99-103 — a workerQueueFull(18) received in a
+    //  remote reply is the target's queue state and maps to Unavailable.
+    [18, ZLinkFrameworkInternalErrorKind.RouteNotConnected]
+  ]);
 
 const WIRE_TERMINAL_RESULT_BY_FAILURE_CODE: ReadonlyMap<number, number> = new Map([
-  ...[1, 6, 8, 9, 10, 11, 14].map(code => [code, 102] as const),
-  ...[2, 5, 13, 17, 19, 20, 35, 42].map(code => [code, 105] as const),
-  ...[3, 4, 7, 21, 33, 34].map(code => [code, 107] as const),
-  ...[12, 16].map(code => [code, 104] as const),
-  ...[15, 18, 22].map(code => [code, 106] as const)
+  ...[1, 6, 8, 9, 10, 11, 14].map((code) => [code, 102] as const),
+  ...[2, 5, 13, 17, 19, 20, 35, 42].map((code) => [code, 105] as const),
+  ...[3, 4, 7, 21, 33, 34].map((code) => [code, 107] as const),
+  ...[12, 16].map((code) => [code, 104] as const),
+  ...[15, 18, 22].map((code) => [code, 106] as const)
 ]);
 
 const INTERNAL_KIND = new WeakMap<ZLinkFrameworkException, ZLinkFrameworkInternalErrorKind>();
@@ -249,10 +257,7 @@ export function wireReplyFailureException(
       message
     );
   }
-  return new ZLinkFrameworkException(
-    requestResultToPublicErrorKind(terminalResult),
-    message
-  );
+  return new ZLinkFrameworkException(requestResultToPublicErrorKind(terminalResult), message);
 }
 
 /**
@@ -280,9 +285,10 @@ export function internalFrameworkErrorCode(error: ZLinkFrameworkException): numb
 }
 
 /** Produces the canonical stateful wire terminal without leaking internal kinds. */
-export function internalFrameworkWireReply(
-  error: ZLinkFrameworkException
-): { readonly terminalResult: number; readonly failureCode: number } {
+export function internalFrameworkWireReply(error: ZLinkFrameworkException): {
+  readonly terminalResult: number;
+  readonly failureCode: number;
+} {
   const kind = INTERNAL_KIND.get(error);
   if (kind === ZLinkFrameworkInternalErrorKind.DeadlineExceeded) {
     return { terminalResult: 101, failureCode: 0 };
@@ -321,15 +327,10 @@ export function internalFrameworkErrorKindFromWireReply(
   return expectedTerminalResult === terminalResult ? kind : undefined;
 }
 
-const BOUNDARY_WIRE_TERMINAL_RESULTS = new Set([
-  101, 103, 108, 109, 110, 111, 112, 113
-]);
+const BOUNDARY_WIRE_TERMINAL_RESULTS = new Set([101, 103, 108, 109, 110, 111, 112, 113]);
 
 /** Checks the terminal and failure-code pair before a transport maps it. */
-export function isCanonicalWireReplyTerminal(
-  terminalResult: number,
-  failureCode: number
-): boolean {
+export function isCanonicalWireReplyTerminal(terminalResult: number, failureCode: number): boolean {
   if (terminalResult === 0) return failureCode === 0;
   if (BOUNDARY_WIRE_TERMINAL_RESULTS.has(terminalResult)) return failureCode === 0;
   return internalFrameworkErrorKindFromWireReply(terminalResult, failureCode) !== undefined;

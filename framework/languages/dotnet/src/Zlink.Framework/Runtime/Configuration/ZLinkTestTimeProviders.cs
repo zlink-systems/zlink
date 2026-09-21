@@ -9,14 +9,16 @@ internal static class ZLinkTestTimeProviders
 {
     internal static void UseTestTimeProvider(
         this IZLinkFrameworkOptions options,
-        TimeProvider timeProvider)
+        TimeProvider timeProvider
+    )
     {
         ArgumentNullException.ThrowIfNull(options);
         ArgumentNullException.ThrowIfNull(timeProvider);
 
         if (options is not ZLinkFrameworkOptionsBuilder builder)
             throw new InvalidOperationException(
-                "UseTestTimeProvider requires the framework options created by AddZLinkFramework.");
+                "UseTestTimeProvider requires the framework options created by AddZLinkFramework."
+            );
 
         builder.UseTestTimeProvider(timeProvider);
     }

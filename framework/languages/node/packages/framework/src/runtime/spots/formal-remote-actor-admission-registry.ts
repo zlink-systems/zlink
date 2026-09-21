@@ -1,9 +1,4 @@
-import type {
-  ActorRef,
-  RoutingId,
-  ZLinkActor,
-  ZLinkActorJoinOperationId
-} from '../../contracts';
+import type { ActorRef, RoutingId, ZLinkActor, ZLinkActorJoinOperationId } from '../../contracts';
 import type { ZLinkRemoteBoundSessionTarget } from '../actors/actor-runtime-state';
 import type { ZLinkDeferredJoinAcceptedRoot } from '../actors/deferred-join-accepted-journal';
 import type { ZLinkActorRequestTerminal } from './spot-actor-packet-dispatch';
@@ -36,13 +31,7 @@ function objectKey(actorId: string, objectGeneration: bigint): string {
 }
 
 export type ZLinkFormalRemoteActorAdmissionState =
-  | 'provisional'
-  | 'admitting'
-  | 'admitted'
-  | 'rejected'
-  | 'committed'
-  | 'aborted'
-  | 'failed';
+  'provisional' | 'admitting' | 'admitted' | 'rejected' | 'committed' | 'aborted' | 'failed';
 
 export interface ZLinkFormalRemoteActorAdmission {
   readonly actorId: string;
@@ -76,8 +65,7 @@ export interface ZLinkFormalRemoteActorAdmissionFailure {
 }
 
 export type ZLinkFormalRemoteActorAdmissionResult =
-  | ZLinkFormalRemoteActorAdmissionOutcome
-  | ZLinkFormalRemoteActorAdmissionFailure;
+  ZLinkFormalRemoteActorAdmissionOutcome | ZLinkFormalRemoteActorAdmissionFailure;
 
 export interface ZLinkFormalRemoteActorAdmissionRecord {
   readonly admission: ZLinkFormalRemoteActorAdmission;
@@ -124,7 +112,9 @@ export class ZLinkFormalRemoteActorAdmissionRegistry {
     const existing = this.admissions.get(input.transferId);
     if (existing !== undefined) {
       if (!sameAdmission(existing.admission, input)) {
-        throw new Error(`Remote actor admission '${input.transferId}' does not match the original request.`);
+        throw new Error(
+          `Remote actor admission '${input.transferId}' does not match the original request.`
+        );
       }
       return { record: existing, created: false };
     }
@@ -144,7 +134,9 @@ export class ZLinkFormalRemoteActorAdmissionRegistry {
     const existing = this.admissions.get(input.transferId);
     if (existing !== undefined) {
       if (!sameProvisionalAdmission(existing.admission, input)) {
-        throw new Error(`Remote actor admission '${input.transferId}' does not match the original request.`);
+        throw new Error(
+          `Remote actor admission '${input.transferId}' does not match the original request.`
+        );
       }
       return { record: existing, created: false };
     }
@@ -225,11 +217,11 @@ export class ZLinkFormalRemoteActorAdmissionRegistry {
     if (transferId === undefined) return 'not-found';
     const entry = this.admissions.get(transferId);
     if (
-      entry === undefined
-      || entry.migrated
-      || entry.state === 'rejected'
-      || entry.state === 'aborted'
-      || entry.state === 'failed'
+      entry === undefined ||
+      entry.migrated ||
+      entry.state === 'rejected' ||
+      entry.state === 'aborted' ||
+      entry.state === 'failed'
     ) {
       return 'not-found';
     }
@@ -265,25 +257,21 @@ export class ZLinkFormalRemoteActorAdmissionRegistry {
     this.delete(transferId);
   }
 
-  private failParked(
-    entry: ZLinkFormalRemoteActorAdmissionEntry,
-    reason?: unknown
-  ): void {
+  private failParked(entry: ZLinkFormalRemoteActorAdmissionEntry, reason?: unknown): void {
     if (entry.parked.length === 0) return;
     const parked = entry.parked;
     entry.parked = [];
-    const aborted = reason ?? new Error(
-      `Actor Join relocation temporary queue for '${entry.admission.actorId}' was aborted.`
-    );
+    const aborted =
+      reason ??
+      new Error(
+        `Actor Join relocation temporary queue for '${entry.admission.actorId}' was aborted.`
+      );
     for (const message of parked) {
       message.reject(aborted);
     }
   }
 
-  complete(
-    transferId: string,
-    outcome: ZLinkFormalRemoteActorAdmissionOutcome
-  ): void {
+  complete(transferId: string, outcome: ZLinkFormalRemoteActorAdmissionOutcome): void {
     const entry = this.admissions.get(transferId);
     if (entry === undefined || entry.state === 'aborted' || entry.state === 'committed') return;
     entry.state = outcome.accepted ? 'admitted' : 'rejected';
@@ -326,13 +314,15 @@ export class ZLinkFormalRemoteActorAdmissionRegistry {
     entry.actor = actor;
   }
 
-  attachDeferredJoinRoot(
-    transferId: string,
-    root: ZLinkDeferredJoinAcceptedRoot
-  ): void {
+  attachDeferredJoinRoot(transferId: string, root: ZLinkDeferredJoinAcceptedRoot): void {
     const entry = this.admissions.get(transferId);
-    if (entry === undefined || entry.state !== 'admitted'
-      || entry.result === undefined || 'error' in entry.result || !entry.result.accepted) {
+    if (
+      entry === undefined ||
+      entry.state !== 'admitted' ||
+      entry.result === undefined ||
+      'error' in entry.result ||
+      !entry.result.accepted
+    ) {
       throw new Error(`Remote actor admission '${transferId}' cannot attach deferred recovery.`);
     }
     entry.result = { ...entry.result, deferredJoinRoot: root };
@@ -377,35 +367,39 @@ function sameAdmission(
   left: ZLinkFormalRemoteActorAdmission,
   right: ZLinkFormalRemoteActorAdmission
 ): boolean {
-  return left.actorId === right.actorId
-    && left.actorType === right.actorType
-    && String(left.spotId) === String(right.spotId)
-    && left.targetSpotGeneration === right.targetSpotGeneration
-    && left.expectedMembershipEpoch === right.expectedMembershipEpoch
-    && left.requestFingerprint === right.requestFingerprint
-    && sameOperationId(left.completionOperationId, right.completionOperationId)
-    && String(left.sourceSpotId ?? '') === String(right.sourceSpotId ?? '')
-    && String(left.sourceActorNodeRid ?? '') === String(right.sourceActorNodeRid ?? '')
-    && left.actorRef.actorId === right.actorRef.actorId
-    && String(left.actorRef.nodeRid) === String(right.actorRef.nodeRid)
-    && left.actorRef.objectGeneration === right.actorRef.objectGeneration;
+  return (
+    left.actorId === right.actorId &&
+    left.actorType === right.actorType &&
+    String(left.spotId) === String(right.spotId) &&
+    left.targetSpotGeneration === right.targetSpotGeneration &&
+    left.expectedMembershipEpoch === right.expectedMembershipEpoch &&
+    left.requestFingerprint === right.requestFingerprint &&
+    sameOperationId(left.completionOperationId, right.completionOperationId) &&
+    String(left.sourceSpotId ?? '') === String(right.sourceSpotId ?? '') &&
+    String(left.sourceActorNodeRid ?? '') === String(right.sourceActorNodeRid ?? '') &&
+    left.actorRef.actorId === right.actorRef.actorId &&
+    String(left.actorRef.nodeRid) === String(right.actorRef.nodeRid) &&
+    left.actorRef.objectGeneration === right.actorRef.objectGeneration
+  );
 }
 
 function sameProvisionalAdmission(
   left: ZLinkFormalRemoteActorAdmission,
   right: ZLinkProvisionalRemoteActorAdmission
 ): boolean {
-  return left.actorId === right.actorId
-    && String(left.spotId) === String(right.spotId)
-    && left.targetSpotGeneration === right.targetSpotGeneration
-    && left.expectedMembershipEpoch === right.expectedMembershipEpoch
-    && left.requestFingerprint === right.requestFingerprint
-    && sameOperationId(left.completionOperationId, right.completionOperationId)
-    && String(left.sourceSpotId ?? '') === String(right.sourceSpotId ?? '')
-    && String(left.sourceActorNodeRid ?? '') === String(right.sourceActorNodeRid ?? '')
-    && left.actorRef.actorId === right.actorRef.actorId
-    && String(left.actorRef.nodeRid) === String(right.actorRef.nodeRid)
-    && left.actorRef.objectGeneration === right.actorRef.objectGeneration;
+  return (
+    left.actorId === right.actorId &&
+    String(left.spotId) === String(right.spotId) &&
+    left.targetSpotGeneration === right.targetSpotGeneration &&
+    left.expectedMembershipEpoch === right.expectedMembershipEpoch &&
+    left.requestFingerprint === right.requestFingerprint &&
+    sameOperationId(left.completionOperationId, right.completionOperationId) &&
+    String(left.sourceSpotId ?? '') === String(right.sourceSpotId ?? '') &&
+    String(left.sourceActorNodeRid ?? '') === String(right.sourceActorNodeRid ?? '') &&
+    left.actorRef.actorId === right.actorRef.actorId &&
+    String(left.actorRef.nodeRid) === String(right.actorRef.nodeRid) &&
+    left.actorRef.objectGeneration === right.actorRef.objectGeneration
+  );
 }
 
 function sameOperationId(

@@ -21,7 +21,7 @@ public final class ZLinkServiceOperationRegistry implements AutoCloseable {
     private final LongSupplier nanoTime;
     private final Supplier<? extends Throwable> timeoutFailure;
     private final ZLinkServiceCompletionDispatcher completions =
-        ZLinkServiceCompletionDispatcher.INSTANCE;
+            ZLinkServiceCompletionDispatcher.INSTANCE;
     private final Object gate = new Object();
     private final Map<UUID, Entry<?>> entries = new HashMap<>();
     private final Throwable closeFailure;
@@ -30,57 +30,41 @@ public final class ZLinkServiceOperationRegistry implements AutoCloseable {
     private volatile boolean closed;
 
     public ZLinkServiceOperationRegistry(ScheduledExecutorService scheduler) {
-        this(
-            scheduler,
-            new IllegalStateException("service runtime is closed"));
+        this(scheduler, new IllegalStateException("service runtime is closed"));
     }
 
     public ZLinkServiceOperationRegistry(
-        ScheduledExecutorService scheduler,
-        Throwable closeFailure) {
-        this(
-            scheduler,
-            closeFailure,
-            () -> new TimeoutException("service operation timed out"));
+            ScheduledExecutorService scheduler, Throwable closeFailure) {
+        this(scheduler, closeFailure, () -> new TimeoutException("service operation timed out"));
     }
 
     public ZLinkServiceOperationRegistry(
-        ScheduledExecutorService scheduler,
-        Throwable closeFailure,
-        Supplier<? extends Throwable> timeoutFailure) {
-        this(
-            scheduler,
-            closeFailure,
-            timeoutFailure,
-            System::nanoTime);
+            ScheduledExecutorService scheduler,
+            Throwable closeFailure,
+            Supplier<? extends Throwable> timeoutFailure) {
+        this(scheduler, closeFailure, timeoutFailure, System::nanoTime);
     }
 
     ZLinkServiceOperationRegistry(
-        ScheduledExecutorService scheduler,
-        Throwable closeFailure,
-        LongSupplier nanoTime) {
+            ScheduledExecutorService scheduler, Throwable closeFailure, LongSupplier nanoTime) {
         this(
-            scheduler,
-            closeFailure,
-            () -> new TimeoutException("service operation timed out"),
-            nanoTime);
+                scheduler,
+                closeFailure,
+                () -> new TimeoutException("service operation timed out"),
+                nanoTime);
     }
 
     public ZLinkServiceOperationRegistry(
-        ScheduledExecutorService scheduler,
-        Throwable closeFailure,
-        Supplier<? extends Throwable> timeoutFailure,
-        LongSupplier nanoTime) {
+            ScheduledExecutorService scheduler,
+            Throwable closeFailure,
+            Supplier<? extends Throwable> timeoutFailure,
+            LongSupplier nanoTime) {
         Objects.requireNonNull(scheduler, "scheduler");
         this.closeFailure = Objects.requireNonNull(closeFailure, "closeFailure");
-        this.timeoutFailure = Objects.requireNonNull(
-            timeoutFailure, "timeoutFailure");
+        this.timeoutFailure = Objects.requireNonNull(timeoutFailure, "timeoutFailure");
         this.nanoTime = Objects.requireNonNull(nanoTime, "nanoTime");
-        this.maintenance = scheduler.scheduleAtFixedRate(
-            this::expireMaintenance,
-            1,
-            1,
-            TimeUnit.MILLISECONDS);
+        this.maintenance =
+                scheduler.scheduleAtFixedRate(this::expireMaintenance, 1, 1, TimeUnit.MILLISECONDS);
     }
 
     public <T> Operation<T> register(Duration timeout) {
@@ -100,10 +84,10 @@ public final class ZLinkServiceOperationRegistry implements AutoCloseable {
     }
 
     public <T> CompletableFuture<T> submit(
-        UUID id,
-        Duration timeout,
-        Supplier<? extends CompletionStage<T>> submission,
-        Consumer<? super T> discardValue) {
+            UUID id,
+            Duration timeout,
+            Supplier<? extends CompletionStage<T>> submission,
+            Consumer<? super T> discardValue) {
         Objects.requireNonNull(id, "id");
         Objects.requireNonNull(submission, "submission");
         Objects.requireNonNull(discardValue, "discardValue");
@@ -117,8 +101,7 @@ public final class ZLinkServiceOperationRegistry implements AutoCloseable {
             }
             operation = registerLocked(timeoutNanos, id);
             try {
-                submitted = Objects.requireNonNull(
-                    submission.get(), "submission result");
+                submitted = Objects.requireNonNull(submission.get(), "submission result");
             } catch (Throwable failure) {
                 synchronousFailure = takeLocked(operation.id());
                 if (synchronousFailure != null) {
@@ -129,13 +112,14 @@ public final class ZLinkServiceOperationRegistry implements AutoCloseable {
         if (synchronousFailure != null) {
             completions.post(synchronousFailure);
         } else if (submitted != null) {
-            submitted.whenComplete((value, failure) -> {
-                if (failure != null) {
-                    completeExceptionally(operation.id(), failure);
-                } else if (!complete(operation.id(), value) && value != null) {
-                    discardValue.accept(value);
-                }
-            });
+            submitted.whenComplete(
+                    (value, failure) -> {
+                        if (failure != null) {
+                            completeExceptionally(operation.id(), failure);
+                        } else if (!complete(operation.id(), value) && value != null) {
+                            discardValue.accept(value);
+                        }
+                    });
         }
         return operation.completion();
     }
@@ -163,8 +147,8 @@ public final class ZLinkServiceOperationRegistry implements AutoCloseable {
     }
 
     /**
-     * Removes an operation whose transport submission was rejected before a
-     * request existed. No callback is delivered for such an operation.
+     * Removes an operation whose transport submission was rejected before a request existed. No
+     * callback is delivered for such an operation.
      */
     public boolean discard(UUID id) {
         Entry<?> entry = take(Objects.requireNonNull(id, "id"));
@@ -282,8 +266,8 @@ public final class ZLinkServiceOperationRegistry implements AutoCloseable {
                 if (deadlineReached(nowNanos, current.deadlineNanos)) {
                     entries.remove(current.id, current);
                     unlinkActive(current);
-                    current.completeWithFailure(Objects.requireNonNull(
-                        timeoutFailure.get(), "timeout failure"));
+                    current.completeWithFailure(
+                            Objects.requireNonNull(timeoutFailure.get(), "timeout failure"));
                     current.dispatchNext(null);
                     if (expiredTail == null) {
                         expiredHead = current;
@@ -313,11 +297,9 @@ public final class ZLinkServiceOperationRegistry implements AutoCloseable {
             do {
                 id = ZLinkServiceOperationIds.next();
             } while (entries.containsKey(id));
-        } else if ((id.getMostSignificantBits() == 0
-                && id.getLeastSignificantBits() == 0)
-            || entries.containsKey(id)) {
-            throw new IllegalArgumentException(
-                "operation identity is zero or already pending");
+        } else if ((id.getMostSignificantBits() == 0 && id.getLeastSignificantBits() == 0)
+                || entries.containsKey(id)) {
+            throw new IllegalArgumentException("operation identity is zero or already pending");
         }
         Entry<T> entry = new Entry<>();
         completions.register(entry);
@@ -352,8 +334,7 @@ public final class ZLinkServiceOperationRegistry implements AutoCloseable {
         }
     }
 
-    private static final class Entry<T>
-        extends ZLinkServiceCompletionDispatcher.WorkItem {
+    private static final class Entry<T> extends ZLinkServiceCompletionDispatcher.WorkItem {
         private static final int VALUE = 1;
         private static final int FAILURE = 2;
         private static final int CANCELLATION = 3;
@@ -387,11 +368,11 @@ public final class ZLinkServiceOperationRegistry implements AutoCloseable {
             try {
                 switch (terminalKind) {
                     case VALUE -> completion.complete((T) terminalValue);
-                    case FAILURE ->
-                        completion.completeExceptionally(terminalFailure);
+                    case FAILURE -> completion.completeExceptionally(terminalFailure);
                     case CANCELLATION -> completion.completeCancellation();
-                    default -> throw new IllegalStateException(
-                        "completion work item has no terminal outcome");
+                    default ->
+                            throw new IllegalStateException(
+                                    "completion work item has no terminal outcome");
                 }
             } finally {
                 completion.clearCancellation();

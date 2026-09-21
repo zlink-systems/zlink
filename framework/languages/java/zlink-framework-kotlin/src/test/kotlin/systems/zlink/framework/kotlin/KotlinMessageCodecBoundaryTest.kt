@@ -1,6 +1,5 @@
 package systems.zlink.framework.kotlin
 
-import org.junit.jupiter.api.Assertions
 import java.nio.charset.StandardCharsets
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Test
@@ -82,9 +81,8 @@ private class KotlinBoundarySerializer : ZLinkMessageSerializer {
     override fun <T : Any?> serialize(value: T): ZLinkEncodedPayload =
         when (value) {
             is Message -> ZLinkEncodedPayload.from(value.toByteArray())
-            is KotlinBoundaryPayload -> ZLinkEncodedPayload.from(
-                value.value.toByteArray(StandardCharsets.UTF_8),
-            )
+            is KotlinBoundaryPayload ->
+                ZLinkEncodedPayload.from(value.value.toByteArray(StandardCharsets.UTF_8))
             else -> ZLinkEncodedPayload.from(value.toString().toByteArray(StandardCharsets.UTF_8))
         }
 

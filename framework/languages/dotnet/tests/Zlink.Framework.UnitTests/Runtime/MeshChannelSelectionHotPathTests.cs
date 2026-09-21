@@ -5,12 +5,21 @@ namespace Zlink.Framework.UnitTests;
 
 public sealed class MeshChannelSelectionHotPathTests
 {
-    private delegate (bool Selected, RoutingId TargetRid, RoutingId PhysicalRid,
-        SubmitResult Failure, string FailureReason, bool Wait, Task Changed)
-        SelectTarget(string channel);
+    private delegate (
+        bool Selected,
+        RoutingId TargetRid,
+        RoutingId PhysicalRid,
+        SubmitResult Failure,
+        string FailureReason,
+        bool Wait,
+        Task Changed
+    ) SelectTarget(string channel);
 
     private delegate ValueTask<(RoutingId TargetRid, RoutingId PhysicalRid)> WaitForTarget(
-        string channel, TimeSpan timeout, CancellationToken cancellationToken);
+        string channel,
+        TimeSpan timeout,
+        CancellationToken cancellationToken
+    );
 
     [Fact]
     public async Task ReadyRequestSelectionAllocatesNoDeadlineBeyondSynchronousSelection()
@@ -41,9 +50,11 @@ public sealed class MeshChannelSelectionHotPathTests
 
         // A linked CTS plus its deadline timer cannot fit in this allowance.
         // The reference path performs the same selector and peer lookup.
-        Assert.True(requestBytes <= synchronousBytes + iterations * 32L,
+        Assert.True(
+            requestBytes <= synchronousBytes + iterations * 32L,
             $"Ready request selection allocated {requestBytes} bytes; "
-            + $"synchronous selection allocated {synchronousBytes} bytes.");
+                + $"synchronous selection allocated {synchronousBytes} bytes."
+        );
 
         cancellation.Cancel();
         var selected = await wait("worker", TimeSpan.FromMinutes(1), cancellation.Token);
@@ -79,36 +90,46 @@ public sealed class MeshChannelSelectionHotPathTests
         using var cancellation = new CancellationTokenSource();
         cancellation.Cancel();
         await Assert.ThrowsAnyAsync<OperationCanceledException>(() =>
-            wait("worker", TimeSpan.FromSeconds(1), cancellation.Token).AsTask());
+            wait("worker", TimeSpan.FromSeconds(1), cancellation.Token).AsTask()
+        );
 
         var timeout = await Assert.ThrowsAsync<ZLinkFrameworkException>(() =>
-            wait("worker", TimeSpan.FromTicks(1), CancellationToken.None).AsTask()
-                .WaitAsync(TimeSpan.FromSeconds(3)));
+            wait("worker", TimeSpan.FromTicks(1), CancellationToken.None)
+                .AsTask()
+                .WaitAsync(TimeSpan.FromSeconds(3))
+        );
         Assert.Equal(ZLinkFrameworkErrorKind.DeadlineExceeded, timeout.Kind);
     }
 
     private static ZLinkMeshPeer AddReadyPeer(ZLinkManagedMeshNode node)
     {
-        var peer = new ZLinkMeshPeer(1, "inproc://selection-peer", null, "",
-            ZLinkServiceConnectionDirection.Outbound)
+        var peer = new ZLinkMeshPeer(
+            1,
+            "inproc://selection-peer",
+            null,
+            "",
+            ZLinkServiceConnectionDirection.Outbound
+        )
         {
             RoutingId = RoutingId.From("logical-peer"),
             PhysicalRoutingId = RoutingId.From("physical-peer"),
-            Admitted = true
+            Admitted = true,
         };
-        Field<Dictionary<RoutingId, ZLinkMeshPeer>>(node, "_peersByRid")
-            .Add(peer.RoutingId, peer);
-        Field<ZLinkMeshChannelSelection>(node, "_channelSelection").Rebuild(
-            ["worker"], _ => [new ZLinkMeshChannelTarget(peer.RoutingId, 1)]);
+        Field<Dictionary<RoutingId, ZLinkMeshPeer>>(node, "_peersByRid").Add(peer.RoutingId, peer);
+        Field<ZLinkMeshChannelSelection>(node, "_channelSelection")
+            .Rebuild(["worker"], _ => [new ZLinkMeshChannelTarget(peer.RoutingId, 1)]);
         return peer;
     }
 
     private static T Method<T>(ZLinkManagedMeshNode node, string name)
         where T : Delegate =>
-        typeof(ZLinkManagedMeshNode).GetMethod(name, BindingFlags.Instance | BindingFlags.NonPublic)!
+        typeof(ZLinkManagedMeshNode)
+            .GetMethod(name, BindingFlags.Instance | BindingFlags.NonPublic)!
             .CreateDelegate<T>(node);
 
     private static T Field<T>(ZLinkManagedMeshNode node, string name) =>
-        (T)typeof(ZLinkManagedMeshNode).GetField(name, BindingFlags.Instance | BindingFlags.NonPublic)!
-            .GetValue(node)!;
+        (T)
+            typeof(ZLinkManagedMeshNode)
+                .GetField(name, BindingFlags.Instance | BindingFlags.NonPublic)!
+                .GetValue(node)!;
 }

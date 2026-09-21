@@ -1,15 +1,16 @@
 package systems.zlink.framework.locations.redis;
-import java.io.ByteArrayOutputStream;
-import java.util.Locale;
-import java.util.UUID;
+
+import systems.zlink.framework.runtime.internal.locations.ZLinkCreationOperationIdentity;
 import systems.zlink.framework.runtime.internal.locations.ZLinkMeshNodeDescriptorKey;
 
+import java.io.ByteArrayOutputStream;
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
 import java.util.Base64;
 import java.util.HexFormat;
-import systems.zlink.framework.runtime.internal.locations.ZLinkCreationOperationIdentity;
+import java.util.Locale;
+import java.util.UUID;
 
 final class ZLinkRedisLocationKeys {
     private final String prefix;
@@ -50,14 +51,8 @@ final class ZLinkRedisLocationKeys {
         return prefix + ":own:" + tag + ":";
     }
 
-    String meshNodeOwnerTokenIndexKey(
-        String ownerId,
-        long leaseGeneration) {
-        return ownerIndexKeyPrefix("mesh-node")
-            + sha256Hex(
-                ownerId
-                    + "\0"
-                    + leaseGeneration);
+    String meshNodeOwnerTokenIndexKey(String ownerId, long leaseGeneration) {
+        return ownerIndexKeyPrefix("mesh-node") + sha256Hex(ownerId + "\0" + leaseGeneration);
     }
 
     String leaseKey(String ownerId) {
@@ -87,63 +82,55 @@ final class ZLinkRedisLocationKeys {
     String stampKey(String tag, String meshName) {
         if ("mesh-node".equals(tag)) {
             return meshName == null
-                ? domainBase() + ":descriptor:mesh:stamp"
-                : domainBase() + ":descriptor:mesh:stamp:"
-                    + encode(meshName);
+                    ? domainBase() + ":descriptor:mesh:stamp"
+                    : domainBase() + ":descriptor:mesh:stamp:" + encode(meshName);
         }
-        return meshName == null ? prefix + ":stamp:" + tag : prefix + ":stamp:" + tag + ":" + meshName;
+        return meshName == null
+                ? prefix + ":stamp:" + tag
+                : prefix + ":stamp:" + tag + ":" + meshName;
     }
 
     String authorityRowKey(String authorityKey) {
-        return domainBase() + ":authority:current:"
-            + sha256Hex(authorityKey);
+        return domainBase() + ":authority:current:" + sha256Hex(authorityKey);
     }
 
     String entrySpotIdentityClaimKey(String spotId) {
-        return domainBase() + ":entry-spot-id:"
-            + sha256Hex(spotId);
+        return domainBase() + ":entry-spot-id:" + sha256Hex(spotId);
     }
 
     String entrySpotIdentityClaimKeyFromAuthority(String authorityKey) {
         if (authorityKey == null || !authorityKey.startsWith("zla1:s:")) {
-            throw new IllegalArgumentException(
-                "Entry Spot authority key is invalid");
+            throw new IllegalArgumentException("Entry Spot authority key is invalid");
         }
         int lengthEnd = authorityKey.indexOf(':', "zla1:s:".length());
         if (lengthEnd < 0) {
-            throw new IllegalArgumentException(
-                "Entry Spot authority key is invalid");
+            throw new IllegalArgumentException("Entry Spot authority key is invalid");
         }
         int expectedLength;
         try {
-            expectedLength = Integer.parseInt(
-                authorityKey.substring("zla1:s:".length(), lengthEnd));
+            expectedLength =
+                    Integer.parseInt(authorityKey.substring("zla1:s:".length(), lengthEnd));
         } catch (NumberFormatException error) {
-            throw new IllegalArgumentException(
-                "Entry Spot authority key is invalid",
-                error);
+            throw new IllegalArgumentException("Entry Spot authority key is invalid", error);
         }
         var decoded = new ByteArrayOutputStream(expectedLength);
         String encoded = authorityKey.substring(lengthEnd + 1);
-        for (int index = 0; index < encoded.length();) {
+        for (int index = 0; index < encoded.length(); ) {
             char item = encoded.charAt(index);
             if (item == '%') {
                 if (index + 2 >= encoded.length()) {
-                    throw new IllegalArgumentException(
-                        "Entry Spot authority key is invalid");
+                    throw new IllegalArgumentException("Entry Spot authority key is invalid");
                 }
                 int high = Character.digit(encoded.charAt(index + 1), 16);
                 int low = Character.digit(encoded.charAt(index + 2), 16);
                 if (high < 0 || low < 0) {
-                    throw new IllegalArgumentException(
-                        "Entry Spot authority key is invalid");
+                    throw new IllegalArgumentException("Entry Spot authority key is invalid");
                 }
                 decoded.write((high << 4) | low);
                 index += 3;
             } else {
                 if (item > 0x7f) {
-                    throw new IllegalArgumentException(
-                        "Entry Spot authority key is invalid");
+                    throw new IllegalArgumentException("Entry Spot authority key is invalid");
                 }
                 decoded.write(item);
                 index++;
@@ -151,15 +138,12 @@ final class ZLinkRedisLocationKeys {
         }
         byte[] bytes = decoded.toByteArray();
         if (bytes.length != expectedLength) {
-            throw new IllegalArgumentException(
-                "Entry Spot authority key is invalid");
+            throw new IllegalArgumentException("Entry Spot authority key is invalid");
         }
         String spotId = new String(bytes, StandardCharsets.UTF_8);
-        if (!systems.zlink.framework.runtime.locations
-            .ZLinkAuthorityKeyCodec.spot(spotId)
-            .equals(authorityKey)) {
-            throw new IllegalArgumentException(
-                "Entry Spot authority key is invalid");
+        if (!systems.zlink.framework.runtime.locations.ZLinkAuthorityKeyCodec.spot(spotId)
+                .equals(authorityKey)) {
+            throw new IllegalArgumentException("Entry Spot authority key is invalid");
         }
         return entrySpotIdentityClaimKey(spotId);
     }
@@ -173,36 +157,32 @@ final class ZLinkRedisLocationKeys {
     }
 
     String creationKey(String reservationId) {
-        return domainBase() + ":creation:"
-            + reservationId.toLowerCase(Locale.ROOT);
+        return domainBase() + ":creation:" + reservationId.toLowerCase(Locale.ROOT);
     }
 
-    String creationTerminalKey(
-        ZLinkCreationOperationIdentity operation) {
+    String creationTerminalKey(ZLinkCreationOperationIdentity operation) {
         byte[] sourceRid = operation.sourceNodeRid().toBytes();
-        return prefix + ":{zlink-location-v3}:creation-terminal:"
-            + sourceRid.length + ":"
-            + HexFormat.of().formatHex(sourceRid) + ":"
-            + operation.sourceLifecycleGeneration() + ":"
-            + String.format(
-                Locale.ROOT,
-                "%016x%016x",
-                operation.operationIdHigh(),
-                operation.operationIdLow());
+        return prefix
+                + ":{zlink-location-v3}:creation-terminal:"
+                + sourceRid.length
+                + ":"
+                + HexFormat.of().formatHex(sourceRid)
+                + ":"
+                + operation.sourceLifecycleGeneration()
+                + ":"
+                + String.format(
+                        Locale.ROOT,
+                        "%016x%016x",
+                        operation.operationIdHigh(),
+                        operation.operationIdLow());
     }
 
-    String authorityAggregateKey(
-        UUID aggregateId,
-        long generation) {
-        return domainBase() + ":aggregate:"
-            + uuidHex(aggregateId)
-            + ":"
-            + generation;
+    String authorityAggregateKey(UUID aggregateId, long generation) {
+        return domainBase() + ":aggregate:" + uuidHex(aggregateId) + ":" + generation;
     }
 
     String relocationCapacityKey(String fence) {
-        return domainBase() + ":relocation:"
-            + fence.replace("-", "").toLowerCase(Locale.ROOT);
+        return domainBase() + ":relocation:" + fence.replace("-", "").toLowerCase(Locale.ROOT);
     }
 
     String placementCapacityStateKey() {
@@ -213,18 +193,15 @@ final class ZLinkRedisLocationKeys {
         return domainBase() + ":membership:current";
     }
 
-    String meshNodeDescriptorRowKey(
-        ZLinkMeshNodeDescriptorKey key) {
-        return domainBase() + ":descriptor:mesh:"
-            + sha256Hex(
-                ZLinkRedisLocationKeyCodec.encodeMeshNodeKey(key));
+    String meshNodeDescriptorRowKey(ZLinkMeshNodeDescriptorKey key) {
+        return domainBase()
+                + ":descriptor:mesh:"
+                + sha256Hex(ZLinkRedisLocationKeyCodec.encodeMeshNodeKey(key));
     }
 
-    String meshNodeDescriptorMetadataKey(
-        ZLinkMeshNodeDescriptorKey key) {
+    String meshNodeDescriptorMetadataKey(ZLinkMeshNodeDescriptorKey key) {
         return meshNodeDescriptorMetadataKeyPrefix()
-            + sha256Hex(
-                ZLinkRedisLocationKeyCodec.encodeMeshNodeKey(key));
+                + sha256Hex(ZLinkRedisLocationKeyCodec.encodeMeshNodeKey(key));
     }
 
     String meshNodeDescriptorMetadataKeyPrefix() {
@@ -236,13 +213,11 @@ final class ZLinkRedisLocationKeys {
     }
 
     String clientServerDescriptorRowKey(String encodedKey) {
-        return domainBase() + ":descriptor:client-server:"
-            + sha256Hex(encodedKey);
+        return domainBase() + ":descriptor:client-server:" + sha256Hex(encodedKey);
     }
 
     String clientServerDescriptorMetadataKey(String encodedKey) {
-        return domainBase() + ":descriptor-admission:client-server:"
-            + sha256Hex(encodedKey);
+        return domainBase() + ":descriptor-admission:client-server:" + sha256Hex(encodedKey);
     }
 
     String clientServerDescriptorIndexKey() {
@@ -250,20 +225,17 @@ final class ZLinkRedisLocationKeys {
     }
 
     String clientServerDescriptorChannelIndexKey(String channelName) {
-        return domainBase() + ":descriptor:client-server:channel:"
-            + sha256Hex(channelName);
+        return domainBase() + ":descriptor:client-server:channel:" + sha256Hex(channelName);
     }
 
-    String clientServerOwnerTokenIndexKey(
-        String ownerId,
-        long leaseGeneration) {
-        return domainBase() + ":descriptor:client-server:owner:"
-            + sha256Hex(ownerId + "\0" + leaseGeneration);
+    String clientServerOwnerTokenIndexKey(String ownerId, long leaseGeneration) {
+        return domainBase()
+                + ":descriptor:client-server:owner:"
+                + sha256Hex(ownerId + "\0" + leaseGeneration);
     }
 
     String clientServerDescriptorStampKey(String channelName) {
-        return domainBase() + ":descriptor:client-server:stamp:"
-            + sha256Hex(channelName);
+        return domainBase() + ":descriptor:client-server:stamp:" + sha256Hex(channelName);
     }
 
     String clientServerDescriptorGlobalStampKey() {
@@ -271,36 +243,29 @@ final class ZLinkRedisLocationKeys {
     }
 
     String fanoutPublisherDescriptorRowKey(String encodedKey) {
-        return domainBase() + ":descriptor:fanout-publisher:"
-            + sha256Hex(encodedKey);
+        return domainBase() + ":descriptor:fanout-publisher:" + sha256Hex(encodedKey);
     }
 
     String fanoutPublisherDescriptorMetadataKey(String encodedKey) {
-        return domainBase() + ":descriptor-admission:fanout-publisher:"
-            + sha256Hex(encodedKey);
+        return domainBase() + ":descriptor-admission:fanout-publisher:" + sha256Hex(encodedKey);
     }
 
     String fanoutPublisherDescriptorIndexKey() {
         return domainBase() + ":descriptor:fanout-publisher:index";
     }
 
-    String fanoutPublisherDescriptorChannelIndexKey(
-        String channelName) {
-        return domainBase()
-            + ":descriptor:fanout-publisher:channel:"
-            + sha256Hex(channelName);
+    String fanoutPublisherDescriptorChannelIndexKey(String channelName) {
+        return domainBase() + ":descriptor:fanout-publisher:channel:" + sha256Hex(channelName);
     }
 
-    String fanoutPublisherOwnerTokenIndexKey(
-        String ownerId,
-        long leaseGeneration) {
-        return domainBase() + ":descriptor:fanout-publisher:owner:"
-            + sha256Hex(ownerId + "\0" + leaseGeneration);
+    String fanoutPublisherOwnerTokenIndexKey(String ownerId, long leaseGeneration) {
+        return domainBase()
+                + ":descriptor:fanout-publisher:owner:"
+                + sha256Hex(ownerId + "\0" + leaseGeneration);
     }
 
     String fanoutPublisherDescriptorStampKey(String channelName) {
-        return domainBase() + ":descriptor:fanout-publisher:stamp:"
-            + sha256Hex(channelName);
+        return domainBase() + ":descriptor:fanout-publisher:stamp:" + sha256Hex(channelName);
     }
 
     String fanoutPublisherDescriptorGlobalStampKey() {
@@ -308,14 +273,11 @@ final class ZLinkRedisLocationKeys {
     }
 
     String encodedAuthorityKey(String authorityKey) {
-        return HexFormat.of().formatHex(
-            authorityKey.getBytes(StandardCharsets.UTF_8));
+        return HexFormat.of().formatHex(authorityKey.getBytes(StandardCharsets.UTF_8));
     }
 
     String decodeAuthorityKey(String encoded) {
-        return new String(
-            HexFormat.of().parseHex(encoded),
-            StandardCharsets.UTF_8);
+        return new String(HexFormat.of().parseHex(encoded), StandardCharsets.UTF_8);
     }
 
     String schemaKey() {
@@ -323,13 +285,11 @@ final class ZLinkRedisLocationKeys {
     }
 
     String authorityHistoryKey(String authorityKey) {
-        return domainBase() + ":authority:history:"
-            + sha256Hex(authorityKey);
+        return domainBase() + ":authority:history:" + sha256Hex(authorityKey);
     }
 
     String authorityHistoryRevisionsKey(String authorityKey) {
-        return domainBase() + ":authority:history-revisions:"
-            + sha256Hex(authorityKey);
+        return domainBase() + ":authority:history-revisions:" + sha256Hex(authorityKey);
     }
 
     String authorityIndexGcKey() {
@@ -337,13 +297,11 @@ final class ZLinkRedisLocationKeys {
     }
 
     String membershipHistoryKey(String authorityKey) {
-        return domainBase() + ":membership:history:"
-            + sha256Hex(authorityKey);
+        return domainBase() + ":membership:history:" + sha256Hex(authorityKey);
     }
 
     String membershipHistoryRevisionsKey(String authorityKey) {
-        return domainBase() + ":membership:history-revisions:"
-            + sha256Hex(authorityKey);
+        return domainBase() + ":membership:history-revisions:" + sha256Hex(authorityKey);
     }
 
     String capacityNodeActiveKey() {
@@ -399,15 +357,13 @@ final class ZLinkRedisLocationKeys {
     }
 
     /**
-     * The opaque record key: {@code {prefix}:{zlink-location-v3}:opaque:
-     * {sha256hex(preimage)}} exactly, per 21-location-runtime.md#2.4 /
-     * 22-location-store-redis.md#7 and the store-record-v1 golden fixture
-     * (owner ruling: the Redis Cluster hashtag braces are canonical and win
-     * over an earlier brace-less reading; the spec/golden text is being
-     * corrected to match). Shares {@link #domainBase()} with the dedicated
-     * Lua paths so the opaque store's multi-key EVAL scripts (record + index
-     * + map + cleanup + sequence + snapshot keys) keep Cluster same-slot
-     * atomicity.
+     * The opaque record key: {@code {prefix}:{zlink-location-v3}:opaque: {sha256hex(preimage)}}
+     * exactly, per 21-location-runtime.md#2.4 / 22-location-store-redis.md#7 and the
+     * store-record-v1 golden fixture (owner ruling: the Redis Cluster hashtag braces are canonical
+     * and win over an earlier brace-less reading; the spec/golden text is being corrected to
+     * match). Shares {@link #domainBase()} with the dedicated Lua paths so the opaque store's
+     * multi-key EVAL scripts (record + index + map + cleanup + sequence + snapshot keys) keep
+     * Cluster same-slot atomicity.
      */
     String opaqueRecordKey(String key) {
         return domainBase() + ":opaque:" + sha256Hex(key);
@@ -438,9 +394,7 @@ final class ZLinkRedisLocationKeys {
     }
 
     String opaqueScanKey(String scanId) {
-        return domainBase() + ":opaque:scan:"
-            + scanId.replace("-", "")
-                .toLowerCase(Locale.ROOT);
+        return domainBase() + ":opaque:scan:" + scanId.replace("-", "").toLowerCase(Locale.ROOT);
     }
 
     private String domainBase() {
@@ -449,25 +403,23 @@ final class ZLinkRedisLocationKeys {
 
     private static String encode(String value) {
         return Base64.getUrlEncoder()
-            .withoutPadding()
-            .encodeToString(value.getBytes(StandardCharsets.UTF_8));
+                .withoutPadding()
+                .encodeToString(value.getBytes(StandardCharsets.UTF_8));
     }
 
     private static String sha256Hex(String value) {
         try {
-            return HexFormat.of().formatHex(
-                MessageDigest.getInstance("SHA-256").digest(
-                    value.getBytes(StandardCharsets.UTF_8)));
+            return HexFormat.of()
+                    .formatHex(
+                            MessageDigest.getInstance("SHA-256")
+                                    .digest(value.getBytes(StandardCharsets.UTF_8)));
         } catch (NoSuchAlgorithmException exception) {
             throw new IllegalStateException(
-                "SHA-256 is required by the Redis location schema",
-                exception);
+                    "SHA-256 is required by the Redis location schema", exception);
         }
     }
 
     private static String uuidHex(UUID value) {
-        return value.toString().replace("-", "")
-            .toLowerCase(Locale.ROOT);
+        return value.toString().replace("-", "").toLowerCase(Locale.ROOT);
     }
-
 }

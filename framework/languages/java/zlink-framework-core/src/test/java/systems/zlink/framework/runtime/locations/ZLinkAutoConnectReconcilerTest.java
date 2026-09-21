@@ -1,21 +1,22 @@
 package systems.zlink.framework.runtime.locations;
-import java.util.concurrent.CompletionStage;
 
 import static org.junit.jupiter.api.Assertions.*;
 
-import java.time.Duration;
-import java.time.Instant;
-import java.util.ArrayList;
-import java.util.List;
-import java.util.Map;
-import java.util.concurrent.CompletableFuture;
-import java.util.concurrent.atomic.AtomicLong;
 import org.junit.jupiter.api.Test;
+
 import systems.zlink.contracts.core.RoutingId;
 import systems.zlink.framework.locations.ZLinkLocationOptions;
 import systems.zlink.framework.locations.ZLinkLocationRole;
 import systems.zlink.framework.locations.ZLinkMeshNodeObjectRole;
 import systems.zlink.framework.runtime.internal.locations.*;
+
+import java.time.Duration;
+import java.time.Instant;
+import java.util.List;
+import java.util.Map;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CompletionStage;
+import java.util.concurrent.atomic.AtomicLong;
 
 final class ZLinkAutoConnectReconcilerTest {
     @Test
@@ -26,8 +27,7 @@ final class ZLinkAutoConnectReconcilerTest {
         AtomicLong now = new AtomicLong();
         ZLinkLocationOptions options = new ZLinkLocationOptions();
         options.setStoreFailureGrace(Duration.ofSeconds(5));
-        var reconciler = reconciler(
-            resolver, executor, options, now);
+        var reconciler = reconciler(resolver, executor, options, now);
 
         resolver.rows = List.of(peer());
         reconciler.tick().toCompletableFuture().join();
@@ -42,8 +42,8 @@ final class ZLinkAutoConnectReconcilerTest {
         executor.connectSucceeds = false;
         now.set(Duration.ofSeconds(7).toNanos());
         reconciler.tick().toCompletableFuture().join();
-        assertEquals(2, executor.connects,
-            "retry must stop after the configured Store failure grace");
+        assertEquals(
+                2, executor.connects, "retry must stop after the configured Store failure grace");
     }
 
     @Test
@@ -54,8 +54,7 @@ final class ZLinkAutoConnectReconcilerTest {
         ZLinkLocationOptions options = new ZLinkLocationOptions();
         options.setOwnerLeaseRenewInterval(Duration.ofSeconds(1));
         options.setOwnerLeaseTtl(Duration.ofSeconds(3));
-        var reconciler = reconciler(
-            resolver, executor, options, now);
+        var reconciler = reconciler(resolver, executor, options, now);
 
         resolver.rows = List.of(peer());
         reconciler.tick().toCompletableFuture().join();
@@ -79,37 +78,40 @@ final class ZLinkAutoConnectReconcilerTest {
         MutableResolver resolver = new MutableResolver();
         RecordingExecutor executor = new RecordingExecutor();
         AtomicLong now = new AtomicLong();
-        var reconciler = new ZLinkAutoConnectReconciler(
-            new ZLinkAutoConnectPlanner.Local(
-                ZLinkAutoConnectType.ROUTE_MESH,
-                "mesh",
-                ZLinkLocationRole.ROUTER,
-                RoutingId.from("client-a"),
-                "inproc://client-a",
-                ZLinkMeshNodeObjectRole.CLIENT,
-                false),
-            null,
-            null,
-            resolver,
-            executor,
-            new ZLinkLocationOptions(),
-            now::get);
-        resolver.rows = List.of(new ZLinkAutoConnectPeer(
-            ZLinkAutoConnectType.ROUTE_MESH,
-            "mesh",
-            RoutingId.from("client-b"),
-            ZLinkLocationRole.ROUTER,
-            "inproc://client-b",
-            100,
-            false,
-            3,
-            Map.of(),
-            List.of(),
-            "owner-b",
-            4,
-            Instant.EPOCH,
-            ZLinkMeshNodeObjectRole.CLIENT,
-            false));
+        var reconciler =
+                new ZLinkAutoConnectReconciler(
+                        new ZLinkAutoConnectPlanner.Local(
+                                ZLinkAutoConnectType.ROUTE_MESH,
+                                "mesh",
+                                ZLinkLocationRole.ROUTER,
+                                RoutingId.from("client-a"),
+                                "inproc://client-a",
+                                ZLinkMeshNodeObjectRole.CLIENT,
+                                false),
+                        null,
+                        null,
+                        resolver,
+                        executor,
+                        new ZLinkLocationOptions(),
+                        now::get);
+        resolver.rows =
+                List.of(
+                        new ZLinkAutoConnectPeer(
+                                ZLinkAutoConnectType.ROUTE_MESH,
+                                "mesh",
+                                RoutingId.from("client-b"),
+                                ZLinkLocationRole.ROUTER,
+                                "inproc://client-b",
+                                100,
+                                false,
+                                3,
+                                Map.of(),
+                                List.of(),
+                                "owner-b",
+                                4,
+                                Instant.EPOCH,
+                                ZLinkMeshNodeObjectRole.CLIENT,
+                                false));
 
         reconciler.tick().toCompletableFuture().join();
         assertEquals(0, executor.connects);
@@ -123,61 +125,56 @@ final class ZLinkAutoConnectReconcilerTest {
     }
 
     private static ZLinkAutoConnectReconciler reconciler(
-        MutableResolver resolver,
-        RecordingExecutor executor,
-        ZLinkLocationOptions options,
-        AtomicLong now) {
+            MutableResolver resolver,
+            RecordingExecutor executor,
+            ZLinkLocationOptions options,
+            AtomicLong now) {
         return new ZLinkAutoConnectReconciler(
-            new ZLinkAutoConnectPlanner.Local(
-                ZLinkAutoConnectType.CLIENT_SERVER,
-                "orders",
-                ZLinkLocationRole.DEALER,
-                RoutingId.from("client"),
-                "inproc://client"),
-            null,
-            null,
-            resolver,
-            executor,
-            options,
-            now::get);
+                new ZLinkAutoConnectPlanner.Local(
+                        ZLinkAutoConnectType.CLIENT_SERVER,
+                        "orders",
+                        ZLinkLocationRole.DEALER,
+                        RoutingId.from("client"),
+                        "inproc://client"),
+                null,
+                null,
+                resolver,
+                executor,
+                options,
+                now::get);
     }
 
     private static ZLinkAutoConnectPeer peer() {
         return new ZLinkAutoConnectPeer(
-            ZLinkAutoConnectType.CLIENT_SERVER,
-            "orders",
-            RoutingId.from("server"),
-            ZLinkLocationRole.ROUTER,
-            "inproc://server",
-            100,
-            false,
-            9,
-            Map.of(),
-            List.of(),
-            "owner-server",
-            4,
-            Instant.parse("2026-07-27T00:00:00Z"));
+                ZLinkAutoConnectType.CLIENT_SERVER,
+                "orders",
+                RoutingId.from("server"),
+                ZLinkLocationRole.ROUTER,
+                "inproc://server",
+                100,
+                false,
+                9,
+                Map.of(),
+                List.of(),
+                "owner-server",
+                4,
+                Instant.parse("2026-07-27T00:00:00Z"));
     }
 
-    private static final class MutableResolver
-        implements ZLinkAutoConnectPeerResolver {
+    private static final class MutableResolver implements ZLinkAutoConnectPeerResolver {
         private List<ZLinkAutoConnectPeer> rows = List.of();
         private RuntimeException failure;
 
         @Override
-        public CompletionStage<List<ZLinkAutoConnectPeer>>
-            listPeers(
-                ZLinkAutoConnectType type,
-                String meshName,
-                ZLinkLocationRole role) {
+        public CompletionStage<List<ZLinkAutoConnectPeer>> listPeers(
+                ZLinkAutoConnectType type, String meshName, ZLinkLocationRole role) {
             return failure == null
-                ? CompletableFuture.completedFuture(rows)
-                : CompletableFuture.failedFuture(failure);
+                    ? CompletableFuture.completedFuture(rows)
+                    : CompletableFuture.failedFuture(failure);
         }
     }
 
-    private static final class RecordingExecutor
-        implements ZLinkAutoConnectExecutor {
+    private static final class RecordingExecutor implements ZLinkAutoConnectExecutor {
         private int connects;
         private int disconnects;
         private int notRequiredMarks;
@@ -209,14 +206,12 @@ final class ZLinkAutoConnectReconcilerTest {
         }
 
         @Override
-        public void observeAdmissionExpectation(
-            ZLinkAutoConnectPlanner.Target target) {
+        public void observeAdmissionExpectation(ZLinkAutoConnectPlanner.Target target) {
             admissionExpectations++;
         }
 
         @Override
-        public void forgetAdmissionExpectation(
-            ZLinkAutoConnectPlanner.Target target) {
+        public void forgetAdmissionExpectation(ZLinkAutoConnectPlanner.Target target) {
             forgottenAdmissionExpectations++;
         }
     }

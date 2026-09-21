@@ -1,8 +1,4 @@
-import type {
-  BaseSocket,
-  PollEventFlagValue,
-  Socket
-} from '@zlink-systems/zlink';
+import type { BaseSocket, PollEventFlagValue, Socket } from '@zlink-systems/zlink';
 import { zlink } from './node-backend-adapter-support';
 
 /**
@@ -16,11 +12,7 @@ export class ZLinkNodeEventLoopPoller {
   private readableHandler: () => void;
   private disposed = false;
 
-  constructor(
-    socket: Socket,
-    pollCompletion: boolean,
-    readableHandler: () => void
-  ) {
+  constructor(socket: Socket, pollCompletion: boolean, readableHandler: () => void) {
     this.readableHandler = readableHandler;
     try {
       const pollEvents: PollEventFlagValue[] = [zlink.PollEventFlag.PollIn];

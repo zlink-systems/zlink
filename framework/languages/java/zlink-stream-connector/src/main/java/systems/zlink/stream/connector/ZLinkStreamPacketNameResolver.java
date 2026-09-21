@@ -7,7 +7,7 @@ public interface ZLinkStreamPacketNameResolver {
     static ZLinkStreamPacketNameResolver defaultResolver() {
         return payloadType -> {
             ZLinkStreamPacketName packetName =
-                payloadType.getAnnotation(ZLinkStreamPacketName.class);
+                    payloadType.getAnnotation(ZLinkStreamPacketName.class);
             if (packetName != null) {
                 return packetName.value();
             }

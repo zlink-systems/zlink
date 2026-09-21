@@ -1,4 +1,5 @@
 using System.Diagnostics;
+
 namespace Zlink.Framework.Runtime.Execution;
 
 /// <summary>
@@ -23,16 +24,16 @@ internal sealed class ZLinkWorkerPool : IDisposable, IAsyncDisposable
     private int _idleThreads;
     private int _threadCount;
 
-    public ZLinkWorkerPool(
-        int minThreads,
-        int maxThreads,
-        TimeSpan idleTimeout)
+    public ZLinkWorkerPool(int minThreads, int maxThreads, TimeSpan idleTimeout)
     {
-        if (minThreads < 0) throw new ArgumentOutOfRangeException(nameof(minThreads));
+        if (minThreads < 0)
+            throw new ArgumentOutOfRangeException(nameof(minThreads));
 
-        if (maxThreads < Math.Max(1, minThreads)) throw new ArgumentOutOfRangeException(nameof(maxThreads));
+        if (maxThreads < Math.Max(1, minThreads))
+            throw new ArgumentOutOfRangeException(nameof(maxThreads));
 
-        if (idleTimeout <= TimeSpan.Zero) throw new ArgumentOutOfRangeException(nameof(idleTimeout));
+        if (idleTimeout <= TimeSpan.Zero)
+            throw new ArgumentOutOfRangeException(nameof(idleTimeout));
 
         _minThreads = minThreads;
         MaxThreads = maxThreads;
@@ -80,7 +81,8 @@ internal sealed class ZLinkWorkerPool : IDisposable, IAsyncDisposable
         {
             if (_threads.Contains(Thread.CurrentThread))
                 throw new InvalidOperationException("A worker cannot dispose its own pool.");
-            if (_disposeTask is not null) return new ValueTask(_disposeTask);
+            if (_disposeTask is not null)
+                return new ValueTask(_disposeTask);
             if (!_disposed)
             {
                 _disposed = true;
@@ -91,7 +93,9 @@ internal sealed class ZLinkWorkerPool : IDisposable, IAsyncDisposable
                 SignalDirectCapacityChanged();
                 cancel = true;
             }
-            completion = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            completion = new TaskCompletionSource(
+                TaskCreationOptions.RunContinuationsAsynchronously
+            );
             _disposeTask = completion.Task;
             threads = _threads.ToArray();
         }
@@ -129,17 +133,20 @@ internal sealed class ZLinkWorkerPool : IDisposable, IAsyncDisposable
         foreach (var item in abandoned)
             if (item.CancelBeforeStart is { } cancelBeforeStart)
                 failures.Capture(cancelBeforeStart);
-        if (cancel) failures.Capture(_shutdownSource.Cancel);
+        if (cancel)
+            failures.Capture(_shutdownSource.Cancel);
         failures.ThrowIfAny();
     }
 
     public ZLinkWorkerSubmitResult TrySubmit(
         Action<CancellationToken> work,
-        Action? cancelBeforeStart = null)
+        Action? cancelBeforeStart = null
+    )
     {
         lock (_sync)
         {
-            if (_disposed) return ZLinkWorkerSubmitResult.Stopped;
+            if (_disposed)
+                return ZLinkWorkerSubmitResult.Stopped;
             _queue.Enqueue(new WorkerItem(work, cancelBeforeStart));
             if (_idleThreads > 0)
             {
@@ -157,16 +164,18 @@ internal sealed class ZLinkWorkerPool : IDisposable, IAsyncDisposable
 
     internal ZLinkWorkerSubmitResult TrySubmitDirect(
         Action<CancellationToken> work,
-        Action? cancelBeforeStart = null)
+        Action? cancelBeforeStart = null
+    )
     {
         lock (_sync)
         {
-            if (_disposed) return ZLinkWorkerSubmitResult.Stopped;
+            if (_disposed)
+                return ZLinkWorkerSubmitResult.Stopped;
 
-            var availableReservations = _idleThreads
-                                        + (MaxThreads - _threadCount)
-                                        - _directQueue.Count;
-            if (availableReservations <= 0) return ZLinkWorkerSubmitResult.Full;
+            var availableReservations =
+                _idleThreads + (MaxThreads - _threadCount) - _directQueue.Count;
+            if (availableReservations <= 0)
+                return ZLinkWorkerSubmitResult.Full;
 
             var reservedIdleThread = _idleThreads > _directQueue.Count;
             _directQueue.Enqueue(new WorkerItem(work, cancelBeforeStart));
@@ -188,9 +197,11 @@ internal sealed class ZLinkWorkerPool : IDisposable, IAsyncDisposable
         Action<CancellationToken> work,
         Action? cancelBeforeStart,
         TimeSpan timeout,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken
+    )
     {
-        if (timeout <= TimeSpan.Zero) throw new ArgumentOutOfRangeException(nameof(timeout));
+        if (timeout <= TimeSpan.Zero)
+            throw new ArgumentOutOfRangeException(nameof(timeout));
         var deadline = Stopwatch.GetElapsedTime(0) + timeout;
 
         while (true)
@@ -198,12 +209,13 @@ internal sealed class ZLinkWorkerPool : IDisposable, IAsyncDisposable
             Task capacityChanged;
             lock (_sync)
             {
-                if (_disposed) return ZLinkWorkerSubmitResult.Stopped;
-                if (deadline <= Stopwatch.GetElapsedTime(0)) return ZLinkWorkerSubmitResult.Full;
+                if (_disposed)
+                    return ZLinkWorkerSubmitResult.Stopped;
+                if (deadline <= Stopwatch.GetElapsedTime(0))
+                    return ZLinkWorkerSubmitResult.Full;
 
-                var availableReservations = _idleThreads
-                                            + (MaxThreads - _threadCount)
-                                            - _directQueue.Count;
+                var availableReservations =
+                    _idleThreads + (MaxThreads - _threadCount) - _directQueue.Count;
                 if (availableReservations > 0)
                 {
                     var reservedIdleThread = _idleThreads > _directQueue.Count;
@@ -228,10 +240,13 @@ internal sealed class ZLinkWorkerPool : IDisposable, IAsyncDisposable
             try
             {
                 var remaining = deadline - Stopwatch.GetElapsedTime(0);
-                if (remaining <= TimeSpan.Zero) return ZLinkWorkerSubmitResult.Full;
+                if (remaining <= TimeSpan.Zero)
+                    return ZLinkWorkerSubmitResult.Full;
                 try
                 {
-                    await capacityChanged.WaitAsync(remaining, cancellationToken).ConfigureAwait(false);
+                    await capacityChanged
+                        .WaitAsync(remaining, cancellationToken)
+                        .ConfigureAwait(false);
                 }
                 catch (TimeoutException)
                 {
@@ -240,18 +255,15 @@ internal sealed class ZLinkWorkerPool : IDisposable, IAsyncDisposable
             }
             finally
             {
-                lock (_sync) _directCapacityWaiters--;
+                lock (_sync)
+                    _directCapacityWaiters--;
             }
         }
     }
 
     private void StartWorkerThread()
     {
-        var thread = new Thread(WorkerLoop)
-        {
-            IsBackground = true,
-            Name = "zlink-worker"
-        };
+        var thread = new Thread(WorkerLoop) { IsBackground = true, Name = "zlink-worker" };
         _threads.Add(thread);
         thread.Start();
     }
@@ -267,22 +279,23 @@ internal sealed class ZLinkWorkerPool : IDisposable, IAsyncDisposable
                 {
                     while (_directQueue.Count == 0 && _queue.Count == 0)
                     {
-                        if (_disposed) return;
+                        if (_disposed)
+                            return;
 
                         _idleThreads++;
                         SignalDirectCapacityChanged();
                         var signaled = Monitor.Wait(_sync, _idleTimeout);
                         _idleThreads--;
-                        if (!signaled
+                        if (
+                            !signaled
                             && _directQueue.Count == 0
                             && _queue.Count == 0
-                            && _threadCount > _minThreads)
+                            && _threadCount > _minThreads
+                        )
                             return;
                     }
 
-                    item = _directQueue.Count > 0
-                        ? _directQueue.Dequeue()
-                        : _queue.Dequeue();
+                    item = _directQueue.Count > 0 ? _directQueue.Dequeue() : _queue.Dequeue();
                 }
 
                 try
@@ -308,16 +321,15 @@ internal sealed class ZLinkWorkerPool : IDisposable, IAsyncDisposable
         }
     }
 
-    private sealed record WorkerItem(
-        Action<CancellationToken> Run,
-        Action? CancelBeforeStart);
+    private sealed record WorkerItem(Action<CancellationToken> Run, Action? CancelBeforeStart);
 
     private void SignalDirectCapacityChanged()
     {
         // Waiters register under _sync (every caller holds it), so with no
         // waiters the old signal is unobservable: skip the per-item TCS
         // rotation and its thread-pool completion.
-        if (_directCapacityWaiters == 0) return;
+        if (_directCapacityWaiters == 0)
+            return;
         var signal = _directCapacityChanged;
         _directCapacityChanged = NewCapacitySignal();
         signal.TrySetResult();
@@ -329,17 +341,21 @@ internal sealed class ZLinkWorkerPool : IDisposable, IAsyncDisposable
     private async Task CompleteStopAsync(
         IReadOnlyList<Thread> threads,
         TaskCompletionSource completion,
-        Exception? cancellationFailure)
+        Exception? cancellationFailure
+    )
     {
         var failures = new ZLinkFailureCollector(cancellationFailure);
-        await failures.CaptureAsync(
-                () => new ValueTask(Task.WhenAll(
-                    threads.Select(static thread => Task.Run(thread.Join)))))
+        await failures
+            .CaptureAsync(() =>
+                new ValueTask(Task.WhenAll(threads.Select(static thread => Task.Run(thread.Join))))
+            )
             .ConfigureAwait(false);
         failures.Capture(_shutdownSource.Dispose);
         var failure = failures.BuildException();
-        if (failure is null) completion.TrySetResult();
-        else completion.TrySetException(failure);
+        if (failure is null)
+            completion.TrySetResult();
+        else
+            completion.TrySetException(failure);
     }
 }
 
@@ -347,5 +363,5 @@ internal enum ZLinkWorkerSubmitResult
 {
     Accepted,
     Full,
-    Stopped
+    Stopped,
 }

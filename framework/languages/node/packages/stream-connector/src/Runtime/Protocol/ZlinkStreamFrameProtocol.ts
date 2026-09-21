@@ -14,10 +14,7 @@ import { ZlinkStreamHeaderFlags } from '../../Contracts/ZlinkStreamEnums';
 import type { ZlinkStreamHeader } from '../../Contracts/ZlinkStreamModels';
 import type { ZlinkFlowOrigin } from '../../Contracts';
 import { connectorError } from '../ZlinkStreamSupport';
-import {
-  compressPayload,
-  decompressIfNeeded
-} from './Compression/ZlinkStreamCompressionCodec';
+import { compressPayload, decompressIfNeeded } from './Compression/ZlinkStreamCompressionCodec';
 import { splitZlinkStreamFrames, ZlinkStreamFrameCodec } from './ZlinkStreamFrameCodec';
 import { buildHeader, ZlinkStreamHeaderCodec } from './ZlinkStreamHeaderCodec';
 
@@ -41,18 +38,31 @@ export class ZlinkStreamFrameProtocol {
     const payloadBytes = compress
       ? compressPayload(payload.payload, this.options.compression, this.options.compressionCodec)
       : payload.payload;
-    const header = buildHeader(kind, name, payload.codec, metadata, compress, requestSeq, correlationId, flowId, flowOrigin);
+    const header = buildHeader(
+      kind,
+      name,
+      payload.codec,
+      metadata,
+      compress,
+      requestSeq,
+      correlationId,
+      flowId,
+      flowOrigin
+    );
     return this.encodeFrame(header, payloadBytes);
   }
 
   encodeControl(name: string, payload = new Uint8Array()): Uint8Array {
-    return this.encodeFrame({
-      kind: ZlinkStreamMessageKind.Control,
-      codec: ZlinkStreamCodec.Raw,
-      flags: ZlinkStreamHeaderFlags.None,
-      name,
-      metadata: ZlinkStreamMetadataMap.empty
-    }, payload);
+    return this.encodeFrame(
+      {
+        kind: ZlinkStreamMessageKind.Control,
+        codec: ZlinkStreamCodec.Raw,
+        flags: ZlinkStreamHeaderFlags.None,
+        name,
+        metadata: ZlinkStreamMetadataMap.empty
+      },
+      payload
+    );
   }
 
   decode(
@@ -87,7 +97,10 @@ export class ZlinkStreamFrameProtocol {
     return splitZlinkStreamFrames(chunk).map((frame) => {
       const decoded = this.decode(frame, flowEnabled);
       if (decoded.payload.length > this.options.maxReceivePayloadSize) {
-        throw connectorError(ZlinkStreamErrorCode.FrameTooLarge, 'Payload exceeds MaxReceivePayloadSize.');
+        throw connectorError(
+          ZlinkStreamErrorCode.FrameTooLarge,
+          'Payload exceeds MaxReceivePayloadSize.'
+        );
       }
       return decoded;
     });

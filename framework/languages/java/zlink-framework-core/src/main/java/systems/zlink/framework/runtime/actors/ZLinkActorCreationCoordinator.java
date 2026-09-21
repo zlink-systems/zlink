@@ -1,17 +1,35 @@
 package systems.zlink.framework.runtime.actors;
-import java.security.NoSuchAlgorithmException;
-import java.util.HashSet;
-import java.util.Objects;
-import java.util.concurrent.ExecutionException;
-import java.util.concurrent.ThreadLocalRandom;
-import java.util.function.Supplier;
+
 import systems.zlink.contracts.core.RoutingId;
+import systems.zlink.framework.ZLinkEncodedPayload;
+import systems.zlink.framework.ZLinkMessageSerializer;
+import systems.zlink.framework.actors.ActorRef;
+import systems.zlink.framework.actors.ZLinkActorCreateResult;
+import systems.zlink.framework.errors.ZLinkFrameworkErrorKind;
+import systems.zlink.framework.errors.ZLinkFrameworkException;
+import systems.zlink.framework.locations.*;
 import systems.zlink.framework.locations.ZLinkCapacityUsage;
+import systems.zlink.framework.messaging.ZLinkMessage;
+import systems.zlink.framework.runtime.internal.backend.ZLinkBackendRequestResult;
+import systems.zlink.framework.runtime.internal.backend.ZLinkInternalMeshNode;
+import systems.zlink.framework.runtime.internal.binding.spot.MeshNodeState;
+import systems.zlink.framework.runtime.internal.binding.spot.MeshNodeStatus;
+import systems.zlink.framework.runtime.internal.binding.spot.MeshPeerEntry;
+import systems.zlink.framework.runtime.internal.binding.spot.MeshPeerState;
+import systems.zlink.framework.runtime.internal.locations.*;
+import systems.zlink.framework.runtime.internal.locations.ZLinkLocationRepository;
+import systems.zlink.framework.runtime.internal.service.ZLinkServiceM6AWireCodec;
+import systems.zlink.framework.runtime.internal.service.ZLinkServiceM6BWireCodec;
+import systems.zlink.framework.runtime.locations.ZLinkActorAuthorityPayloadCodec;
+import systems.zlink.framework.runtime.locations.ZLinkAuthorityKeyCodec;
 
 import java.security.MessageDigest;
+import java.security.NoSuchAlgorithmException;
 import java.time.Duration;
 import java.time.Instant;
+import java.util.HashSet;
 import java.util.List;
+import java.util.Objects;
 import java.util.Optional;
 import java.util.Set;
 import java.util.UUID;
@@ -19,39 +37,17 @@ import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionException;
 import java.util.concurrent.CompletionStage;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.ExecutionException;
+import java.util.concurrent.ThreadLocalRandom;
 import java.util.concurrent.TimeUnit;
-import systems.zlink.framework.ZLinkEncodedPayload;
-import systems.zlink.framework.ZLinkMessageSerializer;
-import systems.zlink.framework.actors.ActorRef;
-import systems.zlink.framework.actors.ZLinkActorCreateResult;
-import systems.zlink.framework.errors.ZLinkFrameworkErrorKind;
-import systems.zlink.framework.errors.ZLinkFrameworkException;
-import systems.zlink.framework.runtime.internal.backend.ZLinkBackendRequestResult;
-import systems.zlink.framework.locations.*;
-import systems.zlink.framework.runtime.internal.locations.*;
-import systems.zlink.framework.runtime.internal.locations
-    .ZLinkLocationRepository;
-import systems.zlink.framework.runtime.internal.binding.spot.MeshNodeState;
-import systems.zlink.framework.runtime.internal.binding.spot.MeshNodeStatus;
-import systems.zlink.framework.runtime.internal.binding.spot.MeshPeerEntry;
-import systems.zlink.framework.runtime.internal.binding.spot.MeshPeerState;
-import systems.zlink.framework.messaging.ZLinkMessage;
-import systems.zlink.framework.runtime.internal.backend.ZLinkInternalMeshNode;
-import systems.zlink.framework.runtime.locations.ZLinkActorAuthorityPayloadCodec;
-import systems.zlink.framework.runtime.locations.ZLinkAuthorityKeyCodec;
-import systems.zlink.framework.runtime.internal.service.ZLinkServiceM6AWireCodec;
-import systems.zlink.framework.runtime.internal.service.ZLinkServiceM6BWireCodec;
-import systems.zlink.framework.spots.ZLinkSpotKind;
+import java.util.function.Supplier;
 
-/**
- * Owns the durable Actor creation reservation and terminal publication path.
- */
+/** Owns the durable Actor creation reservation and terminal publication path. */
 public final class ZLinkActorCreationCoordinator
-    implements ZLinkActorRuntime.CreationSubmitter,
-        ZLinkInternalMeshNode.ActorCreateOperationHandler {
+        implements ZLinkActorRuntime.CreationSubmitter,
+                ZLinkInternalMeshNode.ActorCreateOperationHandler {
     private static final ZLinkStoreCancellation OPEN = () -> false;
-    private static final Duration TERMINAL_RETENTION =
-        Duration.ofMinutes(5);
+    private static final Duration TERMINAL_RETENTION = Duration.ofMinutes(5);
     private static final int TERMINAL_REQUEST_FAILED = 105;
     private static final int TERMINAL_INVALID_STATE = 107;
     private static final int FAILURE_ACTOR_CREATE_FAILED = 2;
@@ -62,220 +58,224 @@ public final class ZLinkActorCreationCoordinator
     private final ZLinkActorRuntime actors;
     private final ZLinkMessageSerializer serializer;
     private final ZLinkActorAuthorityPayloadCodec authorities =
-        new ZLinkActorAuthorityPayloadCodec();
-    private final ZLinkServiceM6AWireCodec payloads =
-        new ZLinkServiceM6AWireCodec();
-    private final ZLinkServiceM6BWireCodec wire =
-        new ZLinkServiceM6BWireCodec();
-    private final ConcurrentHashMap<String, CompletableFuture<Void>>
-        targetTails = new ConcurrentHashMap<>();
+            new ZLinkActorAuthorityPayloadCodec();
+    private final ZLinkServiceM6AWireCodec payloads = new ZLinkServiceM6AWireCodec();
+    private final ZLinkServiceM6BWireCodec wire = new ZLinkServiceM6BWireCodec();
+    private final ConcurrentHashMap<String, CompletableFuture<Void>> targetTails =
+            new ConcurrentHashMap<>();
 
     public ZLinkActorCreationCoordinator(
-        String meshName,
-        ZLinkInternalMeshNode node,
-        ZLinkLocationRepository locations,
-        ZLinkActorRuntime actors,
-        ZLinkMessageSerializer serializer) {
-        this.meshName = Objects.requireNonNull(
-            meshName, "meshName");
+            String meshName,
+            ZLinkInternalMeshNode node,
+            ZLinkLocationRepository locations,
+            ZLinkActorRuntime actors,
+            ZLinkMessageSerializer serializer) {
+        this.meshName = Objects.requireNonNull(meshName, "meshName");
         this.node = Objects.requireNonNull(node, "node");
-        this.locations = Objects.requireNonNull(
-            locations, "locations");
+        this.locations = Objects.requireNonNull(locations, "locations");
         this.actors = Objects.requireNonNull(actors, "actors");
-        this.serializer = Objects.requireNonNull(
-            serializer, "serializer");
+        this.serializer = Objects.requireNonNull(serializer, "serializer");
     }
 
     @Override
     public CompletionStage<ZLinkActorCreateResult> submit(
-        String actorId,
-        String actorType,
-        ZLinkMessage createRequest,
-        boolean getOrCreate,
-        Duration timeout) {
+            String actorId,
+            String actorType,
+            ZLinkMessage createRequest,
+            boolean getOrCreate,
+            Duration timeout) {
         UUID id = UUID.randomUUID();
         long high = id.getMostSignificantBits() & Long.MAX_VALUE;
         long low = id.getLeastSignificantBits() & Long.MAX_VALUE;
         if (high == 0 && low == 0) {
             low = 1;
         }
-        var operation = new ZLinkCreationOperationIdentity(
-            node.status().routingId(),
-            node.status().lifecycleGeneration(),
-            high,
-            low);
-        long deadline = Math.addExact(
-            System.currentTimeMillis(),
-            timeout.toMillis());
+        var operation =
+                new ZLinkCreationOperationIdentity(
+                        node.status().routingId(), node.status().lifecycleGeneration(), high, low);
+        long deadline = Math.addExact(System.currentTimeMillis(), timeout.toMillis());
         byte[] requestEnvelope = encodeCreateRequest(createRequest);
         return resumeOrCreate(
-            operation,
-            actorId,
-            actorType,
-            requestEnvelope,
-            getOrCreate,
-            deadline,
-            Set.of());
+                operation, actorId, actorType, requestEnvelope, getOrCreate, deadline, Set.of());
     }
 
     private CompletionStage<ZLinkActorCreateResult> resumeOrCreate(
-        ZLinkCreationOperationIdentity operation,
-        String actorId,
-        String actorType,
-        byte[] requestEnvelope,
-        boolean getOrCreate,
-        long deadline,
-        Set<ZLinkMeshNodeDescriptorKey> excludedTargets) {
-        return locations.readCreationTerminal(operation, OPEN)
-            .thenCompose(read -> {
-                if (read instanceof ZLinkCreationTerminalFound found) {
-                    return completedResult(
-                        found.terminalEnvelope(), actorId);
-                }
-                if (System.currentTimeMillis() >= deadline) {
-                    return admissionUnavailable("Actor create deadline expired");
-                }
-                return selectTarget(
-                        actorType, deadline, excludedTargets)
-                    .thenCompose(target -> {
-                        return resolveEntrySpot(target)
-                        .thenCompose(entry -> reserveAndSubmit(
-                            operation,
-                            actorId,
-                            actorType,
-                            requestEnvelope,
-                            getOrCreate,
-                            deadline,
-                            target,
-                            entry,
-                            excludedTargets));
-                    });
-            });
+            ZLinkCreationOperationIdentity operation,
+            String actorId,
+            String actorType,
+            byte[] requestEnvelope,
+            boolean getOrCreate,
+            long deadline,
+            Set<ZLinkMeshNodeDescriptorKey> excludedTargets) {
+        return locations
+                .readCreationTerminal(operation, OPEN)
+                .thenCompose(
+                        read -> {
+                            if (read instanceof ZLinkCreationTerminalFound found) {
+                                return completedResult(found.terminalEnvelope(), actorId);
+                            }
+                            if (System.currentTimeMillis() >= deadline) {
+                                return admissionUnavailable("Actor create deadline expired");
+                            }
+                            return selectTarget(actorType, deadline, excludedTargets)
+                                    .thenCompose(
+                                            target -> {
+                                                return resolveEntrySpot(target)
+                                                        .thenCompose(
+                                                                entry ->
+                                                                        reserveAndSubmit(
+                                                                                operation,
+                                                                                actorId,
+                                                                                actorType,
+                                                                                requestEnvelope,
+                                                                                getOrCreate,
+                                                                                deadline,
+                                                                                target,
+                                                                                entry,
+                                                                                excludedTargets));
+                                            });
+                        });
     }
 
     private CompletionStage<ZLinkActorCreateResult> reserveAndSubmit(
-        ZLinkCreationOperationIdentity operation,
-        String actorId,
-        String actorType,
-        byte[] requestEnvelope,
-        boolean getOrCreate,
-        long deadline,
-        ZLinkMeshNodeDescriptor target,
-        EntrySpot entry,
-        Set<ZLinkMeshNodeDescriptorKey> excludedTargets) {
+            ZLinkCreationOperationIdentity operation,
+            String actorId,
+            String actorType,
+            byte[] requestEnvelope,
+            boolean getOrCreate,
+            long deadline,
+            ZLinkMeshNodeDescriptor target,
+            EntrySpot entry,
+            Set<ZLinkMeshNodeDescriptorKey> excludedTargets) {
         if (!isExactReadyTarget(target, node.status(), node.peers())) {
             if (System.currentTimeMillis() >= deadline) {
-                return admissionUnavailable(
-                    "Actor placement target is no longer ready");
+                return admissionUnavailable("Actor placement target is no longer ready");
             }
-            return awaitConflict().thenCompose(ignored ->
-                resumeOrCreate(
-                    operation,
-                    actorId,
-                    actorType,
-                    requestEnvelope,
-                    getOrCreate,
-                    deadline,
-                    excludedTargets));
+            return awaitConflict()
+                    .thenCompose(
+                            ignored ->
+                                    resumeOrCreate(
+                                            operation,
+                                            actorId,
+                                            actorType,
+                                            requestEnvelope,
+                                            getOrCreate,
+                                            deadline,
+                                            excludedTargets));
         }
         String key = ZLinkAuthorityKeyCodec.actor(actorId);
-        byte[] creating = authorities.encode(
-            ZLinkActorAuthorityPayloadCodec.State.CREATING,
-            actorType,
-            actorId,
-            entry.spotId(),
-            entry.spotGeneration(),
-            1,
-            target.ownerId(),
-            target.leaseGeneration(),
-            target.meshName(),
-            target.rid(),
-            target.lifecycleGeneration());
-        var request = new ZLinkObjectReservationRequest(
-            ZLinkPlacementObjectKind.ACTOR,
-            key,
-            actorType,
-            ZLinkInlineCreationContentCodec.encode(requestEnvelope),
-            sha256(requestEnvelope),
-            requestEnvelope.length,
-            new ZLinkMeshNodeDescriptorKey(
-                target.meshName(), target.rid()),
-            target.lifecycleGeneration(),
-            new ZLinkLocationOwnerToken(
-                target.ownerId(), target.leaseGeneration()),
-            creating,
-            ZLinkPlacementCapacityBundle.actor(1));
-        return locations.reserve(request, OPEN)
-            .thenCompose(result -> {
-                if (result instanceof ZLinkObjectAlreadyExists exists) {
-                    return existing(exists.current(), actorId, actorType);
-                }
-                if (result instanceof ZLinkObjectTypeMismatch) {
-                    return CompletableFuture.failedFuture(
-                        frameworkFailure(
-                            ZLinkFrameworkErrorKind.REJECTED,
-                            "Actor type does not match"));
-                }
-                if (result instanceof ZLinkObjectConflict conflict) {
-                    Set<ZLinkMeshNodeDescriptorKey> retryTargets =
-                        conflict.current() instanceof ZLinkAuthorityMissing
-                            ? excluding(excludedTargets, target)
-                            : excludedTargets;
-                    return awaitConflict().thenCompose(ignored ->
-                        resumeOrCreate(
-                            operation,
-                            actorId,
-                            actorType,
-                            requestEnvelope,
-                            getOrCreate,
-                            deadline,
-                            retryTargets));
-                }
-                if (result instanceof ZLinkPlacementCapacityExhausted) {
-                    return resumeOrCreate(
-                        operation,
-                        actorId,
+        byte[] creating =
+                authorities.encode(
+                        ZLinkActorAuthorityPayloadCodec.State.CREATING,
                         actorType,
-                        requestEnvelope,
-                        getOrCreate,
-                        deadline,
-                        excluding(excludedTargets, target));
-                }
-                if (!(result instanceof ZLinkObjectReserved reserved)) {
-                    return failed(
-                        "Actor reservation failed: "
-                            + result.getClass().getSimpleName());
-                }
-                ZLinkObjectReservation reservation =
-                    reserved.reservation();
-                var fence = reservationFence(reservation);
-                var intent = new ZLinkInternalMeshNode.ActorCreateIntent(
-                    actorId,
-                    actorType,
-                    fence,
-                    operation.operationIdHigh(),
-                    operation.operationIdLow(),
-                    deadline);
-                return node.requestActorCreate(
-                        target.rid(), intent, remainingTimeout(deadline))
-                    .thenCompose(response ->
-                        completedResult(
-                            response.terminalEnvelope(),
-                            target.meshName(),
-                            target.rid()))
-                    .exceptionallyCompose(failure -> {
-                        return locations.readCreationTerminal(operation, OPEN)
-                            .thenCompose(read ->
-                                read instanceof
-                                    ZLinkCreationTerminalFound found
-                                    ? completedResult(
-                                        found.terminalEnvelope(),
-                                        target.meshName(),
-                                        target.rid())
-                                    : CompletableFuture.failedFuture(
-                                        unwrap(failure)));
-                    });
-            });
+                        actorId,
+                        entry.spotId(),
+                        entry.spotGeneration(),
+                        1,
+                        target.ownerId(),
+                        target.leaseGeneration(),
+                        target.meshName(),
+                        target.rid(),
+                        target.lifecycleGeneration());
+        var request =
+                new ZLinkObjectReservationRequest(
+                        ZLinkPlacementObjectKind.ACTOR,
+                        key,
+                        actorType,
+                        ZLinkInlineCreationContentCodec.encode(requestEnvelope),
+                        sha256(requestEnvelope),
+                        requestEnvelope.length,
+                        new ZLinkMeshNodeDescriptorKey(target.meshName(), target.rid()),
+                        target.lifecycleGeneration(),
+                        new ZLinkLocationOwnerToken(target.ownerId(), target.leaseGeneration()),
+                        creating,
+                        ZLinkPlacementCapacityBundle.actor(1));
+        return locations
+                .reserve(request, OPEN)
+                .thenCompose(
+                        result -> {
+                            if (result instanceof ZLinkObjectAlreadyExists exists) {
+                                return existing(exists.current(), actorId, actorType);
+                            }
+                            if (result instanceof ZLinkObjectTypeMismatch) {
+                                return CompletableFuture.failedFuture(
+                                        frameworkFailure(
+                                                ZLinkFrameworkErrorKind.REJECTED,
+                                                "Actor type does not match"));
+                            }
+                            if (result instanceof ZLinkObjectConflict conflict) {
+                                Set<ZLinkMeshNodeDescriptorKey> retryTargets =
+                                        conflict.current() instanceof ZLinkAuthorityMissing
+                                                ? excluding(excludedTargets, target)
+                                                : excludedTargets;
+                                return awaitConflict()
+                                        .thenCompose(
+                                                ignored ->
+                                                        resumeOrCreate(
+                                                                operation,
+                                                                actorId,
+                                                                actorType,
+                                                                requestEnvelope,
+                                                                getOrCreate,
+                                                                deadline,
+                                                                retryTargets));
+                            }
+                            if (result instanceof ZLinkPlacementCapacityExhausted) {
+                                return resumeOrCreate(
+                                        operation,
+                                        actorId,
+                                        actorType,
+                                        requestEnvelope,
+                                        getOrCreate,
+                                        deadline,
+                                        excluding(excludedTargets, target));
+                            }
+                            if (!(result instanceof ZLinkObjectReserved reserved)) {
+                                return failed(
+                                        "Actor reservation failed: "
+                                                + result.getClass().getSimpleName());
+                            }
+                            ZLinkObjectReservation reservation = reserved.reservation();
+                            var fence = reservationFence(reservation);
+                            var intent =
+                                    new ZLinkInternalMeshNode.ActorCreateIntent(
+                                            actorId,
+                                            actorType,
+                                            fence,
+                                            operation.operationIdHigh(),
+                                            operation.operationIdLow(),
+                                            deadline);
+                            return node.requestActorCreate(
+                                            target.rid(), intent, remainingTimeout(deadline))
+                                    .thenCompose(
+                                            response ->
+                                                    completedResult(
+                                                            response.terminalEnvelope(),
+                                                            target.meshName(),
+                                                            target.rid()))
+                                    .exceptionallyCompose(
+                                            failure -> {
+                                                return locations
+                                                        .readCreationTerminal(operation, OPEN)
+                                                        .thenCompose(
+                                                                read ->
+                                                                        read
+                                                                                        instanceof
+                                                                                        ZLinkCreationTerminalFound
+                                                                                                found
+                                                                                ? completedResult(
+                                                                                        found
+                                                                                                .terminalEnvelope(),
+                                                                                        target
+                                                                                                .meshName(),
+                                                                                        target
+                                                                                                .rid())
+                                                                                : CompletableFuture
+                                                                                        .failedFuture(
+                                                                                                unwrap(
+                                                                                                        failure)));
+                                            });
+                        });
     }
 
     private static Duration remainingTimeout(long deadlineUnixMs) {
@@ -287,412 +287,406 @@ public final class ZLinkActorCreationCoordinator
     }
 
     private CompletionStage<ZLinkActorCreateResult> existing(
-        ZLinkAuthoritySnapshot snapshot,
-        String actorId,
-        String actorType) {
-        var authority = authorities.decode(snapshot.payload())
-            .orElseThrow(() -> frameworkFailure(
-                ZLinkFrameworkErrorKind.INTERNAL_FAILURE,
-                "Actor authority payload is invalid"));
-        if (authority.state()
-                != ZLinkActorAuthorityPayloadCodec.State.READY
-            || !authority.actorId().equals(actorId)
-            || !authority.stableType().equals(actorType)) {
+            ZLinkAuthoritySnapshot snapshot, String actorId, String actorType) {
+        var authority =
+                authorities
+                        .decode(snapshot.payload())
+                        .orElseThrow(
+                                () ->
+                                        frameworkFailure(
+                                                ZLinkFrameworkErrorKind.INTERNAL_FAILURE,
+                                                "Actor authority payload is invalid"));
+        if (authority.state() != ZLinkActorAuthorityPayloadCodec.State.READY
+                || !authority.actorId().equals(actorId)
+                || !authority.stableType().equals(actorType)) {
             return failed("Actor authority is not Ready");
         }
         return CompletableFuture.completedFuture(
-            new ZLinkActorCreateResult.Existing(
-                new ActorRef(
-                    actorId,
-                    snapshot.objectGeneration(),
-                    authority.meshName(),
-                    authority.nodeRid())));
+                new ZLinkActorCreateResult.Existing(
+                        new ActorRef(
+                                actorId,
+                                snapshot.objectGeneration(),
+                                authority.meshName(),
+                                authority.nodeRid())));
     }
 
     @Override
     public CompletionStage<ZLinkInternalMeshNode.ActorCreateResponse> create(
-        ZLinkInternalMeshNode.ActorCreateRequest request) {
-        return serializeTarget(
-            request.intent().actorId(),
-            () -> executeTarget(request));
+            ZLinkInternalMeshNode.ActorCreateRequest request) {
+        return serializeTarget(request.intent().actorId(), () -> executeTarget(request));
     }
 
-    private CompletionStage<ZLinkInternalMeshNode.ActorCreateResponse>
-        executeTarget(ZLinkInternalMeshNode.ActorCreateRequest request) {
+    private CompletionStage<ZLinkInternalMeshNode.ActorCreateResponse> executeTarget(
+            ZLinkInternalMeshNode.ActorCreateRequest request) {
         ZLinkCreationOperationIdentity operation =
-            new ZLinkCreationOperationIdentity(
-                request.sourceNodeRid(),
-                request.sourceNodeGeneration(),
-                request.operationHigh(),
-                request.operationLow());
-        return locations.readCreationTerminal(operation, OPEN)
-            .thenCompose(read -> {
-                if (read instanceof ZLinkCreationTerminalFound found) {
-                    return verifiedResponse(found.terminalEnvelope());
-                }
-                if (System.currentTimeMillis()
-                        >= request.intent().deadlineUnixMs()) {
-                    return failReserved(
-                        request,
-                        operation,
-                        "Actor create deadline expired");
-                }
-                return executeReserved(request, operation);
-            });
+                new ZLinkCreationOperationIdentity(
+                        request.sourceNodeRid(),
+                        request.sourceNodeGeneration(),
+                        request.operationHigh(),
+                        request.operationLow());
+        return locations
+                .readCreationTerminal(operation, OPEN)
+                .thenCompose(
+                        read -> {
+                            if (read instanceof ZLinkCreationTerminalFound found) {
+                                return verifiedResponse(found.terminalEnvelope());
+                            }
+                            if (System.currentTimeMillis() >= request.intent().deadlineUnixMs()) {
+                                return failReserved(
+                                        request, operation, "Actor create deadline expired");
+                            }
+                            return executeReserved(request, operation);
+                        });
     }
 
-    private CompletionStage<ZLinkInternalMeshNode.ActorCreateResponse>
-        executeReserved(
+    private CompletionStage<ZLinkInternalMeshNode.ActorCreateResponse> executeReserved(
             ZLinkInternalMeshNode.ActorCreateRequest request,
             ZLinkCreationOperationIdentity operation) {
-        String key = ZLinkAuthorityKeyCodec.actor(
-            request.intent().actorId());
-        return locations.read(key, OPEN).thenCompose(read -> {
-            if (!(read instanceof ZLinkAuthoritySnapshot snapshot)) {
-                return replayAfterConflict(
-                    operation, "Actor reservation is missing");
-            }
-            ZLinkObjectReservation reservation;
-            try {
-                reservation = validateReservation(
-                    request, key, snapshot);
-            } catch (RuntimeException stale) {
-                return replayAfterConflict(
-                    operation,
-                    stale.getMessage() == null
-                        ? "Actor reservation is stale"
-                        : stale.getMessage());
-            }
-            var pending = snapshot.pendingCreation().orElseThrow();
-            byte[] stored;
-            try {
-                stored = ZLinkInlineCreationContentCodec.decode(
-                    pending.requestContentReference(),
-                    pending.requestSha256(),
-                    pending.requestEncodedSize());
-            } catch (RuntimeException invalid) {
-                return failReserved(
-                    request,
-                    operation,
-                    reservation,
-                    "Actor create payload failed integrity validation");
-            }
-            var application = payloads.decodeApplicationPayload(stored);
-            ZLinkMessage createRequest = ZLinkMessage.fromEncoded(
-                ZLinkEncodedPayload.from(application.payload()),
-                serializer);
-            return actors.createReservedActor(
-                    request.intent().actorId(),
-                    request.intent().stableType(),
-                    createRequest,
-                    snapshot.objectGeneration(),
-                    snapshot.authorityOwnerGeneration())
-                .thenCompose(result -> completeTarget(
-                    request,
-                    operation,
-                    snapshot,
-                    reservation,
-                    result))
-                .exceptionallyCompose(failure -> failReserved(
-                    request,
-                    operation,
-                    reservation,
-                    failure.getMessage() == null
-                        ? "Actor create callback failed"
-                        : failure.getMessage()));
-        });
+        String key = ZLinkAuthorityKeyCodec.actor(request.intent().actorId());
+        return locations
+                .read(key, OPEN)
+                .thenCompose(
+                        read -> {
+                            if (!(read instanceof ZLinkAuthoritySnapshot snapshot)) {
+                                return replayAfterConflict(
+                                        operation, "Actor reservation is missing");
+                            }
+                            ZLinkObjectReservation reservation;
+                            try {
+                                reservation = validateReservation(request, key, snapshot);
+                            } catch (RuntimeException stale) {
+                                return replayAfterConflict(
+                                        operation,
+                                        stale.getMessage() == null
+                                                ? "Actor reservation is stale"
+                                                : stale.getMessage());
+                            }
+                            var pending = snapshot.pendingCreation().orElseThrow();
+                            byte[] stored;
+                            try {
+                                stored =
+                                        ZLinkInlineCreationContentCodec.decode(
+                                                pending.requestContentReference(),
+                                                pending.requestSha256(),
+                                                pending.requestEncodedSize());
+                            } catch (RuntimeException invalid) {
+                                return failReserved(
+                                        request,
+                                        operation,
+                                        reservation,
+                                        "Actor create payload failed integrity validation");
+                            }
+                            var application = payloads.decodeApplicationPayload(stored);
+                            ZLinkMessage createRequest =
+                                    ZLinkMessage.fromEncoded(
+                                            ZLinkEncodedPayload.from(application.payload()),
+                                            serializer);
+                            return actors.createReservedActor(
+                                            request.intent().actorId(),
+                                            request.intent().stableType(),
+                                            createRequest,
+                                            snapshot.objectGeneration(),
+                                            snapshot.authorityOwnerGeneration())
+                                    .thenCompose(
+                                            result ->
+                                                    completeTarget(
+                                                            request,
+                                                            operation,
+                                                            snapshot,
+                                                            reservation,
+                                                            result))
+                                    .exceptionallyCompose(
+                                            failure ->
+                                                    failReserved(
+                                                            request,
+                                                            operation,
+                                                            reservation,
+                                                            failure.getMessage() == null
+                                                                    ? "Actor create callback failed"
+                                                                    : failure.getMessage()));
+                        });
     }
 
-    private CompletionStage<ZLinkInternalMeshNode.ActorCreateResponse>
-        completeTarget(
+    private CompletionStage<ZLinkInternalMeshNode.ActorCreateResponse> completeTarget(
             ZLinkInternalMeshNode.ActorCreateRequest request,
             ZLinkCreationOperationIdentity operation,
             ZLinkAuthoritySnapshot snapshot,
             ZLinkObjectReservation reservation,
             ZLinkActorCreateResult result) {
         if (result instanceof ZLinkActorCreateResult.Rejected rejected) {
-            byte[] envelope = terminalEnvelope(
-                new ZLinkServiceM6BWireCodec.ActorCreateTerminal(
-                    ZLinkServiceM6BWireCodec.ActorCreateResult.REJECTED,
-                    null),
-                rejected.reply(),
-                0,
-                0);
-            ZLinkCreationOperationTerminal terminal = terminal(
-                operation,
-                reservation,
-                ZLinkCreationTerminalState.REJECTED,
-                envelope,
-                request.intent().deadlineUnixMs());
-            return locations.reject(reservation, terminal, OPEN)
-                .thenCompose(status ->
-                    status == ZLinkObjectRejectResult.REJECTED
-                        || status
-                            == ZLinkObjectRejectResult.ALREADY_REJECTED
-                        ? response(envelope)
-                        : replayAfterConflict(
+            byte[] envelope =
+                    terminalEnvelope(
+                            new ZLinkServiceM6BWireCodec.ActorCreateTerminal(
+                                    ZLinkServiceM6BWireCodec.ActorCreateResult.REJECTED, null),
+                            rejected.reply(),
+                            0,
+                            0);
+            ZLinkCreationOperationTerminal terminal =
+                    terminal(
                             operation,
-                            "Actor rejection lost its reservation"));
+                            reservation,
+                            ZLinkCreationTerminalState.REJECTED,
+                            envelope,
+                            request.intent().deadlineUnixMs());
+            return locations
+                    .reject(reservation, terminal, OPEN)
+                    .thenCompose(
+                            status ->
+                                    status == ZLinkObjectRejectResult.REJECTED
+                                                    || status
+                                                            == ZLinkObjectRejectResult
+                                                                    .ALREADY_REJECTED
+                                            ? response(envelope)
+                                            : replayAfterConflict(
+                                                    operation,
+                                                    "Actor rejection lost its reservation"));
         }
-        ActorRef actor = result instanceof
-                ZLinkActorCreateResult.Created created
-            ? created.actor()
-            : ((ZLinkActorCreateResult.Existing) result).actor();
-        ZLinkMessage reply = result instanceof
-                ZLinkActorCreateResult.Created created
-            ? created.reply()
-            : null;
-        ActorRef published = new ActorRef(
-            request.intent().actorId(),
-            snapshot.objectGeneration(),
-            meshName,
-            node.status().routingId());
-        byte[] envelope = terminalEnvelope(
-            new ZLinkServiceM6BWireCodec.ActorCreateTerminal(
-                ZLinkServiceM6BWireCodec.ActorCreateResult.CREATED,
-                published),
-            reply,
-            0,
-            0);
-        ZLinkCreationOperationTerminal terminal = terminal(
-            operation,
-            reservation,
-            ZLinkCreationTerminalState.CREATED,
-            envelope,
-            request.intent().deadlineUnixMs());
-        var current = authorities.decode(snapshot.payload())
-            .orElseThrow(() -> stale("invalid Actor authority"));
-        byte[] ready = authorities.encode(
-            ZLinkActorAuthorityPayloadCodec.State.READY,
-            request.intent().stableType(),
-            request.intent().actorId(),
-            current.currentSpotId(),
-            current.currentSpotGeneration(),
-            current.currentSpotKind(),
-            snapshot.ownerId(),
-            snapshot.ownerLeaseGeneration(),
-            meshName,
-            node.status().routingId(),
-            node.status().lifecycleGeneration());
-        return locations.commit(reservation, ready, terminal, OPEN)
-            .thenCompose(status -> {
-                if (status == ZLinkObjectCommitResult.COMMITTED
-                    || status
-                        == ZLinkObjectCommitResult.ALREADY_COMMITTED) {
-                    return response(envelope);
-                }
-                return actors.discardReservedActor(actor.actorId())
-                    .thenCompose(ignored -> replayAfterConflict(
+        ActorRef actor =
+                result instanceof ZLinkActorCreateResult.Created created
+                        ? created.actor()
+                        : ((ZLinkActorCreateResult.Existing) result).actor();
+        ZLinkMessage reply =
+                result instanceof ZLinkActorCreateResult.Created created ? created.reply() : null;
+        ActorRef published =
+                new ActorRef(
+                        request.intent().actorId(),
+                        snapshot.objectGeneration(),
+                        meshName,
+                        node.status().routingId());
+        byte[] envelope =
+                terminalEnvelope(
+                        new ZLinkServiceM6BWireCodec.ActorCreateTerminal(
+                                ZLinkServiceM6BWireCodec.ActorCreateResult.CREATED, published),
+                        reply,
+                        0,
+                        0);
+        ZLinkCreationOperationTerminal terminal =
+                terminal(
                         operation,
-                        "Actor Ready commit lost its reservation"));
-            });
+                        reservation,
+                        ZLinkCreationTerminalState.CREATED,
+                        envelope,
+                        request.intent().deadlineUnixMs());
+        var current =
+                authorities
+                        .decode(snapshot.payload())
+                        .orElseThrow(() -> stale("invalid Actor authority"));
+        byte[] ready =
+                authorities.encode(
+                        ZLinkActorAuthorityPayloadCodec.State.READY,
+                        request.intent().stableType(),
+                        request.intent().actorId(),
+                        current.currentSpotId(),
+                        current.currentSpotGeneration(),
+                        current.currentSpotKind(),
+                        snapshot.ownerId(),
+                        snapshot.ownerLeaseGeneration(),
+                        meshName,
+                        node.status().routingId(),
+                        node.status().lifecycleGeneration());
+        return locations
+                .commit(reservation, ready, terminal, OPEN)
+                .thenCompose(
+                        status -> {
+                            if (status == ZLinkObjectCommitResult.COMMITTED
+                                    || status == ZLinkObjectCommitResult.ALREADY_COMMITTED) {
+                                return response(envelope);
+                            }
+                            return actors.discardReservedActor(actor.actorId())
+                                    .thenCompose(
+                                            ignored ->
+                                                    replayAfterConflict(
+                                                            operation,
+                                                            "Actor Ready commit lost its"
+                                                                    + " reservation"));
+                        });
     }
 
     private ZLinkObjectReservation validateReservation(
-        ZLinkInternalMeshNode.ActorCreateRequest request,
-        String key,
-        ZLinkAuthoritySnapshot snapshot) {
+            ZLinkInternalMeshNode.ActorCreateRequest request,
+            String key,
+            ZLinkAuthoritySnapshot snapshot) {
         var fence = request.intent().reservation();
         var allocation = snapshot.allocation();
-        var pending = snapshot.pendingCreation().orElseThrow(
-            () -> stale("Actor creation projection is missing"));
-        var authority = authorities.decode(snapshot.payload())
-            .orElseThrow(() -> stale("invalid Actor authority"));
+        var pending =
+                snapshot.pendingCreation()
+                        .orElseThrow(() -> stale("Actor creation projection is missing"));
+        var authority =
+                authorities
+                        .decode(snapshot.payload())
+                        .orElseThrow(() -> stale("invalid Actor authority"));
         require(
-            authority.state()
-                == ZLinkActorAuthorityPayloadCodec.State.CREATING
-                && authority.actorId().equals(request.intent().actorId())
-                && authority.stableType()
-                    .equals(request.intent().stableType())
-                && authority.meshName().equals(meshName)
-                && authority.nodeRid().equals(node.status().routingId())
-                && authority.nodeGeneration()
-                    == node.status().lifecycleGeneration()
-                && allocation.state()
-                    == ZLinkPlacementAllocationState.PENDING
-                && allocation.objectKind()
-                    == ZLinkPlacementObjectKind.ACTOR
-                && allocation.stableType()
-                    .equals(request.intent().stableType())
-                && pending.reservationId().equals(fence.reservationId())
-                && snapshot.storeVersion().equals(fence.storeVersion())
-                && snapshot.objectGeneration()
-                    == fence.objectGeneration()
-                && snapshot.authorityOwnerGeneration()
-                    == fence.authorityOwnerGeneration()
-                && snapshot.ownerId().equals(fence.targetOwnerId())
-                && snapshot.ownerLeaseGeneration()
-                    == fence.targetOwnerLeaseGeneration()
-                && fence.targetNodeRid().equals(node.status().routingId())
-                && fence.targetNodeGeneration()
-                    == node.status().lifecycleGeneration()
-                && allocation.capacityBundle().equals(
-                    ZLinkPlacementCapacityBundle.actor(
-                        Math.toIntExact(
-                            fence.pendingCapacityDelta()))),
-            "stale Actor create reservation");
+                authority.state() == ZLinkActorAuthorityPayloadCodec.State.CREATING
+                        && authority.actorId().equals(request.intent().actorId())
+                        && authority.stableType().equals(request.intent().stableType())
+                        && authority.meshName().equals(meshName)
+                        && authority.nodeRid().equals(node.status().routingId())
+                        && authority.nodeGeneration() == node.status().lifecycleGeneration()
+                        && allocation.state() == ZLinkPlacementAllocationState.PENDING
+                        && allocation.objectKind() == ZLinkPlacementObjectKind.ACTOR
+                        && allocation.stableType().equals(request.intent().stableType())
+                        && pending.reservationId().equals(fence.reservationId())
+                        && snapshot.storeVersion().equals(fence.storeVersion())
+                        && snapshot.objectGeneration() == fence.objectGeneration()
+                        && snapshot.authorityOwnerGeneration() == fence.authorityOwnerGeneration()
+                        && snapshot.ownerId().equals(fence.targetOwnerId())
+                        && snapshot.ownerLeaseGeneration() == fence.targetOwnerLeaseGeneration()
+                        && fence.targetNodeRid().equals(node.status().routingId())
+                        && fence.targetNodeGeneration() == node.status().lifecycleGeneration()
+                        && allocation
+                                .capacityBundle()
+                                .equals(
+                                        ZLinkPlacementCapacityBundle.actor(
+                                                Math.toIntExact(fence.pendingCapacityDelta()))),
+                "stale Actor create reservation");
         return new ZLinkObjectReservation(
-            key,
-            snapshot.storeVersion(),
-            snapshot.objectGeneration(),
-            snapshot.authorityOwnerGeneration(),
-            fence.reservationId(),
-            allocation.descriptor(),
-            allocation.descriptorLifecycleGeneration(),
-            new ZLinkLocationOwnerToken(
-                snapshot.ownerId(),
-                snapshot.ownerLeaseGeneration()));
+                key,
+                snapshot.storeVersion(),
+                snapshot.objectGeneration(),
+                snapshot.authorityOwnerGeneration(),
+                fence.reservationId(),
+                allocation.descriptor(),
+                allocation.descriptorLifecycleGeneration(),
+                new ZLinkLocationOwnerToken(snapshot.ownerId(), snapshot.ownerLeaseGeneration()));
     }
 
-    private CompletionStage<ZLinkInternalMeshNode.ActorCreateResponse>
-        failReserved(
+    private CompletionStage<ZLinkInternalMeshNode.ActorCreateResponse> failReserved(
             ZLinkInternalMeshNode.ActorCreateRequest request,
             ZLinkCreationOperationIdentity operation,
             String message) {
-        String key = ZLinkAuthorityKeyCodec.actor(
-            request.intent().actorId());
-        return locations.read(key, OPEN).thenCompose(read -> {
-            if (!(read instanceof ZLinkAuthoritySnapshot snapshot)) {
-                return replayAfterConflict(operation, message);
-            }
-            return failReserved(
-                request,
-                operation,
-                validateReservation(request, key, snapshot),
-                message);
-        });
+        String key = ZLinkAuthorityKeyCodec.actor(request.intent().actorId());
+        return locations
+                .read(key, OPEN)
+                .thenCompose(
+                        read -> {
+                            if (!(read instanceof ZLinkAuthoritySnapshot snapshot)) {
+                                return replayAfterConflict(operation, message);
+                            }
+                            return failReserved(
+                                    request,
+                                    operation,
+                                    validateReservation(request, key, snapshot),
+                                    message);
+                        });
     }
 
-    private CompletionStage<ZLinkInternalMeshNode.ActorCreateResponse>
-        failReserved(
+    private CompletionStage<ZLinkInternalMeshNode.ActorCreateResponse> failReserved(
             ZLinkInternalMeshNode.ActorCreateRequest request,
             ZLinkCreationOperationIdentity operation,
             ZLinkObjectReservation reservation,
             String message) {
-        byte[] envelope = terminalEnvelope(
-            null,
-            null,
-            TERMINAL_REQUEST_FAILED,
-            FAILURE_ACTOR_CREATE_FAILED);
-        ZLinkCreationOperationTerminal terminal = terminal(
-            operation,
-            reservation,
-            ZLinkCreationTerminalState.FAILED,
-            envelope,
-            request.intent().deadlineUnixMs());
+        byte[] envelope =
+                terminalEnvelope(null, null, TERMINAL_REQUEST_FAILED, FAILURE_ACTOR_CREATE_FAILED);
+        ZLinkCreationOperationTerminal terminal =
+                terminal(
+                        operation,
+                        reservation,
+                        ZLinkCreationTerminalState.FAILED,
+                        envelope,
+                        request.intent().deadlineUnixMs());
         return actors.discardReservedActor(request.intent().actorId())
-            .thenCompose(ignored ->
-                locations.abort(reservation, terminal, OPEN))
-            .thenCompose(ignored -> response(envelope));
+                .thenCompose(ignored -> locations.abort(reservation, terminal, OPEN))
+                .thenCompose(ignored -> response(envelope));
     }
 
-    private CompletionStage<ZLinkInternalMeshNode.ActorCreateResponse>
-        replayAfterConflict(
-            ZLinkCreationOperationIdentity operation,
-            String message) {
-        return locations.readCreationTerminal(operation, OPEN)
-            .thenCompose(read ->
-                read instanceof ZLinkCreationTerminalFound found
-                    ? verifiedResponse(found.terminalEnvelope())
-                    : CompletableFuture.failedFuture(stale(message)));
+    private CompletionStage<ZLinkInternalMeshNode.ActorCreateResponse> replayAfterConflict(
+            ZLinkCreationOperationIdentity operation, String message) {
+        return locations
+                .readCreationTerminal(operation, OPEN)
+                .thenCompose(
+                        read ->
+                                read instanceof ZLinkCreationTerminalFound found
+                                        ? verifiedResponse(found.terminalEnvelope())
+                                        : CompletableFuture.failedFuture(stale(message)));
     }
 
     private byte[] terminalEnvelope(
-        ZLinkServiceM6BWireCodec.ActorCreateTerminal creation,
-        ZLinkMessage reply,
-        int terminalResult,
-        int failureCode) {
-        byte[] applicationFrame = reply == null
-            ? null
-            : payloads.encodeApplicationPayload(
-                new ZLinkServiceM6AWireCodec.ApplicationPayload(
-                    "zlink.actor-create-reply",
-                    "application/zlink-framework-json-v1",
-                    reply.toEncodedPayload(serializer).bytes()));
+            ZLinkServiceM6BWireCodec.ActorCreateTerminal creation,
+            ZLinkMessage reply,
+            int terminalResult,
+            int failureCode) {
+        byte[] applicationFrame =
+                reply == null
+                        ? null
+                        : payloads.encodeApplicationPayload(
+                                new ZLinkServiceM6AWireCodec.ApplicationPayload(
+                                        "zlink.actor-create-reply",
+                                        "application/zlink-framework-json-v1",
+                                        reply.toEncodedPayload(serializer).bytes()));
         return wire.encodeCreationOperationTerminal(
-            new ZLinkServiceM6BWireCodec.ActorCreationTerminal(
-                terminalResult,
-                failureCode,
-                creation,
-                applicationFrame));
+                new ZLinkServiceM6BWireCodec.ActorCreationTerminal(
+                        terminalResult, failureCode, creation, applicationFrame));
     }
 
     private ZLinkCreationOperationTerminal terminal(
-        ZLinkCreationOperationIdentity operation,
-        ZLinkObjectReservation reservation,
-        ZLinkCreationTerminalState state,
-        byte[] envelope,
-        long deadlineUnixMs) {
+            ZLinkCreationOperationIdentity operation,
+            ZLinkObjectReservation reservation,
+            ZLinkCreationTerminalState state,
+            byte[] envelope,
+            long deadlineUnixMs) {
         return new ZLinkCreationOperationTerminal(
-            operation,
-            reservation,
-            state,
-            envelope,
-            Instant.ofEpochMilli(Math.addExact(
-                deadlineUnixMs,
-                TERMINAL_RETENTION.toMillis())));
+                operation,
+                reservation,
+                state,
+                envelope,
+                Instant.ofEpochMilli(Math.addExact(deadlineUnixMs, TERMINAL_RETENTION.toMillis())));
     }
 
     private CompletionStage<ZLinkActorCreateResult> completedResult(
-        byte[] envelope,
-        String actorId) {
-        return locations.read(ZLinkAuthorityKeyCodec.actor(actorId), OPEN)
-            .thenCompose(read -> {
-                if (read instanceof ZLinkAuthoritySnapshot snapshot) {
-                    var descriptor = snapshot.allocation().descriptor();
-                    return completedResult(
-                        envelope,
-                        descriptor.meshName(),
-                        descriptor.rid());
-                }
-                return completedResult(envelope, null, null);
-            });
+            byte[] envelope, String actorId) {
+        return locations
+                .read(ZLinkAuthorityKeyCodec.actor(actorId), OPEN)
+                .thenCompose(
+                        read -> {
+                            if (read instanceof ZLinkAuthoritySnapshot snapshot) {
+                                var descriptor = snapshot.allocation().descriptor();
+                                return completedResult(
+                                        envelope, descriptor.meshName(), descriptor.rid());
+                            }
+                            return completedResult(envelope, null, null);
+                        });
     }
 
     private CompletionStage<ZLinkActorCreateResult> completedResult(
-        byte[] envelope,
-        String targetMeshName,
-        RoutingId targetNodeRid) {
+            byte[] envelope, String targetMeshName, RoutingId targetNodeRid) {
         try {
-            var terminal = wire.decodeCreationOperationTerminal(
-                envelope, targetMeshName, targetNodeRid);
-            if (terminal.terminalResult() != 0
-                || terminal.creation() == null) {
+            var terminal =
+                    wire.decodeCreationOperationTerminal(envelope, targetMeshName, targetNodeRid);
+            if (terminal.terminalResult() != 0 || terminal.creation() == null) {
                 //  Classify the create terminal + fine failure code via the
                 //  shared translator instead of collapsing to InternalFailure
                 //  (spec 32:81-118).
-                ZLinkFrameworkErrorKind kind = ZLinkBackendRequestResult
-                    .fromWireTerminal(terminal.terminalResult())
-                    .toFrameworkErrorKind(terminal.failureCode());
+                ZLinkFrameworkErrorKind kind =
+                        ZLinkBackendRequestResult.fromWireTerminal(terminal.terminalResult())
+                                .toFrameworkErrorKind(terminal.failureCode());
                 return failed(
-                    kind,
-                    "Actor create failed with terminal result "
-                        + terminal.terminalResult()
-                        + " and failure code "
-                        + terminal.failureCode());
+                        kind,
+                        "Actor create failed with terminal result "
+                                + terminal.terminalResult()
+                                + " and failure code "
+                                + terminal.failureCode());
             }
-            ZLinkMessage reply = decodeReply(
-                terminal.applicationPayloadFrame());
+            ZLinkMessage reply = decodeReply(terminal.applicationPayloadFrame());
             return CompletableFuture.completedFuture(
-                switch (terminal.creation().result()) {
-                    case EXISTING ->
-                        new ZLinkActorCreateResult.Existing(
-                            terminal.creation().actor());
-                    case CREATED ->
-                        new ZLinkActorCreateResult.Created(
-                            terminal.creation().actor(), reply);
-                    case REJECTED ->
-                        new ZLinkActorCreateResult.Rejected(reply);
-                });
+                    switch (terminal.creation().result()) {
+                        case EXISTING ->
+                                new ZLinkActorCreateResult.Existing(terminal.creation().actor());
+                        case CREATED ->
+                                new ZLinkActorCreateResult.Created(
+                                        terminal.creation().actor(), reply);
+                        case REJECTED -> new ZLinkActorCreateResult.Rejected(reply);
+                    });
         } catch (ZLinkFrameworkException framework) {
             return CompletableFuture.failedFuture(framework);
         } catch (IllegalArgumentException decode) {
             //  Spec 32-framework-error-model:40,91 — a malformed create terminal
             //  or reply that fails decoding is a ProtocolError, not an
             //  InternalFailure.
-            return CompletableFuture.failedFuture(new ZLinkFrameworkException(
-                ZLinkFrameworkErrorKind.PROTOCOL_ERROR,
-                "Actor create reply could not be decoded.", decode));
+            return CompletableFuture.failedFuture(
+                    new ZLinkFrameworkException(
+                            ZLinkFrameworkErrorKind.PROTOCOL_ERROR,
+                            "Actor create reply could not be decoded.",
+                            decode));
         } catch (RuntimeException failure) {
             return CompletableFuture.failedFuture(failure);
         }
@@ -703,129 +697,161 @@ public final class ZLinkActorCreationCoordinator
             return null;
         }
         var payload = payloads.decodeApplicationPayload(frame);
-        return ZLinkMessage.fromEncoded(
-            ZLinkEncodedPayload.from(payload.payload()), serializer);
+        return ZLinkMessage.fromEncoded(ZLinkEncodedPayload.from(payload.payload()), serializer);
     }
 
     private CompletionStage<ZLinkMeshNodeDescriptor> selectTarget(
-        String actorType,
-        long deadline,
-        Set<ZLinkMeshNodeDescriptorKey> excludedTargets) {
-        return locations.listMeshNodes(
-                meshName, ZLinkPageRequest.firstPage())
-            .toCompletableFuture()
-            .orTimeout(
-                Math.max(1L, deadline - System.currentTimeMillis()),
-                TimeUnit.MILLISECONDS)
-            .thenCompose(page -> {
-                MeshNodeStatus localStatus = node.status();
-                List<MeshPeerEntry> peerSnapshot = node.peers();
-                List<ZLinkMeshNodeDescriptor> candidates =
-                    page.items().stream()
-                        .filter(candidate ->
-                            candidate.state()
-                                == systems.zlink.framework.runtime.host
-                                    .ZLinkFrameworkRuntimeState.SERVING
-                                && candidate.objectRole()
-                                    == ZLinkMeshNodeObjectRole.SERVER
-                                && candidate.placementWeight() > 0
-                                && !excludedTargets.contains(
-                                    descriptorKey(candidate))
-                                && candidate.objectCapabilities().stream()
-                                    .anyMatch(capability ->
-                                        capability.objectKind()
-                                            == ZLinkPlacementObjectKind.ACTOR
-                                        && capability.stableType()
-                                                .equals(actorType)
-                                        && hasCapacity(
-                                                candidate,
-                                                capability))
-                                && isExactReadyTarget(
-                                    candidate, localStatus, peerSnapshot))
-                        .toList();
-                if (candidates.isEmpty()) {
-                    boolean capacityKnown = page.items().stream()
-                        .filter(candidate ->
-                            candidate.state()
-                                == systems.zlink.framework.runtime.host
-                                    .ZLinkFrameworkRuntimeState.SERVING
-                            && candidate.objectRole()
-                                == ZLinkMeshNodeObjectRole.SERVER
-                            && candidate.placementWeight() > 0
-                            && isExactReadyTarget(
-                                candidate, localStatus, peerSnapshot))
-                        .flatMap(candidate -> candidate.objectCapabilities().stream())
-                        .anyMatch(capability ->
-                            capability.objectKind() == ZLinkPlacementObjectKind.ACTOR
-                            && capability.stableType().equals(actorType));
-                    if (capacityKnown) {
-                        return CompletableFuture.failedFuture(
-                            frameworkFailure(
-                                ZLinkFrameworkErrorKind.UNAVAILABLE,
-                                "Actor placement is unavailable"));
-                    }
-                    if (System.currentTimeMillis() >= deadline) {
-                        return admissionUnavailable(
-                            "No Ready Actor placement target");
-                    }
-                    return awaitConflict().thenCompose(
-                        ignored -> selectTarget(
-                            actorType, deadline, excludedTargets));
-                }
-                Optional<ZLinkMeshNodeDescriptor> localTarget =
-                    localCandidate(candidates, node.status().routingId());
-                if (localTarget.isPresent()) {
-                    return CompletableFuture.completedFuture(
-                        localTarget.get());
-                }
-                long total = candidates.stream()
-                    .mapToLong(ZLinkMeshNodeDescriptor::placementWeight)
-                    .sum();
-                long selected = ThreadLocalRandom
-                    .current().nextLong(total);
-                for (var candidate : candidates) {
-                    selected -= candidate.placementWeight();
-                    if (selected < 0) {
-                        return CompletableFuture.completedFuture(candidate);
-                    }
-                }
-                return CompletableFuture.completedFuture(
-                    candidates.getLast());
-            });
+            String actorType, long deadline, Set<ZLinkMeshNodeDescriptorKey> excludedTargets) {
+        return locations
+                .listMeshNodes(meshName, ZLinkPageRequest.firstPage())
+                .toCompletableFuture()
+                .orTimeout(
+                        Math.max(1L, deadline - System.currentTimeMillis()), TimeUnit.MILLISECONDS)
+                .thenCompose(
+                        page -> {
+                            MeshNodeStatus localStatus = node.status();
+                            List<MeshPeerEntry> peerSnapshot = node.peers();
+                            List<ZLinkMeshNodeDescriptor> candidates =
+                                    page.items().stream()
+                                            .filter(
+                                                    candidate ->
+                                                            candidate.state()
+                                                                            == systems.zlink
+                                                                                    .framework
+                                                                                    .runtime.host
+                                                                                    .ZLinkFrameworkRuntimeState
+                                                                                    .SERVING
+                                                                    && candidate.objectRole()
+                                                                            == ZLinkMeshNodeObjectRole
+                                                                                    .SERVER
+                                                                    && candidate.placementWeight()
+                                                                            > 0
+                                                                    && !excludedTargets.contains(
+                                                                            descriptorKey(
+                                                                                    candidate))
+                                                                    && candidate
+                                                                            .objectCapabilities()
+                                                                            .stream()
+                                                                            .anyMatch(
+                                                                                    capability ->
+                                                                                            capability
+                                                                                                                    .objectKind()
+                                                                                                            == ZLinkPlacementObjectKind
+                                                                                                                    .ACTOR
+                                                                                                    && capability
+                                                                                                            .stableType()
+                                                                                                            .equals(
+                                                                                                                    actorType)
+                                                                                                    && hasCapacity(
+                                                                                                            candidate,
+                                                                                                            capability))
+                                                                    && isExactReadyTarget(
+                                                                            candidate,
+                                                                            localStatus,
+                                                                            peerSnapshot))
+                                            .toList();
+                            if (candidates.isEmpty()) {
+                                boolean capacityKnown =
+                                        page.items().stream()
+                                                .filter(
+                                                        candidate ->
+                                                                candidate.state()
+                                                                                == systems.zlink
+                                                                                        .framework
+                                                                                        .runtime
+                                                                                        .host
+                                                                                        .ZLinkFrameworkRuntimeState
+                                                                                        .SERVING
+                                                                        && candidate.objectRole()
+                                                                                == ZLinkMeshNodeObjectRole
+                                                                                        .SERVER
+                                                                        && candidate
+                                                                                        .placementWeight()
+                                                                                > 0
+                                                                        && isExactReadyTarget(
+                                                                                candidate,
+                                                                                localStatus,
+                                                                                peerSnapshot))
+                                                .flatMap(
+                                                        candidate ->
+                                                                candidate
+                                                                        .objectCapabilities()
+                                                                        .stream())
+                                                .anyMatch(
+                                                        capability ->
+                                                                capability.objectKind()
+                                                                                == ZLinkPlacementObjectKind
+                                                                                        .ACTOR
+                                                                        && capability
+                                                                                .stableType()
+                                                                                .equals(actorType));
+                                if (capacityKnown) {
+                                    return CompletableFuture.failedFuture(
+                                            frameworkFailure(
+                                                    ZLinkFrameworkErrorKind.UNAVAILABLE,
+                                                    "Actor placement is unavailable"));
+                                }
+                                if (System.currentTimeMillis() >= deadline) {
+                                    return admissionUnavailable("No Ready Actor placement target");
+                                }
+                                return awaitConflict()
+                                        .thenCompose(
+                                                ignored ->
+                                                        selectTarget(
+                                                                actorType,
+                                                                deadline,
+                                                                excludedTargets));
+                            }
+                            Optional<ZLinkMeshNodeDescriptor> localTarget =
+                                    localCandidate(candidates, node.status().routingId());
+                            if (localTarget.isPresent()) {
+                                return CompletableFuture.completedFuture(localTarget.get());
+                            }
+                            long total =
+                                    candidates.stream()
+                                            .mapToLong(ZLinkMeshNodeDescriptor::placementWeight)
+                                            .sum();
+                            long selected = ThreadLocalRandom.current().nextLong(total);
+                            for (var candidate : candidates) {
+                                selected -= candidate.placementWeight();
+                                if (selected < 0) {
+                                    return CompletableFuture.completedFuture(candidate);
+                                }
+                            }
+                            return CompletableFuture.completedFuture(candidates.getLast());
+                        });
     }
 
     static Optional<ZLinkMeshNodeDescriptor> localCandidate(
-        List<ZLinkMeshNodeDescriptor> candidates,
-        RoutingId localRoutingId) {
+            List<ZLinkMeshNodeDescriptor> candidates, RoutingId localRoutingId) {
         return candidates.stream()
-            .filter(candidate -> candidate.rid().equals(localRoutingId))
-            .findFirst();
+                .filter(candidate -> candidate.rid().equals(localRoutingId))
+                .findFirst();
     }
 
     static boolean isExactReadyTarget(
-        ZLinkMeshNodeDescriptor candidate,
-        MeshNodeStatus localStatus,
-        List<MeshPeerEntry> peers) {
+            ZLinkMeshNodeDescriptor candidate,
+            MeshNodeStatus localStatus,
+            List<MeshPeerEntry> peers) {
         Objects.requireNonNull(candidate, "candidate");
         Objects.requireNonNull(localStatus, "localStatus");
         Objects.requireNonNull(peers, "peers");
         if (candidate.rid().equals(localStatus.routingId())) {
             return candidate.meshName().equals(localStatus.meshName())
-                && localStatus.state() == MeshNodeState.READY
-                && candidate.lifecycleGeneration()
-                    == localStatus.lifecycleGeneration();
+                    && localStatus.state() == MeshNodeState.READY
+                    && candidate.lifecycleGeneration() == localStatus.lifecycleGeneration();
         }
-        return peers.stream().anyMatch(peer ->
-            peer.routingId().equals(candidate.rid())
-                && peer.lifecycleGeneration()
-                    == candidate.lifecycleGeneration()
-                && peer.state() == MeshPeerState.ADMITTED);
+        return peers.stream()
+                .anyMatch(
+                        peer ->
+                                peer.routingId().equals(candidate.rid())
+                                        && peer.lifecycleGeneration()
+                                                == candidate.lifecycleGeneration()
+                                        && peer.state() == MeshPeerState.ADMITTED);
     }
 
-    public CompletionStage<ZLinkActorRuntime.EntrySpotTarget>
-        selectEntrySpotTarget(
-            String actorType,
-            Duration timeout) {
+    public CompletionStage<ZLinkActorRuntime.EntrySpotTarget> selectEntrySpotTarget(
+            String actorType, Duration timeout) {
         if (actorType == null || actorType.isBlank()) {
             return failed("Actor stable type is not available");
         }
@@ -834,129 +860,118 @@ public final class ZLinkActorCreationCoordinator
         }
         long deadline;
         try {
-            deadline = Math.addExact(
-                System.currentTimeMillis(),
-                timeout.toMillis());
+            deadline = Math.addExact(System.currentTimeMillis(), timeout.toMillis());
         } catch (ArithmeticException overflow) {
             deadline = Long.MAX_VALUE;
         }
         return selectTarget(actorType, deadline, Set.of())
-            .thenCompose(target -> target.entrySpotId()
-                .<CompletionStage<ZLinkActorRuntime.EntrySpotTarget>>map(
-                    spotId -> CompletableFuture.completedFuture(
-                        new ZLinkActorRuntime.EntrySpotTarget(
-                            target.rid(),
-                            spotId)))
-                .orElseGet(() -> failed(
-                    "Target descriptor has no Entry Spot identity")));
+                .thenCompose(
+                        target ->
+                                target.entrySpotId()
+                                        .<CompletionStage<ZLinkActorRuntime.EntrySpotTarget>>map(
+                                                spotId ->
+                                                        CompletableFuture.completedFuture(
+                                                                new ZLinkActorRuntime
+                                                                        .EntrySpotTarget(
+                                                                        target.rid(), spotId)))
+                                        .orElseGet(
+                                                () ->
+                                                        failed(
+                                                                "Target descriptor has no Entry"
+                                                                        + " Spot identity")));
     }
 
     static boolean hasCapacity(
-        ZLinkMeshNodeDescriptor candidate,
-        ZLinkObjectCapability capability) {
+            ZLinkMeshNodeDescriptor candidate, ZLinkObjectCapability capability) {
         return capability.objectKind() == ZLinkPlacementObjectKind.ACTOR
-            && hasRoom(candidate.capacity().actors());
+                && hasRoom(candidate.capacity().actors());
     }
 
-    private static boolean hasRoom(
-        ZLinkCapacityUsage usage) {
-        return usage.limit() == 0
-            || (long) usage.active() + usage.reserved() < usage.limit();
+    private static boolean hasRoom(ZLinkCapacityUsage usage) {
+        return usage.limit() == 0 || (long) usage.active() + usage.reserved() < usage.limit();
     }
 
-    private static ZLinkMeshNodeDescriptorKey descriptorKey(
-        ZLinkMeshNodeDescriptor descriptor) {
-        return new ZLinkMeshNodeDescriptorKey(
-            descriptor.meshName(), descriptor.rid());
+    private static ZLinkMeshNodeDescriptorKey descriptorKey(ZLinkMeshNodeDescriptor descriptor) {
+        return new ZLinkMeshNodeDescriptorKey(descriptor.meshName(), descriptor.rid());
     }
 
     private static Set<ZLinkMeshNodeDescriptorKey> excluding(
-        Set<ZLinkMeshNodeDescriptorKey> current,
-        ZLinkMeshNodeDescriptor descriptor) {
+            Set<ZLinkMeshNodeDescriptorKey> current, ZLinkMeshNodeDescriptor descriptor) {
         var result = new HashSet<>(current);
         result.add(descriptorKey(descriptor));
         return Set.copyOf(result);
     }
 
-    private CompletionStage<EntrySpot> resolveEntrySpot(
-        ZLinkMeshNodeDescriptor target) {
+    private CompletionStage<EntrySpot> resolveEntrySpot(ZLinkMeshNodeDescriptor target) {
         return target.entrySpotId()
-            .<CompletionStage<EntrySpot>>map(spotId ->
-                CompletableFuture.completedFuture(
-                    new EntrySpot(spotId, target.lifecycleGeneration())))
-            .orElseGet(() -> failed(
-                "Target descriptor has no Entry Spot identity"));
+                .<CompletionStage<EntrySpot>>map(
+                        spotId ->
+                                CompletableFuture.completedFuture(
+                                        new EntrySpot(spotId, target.lifecycleGeneration())))
+                .orElseGet(() -> failed("Target descriptor has no Entry Spot identity"));
     }
 
-    private record EntrySpot(String spotId, long spotGeneration) {
-    }
+    private record EntrySpot(String spotId, long spotGeneration) {}
 
-    private static ZLinkServiceM6BWireCodec.ReservationFence
-        reservationFence(ZLinkObjectReservation reservation) {
+    private static ZLinkServiceM6BWireCodec.ReservationFence reservationFence(
+            ZLinkObjectReservation reservation) {
         return new ZLinkServiceM6BWireCodec.ReservationFence(
-            reservation.reservationVersion(),
-            reservation.storeVersion(),
-            reservation.objectGeneration(),
-            reservation.authorityOwnerGeneration(),
-            reservation.targetDescriptor().rid(),
-            reservation.targetDescriptorLifecycleGeneration(),
-            reservation.targetOwner().ownerId(),
-            reservation.targetOwner().leaseGeneration(),
-            1);
+                reservation.reservationVersion(),
+                reservation.storeVersion(),
+                reservation.objectGeneration(),
+                reservation.authorityOwnerGeneration(),
+                reservation.targetDescriptor().rid(),
+                reservation.targetDescriptorLifecycleGeneration(),
+                reservation.targetOwner().ownerId(),
+                reservation.targetOwner().leaseGeneration(),
+                1);
     }
 
     private byte[] encodeCreateRequest(ZLinkMessage request) {
         byte[] encoded = request.toEncodedPayload(serializer).bytes();
         return payloads.encodeApplicationPayload(
-            new ZLinkServiceM6AWireCodec.ApplicationPayload(
-                "zlink.actor-create",
-                "application/zlink-framework-json-v1",
-                encoded));
+                new ZLinkServiceM6AWireCodec.ApplicationPayload(
+                        "zlink.actor-create", "application/zlink-framework-json-v1", encoded));
     }
 
-    private CompletionStage<ZLinkInternalMeshNode.ActorCreateResponse>
-        response(byte[] envelope) {
+    private CompletionStage<ZLinkInternalMeshNode.ActorCreateResponse> response(byte[] envelope) {
         return CompletableFuture.completedFuture(
-            new ZLinkInternalMeshNode.ActorCreateResponse(envelope));
+                new ZLinkInternalMeshNode.ActorCreateResponse(envelope));
     }
 
-    private CompletionStage<ZLinkInternalMeshNode.ActorCreateResponse>
-        verifiedResponse(byte[] envelope) {
+    private CompletionStage<ZLinkInternalMeshNode.ActorCreateResponse> verifiedResponse(
+            byte[] envelope) {
         try {
-            wire.decodeCreationOperationTerminal(
-                envelope, meshName, node.status().routingId());
+            wire.decodeCreationOperationTerminal(envelope, meshName, node.status().routingId());
             return response(envelope);
         } catch (RuntimeException invalid) {
-            return CompletableFuture.failedFuture(stale(
-                "Actor creation terminal failed integrity validation"));
+            return CompletableFuture.failedFuture(
+                    stale("Actor creation terminal failed integrity validation"));
         }
     }
 
-    private CompletionStage<ZLinkInternalMeshNode.ActorCreateResponse>
-        serializeTarget(
+    private CompletionStage<ZLinkInternalMeshNode.ActorCreateResponse> serializeTarget(
             String actorId,
-            Supplier<CompletionStage<
-                ZLinkInternalMeshNode.ActorCreateResponse>> operation) {
+            Supplier<CompletionStage<ZLinkInternalMeshNode.ActorCreateResponse>> operation) {
         CompletableFuture<Void> next = new CompletableFuture<>();
-        CompletableFuture<Void> previous =
-            targetTails.put(actorId, next);
-        CompletionStage<Void> ready = previous == null
-            ? CompletableFuture.completedFuture(null)
-            : previous.handle((ignored, failure) -> null);
+        CompletableFuture<Void> previous = targetTails.put(actorId, next);
+        CompletionStage<Void> ready =
+                previous == null
+                        ? CompletableFuture.completedFuture(null)
+                        : previous.handle((ignored, failure) -> null);
         CompletionStage<ZLinkInternalMeshNode.ActorCreateResponse> result =
-            ready.thenCompose(ignored -> operation.get());
-        result.whenComplete((ignored, failure) -> {
-            next.complete(null);
-            targetTails.remove(actorId, next);
-        });
+                ready.thenCompose(ignored -> operation.get());
+        result.whenComplete(
+                (ignored, failure) -> {
+                    next.complete(null);
+                    targetTails.remove(actorId, next);
+                });
         return result;
     }
 
     private static CompletionStage<Void> awaitConflict() {
         return CompletableFuture.supplyAsync(
-            () -> null,
-            CompletableFuture.delayedExecutor(
-                10, TimeUnit.MILLISECONDS));
+                () -> null, CompletableFuture.delayedExecutor(10, TimeUnit.MILLISECONDS));
     }
 
     private static byte[] sha256(byte[] value) {
@@ -974,13 +989,11 @@ public final class ZLinkActorCreationCoordinator
     }
 
     private static ZLinkFrameworkException stale(String message) {
-        return frameworkFailure(
-            ZLinkFrameworkErrorKind.INTERNAL_FAILURE, message);
+        return frameworkFailure(ZLinkFrameworkErrorKind.INTERNAL_FAILURE, message);
     }
 
     private static ZLinkFrameworkException frameworkFailure(
-        ZLinkFrameworkErrorKind kind,
-        String message) {
+            ZLinkFrameworkErrorKind kind, String message) {
         return new ZLinkFrameworkException(kind, message);
     }
 
@@ -988,23 +1001,19 @@ public final class ZLinkActorCreationCoordinator
         return CompletableFuture.failedFuture(stale(message));
     }
 
-    private static <T> CompletionStage<T> failed(
-        ZLinkFrameworkErrorKind kind, String message) {
+    private static <T> CompletionStage<T> failed(ZLinkFrameworkErrorKind kind, String message) {
         return CompletableFuture.failedFuture(frameworkFailure(kind, message));
     }
 
     private static <T> CompletionStage<T> admissionUnavailable(String message) {
         return CompletableFuture.failedFuture(
-            frameworkFailure(
-                ZLinkFrameworkErrorKind.UNAVAILABLE,
-                message));
+                frameworkFailure(ZLinkFrameworkErrorKind.UNAVAILABLE, message));
     }
 
     private static Throwable unwrap(Throwable failure) {
         Throwable current = failure;
-        while ((current instanceof CompletionException
-            || current instanceof ExecutionException)
-            && current.getCause() != null) {
+        while ((current instanceof CompletionException || current instanceof ExecutionException)
+                && current.getCause() != null) {
             current = current.getCause();
         }
         return current;

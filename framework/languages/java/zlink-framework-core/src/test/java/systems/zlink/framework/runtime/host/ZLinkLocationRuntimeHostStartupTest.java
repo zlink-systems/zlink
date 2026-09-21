@@ -1,10 +1,39 @@
 package systems.zlink.framework.runtime.host;
 
-import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
+
+import org.junit.jupiter.api.Test;
+
+import systems.zlink.contracts.core.RoutingId;
+import systems.zlink.framework.actors.ZLinkActor;
+import systems.zlink.framework.actors.ZLinkActorContext;
+import systems.zlink.framework.actors.ZLinkActorFactory;
+import systems.zlink.framework.locationprovider.ZLinkLocationStore;
+import systems.zlink.framework.locationprovider.ZLinkStoreCancellation;
+import systems.zlink.framework.locationprovider.ZLinkStoreKey;
+import systems.zlink.framework.locationprovider.ZLinkStoreReadResult;
+import systems.zlink.framework.locationprovider.ZLinkStoreScanRequest;
+import systems.zlink.framework.locationprovider.ZLinkStoreScanResult;
+import systems.zlink.framework.locationprovider.ZLinkStoreWriteRequest;
+import systems.zlink.framework.locationprovider.ZLinkStoreWriteResult;
+import systems.zlink.framework.locations.ZLinkPageRequest;
+import systems.zlink.framework.messaging.ZLinkMessage;
+import systems.zlink.framework.runtime.binding.ZLinkJavaBackendAdapterFactory;
+import systems.zlink.framework.runtime.configuration.DefaultZLinkFrameworkOptions;
+import systems.zlink.framework.runtime.internal.locations.ZLinkProviderLocationRepository;
+import systems.zlink.framework.runtime.locations.ZLinkInMemoryProviderLocationStore;
+import systems.zlink.framework.spots.ZLinkSpot;
+import systems.zlink.framework.spots.ZLinkSpotActorJoinResult;
+import systems.zlink.framework.spots.ZLinkSpotContext;
+import systems.zlink.framework.spots.ZLinkSpotRequestHandler;
+import systems.zlink.framework.spots.ZLinkSpotTimerHandler;
+import systems.zlink.framework.spots.ZLinkTimerOptions;
+import systems.zlink.framework.spots.ZLinkTimerOverrunPolicy;
+import systems.zlink.framework.spots.ZLinkTimerTick;
 
 import java.time.Duration;
 import java.util.UUID;
@@ -15,60 +44,28 @@ import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.function.BooleanSupplier;
-import org.junit.jupiter.api.Test;
-import systems.zlink.contracts.core.RoutingId;
-import systems.zlink.framework.locationprovider.ZLinkLocationStore;
-import systems.zlink.framework.locationprovider.ZLinkStoreCancellation;
-import systems.zlink.framework.locationprovider.ZLinkStoreKey;
-import systems.zlink.framework.locationprovider.ZLinkStoreReadResult;
-import systems.zlink.framework.locationprovider.ZLinkStoreScanRequest;
-import systems.zlink.framework.locationprovider.ZLinkStoreScanResult;
-import systems.zlink.framework.locationprovider.ZLinkStoreWriteRequest;
-import systems.zlink.framework.locationprovider.ZLinkStoreWriteResult;
-import systems.zlink.framework.locations.ZLinkPageRequest;
-import systems.zlink.framework.runtime.binding.ZLinkJavaBackendAdapterFactory;
-import systems.zlink.framework.runtime.configuration.DefaultZLinkFrameworkOptions;
-import systems.zlink.framework.runtime.internal.locations
-    .ZLinkProviderLocationRepository;
-import systems.zlink.framework.runtime.locations.ZLinkInMemoryProviderLocationStore;
-import systems.zlink.framework.actors.ZLinkActor;
-import systems.zlink.framework.actors.ZLinkActorContext;
-import systems.zlink.framework.actors.ZLinkActorFactory;
-import systems.zlink.framework.messaging.ZLinkMessage;
-import systems.zlink.framework.spots.ZLinkSpot;
-import systems.zlink.framework.spots.ZLinkSpotActorJoinResult;
-import systems.zlink.framework.spots.ZLinkSpotContext;
-import systems.zlink.framework.spots.ZLinkSpotRequestHandler;
-import systems.zlink.framework.spots.ZLinkSpotTimerHandler;
-import systems.zlink.framework.spots.ZLinkTimerOptions;
-import systems.zlink.framework.spots.ZLinkTimerOverrunPolicy;
-import systems.zlink.framework.spots.ZLinkTimerTick;
 
 final class ZLinkLocationRuntimeHostStartupTest {
     @Test
-    void degradedHostCompletesStartupBeforeOwnerLeaseRecovery()
-        throws Exception {
+    void degradedHostCompletesStartupBeforeOwnerLeaseRecovery() throws Exception {
         RecoveringLocationStore store = new RecoveringLocationStore();
         DefaultZLinkFrameworkOptions options = new DefaultZLinkFrameworkOptions();
         options.addLocationStore(store);
         options.configureLocations().setOwnerLeaseTtl(Duration.ofSeconds(1));
-        options.configureLocations().setOwnerLeaseRenewInterval(
-            Duration.ofMillis(20));
-        options.configureLocations().setOwnerLeaseRenewTimeout(
-            Duration.ofMillis(10));
-        options.configureLocations().setOwnerLeaseFencingMargin(
-            Duration.ofMillis(100));
+        options.configureLocations().setOwnerLeaseRenewInterval(Duration.ofMillis(20));
+        options.configureLocations().setOwnerLeaseRenewTimeout(Duration.ofMillis(10));
+        options.configureLocations().setOwnerLeaseFencingMargin(Duration.ofMillis(100));
         options.addRouteMesh("game")
-            .listen("inproc://degraded-host-" + UUID.randomUUID())
-            .setRoutingId(RoutingId.from("degraded-host"));
+                .listen("inproc://degraded-host-" + UUID.randomUUID())
+                .setRoutingId(RoutingId.from("degraded-host"));
 
-        try (ZLinkFrameworkRuntime runtime = ZLinkFrameworkRuntimeTestAccess.start(
-            options,
-            new ZLinkJavaBackendAdapterFactory())) {
+        try (ZLinkFrameworkRuntime runtime =
+                ZLinkFrameworkRuntimeTestAccess.start(
+                        options, new ZLinkJavaBackendAdapterFactory())) {
             assertTrue(store.unavailableObserved.await(1, TimeUnit.SECONDS));
             ZLinkFrameworkRuntimeTestAccess.startupCompletion(runtime)
-                .toCompletableFuture()
-                .get(1, TimeUnit.SECONDS);
+                    .toCompletableFuture()
+                    .get(1, TimeUnit.SECONDS);
             await(() -> store.failedRequests.get() >= 3, Duration.ofSeconds(1));
 
             assertFalse(runtime.isReady());
@@ -76,58 +73,67 @@ final class ZLinkLocationRuntimeHostStartupTest {
 
             store.available.set(true);
 
-            await(() -> runtime.isReady() && !store.descriptors().isEmpty(),
-                Duration.ofSeconds(2));
+            await(() -> runtime.isReady() && !store.descriptors().isEmpty(), Duration.ofSeconds(2));
         }
     }
 
     @Test
-    void ownerAdmissionDeadlineGatesAndResumesAllOwnerBoundWork()
-        throws Exception {
+    void ownerAdmissionDeadlineGatesAndResumesAllOwnerBoundWork() throws Exception {
         ProbeSpot.reset();
         ProbeActorFactory.reset();
         RecoveringLocationStore store = new RecoveringLocationStore(true);
         DefaultZLinkFrameworkOptions options = new DefaultZLinkFrameworkOptions();
         options.addLocationStore(store);
         options.configureLocations().setOwnerLeaseTtl(Duration.ofSeconds(1));
-        options.configureLocations().setOwnerLeaseRenewInterval(
-            Duration.ofMillis(20));
-        options.configureLocations().setOwnerLeaseRenewTimeout(
-            Duration.ofMillis(10));
-        options.configureLocations().setOwnerLeaseFencingMargin(
-            Duration.ofMillis(700));
-        var mesh = options.addRouteMesh("game")
-            .listen("inproc://owner-admission-" + UUID.randomUUID())
-            .setRoutingId(RoutingId.from("owner-admission"));
-        mesh.objects().server().addSpotFactory(
-            "probe", ProbeSpot.class, factory -> factory.disableRelocation());
-        mesh.objects().server().addActorFactory(
-            "probe-actor", ProbeActor.class, ProbeActorFactory.class,
-            factory -> factory.disableRelocation());
+        options.configureLocations().setOwnerLeaseRenewInterval(Duration.ofMillis(20));
+        options.configureLocations().setOwnerLeaseRenewTimeout(Duration.ofMillis(10));
+        options.configureLocations().setOwnerLeaseFencingMargin(Duration.ofMillis(700));
+        var mesh =
+                options.addRouteMesh("game")
+                        .listen("inproc://owner-admission-" + UUID.randomUUID())
+                        .setRoutingId(RoutingId.from("owner-admission"));
+        mesh.objects()
+                .server()
+                .addSpotFactory("probe", ProbeSpot.class, factory -> factory.disableRelocation());
+        mesh.objects()
+                .server()
+                .addActorFactory(
+                        "probe-actor",
+                        ProbeActor.class,
+                        ProbeActorFactory.class,
+                        factory -> factory.disableRelocation());
 
-        try (ZLinkFrameworkRuntime runtime = ZLinkFrameworkRuntimeTestAccess.start(
-            options, new ZLinkJavaBackendAdapterFactory())) {
+        try (ZLinkFrameworkRuntime runtime =
+                ZLinkFrameworkRuntimeTestAccess.start(
+                        options, new ZLinkJavaBackendAdapterFactory())) {
             await(runtime::isReady, Duration.ofSeconds(2));
-            runtime.spotManager().getOrCreate("probe", "probe")
-                .submit().toCompletableFuture().get(2, TimeUnit.SECONDS);
-            long descriptorRevision = store.descriptors().getFirst()
-                .descriptorRevision();
+            runtime.spotManager()
+                    .getOrCreate("probe", "probe")
+                    .submit()
+                    .toCompletableFuture()
+                    .get(2, TimeUnit.SECONDS);
+            long descriptorRevision = store.descriptors().getFirst().descriptorRevision();
             assertEquals("pong:open", request("open"));
             await(() -> ProbeSpot.timerTicks.get() > 0, Duration.ofSeconds(1));
             ProbeActorFactory.block();
-            CompletableFuture<?> factoryAcrossDeadline = runtime.actorManager()
-                .create("crossing-actor", "probe-actor")
-                .submit().toCompletableFuture();
-            await(() -> ProbeActorFactory.invocations.get() == 1,
-                Duration.ofSeconds(1));
+            CompletableFuture<?> factoryAcrossDeadline =
+                    runtime.actorManager()
+                            .create("crossing-actor", "probe-actor")
+                            .submit()
+                            .toCompletableFuture();
+            await(() -> ProbeActorFactory.invocations.get() == 1, Duration.ofSeconds(1));
 
             store.available.set(false);
-            await(() -> !ZLinkFrameworkRuntimeTestAccess.ownerAdmissionOpen(runtime),
-                Duration.ofSeconds(1));
+            await(
+                    () -> !ZLinkFrameworkRuntimeTestAccess.ownerAdmissionOpen(runtime),
+                    Duration.ofSeconds(1));
 
-            assertThrows(IllegalStateException.class, () ->
-                runtime.routeMeshRuntimeOptionsInternal()
-                    .mesh("game").setPlacementWeight(90));
+            assertThrows(
+                    IllegalStateException.class,
+                    () ->
+                            runtime.routeMeshRuntimeOptionsInternal()
+                                    .mesh("game")
+                                    .setPlacementWeight(90));
             int messagesWhileClosed = ProbeSpot.messages.get();
             assertThrows(Exception.class, () -> request("closed"));
             assertEquals(messagesWhileClosed, ProbeSpot.messages.get());
@@ -136,50 +142,58 @@ final class ZLinkLocationRuntimeHostStartupTest {
             Thread.sleep(50);
             assertEquals(ticksWhileClosed, ProbeSpot.timerTicks.get());
             ProbeActorFactory.release.complete(null);
-            assertThrows(Exception.class, () -> factoryAcrossDeadline
-                .get(1, TimeUnit.SECONDS));
+            assertThrows(Exception.class, () -> factoryAcrossDeadline.get(1, TimeUnit.SECONDS));
             assertEquals(1, ProbeActorFactory.invocations.get());
-            assertEquals(ZLinkFrameworkRelocationReason.RUNTIME_NOT_READY,
-                relocate(runtime).reason());
+            assertEquals(
+                    ZLinkFrameworkRelocationReason.RUNTIME_NOT_READY, relocate(runtime).reason());
 
             store.available.set(true);
-            await(() -> ZLinkFrameworkRuntimeTestAccess.ownerAdmissionOpen(runtime)
-                    && store.descriptors().getFirst().descriptorRevision()
-                        > descriptorRevision,
-                Duration.ofSeconds(1));
-            runtime.routeMeshRuntimeOptionsInternal()
-                .mesh("game").setPlacementWeight(80);
+            await(
+                    () ->
+                            ZLinkFrameworkRuntimeTestAccess.ownerAdmissionOpen(runtime)
+                                    && store.descriptors().getFirst().descriptorRevision()
+                                            > descriptorRevision,
+                    Duration.ofSeconds(1));
+            runtime.routeMeshRuntimeOptionsInternal().mesh("game").setPlacementWeight(80);
             assertEquals("pong:recovered", request("recovered"));
-            await(() -> ProbeSpot.timerTicks.get() > ticksWhileClosed,
-                Duration.ofSeconds(1));
+            await(() -> ProbeSpot.timerTicks.get() > ticksWhileClosed, Duration.ofSeconds(1));
             ProbeActorFactory.unblock();
-            runtime.actorManager().create("recovered-actor", "probe-actor")
-                .submit().toCompletableFuture().get(2, TimeUnit.SECONDS);
+            runtime.actorManager()
+                    .create("recovered-actor", "probe-actor")
+                    .submit()
+                    .toCompletableFuture()
+                    .get(2, TimeUnit.SECONDS);
             assertEquals(2, ProbeActorFactory.invocations.get());
-            assertNotEquals(ZLinkFrameworkRelocationReason.RUNTIME_NOT_READY,
-                relocate(runtime).reason());
+            assertNotEquals(
+                    ZLinkFrameworkRelocationReason.RUNTIME_NOT_READY, relocate(runtime).reason());
         }
     }
 
     private static String request(String value) throws Exception {
-        return ProbeSpot.last.context().outbound()
-            .requestToSpot("probe", new Ping(value))
-            .timeout(Duration.ofMillis(250))
-            .submit(Pong.class)
-            .toCompletableFuture().get(1, TimeUnit.SECONDS).value();
+        return ProbeSpot.last
+                .context()
+                .outbound()
+                .requestToSpot("probe", new Ping(value))
+                .timeout(Duration.ofMillis(250))
+                .submit(Pong.class)
+                .toCompletableFuture()
+                .get(1, TimeUnit.SECONDS)
+                .value();
     }
 
-    private static ZLinkFrameworkRelocationResult relocate(
-        ZLinkFrameworkRuntime runtime) throws Exception {
-        return runtime.relocate(new ZLinkFrameworkRelocationOptions(
-                ZLinkFrameworkRelocationMode.PLANNED_MAINTENANCE,
-                null,
-                Duration.ofMillis(100)))
-            .toCompletableFuture().get(1, TimeUnit.SECONDS);
+    private static ZLinkFrameworkRelocationResult relocate(ZLinkFrameworkRuntime runtime)
+            throws Exception {
+        return runtime.relocate(
+                        new ZLinkFrameworkRelocationOptions(
+                                ZLinkFrameworkRelocationMode.PLANNED_MAINTENANCE,
+                                null,
+                                Duration.ofMillis(100)))
+                .toCompletableFuture()
+                .get(1, TimeUnit.SECONDS);
     }
 
     private static void await(BooleanSupplier condition, Duration timeout)
-        throws InterruptedException {
+            throws InterruptedException {
         long deadline = System.nanoTime() + timeout.toNanos();
         while (!condition.getAsBoolean() && System.nanoTime() < deadline) {
             Thread.sleep(1);
@@ -187,18 +201,16 @@ final class ZLinkLocationRuntimeHostStartupTest {
         assertTrue(condition.getAsBoolean());
     }
 
-    private static final class RecoveringLocationStore
-        implements ZLinkLocationStore {
+    private static final class RecoveringLocationStore implements ZLinkLocationStore {
         private final ZLinkInMemoryProviderLocationStore inner =
-            new ZLinkInMemoryProviderLocationStore();
+                new ZLinkInMemoryProviderLocationStore();
         private final ZLinkProviderLocationRepository repository =
-            new ZLinkProviderLocationRepository(inner);
+                new ZLinkProviderLocationRepository(inner);
         private final AtomicBoolean available = new AtomicBoolean();
         private final AtomicInteger failedRequests = new AtomicInteger();
         private final CountDownLatch unavailableObserved = new CountDownLatch(1);
 
-        RecoveringLocationStore() {
-        }
+        RecoveringLocationStore() {}
 
         RecoveringLocationStore(boolean available) {
             this.available.set(available);
@@ -206,8 +218,7 @@ final class ZLinkLocationRuntimeHostStartupTest {
 
         @Override
         public CompletionStage<ZLinkStoreReadResult> read(
-            ZLinkStoreKey key,
-            ZLinkStoreCancellation cancellation) {
+                ZLinkStoreKey key, ZLinkStoreCancellation cancellation) {
             if (!available.get()) {
                 return unavailable();
             }
@@ -216,8 +227,7 @@ final class ZLinkLocationRuntimeHostStartupTest {
 
         @Override
         public CompletionStage<ZLinkStoreWriteResult> write(
-            ZLinkStoreWriteRequest request,
-            ZLinkStoreCancellation cancellation) {
+                ZLinkStoreWriteRequest request, ZLinkStoreCancellation cancellation) {
             if (!available.get()) {
                 return unavailable();
             }
@@ -226,33 +236,33 @@ final class ZLinkLocationRuntimeHostStartupTest {
 
         @Override
         public CompletionStage<ZLinkStoreScanResult> scan(
-            ZLinkStoreScanRequest request,
-            ZLinkStoreCancellation cancellation) {
+                ZLinkStoreScanRequest request, ZLinkStoreCancellation cancellation) {
             if (!available.get()) {
                 return unavailable();
             }
             return inner.scan(request, cancellation);
         }
 
-        java.util.List<systems.zlink.framework.runtime.internal.locations
-            .ZLinkMeshNodeDescriptor> descriptors() {
-            return repository.listMeshNodes("game", ZLinkPageRequest.firstPage())
-                .toCompletableFuture().join().items();
+        java.util.List<systems.zlink.framework.runtime.internal.locations.ZLinkMeshNodeDescriptor>
+                descriptors() {
+            return repository
+                    .listMeshNodes("game", ZLinkPageRequest.firstPage())
+                    .toCompletableFuture()
+                    .join()
+                    .items();
         }
 
         private <T> CompletionStage<T> unavailable() {
             failedRequests.incrementAndGet();
             unavailableObserved.countDown();
             return CompletableFuture.failedFuture(
-                new IllegalStateException("location store transport unavailable"));
+                    new IllegalStateException("location store transport unavailable"));
         }
     }
 
-    public record Ping(String value) {
-    }
+    public record Ping(String value) {}
 
-    public record Pong(String value) {
-    }
+    public record Pong(String value) {}
 
     public static final class ProbeSpot implements ZLinkSpot<ZLinkActor> {
         private static final AtomicInteger messages = new AtomicInteger();
@@ -284,20 +294,18 @@ final class ZLinkLocationRuntimeHostStartupTest {
         @Override
         public CompletionStage<Void> onInitialize() {
             return context.addTimer(
-                    "lease-probe",
-                    Duration.ofMillis(10),
-                    TimerHandler.class,
-                    new ZLinkTimerOptions(
-                        ZLinkTimerOverrunPolicy.SKIP_LATE_TICKS, 1, false))
-                .thenApply(ignored -> null);
+                            "lease-probe",
+                            Duration.ofMillis(10),
+                            TimerHandler.class,
+                            new ZLinkTimerOptions(
+                                    ZLinkTimerOverrunPolicy.SKIP_LATE_TICKS, 1, false))
+                    .thenApply(ignored -> null);
         }
 
         @Override
         public CompletionStage<ZLinkSpotActorJoinResult> onActorJoin(
-            String actorId,
-            ZLinkMessage request) {
-            return CompletableFuture.completedFuture(
-                ZLinkSpotActorJoinResult.accept());
+                String actorId, ZLinkMessage request) {
+            return CompletableFuture.completedFuture(ZLinkSpotActorJoinResult.accept());
         }
 
         @Override
@@ -312,28 +320,23 @@ final class ZLinkLocationRuntimeHostStartupTest {
     }
 
     public static final class PingHandler
-        implements ZLinkSpotRequestHandler<ProbeSpot, Ping, Pong> {
+            implements ZLinkSpotRequestHandler<ProbeSpot, Ping, Pong> {
         @Override
         public CompletionStage<Pong> handle(ProbeSpot spot, Ping request) {
             ProbeSpot.messages.incrementAndGet();
-            return CompletableFuture.completedFuture(
-                new Pong("pong:" + request.value()));
+            return CompletableFuture.completedFuture(new Pong("pong:" + request.value()));
         }
     }
 
-    public static final class TimerHandler
-        implements ZLinkSpotTimerHandler<ProbeSpot> {
+    public static final class TimerHandler implements ZLinkSpotTimerHandler<ProbeSpot> {
         @Override
-        public CompletionStage<Void> handle(
-            ProbeSpot spot,
-            ZLinkTimerTick tick) {
+        public CompletionStage<Void> handle(ProbeSpot spot, ZLinkTimerTick tick) {
             ProbeSpot.timerTicks.incrementAndGet();
             return CompletableFuture.completedFuture(null);
         }
     }
 
-    public record ProbeActor(ZLinkActorContext context) implements ZLinkActor {
-    }
+    public record ProbeActor(ZLinkActorContext context) implements ZLinkActor {}
 
     public static final class ProbeActorFactory implements ZLinkActorFactory {
         private static final AtomicInteger invocations = new AtomicInteger();

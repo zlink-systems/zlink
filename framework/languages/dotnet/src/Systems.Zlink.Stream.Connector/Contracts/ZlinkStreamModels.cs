@@ -5,12 +5,10 @@ public sealed record ZlinkStreamDisconnected(ZlinkStreamCloseReason CloseReason)
 public sealed record ZlinkStreamEncodedPayload(
     ZlinkStreamCodec Codec,
     ReadOnlyMemory<byte> Payload,
-    Type? MessageType = null);
+    Type? MessageType = null
+);
 
-public sealed record ZlinkStreamMessage(
-    string Name,
-    ZlinkStreamMetadata Metadata,
-    object? Payload);
+public sealed record ZlinkStreamMessage(string Name, ZlinkStreamMetadata Metadata, object? Payload);
 
 /// <summary>
 ///     A received stream message: payload, packet name, metadata and the flow pair the
@@ -33,19 +31,23 @@ public sealed record ZlinkStreamMessage<TPayload>(
     ZlinkStreamMetadata Metadata,
     TPayload Payload,
     string? FlowId = null,
-    ZlinkStreamFlowOrigin? FlowOrigin = null);
+    ZlinkStreamFlowOrigin? FlowOrigin = null
+);
 
 public sealed record ZlinkStreamError(
     ZlinkStreamErrorCode Code,
     string Message,
-    Exception? Exception = null);
+    Exception? Exception = null
+);
 
 public sealed record ZlinkStreamConnectionStateChanged(
     ZlinkStreamConnectionState Previous,
     ZlinkStreamConnectionState Current,
-    ZlinkStreamError? Error = null);
+    ZlinkStreamError? Error = null
+);
 
-public sealed class ZlinkStreamException(ZlinkStreamError error) : Exception(error.Message, error.Exception)
+public sealed class ZlinkStreamException(ZlinkStreamError error)
+    : Exception(error.Message, error.Exception)
 {
     public ZlinkStreamError Error { get; } = error;
 }

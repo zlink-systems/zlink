@@ -78,8 +78,7 @@ int main ()
         (void) zlink::framework::transport_endpoint_t::parse ("pgm://224.0.0.1");
     }
     catch (const zlink::framework::framework_exception_t &error) {
-        pgm_rejected =
-          error.kind () == zlink::framework::framework_error_kind_t::protocol_error;
+        pgm_rejected = error.kind () == zlink::framework::framework_error_kind_t::protocol_error;
     }
     if (!pgm_rejected) {
         return 8;

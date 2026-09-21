@@ -4,15 +4,14 @@ import type {
   ZLinkAuthoritySnapshot,
   ZLinkAuthorityReadResult
 } from '../../contracts/Locations/Authority';
-import type { ZLinkAuthorityStore, ZLinkObjectCreationStore } from '../locations/internal-store-contracts';
 import type {
-  ZLinkRelocationStore
-} from '../../contracts/Locations/RelocationStore';
+  ZLinkAuthorityStore,
+  ZLinkObjectCreationStore
+} from '../locations/internal-store-contracts';
+import type { ZLinkRelocationStore } from '../../contracts/Locations/RelocationStore';
 import { relocationBlobReference } from '../locations/relocation-blob';
 import type { ZLinkBackendMeshNode } from '../backend/contracts';
-import type {
-  ServicePendingInstanceActivation
-} from '../foundation/service-stateful-runtime';
+import type { ServicePendingInstanceActivation } from '../foundation/service-stateful-runtime';
 import type {
   ServiceDirectSpotRouteFence,
   ServiceInstanceRouteFence,
@@ -175,9 +174,9 @@ export class ZLinkStatefulAuthorityRouteRuntime {
       const status = sink.status();
       for (const pending of snapshot.pending) {
         if (
-          pending.targetMeshName === meshName
-          && routingIdsEqual(status.routingId, pending.targetNodeRid)
-          && status.lifecycleGeneration === pending.targetNodeGeneration
+          pending.targetMeshName === meshName &&
+          routingIdsEqual(status.routingId, pending.targetNodeRid) &&
+          status.lifecycleGeneration === pending.targetNodeGeneration
         ) {
           await this.recoverPendingInstanceActivation(sink, pending, signal);
         }
@@ -187,20 +186,18 @@ export class ZLinkStatefulAuthorityRouteRuntime {
         if (route.meshName !== meshName) continue;
         const previousRoute = previous.get(key);
         const expectedSpotRoute = previousRoute?.spotRoute ?? null;
-        const expectedInstanceRoute = previousRoute?.kind === 'instance_spot'
-          ? previousRoute.instanceRoute
-          : null;
+        const expectedInstanceRoute =
+          previousRoute?.kind === 'instance_spot' ? previousRoute.instanceRoute : null;
         sink.rememberSpotRoute(route.spotRoute, expectedSpotRoute);
         if (route.kind === 'instance_spot') {
           const status = sink.status();
           if (
-            routingIdsEqual(status.routingId, route.instanceRoute.targetNodeRid)
-            && status.lifecycleGeneration === route.instanceRoute.targetNodeGeneration
+            routingIdsEqual(status.routingId, route.instanceRoute.targetNodeRid) &&
+            status.lifecycleGeneration === route.instanceRoute.targetNodeGeneration
           ) {
             if (route.activationRecovery !== undefined) {
               if (
-                route.activationRecovery.replayCursor
-                === route.activationRecovery.inboxSequence
+                route.activationRecovery.replayCursor === route.activationRecovery.inboxSequence
               ) {
                 const released = await sink.completeRecoveredInstanceActivation(
                   {
@@ -273,9 +270,7 @@ export class ZLinkStatefulAuthorityRouteRuntime {
     // then cannot remove a route or intent installed for a newer generation.
     for (const { meshName, sink } of sinks) {
       const previous = this.appliedByMesh.get(meshName) ?? new Map();
-      const meshCurrent = new Map(
-        [...current].filter(([, route]) => route.meshName === meshName)
-      );
+      const meshCurrent = new Map([...current].filter(([, route]) => route.meshName === meshName));
       const changedSpotIds = new Set<string>();
       for (const [key, oldRoute] of previous) {
         const next = meshCurrent.get(key);
@@ -319,23 +314,25 @@ export class ZLinkStatefulAuthorityRouteRuntime {
     const envelope = await this.readRecoveryEnvelope(recovery, signal);
     const status = sink.status();
     if (
-      envelope.targetMeshName !== route.meshName
-      || envelope.target.stableType !== route.stableType
-      || envelope.target.targetSpotId !== route.instanceRoute.targetSpotId
-      || envelope.target.targetNodeRid !== route.instanceRoute.targetNodeRid
-      || envelope.target.targetNodeGeneration !== route.instanceRoute.targetNodeGeneration
-      || envelope.target.descriptorVersion !== status.descriptorRevision.toString()
+      envelope.targetMeshName !== route.meshName ||
+      envelope.target.stableType !== route.stableType ||
+      envelope.target.targetSpotId !== route.instanceRoute.targetSpotId ||
+      envelope.target.targetNodeRid !== route.instanceRoute.targetNodeRid ||
+      envelope.target.targetNodeGeneration !== route.instanceRoute.targetNodeGeneration ||
+      envelope.target.descriptorVersion !== status.descriptorRevision.toString()
     ) {
       this.options.reportError(
         new Error('Instance activation recovery envelope does not match Ready authority.')
       );
       return false;
     }
-    return (await sink.recoverInstanceActivation(
-      envelope,
-      route.instanceRoute,
-      expectedCurrentRoute
-    )) !== false;
+    return (
+      (await sink.recoverInstanceActivation(
+        envelope,
+        route.instanceRoute,
+        expectedCurrentRoute
+      )) !== false
+    );
   }
 
   private async recoverPendingInstanceActivation(
@@ -343,21 +340,24 @@ export class ZLinkStatefulAuthorityRouteRuntime {
     recovery: PendingInstanceActivationRecovery,
     signal?: AbortSignal
   ): Promise<void> {
-    const envelope = await this.readRecoveryEnvelope({
-      reference: recovery.pending.requestReference,
-      sha256: recovery.pending.requestSha256,
-      encodedSize: Number(recovery.pending.requestEncodedSize),
-      inboxSequence: 1n,
-      replayCursor: 0n
-    }, signal);
+    const envelope = await this.readRecoveryEnvelope(
+      {
+        reference: recovery.pending.requestReference,
+        sha256: recovery.pending.requestSha256,
+        encodedSize: Number(recovery.pending.requestEncodedSize),
+        inboxSequence: 1n,
+        replayCursor: 0n
+      },
+      signal
+    );
     const status = sink.status();
     if (
-      envelope.targetMeshName !== recovery.targetMeshName
-      || envelope.target.stableType !== recovery.stableType
-      || envelope.target.targetSpotId !== recovery.spotId
-      || envelope.target.targetNodeRid !== recovery.targetNodeRid
-      || envelope.target.targetNodeGeneration !== recovery.targetNodeGeneration
-      || envelope.target.descriptorVersion !== status.descriptorRevision.toString()
+      envelope.targetMeshName !== recovery.targetMeshName ||
+      envelope.target.stableType !== recovery.stableType ||
+      envelope.target.targetSpotId !== recovery.spotId ||
+      envelope.target.targetNodeRid !== recovery.targetNodeRid ||
+      envelope.target.targetNodeGeneration !== recovery.targetNodeGeneration ||
+      envelope.target.descriptorVersion !== status.descriptorRevision.toString()
     ) {
       const creationStore = this.options.creationStore;
       if (creationStore === undefined) {
@@ -366,20 +366,23 @@ export class ZLinkStatefulAuthorityRouteRuntime {
         );
         return;
       }
-      const aborted = await creationStore.abort({
-        key: { kind: 'instance_spot', globalId: recovery.spotId },
-        reservationId: recovery.pending.reservationId,
-        expectedStoreVersion: recovery.pending.storeVersion,
-        target: {
-          meshName: recovery.pending.meshName,
-          nodeRid: recovery.pending.nodeRid as never,
-          nodeLifecycleGeneration: recovery.pending.nodeGeneration,
-          owner: {
-            ownerId: recovery.pending.ownerId,
-            leaseGeneration: recovery.pending.ownerLeaseGeneration
+      const aborted = await creationStore.abort(
+        {
+          key: { kind: 'instance_spot', globalId: recovery.spotId },
+          reservationId: recovery.pending.reservationId,
+          expectedStoreVersion: recovery.pending.storeVersion,
+          target: {
+            meshName: recovery.pending.meshName,
+            nodeRid: recovery.pending.nodeRid as never,
+            nodeLifecycleGeneration: recovery.pending.nodeGeneration,
+            owner: {
+              ownerId: recovery.pending.ownerId,
+              leaseGeneration: recovery.pending.ownerLeaseGeneration
+            }
           }
-        }
-      }, signal);
+        },
+        signal
+      );
       if (aborted.kind === 'aborted' || aborted.kind === 'alreadyAborted') {
         try {
           await this.options.relocationStore?.delete(
@@ -392,11 +395,8 @@ export class ZLinkStatefulAuthorityRouteRuntime {
       }
       return;
     }
-    if ((await sink.recoverPendingInstanceActivation(
-      envelope,
-      recovery.pending,
-      null
-    )) === false) return;
+    if ((await sink.recoverPendingInstanceActivation(envelope, recovery.pending, null)) === false)
+      return;
   }
 
   private async readRecoveryEnvelope(
@@ -407,20 +407,15 @@ export class ZLinkStatefulAuthorityRouteRuntime {
     if (relocationStore === undefined) {
       throw new Error('Instance activation recovery requires a Relocation Store.');
     }
-    const result = await relocationStore.read(
-      relocationBlobReference(recovery.reference),
-      signal
-    );
+    const result = await relocationStore.read(relocationBlobReference(recovery.reference), signal);
     if (result.kind !== 'found') {
-      throw new Error(
-        `Instance activation recovery payload '${recovery.reference}' is missing.`
-      );
+      throw new Error(`Instance activation recovery payload '${recovery.reference}' is missing.`);
     }
     const payload = Buffer.from(result.bytes);
     const sha256 = createHash('sha256').update(payload).digest();
     if (
-      payload.byteLength !== recovery.encodedSize
-      || !sha256.equals(Buffer.from(recovery.sha256))
+      payload.byteLength !== recovery.encodedSize ||
+      !sha256.equals(Buffer.from(recovery.sha256))
     ) {
       throw new Error(
         `Instance activation recovery payload '${recovery.reference}' failed integrity validation.`
@@ -480,9 +475,9 @@ export class ZLinkStatefulAuthorityRouteRuntime {
       const route = authorityRoute(current);
       if (route !== undefined) result.set(authorityRouteKey(route), route);
       if (
-        current.allocation.state === 'active'
-        && current.allocation.objectKind === 'actor'
-        && decodeActorAuthorityIdentity(
+        current.allocation.state === 'active' &&
+        current.allocation.objectKind === 'actor' &&
+        decodeActorAuthorityIdentity(
           serviceRelocationAuthorityApplicationPayload(current.payload),
           current.objectGeneration
         ) !== undefined
@@ -502,14 +497,17 @@ function authorityNeedsExactRead(
 ): boolean {
   if (pendingInstanceActivation(snapshot) !== undefined) return true;
   if (relocationCodec.read(snapshot.payload) !== undefined) return true;
-  if (decodeServiceReadySpotAuthority(
-    serviceRelocationAuthorityApplicationPayload(snapshot.payload)
-  )?.activationRecovery !== undefined) {
+  if (
+    decodeServiceReadySpotAuthority(serviceRelocationAuthorityApplicationPayload(snapshot.payload))
+      ?.activationRecovery !== undefined
+  ) {
     return true;
   }
-  return snapshot.allocation.state === 'active'
-    && snapshot.allocation.objectKind === 'actor'
-    && decodeActorAuthorityIdentity(snapshot.payload, snapshot.objectGeneration) !== undefined;
+  return (
+    snapshot.allocation.state === 'active' &&
+    snapshot.allocation.objectKind === 'actor' &&
+    decodeActorAuthorityIdentity(snapshot.payload, snapshot.objectGeneration) !== undefined
+  );
 }
 
 function pendingInstanceActivation(
@@ -519,16 +517,16 @@ function pendingInstanceActivation(
   const projection = snapshot.pendingCreation;
   const decoded = decodeServiceInstanceAuthorityPayload(snapshot.payload);
   if (
-    allocation.state !== 'reserved'
-    || allocation.objectKind !== 'instance_spot'
-    || projection === undefined
-    || decoded?.state !== 'coldActivating'
-    || decoded.stableType !== allocation.stableType
-    || decoded.ownerId !== snapshot.ownerId
-    || decoded.ownerLeaseGeneration !== snapshot.ownerLeaseGeneration
-    || decoded.ownerMeshName !== allocation.descriptor.meshName
-    || decoded.ownerNodeGeneration !== allocation.descriptorLifecycleGeneration
-    || !routingIdsEqual(decoded.ownerNodeRid, allocation.descriptor.rid)
+    allocation.state !== 'reserved' ||
+    allocation.objectKind !== 'instance_spot' ||
+    projection === undefined ||
+    decoded?.state !== 'coldActivating' ||
+    decoded.stableType !== allocation.stableType ||
+    decoded.ownerId !== snapshot.ownerId ||
+    decoded.ownerLeaseGeneration !== snapshot.ownerLeaseGeneration ||
+    decoded.ownerMeshName !== allocation.descriptor.meshName ||
+    decoded.ownerNodeGeneration !== allocation.descriptorLifecycleGeneration ||
+    !routingIdsEqual(decoded.ownerNodeRid, allocation.descriptor.rid)
   ) {
     return undefined;
   }
@@ -561,17 +559,17 @@ function authorityRoute(snapshot: ZLinkAuthoritySnapshot): AppliedAuthorityRoute
     serviceRelocationAuthorityApplicationPayload(snapshot.payload)
   );
   if (
-    allocation.state !== 'active'
-    || allocation.objectKind === 'actor'
-    || allocation.descriptor.meshName.length === 0
-    || decoded === undefined
-    || decoded.kind !== allocation.objectKind
-    || decoded.stableType !== allocation.stableType
-    || decoded.ownerId !== snapshot.ownerId
-    || decoded.ownerLeaseGeneration !== snapshot.ownerLeaseGeneration
-    || decoded.ownerMeshName !== allocation.descriptor.meshName
-    || decoded.ownerNodeGeneration !== allocation.descriptorLifecycleGeneration
-    || !routingIdsEqual(decoded.ownerNodeRid, allocation.descriptor.rid)
+    allocation.state !== 'active' ||
+    allocation.objectKind === 'actor' ||
+    allocation.descriptor.meshName.length === 0 ||
+    decoded === undefined ||
+    decoded.kind !== allocation.objectKind ||
+    decoded.stableType !== allocation.stableType ||
+    decoded.ownerId !== snapshot.ownerId ||
+    decoded.ownerLeaseGeneration !== snapshot.ownerLeaseGeneration ||
+    decoded.ownerMeshName !== allocation.descriptor.meshName ||
+    decoded.ownerNodeGeneration !== allocation.descriptorLifecycleGeneration ||
+    !routingIdsEqual(decoded.ownerNodeRid, allocation.descriptor.rid)
   ) {
     return undefined;
   }
@@ -607,8 +605,9 @@ function authorityRoute(snapshot: ZLinkAuthoritySnapshot): AppliedAuthorityRoute
 }
 
 function authorityRouteKey(route: AppliedAuthorityRoute): string {
-  return `${route.meshName}\0${route.spotRoute.spot.spotId}\0`
-    + `${route.spotRoute.spot.generation}`;
+  return (
+    `${route.meshName}\0${route.spotRoute.spot.spotId}\0` + `${route.spotRoute.spot.generation}`
+  );
 }
 
 function sameAppliedRoute(
@@ -616,26 +615,28 @@ function sameAppliedRoute(
   right: AppliedAuthorityRoute | undefined
 ): boolean {
   if (right === undefined) return false;
-  return left.kind === right.kind
-    && left.stableType === right.stableType
-    && left.meshName === right.meshName
-    && left.instanceRoute.targetNodeRid === right.instanceRoute.targetNodeRid
-    && left.instanceRoute.targetNodeGeneration === right.instanceRoute.targetNodeGeneration
-    && left.instanceRoute.authorityOwnerGeneration === right.instanceRoute.authorityOwnerGeneration
-    && left.instanceRoute.storeVersion === right.instanceRoute.storeVersion;
+  return (
+    left.kind === right.kind &&
+    left.stableType === right.stableType &&
+    left.meshName === right.meshName &&
+    left.instanceRoute.targetNodeRid === right.instanceRoute.targetNodeRid &&
+    left.instanceRoute.targetNodeGeneration === right.instanceRoute.targetNodeGeneration &&
+    left.instanceRoute.authorityOwnerGeneration === right.instanceRoute.authorityOwnerGeneration &&
+    left.instanceRoute.storeVersion === right.instanceRoute.storeVersion
+  );
 }
 
 function asStatefulAuthorityRouteSink(
   node: ZLinkBackendMeshNode
 ): StatefulAuthorityRouteSink | undefined {
   const candidate = node as ZLinkBackendMeshNode & Partial<StatefulAuthorityRouteSink>;
-  return typeof candidate.rememberSpotRoute === 'function'
-    && typeof candidate.forgetSpotRoute === 'function'
-    && typeof candidate.registerInstanceIntent === 'function'
-    && typeof candidate.forgetInstanceIntent === 'function'
-    && typeof candidate.recoverInstanceActivation === 'function'
-    && typeof candidate.completeRecoveredInstanceActivation === 'function'
-    ? candidate as StatefulAuthorityRouteSink
+  return typeof candidate.rememberSpotRoute === 'function' &&
+    typeof candidate.forgetSpotRoute === 'function' &&
+    typeof candidate.registerInstanceIntent === 'function' &&
+    typeof candidate.forgetInstanceIntent === 'function' &&
+    typeof candidate.recoverInstanceActivation === 'function' &&
+    typeof candidate.completeRecoveredInstanceActivation === 'function'
+    ? (candidate as StatefulAuthorityRouteSink)
     : undefined;
 }
 

@@ -73,7 +73,8 @@ public sealed class ZLinkSpotRequestHandlerAttribute(string packetName) : Attrib
 public sealed class ZLinkSpotSubscriptionAttribute(
     string spotNodeName,
     string channelName,
-    string topic) : Attribute
+    string topic
+) : Attribute
 {
     public string SpotNodeName { get; } = spotNodeName;
 
@@ -83,9 +84,8 @@ public sealed class ZLinkSpotSubscriptionAttribute(
 }
 
 [AttributeUsage(AttributeTargets.Class)]
-public sealed class ZLinkSpotSubscriptionHandlerAttribute(
-    string channelName,
-    string topic) : Attribute
+public sealed class ZLinkSpotSubscriptionHandlerAttribute(string channelName, string topic)
+    : Attribute
 {
     public string ChannelName { get; } = channelName;
 
@@ -129,7 +129,8 @@ public sealed class ZLinkSpotActorRequestHandlerAttribute(string packetName) : A
 }
 
 [AttributeUsage(AttributeTargets.Class)]
-public sealed class ZLinkSpotTimerHandlerAttribute(string name, double periodMilliseconds) : Attribute
+public sealed class ZLinkSpotTimerHandlerAttribute(string name, double periodMilliseconds)
+    : Attribute
 {
     public string Name { get; } = name;
 
@@ -142,6 +143,4 @@ public sealed class ZLinkSpotTimerHandlerAttribute(string name, double periodMil
 }
 
 [AttributeUsage(AttributeTargets.Method)]
-public sealed class ZLinkStreamPacketAttribute : Attribute
-{
-}
+public sealed class ZLinkStreamPacketAttribute : Attribute { }

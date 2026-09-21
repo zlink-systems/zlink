@@ -36,7 +36,8 @@ public sealed partial class StreamConnectorTests
     private static async Task WritePrefixAsync(
         Stream stream,
         ushort headerLength,
-        uint payloadLength)
+        uint payloadLength
+    )
     {
         var prefix = new byte[6];
         BinaryPrimitives.WriteUInt16BigEndian(prefix.AsSpan(0, 2), headerLength);
@@ -87,26 +88,27 @@ public sealed partial class StreamConnectorTests
     private static async Task DispatchUntilAsync(
         IZlinkStreamConnector connector,
         Func<bool> predicate,
-        TimeSpan timeout)
+        TimeSpan timeout
+    )
     {
         var deadlineStarted = Stopwatch.GetTimestamp();
         while (!predicate())
         {
             await connector.Dispatch.Async();
-            if (Stopwatch.GetElapsedTime(deadlineStarted) >= timeout) throw new TimeoutException("Connector dispatch timeout.");
+            if (Stopwatch.GetElapsedTime(deadlineStarted) >= timeout)
+                throw new TimeoutException("Connector dispatch timeout.");
 
             await Task.Delay(TimeSpan.FromMilliseconds(10));
         }
     }
 
-    private static async Task WaitUntilAsync(
-        Func<bool> predicate,
-        TimeSpan timeout)
+    private static async Task WaitUntilAsync(Func<bool> predicate, TimeSpan timeout)
     {
         var deadlineStarted = Stopwatch.GetTimestamp();
         while (!predicate())
         {
-            if (Stopwatch.GetElapsedTime(deadlineStarted) >= timeout) throw new TimeoutException("Condition wait timeout.");
+            if (Stopwatch.GetElapsedTime(deadlineStarted) >= timeout)
+                throw new TimeoutException("Condition wait timeout.");
 
             await Task.Delay(TimeSpan.FromMilliseconds(10));
         }
@@ -124,14 +126,21 @@ public sealed partial class StreamConnectorTests
             "CN=localhost",
             rsa,
             HashAlgorithmName.SHA256,
-            RSASignaturePadding.Pkcs1);
-        request.CertificateExtensions.Add(new X509BasicConstraintsExtension(false, false, 0, false));
-        request.CertificateExtensions.Add(new X509KeyUsageExtension(
-            X509KeyUsageFlags.DigitalSignature | X509KeyUsageFlags.KeyEncipherment,
-            false));
+            RSASignaturePadding.Pkcs1
+        );
+        request.CertificateExtensions.Add(
+            new X509BasicConstraintsExtension(false, false, 0, false)
+        );
+        request.CertificateExtensions.Add(
+            new X509KeyUsageExtension(
+                X509KeyUsageFlags.DigitalSignature | X509KeyUsageFlags.KeyEncipherment,
+                false
+            )
+        );
         var certificate = request.CreateSelfSigned(
             DateTimeOffset.UtcNow.AddMinutes(-1),
-            DateTimeOffset.UtcNow.AddDays(1));
+            DateTimeOffset.UtcNow.AddDays(1)
+        );
         return new X509Certificate2(certificate.Export(X509ContentType.Pfx));
     }
 
@@ -142,7 +151,8 @@ public sealed partial class StreamConnectorTests
     [MessagePackObject]
     public sealed class PackedPing
     {
-        [Key(0)] public string Text { get; set; } = string.Empty;
+        [Key(0)]
+        public string Text { get; set; } = string.Empty;
     }
 
     [ZlinkStreamPacketName("custom.packet")]

@@ -22,7 +22,8 @@ internal static class ZLinkBackendSocketOptionsMapper
             options.SendTimeout = config.SendTimeout;
             options.SubmitRetryMode = SubmitRetryMode.LocalFailure;
             options.SubmitRetryTimeoutMilliseconds = checked(
-                (int)Math.Ceiling(config.SendTimeout.Value.TotalMilliseconds));
+                (int)Math.Ceiling(config.SendTimeout.Value.TotalMilliseconds)
+            );
             options.SubmitRetryAttempts = 16;
         }
         if (config.ConnectTimeout is not null)

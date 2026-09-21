@@ -1,7 +1,8 @@
 package systems.zlink.framework.runtime.handlers;
 
-import systems.zlink.framework.runtime.internal.handlers.ZLinkSuspendInvocationAdapter;
+import systems.zlink.framework.errors.ZLinkConfigurationException;
 import systems.zlink.framework.runtime.internal.dispatch.ZLinkApplicationJobContext;
+import systems.zlink.framework.runtime.internal.handlers.ZLinkSuspendInvocationAdapter;
 
 import java.lang.reflect.InvocationTargetException;
 import java.lang.reflect.Method;
@@ -9,36 +10,34 @@ import java.lang.reflect.ParameterizedType;
 import java.lang.reflect.Type;
 import java.lang.reflect.WildcardType;
 import java.util.Arrays;
-import java.util.List;
 import java.util.Collection;
+import java.util.List;
 import java.util.Objects;
 import java.util.ServiceLoader;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionStage;
-import systems.zlink.framework.errors.ZLinkConfigurationException;
 
 public final class ZLinkHandlerMethodInvoker {
     private static final String CONTINUATION_CLASS_NAME = "kotlin.coroutines.Continuation";
-    private static final List<ZLinkSuspendInvocationAdapter> SUSPEND_INVOKERS = ServiceLoader
-        .load(ZLinkSuspendInvocationAdapter.class)
-        .stream()
-        .map(ServiceLoader.Provider::get)
-        .toList();
+    private static final List<ZLinkSuspendInvocationAdapter> SUSPEND_INVOKERS =
+            ServiceLoader.load(ZLinkSuspendInvocationAdapter.class).stream()
+                    .map(ServiceLoader.Provider::get)
+                    .toList();
 
-    private ZLinkHandlerMethodInvoker() {
-    }
+    private ZLinkHandlerMethodInvoker() {}
 
     public static boolean isKotlinSuspendMethod(Method method) {
         Class<?>[] parameterTypes = method.getParameterTypes();
         return parameterTypes.length > 0
-            && CONTINUATION_CLASS_NAME.equals(parameterTypes[parameterTypes.length - 1].getName());
+                && CONTINUATION_CLASS_NAME.equals(
+                        parameterTypes[parameterTypes.length - 1].getName());
     }
 
     public static Class<?>[] logicalParameterTypes(Method method) {
         Class<?>[] parameterTypes = method.getParameterTypes();
         return isKotlinSuspendMethod(method)
-            ? Arrays.copyOf(parameterTypes, parameterTypes.length - 1)
-            : parameterTypes;
+                ? Arrays.copyOf(parameterTypes, parameterTypes.length - 1)
+                : parameterTypes;
     }
 
     public static Class<?> kotlinSuspendReplyType(Class<?> handlerType, Method method) {
@@ -48,32 +47,34 @@ public final class ZLinkHandlerMethodInvoker {
         Type[] parameterTypes = method.getGenericParameterTypes();
         Type continuationType = parameterTypes[parameterTypes.length - 1];
         if (continuationType instanceof ParameterizedType parameterized
-            && parameterized.getRawType() instanceof Class<?> raw
-            && CONTINUATION_CLASS_NAME.equals(raw.getName())) {
-            return requireContinuationResultType(handlerType, parameterized.getActualTypeArguments()[0]);
+                && parameterized.getRawType() instanceof Class<?> raw
+                && CONTINUATION_CLASS_NAME.equals(raw.getName())) {
+            return requireContinuationResultType(
+                    handlerType, parameterized.getActualTypeArguments()[0]);
         }
         throw new ZLinkConfigurationException(
-            "Kotlin suspend handler reply type must resolve from Continuation: "
-                + handlerType.getName() + "." + method.getName());
+                "Kotlin suspend handler reply type must resolve from Continuation: "
+                        + handlerType.getName()
+                        + "."
+                        + method.getName());
     }
 
-    public static CompletionStage<Object> invoke(Object handler, Method method, Object[] logicalArguments) {
+    public static CompletionStage<Object> invoke(
+            Object handler, Method method, Object[] logicalArguments) {
         return invoke(handler, method, logicalArguments, SUSPEND_INVOKERS);
     }
 
     public static CompletionStage<Object> invokeHandler(
-        Object handler,
-        String methodName,
-        Object[] logicalArguments,
-        Collection<ZLinkSuspendInvocationAdapter> suspendInvokers) {
+            Object handler,
+            String methodName,
+            Object[] logicalArguments,
+            Collection<ZLinkSuspendInvocationAdapter> suspendInvokers) {
         Method method = requireHandlerMethod(handler.getClass(), methodName, logicalArguments);
         return invoke(handler, method, logicalArguments, suspendInvokers);
     }
 
     public static Method requireHandlerMethod(
-        Class<?> handlerType,
-        String methodName,
-        Object[] logicalArguments) {
+            Class<?> handlerType, String methodName, Object[] logicalArguments) {
         Objects.requireNonNull(handlerType, "handlerType");
         Objects.requireNonNull(methodName, "methodName");
         Object[] args = logicalArguments == null ? new Object[0] : logicalArguments;
@@ -90,15 +91,18 @@ public final class ZLinkHandlerMethodInvoker {
             }
         }
         throw new ZLinkConfigurationException(
-            "handler method is not found: " + handlerType.getName() + "." + methodName
-                + argumentTypesMessage(args));
+                "handler method is not found: "
+                        + handlerType.getName()
+                        + "."
+                        + methodName
+                        + argumentTypesMessage(args));
     }
 
     public static CompletionStage<Object> invoke(
-        Object handler,
-        Method method,
-        Object[] logicalArguments,
-        Collection<ZLinkSuspendInvocationAdapter> suspendInvokers) {
+            Object handler,
+            Method method,
+            Object[] logicalArguments,
+            Collection<ZLinkSuspendInvocationAdapter> suspendInvokers) {
         if (!isKotlinSuspendMethod(method)) {
             try {
                 method.setAccessible(true);
@@ -111,27 +115,33 @@ public final class ZLinkHandlerMethodInvoker {
             } catch (IllegalAccessException | InvocationTargetException ex) {
                 return CompletableFuture.failedFuture(unwrapReflectionFailure(ex));
             } catch (IllegalArgumentException ex) {
-                return CompletableFuture.failedFuture(new ZLinkConfigurationException(
-                    "handler method arguments do not match: "
-                        + method.getDeclaringClass().getName()
-                        + "." + method.getName()
-                        + argumentTypesMessage(logicalArguments),
-                    ex));
+                return CompletableFuture.failedFuture(
+                        new ZLinkConfigurationException(
+                                "handler method arguments do not match: "
+                                        + method.getDeclaringClass().getName()
+                                        + "."
+                                        + method.getName()
+                                        + argumentTypesMessage(logicalArguments),
+                                ex));
             }
         }
         Collection<ZLinkSuspendInvocationAdapter> effectiveInvokers =
-            suspendInvokers == null || suspendInvokers.isEmpty()
-                ? SUSPEND_INVOKERS
-                : suspendInvokers;
+                suspendInvokers == null || suspendInvokers.isEmpty()
+                        ? SUSPEND_INVOKERS
+                        : suspendInvokers;
         for (ZLinkSuspendInvocationAdapter invoker : effectiveInvokers) {
             if (invoker.supports(method)) {
                 ZLinkApplicationJobContext.beforeFirstApplicationInstruction();
                 return invoker.invoke(handler, method, logicalArguments);
             }
         }
-        return CompletableFuture.failedFuture(new ZLinkConfigurationException(
-            "Kotlin suspend handler requires a registered ZLinkSuspendInvocationAdapter: "
-                + method.getDeclaringClass().getName() + "." + method.getName()));
+        return CompletableFuture.failedFuture(
+                new ZLinkConfigurationException(
+                        "Kotlin suspend handler requires a registered"
+                                + " ZLinkSuspendInvocationAdapter: "
+                                + method.getDeclaringClass().getName()
+                                + "."
+                                + method.getName()));
     }
 
     private static boolean argumentsMatch(Class<?>[] parameterTypes, Object[] arguments) {
@@ -194,7 +204,8 @@ public final class ZLinkHandlerMethodInvoker {
 
     private static Throwable unwrapReflectionFailure(Throwable throwable) {
         Throwable current = throwable;
-        while (current instanceof InvocationTargetException invocation && invocation.getCause() != null) {
+        while (current instanceof InvocationTargetException invocation
+                && invocation.getCause() != null) {
             current = invocation.getCause();
         }
         return current;
@@ -208,10 +219,11 @@ public final class ZLinkHandlerMethodInvoker {
             return klass;
         }
         if (argument instanceof ParameterizedType parameterized
-            && parameterized.getRawType() instanceof Class<?> raw) {
+                && parameterized.getRawType() instanceof Class<?> raw) {
             return raw;
         }
         throw new ZLinkConfigurationException(
-            "Kotlin suspend handler reply type must resolve to a class: " + handlerType.getName());
+                "Kotlin suspend handler reply type must resolve to a class: "
+                        + handlerType.getName());
     }
 }

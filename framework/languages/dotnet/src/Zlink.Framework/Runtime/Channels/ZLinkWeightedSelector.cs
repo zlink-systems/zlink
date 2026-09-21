@@ -5,10 +5,7 @@ internal static class ZLinkWeightedSelector
     // Object placement still uses a per-operation cursor. It is deliberately
     // kept separate from channel selection, whose current values belong to the
     // channel route and are supplied to the overload below.
-    internal static T? Select<T>(
-        IReadOnlyList<T> eligible,
-        Func<T, int> weight,
-        ref long cursor)
+    internal static T? Select<T>(IReadOnlyList<T> eligible, Func<T, int> weight, ref long cursor)
         where T : class
     {
         if (eligible.Count == 0)
@@ -31,7 +28,8 @@ internal static class ZLinkWeightedSelector
             selected -= candidateWeight;
         }
         throw new InvalidOperationException(
-            "Weighted selection did not select an eligible target.");
+            "Weighted selection did not select an eligible target."
+        );
     }
 
     // Smooth weighted round-robin. The caller owns the current values because
@@ -43,7 +41,8 @@ internal static class ZLinkWeightedSelector
         Func<T, int> weight,
         Func<T, TKey> key,
         IDictionary<TKey, long> currents,
-        IComparer<TKey> comparer)
+        IComparer<TKey> comparer
+    )
         where T : class
         where TKey : notnull
     {
@@ -69,10 +68,11 @@ internal static class ZLinkWeightedSelector
                 : candidateWeight;
             currents[candidateKey] = current;
 
-            if (selected is null
+            if (
+                selected is null
                 || current > selectedCurrent
-                || current == selectedCurrent
-                   && comparer.Compare(candidateKey, selectedKey!) < 0)
+                || current == selectedCurrent && comparer.Compare(candidateKey, selectedKey!) < 0
+            )
             {
                 selected = candidate;
                 selectedKey = candidateKey;
@@ -87,16 +87,10 @@ internal static class ZLinkWeightedSelector
         return selected;
     }
 
-    internal static long Sum<T>(
-        IEnumerable<T> eligible,
-        Func<T, int> weight) =>
-        eligible.Aggregate(
-            0L,
-            (sum, candidate) => checked(sum + weight(candidate)));
+    internal static long Sum<T>(IEnumerable<T> eligible, Func<T, int> weight) =>
+        eligible.Aggregate(0L, (sum, candidate) => checked(sum + weight(candidate)));
 
-    private static long SumPositive<T>(
-        IEnumerable<T> eligible,
-        Func<T, int> weight)
+    private static long SumPositive<T>(IEnumerable<T> eligible, Func<T, int> weight)
     {
         var total = 0L;
         foreach (var candidate in eligible)
@@ -108,9 +102,7 @@ internal static class ZLinkWeightedSelector
         return total;
     }
 
-    private static int CommonDivisor<T>(
-        IEnumerable<T> eligible,
-        Func<T, int> weight)
+    private static int CommonDivisor<T>(IEnumerable<T> eligible, Func<T, int> weight)
     {
         var divisor = 0L;
         foreach (var candidate in eligible)
@@ -118,9 +110,8 @@ internal static class ZLinkWeightedSelector
             var candidateWeight = weight(candidate);
             if (candidateWeight <= 0)
                 continue;
-            divisor = divisor == 0
-                ? candidateWeight
-                : GreatestCommonDivisor(divisor, candidateWeight);
+            divisor =
+                divisor == 0 ? candidateWeight : GreatestCommonDivisor(divisor, candidateWeight);
             if (divisor == 1)
                 return 1;
         }

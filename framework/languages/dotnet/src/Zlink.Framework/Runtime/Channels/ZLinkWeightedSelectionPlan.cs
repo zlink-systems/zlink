@@ -12,9 +12,7 @@ internal sealed class ZLinkWeightedSelectionPlan<T, TKey>
     where TKey : notnull
 {
     private const int MaximumPrecomputedSteps = 4096;
-    private static readonly long MaximumPrecomputeTicks = Math.Max(
-        1,
-        Stopwatch.Frequency / 100);
+    private static readonly long MaximumPrecomputeTicks = Math.Max(1, Stopwatch.Frequency / 100);
 
     private readonly T[] _candidates;
     private readonly TKey[] _keys;
@@ -35,7 +33,8 @@ internal sealed class ZLinkWeightedSelectionPlan<T, TKey>
         Func<T, TKey> key,
         IReadOnlyDictionary<TKey, long>? retainedCurrents,
         IEqualityComparer<TKey> keyEqualityComparer,
-        IComparer<TKey> keyComparer)
+        IComparer<TKey> keyComparer
+    )
     {
         ArgumentNullException.ThrowIfNull(candidates);
         ArgumentNullException.ThrowIfNull(weight);
@@ -53,27 +52,31 @@ internal sealed class ZLinkWeightedSelectionPlan<T, TKey>
         var keys = new HashSet<TKey>(_keyEqualityComparer);
         for (var index = 0; index < _candidates.Length; index++)
         {
-            var candidate = _candidates[index]
+            var candidate =
+                _candidates[index]
                 ?? throw new ArgumentException(
                     "A selection plan cannot contain a null candidate.",
-                    nameof(candidates));
+                    nameof(candidates)
+                );
             var candidateKey = key(candidate);
             if (!keys.Add(candidateKey))
                 throw new ArgumentException(
                     "A selection plan requires unique candidate keys.",
-                    nameof(candidates));
+                    nameof(candidates)
+                );
             var candidateWeight = weight(candidate);
             if (candidateWeight <= 0)
                 throw new ArgumentOutOfRangeException(
                     nameof(candidates),
-                    "A selection plan requires positive candidate weights.");
+                    "A selection plan requires positive candidate weights."
+                );
 
             _keys[index] = candidateKey;
             _weights[index] = candidateWeight;
-            if (retainedCurrents is not null
-                && retainedCurrents.TryGetValue(
-                    candidateKey,
-                    out var retainedCurrent))
+            if (
+                retainedCurrents is not null
+                && retainedCurrents.TryGetValue(candidateKey, out var retainedCurrent)
+            )
                 _initialCurrents[index] = retainedCurrent;
             _totalWeight = checked(_totalWeight + candidateWeight);
         }
@@ -81,10 +84,7 @@ internal sealed class ZLinkWeightedSelectionPlan<T, TKey>
         if (_candidates.Length == 0)
             return;
 
-        if (TryPrepareSequence(
-                out var sequence,
-                out var cycleStart,
-                out var cycleLength))
+        if (TryPrepareSequence(out var sequence, out var cycleStart, out var cycleLength))
         {
             _sequence = sequence;
             _cycleStart = cycleStart;
@@ -115,11 +115,10 @@ internal sealed class ZLinkWeightedSelectionPlan<T, TKey>
             return _candidates[selected];
         }
 
-        var position = _cursor < _sequence.Length
-            ? checked((int)_cursor)
-            : checked(
-                _cycleStart
-                + ((_cursor - _cycleStart) % _cycleLength));
+        var position =
+            _cursor < _sequence.Length
+                ? checked((int)_cursor)
+                : checked(_cycleStart + ((_cursor - _cycleStart) % _cycleLength));
         _cursor++;
         return _candidates[_sequence[position]];
     }
@@ -149,8 +148,7 @@ internal sealed class ZLinkWeightedSelectionPlan<T, TKey>
         else
         {
             ApplySelections(state, _cycleStart, 0);
-            var remainder = checked(
-                (int)((_cursor - _cycleStart) % _cycleLength));
+            var remainder = checked((int)((_cursor - _cycleStart) % _cycleLength));
             ApplySelections(state, remainder, _cycleStart);
         }
 
@@ -159,10 +157,7 @@ internal sealed class ZLinkWeightedSelectionPlan<T, TKey>
         return currents;
     }
 
-    private bool TryPrepareSequence(
-        out int[] sequence,
-        out int cycleStart,
-        out int cycleLength)
+    private bool TryPrepareSequence(out int[] sequence, out int cycleStart, out int cycleLength)
     {
         var visited = new Dictionary<SelectionState, int>();
         var steps = new List<int>();
@@ -171,8 +166,7 @@ internal sealed class ZLinkWeightedSelectionPlan<T, TKey>
 
         for (var step = 0; step < MaximumPrecomputedSteps; step++)
         {
-            if (Stopwatch.GetTimestamp() - startedAt
-                > MaximumPrecomputeTicks)
+            if (Stopwatch.GetTimestamp() - startedAt > MaximumPrecomputeTicks)
             {
                 sequence = [];
                 cycleStart = 0;
@@ -207,14 +201,13 @@ internal sealed class ZLinkWeightedSelectionPlan<T, TKey>
         var selectedCurrent = long.MinValue;
         for (var index = 0; index < currents.Length; index++)
         {
-            var candidateCurrent = checked(
-                currents[index] + _weights[index]);
-            if (selected < 0
+            var candidateCurrent = checked(currents[index] + _weights[index]);
+            if (
+                selected < 0
                 || candidateCurrent > selectedCurrent
                 || candidateCurrent == selectedCurrent
-                   && _keyComparer.Compare(
-                       _keys[index],
-                       _keys[selected]) < 0)
+                    && _keyComparer.Compare(_keys[index], _keys[selected]) < 0
+            )
             {
                 selected = index;
                 selectedCurrent = candidateCurrent;
@@ -230,10 +223,7 @@ internal sealed class ZLinkWeightedSelectionPlan<T, TKey>
         currents[selected] = checked(currents[selected] - _totalWeight);
     }
 
-    private void ApplySelections(
-        long[] currents,
-        int count,
-        int sequenceOffset)
+    private void ApplySelections(long[] currents, int count, int sequenceOffset)
     {
         for (var index = 0; index < count; index++)
             Advance(currents, _sequence![sequenceOffset + index]);
@@ -254,11 +244,9 @@ internal sealed class ZLinkWeightedSelectionPlan<T, TKey>
         }
 
         public bool Equals(SelectionState? other) =>
-            other is not null
-            && _values.AsSpan().SequenceEqual(other._values);
+            other is not null && _values.AsSpan().SequenceEqual(other._values);
 
-        public override bool Equals(object? obj) =>
-            obj is SelectionState other && Equals(other);
+        public override bool Equals(object? obj) => obj is SelectionState other && Equals(other);
 
         public override int GetHashCode() => _hashCode;
     }

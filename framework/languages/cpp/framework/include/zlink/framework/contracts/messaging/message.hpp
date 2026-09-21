@@ -124,8 +124,7 @@ class message_t
         message_t wrapped;
         auto raw_payload = std::make_shared<raw_payload_state_t> ();
         raw_payload->message = std::move (message);
-        raw_payload->encoded = detail::encoded_payload_from_raw (
-          raw_payload->message);
+        raw_payload->encoded = detail::encoded_payload_from_raw (raw_payload->message);
         wrapped._raw_payload = std::move (raw_payload);
         wrapped._decode = std::make_shared<decode_state_t> ();
         wrapped._serializers = serializers;
@@ -152,12 +151,9 @@ class message_t
     {
         using value_type = std::remove_cvref_t<TValue>;
         if (!_decode) {
-            return with_encoded_payload (
-              serializers,
-              [&] (const encoded_payload_t &payload) {
-                  return serializers.template get<value_type> ().deserialize (
-                    payload);
-              });
+            return with_encoded_payload (serializers, [&] (const encoded_payload_t &payload) {
+                return serializers.template get<value_type> ().deserialize (payload);
+            });
         }
 
         std::lock_guard lock (_decode->gate);
@@ -170,8 +166,7 @@ class message_t
                   "framework message was already decoded as another payload type");
             }
             if constexpr (std::is_copy_constructible_v<value_type>) {
-                return *static_cast<const value_type *> (
-                  _decode->value.get ());
+                return *static_cast<const value_type *> (_decode->value.get ());
             }
             throw framework_exception_t (
               framework_error_kind_t::protocol_error,
@@ -181,11 +176,9 @@ class message_t
         _decode->attempted = true;
         _decode->type = std::type_index (typeid (value_type));
         try {
-            auto decoded = with_encoded_payload (
-              serializers,
-              [&] (const encoded_payload_t &payload) {
-                  return serializers.template get<value_type> ().deserialize (
-                    payload);
+            auto decoded =
+              with_encoded_payload (serializers, [&] (const encoded_payload_t &payload) {
+                  return serializers.template get<value_type> ().deserialize (payload);
               });
             if constexpr (std::is_copy_constructible_v<value_type>) {
                 _decode->value = std::make_shared<const value_type> (decoded);
@@ -200,17 +193,14 @@ class message_t
     }
 
     template <typename TVisitor>
-    auto with_encoded_payload (const serializer_registry_t &serializers,
-                               TVisitor &&visitor) const
+    auto with_encoded_payload (const serializer_registry_t &serializers, TVisitor &&visitor) const
       -> std::invoke_result_t<TVisitor, const encoded_payload_t &>
     {
-        using result_type =
-          std::invoke_result_t<TVisitor, const encoded_payload_t &>;
+        using result_type = std::invoke_result_t<TVisitor, const encoded_payload_t &>;
         static_assert (!std::is_reference_v<result_type>,
                        "encoded payload visitor result must own its value");
         if (_raw_payload) {
-            return std::forward<TVisitor> (visitor) (
-              _raw_payload->encoded);
+            return std::forward<TVisitor> (visitor) (_raw_payload->encoded);
         }
         encoded_payload_t encoded;
         if (!_value) {
@@ -218,8 +208,7 @@ class message_t
         }
         if (_encoder) {
             encoded = _encoder (serializers);
-        }
-        else {
+        } else {
             encoded = serializers.serialize (_type, _value.get ());
         }
         return std::forward<TVisitor> (visitor) (encoded);
@@ -228,20 +217,16 @@ class message_t
     zlink::message_t to_raw () const
     {
         const auto &serializers = require_serializers ();
-        return with_encoded_payload (
-          serializers,
-          [] (const encoded_payload_t &payload) {
-              return detail::encoded_payload_to_raw (payload);
-          });
+        return with_encoded_payload (serializers, [] (const encoded_payload_t &payload) {
+            return detail::encoded_payload_to_raw (payload);
+        });
     }
 
     zlink::message_t to_raw (const serializer_registry_t &serializers) const
     {
-        return with_encoded_payload (
-          serializers,
-          [] (const encoded_payload_t &payload) {
-              return detail::encoded_payload_to_raw (payload);
-          });
+        return with_encoded_payload (serializers, [] (const encoded_payload_t &payload) {
+            return detail::encoded_payload_to_raw (payload);
+        });
     }
 
     std::shared_ptr<raw_payload_state_t> _raw_payload;

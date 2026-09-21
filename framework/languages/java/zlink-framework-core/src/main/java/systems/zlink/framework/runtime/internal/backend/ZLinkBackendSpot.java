@@ -1,13 +1,14 @@
 package systems.zlink.framework.runtime.internal.backend;
 
-import java.time.Duration;
-import java.util.List;
-import java.util.UUID;
-import java.util.concurrent.CompletionStage;
 import systems.zlink.contracts.core.RoutingId;
 import systems.zlink.contracts.messaging.Message;
 import systems.zlink.contracts.sockets.SendFlags;
 import systems.zlink.framework.runtime.internal.service.ZLinkServiceOperationRegistry;
+
+import java.time.Duration;
+import java.util.List;
+import java.util.UUID;
+import java.util.concurrent.CompletionStage;
 
 public interface ZLinkBackendSpot extends ZLinkBackendObject {
     String spotId();
@@ -30,41 +31,31 @@ public interface ZLinkBackendSpot extends ZLinkBackendObject {
     ZLinkBackendReceived recvRoute(ZLinkBackendRecvMode mode);
 
     default void rememberSpotAuthority(
-        RoutingId targetNodeRid,
-        String spotId,
-        long objectGeneration,
-        long authorityOwnerGeneration) {
-    }
+            RoutingId targetNodeRid,
+            String spotId,
+            long objectGeneration,
+            long authorityOwnerGeneration) {}
 
     default void rememberSpotAuthority(
-        RoutingId targetNodeRid,
-        String spotId,
-        long objectGeneration,
-        long authorityOwnerGeneration,
-        long ownerLeaseGeneration) {
-        rememberSpotAuthority(
-            targetNodeRid, spotId, objectGeneration,
-            authorityOwnerGeneration);
+            RoutingId targetNodeRid,
+            String spotId,
+            long objectGeneration,
+            long authorityOwnerGeneration,
+            long ownerLeaseGeneration) {
+        rememberSpotAuthority(targetNodeRid, spotId, objectGeneration, authorityOwnerGeneration);
     }
 
-    boolean publish(
-        String channelName,
-        String topic,
-        List<Message> parts,
-        SendFlags flags);
+    boolean publish(String channelName, String topic, List<Message> parts, SendFlags flags);
 
     CompletionStage<Void> publishAsync(
-        String channelName,
-        String topic,
-        List<Message> parts,
-        SendFlags flags);
+            String channelName, String topic, List<Message> parts, SendFlags flags);
 
     default boolean publish(
-        String channelName,
-        String topic,
-        byte[] metadata,
-        List<Message> parts,
-        SendFlags flags) {
+            String channelName,
+            String topic,
+            byte[] metadata,
+            List<Message> parts,
+            SendFlags flags) {
         if (metadata == null || metadata.length == 0) {
             return publish(channelName, topic, parts, flags);
         }
@@ -72,84 +63,76 @@ public interface ZLinkBackendSpot extends ZLinkBackendObject {
     }
 
     default CompletionStage<Void> publishAsync(
-        String channelName,
-        String topic,
-        byte[] metadata,
-        List<Message> parts,
-        SendFlags flags) {
+            String channelName,
+            String topic,
+            byte[] metadata,
+            List<Message> parts,
+            SendFlags flags) {
         if (metadata == null || metadata.length == 0) {
             return publishAsync(channelName, topic, parts, flags);
         }
-        throw new UnsupportedOperationException(
-            "Spot publish metadata is unavailable");
+        throw new UnsupportedOperationException("Spot publish metadata is unavailable");
     }
 
     CompletionStage<Void> sendToSpot(
-        RoutingId targetNodeRid,
-        String spotId,
-        long spotGeneration,
-        List<Message> parts);
+            RoutingId targetNodeRid, String spotId, long spotGeneration, List<Message> parts);
 
     default CompletionStage<Void> sendToSpot(
-        RoutingId targetNodeRid,
-        String spotId,
-        long spotGeneration,
-        byte[] metadata,
-        List<Message> parts) {
+            RoutingId targetNodeRid,
+            String spotId,
+            long spotGeneration,
+            byte[] metadata,
+            List<Message> parts) {
         if (metadata == null || metadata.length == 0) {
-            return sendToSpot(
-                targetNodeRid, spotId, spotGeneration, parts);
+            return sendToSpot(targetNodeRid, spotId, spotGeneration, parts);
         }
         throw new UnsupportedOperationException("Spot send metadata is unavailable");
     }
 
     CompletionStage<ZLinkBackendReceived> requestToSpot(
-        RoutingId targetNodeRid,
-        String spotId,
-        long spotGeneration,
-        List<Message> parts,
-        Duration timeout);
+            RoutingId targetNodeRid,
+            String spotId,
+            long spotGeneration,
+            List<Message> parts,
+            Duration timeout);
 
     default CompletionStage<ZLinkBackendReceived> requestToSpot(
-        RoutingId targetNodeRid,
-        String spotId,
-        long spotGeneration,
-        byte[] metadata,
-        List<Message> parts,
-        Duration timeout) {
+            RoutingId targetNodeRid,
+            String spotId,
+            long spotGeneration,
+            byte[] metadata,
+            List<Message> parts,
+            Duration timeout) {
         if (metadata == null || metadata.length == 0) {
-            return requestToSpot(
-                targetNodeRid,
-                spotId,
-                spotGeneration,
-                parts,
-                timeout);
+            return requestToSpot(targetNodeRid, spotId, spotGeneration, parts, timeout);
         }
         throw new UnsupportedOperationException("Spot request metadata is unavailable");
     }
 
     default CompletionStage<ZLinkBackendReceived> requestToSpot(
-        RoutingId targetNodeRid,
-        String spotId,
-        long spotGeneration,
-        byte[] metadata,
-        List<Message> parts,
-        Duration timeout,
-        ZLinkServiceOperationRegistry operations,
-        UUID operationId) {
-        return operations.submit(operationId, timeout,
-            () -> requestToSpot(
-                targetNodeRid, spotId, spotGeneration, metadata, parts, timeout),
-            ZLinkBackendReceived::close);
+            RoutingId targetNodeRid,
+            String spotId,
+            long spotGeneration,
+            byte[] metadata,
+            List<Message> parts,
+            Duration timeout,
+            ZLinkServiceOperationRegistry operations,
+            UUID operationId) {
+        return operations.submit(
+                operationId,
+                timeout,
+                () ->
+                        requestToSpot(
+                                targetNodeRid, spotId, spotGeneration, metadata, parts, timeout),
+                ZLinkBackendReceived::close);
     }
+
     void onDispatchEvent(ZLinkBackendSpotDispatchHandler handler);
 
     ZLinkBackendActorJoinRequest recvActorJoin(ZLinkBackendRecvMode mode);
 
     void replyActorJoin(
-        ZLinkBackendActorJoinRequest request,
-        int joinResultCode,
-        List<Message> parts);
+            ZLinkBackendActorJoinRequest request, int joinResultCode, List<Message> parts);
 
     ZLinkBackendActorLifecycleEvent recvActorLifecycle(ZLinkBackendRecvMode mode);
 }

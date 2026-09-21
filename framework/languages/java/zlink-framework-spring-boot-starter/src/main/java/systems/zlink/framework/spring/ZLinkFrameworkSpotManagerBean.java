@@ -1,14 +1,13 @@
 package systems.zlink.framework.spring;
 
-import systems.zlink.framework.spring.internal.runtime.ZLinkFrameworkLifecycle;
-
-import java.util.Optional;
-import java.util.concurrent.CompletionStage;
-import systems.zlink.contracts.core.RoutingId;
 import systems.zlink.framework.spots.SpotRef;
 import systems.zlink.framework.spots.ZLinkSpotCreateCall;
 import systems.zlink.framework.spots.ZLinkSpotGetOrCreateCall;
 import systems.zlink.framework.spots.ZLinkSpotManager;
+import systems.zlink.framework.spring.internal.runtime.ZLinkFrameworkLifecycle;
+
+import java.util.Optional;
+import java.util.concurrent.CompletionStage;
 
 final class ZLinkFrameworkSpotManagerBean implements ZLinkSpotManager {
     private final ZLinkFrameworkLifecycle lifecycle;
@@ -23,9 +22,7 @@ final class ZLinkFrameworkSpotManagerBean implements ZLinkSpotManager {
     }
 
     @Override
-    public ZLinkSpotGetOrCreateCall getOrCreate(
-        String spotId,
-        String spotType) {
+    public ZLinkSpotGetOrCreateCall getOrCreate(String spotId, String spotType) {
         return lifecycle.spotManager().getOrCreate(spotId, spotType);
     }
 

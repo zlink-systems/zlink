@@ -2,7 +2,7 @@ import type {
   Type,
   ZLinkHandlerFilter,
   ZLinkHandlerFilterContext,
-  ZLinkMessageContext,
+  ZLinkMessageContext
 } from '../../contracts';
 import type { ZLinkProviderResolver } from '../../contracts/Common/ZLinkProviderResolver';
 import type {
@@ -55,7 +55,10 @@ export interface ZLinkChannelOutboundTracePoint {
 }
 
 export class ZLinkChannelDispatchServices {
-  private readonly dispatchErrorReporters = new WeakMap<ZLinkRuntimeTaskErrorSink, ZLinkDispatchErrorReporter>();
+  private readonly dispatchErrorReporters = new WeakMap<
+    ZLinkRuntimeTaskErrorSink,
+    ZLinkDispatchErrorReporter
+  >();
   private messageFlowModeCellValue?: ZLinkMessageFlowModeCell;
   private diagnosticsContextValue?: ZLinkDiagnosticsContext;
   private handlerFiltersValue?: readonly ZLinkHandlerFilter[];
@@ -98,53 +101,50 @@ export class ZLinkChannelDispatchServices {
     if (this.handlerFiltersValue !== undefined) {
       return this.handlerFiltersValue;
     }
-    this.handlerFiltersValue = this.registration.filterTypes.length === 0
-      ? []
-      : [{ invoke: (context, next, signal) => this.invokeHandlerFilters(context, next, signal) }];
+    this.handlerFiltersValue =
+      this.registration.filterTypes.length === 0
+        ? []
+        : [{ invoke: (context, next, signal) => this.invokeHandlerFilters(context, next, signal) }];
     return this.handlerFiltersValue;
   }
 
   channelRequestHandler(handlerType: Type): ZLinkChannelRequestHandler {
     return {
-      handle: (payload, context) => this.withHandlerScope(context, async (scope) => {
-        const handler = await scope.resolve(
-          handlerType as Type<ZLinkChannelRequestHandler>
-        );
-        return handler.handle(payload, context);
-      })
+      handle: (payload, context) =>
+        this.withHandlerScope(context, async (scope) => {
+          const handler = await scope.resolve(handlerType as Type<ZLinkChannelRequestHandler>);
+          return handler.handle(payload, context);
+        })
     };
   }
 
   channelSendHandler(handlerType: Type): ZLinkChannelSendHandler {
     return {
-      handle: (payload, context) => this.withHandlerScope(context, async (scope) => {
-        const handler = await scope.resolve(
-          handlerType as Type<ZLinkChannelSendHandler>
-        );
-        await handler.handle(payload, context);
-      })
+      handle: (payload, context) =>
+        this.withHandlerScope(context, async (scope) => {
+          const handler = await scope.resolve(handlerType as Type<ZLinkChannelSendHandler>);
+          await handler.handle(payload, context);
+        })
     };
   }
 
   routeRequestHandler(handlerType: Type): ZLinkRouteRuntimeRequestHandler {
     return {
-      handle: (payload, context) => this.withHandlerScope(context, async (scope) => {
-        const handler = await scope.resolve(
-          handlerType as Type<ZLinkRouteRuntimeRequestHandler>
-        );
-        return handler.handle(payload, context);
-      })
+      handle: (payload, context) =>
+        this.withHandlerScope(context, async (scope) => {
+          const handler = await scope.resolve(handlerType as Type<ZLinkRouteRuntimeRequestHandler>);
+          return handler.handle(payload, context);
+        })
     };
   }
 
   routeSendHandler(handlerType: Type): ZLinkRouteRuntimeSendHandler {
     return {
-      handle: (payload, context) => this.withHandlerScope(context, async (scope) => {
-        const handler = await scope.resolve(
-          handlerType as Type<ZLinkRouteRuntimeSendHandler>
-        );
-        await handler.handle(payload, context);
-      })
+      handle: (payload, context) =>
+        this.withHandlerScope(context, async (scope) => {
+          const handler = await scope.resolve(handlerType as Type<ZLinkRouteRuntimeSendHandler>);
+          await handler.handle(payload, context);
+        })
     };
   }
 
@@ -169,7 +169,9 @@ export class ZLinkChannelDispatchServices {
     }
     await this.withHandlerScope(context, async (scope) => {
       await invokeZLinkHandlerFilters(
-        await Promise.all(this.registration.filterTypes.map((filterType) => scope.resolve(filterType))),
+        await Promise.all(
+          this.registration.filterTypes.map((filterType) => scope.resolve(filterType))
+        ),
         context,
         next,
         signal
@@ -191,21 +193,22 @@ export class ZLinkChannelDispatchServices {
     const flow = flowIfEnabled(this.outboundFlow(), outcome, result);
     if (flow === undefined) return undefined;
     return {
-      trace: (event) => flow.trace({
-        outcome,
-        surface: event.surface,
-        messageKind: event.messageKind,
-        channelName: event.channelName,
-        packetName: event.packetName,
-        correlationId: event.correlationId,
-        result: event.result,
-        channelRouteKind: event.channelRouteKind,
-        serverRid: event.serverRid,
-        durationSeconds: event.durationSeconds,
-        topic: event.topic,
-        sourceRid: event.sourceRid,
-        targetRid: event.targetRid
-      })
+      trace: (event) =>
+        flow.trace({
+          outcome,
+          surface: event.surface,
+          messageKind: event.messageKind,
+          channelName: event.channelName,
+          packetName: event.packetName,
+          correlationId: event.correlationId,
+          result: event.result,
+          channelRouteKind: event.channelRouteKind,
+          serverRid: event.serverRid,
+          durationSeconds: event.durationSeconds,
+          topic: event.topic,
+          sourceRid: event.sourceRid,
+          targetRid: event.targetRid
+        })
     };
   }
 
@@ -225,10 +228,9 @@ export class ZLinkChannelDispatchServices {
   }
 
   private outboundFlow(): ZLinkMessageFlowTracer {
-    this.outboundFlowValue ??= new ZLinkMessageFlowTracer(
-      this.diagnosticsContext(),
-      { reportRuntimeTaskException() {} }
-    );
+    this.outboundFlowValue ??= new ZLinkMessageFlowTracer(this.diagnosticsContext(), {
+      reportRuntimeTaskException() {}
+    });
     return this.outboundFlowValue;
   }
 }

@@ -14,7 +14,8 @@ internal static class ZLinkReconciliationRunner
         Action<Exception> reportRetry,
         CancellationToken cancellationToken,
         Predicate<Exception>? isTerminal = null,
-        TimeSpan? retryDelay = null)
+        TimeSpan? retryDelay = null
+    )
     {
         await RunAsync(
                 async token =>
@@ -25,7 +26,8 @@ internal static class ZLinkReconciliationRunner
                 reportRetry,
                 cancellationToken,
                 isTerminal,
-                retryDelay)
+                retryDelay
+            )
             .ConfigureAwait(false);
     }
 
@@ -34,7 +36,8 @@ internal static class ZLinkReconciliationRunner
         Action<Exception> reportRetry,
         CancellationToken cancellationToken,
         Predicate<Exception>? isTerminal = null,
-        TimeSpan? retryDelay = null)
+        TimeSpan? retryDelay = null
+    )
     {
         var delay = retryDelay ?? DefaultRetryDelay;
         if (delay < TimeSpan.Zero)
@@ -53,7 +56,8 @@ internal static class ZLinkReconciliationRunner
             }
             catch (Exception exception)
             {
-                if (isTerminal?.Invoke(exception) == true) throw;
+                if (isTerminal?.Invoke(exception) == true)
+                    throw;
                 reportRetry(exception);
             }
 

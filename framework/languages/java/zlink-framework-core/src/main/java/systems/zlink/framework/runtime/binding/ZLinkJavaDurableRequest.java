@@ -1,5 +1,12 @@
 package systems.zlink.framework.runtime.binding;
 
+import systems.zlink.contracts.errors.ZlinkRequestException;
+import systems.zlink.contracts.errors.ZlinkSubmitException;
+import systems.zlink.contracts.sockets.RequestResult;
+import systems.zlink.contracts.sockets.SubmitResult;
+import systems.zlink.framework.errors.ZLinkFrameworkErrorKind;
+import systems.zlink.framework.errors.ZLinkFrameworkException;
+
 import java.time.Duration;
 import java.util.List;
 import java.util.concurrent.CompletableFuture;
@@ -10,12 +17,6 @@ import java.util.concurrent.TimeUnit;
 import java.util.function.BiFunction;
 import java.util.function.BooleanSupplier;
 import java.util.function.Supplier;
-import systems.zlink.contracts.errors.ZlinkRequestException;
-import systems.zlink.contracts.errors.ZlinkSubmitException;
-import systems.zlink.contracts.sockets.RequestResult;
-import systems.zlink.contracts.sockets.SubmitResult;
-import systems.zlink.framework.errors.ZLinkFrameworkErrorKind;
-import systems.zlink.framework.errors.ZLinkFrameworkException;
 
 /** Owns the encoded identity and typed admission history of one durable request. */
 final class ZLinkJavaDurableRequest {
@@ -29,10 +30,10 @@ final class ZLinkJavaDurableRequest {
     private Throwable lastFailure;
 
     private ZLinkJavaDurableRequest(
-        Supplier<List<byte[]>> prepare,
-        BiFunction<List<byte[]>, Duration, CompletionStage<List<byte[]>>> submit,
-        BooleanSupplier targetLifecycleEnded,
-        Duration timeout) {
+            Supplier<List<byte[]>> prepare,
+            BiFunction<List<byte[]>, Duration, CompletionStage<List<byte[]>>> submit,
+            BooleanSupplier targetLifecycleEnded,
+            Duration timeout) {
         this.prepare = prepare;
         this.submit = submit;
         this.targetLifecycleEnded = targetLifecycleEnded;
@@ -40,12 +41,11 @@ final class ZLinkJavaDurableRequest {
     }
 
     static CompletionStage<List<byte[]>> request(
-        Supplier<List<byte[]>> prepare,
-        BiFunction<List<byte[]>, Duration, CompletionStage<List<byte[]>>> submit,
-        BooleanSupplier targetLifecycleEnded,
-        Duration timeout) {
-        var request = new ZLinkJavaDurableRequest(
-            prepare, submit, targetLifecycleEnded, timeout);
+            Supplier<List<byte[]>> prepare,
+            BiFunction<List<byte[]>, Duration, CompletionStage<List<byte[]>>> submit,
+            BooleanSupplier targetLifecycleEnded,
+            Duration timeout) {
+        var request = new ZLinkJavaDurableRequest(prepare, submit, targetLifecycleEnded, timeout);
         request.attempt();
         return request.completion;
     }
@@ -55,9 +55,11 @@ final class ZLinkJavaDurableRequest {
             return;
         }
         if (targetLifecycleEnded.getAsBoolean()) {
-            completion.completeExceptionally(new ZLinkFrameworkException(
-                ZLinkFrameworkErrorKind.UNAVAILABLE,
-                "durable request target lifecycle ended", lastFailure));
+            completion.completeExceptionally(
+                    new ZLinkFrameworkException(
+                            ZLinkFrameworkErrorKind.UNAVAILABLE,
+                            "durable request target lifecycle ended",
+                            lastFailure));
             return;
         }
         if (deadline - System.nanoTime() <= 0) {
@@ -79,8 +81,7 @@ final class ZLinkJavaDurableRequest {
                 exhaust();
                 return;
             }
-            submit.apply(frames, Duration.ofNanos(remaining))
-                .whenComplete(this::settle);
+            submit.apply(frames, Duration.ofNanos(remaining)).whenComplete(this::settle);
         } catch (RuntimeException failure) {
             settle(null, failure);
         }
@@ -97,24 +98,24 @@ final class ZLinkJavaDurableRequest {
             return;
         }
         Throwable cause = failure;
-        while ((cause instanceof CompletionException
-            || cause instanceof ExecutionException) && cause.getCause() != null) {
+        while ((cause instanceof CompletionException || cause instanceof ExecutionException)
+                && cause.getCause() != null) {
             cause = cause.getCause();
         }
         lastFailure = cause;
         if (cause instanceof ZlinkRequestException request) {
             admitted = true;
             if (request.getResult() == RequestResult.NOT_CONNECTED
-                || request.getResult() == RequestResult.TIMED_OUT) {
+                    || request.getResult() == RequestResult.TIMED_OUT) {
                 retry();
                 return;
             }
         } else if (cause instanceof ZlinkSubmitException initial) {
             SubmitResult result = initial.getResult();
             if (result == SubmitResult.NOT_CONNECTED
-                || result == SubmitResult.NOT_FOUND
-                || result == SubmitResult.BACKPRESSURED
-                || result == SubmitResult.NOT_ADMITTED) {
+                    || result == SubmitResult.NOT_FOUND
+                    || result == SubmitResult.BACKPRESSURED
+                    || result == SubmitResult.NOT_ADMITTED) {
                 retry();
                 return;
             }
@@ -124,18 +125,22 @@ final class ZLinkJavaDurableRequest {
 
     private void retry() {
         long remaining = deadline - System.nanoTime();
-        ZLinkProcessExecutionLanes.deadlines().schedule(
-            this::attempt,
-            Math.max(0, Math.min(remaining, TimeUnit.MILLISECONDS.toNanos(10))),
-            TimeUnit.NANOSECONDS);
+        ZLinkProcessExecutionLanes.deadlines()
+                .schedule(
+                        this::attempt,
+                        Math.max(0, Math.min(remaining, TimeUnit.MILLISECONDS.toNanos(10))),
+                        TimeUnit.NANOSECONDS);
     }
 
     private void exhaust() {
-        completion.completeExceptionally(new ZLinkFrameworkException(
-            admitted ? ZLinkFrameworkErrorKind.DEADLINE_EXCEEDED
-                : ZLinkFrameworkErrorKind.UNAVAILABLE,
-            admitted ? "durable request reply was not received before its deadline"
-                : "durable request was not admitted before its deadline",
-            lastFailure));
+        completion.completeExceptionally(
+                new ZLinkFrameworkException(
+                        admitted
+                                ? ZLinkFrameworkErrorKind.DEADLINE_EXCEEDED
+                                : ZLinkFrameworkErrorKind.UNAVAILABLE,
+                        admitted
+                                ? "durable request reply was not received before its deadline"
+                                : "durable request was not admitted before its deadline",
+                        lastFailure));
     }
 }

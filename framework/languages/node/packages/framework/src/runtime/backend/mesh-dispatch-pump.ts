@@ -70,8 +70,7 @@ export class ZLinkMeshDispatchPump {
   constructor(
     private readonly node: ZLinkBackendMeshNode,
     private readonly options: ZLinkMeshDispatchPumpOptions
-  ) {
-  }
+  ) {}
 
   start(): void {
     if (this.applicationWorkerCount === 0) this.startApplicationWorker();
@@ -103,11 +102,9 @@ export class ZLinkMeshDispatchPump {
     const previous = this.pendingDomains;
     this.pendingDomains |= domains;
     const startInfrastructure =
-      (domains & ReadyDomain.Infrastructure) !== 0
-      && (previous & ReadyDomain.Infrastructure) === 0;
+      (domains & ReadyDomain.Infrastructure) !== 0 && (previous & ReadyDomain.Infrastructure) === 0;
     const startApplication =
-      (domains & ReadyDomain.Application) !== 0
-      && (previous & ReadyDomain.Application) === 0;
+      (domains & ReadyDomain.Application) !== 0 && (previous & ReadyDomain.Application) === 0;
     if (startInfrastructure && startApplication) {
       const startTurn = this.yieldIfNeeded() ?? Promise.resolve();
       this.scheduleInfrastructure(startTurn);
@@ -141,11 +138,11 @@ export class ZLinkMeshDispatchPump {
     this.applicationWorkerCount += 1;
     let worker: Promise<void>;
     worker = detachedMeshDispatchScope(() =>
-      runZLinkExecutionArea('application', () => this.runApplicationWorker()))
-      .finally(() => {
-        this.applicationWorkerCount -= 1;
-        this.activeDrains.delete(worker);
-      });
+      runZLinkExecutionArea('application', () => this.runApplicationWorker())
+    ).finally(() => {
+      this.applicationWorkerCount -= 1;
+      this.activeDrains.delete(worker);
+    });
     this.activeDrains.add(worker);
   }
 
@@ -154,7 +151,8 @@ export class ZLinkMeshDispatchPump {
     // unrelated owners. Each owner may supply up to 64 pre-admitted records.
     const readyBatch = this.node.createReadyBatch(1);
     const receiveBatch = this.node.createReceiveBatch(
-      MESH_DISPATCH_RECEIVE_CAPACITY, this.options.partCapacity ?? 256
+      MESH_DISPATCH_RECEIVE_CAPACITY,
+      this.options.partCapacity ?? 256
     );
     try {
       for (;;) {
@@ -178,7 +176,7 @@ export class ZLinkMeshDispatchPump {
       this.pendingDomains &= ~ReadyDomain.Application;
       return Promise.resolve();
     }
-    return new Promise(resolve => this.idleApplicationWorkers.add(resolve));
+    return new Promise((resolve) => this.idleApplicationWorkers.add(resolve));
   }
 
   private reportDispatchError(error: unknown): void {
@@ -202,8 +200,11 @@ export class ZLinkMeshDispatchPump {
     }
     this.infrastructureScheduled = true;
     const drain = (startTurn ?? this.yieldIfNeeded() ?? Promise.resolve())
-      .then(() => detachedMeshDispatchScope(() =>
-        runZLinkExecutionArea('infrastructure', () => this.drainInfrastructure())))
+      .then(() =>
+        detachedMeshDispatchScope(() =>
+          runZLinkExecutionArea('infrastructure', () => this.drainInfrastructure())
+        )
+      )
       .catch((error) => {
         if (error instanceof ZLinkMeshDispatchFailure) {
           this.options.reportError?.(error.dispatchCause, error.context);
@@ -230,7 +231,8 @@ export class ZLinkMeshDispatchPump {
       Math.min(this.options.readyCapacity ?? 32, MESH_DISPATCH_LIFECYCLE_CLAIM_BUDGET)
     );
     const receiveBatch = this.node.createReceiveBatch(
-      MESH_DISPATCH_RECEIVE_CAPACITY, this.options.partCapacity ?? 256
+      MESH_DISPATCH_RECEIVE_CAPACITY,
+      this.options.partCapacity ?? 256
     );
     try {
       while (!this.disposed) {
@@ -287,14 +289,15 @@ export class ZLinkMeshDispatchPump {
           // Raw ingress already attached one host permit to each record.
           // A claim that reserves admission here may receive only that permit's record.
           try {
-            const capacity = owner.ordinaryIngressPreAdmitted === true
-              ? MESH_DISPATCH_RECEIVE_CAPACITY : 1;
+            const capacity =
+              owner.ordinaryIngressPreAdmitted === true ? MESH_DISPATCH_RECEIVE_CAPACITY : 1;
             for (;;) {
-              let claimPermit = owner.terminalCompletion === true
-                || owner.ordinaryIngressPreAdmitted === true
-                || domain === ReadyDomain.Infrastructure
-                ? undefined
-                : await this.acquirePermit();
+              let claimPermit =
+                owner.terminalCompletion === true ||
+                owner.ordinaryIngressPreAdmitted === true ||
+                domain === ReadyDomain.Infrastructure
+                  ? undefined
+                  : await this.acquirePermit();
               try {
                 if (this.capacityStop.signal.aborted) return false;
                 receiveBatch.reset(capacity);
@@ -314,7 +317,9 @@ export class ZLinkMeshDispatchPump {
                     if (this.disposed) break;
                     const permit = record.applicationJobPermit ?? claimPermit;
                     if (owner.ordinaryIngressPreAdmitted === true && permit === undefined) {
-                      throw new Error('Pre-admitted raw ingress record lost its Application Job Queue permit.');
+                      throw new Error(
+                        'Pre-admitted raw ingress record lost its Application Job Queue permit.'
+                      );
                     }
                     this.recordsSinceYield += 1;
                     const dispatch = async () => {
@@ -332,9 +337,10 @@ export class ZLinkMeshDispatchPump {
                       await dispatch();
                     } else {
                       if (
-                        domain === ReadyDomain.Application
-                        && record.applicationJobPermit === undefined
-                      ) permit.markApplicationQueued();
+                        domain === ReadyDomain.Application &&
+                        record.applicationJobPermit === undefined
+                      )
+                        permit.markApplicationQueued();
                       // The scope now owns this reservation, including failure
                       // and detached handler handoff. Only unused permits remain
                       // owned by the receive attempt's finally block.
@@ -380,8 +386,11 @@ export class ZLinkMeshDispatchPump {
 
   private yieldIfNeeded(): Promise<void> | undefined {
     const nowMs = this.nowMs();
-    if (this.recordsSinceYield < MESH_DISPATCH_YIELD_RECORDS
-        && nowMs - this.yieldStartedAtMs < MESH_DISPATCH_YIELD_INTERVAL_MS) return undefined;
+    if (
+      this.recordsSinceYield < MESH_DISPATCH_YIELD_RECORDS &&
+      nowMs - this.yieldStartedAtMs < MESH_DISPATCH_YIELD_INTERVAL_MS
+    )
+      return undefined;
     this.recordsSinceYield = 0;
     return yieldToTimers().then(() => {
       this.yieldStartedAtMs = this.nowMs();
@@ -424,7 +433,6 @@ function serviceWireCommand(record: ReceiveRecord): number | undefined {
 function yieldToEventLoop(): Promise<void> {
   return new Promise((resolve) => setImmediate(resolve));
 }
-
 
 function yieldToTimers(): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, 0));

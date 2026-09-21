@@ -1,38 +1,41 @@
 package systems.zlink.framework.runtime.internal.streams;
-import java.util.concurrent.CompletionException;
-import java.util.concurrent.ExecutionException;
 
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
-import java.io.IOException;
-import java.util.Map;
+
 import systems.zlink.framework.errors.ZLinkFrameworkErrorKind;
 import systems.zlink.framework.errors.ZLinkFrameworkException;
+
+import java.io.IOException;
+import java.util.Map;
+import java.util.concurrent.CompletionException;
+import java.util.concurrent.ExecutionException;
 
 /** Encodes and decodes the common JSON body carried by a STREAM Error frame. */
 public final class ZLinkStreamErrorPayload {
     private static final ObjectMapper MAPPER = new ObjectMapper();
 
-    private ZLinkStreamErrorPayload() {
-    }
+    private ZLinkStreamErrorPayload() {}
 
     public static byte[] encode(Throwable failure) {
         Throwable error = unwrap(failure);
-        String code = error instanceof ZLinkFrameworkException frameworkError
-            ? frameworkCode(frameworkError.kind())
-            : error.getClass().getSimpleName();
+        String code =
+                error instanceof ZLinkFrameworkException frameworkError
+                        ? frameworkCode(frameworkError.kind())
+                        : error.getClass().getSimpleName();
         String message = error.getMessage();
         if (message == null || message.isBlank()) {
             message = error.getClass().getSimpleName();
         }
         try {
-            return MAPPER.writeValueAsBytes(Map.of(
-                "code", code,
-                "message", message));
+            return MAPPER.writeValueAsBytes(
+                    Map.of(
+                            "code", code,
+                            "message", message));
         } catch (JsonProcessingException encodingFailure) {
             throw new IllegalStateException(
-                "failed to encode STREAM error payload", encodingFailure);
+                    "failed to encode STREAM error payload", encodingFailure);
         }
     }
 
@@ -47,11 +50,14 @@ public final class ZLinkStreamErrorPayload {
             }
             JsonNode codeNode = root.get("code");
             JsonNode messageNode = root.get("message");
-            if (codeNode == null || !codeNode.isTextual()
-                || messageNode == null || !messageNode.isTextual()
-                || codeNode.textValue().isBlank() || messageNode.textValue().isBlank()) {
+            if (codeNode == null
+                    || !codeNode.isTextual()
+                    || messageNode == null
+                    || !messageNode.isTextual()
+                    || codeNode.textValue().isBlank()
+                    || messageNode.textValue().isBlank()) {
                 throw new IllegalArgumentException(
-                    "STREAM error payload requires non-empty code and message strings");
+                        "STREAM error payload requires non-empty code and message strings");
             }
             String code = codeNode.textValue();
             ZLinkFrameworkErrorKind frameworkKind = frameworkKind(code);
@@ -61,11 +67,7 @@ public final class ZLinkStreamErrorPayload {
         }
     }
 
-    public record Decoded(
-        String code,
-        String message,
-        ZLinkFrameworkErrorKind frameworkKind) {
-    }
+    public record Decoded(String code, String message, ZLinkFrameworkErrorKind frameworkKind) {}
 
     private static ZLinkFrameworkErrorKind frameworkKind(String code) {
         for (ZLinkFrameworkErrorKind kind : ZLinkFrameworkErrorKind.values()) {
@@ -91,12 +93,9 @@ public final class ZLinkStreamErrorPayload {
     }
 
     private static Throwable unwrap(Throwable failure) {
-        Throwable current = failure == null
-            ? new IllegalStateException("handler failed")
-            : failure;
-        while ((current instanceof CompletionException
-                || current instanceof ExecutionException)
-            && current.getCause() != null) {
+        Throwable current = failure == null ? new IllegalStateException("handler failed") : failure;
+        while ((current instanceof CompletionException || current instanceof ExecutionException)
+                && current.getCause() != null) {
             current = current.getCause();
         }
         return current;

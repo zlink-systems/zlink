@@ -11,14 +11,12 @@ public sealed class ActorRemoteJoinRecoveryCodecBoundaryTests
     [Fact]
     public void Exact_request_and_reply_limits_round_trip_together()
     {
-        var request = Enumerable.Repeat((byte)0x5a, MaximumMessageBytes)
-            .ToArray();
-        var reply = Enumerable.Repeat((byte)0xa5, MaximumMessageBytes)
-            .ToArray();
+        var request = Enumerable.Repeat((byte)0x5a, MaximumMessageBytes).ToArray();
+        var reply = Enumerable.Repeat((byte)0xa5, MaximumMessageBytes).ToArray();
 
         var restored = ZLinkActorRemoteJoinRecoveryCodec.Decode(
-            ZLinkActorRemoteJoinRecoveryCodec.Encode(
-                CreateRecovery(request, reply)));
+            ZLinkActorRemoteJoinRecoveryCodec.Encode(CreateRecovery(request, reply))
+        );
 
         Assert.Equal(request, restored.Request.Request);
         Assert.Equal(reply, restored.Reply);
@@ -27,23 +25,21 @@ public sealed class ActorRemoteJoinRecoveryCodecBoundaryTests
     [Fact]
     public void Request_above_limit_is_rejected()
     {
-        var recovery = CreateRecovery(
-            new byte[MaximumMessageBytes + 1],
-            []);
+        var recovery = CreateRecovery(new byte[MaximumMessageBytes + 1], []);
 
-        Assert.Throws<ArgumentOutOfRangeException>(
-            () => ZLinkActorRemoteJoinRecoveryCodec.Encode(recovery));
+        Assert.Throws<ArgumentOutOfRangeException>(() =>
+            ZLinkActorRemoteJoinRecoveryCodec.Encode(recovery)
+        );
     }
 
     [Fact]
     public void Reply_above_limit_is_rejected()
     {
-        var recovery = CreateRecovery(
-            [],
-            new byte[MaximumMessageBytes + 1]);
+        var recovery = CreateRecovery([], new byte[MaximumMessageBytes + 1]);
 
-        Assert.Throws<ArgumentOutOfRangeException>(
-            () => ZLinkActorRemoteJoinRecoveryCodec.Encode(recovery));
+        Assert.Throws<ArgumentOutOfRangeException>(() =>
+            ZLinkActorRemoteJoinRecoveryCodec.Encode(recovery)
+        );
     }
 
     [Fact]
@@ -52,7 +48,8 @@ public sealed class ActorRemoteJoinRecoveryCodecBoundaryTests
         var expected = CreateRecovery([1, 2, 3], [4, 5, 6]);
 
         var restored = ZLinkActorRemoteJoinRecoveryCodec.Decode(
-            ZLinkActorRemoteJoinRecoveryCodec.Encode(expected));
+            ZLinkActorRemoteJoinRecoveryCodec.Encode(expected)
+        );
 
         Assert.Equal(expected.OperationIdHigh, restored.OperationIdHigh);
         Assert.Equal(expected.OperationIdLow, restored.OperationIdLow);
@@ -63,30 +60,26 @@ public sealed class ActorRemoteJoinRecoveryCodecBoundaryTests
         Assert.Equal(expected.Request.SourceNodeRid, restored.Request.SourceNodeRid);
         Assert.Equal(expected.TargetSpotId, restored.TargetSpotId);
         Assert.Equal(expected.TargetNodeRid, restored.TargetNodeRid);
-        Assert.Equal(
-            expected.TargetNodeGeneration,
-            restored.TargetNodeGeneration);
-        Assert.Equal(
-            expected.TargetSpotGeneration,
-            restored.TargetSpotGeneration);
+        Assert.Equal(expected.TargetNodeGeneration, restored.TargetNodeGeneration);
+        Assert.Equal(expected.TargetSpotGeneration, restored.TargetSpotGeneration);
         Assert.Equal(
             expected.TargetAuthorityOwnerGeneration,
-            restored.TargetAuthorityOwnerGeneration);
-        Assert.Equal(
-            expected.Request.BoundSessionNodeRid,
-            restored.Request.BoundSessionNodeRid);
-        Assert.Equal(
-            expected.Request.BoundSessionRid,
-            restored.Request.BoundSessionRid);
+            restored.TargetAuthorityOwnerGeneration
+        );
+        Assert.Equal(expected.Request.BoundSessionNodeRid, restored.Request.BoundSessionNodeRid);
+        Assert.Equal(expected.Request.BoundSessionRid, restored.Request.BoundSessionRid);
         Assert.Equal(
             expected.Request.BoundSessionBindingToken,
-            restored.Request.BoundSessionBindingToken);
+            restored.Request.BoundSessionBindingToken
+        );
         Assert.Equal(
             expected.Request.BoundSessionBindingGeneration,
-            restored.Request.BoundSessionBindingGeneration);
+            restored.Request.BoundSessionBindingGeneration
+        );
         Assert.Equal(
             expected.Request.BoundSessionAcceptedHighWater,
-            restored.Request.BoundSessionAcceptedHighWater);
+            restored.Request.BoundSessionAcceptedHighWater
+        );
         Assert.Equal(expected.ReplyContentType, restored.ReplyContentType);
     }
 
@@ -94,25 +87,30 @@ public sealed class ActorRemoteJoinRecoveryCodecBoundaryTests
     public void Truncated_payload_is_rejected()
     {
         var encoded = ZLinkActorRemoteJoinRecoveryCodec.Encode(
-            CreateRecovery([1, 2, 3], [4, 5, 6]));
+            CreateRecovery([1, 2, 3], [4, 5, 6])
+        );
 
-        Assert.Throws<InvalidDataException>(
-            () => ZLinkActorRemoteJoinRecoveryCodec.Decode(encoded[..^1]));
+        Assert.Throws<InvalidDataException>(() =>
+            ZLinkActorRemoteJoinRecoveryCodec.Decode(encoded[..^1])
+        );
     }
 
     [Fact]
     public void Corrupt_request_length_is_rejected()
     {
         var encoded = ZLinkActorRemoteJoinRecoveryCodec.Encode(
-            CreateRecovery([1, 2, 3], [4, 5, 6]));
+            CreateRecovery([1, 2, 3], [4, 5, 6])
+        );
         var zljrOffset = encoded.AsSpan().IndexOf("ZLJR"u8);
         Assert.True(zljrOffset >= 0);
         BinaryPrimitives.WriteUInt32BigEndian(
             encoded.AsSpan(zljrOffset + 9, sizeof(uint)),
-            MaximumMessageBytes + 1U);
+            MaximumMessageBytes + 1U
+        );
 
-        Assert.Throws<InvalidDataException>(
-            () => ZLinkActorRemoteJoinRecoveryCodec.Decode(encoded));
+        Assert.Throws<InvalidDataException>(() =>
+            ZLinkActorRemoteJoinRecoveryCodec.Decode(encoded)
+        );
     }
 
     [Fact]
@@ -121,26 +119,22 @@ public sealed class ActorRemoteJoinRecoveryCodecBoundaryTests
         var expected = CreateRecovery([1, 2, 3], [4, 5, 6]);
         var legacyJson = JsonSerializer.SerializeToUtf8Bytes(expected);
         var sourceFenceV1 = ZLinkActorRelocationSourceFenceCodec.Encode(
-            new ZLinkActorRelocationSourceFence(
-                "source-owner",
-                3,
-                RoutingId.From("source-node"),
-                7));
-        var sourceFenceV2 = new byte[
-            sourceFenceV1.Length + sizeof(uint) + legacyJson.Length];
+            new ZLinkActorRelocationSourceFence("source-owner", 3, RoutingId.From("source-node"), 7)
+        );
+        var sourceFenceV2 = new byte[sourceFenceV1.Length + sizeof(uint) + legacyJson.Length];
         sourceFenceV1.CopyTo(sourceFenceV2, 0);
         sourceFenceV2[4] = 2;
         BinaryPrimitives.WriteUInt32BigEndian(
             sourceFenceV2.AsSpan(sourceFenceV1.Length, sizeof(uint)),
-            checked((uint)legacyJson.Length));
-        legacyJson.CopyTo(
-            sourceFenceV2.AsSpan(sourceFenceV1.Length + sizeof(uint)));
+            checked((uint)legacyJson.Length)
+        );
+        legacyJson.CopyTo(sourceFenceV2.AsSpan(sourceFenceV1.Length + sizeof(uint)));
 
-        var sourceFence =
-            ZLinkActorRelocationSourceFenceCodec.Decode(sourceFenceV2);
+        var sourceFence = ZLinkActorRelocationSourceFenceCodec.Decode(sourceFenceV2);
         var restored = ZLinkActorRemoteJoinRecoveryCodec.Decode(
             ReadOnlySpan<byte>.Empty,
-            sourceFence.LegacyRemoteJoinRecovery.Span);
+            sourceFence.LegacyRemoteJoinRecovery.Span
+        );
 
         Assert.Equal(expected.Request.Request, restored.Request.Request);
         Assert.Equal(expected.Reply, restored.Reply);
@@ -151,14 +145,14 @@ public sealed class ActorRemoteJoinRecoveryCodecBoundaryTests
     [Fact]
     public void Null_legacy_fields_are_rejected_as_malformed_data()
     {
-        var malformed = """
+        var malformed =
+            """
             {"Request":null,"TargetSpotId":"target-spot","Reply":[]}
             """u8.ToArray();
 
         Assert.Throws<InvalidDataException>(() =>
-            ZLinkActorRemoteJoinRecoveryCodec.Decode(
-                ReadOnlySpan<byte>.Empty,
-                malformed));
+            ZLinkActorRemoteJoinRecoveryCodec.Decode(ReadOnlySpan<byte>.Empty, malformed)
+        );
     }
 
     [Fact]
@@ -169,19 +163,19 @@ public sealed class ActorRemoteJoinRecoveryCodecBoundaryTests
         var legacy = JsonSerializer.SerializeToUtf8Bytes(recovery);
 
         Assert.Throws<InvalidDataException>(() =>
-            ZLinkActorRemoteJoinRecoveryCodec.Decode(current, legacy));
+            ZLinkActorRemoteJoinRecoveryCodec.Decode(current, legacy)
+        );
     }
 
     private static ZLinkActorRelocationRecoveryRecord CreateRecovery(
         byte[] requestPayload,
-        byte[] replyPayload)
+        byte[] replyPayload
+    )
     {
-        var aggregateId =
-            Guid.Parse("aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee");
+        var aggregateId = Guid.Parse("aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee");
         var sourceRid = RoutingId.From("source-node").ToBytes().ToArray();
         var targetRid = RoutingId.From("target-node").ToBytes().ToArray();
-        var sessionNodeRid =
-            RoutingId.From("session-node").ToBytes().ToArray();
+        var sessionNodeRid = RoutingId.From("session-node").ToBytes().ToArray();
         var sessionRid = RoutingId.From("session-1").ToBytes().ToArray();
         return new ZLinkActorRelocationRecoveryRecord(
             new ZLinkRemoteActorJoinRequest(
@@ -225,7 +219,8 @@ public sealed class ActorRemoteJoinRecoveryCodecBoundaryTests
                 RelocationCoordinatorNodeGeneration: 13,
                 RelocationCoordinatorExpectedAuthorityStoreVersion: "store-v1",
                 ActorNodeGeneration: 13,
-                ExpectedOwnerLeaseGeneration: 17),
+                ExpectedOwnerLeaseGeneration: 17
+            ),
             "target-spot",
             targetRid,
             11,
@@ -234,6 +229,7 @@ public sealed class ActorRemoteJoinRecoveryCodecBoundaryTests
             19,
             47,
             "application/json",
-            replyPayload);
+            replyPayload
+        );
     }
 }

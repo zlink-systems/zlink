@@ -1,20 +1,12 @@
-import { ZLinkFrameworkInternalErrorKind, createInternalFrameworkException  } from '../framework-errors-internal';
 import {
-  ZLinkFrameworkException,
-  type ActorRef,
-  type RoutingId
-} from '../../contracts';
+  ZLinkFrameworkInternalErrorKind,
+  createInternalFrameworkException
+} from '../framework-errors-internal';
+import { ZLinkFrameworkException, type ActorRef, type RoutingId } from '../../contracts';
 import { ZLinkBufferMessage as RuntimeMessage } from '../backend/runtime-message';
 import type { ZLinkBackendReceived as BackendReceived } from '../backend/runtime-values';
-import type {
-  ZLinkRemoteActorPacketTarget,
-  ZLinkRemoteBoundSessionTarget
-} from '../actors';
-import {
-  decodeStreamHeader,
-  messageToBytes,
-  ZLinkStreamMessageKind
-} from '../streams/protocol';
+import type { ZLinkRemoteActorPacketTarget, ZLinkRemoteBoundSessionTarget } from '../actors';
+import { decodeStreamHeader, messageToBytes, ZLinkStreamMessageKind } from '../streams/protocol';
 import {
   decodeRemoteActorSessionBinding,
   encodeRemoteActorPacketTarget,
@@ -22,15 +14,14 @@ import {
 } from '../actors/actor-packet-relay-wire';
 import { decodeRoutingId as decodeWireRoutingId, routingIdsEqual } from '../routing-id';
 import type { ZLinkRemoteActorPacketRelay } from './spot-remote-route-codec';
-import {
-  hasReplyToken,
-  submitSpotRouteBridgeReply
-} from './spot-route-replies';
+import { hasReplyToken, submitSpotRouteBridgeReply } from './spot-route-replies';
 import type { ZLinkActorPacketDelivery } from './spot-actor-packet-dispatch';
 
 interface ZLinkSpotActorPacketRelayDispatchOptions {
   readonly actorPacketHandler?: (delivery: ZLinkActorPacketDelivery) => Promise<unknown>;
-  readonly actorPacketTargetProvider?: (actorId: string) => ZLinkRemoteActorPacketTarget | undefined;
+  readonly actorPacketTargetProvider?: (
+    actorId: string
+  ) => ZLinkRemoteActorPacketTarget | undefined;
   readonly bindRemoteSession?: (
     actor: ActorRef,
     sourceNodeRid: RoutingId,
@@ -54,18 +45,15 @@ export class ZLinkSpotActorPacketRelayDispatch {
       actorPacketRelay.routerChannelId === undefined ||
       actorPacketRelay.boundSessionTargetNodeRid === undefined ||
       actorPacketRelay.boundSessionSpotId === undefined
-      ? undefined
-      : {
-          routerChannelId: actorPacketRelay.routerChannelId,
-          targetNodeRid: decodeWireRoutingId(
-            actorPacketRelay.boundSessionTargetNodeRid,
-            undefined
-          ),
-          spotId: decodeWireRoutingId(
-            actorPacketRelay.boundSessionSpotId,
-            undefined
-          )
-        };
+        ? undefined
+        : {
+            routerChannelId: actorPacketRelay.routerChannelId,
+            targetNodeRid: decodeWireRoutingId(
+              actorPacketRelay.boundSessionTargetNodeRid,
+              undefined
+            ),
+            spotId: decodeWireRoutingId(actorPacketRelay.boundSessionSpotId, undefined)
+          };
     const header = RuntimeMessage.from(Buffer.from(actorPacketRelay.header, 'base64'));
     const payload = RuntimeMessage.from(Buffer.from(actorPacketRelay.payload, 'base64'));
     try {
@@ -82,12 +70,16 @@ export class ZLinkSpotActorPacketRelayDispatch {
           sourceNodeRid === null ||
           this.options.bindRemoteSession === undefined
         ) {
-          throw new Error('Remote actor session binding requires a send, source route, and concrete actor ref.');
+          throw new Error(
+            'Remote actor session binding requires a send, source route, and concrete actor ref.'
+          );
         }
         const binding = decodeRemoteActorSessionBinding(messageToBytes(payload));
         const declaredSourceNodeRid = binding.sessionNodeRid;
         if (!routingIdsEqual(sourceNodeRid, declaredSourceNodeRid)) {
-          throw new Error('Remote actor session binding source did not match the declared session node.');
+          throw new Error(
+            'Remote actor session binding source did not match the declared session node.'
+          );
         }
         this.options.bindRemoteSession(
           actorRef,
@@ -109,8 +101,10 @@ export class ZLinkSpotActorPacketRelayDispatch {
         }
         return true;
       }
-      if (actorPacketRelay.messageFollowContext?.deadlineUnixMs !== undefined
-        && Date.now() >= actorPacketRelay.messageFollowContext.deadlineUnixMs) {
+      if (
+        actorPacketRelay.messageFollowContext?.deadlineUnixMs !== undefined &&
+        Date.now() >= actorPacketRelay.messageFollowContext.deadlineUnixMs
+      ) {
         throw createInternalFrameworkException(
           ZLinkFrameworkInternalErrorKind.DeadlineExceeded,
           `Actor request '${actorPacketRelay.actorId}' expired before target handler admission.`
@@ -125,9 +119,9 @@ export class ZLinkSpotActorPacketRelayDispatch {
       //  be discarded. Non-follow relays keep the synchronous-return path.
       const outerReplyable = hasReplyToken(received.replyToken);
       const followedBoundSessionReply =
-        !outerReplyable
-        && actorPacketRelay.messageFollowContext !== undefined
-        && remoteBoundSessionTarget !== undefined;
+        !outerReplyable &&
+        actorPacketRelay.messageFollowContext !== undefined &&
+        remoteBoundSessionTarget !== undefined;
       const response = await this.options.actorPacketHandler({
         actorId: actorPacketRelay.actorId,
         parts: [header, payload],
@@ -137,7 +131,11 @@ export class ZLinkSpotActorPacketRelayDispatch {
       });
       const actorPacketTarget = this.actorPacketTarget(actorPacketRelay.actorId);
       if (hasReplyToken(received.replyToken)) {
-        submitSpotRouteBridgeReply(received, actorPacketRelay.envelope, { ok: true, response, actorPacketTarget });
+        submitSpotRouteBridgeReply(received, actorPacketRelay.envelope, {
+          ok: true,
+          response,
+          actorPacketTarget
+        });
       }
       return true;
     } catch (error) {

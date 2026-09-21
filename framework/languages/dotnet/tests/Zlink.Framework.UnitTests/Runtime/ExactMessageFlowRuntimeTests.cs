@@ -46,7 +46,7 @@ public sealed class ExactMessageFlowRuntimeTests
             ShouldListenTo = source => source.Name == ZLinkTelemetry.ActivitySourceName,
             Sample = (ref ActivityCreationOptions<ActivityContext> _) =>
                 ActivitySamplingResult.AllDataAndRecorded,
-            ActivityStopped = activities.Add
+            ActivityStopped = activities.Add,
         };
         ActivitySource.AddActivityListener(listener);
         var options = new ZLinkDispatchOptionsModel();
@@ -58,11 +58,10 @@ public sealed class ExactMessageFlowRuntimeTests
             ZLinkDispatchErrorSurface.Channel,
             reporter.Flow.CaptureEnabled,
             ZLinkDispatchMessageKind.Send,
-            "packet");
+            "packet"
+        );
 
-        scope.HandlerMissing(
-            reporter,
-            ZLinkDispatchErrorAction.Drop);
+        scope.HandlerMissing(reporter, ZLinkDispatchErrorAction.Drop);
 
         Assert.Equal(0, logger.CallCount);
         Assert.Empty(activities);
@@ -74,11 +73,10 @@ public sealed class ExactMessageFlowRuntimeTests
         var activities = new List<Activity>();
         using var listener = new ActivityListener
         {
-            ShouldListenTo = source =>
-                source.Name == ZLinkTelemetry.ActivitySourceName,
+            ShouldListenTo = source => source.Name == ZLinkTelemetry.ActivitySourceName,
             Sample = (ref ActivityCreationOptions<ActivityContext> _) =>
                 ActivitySamplingResult.AllDataAndRecorded,
-            ActivityStopped = activities.Add
+            ActivityStopped = activities.Add,
         };
         ActivitySource.AddActivityListener(listener);
         var options = new ZLinkDispatchOptionsModel();
@@ -89,11 +87,14 @@ public sealed class ExactMessageFlowRuntimeTests
         var requestFlowId = ZlinkStreamFlowId.Create();
 
         ZLinkDispatchFlowScope scope;
-        using (ZLinkFlowContext.Enter(
-                   requestFlowId,
-                   ZLinkFlowOrigin.Inbound,
-                   captureEnabled: true,
-                   ZLinkFlowOrigin.Inbound))
+        using (
+            ZLinkFlowContext.Enter(
+                requestFlowId,
+                ZLinkFlowOrigin.Inbound,
+                captureEnabled: true,
+                ZLinkFlowOrigin.Inbound
+            )
+        )
         {
             scope = new ZLinkDispatchFlowScope(
                 ZLinkDispatchErrorSurface.SpotRoute,
@@ -101,26 +102,26 @@ public sealed class ExactMessageFlowRuntimeTests
                 ZLinkDispatchMessageKind.Request,
                 "request",
                 correlationId: "correlation-1",
-                spotId: "spot-1");
+                spotId: "spot-1"
+            );
             scope.Trace(reporter, ZLinkMessageFlowOutcome.Received);
         }
 
-        using (ZLinkFlowContext.Enter(
-                   ZlinkStreamFlowId.Create(),
-                   ZLinkFlowOrigin.Application,
-                   captureEnabled: true,
-                   ZLinkFlowOrigin.Application))
+        using (
+            ZLinkFlowContext.Enter(
+                ZlinkStreamFlowId.Create(),
+                ZLinkFlowOrigin.Application,
+                captureEnabled: true,
+                ZLinkFlowOrigin.Application
+            )
+        )
             scope.Trace(reporter, ZLinkMessageFlowOutcome.Replied);
 
         var traces = activities
-            .Where(activity =>
-                activity.OperationName == "zlink.message_flow")
+            .Where(activity => activity.OperationName == "zlink.message_flow")
             .ToArray();
         Assert.Equal(2, traces.Length);
-        Assert.All(traces, activity =>
-            Assert.Equal(
-                requestFlowId,
-                activity.GetTagItem("flow_id")));
+        Assert.All(traces, activity => Assert.Equal(requestFlowId, activity.GetTagItem("flow_id")));
     }
 
     private sealed class CountingLogger : ILogger
@@ -137,7 +138,7 @@ public sealed class ExactMessageFlowRuntimeTests
             EventId eventId,
             TState state,
             Exception? exception,
-            Func<TState, Exception?, string> formatter) =>
-            CallCount++;
+            Func<TState, Exception?, string> formatter
+        ) => CallCount++;
     }
 }

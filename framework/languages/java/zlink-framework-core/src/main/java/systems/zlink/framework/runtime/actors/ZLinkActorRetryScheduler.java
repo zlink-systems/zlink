@@ -1,5 +1,8 @@
 package systems.zlink.framework.runtime.actors;
 
+import systems.zlink.framework.errors.ZLinkFrameworkErrorKind;
+import systems.zlink.framework.errors.ZLinkFrameworkException;
+
 import java.time.Duration;
 import java.util.Objects;
 import java.util.Optional;
@@ -10,14 +13,11 @@ import java.util.function.BooleanSupplier;
 import java.util.function.Predicate;
 import java.util.function.Supplier;
 
-import systems.zlink.framework.errors.ZLinkFrameworkErrorKind;
-import systems.zlink.framework.errors.ZLinkFrameworkException;
-
 final class ZLinkActorRetryScheduler {
     private static final Duration RELAY_RETRY_DELAY = Duration.ofMillis(10);
     private static final Duration ROUTE_RETRY_DELAY = Duration.ofMillis(20);
-    private ZLinkActorRetryScheduler() {
-    }
+
+    private ZLinkActorRetryScheduler() {}
 
     static void execute(Runnable attempt) {
         CompletableFuture.runAsync(attempt);
@@ -32,8 +32,8 @@ final class ZLinkActorRetryScheduler {
     }
 
     /**
-     * Schedules the next Session route retransmission at an explicit spec
-     * interval (spec 20 §5 step 8: 1s, 1s, 2s, 4s, 5s and then 5s).
+     * Schedules the next Session route retransmission at an explicit spec interval (spec 20 §5 step
+     * 8: 1s, 1s, 2s, 4s, 5s and then 5s).
      */
     static void scheduleRouteAfter(Runnable attempt, Duration delay) {
         if (delay == null || delay.isNegative() || delay.isZero()) {
@@ -50,9 +50,7 @@ final class ZLinkActorRetryScheduler {
     }
 
     static <T> CompletionStage<T> retryRouteUntil(
-        Duration timeout,
-        Supplier<CompletionStage<T>> submit,
-        Predicate<Throwable> retryable) {
+            Duration timeout, Supplier<CompletionStage<T>> submit, Predicate<Throwable> retryable) {
         CompletableFuture<T> result = new CompletableFuture<>();
         long deadline = System.nanoTime() + timeout.toNanos();
         class Attempt implements Runnable {
@@ -62,17 +60,20 @@ final class ZLinkActorRetryScheduler {
                     return;
                 }
                 try {
-                    submit.get().whenComplete((value, error) -> {
-                        if (error == null) {
-                            result.complete(value);
-                            return;
-                        }
-                        if (!retryable.test(error) || System.nanoTime() >= deadline) {
-                            result.completeExceptionally(error);
-                            return;
-                        }
-                        scheduleRoute(this);
-                    });
+                    submit.get()
+                            .whenComplete(
+                                    (value, error) -> {
+                                        if (error == null) {
+                                            result.complete(value);
+                                            return;
+                                        }
+                                        if (!retryable.test(error)
+                                                || System.nanoTime() >= deadline) {
+                                            result.completeExceptionally(error);
+                                            return;
+                                        }
+                                        scheduleRoute(this);
+                                    });
                 } catch (RuntimeException ex) {
                     if (!retryable.test(ex) || System.nanoTime() >= deadline) {
                         result.completeExceptionally(ex);
@@ -87,8 +88,7 @@ final class ZLinkActorRetryScheduler {
     }
 
     static <T> CompletionStage<Optional<T>> retryRouteUntilPresent(
-        Duration timeout,
-        Supplier<CompletionStage<Optional<T>>> lookup) {
+            Duration timeout, Supplier<CompletionStage<Optional<T>>> lookup) {
         CompletableFuture<Optional<T>> result = new CompletableFuture<>();
         long deadline = System.nanoTime() + timeout.toNanos();
         class Attempt implements Runnable {
@@ -99,32 +99,30 @@ final class ZLinkActorRetryScheduler {
                 }
                 CompletionStage<Optional<T>> lookupStage;
                 try {
-                    lookupStage = Objects.requireNonNull(
-                        lookup.get(), "route lookup stage");
+                    lookupStage = Objects.requireNonNull(lookup.get(), "route lookup stage");
                 } catch (RuntimeException failure) {
                     result.completeExceptionally(failure);
                     return;
                 }
-                lookupStage.whenComplete((value, error) -> {
-                    if (error != null) {
-                        // An empty result can represent eventual Store
-                        // visibility. A Store or protocol failure is already
-                        // terminal and must remain observable to the caller.
-                        result.completeExceptionally(error);
-                        return;
-                    }
-                    if (value == null || value.isPresent()) {
-                        result.complete(value == null
-                            ? Optional.empty()
-                            : value);
-                        return;
-                    }
-                    if (System.nanoTime() >= deadline) {
-                        result.complete(Optional.empty());
-                        return;
-                    }
-                    scheduleRoute(this);
-                });
+                lookupStage.whenComplete(
+                        (value, error) -> {
+                            if (error != null) {
+                                // An empty result can represent eventual Store
+                                // visibility. A Store or protocol failure is already
+                                // terminal and must remain observable to the caller.
+                                result.completeExceptionally(error);
+                                return;
+                            }
+                            if (value == null || value.isPresent()) {
+                                result.complete(value == null ? Optional.empty() : value);
+                                return;
+                            }
+                            if (System.nanoTime() >= deadline) {
+                                result.complete(Optional.empty());
+                                return;
+                            }
+                            scheduleRoute(this);
+                        });
             }
         }
         new Attempt().run();
@@ -132,24 +130,22 @@ final class ZLinkActorRetryScheduler {
     }
 
     static CompletionStage<Void> waitUntilRelay(
-        Duration timeout,
-        BooleanSupplier ready,
-        Runnable onReady,
-        Supplier<? extends Throwable> timeoutError) {
+            Duration timeout,
+            BooleanSupplier ready,
+            Runnable onReady,
+            Supplier<? extends Throwable> timeoutError) {
         return waitUntilRelay(timeout, ready, onReady, timeoutError, false);
     }
 
-    static CompletionStage<Void> waitUntilRelayOrContinue(
-        Duration timeout,
-        BooleanSupplier ready) {
+    static CompletionStage<Void> waitUntilRelayOrContinue(Duration timeout, BooleanSupplier ready) {
         return waitUntilRelay(timeout, ready, () -> {}, null, true);
     }
 
     static CompletionStage<Void> bindRelayUntilAccepted(
-        Duration timeout,
-        Supplier<CompletionStage<Void>> bind,
-        Predicate<Throwable> acceptedFailure,
-        Predicate<Throwable> retryableFailure) {
+            Duration timeout,
+            Supplier<CompletionStage<Void>> bind,
+            Predicate<Throwable> acceptedFailure,
+            Predicate<Throwable> retryableFailure) {
         CompletableFuture<Void> result = new CompletableFuture<>();
         long deadline = System.nanoTime() + timeout.toNanos();
         class Attempt implements Runnable {
@@ -159,29 +155,33 @@ final class ZLinkActorRetryScheduler {
                     return;
                 }
                 try {
-                    bind.get().whenComplete((ignored, error) -> {
-                        if (error == null || acceptedFailure.test(error)) {
-                            result.complete(null);
-                            return;
-                        }
-                        if (!retryableFailure.test(error)) {
-                            result.completeExceptionally(error);
-                            return;
-                        }
-                        if (System.nanoTime() >= deadline) {
-                            //  Spec 32-framework-error-model:90 — retryable
-                            //  bind attempts that exhaust their deadline
-                            //  surface DeadlineExceeded; the last attempt's
-                            //  failure stays observable as the cause.
-                            result.completeExceptionally(new ZLinkFrameworkException(
-                                ZLinkFrameworkErrorKind.DEADLINE_EXCEEDED,
-                                "bind retries did not complete within their"
-                                    + " deadline",
-                                error));
-                            return;
-                        }
-                        scheduleRelay(this);
-                    });
+                    bind.get()
+                            .whenComplete(
+                                    (ignored, error) -> {
+                                        if (error == null || acceptedFailure.test(error)) {
+                                            result.complete(null);
+                                            return;
+                                        }
+                                        if (!retryableFailure.test(error)) {
+                                            result.completeExceptionally(error);
+                                            return;
+                                        }
+                                        if (System.nanoTime() >= deadline) {
+                                            //  Spec 32-framework-error-model:90 — retryable
+                                            //  bind attempts that exhaust their deadline
+                                            //  surface DeadlineExceeded; the last attempt's
+                                            //  failure stays observable as the cause.
+                                            result.completeExceptionally(
+                                                    new ZLinkFrameworkException(
+                                                            ZLinkFrameworkErrorKind
+                                                                    .DEADLINE_EXCEEDED,
+                                                            "bind retries did not complete within"
+                                                                    + " their deadline",
+                                                            error));
+                                            return;
+                                        }
+                                        scheduleRelay(this);
+                                    });
                 } catch (RuntimeException ex) {
                     result.completeExceptionally(ex);
                 }
@@ -192,11 +192,11 @@ final class ZLinkActorRetryScheduler {
     }
 
     private static CompletionStage<Void> waitUntilRelay(
-        Duration timeout,
-        BooleanSupplier ready,
-        Runnable onReady,
-        Supplier<? extends Throwable> timeoutError,
-        boolean continueOnTimeout) {
+            Duration timeout,
+            BooleanSupplier ready,
+            Runnable onReady,
+            Supplier<? extends Throwable> timeoutError,
+            boolean continueOnTimeout) {
         CompletableFuture<Void> result = new CompletableFuture<>();
         long deadline = System.nanoTime() + timeout.toNanos();
         class Attempt implements Runnable {
@@ -233,12 +233,9 @@ final class ZLinkActorRetryScheduler {
         scheduleAfter(attempt, delay);
     }
 
-    static CompletableFuture<Void> scheduleAfter(
-        Runnable attempt,
-        Duration delay) {
+    static CompletableFuture<Void> scheduleAfter(Runnable attempt, Duration delay) {
         return CompletableFuture.runAsync(
-            attempt,
-            CompletableFuture.delayedExecutor(
-                delay.toMillis(), TimeUnit.MILLISECONDS));
+                attempt,
+                CompletableFuture.delayedExecutor(delay.toMillis(), TimeUnit.MILLISECONDS));
     }
 }

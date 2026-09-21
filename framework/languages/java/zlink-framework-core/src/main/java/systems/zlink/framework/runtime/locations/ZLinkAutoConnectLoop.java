@@ -1,5 +1,7 @@
 package systems.zlink.framework.runtime.locations;
 
+import systems.zlink.framework.locations.ZLinkLocationOptions;
+
 import java.util.Objects;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionStage;
@@ -7,7 +9,6 @@ import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.ScheduledFuture;
 import java.util.concurrent.TimeUnit;
-import systems.zlink.framework.locations.ZLinkLocationOptions;
 
 final class ZLinkAutoConnectLoop implements AutoCloseable {
     private static final long STARTUP_POLLING_MILLIS = 100;
@@ -17,31 +18,29 @@ final class ZLinkAutoConnectLoop implements AutoCloseable {
     private final ScheduledExecutorService executor;
     private final Object lifecycleGate = new Object();
     private ScheduledFuture<?> task;
-    private CompletionStage<Void> inFlightTick =
-        CompletableFuture.completedFuture(null);
+    private CompletionStage<Void> inFlightTick = CompletableFuture.completedFuture(null);
     private CompletionStage<Void> termination;
     private volatile boolean running;
     private volatile long startupPollingUntilNanos;
 
-    ZLinkAutoConnectLoop(
-        ZLinkAutoConnectReconciler reconciler,
-        ZLinkLocationOptions options) {
+    ZLinkAutoConnectLoop(ZLinkAutoConnectReconciler reconciler, ZLinkLocationOptions options) {
         this.reconciler = Objects.requireNonNull(reconciler, "reconciler");
         this.options = Objects.requireNonNull(options, "options");
-        this.executor = Executors.newSingleThreadScheduledExecutor(task -> {
-            Thread thread = new Thread(task, "zlink-location-auto-connect");
-            thread.setDaemon(true);
-            return thread;
-        });
+        this.executor =
+                Executors.newSingleThreadScheduledExecutor(
+                        task -> {
+                            Thread thread = new Thread(task, "zlink-location-auto-connect");
+                            thread.setDaemon(true);
+                            return thread;
+                        });
     }
 
     CompletionStage<Void> start() {
         synchronized (lifecycleGate) {
             running = true;
-            startupPollingUntilNanos = System.nanoTime()
-                + options.ownerLeaseRenewInterval().toNanos();
-            inFlightTick = tick().whenComplete((ignored, failure) ->
-                scheduleNext());
+            startupPollingUntilNanos =
+                    System.nanoTime() + options.ownerLeaseRenewInterval().toNanos();
+            inFlightTick = tick().whenComplete((ignored, failure) -> scheduleNext());
             return inFlightTick;
         }
     }
@@ -62,19 +61,25 @@ final class ZLinkAutoConnectLoop implements AutoCloseable {
             executor.shutdownNow();
             settling = inFlightTick;
         }
-        settling.whenComplete((ignored, tickFailure) ->
-            reconciler.shutdown().whenComplete((shutdownIgnored, shutdownFailure) -> {
-                Throwable failure = tickFailure == null
-                    ? shutdownFailure : tickFailure;
-                if (tickFailure != null && shutdownFailure != null) {
-                    tickFailure.addSuppressed(shutdownFailure);
-                }
-                if (failure == null) {
-                    stopping.complete(null);
-                } else {
-                    stopping.completeExceptionally(failure);
-                }
-            }));
+        settling.whenComplete(
+                (ignored, tickFailure) ->
+                        reconciler
+                                .shutdown()
+                                .whenComplete(
+                                        (shutdownIgnored, shutdownFailure) -> {
+                                            Throwable failure =
+                                                    tickFailure == null
+                                                            ? shutdownFailure
+                                                            : tickFailure;
+                                            if (tickFailure != null && shutdownFailure != null) {
+                                                tickFailure.addSuppressed(shutdownFailure);
+                                            }
+                                            if (failure == null) {
+                                                stopping.complete(null);
+                                            } else {
+                                                stopping.completeExceptionally(failure);
+                                            }
+                                        }));
         return stopping;
     }
 
@@ -92,8 +97,7 @@ final class ZLinkAutoConnectLoop implements AutoCloseable {
             if (!running) {
                 return;
             }
-            inFlightTick = tick().whenComplete((ignored, failure) ->
-                scheduleNext());
+            inFlightTick = tick().whenComplete((ignored, failure) -> scheduleNext());
         }
     }
 
@@ -106,8 +110,7 @@ final class ZLinkAutoConnectLoop implements AutoCloseable {
             if (System.nanoTime() < startupPollingUntilNanos) {
                 delayMillis = Math.min(delayMillis, STARTUP_POLLING_MILLIS);
             }
-            task = executor.schedule(
-                this::tickOnLoop, delayMillis, TimeUnit.MILLISECONDS);
+            task = executor.schedule(this::tickOnLoop, delayMillis, TimeUnit.MILLISECONDS);
         }
     }
 

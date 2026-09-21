@@ -16,13 +16,15 @@ internal static class ZLinkMeshNodeTargetAvailability
     internal readonly record struct PeerEpoch(
         RoutingId RoutingId,
         ulong LifecycleGeneration,
-        ulong LastChangedMs);
+        ulong LastChangedMs
+    );
 
     internal static IReadOnlyList<ZLinkMeshNodeDescriptor> FilterAdmitted(
         RoutingId localRid,
         IReadOnlyList<ZLinkMeshNodeDescriptor> candidates,
         IReadOnlyList<MeshNodePeer> peers,
-        IReadOnlySet<PeerEpoch>? unavailablePeerEpochs = null)
+        IReadOnlySet<PeerEpoch>? unavailablePeerEpochs = null
+    )
     {
         var admitted = peers
             .Where(static peer => peer.State == MeshPeerState.Admitted)
@@ -31,14 +33,17 @@ internal static class ZLinkMeshNodeTargetAvailability
                 static peer => new PeerEpoch(
                     peer.RoutingId,
                     peer.LifecycleGeneration,
-                    peer.LastChangedMs));
+                    peer.LastChangedMs
+                )
+            );
 
         return candidates
-            .Where(candidate => candidate.Rid == localRid
+            .Where(candidate =>
+                candidate.Rid == localRid
                 || admitted.TryGetValue(candidate.Rid, out var epoch)
-                   && epoch.LifecycleGeneration == candidate.LifecycleGeneration
-                   && (unavailablePeerEpochs is null
-                       || !unavailablePeerEpochs.Contains(epoch)))
+                    && epoch.LifecycleGeneration == candidate.LifecycleGeneration
+                    && (unavailablePeerEpochs is null || !unavailablePeerEpochs.Contains(epoch))
+            )
             .ToArray();
     }
 
@@ -46,22 +51,21 @@ internal static class ZLinkMeshNodeTargetAvailability
         RoutingId peerRid,
         ulong lifecycleGeneration,
         IReadOnlyList<MeshNodePeer> peers,
-        out PeerEpoch epoch)
+        out PeerEpoch epoch
+    )
     {
         var peer = peers.FirstOrDefault(candidate =>
             candidate.State == MeshPeerState.Admitted
             && candidate.RoutingId == peerRid
-            && candidate.LifecycleGeneration == lifecycleGeneration);
+            && candidate.LifecycleGeneration == lifecycleGeneration
+        );
         if (peer is null)
         {
             epoch = default;
             return false;
         }
 
-        epoch = new PeerEpoch(
-            peer.RoutingId,
-            peer.LifecycleGeneration,
-            peer.LastChangedMs);
+        epoch = new PeerEpoch(peer.RoutingId, peer.LifecycleGeneration, peer.LastChangedMs);
         return true;
     }
 }

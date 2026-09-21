@@ -2,9 +2,7 @@ package systems.zlink.framework.spots;
 
 import systems.zlink.framework.messaging.ZLinkMessage;
 
-/**
- * Entry Spot admission result for the first creation of an Actor.
- */
+/** Entry Spot admission result for the first creation of an Actor. */
 public record ZLinkActorCreateResponse(boolean accepted, ZLinkMessage reply) {
     public static ZLinkActorCreateResponse accept() {
         return new ZLinkActorCreateResponse(true, null);

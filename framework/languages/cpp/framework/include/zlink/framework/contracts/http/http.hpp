@@ -397,21 +397,15 @@ class http_options_builder_t
         _serializers = &serializers;
     }
 
-    template <typename T> static constexpr bool has_request_type_v = requires
-    {
-        typename T::request_type;
-    };
-
-    template <typename T> static constexpr bool has_reply_type_v = requires
-    {
-        typename T::reply_type;
-    };
+    template <typename T>
+    static constexpr bool has_request_type_v = requires { typename T::request_type; };
 
     template <typename T>
-    static constexpr bool has_raw_http_shape_v = requires (T handler, const http_request_t &request)
-    {
-        handler.handle (request);
-    };
+    static constexpr bool has_reply_type_v = requires { typename T::reply_type; };
+
+    template <typename T>
+    static constexpr bool has_raw_http_shape_v =
+      requires (T handler, const http_request_t &request) { handler.handle (request); };
 
     static bool starts_with (const std::string &value, const char *prefix)
     {
@@ -444,10 +438,10 @@ class http_options_builder_t
                                                    service_provider_t &services,
                                                    http_context_t &context)
     {
-        if constexpr (requires (TMiddleware value, http_context_t & ctx) { value.before (ctx); }) {
+        if constexpr (requires (TMiddleware value, http_context_t &ctx) { value.before (ctx); }) {
             middleware.before (context);
-        } else if constexpr (requires (TMiddleware value, service_provider_t & provider,
-                                       http_context_t & ctx) { value.before (provider, ctx); }) {
+        } else if constexpr (requires (TMiddleware value, service_provider_t &provider,
+                                       http_context_t &ctx) { value.before (provider, ctx); }) {
             middleware.before (services, context);
         }
     }
@@ -457,10 +451,10 @@ class http_options_builder_t
                                                   service_provider_t &services,
                                                   http_context_t &context)
     {
-        if constexpr (requires (TMiddleware value, http_context_t & ctx) { value.after (ctx); }) {
+        if constexpr (requires (TMiddleware value, http_context_t &ctx) { value.after (ctx); }) {
             middleware.after (context);
-        } else if constexpr (requires (TMiddleware value, service_provider_t & provider,
-                                       http_context_t & ctx) { value.after (provider, ctx); }) {
+        } else if constexpr (requires (TMiddleware value, service_provider_t &provider,
+                                       http_context_t &ctx) { value.after (provider, ctx); }) {
             middleware.after (services, context);
         }
     }

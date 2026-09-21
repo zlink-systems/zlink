@@ -9,9 +9,9 @@ namespace Zlink.Framework.Runtime.Locations;
 /// (06-location-store §5), so topology and summaries project MeshNode
 /// descriptors only.
 /// </summary>
-internal sealed class ZLinkLocationRuntimeQueryService :
-    IZLinkLocationRuntimeQuery,
-    IZLinkLocationDescriptorQuery
+internal sealed class ZLinkLocationRuntimeQueryService
+    : IZLinkLocationRuntimeQuery,
+        IZLinkLocationDescriptorQuery
 {
     private readonly ZLinkLocationOptions _options;
     private readonly IZLinkLocationRepository _meshNodeStore;
@@ -30,7 +30,8 @@ internal sealed class ZLinkLocationRuntimeQueryService :
         ZLinkOwnerLeaseTracker leaseTracker,
         ZLinkLocationRuntime runtime,
         ZLinkObservedLocationGenerations observed,
-        ZLinkLocationStoreHealth? storeHealth = null)
+        ZLinkLocationStoreHealth? storeHealth = null
+    )
     {
         _options = options;
         _meshNodeStore = meshNodeStore;
@@ -40,44 +41,44 @@ internal sealed class ZLinkLocationRuntimeQueryService :
         _observed = observed;
         _storeHealth = storeHealth;
         _liveRows = new ZLinkLiveLocationRows(leaseTracker);
-        _objects = new ZLinkLocationObjectQuery(
-            meshNodeStore,
-            leaseTracker,
-            storeHealth);
+        _objects = new ZLinkLocationObjectQuery(meshNodeStore, leaseTracker, storeHealth);
     }
 
     public ValueTask<ZLinkLocationRuntimeStatus> GetStatusAsync(
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default
+    )
     {
         var health = _runtime.GetHealthSnapshot();
         var store = _storeHealth?.GetSnapshot();
         var lastRefreshAt = store?.LastSuccessAt;
-        if (health.RenewedAt is { } renewedAt
-            && (lastRefreshAt is null || renewedAt > lastRefreshAt))
+        if (
+            health.RenewedAt is { } renewedAt
+            && (lastRefreshAt is null || renewedAt > lastRefreshAt)
+        )
         {
             lastRefreshAt = renewedAt;
         }
 
-        return ValueTask.FromResult(new ZLinkLocationRuntimeStatus(
-            StoreHealthy: health.LastError is null && (store?.Healthy ?? true),
-            LastRefreshAt: lastRefreshAt,
-            OwnerLeaseHealthy: health.Healthy,
-            OwnerLeaseRenewedAt: health.RenewedAt));
+        return ValueTask.FromResult(
+            new ZLinkLocationRuntimeStatus(
+                StoreHealthy: health.LastError is null && (store?.Healthy ?? true),
+                LastRefreshAt: lastRefreshAt,
+                OwnerLeaseHealthy: health.Healthy,
+                OwnerLeaseRenewedAt: health.RenewedAt
+            )
+        );
     }
 
-    public async ValueTask<ZLinkLocationPage<ZLinkMeshNodeDescriptor>>
-        ListMeshNodeDescriptorsAsync(
+    public async ValueTask<ZLinkLocationPage<ZLinkMeshNodeDescriptor>> ListMeshNodeDescriptorsAsync(
         string meshName,
         ZLinkPageRequest page = default,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default
+    )
     {
         var rows = await ListAcceptedDescriptorsAsync(meshName, cancellationToken)
             .ConfigureAwait(false);
-        var live = await _liveRows.FilterAsync(
-                rows,
-                static row => row.OwnerId,
-                static _ => true,
-                cancellationToken)
+        var live = await _liveRows
+            .FilterAsync(rows, static row => row.OwnerId, static _ => true, cancellationToken)
             .ConfigureAwait(false);
         return PageInMemory(live, Normalize(page));
     }
@@ -85,7 +86,8 @@ internal sealed class ZLinkLocationRuntimeQueryService :
     public async ValueTask<ZLinkLocationPage<ZLinkLocationTopologyEntry>> ListTopologyAsync(
         ZLinkLocationTopologyFilter filter,
         ZLinkPageRequest page = default,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default
+    )
     {
         // The projection is built by the framework from descriptors plus
         // liveness; stores never decide topology meaning. Until a
@@ -98,45 +100,57 @@ internal sealed class ZLinkLocationRuntimeQueryService :
                 .ConfigureAwait(false);
             foreach (var row in rows)
             {
-                var live = await _leaseTracker.IsOwnerLiveAsync(row.OwnerId, cancellationToken)
+                var live = await _leaseTracker
+                    .IsOwnerLiveAsync(row.OwnerId, cancellationToken)
                     .ConfigureAwait(false);
                 //  Spec 13 §365는 relocate가 unit seal을 마치면 source가 draining으로
                 //  넘어간다고 정하고, §409는 draining node가 새 placement target이
                 //  되지 않는다고 정한다. Host lifecycle의 `Draining`만 보면 relocate로
                 //  빠지는 node가 계속 accepting으로 보인다.
                 var entry = new ZLinkLocationTopologyEntry(
-                    row.MeshName, row.Rid, row.Endpoint,
-                    row.State is ZLinkFrameworkRuntimeState.Draining
-                        or ZLinkFrameworkRuntimeState.Relocating
-                        or ZLinkFrameworkRuntimeState.Relocated,
+                    row.MeshName,
+                    row.Rid,
+                    row.Endpoint,
+                    row.State
+                        is ZLinkFrameworkRuntimeState.Draining
+                            or ZLinkFrameworkRuntimeState.Relocating
+                            or ZLinkFrameworkRuntimeState.Relocated,
                     live ? ZLinkLocationTopologyState.Ready : ZLinkLocationTopologyState.Lost,
-                    row.UpdatedAt);
-                if (Matches(entry, filter)) entries.Add(entry);
+                    row.UpdatedAt
+                );
+                if (Matches(entry, filter))
+                    entries.Add(entry);
             }
         }
 
         return PageInMemory(entries, Normalize(page));
     }
 
-    public async ValueTask<ZLinkLocationPage<ZLinkLocationServiceSummary>>
-        ListServiceSummariesAsync(
+    public async ValueTask<
+        ZLinkLocationPage<ZLinkLocationServiceSummary>
+    > ListServiceSummariesAsync(
         ZLinkLocationServiceSummaryFilter filter,
         ZLinkPageRequest page = default,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default
+    )
     {
         var summaries = new List<ZLinkLocationServiceSummary>();
         foreach (var meshName in MeshNamesOf(filter.MeshName))
         {
             var rows = await ListAcceptedDescriptorsAsync(meshName, cancellationToken)
                 .ConfigureAwait(false);
-            if (rows.Count == 0) continue;
+            if (rows.Count == 0)
+                continue;
 
             var accumulator = new Accumulator();
             foreach (var row in rows)
             {
                 accumulator.Total++;
-                if (await _leaseTracker.IsOwnerLiveAsync(row.OwnerId, cancellationToken)
-                        .ConfigureAwait(false))
+                if (
+                    await _leaseTracker
+                        .IsOwnerLiveAsync(row.OwnerId, cancellationToken)
+                        .ConfigureAwait(false)
+                )
                 {
                     accumulator.Ready++;
                 }
@@ -151,10 +165,16 @@ internal sealed class ZLinkLocationRuntimeQueryService :
                 }
             }
 
-            summaries.Add(new ZLinkLocationServiceSummary(
-                meshName,
-                accumulator.Total, accumulator.Ready, 0, accumulator.Stopped,
-                accumulator.LastUpdatedAt));
+            summaries.Add(
+                new ZLinkLocationServiceSummary(
+                    meshName,
+                    accumulator.Total,
+                    accumulator.Ready,
+                    0,
+                    accumulator.Stopped,
+                    accumulator.LastUpdatedAt
+                )
+            );
         }
 
         return PageInMemory(summaries, Normalize(page));
@@ -162,53 +182,58 @@ internal sealed class ZLinkLocationRuntimeQueryService :
 
     public ValueTask<ZLinkLocationObjectEntry?> FindActorLocationAsync(
         string actorId,
-        CancellationToken cancellationToken = default) =>
-        _objects.FindActorAsync(actorId, cancellationToken);
+        CancellationToken cancellationToken = default
+    ) => _objects.FindActorAsync(actorId, cancellationToken);
 
     public ValueTask<ZLinkLocationObjectEntry?> FindSpotLocationAsync(
         string spotId,
-        CancellationToken cancellationToken = default) =>
-        _objects.FindSpotAsync(spotId, cancellationToken);
+        CancellationToken cancellationToken = default
+    ) => _objects.FindSpotAsync(spotId, cancellationToken);
 
-    public ValueTask<ZLinkLocationPage<ZLinkLocationObjectEntry>>
-        ListObjectLocationsAsync(
-            ZLinkLocationObjectFilter filter,
-            ZLinkPageRequest page = default,
-            CancellationToken cancellationToken = default) =>
-        _objects.ListAsync(filter, page, cancellationToken);
+    public ValueTask<ZLinkLocationPage<ZLinkLocationObjectEntry>> ListObjectLocationsAsync(
+        ZLinkLocationObjectFilter filter,
+        ZLinkPageRequest page = default,
+        CancellationToken cancellationToken = default
+    ) => _objects.ListAsync(filter, page, cancellationToken);
 
     private IEnumerable<string> MeshNamesOf(string? meshName) =>
-        meshName is not null
-            ? [meshName]
-            : _registeredMeshNames;
+        meshName is not null ? [meshName] : _registeredMeshNames;
 
     private static ZLinkPageRequest Normalize(ZLinkPageRequest page) =>
         ZLinkPageRequestPolicy.Normalize(page);
 
     private async ValueTask<IReadOnlyList<ZLinkMeshNodeDescriptor>> ListAcceptedDescriptorsAsync(
         string meshName,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken
+    )
     {
-        var rows = await ZLinkLocationStoreRead.ExecuteAsync(
-            _storeHealth,
-            "mesh-node-query-read",
-            cancellationToken,
-            storeToken => _meshNodeStore.ListAllMeshNodesAsync(meshName, storeToken)).ConfigureAwait(false);
+        var rows = await ZLinkLocationStoreRead
+            .ExecuteAsync(
+                _storeHealth,
+                "mesh-node-query-read",
+                cancellationToken,
+                storeToken => _meshNodeStore.ListAllMeshNodesAsync(meshName, storeToken)
+            )
+            .ConfigureAwait(false);
         _observed.ReconcileDescriptors(meshName, rows);
         return rows.Where(_observed.AcceptDescriptor).ToArray();
     }
 
     private static bool Matches(
         ZLinkLocationTopologyEntry entry,
-        ZLinkLocationTopologyFilter filter) =>
-        (filter.MeshName is null
-            || string.Equals(entry.MeshName, filter.MeshName, StringComparison.Ordinal))
+        ZLinkLocationTopologyFilter filter
+    ) =>
+        (
+            filter.MeshName is null
+            || string.Equals(entry.MeshName, filter.MeshName, StringComparison.Ordinal)
+        )
         && (filter.NodeRid is null || entry.NodeRid.Equals(filter.NodeRid.Value))
         && (filter.State is null || entry.State == filter.State);
 
     private static ZLinkLocationPage<T> PageInMemory<T>(
         IReadOnlyList<T> entries,
-        ZLinkPageRequest page)
+        ZLinkPageRequest page
+    )
     {
         var offset = 0;
         if (page.ContinuationToken is { } token && int.TryParse(token, out var parsed))
@@ -220,7 +245,8 @@ internal sealed class ZLinkLocationRuntimeQueryService :
         var nextOffset = offset + items.Length;
         return new ZLinkLocationPage<T>(
             items,
-            nextOffset < entries.Count ? nextOffset.ToString() : null);
+            nextOffset < entries.Count ? nextOffset.ToString() : null
+        );
     }
 
     private sealed class Accumulator

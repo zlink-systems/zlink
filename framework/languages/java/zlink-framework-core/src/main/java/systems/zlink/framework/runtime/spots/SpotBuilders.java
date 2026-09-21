@@ -1,10 +1,6 @@
 package systems.zlink.framework.runtime.spots;
 
-import java.util.function.Consumer;
 import systems.zlink.contracts.core.RoutingId;
-import systems.zlink.framework.runtime.internal.configuration.ZLinkSpotMeshBuilder;
-import systems.zlink.framework.runtime.internal.configuration.ZLinkSpotNodeBuilder;
-import systems.zlink.framework.runtime.configuration.ZLinkFrameworkRegistration;
 import systems.zlink.framework.actors.ZLinkActor;
 import systems.zlink.framework.actors.ZLinkActorFactory;
 import systems.zlink.framework.actors.ZLinkActorRelocationAdapter;
@@ -13,32 +9,37 @@ import systems.zlink.framework.configuration.ZLinkInstanceSpotFactoryBuilder;
 import systems.zlink.framework.configuration.ZLinkMeshObjectClientBuilder;
 import systems.zlink.framework.configuration.ZLinkMeshObjectRoleBuilder;
 import systems.zlink.framework.configuration.ZLinkMeshObjectServerBuilder;
+import systems.zlink.framework.configuration.ZLinkSpotRelocationCoordinationMode;
 import systems.zlink.framework.configuration.ZLinkUserSpotExecutionMode;
 import systems.zlink.framework.configuration.ZLinkUserSpotFactoryBuilder;
-import systems.zlink.framework.configuration.ZLinkSpotRelocationCoordinationMode;
 import systems.zlink.framework.errors.ZLinkConfigurationException;
+import systems.zlink.framework.runtime.configuration.ZLinkFrameworkRegistration;
+import systems.zlink.framework.runtime.internal.configuration.ZLinkSpotMeshBuilder;
+import systems.zlink.framework.runtime.internal.configuration.ZLinkSpotNodeBuilder;
 import systems.zlink.framework.spots.ZLinkEntrySpot;
 import systems.zlink.framework.spots.ZLinkInstanceSpot;
 import systems.zlink.framework.spots.ZLinkSpot;
 import systems.zlink.framework.spots.ZLinkSpotRelocationAdapter;
 
+import java.util.function.Consumer;
+
 public final class SpotBuilders {
-    private SpotBuilders() {
-    }
+    private SpotBuilders() {}
 
     public static Mesh mesh(
-        String meshName,
-        SpotNodeRegistration node,
-        ZLinkFrameworkRegistration registration,
-        Consumer<Class<?>> spotFactoryAdded) {
+            String meshName,
+            SpotNodeRegistration node,
+            ZLinkFrameworkRegistration registration,
+            Consumer<Class<?>> spotFactoryAdded) {
         return new Mesh(meshName, node, registration, spotFactoryAdded);
     }
 
     public record Mesh(
-        String meshName,
-        SpotNodeRegistration node,
-        ZLinkFrameworkRegistration registration,
-        Consumer<Class<?>> spotFactoryAdded) implements ZLinkSpotMeshBuilder {
+            String meshName,
+            SpotNodeRegistration node,
+            ZLinkFrameworkRegistration registration,
+            Consumer<Class<?>> spotFactoryAdded)
+            implements ZLinkSpotMeshBuilder {
         @Override
         public ZLinkSpotNodeBuilder setRoutingId(RoutingId routingId) {
             node.setRoutingId(routingId);
@@ -82,9 +83,9 @@ public final class SpotBuilders {
     }
 
     private static final class ObjectRoles
-        implements ZLinkMeshObjectRoleBuilder,
-            ZLinkMeshObjectClientBuilder,
-            ZLinkMeshObjectServerBuilder {
+            implements ZLinkMeshObjectRoleBuilder,
+                    ZLinkMeshObjectClientBuilder,
+                    ZLinkMeshObjectServerBuilder {
         private final SpotNodeRegistration node;
 
         private ObjectRoles(SpotNodeRegistration node) {
@@ -103,16 +104,16 @@ public final class SpotBuilders {
 
         @Override
         public ZLinkMeshObjectServerBuilder addEntrySpot(
-            Class<? extends ZLinkEntrySpot<?>> entrySpotType) {
+                Class<? extends ZLinkEntrySpot<?>> entrySpotType) {
             node.registerEntrySpot(entrySpotType);
             return this;
         }
 
         @Override
         public <TSpot extends ZLinkSpot<?>> ZLinkMeshObjectServerBuilder addSpotFactory(
-            String stableType,
-            Class<TSpot> spotType,
-            Consumer<ZLinkUserSpotFactoryBuilder<TSpot>> configure) {
+                String stableType,
+                Class<TSpot> spotType,
+                Consumer<ZLinkUserSpotFactoryBuilder<TSpot>> configure) {
             LegacyUserSpotBuilder<TSpot> builder = new LegacyUserSpotBuilder<>();
             builder.configure(configure);
             node.registerSpotFactory(spotType);
@@ -121,20 +122,20 @@ public final class SpotBuilders {
 
         @Override
         public <TSpot extends ZLinkInstanceSpot>
-        ZLinkMeshObjectServerBuilder addInstanceSpotFactory(
-            String stableType,
-            Class<TSpot> spotType,
-            Consumer<ZLinkInstanceSpotFactoryBuilder<TSpot>> configure) {
+                ZLinkMeshObjectServerBuilder addInstanceSpotFactory(
+                        String stableType,
+                        Class<TSpot> spotType,
+                        Consumer<ZLinkInstanceSpotFactoryBuilder<TSpot>> configure) {
             throw new ZLinkConfigurationException(
-                "legacy Spot topology does not support Instance Spot factories");
+                    "legacy Spot topology does not support Instance Spot factories");
         }
 
         @Override
         public <TActor extends ZLinkActor> ZLinkMeshObjectServerBuilder addActorFactory(
-            String stableType,
-            Class<TActor> actorType,
-            Class<? extends ZLinkActorFactory> factoryType,
-            Consumer<ZLinkActorFactoryBuilder<TActor>> configure) {
+                String stableType,
+                Class<TActor> actorType,
+                Class<? extends ZLinkActorFactory> factoryType,
+                Consumer<ZLinkActorFactoryBuilder<TActor>> configure) {
             LegacyActorBuilder<TActor> builder = new LegacyActorBuilder<>();
             builder.configure(configure);
             node.registerActorFactory(stableType, factoryType);
@@ -153,7 +154,7 @@ public final class SpotBuilders {
                 configure.accept(self);
                 if (!selected) {
                     throw new ZLinkConfigurationException(
-                        "factory relocation behavior must be selected exactly once");
+                            "factory relocation behavior must be selected exactly once");
                 }
             } finally {
                 accepting = false;
@@ -163,55 +164,70 @@ public final class SpotBuilders {
         final void select() {
             if (!accepting || selected) {
                 throw new ZLinkConfigurationException(
-                    "factory relocation behavior must be selected exactly once");
+                        "factory relocation behavior must be selected exactly once");
             }
             selected = true;
         }
     }
 
     private static final class LegacyActorBuilder<TActor extends ZLinkActor>
-        extends LegacyRelocationBuilder
-        implements ZLinkActorFactoryBuilder<TActor> {
-        @Override public void disableRelocation() { select(); }
-        @Override public void recreateOnRelocation() { select(); }
-        @Override public void preserveStateWith(
-            Class<? extends ZLinkActorRelocationAdapter<TActor>> adapterClass) {
+            extends LegacyRelocationBuilder implements ZLinkActorFactoryBuilder<TActor> {
+        @Override
+        public void disableRelocation() {
+            select();
+        }
+
+        @Override
+        public void recreateOnRelocation() {
+            select();
+        }
+
+        @Override
+        public void preserveStateWith(
+                Class<? extends ZLinkActorRelocationAdapter<TActor>> adapterClass) {
             if (adapterClass == null) {
-                throw new ZLinkConfigurationException(
-                    "relocation adapterClass is required");
+                throw new ZLinkConfigurationException("relocation adapterClass is required");
             }
             select();
         }
     }
 
     private static final class LegacyUserSpotBuilder<TSpot extends ZLinkSpot<?>>
-        extends LegacyRelocationBuilder
-        implements ZLinkUserSpotFactoryBuilder<TSpot> {
+            extends LegacyRelocationBuilder implements ZLinkUserSpotFactoryBuilder<TSpot> {
         @Override
         public ZLinkUserSpotFactoryBuilder<TSpot> stableTypeLimit(int limit) {
             if (limit <= 0) {
-                throw new ZLinkConfigurationException(
-                    "stableTypeLimit must be positive");
+                throw new ZLinkConfigurationException("stableTypeLimit must be positive");
             }
             return this;
         }
+
         @Override
-        public ZLinkUserSpotFactoryBuilder<TSpot> executionMode(
-            ZLinkUserSpotExecutionMode mode) {
+        public ZLinkUserSpotFactoryBuilder<TSpot> executionMode(ZLinkUserSpotExecutionMode mode) {
             return this;
         }
+
         @Override
         public ZLinkUserSpotFactoryBuilder<TSpot> relocationCoordinationMode(
-            ZLinkSpotRelocationCoordinationMode mode) {
+                ZLinkSpotRelocationCoordinationMode mode) {
             return this;
         }
-        @Override public void disableRelocation() { select(); }
-        @Override public void recreateOnRelocation() { select(); }
-        @Override public void preserveStateWith(
-            Class<? extends ZLinkSpotRelocationAdapter<TSpot>> adapterClass) {
+
+        @Override
+        public void disableRelocation() {
+            select();
+        }
+
+        @Override
+        public void recreateOnRelocation() {
+            select();
+        }
+
+        @Override
+        public void preserveStateWith(
+                Class<? extends ZLinkSpotRelocationAdapter<TSpot>> adapterClass) {
             if (adapterClass == null) {
-                throw new ZLinkConfigurationException(
-                    "relocation adapterClass is required");
+                throw new ZLinkConfigurationException("relocation adapterClass is required");
             }
             select();
         }

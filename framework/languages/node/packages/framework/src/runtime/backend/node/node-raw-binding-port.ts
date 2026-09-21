@@ -73,10 +73,9 @@ class NodeRawHostPort implements ZLinkRawHostPort {
 
   createRouter(): ZLinkRawRouterPort {
     this.requireOpen();
-    return this.own(new NodeRawRouterPort(
-      createRouterSocket(this.context),
-      this.routerReceiveTimeoutMs
-    ));
+    return this.own(
+      new NodeRawRouterPort(createRouterSocket(this.context), this.routerReceiveTimeoutMs)
+    );
   }
 
   createDealer(): ZLinkRawDealerPort {
@@ -133,11 +132,7 @@ abstract class NodeRawSocketPort<TSocket extends Socket> implements ZLinkRawSock
   private closed = false;
 
   protected constructor(protected readonly socket: TSocket) {
-    this.eventLoopPoller = new ZLinkNodeEventLoopPoller(
-      socket,
-      true,
-      () => {}
-    );
+    this.eventLoopPoller = new ZLinkNodeEventLoopPoller(socket, true, () => {});
   }
 
   setReadableHandler(handler: () => void): void {
@@ -233,9 +228,11 @@ class NodeRawRouterPort extends NodeRawSocketPort<RouterSocket> implements ZLink
   private nextIncomingRequestSequence = 1n;
   disconnectRid(routingId: string): void {
     this.requireOpen();
-    (this.socket as RouterSocket & {
-      disconnectRid(value: BindingRoutingId): void;
-    }).disconnectRid(bindingRoutingId(routingId));
+    (
+      this.socket as RouterSocket & {
+        disconnectRid(value: BindingRoutingId): void;
+      }
+    ).disconnectRid(bindingRoutingId(routingId));
   }
 
   constructor(socket: RouterSocket, receiveTimeoutMs?: number) {
@@ -282,7 +279,10 @@ class NodeRawRouterPort extends NodeRawSocketPort<RouterSocket> implements ZLink
   ): Promise<readonly Buffer[]> {
     this.requireOpen();
     try {
-      const replies = await appendRequestParts(this.socket.request(bindingRoutingId(targetRid)), parts)
+      const replies = await appendRequestParts(
+        this.socket.request(bindingRoutingId(targetRid)),
+        parts
+      )
         .timeout(timeoutMs)
         .submit().reply;
       return copyAndClose(replies);
@@ -298,9 +298,8 @@ class NodeRawRouterPort extends NodeRawSocketPort<RouterSocket> implements ZLink
       dontWait,
       () => {
         const current = this.nextIncomingRequestSequence;
-        this.nextIncomingRequestSequence = current === BigInt(Number.MAX_SAFE_INTEGER)
-          ? 1n
-          : current + 1n;
+        this.nextIncomingRequestSequence =
+          current === BigInt(Number.MAX_SAFE_INTEGER) ? 1n : current + 1n;
         return current;
       },
       (targetRid, replyToken, parts) => {
@@ -333,7 +332,9 @@ class NodeRawDealerPort extends NodeRawSocketPort<DealerSocket> implements ZLink
 
   async request(parts: readonly Uint8Array[], timeoutMs: number): Promise<readonly Buffer[]> {
     this.requireOpen();
-    const replies = await appendRequestParts(this.socket.request(), parts).timeout(timeoutMs).submit().reply;
+    const replies = await appendRequestParts(this.socket.request(), parts)
+      .timeout(timeoutMs)
+      .submit().reply;
     return copyAndClose(replies);
   }
 
@@ -412,7 +413,8 @@ function appendReplyParts(
 }
 
 function requireParts(parts: readonly Uint8Array[]): [Uint8Array, ...Uint8Array[]] {
-  if (parts.length === 0) throw new TypeError('Raw multipart operation requires at least one part.');
+  if (parts.length === 0)
+    throw new TypeError('Raw multipart operation requires at least one part.');
   return parts as [Uint8Array, ...Uint8Array[]];
 }
 
@@ -429,10 +431,7 @@ function receiveRecord(
   reply?: RawReceivedReply
 ): ZLinkRawReceivedRecord | undefined {
   const received = new Received();
-  if (!socket.recv(
-    received,
-    dontWait ? RecvFlags.DontWait : RecvFlags.None
-  )) {
+  if (!socket.recv(received, dontWait ? RecvFlags.DontWait : RecvFlags.None)) {
     received.close();
     return undefined;
   }
@@ -442,11 +441,12 @@ function receiveRecord(
     const sourceRoute = received.routingId?.toBytes() ?? Buffer.alloc(0);
     const requestSeq = received.replyToken === null ? undefined : nextRequestSequence?.();
     const replyToken = received.replyToken;
-    const receivedReply = replyToken === null
-      ? undefined
-      : reply === undefined
-        ? received.reply()
-        : (parts: readonly Uint8Array[]) => reply(sourceRoute, replyToken, parts);
+    const receivedReply =
+      replyToken === null
+        ? undefined
+        : reply === undefined
+          ? received.reply()
+          : (parts: readonly Uint8Array[]) => reply(sourceRoute, replyToken, parts);
     return {
       sourceRid,
       sourceRoute,
@@ -462,7 +462,7 @@ function receiveRecord(
               appendReplyParts(receivedReply, parts).submit();
             }
           }),
-      parts: received.parts.map(part => part.toBytes()),
+      parts: received.parts.map((part) => part.toBytes()),
       close: () => {
         if (closed) return;
         closed = true;
@@ -477,7 +477,7 @@ function receiveRecord(
 
 function copyAndClose(messages: readonly Message[]): readonly Buffer[] {
   try {
-    return messages.map(message => message.toBytes());
+    return messages.map((message) => message.toBytes());
   } finally {
     for (const message of messages) message.close();
   }

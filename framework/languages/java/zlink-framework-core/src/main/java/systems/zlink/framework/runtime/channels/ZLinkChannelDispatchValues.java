@@ -1,42 +1,39 @@
 package systems.zlink.framework.runtime.channels;
-import java.util.Objects;
 
-import java.util.Map;
-import java.util.Optional;
 import systems.zlink.contracts.core.RoutingId;
 import systems.zlink.contracts.messaging.Message;
-import systems.zlink.framework.ZLinkMessageContext;
 import systems.zlink.framework.ZLinkHandlerDispatchKind;
 import systems.zlink.framework.ZLinkHandlerFilterContext;
+import systems.zlink.framework.ZLinkMessageContext;
 import systems.zlink.framework.channels.ZLinkPublishMessageContext;
 import systems.zlink.framework.channels.ZLinkRouteMessageContext;
 
+import java.util.Map;
+import java.util.Objects;
+import java.util.Optional;
+
 /**
- * Parsed inbound channel packet. {@code header} is the decoded shared
- * cross-language envelope header when the message arrived as an envelope, or
- * {@code null} for legacy raw-parts frames.
+ * Parsed inbound channel packet. {@code header} is the decoded shared cross-language envelope
+ * header when the message arrived as an envelope, or {@code null} for legacy raw-parts frames.
  */
 record ParsedPacket(
-    String packetName,
-    Message payload,
-    systems.zlink.framework.runtime.messaging.ZLinkChannelEnvelope.Header header) {
+        String packetName,
+        Message payload,
+        systems.zlink.framework.runtime.messaging.ZLinkChannelEnvelope.Header header) {
 
     ParsedPacket(String packetName, Message payload) {
         this(packetName, payload, null);
     }
 }
 
-final class DefaultHandlerFilterContext
-    implements ZLinkHandlerFilterContext {
+final class DefaultHandlerFilterContext implements ZLinkHandlerFilterContext {
     private final ZLinkMessageContext message;
     private final ZLinkHandlerDispatchKind dispatchKind;
 
     DefaultHandlerFilterContext(
-        ZLinkMessageContext message,
-        ZLinkHandlerDispatchKind dispatchKind) {
+            ZLinkMessageContext message, ZLinkHandlerDispatchKind dispatchKind) {
         this.message = Objects.requireNonNull(message, "message");
-        this.dispatchKind =
-            Objects.requireNonNull(dispatchKind, "dispatchKind");
+        this.dispatchKind = Objects.requireNonNull(dispatchKind, "dispatchKind");
     }
 
     @Override
@@ -88,27 +85,24 @@ abstract class ChannelHandlerContextBase implements ZLinkMessageContext {
     private final String contentType;
     private final Map<String, String> metadata;
 
-    ChannelHandlerContextBase(
-        String channelName,
-        String packetName,
-        String contentType) {
+    ChannelHandlerContextBase(String channelName, String packetName, String contentType) {
         this(null, channelName, packetName, contentType, Map.of());
     }
 
     ChannelHandlerContextBase(
-        String channelName,
-        String packetName,
-        String contentType,
-        Map<String, String> metadata) {
+            String channelName,
+            String packetName,
+            String contentType,
+            Map<String, String> metadata) {
         this(null, channelName, packetName, contentType, metadata);
     }
 
     ChannelHandlerContextBase(
-        String meshName,
-        String channelName,
-        String packetName,
-        String contentType,
-        Map<String, String> metadata) {
+            String meshName,
+            String channelName,
+            String packetName,
+            String contentType,
+            Map<String, String> metadata) {
         this.meshName = meshName;
         this.channelName = channelName;
         this.packetName = packetName;
@@ -151,76 +145,67 @@ abstract class ChannelHandlerContextBase implements ZLinkMessageContext {
     }
 }
 
-final class DefaultRequestContext
-    extends ChannelHandlerContextBase
-    implements ZLinkMessageContext {
+final class DefaultRequestContext extends ChannelHandlerContextBase implements ZLinkMessageContext {
     DefaultRequestContext(String channelName, String packetName, String contentType) {
         super(channelName, packetName, contentType);
     }
 
     DefaultRequestContext(
-        String channelName,
-        String packetName,
-        String contentType,
-        Map<String, String> metadata) {
+            String channelName,
+            String packetName,
+            String contentType,
+            Map<String, String> metadata) {
         super(channelName, packetName, contentType, metadata);
     }
 
     DefaultRequestContext(
-        String meshName,
-        String channelName,
-        String packetName,
-        String contentType,
-        Map<String, String> metadata) {
+            String meshName,
+            String channelName,
+            String packetName,
+            String contentType,
+            Map<String, String> metadata) {
         super(meshName, channelName, packetName, contentType, metadata);
     }
 }
 
-final class DefaultSendContext
-    extends ChannelHandlerContextBase
-    implements ZLinkMessageContext {
+final class DefaultSendContext extends ChannelHandlerContextBase implements ZLinkMessageContext {
     DefaultSendContext(String channelName, String packetName, String contentType) {
         super(channelName, packetName, contentType);
     }
 
     DefaultSendContext(
-        String channelName,
-        String packetName,
-        String contentType,
-        Map<String, String> metadata) {
+            String channelName,
+            String packetName,
+            String contentType,
+            Map<String, String> metadata) {
         super(channelName, packetName, contentType, metadata);
     }
 
     DefaultSendContext(
-        String meshName,
-        String channelName,
-        String packetName,
-        String contentType,
-        Map<String, String> metadata) {
+            String meshName,
+            String channelName,
+            String packetName,
+            String contentType,
+            Map<String, String> metadata) {
         super(meshName, channelName, packetName, contentType, metadata);
     }
 }
 
-final class DefaultPublishContext
-    extends ChannelHandlerContextBase
-    implements ZLinkPublishMessageContext {
+final class DefaultPublishContext extends ChannelHandlerContextBase
+        implements ZLinkPublishMessageContext {
     private final String topic;
 
-    DefaultPublishContext(
-        String channelName,
-        String packetName,
-        String topic,
-        String contentType) {
+    DefaultPublishContext(String channelName, String packetName, String topic, String contentType) {
         super(channelName, packetName, contentType);
         this.topic = topic;
     }
 
     DefaultPublishContext(
-        String channelName,
-        String packetName,
-        String topic,
-        String contentType,
-        Map<String, String> metadata) {
+            String channelName,
+            String packetName,
+            String topic,
+            String contentType,
+            Map<String, String> metadata) {
         super(channelName, packetName, contentType, metadata);
         this.topic = topic;
     }
@@ -240,31 +225,28 @@ abstract class RouteHandlerContextBase extends ChannelHandlerContextBase {
     private final RoutingId routingId;
 
     RouteHandlerContextBase(
-        String channelName,
-        String packetName,
-        RoutingId routingId,
-        String contentType) {
+            String channelName, String packetName, RoutingId routingId, String contentType) {
         super(channelName, packetName, contentType);
         this.routingId = routingId;
     }
 
     RouteHandlerContextBase(
-        String channelName,
-        String packetName,
-        RoutingId routingId,
-        String contentType,
-        Map<String, String> metadata) {
+            String channelName,
+            String packetName,
+            RoutingId routingId,
+            String contentType,
+            Map<String, String> metadata) {
         super(channelName, packetName, contentType, metadata);
         this.routingId = routingId;
     }
 
     RouteHandlerContextBase(
-        String meshName,
-        String channelName,
-        String packetName,
-        RoutingId routingId,
-        String contentType,
-        Map<String, String> metadata) {
+            String meshName,
+            String channelName,
+            String packetName,
+            RoutingId routingId,
+            String contentType,
+            Map<String, String> metadata) {
         super(meshName, channelName, packetName, contentType, metadata);
         this.routingId = routingId;
     }
@@ -278,64 +260,56 @@ abstract class RouteHandlerContextBase extends ChannelHandlerContextBase {
     }
 }
 
-final class DefaultRouteRequestContext
-    extends RouteHandlerContextBase
-    implements ZLinkRouteMessageContext {
+final class DefaultRouteRequestContext extends RouteHandlerContextBase
+        implements ZLinkRouteMessageContext {
     DefaultRouteRequestContext(
-        String channelName,
-        String packetName,
-        RoutingId routingId,
-        String contentType) {
+            String channelName, String packetName, RoutingId routingId, String contentType) {
         super(channelName, packetName, routingId, contentType);
     }
 
     DefaultRouteRequestContext(
-        String channelName,
-        String packetName,
-        RoutingId routingId,
-        String contentType,
-        Map<String, String> metadata) {
+            String channelName,
+            String packetName,
+            RoutingId routingId,
+            String contentType,
+            Map<String, String> metadata) {
         super(channelName, packetName, routingId, contentType, metadata);
     }
 
     DefaultRouteRequestContext(
-        String meshName,
-        String channelName,
-        String packetName,
-        RoutingId routingId,
-        String contentType,
-        Map<String, String> metadata) {
+            String meshName,
+            String channelName,
+            String packetName,
+            RoutingId routingId,
+            String contentType,
+            Map<String, String> metadata) {
         super(meshName, channelName, packetName, routingId, contentType, metadata);
     }
 }
 
-final class DefaultRouteSendContext
-    extends RouteHandlerContextBase
-    implements ZLinkRouteMessageContext {
+final class DefaultRouteSendContext extends RouteHandlerContextBase
+        implements ZLinkRouteMessageContext {
     DefaultRouteSendContext(
-        String channelName,
-        String packetName,
-        RoutingId routingId,
-        String contentType) {
+            String channelName, String packetName, RoutingId routingId, String contentType) {
         super(channelName, packetName, routingId, contentType);
     }
 
     DefaultRouteSendContext(
-        String channelName,
-        String packetName,
-        RoutingId routingId,
-        String contentType,
-        Map<String, String> metadata) {
+            String channelName,
+            String packetName,
+            RoutingId routingId,
+            String contentType,
+            Map<String, String> metadata) {
         super(channelName, packetName, routingId, contentType, metadata);
     }
 
     DefaultRouteSendContext(
-        String meshName,
-        String channelName,
-        String packetName,
-        RoutingId routingId,
-        String contentType,
-        Map<String, String> metadata) {
+            String meshName,
+            String channelName,
+            String packetName,
+            RoutingId routingId,
+            String contentType,
+            Map<String, String> metadata) {
         super(meshName, channelName, packetName, routingId, contentType, metadata);
     }
 }

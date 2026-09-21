@@ -11,8 +11,7 @@
 namespace zlink::framework::runtime
 {
 
-offload_executor_t::offload_executor_t (std::size_t worker_count,
-                                        std::string thread_name) :
+offload_executor_t::offload_executor_t (std::size_t worker_count, std::string thread_name) :
     offload_executor_t (worker_count == 0 ? 1 : worker_count,
                         worker_count == 0 ? 1 : worker_count,
                         std::chrono::milliseconds{0},
@@ -52,12 +51,11 @@ void offload_executor_t::submit (std::function<void ()> work)
 
 bool offload_executor_t::try_submit (std::function<void ()> work)
 {
-    return try_submit_cancellable (
-      [work = std::move (work)] (std::stop_token) mutable {
-          if (work) {
-              work ();
-          }
-      });
+    return try_submit_cancellable ([work = std::move (work)] (std::stop_token) mutable {
+        if (work) {
+            work ();
+        }
+    });
 }
 
 bool offload_executor_t::try_submit_internal (std::function<void ()> work)
@@ -70,13 +68,12 @@ bool offload_executor_t::try_submit_internal (std::function<void ()> work)
         if (_stopping && _active == 0 && _queue.empty ()) {
             return false;
         }
-        _queue.push (work_item_t{
-          [work = std::move (work)] (std::stop_token) mutable {
-              if (work) {
-                  work ();
-              }
-          },
-          std::nullopt});
+        _queue.push (work_item_t{[work = std::move (work)] (std::stop_token) mutable {
+                                     if (work) {
+                                         work ();
+                                     }
+                                 },
+                                 std::nullopt});
         if (_idle_workers == 0 && _live_workers < _max_worker_count) {
             start_worker_locked ();
         }
@@ -85,8 +82,7 @@ bool offload_executor_t::try_submit_internal (std::function<void ()> work)
     return true;
 }
 
-bool offload_executor_t::try_submit_cancellable (
-  std::function<void (std::stop_token)> work)
+bool offload_executor_t::try_submit_cancellable (std::function<void (std::stop_token)> work)
 {
     {
         std::lock_guard lock (_mutex);
@@ -124,15 +120,14 @@ void offload_executor_t::drain ()
     (void) drain_until (std::chrono::steady_clock::time_point::max ());
 }
 
-bool offload_executor_t::drain_until (
-  std::chrono::steady_clock::time_point deadline)
+bool offload_executor_t::drain_until (std::chrono::steady_clock::time_point deadline)
 {
     const char *trace_value = std::getenv ("ZLINK_CPP_HOST_STOP_TRACE");
     const bool trace_enabled = trace_value != nullptr && std::string_view (trace_value) != "0"
                                && std::string_view (trace_value) != "";
     if (trace_enabled) {
-        std::cerr << "zlink-cpp-host-stop stage=offload-drain-begin name="
-                  << _thread_name << " workers=" << _workers.size () << std::endl;
+        std::cerr << "zlink-cpp-host-stop stage=offload-drain-begin name=" << _thread_name
+                  << " workers=" << _workers.size () << std::endl;
     }
     {
         std::unique_lock lock (_mutex);
@@ -142,11 +137,11 @@ bool offload_executor_t::drain_until (
     _ready.notify_all ();
     {
         std::unique_lock lock (_mutex);
-        if (!_empty.wait_until (
-              lock, deadline, [this] { return _queue.empty () && _active == 0; })) {
+        if (!_empty.wait_until (lock, deadline,
+                                [this] { return _queue.empty () && _active == 0; })) {
             if (trace_enabled) {
-                std::cerr << "zlink-cpp-host-stop stage=offload-drain-timeout name="
-                          << _thread_name << std::endl;
+                std::cerr << "zlink-cpp-host-stop stage=offload-drain-timeout name=" << _thread_name
+                          << std::endl;
             }
             return false;
         }
@@ -157,8 +152,8 @@ bool offload_executor_t::drain_until (
         }
     }
     if (trace_enabled) {
-        std::cerr << "zlink-cpp-host-stop stage=offload-drain-end name="
-                  << _thread_name << std::endl;
+        std::cerr << "zlink-cpp-host-stop stage=offload-drain-end name=" << _thread_name
+                  << std::endl;
     }
     return true;
 }
@@ -187,15 +182,13 @@ void offload_executor_t::worker_loop ()
     const bool trace_enabled = trace_value != nullptr && std::string_view (trace_value) != "0"
                                && std::string_view (trace_value) != "";
     if (trace_enabled) {
-        std::cerr << "zlink-cpp-host-stop stage=offload-worker-start name="
-                  << _thread_name << " executor=" << this
-                  << std::endl;
+        std::cerr << "zlink-cpp-host-stop stage=offload-worker-start name=" << _thread_name
+                  << " executor=" << this << std::endl;
     }
     auto trace_exit = [this, trace_enabled] {
         if (trace_enabled) {
-            std::cerr << "zlink-cpp-host-stop stage=offload-worker-exit name="
-                      << _thread_name << " executor=" << this
-                      << std::endl;
+            std::cerr << "zlink-cpp-host-stop stage=offload-worker-exit name=" << _thread_name
+                      << " executor=" << this << std::endl;
         }
     };
     while (true) {
@@ -237,8 +230,7 @@ void offload_executor_t::worker_loop ()
 
         try {
             if (work.work) {
-                work.work (work.cancellation ? work.cancellation->get_token ()
-                                             : std::stop_token{});
+                work.work (work.cancellation ? work.cancellation->get_token () : std::stop_token{});
             }
         }
         catch (...) {
@@ -251,8 +243,7 @@ void offload_executor_t::worker_loop ()
             std::lock_guard lock (_mutex);
             if (work.cancellation) {
                 const auto active = std::find (_active_cancellations.begin (),
-                                               _active_cancellations.end (),
-                                               &*work.cancellation);
+                                               _active_cancellations.end (), &*work.cancellation);
                 if (active != _active_cancellations.end ()) {
                     _active_cancellations.erase (active);
                 }

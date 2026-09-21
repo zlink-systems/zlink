@@ -1,8 +1,5 @@
 package systems.zlink.framework.runtime.binding;
 
-import java.time.Duration;
-import java.util.List;
-import java.util.concurrent.CompletionStage;
 import systems.zlink.contracts.messaging.Message;
 import systems.zlink.contracts.messaging.Received;
 import systems.zlink.contracts.sockets.DealerSocket;
@@ -12,8 +9,11 @@ import systems.zlink.framework.runtime.internal.backend.ZLinkBackendDealerSocket
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendReceived;
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendRecvMode;
 
-final class ZLinkJavaDealerSocket
-    implements ZLinkBackendDealerSocket, ZLinkJavaSocketBacked {
+import java.time.Duration;
+import java.util.List;
+import java.util.concurrent.CompletionStage;
+
+final class ZLinkJavaDealerSocket implements ZLinkBackendDealerSocket, ZLinkJavaSocketBacked {
     private final DealerSocket socket;
     private final ZLinkJavaSocketReceivePoller receivePoller;
 
@@ -22,22 +22,45 @@ final class ZLinkJavaDealerSocket
         this.receivePoller = new ZLinkJavaSocketReceivePoller(socket);
     }
 
-    @Override public Socket nativeSocket() { return socket; }
-    @Override public String name() { return "dealer"; }
-    @Override public synchronized void bind(String endpoint) {
+    @Override
+    public Socket nativeSocket() {
+        return socket;
+    }
+
+    @Override
+    public String name() {
+        return "dealer";
+    }
+
+    @Override
+    public synchronized void bind(String endpoint) {
         socket.bind(endpoint);
         receivePoller.ensureRegistered();
     }
-    @Override public synchronized void connect(String endpoint) {
+
+    @Override
+    public synchronized void connect(String endpoint) {
         socket.connect(endpoint);
         receivePoller.ensureRegistered();
     }
-    @Override public synchronized void disconnect(String endpoint) { socket.disconnect(endpoint); }
-    @Override public void setChannelName(String channelName) { ZLinkJavaSocketSupport.validateChannelName(channelName); }
-    @Override public void setReceiveFlowState(ReceiveFlowState state) {
+
+    @Override
+    public synchronized void disconnect(String endpoint) {
+        socket.disconnect(endpoint);
+    }
+
+    @Override
+    public void setChannelName(String channelName) {
+        ZLinkJavaSocketSupport.validateChannelName(channelName);
+    }
+
+    @Override
+    public void setReceiveFlowState(ReceiveFlowState state) {
         socket.options().receiveFlowState(state);
     }
-    @Override public boolean waitForReadable(Duration timeout) {
+
+    @Override
+    public boolean waitForReadable(Duration timeout) {
         return receivePoller.waitForReadable(timeout);
     }
 
@@ -48,10 +71,8 @@ final class ZLinkJavaDealerSocket
 
     @Override
     public synchronized CompletionStage<ZLinkBackendReceived> request(
-        List<Message> parts,
-        Duration timeout) {
-        return ZLinkJavaSocketSupport.submitRequest(
-            socket.request(), parts, timeout);
+            List<Message> parts, Duration timeout) {
+        return ZLinkJavaSocketSupport.submitRequest(socket.request(), parts, timeout);
     }
 
     @Override

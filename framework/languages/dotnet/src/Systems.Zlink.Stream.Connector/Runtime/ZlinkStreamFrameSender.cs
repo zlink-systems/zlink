@@ -7,7 +7,8 @@ internal sealed class ZlinkStreamFrameSender(
     ZlinkStreamHeaderCodec headerCodec,
     IZlinkStreamCompressionCodec? compressionCodec,
     SemaphoreSlim sendGate,
-    Func<IZlinkStreamConnection?> connectionProvider)
+    Func<IZlinkStreamConnection?> connectionProvider
+)
 {
     public ZlinkStreamOutboundFrame BuildOutboundFrame(
         ZlinkStreamMessageKind kind,
@@ -15,7 +16,8 @@ internal sealed class ZlinkStreamFrameSender(
         ZlinkStreamEncodedPayload payload,
         ZlinkStreamMetadata metadata,
         bool compress,
-        ZlinkStreamRequestSeq? requestSeq)
+        ZlinkStreamRequestSeq? requestSeq
+    )
     {
         var payloadBytes = payload.Payload;
         var flags = requestSeq is null
@@ -37,14 +39,18 @@ internal sealed class ZlinkStreamFrameSender(
         var correlationLength = 0;
         if (kind == ZlinkStreamMessageKind.Request)
             // Every Int64, including counter wraparound, fits in 16 hex digits.
-            ZlinkStreamCorrelation.NextValue().TryFormat(correlationId, out correlationLength, "x");
+            ZlinkStreamCorrelation
+                .NextValue()
+                .TryFormat(correlationId, out correlationLength, "x");
 
         // Flow fields are trace-only: at Off nothing is created or attached and the
         // ambient flow context is not even read.
         string? flowId = null;
         ZlinkStreamFlowOrigin? flowOrigin = null;
-        if (kind != ZlinkStreamMessageKind.Control
-            && options.DiagnosticsLevel != ZlinkStreamDiagnosticsLevel.Off)
+        if (
+            kind != ZlinkStreamMessageKind.Control
+            && options.DiagnosticsLevel != ZlinkStreamDiagnosticsLevel.Off
+        )
         {
             var flow = ZlinkStreamFlowContext.Current;
             flowId = flow?.FlowId ?? ZlinkStreamFlowId.Create();
@@ -60,9 +66,12 @@ internal sealed class ZlinkStreamFrameSender(
             metadata,
             null,
             flowId,
-            flowOrigin);
+            flowOrigin
+        );
         return new ZlinkStreamOutboundFrame(
-            headerCodec.Encode(header, correlationId[..correlationLength]), payloadBytes);
+            headerCodec.Encode(header, correlationId[..correlationLength]),
+            payloadBytes
+        );
     }
 
     public async ValueTask SendControlAsync(string name, CancellationToken cancellationToken)
@@ -73,26 +82,35 @@ internal sealed class ZlinkStreamFrameSender(
             new ZlinkStreamEncodedPayload(ZlinkStreamCodec.Raw, ReadOnlyMemory<byte>.Empty),
             ZlinkStreamMetadata.Empty,
             false,
-            null);
+            null
+        );
         ValidateSendReady(frame.HeaderBytes, frame.PayloadBytes);
-        await SendPacketAsync(frame.HeaderBytes, frame.PayloadBytes, cancellationToken).ConfigureAwait(false);
+        await SendPacketAsync(frame.HeaderBytes, frame.PayloadBytes, cancellationToken)
+            .ConfigureAwait(false);
     }
 
     public void ValidateSendReady(ReadOnlyMemory<byte> header, ReadOnlyMemory<byte> payload)
     {
         ZlinkStreamFrameCodec.ValidateSendFrame(header.Length, payload.Length);
         if (connectionProvider() is null)
-            throw ZlinkStreamConnector.Error(ZlinkStreamErrorCode.Disconnected, "Connector is not connected.");
+            throw ZlinkStreamConnector.Error(
+                ZlinkStreamErrorCode.Disconnected,
+                "Connector is not connected."
+            );
     }
 
     public async ValueTask SendPacketAsync(
         ReadOnlyMemory<byte> header,
         ReadOnlyMemory<byte> payload,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken
+    )
     {
         var connection = connectionProvider();
         if (connection is null)
-            throw ZlinkStreamConnector.Error(ZlinkStreamErrorCode.Disconnected, "Connector is not connected.");
+            throw ZlinkStreamConnector.Error(
+                ZlinkStreamErrorCode.Disconnected,
+                "Connector is not connected."
+            );
 
         try
         {
@@ -107,36 +125,44 @@ internal sealed class ZlinkStreamFrameSender(
                         ZlinkStreamFrameCodec.WritePrefix(
                             prefix.AsSpan(0, 6),
                             header.Length,
-                            payload.Length);
-                        await connection.WriteAsync(
-                            prefix.AsMemory(0, 6),
-                            cancellationToken).ConfigureAwait(false);
+                            payload.Length
+                        );
+                        await connection
+                            .WriteAsync(prefix.AsMemory(0, 6), cancellationToken)
+                            .ConfigureAwait(false);
                     }
                     finally
                     {
                         ArrayPool<byte>.Shared.Return(prefix);
                     }
 
-                    if (header.Length > 0) await connection.WriteAsync(header, cancellationToken).ConfigureAwait(false);
+                    if (header.Length > 0)
+                        await connection
+                            .WriteAsync(header, cancellationToken)
+                            .ConfigureAwait(false);
 
                     if (payload.Length > 0)
-                        await connection.WriteAsync(payload, cancellationToken).ConfigureAwait(false);
+                        await connection
+                            .WriteAsync(payload, cancellationToken)
+                            .ConfigureAwait(false);
                 }
                 else
                 {
                     var frameSize = ZlinkStreamFrameCodec.GetFrameSize(
                         header.Length,
-                        payload.Length);
+                        payload.Length
+                    );
                     var frame = ArrayPool<byte>.Shared.Rent(frameSize);
                     try
                     {
                         ZlinkStreamFrameCodec.WriteFrame(
                             frame.AsSpan(0, frameSize),
                             header,
-                            payload);
-                        await connection.WriteAsync(
-                            frame.AsMemory(0, frameSize),
-                            cancellationToken).ConfigureAwait(false);
+                            payload
+                        );
+                        await connection
+                            .WriteAsync(frame.AsMemory(0, frameSize), cancellationToken)
+                            .ConfigureAwait(false);
                     }
                     finally
                     {
@@ -155,14 +181,19 @@ internal sealed class ZlinkStreamFrameSender(
         }
     }
 
-    public ReadOnlyMemory<byte> DecompressIfNeeded(ZlinkStreamHeader header, ReadOnlyMemory<byte> payload)
+    public ReadOnlyMemory<byte> DecompressIfNeeded(
+        ZlinkStreamHeader header,
+        ReadOnlyMemory<byte> payload
+    )
     {
-        if (!header.Flags.HasFlag(ZlinkStreamHeaderFlags.PayloadCompressed)) return payload;
+        if (!header.Flags.HasFlag(ZlinkStreamHeaderFlags.PayloadCompressed))
+            return payload;
 
         if (options.Compression == ZlinkStreamCompression.None || compressionCodec is null)
             throw ZlinkStreamConnector.Error(
                 ZlinkStreamErrorCode.DecompressionFailed,
-                "Compression codec is not configured.");
+                "Compression codec is not configured."
+            );
 
         try
         {
@@ -170,15 +201,21 @@ internal sealed class ZlinkStreamFrameSender(
         }
         catch (Exception ex)
         {
-            throw ZlinkStreamConnector.Error(ZlinkStreamErrorCode.DecompressionFailed, "Decompression failed.", ex);
+            throw ZlinkStreamConnector.Error(
+                ZlinkStreamErrorCode.DecompressionFailed,
+                "Decompression failed.",
+                ex
+            );
         }
     }
 
     private ReadOnlyMemory<byte> CompressPayload(ReadOnlyMemory<byte> payload)
     {
         if (options.Compression == ZlinkStreamCompression.None || compressionCodec is null)
-            throw ZlinkStreamConnector.Error(ZlinkStreamErrorCode.CompressionFailed,
-                "Compression codec is not configured.");
+            throw ZlinkStreamConnector.Error(
+                ZlinkStreamErrorCode.CompressionFailed,
+                "Compression codec is not configured."
+            );
 
         try
         {
@@ -186,7 +223,11 @@ internal sealed class ZlinkStreamFrameSender(
         }
         catch (Exception ex)
         {
-            throw ZlinkStreamConnector.Error(ZlinkStreamErrorCode.CompressionFailed, "Compression failed.", ex);
+            throw ZlinkStreamConnector.Error(
+                ZlinkStreamErrorCode.CompressionFailed,
+                "Compression failed.",
+                ex
+            );
         }
     }
 }

@@ -4,15 +4,11 @@ public interface IZLinkSession
 {
     IZLinkSessionContext Context { get; }
 
-    void Configure()
-    {
-    }
+    void Configure() { }
 
-    ValueTask OnConnectedAsync(
-        CancellationToken cancellationToken);
+    ValueTask OnConnectedAsync(CancellationToken cancellationToken);
 
-    ValueTask OnDisconnectedAsync(
-        CancellationToken cancellationToken);
+    ValueTask OnDisconnectedAsync(CancellationToken cancellationToken);
 
     /// <summary>
     ///     Notifies the retired session that an Actor binding was replaced by
@@ -20,18 +16,14 @@ public interface IZLinkSession
     ///     state before this callback runs; the session may send a final
     ///     application message, but does not need to close itself.
     /// </summary>
-    ValueTask OnActorBindingReplacedAsync(
-        string actorId,
-        CancellationToken cancellationToken)
+    ValueTask OnActorBindingReplacedAsync(string actorId, CancellationToken cancellationToken)
     {
         _ = actorId;
         _ = cancellationToken;
         return ValueTask.CompletedTask;
     }
 
-    ValueTask OnErrorAsync(
-        ZLinkStreamError error,
-        CancellationToken cancellationToken);
+    ValueTask OnErrorAsync(ZLinkStreamError error, CancellationToken cancellationToken);
 
     /// <summary>
     ///     Handles a framework-owned inbound stream payload.
@@ -44,7 +36,8 @@ public interface IZLinkSession
     ValueTask OnDispatchAsync(
         ZLinkSessionDispatchContext dispatch,
         ZLinkMessage payload,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken
+    )
     {
         _ = dispatch;
         _ = payload;
@@ -66,11 +59,13 @@ public interface IZLinkSessionActors
 
     ValueTask<IZLinkSessionActor> BindAsync(
         ActorRef actor,
-        CancellationToken cancellationToken = default);
+        CancellationToken cancellationToken = default
+    );
 
     ValueTask<IZLinkSessionActor> BindOrGetAsync(
         ActorRef actor,
-        CancellationToken cancellationToken = default);
+        CancellationToken cancellationToken = default
+    );
 
     IZLinkSessionActor? Find(string actorId);
 }
@@ -94,8 +89,7 @@ public interface IZLinkSessionContext
     ValueTask CloseAsync();
 }
 
-public interface IZLinkSessionSendCall
-    : IZLinkMetadataCall<IZLinkSessionSendCall>
+public interface IZLinkSessionSendCall : IZLinkMetadataCall<IZLinkSessionSendCall>
 {
     IZLinkSessionSendCall Compress();
 
@@ -115,8 +109,7 @@ public interface IZLinkSessionSendCall
     /// acceptance complete before this method returns. If the transport queue
     /// is full, the call waits up to the configured send timeout.
     /// </summary>
-    ValueTask Async(
-        CancellationToken cancellationToken = default);
+    ValueTask Async(CancellationToken cancellationToken = default);
 }
 
 public interface IZLinkSessionReplyCall
@@ -128,6 +121,5 @@ public interface IZLinkSessionReplyCall
     /// the request packet name and does not expose PacketName because a reply
     /// must keep the request correlation.
     /// </summary>
-    ValueTask Async(
-        CancellationToken cancellationToken = default);
+    ValueTask Async(CancellationToken cancellationToken = default);
 }

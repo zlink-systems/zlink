@@ -18,7 +18,8 @@ import { ZLinkSpotActorPacketDispatch } from './spot-actor-packet-dispatch';
 import type { ZLinkSpotSerialTurnExecutor } from './spot-serial-turn-executor';
 import type { ZLinkNativeActorJoinSnapshot } from './spot-runtime-ports';
 
-type AdmissionOptions = Pick<ZLinkSpotActivationLifecycleOptions,
+type AdmissionOptions = Pick<
+  ZLinkSpotActivationLifecycleOptions,
   | 'actorHandoffRuntime'
   | 'admission'
   | 'actorResolver'
@@ -57,7 +58,12 @@ export class ZLinkSpotActorAdmissionCoordinator {
       fallbackActorRef,
       undefined,
       messageFollowOrigin,
-      (replayedParts, replayReturnResponse, replayRemoteBoundSessionTarget, replayFallbackActorRef) =>
+      (
+        replayedParts,
+        replayReturnResponse,
+        replayRemoteBoundSessionTarget,
+        replayFallbackActorRef
+      ) =>
         this.dispatchActorPacketDirect(
           activation,
           actorId,
@@ -87,21 +93,29 @@ export class ZLinkSpotActorAdmissionCoordinator {
     const nativeDispatch = new ZLinkSpotActorJoinDispatch({
       nativeSpot,
       createReceived: requireBackendValueFactory(this.options.createReceived, 'Received'),
-      createTopicMessage: requireBackendValueFactory(this.options.createTopicMessage, 'TopicMessage'),
+      createTopicMessage: requireBackendValueFactory(
+        this.options.createTopicMessage,
+        'TopicMessage'
+      ),
       serial: activation.serial,
       actors: {
-        resolveActor: (actorId) => activation.hasDepartedActor(actorId)
-          ? undefined
-          : activation.resolveJoinedActor(actorId) ?? this.options.actorResolver?.(actorId),
+        resolveActor: (actorId) =>
+          activation.hasDepartedActor(actorId)
+            ? undefined
+            : (activation.resolveJoinedActor(actorId) ?? this.options.actorResolver?.(actorId)),
         getTarget: () => activation.spot,
         defaultAccept: false,
-        transfer: this.options.actorTransferRuntime === undefined ? { kind: 'disabled' } : {
-          kind: 'enabled',
-          runtime: this.options.actorTransferRuntime
-        },
+        transfer:
+          this.options.actorTransferRuntime === undefined
+            ? { kind: 'disabled' }
+            : {
+                kind: 'enabled',
+                runtime: this.options.actorTransferRuntime
+              },
         commitNativeActor: (actor) => this.commitNativeActorTransaction(activation, actor),
         commitActorDeparture: (actorId) => activation.commitActorDeparture(actorId),
-        commitTransferredActor: (actor, backlog) => this.commitTransferredActorTransaction(activation, actor, backlog)
+        commitTransferredActor: (actor, backlog) =>
+          this.commitTransferredActorTransaction(activation, actor, backlog)
       },
       packets: {
         handle: (delivery) =>
@@ -116,22 +130,31 @@ export class ZLinkSpotActorAdmissionCoordinator {
         bindRemoteSession: (actor, sourceNodeRid, sourceSessionRid) => {
           const node = this.options.nativeSpotNodeProvider?.(activation.meshName);
           if (node === undefined || routingIdsEqual(sourceNodeRid, node.routingId)) return;
-          const target = this.options.boundSessionRuntime?.resolveRemoteBoundSessionTarget(sourceNodeRid, sourceSessionRid);
+          const target = this.options.boundSessionRuntime?.resolveRemoteBoundSessionTarget(
+            sourceNodeRid,
+            sourceSessionRid
+          );
           if (target !== undefined) {
-            this.options.boundSessionRuntime?.rememberRemoteBoundSessionTarget(actor.actorId, target);
+            this.options.boundSessionRuntime?.rememberRemoteBoundSessionTarget(
+              actor.actorId,
+              target
+            );
           }
           node.bindRemoteActorSession(actor, sourceNodeRid, sourceSessionRid);
         },
         replyNoBind: (info, parts, result) =>
-          this.options.nativeSpotNodeProvider?.(activation.meshName)?.replyActorNoBind(info, parts, result)
+          this.options
+            .nativeSpotNodeProvider?.(activation.meshName)
+            ?.replyActorNoBind(info, parts, result)
       },
       boundSessionRuntime: this.options.boundSessionRuntime,
       messageSerializers: this.options.messageSerializers,
       providerResolver: this.options.providerResolver,
       dispatchErrors: this.options.dispatchErrors,
-      claimApplicationWork: this.options.admission === undefined
-        ? undefined
-        : () => this.options.admission!.claim(activation.meshName, 'Spot route dispatch'),
+      claimApplicationWork:
+        this.options.admission === undefined
+          ? undefined
+          : () => this.options.admission!.claim(activation.meshName, 'Spot route dispatch'),
       detachedTaskRunner: this.options.detachedTaskRunner
     });
     nativeDispatch.attach();
@@ -148,7 +171,7 @@ export class ZLinkSpotActorAdmissionCoordinator {
     fallbackActorRef?: ActorRef,
     requestTerminal?: (response: unknown) => Promise<void> | void
   ): Promise<unknown> {
-    return activation.executeActor(actorId, actorSerial =>
+    return activation.executeActor(actorId, (actorSerial) =>
       this.dispatchActorPacketInActorTurn(
         activation,
         actorSerial,
@@ -176,28 +199,29 @@ export class ZLinkSpotActorAdmissionCoordinator {
   ): ZLinkActorHandoffPrefixAdmission {
     const terminals = activation.admitActorDurablePrefix(
       actorId,
-      records.map(record => ({
-        operation: executeChild => record.drain((
-            parts,
-            returnResponse,
-            remoteBoundSessionTarget,
-            fallbackActorRef
-          ) => executeChild(actorSerial => this.dispatchActorPacketInActorTurn(
-            activation,
-            actorSerial,
-            actorId,
-            parts,
-            returnResponse,
-            remoteBoundSessionTarget,
-            fallbackActorRef
-          ))),
+      records.map((record) => ({
+        operation: (executeChild) =>
+          record.drain((parts, returnResponse, remoteBoundSessionTarget, fallbackActorRef) =>
+            executeChild((actorSerial) =>
+              this.dispatchActorPacketInActorTurn(
+                activation,
+                actorSerial,
+                actorId,
+                parts,
+                returnResponse,
+                remoteBoundSessionTarget,
+                fallbackActorRef
+              )
+            )
+          ),
         preparation: record.preparation,
         workOptions: { payloadBytes: record.payloadBytes }
       }))
     );
-    const terminal = Promise.allSettled(terminals).then(outcomes => {
-      const errors = outcomes.flatMap(outcome =>
-        outcome.status === 'rejected' ? [outcome.reason] : []);
+    const terminal = Promise.allSettled(terminals).then((outcomes) => {
+      const errors = outcomes.flatMap((outcome) =>
+        outcome.status === 'rejected' ? [outcome.reason] : []
+      );
       if (errors.length === 1) throw errors[0];
       if (errors.length > 1) {
         throw new AggregateError(errors, `Actor '${actorId}' durable prefix replay failed.`);
@@ -217,32 +241,38 @@ export class ZLinkSpotActorAdmissionCoordinator {
     requestTerminal?: (response: unknown) => Promise<void> | void
   ): Promise<unknown> {
     return new ZLinkSpotActorPacketDispatch({
-        spot: activation.spot,
-        spotId: () => String(activation.spotId),
-        registry: activation.actorHandlers,
-        serial: actorSerial,
-        resolveActor: (targetActorId) => activation.hasDepartedActor(targetActorId)
+      spot: activation.spot,
+      spotId: () => String(activation.spotId),
+      registry: activation.actorHandlers,
+      serial: actorSerial,
+      resolveActor: (targetActorId) =>
+        activation.hasDepartedActor(targetActorId)
           ? undefined
-          : activation.resolveJoinedActor(targetActorId) ?? this.options.actorResolver?.(targetActorId),
-        actorLeft: (targetActorId) => activation.hasDepartedActor(targetActorId),
-        onRemoteBoundSessionTarget: (targetActorId, target) =>
-          this.options.boundSessionRuntime?.rememberRemoteBoundSessionTarget(targetActorId, target),
-        onDisconnectActor: (actor) =>
-          activation.serial.execute(() => activation.spot.onDisconnectActor?.(actor)),
-        actorResponseSender: this.options.boundSessionRuntime?.sendActorResponse.bind(this.options.boundSessionRuntime),
-        actorErrorSender: this.options.boundSessionRuntime?.sendActorError.bind(this.options.boundSessionRuntime),
-        providerResolver: this.options.providerResolver,
-        messageSerializers: this.options.messageSerializers,
-        dispatchErrors: this.options.dispatchErrors,
-        routeToActorJoinPrewarm: this.options.routeToActorJoinPrewarm
-      }).dispatch(
-        actorId,
-        parts,
-        returnResponse,
-        remoteBoundSessionTarget,
-        fallbackActorRef,
-        requestTerminal
-      );
+          : (activation.resolveJoinedActor(targetActorId) ??
+            this.options.actorResolver?.(targetActorId)),
+      actorLeft: (targetActorId) => activation.hasDepartedActor(targetActorId),
+      onRemoteBoundSessionTarget: (targetActorId, target) =>
+        this.options.boundSessionRuntime?.rememberRemoteBoundSessionTarget(targetActorId, target),
+      onDisconnectActor: (actor) =>
+        activation.serial.execute(() => activation.spot.onDisconnectActor?.(actor)),
+      actorResponseSender: this.options.boundSessionRuntime?.sendActorResponse.bind(
+        this.options.boundSessionRuntime
+      ),
+      actorErrorSender: this.options.boundSessionRuntime?.sendActorError.bind(
+        this.options.boundSessionRuntime
+      ),
+      providerResolver: this.options.providerResolver,
+      messageSerializers: this.options.messageSerializers,
+      dispatchErrors: this.options.dispatchErrors,
+      routeToActorJoinPrewarm: this.options.routeToActorJoinPrewarm
+    }).dispatch(
+      actorId,
+      parts,
+      returnResponse,
+      remoteBoundSessionTarget,
+      fallbackActorRef,
+      requestTerminal
+    );
   }
 
   private async commitNativeActorTransaction(
@@ -273,7 +303,10 @@ export class ZLinkSpotActorAdmissionCoordinator {
       try {
         if (snapshot !== undefined) await transfer?.rollbackNativeActorJoin(actor, snapshot);
       } catch (rollbackError) {
-        throw new AggregateError([error, rollbackError], 'Native actor admission and rollback both failed.');
+        throw new AggregateError(
+          [error, rollbackError],
+          'Native actor admission and rollback both failed.'
+        );
       }
       throw error;
     }
@@ -291,14 +324,9 @@ export class ZLinkSpotActorAdmissionCoordinator {
       activation.commitActorJoin(actor);
       activation.beginActorTransfer(actor.context.actorId);
       await activation.serial.execute(() => activation.spot.onJoinedActor(actor));
-      const results = backlog.length === 0
-        ? []
-        : await this.replayActorBacklog(activation, actor, backlog);
-      await transfer?.claimRoutedActorLocation(
-        actor,
-        activation.spotId,
-        activation.meshName
-      );
+      const results =
+        backlog.length === 0 ? [] : await this.replayActorBacklog(activation, actor, backlog);
+      await transfer?.claimRoutedActorLocation(actor, activation.spotId, activation.meshName);
       routeSwitchStarted = true;
       await transfer?.publishRoutedActorOwnership(actor);
       await transfer?.openRoutedActorSession(actor);
@@ -311,7 +339,10 @@ export class ZLinkSpotActorAdmissionCoordinator {
       try {
         await transfer?.rollbackRoutedActor(actor);
       } catch (rollbackError) {
-        throw new AggregateError([error, rollbackError], 'Actor admission and rollback both failed.');
+        throw new AggregateError(
+          [error, rollbackError],
+          'Actor admission and rollback both failed.'
+        );
       }
       throw error;
     }
@@ -333,13 +364,14 @@ export class ZLinkSpotActorAdmissionCoordinator {
           remoteBoundSessionTarget,
           fallbackActorRef
         ),
-      (index) => this.options.runtimeEventPublisher?.publish({
-        sourceName: 'zlink.framework.actor-handoff',
-        timestamp: new Date(),
-        marker: 'backlog_enqueued',
-        actorId: actor.context.actorId,
-        index
-      })
+      (index) =>
+        this.options.runtimeEventPublisher?.publish({
+          sourceName: 'zlink.framework.actor-handoff',
+          timestamp: new Date(),
+          marker: 'backlog_enqueued',
+          actorId: actor.context.actorId,
+          index
+        })
     );
   }
 }

@@ -1,12 +1,12 @@
 package systems.zlink.stream.connector;
-import java.util.concurrent.CompletionException;
-import java.util.concurrent.TimeoutException;
 
 import java.time.Duration;
 import java.util.Objects;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CompletionException;
 import java.util.concurrent.CompletionStage;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.TimeoutException;
 
 final class DefaultZLinkStreamExpectNoneCall implements ZLinkStreamExpectNoneCall {
     private final ZLinkStreamConnector connector;
@@ -18,9 +18,7 @@ final class DefaultZLinkStreamExpectNoneCall implements ZLinkStreamExpectNoneCal
     }
 
     private DefaultZLinkStreamExpectNoneCall(
-        ZLinkStreamConnector connector,
-        String name,
-        Duration window) {
+            ZLinkStreamConnector connector, String name, Duration window) {
         this.connector = Objects.requireNonNull(connector, "connector");
         this.name = Objects.requireNonNull(name, "name");
         this.window = window;
@@ -44,45 +42,59 @@ final class DefaultZLinkStreamExpectNoneCall implements ZLinkStreamExpectNoneCal
         }
         if (connector instanceof DefaultZLinkStreamConnector concrete) {
             CompletableFuture<Void> result = new CompletableFuture<>();
-            CompletableFuture<ZLinkStreamMessage<ZLinkStreamEncodedPayload>> waiter = concrete
-                .awaitMessage(name, ignored -> true)
-                .toCompletableFuture()
-                .orTimeout(window.toMillis(), TimeUnit.MILLISECONDS);
-            result.whenComplete((ignored, error) -> {
-                if (result.isCancelled()) {
-                    waiter.cancel(false);
-                }
-            });
-            waiter
-                .whenComplete((message, error) -> {
-                    if (message != null) {
-                        message.payload().payload().close();
-                        //  Spec 32 10.1: every failure of an observation
-                        //  surface is ValidationFailed.
-                        result.completeExceptionally(ZLinkStreamException.validationFailed(
-                            "Expected no '" + name + "' message within " + window + "."));
-                    } else if (error instanceof TimeoutException
-                        || (error instanceof CompletionException
-                            && error.getCause() instanceof TimeoutException)) {
-                        result.complete(null);
-                    } else if (error != null) {
-                        result.completeExceptionally(error);
-                    } else {
-                        result.complete(null);
-                    }
-                });
+            CompletableFuture<ZLinkStreamMessage<ZLinkStreamEncodedPayload>> waiter =
+                    concrete.awaitMessage(name, ignored -> true)
+                            .toCompletableFuture()
+                            .orTimeout(window.toMillis(), TimeUnit.MILLISECONDS);
+            result.whenComplete(
+                    (ignored, error) -> {
+                        if (result.isCancelled()) {
+                            waiter.cancel(false);
+                        }
+                    });
+            waiter.whenComplete(
+                    (message, error) -> {
+                        if (message != null) {
+                            message.payload().payload().close();
+                            //  Spec 32 10.1: every failure of an observation
+                            //  surface is ValidationFailed.
+                            result.completeExceptionally(
+                                    ZLinkStreamException.validationFailed(
+                                            "Expected no '"
+                                                    + name
+                                                    + "' message within "
+                                                    + window
+                                                    + "."));
+                        } else if (error instanceof TimeoutException
+                                || (error instanceof CompletionException
+                                        && error.getCause() instanceof TimeoutException)) {
+                            result.complete(null);
+                        } else if (error != null) {
+                            result.completeExceptionally(error);
+                        } else {
+                            result.complete(null);
+                        }
+                    });
             return result;
         }
         CompletableFuture<Void> result = new CompletableFuture<>();
-        AutoCloseable subscription = connector.on(name, message -> {
-            message.payload().payload().close();
-            result.completeExceptionally(ZLinkStreamException.validationFailed(
-                "Expected no '" + name + "' message within " + window + "."));
-            return CompletableFuture.completedFuture(null);
-        });
+        AutoCloseable subscription =
+                connector.on(
+                        name,
+                        message -> {
+                            message.payload().payload().close();
+                            result.completeExceptionally(
+                                    ZLinkStreamException.validationFailed(
+                                            "Expected no '"
+                                                    + name
+                                                    + "' message within "
+                                                    + window
+                                                    + "."));
+                            return CompletableFuture.completedFuture(null);
+                        });
         result.whenComplete((ignored, error) -> closeQuietly(subscription));
         CompletableFuture.delayedExecutor(window.toMillis(), TimeUnit.MILLISECONDS)
-            .execute(() -> result.complete(null));
+                .execute(() -> result.complete(null));
         return result;
     }
 

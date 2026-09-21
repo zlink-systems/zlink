@@ -2,15 +2,17 @@ package systems.zlink.framework.locations.redis;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 
-import java.time.Duration;
 import org.junit.jupiter.api.Test;
+
+import java.time.Duration;
 
 final class ZLinkRedisLocationOptionsTest {
     @Test
     void acceptsDotnetStyleHostPortConnectionString() {
-        ZLinkRedisLocationOptions options = new ZLinkRedisLocationOptions()
-            .setConnectionString("127.0.0.1:16379")
-            .setKeyPrefix("zlink:test");
+        ZLinkRedisLocationOptions options =
+                new ZLinkRedisLocationOptions()
+                        .setConnectionString("127.0.0.1:16379")
+                        .setKeyPrefix("zlink:test");
 
         assertEquals("127.0.0.1", options.redisUri().getHost());
         assertEquals(16379, options.redisUri().getPort());
@@ -18,9 +20,10 @@ final class ZLinkRedisLocationOptionsTest {
 
     @Test
     void preservesExplicitRedisUriConnectionString() {
-        ZLinkRedisLocationOptions options = new ZLinkRedisLocationOptions()
-            .setConnectionString("redis://127.0.0.1:16379/0")
-            .setKeyPrefix("zlink:test");
+        ZLinkRedisLocationOptions options =
+                new ZLinkRedisLocationOptions()
+                        .setConnectionString("redis://127.0.0.1:16379/0")
+                        .setKeyPrefix("zlink:test");
 
         assertEquals("127.0.0.1", options.redisUri().getHost());
         assertEquals(16379, options.redisUri().getPort());
@@ -29,10 +32,11 @@ final class ZLinkRedisLocationOptionsTest {
 
     @Test
     void appliesCommandTimeoutToRedisUri() {
-        ZLinkRedisLocationOptions options = new ZLinkRedisLocationOptions()
-            .setConnectionString("127.0.0.1:16379")
-            .setKeyPrefix("zlink:test")
-            .setCommandTimeout(Duration.ofMillis(500));
+        ZLinkRedisLocationOptions options =
+                new ZLinkRedisLocationOptions()
+                        .setConnectionString("127.0.0.1:16379")
+                        .setKeyPrefix("zlink:test")
+                        .setCommandTimeout(Duration.ofMillis(500));
 
         assertEquals(Duration.ofMillis(500), options.redisUri().getTimeout());
     }

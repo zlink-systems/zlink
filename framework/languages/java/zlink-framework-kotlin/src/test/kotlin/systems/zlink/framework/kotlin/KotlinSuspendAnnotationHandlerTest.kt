@@ -1,27 +1,20 @@
 package systems.zlink.framework.kotlin
 
-
-import org.junit.jupiter.api.Assertions
 import java.lang.reflect.Method
-import java.util.Optional
-import java.util.function.Supplier
-import systems.zlink.framework.actors.ZLinkActorJoinCall
-import systems.zlink.framework.channels.ZLinkRequestHandler
-import systems.zlink.framework.handlers.ZLinkSpotTimer
-import systems.zlink.framework.runtime.internal.configuration.ZLinkLegacyTopology
-import systems.zlink.framework.spots.ZLinkTimerTick
 import java.time.Duration
+import java.util.Optional
 import java.util.concurrent.CancellationException
 import java.util.concurrent.CompletableFuture
 import java.util.concurrent.ExecutionException
 import java.util.concurrent.Executors
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicReference
+import java.util.function.Supplier
 import kotlin.coroutines.coroutineContext
 import kotlinx.coroutines.CoroutineDispatcher
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.asCoroutineDispatcher
 import kotlinx.coroutines.delay
-import kotlinx.coroutines.Job
 import kotlinx.coroutines.withContext
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertSame
@@ -31,13 +24,15 @@ import org.junit.jupiter.api.assertThrows
 import org.springframework.context.annotation.AnnotationConfigApplicationContext
 import org.springframework.context.annotation.Bean
 import org.springframework.context.annotation.Configuration
-import systems.zlink.contracts.core.RoutingId
-import systems.zlink.framework.channels.ZLinkPublishMessageContext
 import systems.zlink.framework.ZLinkMessageContext
 import systems.zlink.framework.actors.ZLinkActor
 import systems.zlink.framework.actors.ZLinkActorContext
 import systems.zlink.framework.actors.ZLinkActorFactory
+import systems.zlink.framework.actors.ZLinkActorJoinCall
+import systems.zlink.framework.channels.ZLinkPublishMessageContext
+import systems.zlink.framework.channels.ZLinkRequestHandler
 import systems.zlink.framework.errors.ZLinkConfigurationException
+import systems.zlink.framework.execution.ZLinkSerialExecutionQueue
 import systems.zlink.framework.handlers.ZLinkHandlerGroup
 import systems.zlink.framework.handlers.ZLinkPacket
 import systems.zlink.framework.handlers.ZLinkPublish
@@ -45,21 +40,23 @@ import systems.zlink.framework.handlers.ZLinkRequest
 import systems.zlink.framework.handlers.ZLinkSend
 import systems.zlink.framework.handlers.ZLinkSpotActorRequest
 import systems.zlink.framework.handlers.ZLinkSpotActorSend
+import systems.zlink.framework.handlers.ZLinkSpotTimer
 import systems.zlink.framework.runtime.configuration.DefaultZLinkFrameworkOptions
 import systems.zlink.framework.runtime.handlers.ZLinkHandlerMethodInvoker
 import systems.zlink.framework.runtime.handlers.ZLinkHandlerScanner
-import systems.zlink.framework.runtime.internal.backend.ZLinkBackendAdapterProvider
-import systems.zlink.framework.runtime.internal.handlers.ZLinkHandlerActivator
-import systems.zlink.framework.runtime.internal.handlers.ZLinkSuspendInvocationAdapter
 import systems.zlink.framework.runtime.handlers.ZLinkScannedHandlerKind
 import systems.zlink.framework.runtime.handlers.ZLinkScannedHandlerSurface
+import systems.zlink.framework.runtime.internal.backend.ZLinkBackendAdapterProvider
+import systems.zlink.framework.runtime.internal.configuration.ZLinkLegacyTopology
+import systems.zlink.framework.runtime.internal.handlers.ZLinkHandlerActivator
+import systems.zlink.framework.runtime.internal.handlers.ZLinkSuspendInvocationAdapter
+import systems.zlink.framework.spots.ZLinkSpot
+import systems.zlink.framework.spots.ZLinkSpotContext
+import systems.zlink.framework.spots.ZLinkTimerTick
 import systems.zlink.framework.spring.EnableZLinkFramework
 import systems.zlink.framework.spring.ZLinkFrameworkAutoConfiguration
 import systems.zlink.framework.spring.ZLinkFrameworkConfigurer
-import systems.zlink.framework.execution.ZLinkSerialExecutionQueue
 import systems.zlink.framework.spring.internal.runtime.ZLinkFrameworkLifecycle
-import systems.zlink.framework.spots.ZLinkSpot
-import systems.zlink.framework.spots.ZLinkSpotContext
 import systems.zlink.framework.testkit.FakeZLinkBackendAdapterFactory
 
 final class KotlinSuspendAnnotationHandlerTest {
@@ -67,11 +64,9 @@ final class KotlinSuspendAnnotationHandlerTest {
     fun clientServerRoleBuildersAllowSameAndDifferentChannelNames() {
         val options = DefaultZLinkFrameworkOptions()
 
-        options.addClientServerChannel("orders").client()
-            .connect("inproc://orders")
+        options.addClientServerChannel("orders").client().connect("inproc://orders")
         options.addClientServerChannel("orders").server().listen()
-        options.addClientServerChannel("billing").client()
-            .connect("inproc://billing")
+        options.addClientServerChannel("billing").client().connect("inproc://billing")
         options.addClientServerChannel("inventory").server().listen()
 
         assertTrue(true)
@@ -81,21 +76,30 @@ final class KotlinSuspendAnnotationHandlerTest {
     fun scannerTreatsKotlinSuspendChannelAnnotationsLikeJavaMethodHandlers() {
         val catalog = ZLinkHandlerScanner.scan(setOf(KotlinSuspendHandlerMarker::class.java))
 
-        val request = catalog.matching(
-            setOf("kotlin-channel"),
-            ZLinkScannedHandlerSurface.CHANNEL,
-            ZLinkScannedHandlerKind.REQUEST,
-        ).single()
-        val send = catalog.matching(
-            setOf("kotlin-channel"),
-            ZLinkScannedHandlerSurface.CHANNEL,
-            ZLinkScannedHandlerKind.SEND,
-        ).single()
-        val publish = catalog.matching(
-            setOf("kotlin-fanout"),
-            ZLinkScannedHandlerSurface.CHANNEL,
-            ZLinkScannedHandlerKind.PUBLISH,
-        ).single()
+        val request =
+            catalog
+                .matching(
+                    setOf("kotlin-channel"),
+                    ZLinkScannedHandlerSurface.CHANNEL,
+                    ZLinkScannedHandlerKind.REQUEST,
+                )
+                .single()
+        val send =
+            catalog
+                .matching(
+                    setOf("kotlin-channel"),
+                    ZLinkScannedHandlerSurface.CHANNEL,
+                    ZLinkScannedHandlerKind.SEND,
+                )
+                .single()
+        val publish =
+            catalog
+                .matching(
+                    setOf("kotlin-fanout"),
+                    ZLinkScannedHandlerSurface.CHANNEL,
+                    ZLinkScannedHandlerKind.PUBLISH,
+                )
+                .single()
 
         assertEquals(ProfileRequest::class.java, request.messageType())
         assertEquals(ProfileReply::class.java, request.replyType())
@@ -108,31 +112,39 @@ final class KotlinSuspendAnnotationHandlerTest {
     fun scannerTreatsKotlinSuspendingInterfacesLikeFirstClassHandlers() {
         val catalog = ZLinkHandlerScanner.scan(setOf(KotlinSuspendHandlerMarker::class.java))
 
-        val request = catalog.matching(
-            setOf("kotlin-interface-channel"),
-            ZLinkScannedHandlerSurface.CHANNEL,
-            ZLinkScannedHandlerKind.REQUEST,
-        ).single()
-        val timer = catalog.matching(
-            setOf("kotlin-interface-spot"),
-            ZLinkScannedHandlerSurface.SPOT,
-            ZLinkScannedHandlerKind.TIMER,
-        ).single()
+        val request =
+            catalog
+                .matching(
+                    setOf("kotlin-interface-channel"),
+                    ZLinkScannedHandlerSurface.CHANNEL,
+                    ZLinkScannedHandlerKind.REQUEST,
+                )
+                .single()
+        val timer =
+            catalog
+                .matching(
+                    setOf("kotlin-interface-spot"),
+                    ZLinkScannedHandlerSurface.SPOT,
+                    ZLinkScannedHandlerKind.TIMER,
+                )
+                .single()
 
         assertEquals(ProfileRequest::class.java, request.messageType())
         assertEquals(ProfileReply::class.java, request.replyType())
         assertEquals(InterfaceSpot::class.java, timer.spotType())
         assertEquals("interface-timer", timer.timerName())
-        val requestMethod = ZLinkHandlerMethodInvoker.requireHandlerMethod(
-            request.handlerType(),
-            "handle",
-            arrayOf(ProfileRequest("Ada"), requestContext("profile")),
-        )
-        val timerMethod = ZLinkHandlerMethodInvoker.requireHandlerMethod(
-            timer.handlerType(),
-            "handle",
-            arrayOfNulls<Any>(2),
-        )
+        val requestMethod =
+            ZLinkHandlerMethodInvoker.requireHandlerMethod(
+                request.handlerType(),
+                "handle",
+                arrayOf(ProfileRequest("Ada"), requestContext("profile")),
+            )
+        val timerMethod =
+            ZLinkHandlerMethodInvoker.requireHandlerMethod(
+                timer.handlerType(),
+                "handle",
+                arrayOfNulls<Any>(2),
+            )
         assertTrue(ZLinkHandlerMethodInvoker.isKotlinSuspendMethod(requestMethod))
         assertTrue(ZLinkHandlerMethodInvoker.isKotlinSuspendMethod(timerMethod))
     }
@@ -141,11 +153,12 @@ final class KotlinSuspendAnnotationHandlerTest {
     fun scannerKeepsMultipleKotlinSuspendingEntrySpotActorRequestHandlers() {
         val catalog = ZLinkHandlerScanner.scan(setOf(KotlinSuspendHandlerMarker::class.java))
 
-        val requests = catalog.matching(
-            setOf("kotlin-interface-spot"),
-            ZLinkScannedHandlerSurface.SPOT,
-            ZLinkScannedHandlerKind.ACTOR_REQUEST,
-        )
+        val requests =
+            catalog.matching(
+                setOf("kotlin-interface-spot"),
+                ZLinkScannedHandlerSurface.SPOT,
+                ZLinkScannedHandlerKind.ACTOR_REQUEST,
+            )
         val packetNames = requests.map { it.packetName() }.toSet()
 
         assertTrue(packetNames.contains("InterfacePlayerCommand"))
@@ -158,15 +171,15 @@ final class KotlinSuspendAnnotationHandlerTest {
     fun kotlinSuspendingInterfaceHandlerRunsThroughMethodInvoker() {
         val handler = KotlinSuspendingInterfaceRequestHandler()
 
-        val reply = ZLinkHandlerMethodInvoker
-            .invokeHandler(
-                handler,
-                "handle",
-                arrayOf(ProfileRequest("Ada"), requestContext("profile")),
-                listOf(ZLinkCoroutineSuspendHandlerInvoker()),
-            )
-            .toCompletableFuture()
-            .get(1, TimeUnit.SECONDS)
+        val reply =
+            ZLinkHandlerMethodInvoker.invokeHandler(
+                    handler,
+                    "handle",
+                    arrayOf(ProfileRequest("Ada"), requestContext("profile")),
+                    listOf(ZLinkCoroutineSuspendHandlerInvoker()),
+                )
+                .toCompletableFuture()
+                .get(1, TimeUnit.SECONDS)
 
         assertEquals(ProfileReply("profile:Ada"), reply)
     }
@@ -174,32 +187,33 @@ final class KotlinSuspendAnnotationHandlerTest {
     @Test
     fun kotlinSuspendInvocationFailsClearlyWhenNoProviderSupportsTheMethod() {
         val handler = KotlinSuspendingInterfaceRequestHandler()
-        val method = ZLinkHandlerMethodInvoker.requireHandlerMethod(
-            handler.javaClass,
-            "handle",
-            arrayOf(ProfileRequest("Ada"), requestContext("profile")),
-        )
-        val unsupportedInvoker = object : ZLinkSuspendInvocationAdapter {
-            override fun supports(method: Method): Boolean = false
+        val method =
+            ZLinkHandlerMethodInvoker.requireHandlerMethod(
+                handler.javaClass,
+                "handle",
+                arrayOf(ProfileRequest("Ada"), requestContext("profile")),
+            )
+        val unsupportedInvoker =
+            object : ZLinkSuspendInvocationAdapter {
+                override fun supports(method: Method): Boolean = false
 
-            override fun invoke(
-                handler: Any,
-                method: Method,
-                logicalArguments: Array<Any>,
-            ) = CompletableFuture.failedFuture<Any>(AssertionError("unsupported invoker must not run"))
-        }
+                override fun invoke(handler: Any, method: Method, logicalArguments: Array<Any>) =
+                    CompletableFuture.failedFuture<Any>(
+                        AssertionError("unsupported invoker must not run")
+                    )
+            }
 
-        val failure = assertThrows<ExecutionException> {
-            ZLinkHandlerMethodInvoker
-                .invoke(
-                    handler,
-                    method,
-                    arrayOf(ProfileRequest("Ada"), requestContext("profile")),
-                    listOf(unsupportedInvoker),
-                )
-                .toCompletableFuture()
-                .get(1, TimeUnit.SECONDS)
-        }
+        val failure =
+            assertThrows<ExecutionException> {
+                ZLinkHandlerMethodInvoker.invoke(
+                        handler,
+                        method,
+                        arrayOf(ProfileRequest("Ada"), requestContext("profile")),
+                        listOf(unsupportedInvoker),
+                    )
+                    .toCompletableFuture()
+                    .get(1, TimeUnit.SECONDS)
+            }
 
         assertTrue(failure.cause is ZLinkConfigurationException)
         assertTrue(failure.cause!!.message!!.contains("registered ZLinkSuspendInvocationAdapter"))
@@ -210,10 +224,10 @@ final class KotlinSuspendAnnotationHandlerTest {
         val handler = CompletionStageHandler()
         val method = handler.javaClass.getMethod("handle", ProfileRequest::class.java)
 
-        val reply = ZLinkHandlerMethodInvoker
-            .invoke(handler, method, arrayOf(ProfileRequest("Ada")))
-            .toCompletableFuture()
-            .get(1, TimeUnit.SECONDS)
+        val reply =
+            ZLinkHandlerMethodInvoker.invoke(handler, method, arrayOf(ProfileRequest("Ada")))
+                .toCompletableFuture()
+                .get(1, TimeUnit.SECONDS)
 
         assertEquals(ProfileReply("stage:Ada"), reply)
         assertTrue(reply !is CompletableFuture<*>)
@@ -223,43 +237,50 @@ final class KotlinSuspendAnnotationHandlerTest {
     fun scannerTreatsKotlinSuspendSpotActorAnnotationsLikeJavaMethodHandlers() {
         val catalog = ZLinkHandlerScanner.scan(setOf(KotlinSuspendHandlerMarker::class.java))
 
-        val request = catalog.matching(
-            setOf("kotlin-spot"),
-            ZLinkScannedHandlerSurface.SPOT,
-            ZLinkScannedHandlerKind.ACTOR_REQUEST,
-        ).single()
-        val send = catalog.matching(
-            setOf("kotlin-spot"),
-            ZLinkScannedHandlerSurface.SPOT,
-            ZLinkScannedHandlerKind.ACTOR_SEND,
-        ).single()
+        val request =
+            catalog
+                .matching(
+                    setOf("kotlin-spot"),
+                    ZLinkScannedHandlerSurface.SPOT,
+                    ZLinkScannedHandlerKind.ACTOR_REQUEST,
+                )
+                .single()
+        val send =
+            catalog
+                .matching(
+                    setOf("kotlin-spot"),
+                    ZLinkScannedHandlerSurface.SPOT,
+                    ZLinkScannedHandlerKind.ACTOR_SEND,
+                )
+                .single()
 
         assertEquals(PlayerCommand::class.java, request.messageType())
         assertEquals(PlayerReply::class.java, request.replyType())
         assertEquals(PlayerEvent::class.java, send.messageType())
-        assertTrue(catalog.handlers().none {
-            it.kind() == ZLinkScannedHandlerKind.ACTOR_JOIN ||
-                it.kind() == ZLinkScannedHandlerKind.ACTOR_JOINED ||
-                it.kind() == ZLinkScannedHandlerKind.ACTOR_LEFT
-        })
+        assertTrue(
+            catalog.handlers().none {
+                it.kind() == ZLinkScannedHandlerKind.ACTOR_JOIN ||
+                    it.kind() == ZLinkScannedHandlerKind.ACTOR_JOINED ||
+                    it.kind() == ZLinkScannedHandlerKind.ACTOR_LEFT
+            }
+        )
         assertTrue(ZLinkHandlerMethodInvoker.isKotlinSuspendMethod(request.handlerMethod()))
     }
 
     @Test
     fun kotlinSuspendSpotActorMethodRunsThroughMethodInvoker() {
         val handler = KotlinSpringSuspendSpotActorHandler()
-        val method = KotlinSpringSuspendSpotActorHandler::class.java.methods.single {
-            it.name == "request"
-        }
+        val method =
+            KotlinSpringSuspendSpotActorHandler::class.java.methods.single { it.name == "request" }
 
-        val reply = ZLinkHandlerMethodInvoker
-            .invoke(
-                handler,
-                method,
-                arrayOf(PlayerActor("p1"), PlayerCommand("move")),
-            )
-            .toCompletableFuture()
-            .get(1, TimeUnit.SECONDS)
+        val reply =
+            ZLinkHandlerMethodInvoker.invoke(
+                    handler,
+                    method,
+                    arrayOf(PlayerActor("p1"), PlayerCommand("move")),
+                )
+                .toCompletableFuture()
+                .get(1, TimeUnit.SECONDS)
 
         assertEquals(PlayerReply("p1:move"), reply)
     }
@@ -267,43 +288,40 @@ final class KotlinSuspendAnnotationHandlerTest {
     @Test
     fun kotlinSuspendAnnotationRunsInsideFrameworkCoroutineContext() {
         val handler = KotlinCoroutineContextHandler()
-        val method = KotlinCoroutineContextHandler::class.java.methods.single {
-            it.name == "request"
-        }
+        val method =
+            KotlinCoroutineContextHandler::class.java.methods.single { it.name == "request" }
 
-        val reply = ZLinkHandlerMethodInvoker
-            .invoke(
-                handler,
-                method,
-                arrayOf(ProfileRequest("Ada")),
-            )
-            .toCompletableFuture()
-            .get(1, TimeUnit.SECONDS)
+        val reply =
+            ZLinkHandlerMethodInvoker.invoke(handler, method, arrayOf(ProfileRequest("Ada")))
+                .toCompletableFuture()
+                .get(1, TimeUnit.SECONDS)
 
         assertEquals(ProfileReply("coroutine:Ada"), reply)
     }
 
     @Test
     fun kotlinSuspendHandlerKeepsYieldTurnAfterDispatcherSwitch() {
-        val firstExecutor = Executors.newSingleThreadExecutor { task ->
-            Thread(task, "zlink-kotlin-first-dispatcher").apply { isDaemon = true }
-        }
-        val secondExecutor = Executors.newSingleThreadExecutor { task ->
-            Thread(task, "zlink-kotlin-second-dispatcher").apply { isDaemon = true }
-        }
+        val firstExecutor =
+            Executors.newSingleThreadExecutor { task ->
+                Thread(task, "zlink-kotlin-first-dispatcher").apply { isDaemon = true }
+            }
+        val secondExecutor =
+            Executors.newSingleThreadExecutor { task ->
+                Thread(task, "zlink-kotlin-second-dispatcher").apply { isDaemon = true }
+            }
         firstExecutor.asCoroutineDispatcher().use { firstDispatcher ->
             secondExecutor.asCoroutineDispatcher().use { secondDispatcher ->
                 val replyStage = CompletableFuture.completedFuture(ProfileReply("yield:Ada"))
                 val handler = KotlinYieldAfterDispatcherSwitchHandler(secondDispatcher, replyStage)
-                val method = KotlinYieldAfterDispatcherSwitchHandler::class.java.methods.single {
-                    it.name == "request"
-                }
+                val method =
+                    KotlinYieldAfterDispatcherSwitchHandler::class.java.methods.single {
+                        it.name == "request"
+                    }
                 val result = CompletableFuture<Any?>()
                 val queue = ZLinkSerialExecutionQueue()
 
                 queue.enqueue {
-                    ZLinkHandlerMethodInvoker
-                        .invoke(
+                    ZLinkHandlerMethodInvoker.invoke(
                             handler,
                             method,
                             arrayOf(ProfileRequest("Ada")),
@@ -316,9 +334,7 @@ final class KotlinSuspendAnnotationHandlerTest {
                                 result.completeExceptionally(error)
                             }
                         }
-                        .thenApply {
-                            null
-                        }
+                        .thenApply { null }
                 }
 
                 assertEquals(ProfileReply("yield:Ada"), result.get(3, TimeUnit.SECONDS))
@@ -330,27 +346,29 @@ final class KotlinSuspendAnnotationHandlerTest {
 
     @Test
     fun frameworkOptionsConfigureKotlinSuspendDispatcher() {
-        val executor = Executors.newSingleThreadExecutor { task ->
-            Thread(task, "zlink-kotlin-handler-dispatcher").apply { isDaemon = true }
-        }
+        val executor =
+            Executors.newSingleThreadExecutor { task ->
+                Thread(task, "zlink-kotlin-handler-dispatcher").apply { isDaemon = true }
+            }
         executor.asCoroutineDispatcher().use { dispatcher ->
             val options = DefaultZLinkFrameworkOptions()
             options.useCoroutineHandlers(dispatcher)
             val invokers = options.registration().suspendHandlerInvokers()
             val handler = KotlinDispatcherObservationHandler()
-            val method = KotlinDispatcherObservationHandler::class.java.methods.single {
-                it.name == "request"
-            }
+            val method =
+                KotlinDispatcherObservationHandler::class.java.methods.single {
+                    it.name == "request"
+                }
 
-            val reply = ZLinkHandlerMethodInvoker
-                .invoke(
-                    handler,
-                    method,
-                    arrayOf(ProfileRequest("Ada")),
-                    invokers,
-                )
-                .toCompletableFuture()
-                .get(1, TimeUnit.SECONDS)
+            val reply =
+                ZLinkHandlerMethodInvoker.invoke(
+                        handler,
+                        method,
+                        arrayOf(ProfileRequest("Ada")),
+                        invokers,
+                    )
+                    .toCompletableFuture()
+                    .get(1, TimeUnit.SECONDS)
 
             assertEquals(ProfileReply("Ada"), reply)
             assertTrue(handler.threadName.get().startsWith("zlink-kotlin-handler-dispatcher"))
@@ -365,18 +383,19 @@ final class KotlinSuspendAnnotationHandlerTest {
             context.register(SpringSuspendHandlerConfig::class.java)
             context.refresh()
             val handler = context.getBean(KotlinSpringSuspendChannelHandler::class.java)
-            val method = KotlinSpringSuspendChannelHandler::class.java.methods.single {
-                it.name == "request"
-            }
+            val method =
+                KotlinSpringSuspendChannelHandler::class.java.methods.single {
+                    it.name == "request"
+                }
 
-            val reply = ZLinkHandlerMethodInvoker
-                .invoke(
-                    handler,
-                    method,
-                    arrayOf(ProfileRequest("Ada"), requestContext("profile")),
-                )
-                .toCompletableFuture()
-                .get(1, TimeUnit.SECONDS)
+            val reply =
+                ZLinkHandlerMethodInvoker.invoke(
+                        handler,
+                        method,
+                        arrayOf(ProfileRequest("Ada"), requestContext("profile")),
+                    )
+                    .toCompletableFuture()
+                    .get(1, TimeUnit.SECONDS)
 
             assertEquals(ProfileReply("profile:Ada:injected"), reply)
             assertSame(handler, context.getBean(KotlinSpringSuspendChannelHandler::class.java))
@@ -386,16 +405,14 @@ final class KotlinSuspendAnnotationHandlerTest {
     @Test
     fun kotlinSuspendAnnotationExceptionCompletesJavaStageExceptionally() {
         val handler = KotlinSuspendFailureHandler()
-        val method = KotlinSuspendFailureHandler::class.java.methods.single {
-            it.name == "fail"
-        }
+        val method = KotlinSuspendFailureHandler::class.java.methods.single { it.name == "fail" }
 
-        val failure = assertThrows<ExecutionException> {
-            ZLinkHandlerMethodInvoker
-                .invoke(handler, method, arrayOf(ProfileRequest("Ada")))
-                .toCompletableFuture()
-                .get(1, TimeUnit.SECONDS)
-        }
+        val failure =
+            assertThrows<ExecutionException> {
+                ZLinkHandlerMethodInvoker.invoke(handler, method, arrayOf(ProfileRequest("Ada")))
+                    .toCompletableFuture()
+                    .get(1, TimeUnit.SECONDS)
+            }
 
         assertTrue(
             failure.cause is IllegalStateException,
@@ -407,16 +424,14 @@ final class KotlinSuspendAnnotationHandlerTest {
     @Test
     fun kotlinSuspendAnnotationCancellationCompletesJavaStageExceptionally() {
         val handler = KotlinSuspendFailureHandler()
-        val method = KotlinSuspendFailureHandler::class.java.methods.single {
-            it.name == "cancel"
-        }
+        val method = KotlinSuspendFailureHandler::class.java.methods.single { it.name == "cancel" }
 
-        val failure = assertThrows<CancellationException> {
-            ZLinkHandlerMethodInvoker
-                .invoke(handler, method, arrayOf(ProfileRequest("Ada")))
-                .toCompletableFuture()
-                .get(1, TimeUnit.SECONDS)
-        }
+        val failure =
+            assertThrows<CancellationException> {
+                ZLinkHandlerMethodInvoker.invoke(handler, method, arrayOf(ProfileRequest("Ada")))
+                    .toCompletableFuture()
+                    .get(1, TimeUnit.SECONDS)
+            }
 
         assertEquals("get", failure.message)
         assertTrue(failure.cause is CancellationException)
@@ -435,16 +450,17 @@ final class KotlinSuspendAnnotationHandlerTest {
             ProfileReply::class.java,
         )
 
-        val lifecycle = ZLinkFrameworkLifecycle(
-            options,
-            FakeZLinkBackendAdapterFactory(),
-            ZLinkHandlerActivator.reflection(),
-        )
-        val failure = assertThrows<ZLinkConfigurationException> {
-            lifecycle.start()
-        }
+        val lifecycle =
+            ZLinkFrameworkLifecycle(
+                options,
+                FakeZLinkBackendAdapterFactory(),
+                ZLinkHandlerActivator.reflection(),
+            )
+        val failure = assertThrows<ZLinkConfigurationException> { lifecycle.start() }
 
-        assertTrue(failure.message!!.contains("duplicate client/server request handler packet name"))
+        assertTrue(
+            failure.message!!.contains("duplicate client/server request handler packet name")
+        )
     }
 
     @Test
@@ -453,14 +469,24 @@ final class KotlinSuspendAnnotationHandlerTest {
         options.addHandlersFromPackageOf(KotlinSuspendHandlerMarker::class.java)
         val node = ZLinkLegacyTopology.addSpotMesh(options, "rooms")
         node.enableRouter("inproc://rooms")
-        node.objects().server().addSpotFactory("InterfaceSpot", InterfaceSpot::class.java) { factory -> factory.disableRelocation() }
-        node.objects().server().addActorFactory("player", PlayerActor::class.java, PlayerActorFactory::class.java) { factory -> factory.recreateOnRelocation() }
+        node.objects().server().addSpotFactory("InterfaceSpot", InterfaceSpot::class.java) { factory
+            ->
+            factory.disableRelocation()
+        }
+        node.objects().server().addActorFactory(
+            "player",
+            PlayerActor::class.java,
+            PlayerActorFactory::class.java,
+        ) { factory ->
+            factory.recreateOnRelocation()
+        }
 
-        val lifecycle = ZLinkFrameworkLifecycle(
-            options,
-            FakeZLinkBackendAdapterFactory(),
-            ZLinkHandlerActivator.reflection(),
-        )
+        val lifecycle =
+            ZLinkFrameworkLifecycle(
+                options,
+                FakeZLinkBackendAdapterFactory(),
+                ZLinkHandlerActivator.reflection(),
+            )
         try {
             lifecycle.start()
         } finally {
@@ -492,10 +518,15 @@ final class KotlinSuspendAnnotationHandlerTest {
     private fun requestContext(channelName: String) =
         object : ZLinkMessageContext {
             override fun meshName() = Optional.empty<String>()
+
             override fun channelName() = Optional.of(channelName)
+
             override fun packetName() = "ProfileRequest"
+
             override fun contentType() = Optional.empty<String>()
+
             override fun metadata() = emptyMap<String, String>()
+
             override fun correlationId() = Optional.empty<String>()
         }
 }
@@ -508,16 +539,13 @@ class KotlinSuspendingInterfaceRequestHandler :
     override suspend fun handle(
         request: ProfileRequest,
         context: ZLinkMessageContext,
-    ): ProfileReply =
-        ProfileReply("${context.channelName().orElse("missing")}:${request.name}")
+    ): ProfileReply = ProfileReply("${context.channelName().orElse("missing")}:${request.name}")
 }
 
 @ZLinkHandlerGroup("kotlin-interface-spot")
 @ZLinkSpotTimer(name = "interface-timer", periodMillis = 1000)
-class KotlinSuspendingInterfaceTimerHandler :
-    ZLinkSuspendingSpotTimerHandler<InterfaceSpot> {
-    override suspend fun handle(spot: InterfaceSpot, tick: ZLinkTimerTick) {
-    }
+class KotlinSuspendingInterfaceTimerHandler : ZLinkSuspendingSpotTimerHandler<InterfaceSpot> {
+    override suspend fun handle(spot: InterfaceSpot, tick: ZLinkTimerTick) {}
 }
 
 class KotlinCoroutineContextHandler {
@@ -533,9 +561,7 @@ class KotlinYieldAfterDispatcherSwitchHandler(
     @ZLinkRequest
     suspend fun request(request: ProfileRequest): ProfileReply {
         delay(1)
-        return withContext(dispatcher) {
-            replyStage.await()
-        }
+        return withContext(dispatcher) { replyStage.await() }
     }
 }
 
@@ -555,7 +581,9 @@ class KotlinDispatcherObservationHandler {
 class KotlinSpringSuspendChannelHandler(private val dependency: SuspendDependency) {
     @ZLinkRequest
     suspend fun request(request: ProfileRequest, context: ZLinkMessageContext): ProfileReply =
-        ProfileReply("${context.channelName().orElse("missing")}:${request.name}:${dependency.value}")
+        ProfileReply(
+            "${context.channelName().orElse("missing")}:${request.name}:${dependency.value}"
+        )
 
     @ZLinkSend
     suspend fun send(message: ProfileGreeting, context: ZLinkMessageContext) {
@@ -581,7 +609,6 @@ class KotlinSpringSuspendSpotActorHandler {
     suspend fun send(actor: PlayerActor, message: PlayerEvent) {
         ObservedValues.lastActorSend.set("${actor.context().actorId()}:${message.value}")
     }
-
 }
 
 @ZLinkHandlerGroup("kotlin-failure")
@@ -598,29 +625,29 @@ class KotlinSuspendFailureHandler {
 }
 
 class JavaProfileRequestHandler : ZLinkRequestHandler<ProfileRequest, ProfileReply> {
-    override fun handle(
-        request: ProfileRequest,
-        context: ZLinkMessageContext,
-    ) = CompletableFuture.completedFuture(ProfileReply(request.name))
+    override fun handle(request: ProfileRequest, context: ZLinkMessageContext) =
+        CompletableFuture.completedFuture(ProfileReply(request.name))
 }
 
 class PlayerActorFactory : ZLinkActorFactory {
     override fun create(context: ZLinkActorContext) =
-        CompletableFuture.completedFuture<ZLinkActor>(
-            PlayerActor(context.actorId()),
-        )
+        CompletableFuture.completedFuture<ZLinkActor>(PlayerActor(context.actorId()))
 }
 
 @ZLinkHandlerGroup("kotlin-interface-spot")
 class KotlinSuspendingSpotActorInterfaceHandler :
-    ZLinkSuspendingSpotActorRequestHandler<InterfaceSpot, PlayerActor, InterfacePlayerCommand, InterfacePlayerReply> {
+    ZLinkSuspendingSpotActorRequestHandler<
+        InterfaceSpot,
+        PlayerActor,
+        InterfacePlayerCommand,
+        InterfacePlayerReply,
+    > {
     override suspend fun handle(
         spot: InterfaceSpot,
         actor: PlayerActor,
         context: ZLinkMessageContext,
         request: InterfacePlayerCommand,
-    ): InterfacePlayerReply =
-        InterfacePlayerReply("${actor.context().actorId()}:${request.value}")
+    ): InterfacePlayerReply = InterfacePlayerReply("${actor.context().actorId()}:${request.value}")
 }
 
 @ZLinkHandlerGroup("kotlin-interface-spot")
@@ -630,7 +657,7 @@ class SecondKotlinSuspendingSpotActorInterfaceHandler :
         PlayerActor,
         SecondInterfacePlayerCommand,
         SecondInterfacePlayerReply,
-        > {
+    > {
     override suspend fun handle(
         spot: InterfaceSpot,
         actor: PlayerActor,
@@ -642,8 +669,7 @@ class SecondKotlinSuspendingSpotActorInterfaceHandler :
 
 @Configuration(proxyBeanMethods = false)
 open class SpringSuspendHandlerConfig {
-    @Bean
-    open fun dependency() = SuspendDependency("injected")
+    @Bean open fun dependency() = SuspendDependency("injected")
 
     @Bean
     open fun handler(dependency: SuspendDependency) = KotlinSpringSuspendChannelHandler(dependency)
@@ -652,8 +678,7 @@ open class SpringSuspendHandlerConfig {
 @Configuration(proxyBeanMethods = false)
 @EnableZLinkFramework
 open class SpringSuspendFrameworkConfig {
-    @Bean
-    open fun dependency() = SuspendDependency("injected")
+    @Bean open fun dependency() = SuspendDependency("injected")
 
     @Bean
     open fun handler(dependency: SuspendDependency) = KotlinSpringSuspendChannelHandler(dependency)
@@ -662,9 +687,12 @@ open class SpringSuspendFrameworkConfig {
     open fun frameworkConfigurer() = ZLinkFrameworkConfigurer { options ->
         options.setDefaultRequestTimeout(Duration.ofSeconds(1))
         options.addHandlersFromPackageOf(KotlinSuspendHandlerMarker::class.java)
-        val channel = options.addClientServerChannel("profile").server()
-            .setBindHost("127.0.0.1")
-            .listen(40502)
+        val channel =
+            options
+                .addClientServerChannel("profile")
+                .server()
+                .setBindHost("127.0.0.1")
+                .listen(40502)
         channel.addHandlerGroup("kotlin-channel")
     }
 }
@@ -679,8 +707,7 @@ object ObservedValues {
     val lastActorLeft: AtomicReference<String> = AtomicReference()
 }
 
-@ZLinkPacket("ProfileRequest")
-data class ProfileRequest(val name: String)
+@ZLinkPacket("ProfileRequest") data class ProfileRequest(val name: String)
 
 data class ProfileReply(val value: String)
 
@@ -689,25 +716,31 @@ class CompletionStageHandler {
         CompletableFuture.completedFuture(ProfileReply("stage:${request.name}"))
 }
 
-@ZLinkPacket("ProfileGreeting")
-data class ProfileGreeting(val value: String)
+@ZLinkPacket("ProfileGreeting") data class ProfileGreeting(val value: String)
 
-@ZLinkPacket("ProfileEvent")
-data class ProfileEvent(val value: String)
+@ZLinkPacket("ProfileEvent") data class ProfileEvent(val value: String)
 
 class PlayerActor(private val id: String) : ZLinkActor {
-    override fun context(): ZLinkActorContext = object : ZLinkActorContext {
-        override fun actorId(): String = id
-        override fun objectGeneration(): Long = 1L
-        override fun meshName(): String = "test"
-        override fun spotId() = Optional.empty<String>()
-        override fun boundSession() = null
-        override fun joinSpot(spotId: String) = unsupportedJoinCall()
-        override fun joinSpot(spotId: String, request: Any) =
-            unsupportedJoinCall()
-        override fun joinEntrySpot() = unsupportedJoinCall()
-        override fun joinEntrySpot(request: Any) = unsupportedJoinCall()
-    }
+    override fun context(): ZLinkActorContext =
+        object : ZLinkActorContext {
+            override fun actorId(): String = id
+
+            override fun objectGeneration(): Long = 1L
+
+            override fun meshName(): String = "test"
+
+            override fun spotId() = Optional.empty<String>()
+
+            override fun boundSession() = null
+
+            override fun joinSpot(spotId: String) = unsupportedJoinCall()
+
+            override fun joinSpot(spotId: String, request: Any) = unsupportedJoinCall()
+
+            override fun joinEntrySpot() = unsupportedJoinCall()
+
+            override fun joinEntrySpot(request: Any) = unsupportedJoinCall()
+        }
 
     private fun unsupportedJoinCall(): ZLinkActorJoinCall =
         throw UnsupportedOperationException("test actor does not join spots")
@@ -723,8 +756,7 @@ data class PlayerReply(val value: String)
 
 data class PlayerEvent(val value: String)
 
-@ZLinkPacket("InterfacePlayerCommand")
-data class InterfacePlayerCommand(val value: String)
+@ZLinkPacket("InterfacePlayerCommand") data class InterfacePlayerCommand(val value: String)
 
 data class InterfacePlayerReply(val value: String)
 

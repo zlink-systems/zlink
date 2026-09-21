@@ -6,12 +6,12 @@ internal sealed class ZLinkFanoutPublisherIdentity(
     string channelName,
     RoutingId publisherRid,
     ulong lifecycleGeneration,
-    string endpoint)
+    string endpoint
+)
 {
     private readonly ZLinkStateLane _lane = new();
     private ulong _descriptorRevision = 1;
-    private ZLinkFrameworkRuntimeState _state =
-        ZLinkFrameworkRuntimeState.Serving;
+    private ZLinkFrameworkRuntimeState _state = ZLinkFrameworkRuntimeState.Serving;
 
     internal string ChannelName { get; } = channelName;
     internal RoutingId PublisherRid { get; } = publisherRid;
@@ -51,5 +51,6 @@ internal sealed class ZLinkFanoutPublisherIdentity(
 
     internal readonly record struct Snapshot(
         ulong DescriptorRevision,
-        ZLinkFrameworkRuntimeState State);
+        ZLinkFrameworkRuntimeState State
+    );
 }

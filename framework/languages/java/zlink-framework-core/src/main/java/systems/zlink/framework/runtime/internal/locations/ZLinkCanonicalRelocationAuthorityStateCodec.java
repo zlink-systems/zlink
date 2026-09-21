@@ -1,5 +1,7 @@
 package systems.zlink.framework.runtime.internal.locations;
 
+import systems.zlink.contracts.core.RoutingId;
+
 import java.io.ByteArrayOutputStream;
 import java.nio.ByteBuffer;
 import java.nio.ByteOrder;
@@ -10,18 +12,15 @@ import java.util.Arrays;
 import java.util.Objects;
 import java.util.UUID;
 import java.util.zip.CRC32C;
-import systems.zlink.contracts.core.RoutingId;
 
 /** Reads and replaces the canonical relocation slot in authority-payload-v1. */
 public final class ZLinkCanonicalRelocationAuthorityStateCodec {
     private static final byte[] MAGIC = {0x5a, 0x4c, 0x41, 0x55};
     private static final byte[] EMPTY = {0, 0, 0, 0, 0};
     private static final int MAX_AUTHORITY_ENVELOPE_BYTES = 1_048_576;
-    private static final long MAX_ISSUED_AGGREGATE_GENERATION =
-        Long.MAX_VALUE - 1;
+    private static final long MAX_ISSUED_AGGREGATE_GENERATION = Long.MAX_VALUE - 1;
 
-    private ZLinkCanonicalRelocationAuthorityStateCodec() {
-    }
+    private ZLinkCanonicalRelocationAuthorityStateCodec() {}
 
     // Strips the relocation slot by its envelope boundaries only. Application
     // payload extraction does not need to interpret relocation progress.
@@ -36,60 +35,61 @@ public final class ZLinkCanonicalRelocationAuthorityStateCodec {
     }
 
     static byte[] publish(
-        byte[] authorityPayload,
-        ZLinkAggregateRelocationCoordinator.Request request,
-        ZLinkAuthorityGenerationTransition ownerTransition) {
+            byte[] authorityPayload,
+            ZLinkAggregateRelocationCoordinator.Request request,
+            ZLinkAuthorityGenerationTransition ownerTransition) {
         Objects.requireNonNull(request, "request");
         Objects.requireNonNull(ownerTransition, "ownerTransition");
         Published previous = decodeStrict(authorityPayload);
-        byte[] applicationPayload = previous == null
-            ? Objects.requireNonNull(authorityPayload, "authorityPayload").clone()
-            : previous.applicationPayload();
-        Owner source = previous == null
-            ? owner(applicationPayload)
-            : new Owner(
-                previous.sourceOwnerId(),
-                previous.sourceOwnerLeaseGeneration(),
-                null,
-                previous.sourceNodeRid(),
-                previous.sourceNodeGeneration());
+        byte[] applicationPayload =
+                previous == null
+                        ? Objects.requireNonNull(authorityPayload, "authorityPayload").clone()
+                        : previous.applicationPayload();
+        Owner source =
+                previous == null
+                        ? owner(applicationPayload)
+                        : new Owner(
+                                previous.sourceOwnerId(),
+                                previous.sourceOwnerLeaseGeneration(),
+                                null,
+                                previous.sourceNodeRid(),
+                                previous.sourceNodeGeneration());
         var root = ZLinkServiceRelocationEnvelopeCodec.decode(request.root());
         if (root.relocationHigh() != request.aggregateId().getMostSignificantBits()
-            || root.relocationLow() != request.aggregateId().getLeastSignificantBits()) {
+                || root.relocationLow() != request.aggregateId().getLeastSignificantBits()) {
             throw new IllegalArgumentException(
-                "authority relocation identity differs from canonical root");
+                    "authority relocation identity differs from canonical root");
         }
         if (previous != null) {
             validateSuccessor(previous, request);
         }
-        applicationPayload = projectOwner(
-            applicationPayload, request, ownerTransition);
-        byte[] state = encodeState(new State(
-            root.relocationHigh(),
-            root.relocationLow(),
-            request.aggregateGeneration(),
-            request.targetAttemptGeneration(),
-            request.relocationReference(),
-            request.relocationChecksumCrc32c(),
-            source.nodeRid(),
-            source.nodeGeneration(),
-            source.ownerId(),
-            source.ownerLeaseGeneration(),
-            request.targetDescriptor().rid(),
-            request.targetDescriptorLifecycleGeneration(),
-            request.targetOwner().ownerId(),
-            request.targetOwner().leaseGeneration(),
-            source.ownerId(),
-            source.ownerLeaseGeneration(),
-            source.nodeRid(),
-            source.nodeGeneration(),
-            request.coordinatorExpectedStoreVersion(),
-            3,
-            root.applicationVersion(),
-            0));
-        return replace(
-            replaceOwner(applicationPayload, request),
-            state);
+        applicationPayload = projectOwner(applicationPayload, request, ownerTransition);
+        byte[] state =
+                encodeState(
+                        new State(
+                                root.relocationHigh(),
+                                root.relocationLow(),
+                                request.aggregateGeneration(),
+                                request.targetAttemptGeneration(),
+                                request.relocationReference(),
+                                request.relocationChecksumCrc32c(),
+                                source.nodeRid(),
+                                source.nodeGeneration(),
+                                source.ownerId(),
+                                source.ownerLeaseGeneration(),
+                                request.targetDescriptor().rid(),
+                                request.targetDescriptorLifecycleGeneration(),
+                                request.targetOwner().ownerId(),
+                                request.targetOwner().leaseGeneration(),
+                                source.ownerId(),
+                                source.ownerLeaseGeneration(),
+                                source.nodeRid(),
+                                source.nodeGeneration(),
+                                request.coordinatorExpectedStoreVersion(),
+                                3,
+                                root.applicationVersion(),
+                                0));
+        return replace(replaceOwner(applicationPayload, request), state);
     }
 
     static Published decode(byte[] authorityPayload) {
@@ -107,32 +107,31 @@ public final class ZLinkCanonicalRelocationAuthorityStateCodec {
         }
         State current = decodeState(slot.state(), null);
         return new Published(
-            new UUID(current.relocationHigh(), current.relocationLow()),
-            current.aggregateGeneration(),
-            current.targetAttemptGeneration(),
-            current.relocationReference(),
-            current.relocationChecksumCrc32c(),
-            current.sourceOwnerId(),
-            current.sourceOwnerLeaseGeneration(),
-            current.sourceNodeRid(),
-            current.sourceNodeGeneration(),
-            current.targetNodeRid(),
-            current.targetNodeGeneration(),
-            current.targetOwnerId(), current.targetOwnerLeaseGeneration(),
-            current.coordinatorOwnerId(),
-            current.coordinatorLeaseGeneration(),
-            current.coordinatorNodeRid(),
-            current.coordinatorNodeGeneration(),
-            current.coordinatorExpectedStoreVersion(),
-            current.phase(),
-            current.applicationVersion(),
-            current.sourceCleanupState(),
-            replace(slot, EMPTY));
+                new UUID(current.relocationHigh(), current.relocationLow()),
+                current.aggregateGeneration(),
+                current.targetAttemptGeneration(),
+                current.relocationReference(),
+                current.relocationChecksumCrc32c(),
+                current.sourceOwnerId(),
+                current.sourceOwnerLeaseGeneration(),
+                current.sourceNodeRid(),
+                current.sourceNodeGeneration(),
+                current.targetNodeRid(),
+                current.targetNodeGeneration(),
+                current.targetOwnerId(),
+                current.targetOwnerLeaseGeneration(),
+                current.coordinatorOwnerId(),
+                current.coordinatorLeaseGeneration(),
+                current.coordinatorNodeRid(),
+                current.coordinatorNodeGeneration(),
+                current.coordinatorExpectedStoreVersion(),
+                current.phase(),
+                current.applicationVersion(),
+                current.sourceCleanupState(),
+                replace(slot, EMPTY));
     }
 
-    static State decodeState(
-        byte[] encoded,
-        Long expectedRootAggregateGeneration) {
+    static State decodeState(byte[] encoded, Long expectedRootAggregateGeneration) {
         Reader state = new Reader(encoded);
         if (state.u8() != 1) {
             throw invalid();
@@ -166,18 +165,30 @@ public final class ZLinkCanonicalRelocationAuthorityStateCodec {
         if (!body.end()) {
             throw invalid();
         }
-        State value = new State(
-            relocationHigh, relocationLow,
-            aggregateGeneration, targetAttemptGeneration,
-            relocationReference, relocationChecksumCrc32c,
-            sourceNodeRid, sourceNodeGeneration,
-            sourceOwnerId, sourceOwnerLeaseGeneration,
-            targetNodeRid, targetNodeGeneration,
-            targetOwnerId, targetOwnerLeaseGeneration,
-            coordinatorOwnerId, coordinatorLeaseGeneration,
-            coordinatorNodeRid, coordinatorNodeGeneration,
-            coordinatorExpectedStoreVersion,
-            phase, applicationVersion, sourceCleanupState);
+        State value =
+                new State(
+                        relocationHigh,
+                        relocationLow,
+                        aggregateGeneration,
+                        targetAttemptGeneration,
+                        relocationReference,
+                        relocationChecksumCrc32c,
+                        sourceNodeRid,
+                        sourceNodeGeneration,
+                        sourceOwnerId,
+                        sourceOwnerLeaseGeneration,
+                        targetNodeRid,
+                        targetNodeGeneration,
+                        targetOwnerId,
+                        targetOwnerLeaseGeneration,
+                        coordinatorOwnerId,
+                        coordinatorLeaseGeneration,
+                        coordinatorNodeRid,
+                        coordinatorNodeGeneration,
+                        coordinatorExpectedStoreVersion,
+                        phase,
+                        applicationVersion,
+                        sourceCleanupState);
         validateState(value, expectedRootAggregateGeneration);
         return value;
     }
@@ -214,88 +225,82 @@ public final class ZLinkCanonicalRelocationAuthorityStateCodec {
         return state.bytes();
     }
 
-    private static void validateState(
-        State value,
-        Long expectedRootAggregateGeneration) {
-        boolean emptyTarget = value.targetNodeRid().toBytes().length == 0
-            && value.targetNodeGeneration() == 0
-            && value.targetOwnerId().isEmpty()
-            && value.targetOwnerLeaseGeneration() == 0;
-        boolean completeTarget = value.targetNodeRid().toBytes().length != 0
-            && value.targetNodeGeneration() != 0
-            && !value.targetOwnerId().isEmpty()
-            && value.targetOwnerLeaseGeneration() != 0;
+    private static void validateState(State value, Long expectedRootAggregateGeneration) {
+        boolean emptyTarget =
+                value.targetNodeRid().toBytes().length == 0
+                        && value.targetNodeGeneration() == 0
+                        && value.targetOwnerId().isEmpty()
+                        && value.targetOwnerLeaseGeneration() == 0;
+        boolean completeTarget =
+                value.targetNodeRid().toBytes().length != 0
+                        && value.targetNodeGeneration() != 0
+                        && !value.targetOwnerId().isEmpty()
+                        && value.targetOwnerLeaseGeneration() != 0;
         if (value.relocationHigh() == 0 && value.relocationLow() == 0
-            || value.aggregateGeneration() < 0
-            || value.aggregateGeneration()
-                > MAX_ISSUED_AGGREGATE_GENERATION
-            || value.targetAttemptGeneration() < 0
-            || value.relocationReference().isEmpty()
-            || value.relocationChecksumCrc32c() < 0
-            || value.relocationChecksumCrc32c() > 0xffff_ffffL
-            || value.sourceNodeRid().toBytes().length == 0
-            || value.sourceNodeGeneration() == 0
-            || value.sourceOwnerId().isEmpty()
-            || value.sourceOwnerLeaseGeneration() == 0
-            || value.coordinatorOwnerId().isEmpty()
-            || value.coordinatorLeaseGeneration() == 0
-            || value.coordinatorNodeRid().toBytes().length == 0
-            || value.coordinatorNodeGeneration() == 0
-            || value.phase() < 1 || value.phase() > 9
-            || value.applicationVersion() < 0
-            || value.sourceCleanupState() < 0
-            || value.sourceCleanupState() > 2
-            || value.phase() == 1 && value.aggregateGeneration() != 0
-            || value.phase() != 1 && value.aggregateGeneration() == 0
-            || (value.phase() == 1 || value.phase() == 2)
-                && (!emptyTarget || value.targetAttemptGeneration() != 0)
-            || value.phase() >= 3 && value.phase() <= 8
-                && (!completeTarget || value.targetAttemptGeneration() == 0)
-            || expectedRootAggregateGeneration != null
-                && (value.phase() == 1
-                    || value.aggregateGeneration()
-                        != expectedRootAggregateGeneration.longValue())) {
+                || value.aggregateGeneration() < 0
+                || value.aggregateGeneration() > MAX_ISSUED_AGGREGATE_GENERATION
+                || value.targetAttemptGeneration() < 0
+                || value.relocationReference().isEmpty()
+                || value.relocationChecksumCrc32c() < 0
+                || value.relocationChecksumCrc32c() > 0xffff_ffffL
+                || value.sourceNodeRid().toBytes().length == 0
+                || value.sourceNodeGeneration() == 0
+                || value.sourceOwnerId().isEmpty()
+                || value.sourceOwnerLeaseGeneration() == 0
+                || value.coordinatorOwnerId().isEmpty()
+                || value.coordinatorLeaseGeneration() == 0
+                || value.coordinatorNodeRid().toBytes().length == 0
+                || value.coordinatorNodeGeneration() == 0
+                || value.phase() < 1
+                || value.phase() > 9
+                || value.applicationVersion() < 0
+                || value.sourceCleanupState() < 0
+                || value.sourceCleanupState() > 2
+                || value.phase() == 1 && value.aggregateGeneration() != 0
+                || value.phase() != 1 && value.aggregateGeneration() == 0
+                || (value.phase() == 1 || value.phase() == 2)
+                        && (!emptyTarget || value.targetAttemptGeneration() != 0)
+                || value.phase() >= 3
+                        && value.phase() <= 8
+                        && (!completeTarget || value.targetAttemptGeneration() == 0)
+                || expectedRootAggregateGeneration != null
+                        && (value.phase() == 1
+                                || value.aggregateGeneration()
+                                        != expectedRootAggregateGeneration.longValue())) {
             throw invalid();
         }
     }
 
     private static void validateSuccessor(
-        Published previous,
-        ZLinkAggregateRelocationCoordinator.Request request) {
+            Published previous, ZLinkAggregateRelocationCoordinator.Request request) {
         // Successor aggregate generations are derived from the canonical root
         // and cleanup state, so they are not an ordered counter. The stable
         // relocation identity and target owner fence are the continuity check.
         if (!previous.aggregateId().equals(request.aggregateId())
-            || !previous.targetOwnerId().equals(
-                request.targetOwner().ownerId())
-            || previous.targetOwnerLeaseGeneration()
-                != request.targetOwner().leaseGeneration()
-            || !previous.targetNodeRid().equals(
-                request.targetDescriptor().rid())
-            || previous.targetNodeGeneration()
-                != request.targetDescriptorLifecycleGeneration()) {
-            throw new IllegalArgumentException(
-                "canonical relocation successor fence differs");
+                || !previous.targetOwnerId().equals(request.targetOwner().ownerId())
+                || previous.targetOwnerLeaseGeneration() != request.targetOwner().leaseGeneration()
+                || !previous.targetNodeRid().equals(request.targetDescriptor().rid())
+                || previous.targetNodeGeneration()
+                        != request.targetDescriptorLifecycleGeneration()) {
+            throw new IllegalArgumentException("canonical relocation successor fence differs");
         }
     }
 
     private static byte[] projectOwner(
-        byte[] payload,
-        ZLinkAggregateRelocationCoordinator.Request request,
-        ZLinkAuthorityGenerationTransition ownerTransition) {
+            byte[] payload,
+            ZLinkAggregateRelocationCoordinator.Request request,
+            ZLinkAuthorityGenerationTransition ownerTransition) {
         if (ownerTransition == ZLinkAuthorityGenerationTransition.NEW_OWNER) {
             return replaceOwner(payload, request);
         }
         Owner current = owner(payload);
         if (!current.ownerId().equals(request.targetOwner().ownerId())
-            || current.ownerLeaseGeneration()
-                != request.targetOwner().leaseGeneration()
-            || !current.meshName().equals(request.targetDescriptor().meshName())
-            || !current.nodeRid().equals(request.targetDescriptor().rid())
-            || current.nodeGeneration()
-                != request.targetDescriptorLifecycleGeneration()) {
+                || current.ownerLeaseGeneration() != request.targetOwner().leaseGeneration()
+                || !current.meshName().equals(request.targetDescriptor().meshName())
+                || !current.nodeRid().equals(request.targetDescriptor().rid())
+                || current.nodeGeneration() != request.targetDescriptorLifecycleGeneration()) {
             throw new IllegalArgumentException(
-                "preserved authority owner differs from target fence");
+                    "preserved authority owner differs from target fence");
         }
         return payload.clone();
     }
@@ -303,7 +308,9 @@ public final class ZLinkCanonicalRelocationAuthorityStateCodec {
     private static Owner owner(byte[] payload) {
         Slot slot = slot(payload);
         Reader body = new Reader(slot.body());
-        body.u8(); body.u8(); body.skip(body.u16());
+        body.u8();
+        body.u8();
+        body.skip(body.u16());
         String ownerId = body.text8();
         long lease = body.u64();
         String meshName = body.text8();
@@ -317,23 +324,25 @@ public final class ZLinkCanonicalRelocationAuthorityStateCodec {
     }
 
     private static byte[] replace(Slot slot, byte[] state) {
-        byte[] nextBody = new byte[
-            slot.start() + state.length + slot.body().length - slot.end()];
+        byte[] nextBody = new byte[slot.start() + state.length + slot.body().length - slot.end()];
         System.arraycopy(slot.body(), 0, nextBody, 0, slot.start());
         System.arraycopy(state, 0, nextBody, slot.start(), state.length);
-        System.arraycopy(slot.body(), slot.end(), nextBody,
-            slot.start() + state.length, slot.body().length - slot.end());
+        System.arraycopy(
+                slot.body(),
+                slot.end(),
+                nextBody,
+                slot.start() + state.length,
+                slot.body().length - slot.end());
         return envelope(nextBody);
     }
 
     /**
-     * Projects the target Location Store owner into the application authority
-     * envelope before the relocation slot is added. The relocation slot keeps
-     * the original source owner separately for recovery and audit.
+     * Projects the target Location Store owner into the application authority envelope before the
+     * relocation slot is added. The relocation slot keeps the original source owner separately for
+     * recovery and audit.
      */
     private static byte[] replaceOwner(
-        byte[] payload,
-        ZLinkAggregateRelocationCoordinator.Request request) {
+            byte[] payload, ZLinkAggregateRelocationCoordinator.Request request) {
         Slot slot = slot(payload);
         Reader body = new Reader(slot.body());
         body.u8();
@@ -356,20 +365,26 @@ public final class ZLinkCanonicalRelocationAuthorityStateCodec {
 
         byte[] originalBody = slot.body();
         byte[] replacement = owner.bytes();
-        byte[] nextBody = new byte[
-            originalBody.length - (ownerEnd - ownerStart) + replacement.length];
+        byte[] nextBody =
+                new byte[originalBody.length - (ownerEnd - ownerStart) + replacement.length];
         System.arraycopy(originalBody, 0, nextBody, 0, ownerStart);
-        System.arraycopy(replacement, 0, nextBody, ownerStart,
-            replacement.length);
-        System.arraycopy(originalBody, ownerEnd, nextBody,
-            ownerStart + replacement.length, originalBody.length - ownerEnd);
+        System.arraycopy(replacement, 0, nextBody, ownerStart, replacement.length);
+        System.arraycopy(
+                originalBody,
+                ownerEnd,
+                nextBody,
+                ownerStart + replacement.length,
+                originalBody.length - ownerEnd);
         return envelope(nextBody);
     }
 
     private static byte[] envelope(byte[] nextBody) {
         Writer envelope = new Writer();
-        envelope.raw(MAGIC); envelope.u8(1); envelope.u16(0);
-        envelope.u32(nextBody.length); envelope.raw(nextBody);
+        envelope.raw(MAGIC);
+        envelope.u8(1);
+        envelope.u16(0);
+        envelope.u32(nextBody.length);
+        envelope.raw(nextBody);
         byte[] withoutChecksum = envelope.bytes();
         envelope.u32(crc32c(withoutChecksum));
         byte[] encoded = envelope.bytes();
@@ -389,15 +404,15 @@ public final class ZLinkCanonicalRelocationAuthorityStateCodec {
         if (envelope.u8() != 1 || envelope.u16() != 0) throw invalid();
         Reader body = envelope.reader(envelope.u32());
         int checksumOffset = envelope.offset();
-        if (envelope.u32Unsigned() != crc32c(payload, checksumOffset)
-            || !envelope.end()) throw invalid();
+        if (envelope.u32Unsigned() != crc32c(payload, checksumOffset) || !envelope.end())
+            throw invalid();
         AuthorityShape shape = authorityPrefix(body);
         int start = body.offset();
         int present = body.u8();
         long encodedSize = body.u32Unsigned();
         if (present != 0 && present != 1
-            || present == 0 && encodedSize != 0
-            || present == 1 && encodedSize == 0) {
+                || present == 0 && encodedSize != 0
+                || present == 1 && encodedSize == 0) {
             throw invalid();
         }
         int size = Math.toIntExact(encodedSize);
@@ -405,8 +420,12 @@ public final class ZLinkCanonicalRelocationAuthorityStateCodec {
         int end = body.offset();
         validateActivationRecovery(body, shape);
         if (!body.end()) throw invalid();
-        return new Slot(body.bytes(), start, end,
-            Arrays.copyOfRange(body.bytes(), start, end), present == 1);
+        return new Slot(
+                body.bytes(),
+                start,
+                end,
+                Arrays.copyOfRange(body.bytes(), start, end),
+                present == 1);
     }
 
     private static AuthorityShape authorityPrefix(Reader body) {
@@ -422,9 +441,10 @@ public final class ZLinkCanonicalRelocationAuthorityStateCodec {
             object.text8();
             object.nonzeroU64();
             int currentSpotKind = object.u8();
-            if (objectState < 0 || objectState > 1
-                || (currentSpotKind != 1 && currentSpotKind != 2)
-                || operationKind != (objectState == 0 ? 1 : 0)) {
+            if (objectState < 0
+                    || objectState > 1
+                    || (currentSpotKind != 1 && currentSpotKind != 2)
+                    || operationKind != (objectState == 0 ? 1 : 0)) {
                 throw invalid();
             }
         } else if (objectKind == 2) {
@@ -435,13 +455,15 @@ public final class ZLinkCanonicalRelocationAuthorityStateCodec {
                 spot.text8();
                 spot.text8();
                 objectState = spot.u8();
-                if (objectState < 0 || objectState > 2
-                    || operationKind != switch (objectState) {
-                        case 0 -> 1;
-                        case 1 -> 0;
-                        case 2 -> 3;
-                        default -> -1;
-                    }) {
+                if (objectState < 0
+                        || objectState > 2
+                        || operationKind
+                                != switch (objectState) {
+                                    case 0 -> 1;
+                                    case 1 -> 0;
+                                    case 2 -> 3;
+                                    default -> -1;
+                                }) {
                     throw invalid();
                 }
             } else if (spotKind == 3) {
@@ -450,13 +472,15 @@ public final class ZLinkCanonicalRelocationAuthorityStateCodec {
                 instance.text8();
                 instance.text8();
                 if (!instance.end()
-                    || objectState < 1 || objectState > 3
-                    || operationKind != switch (objectState) {
-                        case 1 -> 1;
-                        case 2 -> 0;
-                        case 3 -> 3;
-                        default -> -1;
-                    }) {
+                        || objectState < 1
+                        || objectState > 3
+                        || operationKind
+                                != switch (objectState) {
+                                    case 1 -> 1;
+                                    case 2 -> 0;
+                                    case 3 -> 3;
+                                    default -> -1;
+                                }) {
                     throw invalid();
                 }
             } else {
@@ -472,13 +496,10 @@ public final class ZLinkCanonicalRelocationAuthorityStateCodec {
         body.text8();
         RoutingId.from(body.sized8());
         body.nonzeroU64();
-        return new AuthorityShape(
-            operationKind, objectKind, objectState, authoritySpotKind);
+        return new AuthorityShape(operationKind, objectKind, objectState, authoritySpotKind);
     }
 
-    private static void validateActivationRecovery(
-        Reader body,
-        AuthorityShape shape) {
+    private static void validateActivationRecovery(Reader body, AuthorityShape shape) {
         int present = body.u8();
         long encodedSize = body.u32Unsigned();
         if (present == 0) {
@@ -486,10 +507,10 @@ public final class ZLinkCanonicalRelocationAuthorityStateCodec {
             return;
         }
         if (present != 1
-            || shape.objectKind() != 2
-            || shape.spotKind() != 3
-            || shape.objectState() != 1
-            || shape.operationKind() != 0) {
+                || shape.objectKind() != 2
+                || shape.spotKind() != 3
+                || shape.objectState() != 1
+                || shape.operationKind() != 0) {
             throw invalid();
         }
         Reader recovery = body.reader(Math.toIntExact(encodedSize));
@@ -500,63 +521,68 @@ public final class ZLinkCanonicalRelocationAuthorityStateCodec {
         long inboxSequence = recovery.nonzeroU64();
         long replayCursor = recovery.ordinalOrZero();
         if (requestSize > MAX_AUTHORITY_ENVELOPE_BYTES
-            || Long.compareUnsigned(replayCursor, inboxSequence) > 0
-            || !recovery.end()) {
+                || Long.compareUnsigned(replayCursor, inboxSequence) > 0
+                || !recovery.end()) {
             throw invalid();
         }
     }
 
     record Published(
-        UUID aggregateId,
-        long aggregateGeneration,
-        long targetAttemptGeneration,
-        String relocationReference,
-        long relocationChecksumCrc32c,
-        String sourceOwnerId,
-        long sourceOwnerLeaseGeneration,
-        RoutingId sourceNodeRid,
-        long sourceNodeGeneration,
-        RoutingId targetNodeRid,
-        long targetNodeGeneration,
-        String targetOwnerId,
-        long targetOwnerLeaseGeneration,
-        String coordinatorOwnerId,
-        long coordinatorLeaseGeneration,
-        RoutingId coordinatorNodeRid,
-        long coordinatorNodeGeneration,
-        String coordinatorExpectedStoreVersion,
-        int phase,
-        long applicationVersion,
-        int sourceCleanupState,
-        byte[] applicationPayload) {
-        Published { applicationPayload = applicationPayload.clone(); }
-        @Override public byte[] applicationPayload() {
+            UUID aggregateId,
+            long aggregateGeneration,
+            long targetAttemptGeneration,
+            String relocationReference,
+            long relocationChecksumCrc32c,
+            String sourceOwnerId,
+            long sourceOwnerLeaseGeneration,
+            RoutingId sourceNodeRid,
+            long sourceNodeGeneration,
+            RoutingId targetNodeRid,
+            long targetNodeGeneration,
+            String targetOwnerId,
+            long targetOwnerLeaseGeneration,
+            String coordinatorOwnerId,
+            long coordinatorLeaseGeneration,
+            RoutingId coordinatorNodeRid,
+            long coordinatorNodeGeneration,
+            String coordinatorExpectedStoreVersion,
+            int phase,
+            long applicationVersion,
+            int sourceCleanupState,
+            byte[] applicationPayload) {
+        Published {
+            applicationPayload = applicationPayload.clone();
+        }
+
+        @Override
+        public byte[] applicationPayload() {
             return applicationPayload.clone();
         }
     }
+
     record State(
-        long relocationHigh,
-        long relocationLow,
-        long aggregateGeneration,
-        long targetAttemptGeneration,
-        String relocationReference,
-        long relocationChecksumCrc32c,
-        RoutingId sourceNodeRid,
-        long sourceNodeGeneration,
-        String sourceOwnerId,
-        long sourceOwnerLeaseGeneration,
-        RoutingId targetNodeRid,
-        long targetNodeGeneration,
-        String targetOwnerId,
-        long targetOwnerLeaseGeneration,
-        String coordinatorOwnerId,
-        long coordinatorLeaseGeneration,
-        RoutingId coordinatorNodeRid,
-        long coordinatorNodeGeneration,
-        String coordinatorExpectedStoreVersion,
-        int phase,
-        long applicationVersion,
-        int sourceCleanupState) {
+            long relocationHigh,
+            long relocationLow,
+            long aggregateGeneration,
+            long targetAttemptGeneration,
+            String relocationReference,
+            long relocationChecksumCrc32c,
+            RoutingId sourceNodeRid,
+            long sourceNodeGeneration,
+            String sourceOwnerId,
+            long sourceOwnerLeaseGeneration,
+            RoutingId targetNodeRid,
+            long targetNodeGeneration,
+            String targetOwnerId,
+            long targetOwnerLeaseGeneration,
+            String coordinatorOwnerId,
+            long coordinatorLeaseGeneration,
+            RoutingId coordinatorNodeRid,
+            long coordinatorNodeGeneration,
+            String coordinatorExpectedStoreVersion,
+            int phase,
+            long applicationVersion,
+            int sourceCleanupState) {
         State {
             Objects.requireNonNull(relocationReference, "relocationReference");
             Objects.requireNonNull(sourceNodeRid, "sourceNodeRid");
@@ -566,45 +592,95 @@ public final class ZLinkCanonicalRelocationAuthorityStateCodec {
             Objects.requireNonNull(coordinatorOwnerId, "coordinatorOwnerId");
             Objects.requireNonNull(coordinatorNodeRid, "coordinatorNodeRid");
             Objects.requireNonNull(
-                coordinatorExpectedStoreVersion,
-                "coordinatorExpectedStoreVersion");
+                    coordinatorExpectedStoreVersion, "coordinatorExpectedStoreVersion");
         }
     }
-    private record Owner(String ownerId, long ownerLeaseGeneration,
-                         String meshName, RoutingId nodeRid,
-                         long nodeGeneration) {}
+
+    private record Owner(
+            String ownerId,
+            long ownerLeaseGeneration,
+            String meshName,
+            RoutingId nodeRid,
+            long nodeGeneration) {}
+
     private record AuthorityShape(
-        int operationKind,
-        int objectKind,
-        int objectState,
-        int spotKind) {}
-    private record Slot(
-        byte[] body, int start, int end, byte[] state, boolean present) {}
+            int operationKind, int objectKind, int objectState, int spotKind) {}
+
+    private record Slot(byte[] body, int start, int end, byte[] state, boolean present) {}
 
     private static long crc32c(byte[] bytes) {
         return crc32c(bytes, bytes.length);
     }
+
     private static long crc32c(byte[] bytes, int length) {
-        CRC32C crc = new CRC32C(); crc.update(bytes, 0, length); return crc.getValue();
+        CRC32C crc = new CRC32C();
+        crc.update(bytes, 0, length);
+        return crc.getValue();
     }
+
     private static IllegalArgumentException invalid() {
         return new IllegalArgumentException("invalid canonical authority payload");
     }
 
     private static final class Writer {
         private final ByteArrayOutputStream out = new ByteArrayOutputStream();
-        void u8(long v) { out.write((int) v); }
-        void u16(long v) { out.write((int) (v >>> 8)); out.write((int) v); }
-        void u32(long v) { raw(ByteBuffer.allocate(4).order(ByteOrder.BIG_ENDIAN).putInt((int) v).array()); }
-        void u64(long v) { raw(ByteBuffer.allocate(8).order(ByteOrder.BIG_ENDIAN).putLong(v).array()); }
-        void text8(String v) { sized8(textBytes(v, 0xff)); }
-        void text16(String v) { byte[] b=textBytes(v, 4096); u16(b.length); raw(b); }
-        void optionalText8(String v) { byte[] b=optionalTextBytes(v, 0xff); u8(b.length); raw(b); }
-        void sized8(byte[] b) { if (b.length<1||b.length>255) throw invalid(); u8(b.length); raw(b); }
-        void optionalSized8(byte[] b) { if (b.length>255) throw invalid(); u8(b.length); raw(b); }
-        void raw(byte[] b) { out.writeBytes(b); }
-        int size() { return out.size(); }
-        byte[] bytes() { return out.toByteArray(); }
+
+        void u8(long v) {
+            out.write((int) v);
+        }
+
+        void u16(long v) {
+            out.write((int) (v >>> 8));
+            out.write((int) v);
+        }
+
+        void u32(long v) {
+            raw(ByteBuffer.allocate(4).order(ByteOrder.BIG_ENDIAN).putInt((int) v).array());
+        }
+
+        void u64(long v) {
+            raw(ByteBuffer.allocate(8).order(ByteOrder.BIG_ENDIAN).putLong(v).array());
+        }
+
+        void text8(String v) {
+            sized8(textBytes(v, 0xff));
+        }
+
+        void text16(String v) {
+            byte[] b = textBytes(v, 4096);
+            u16(b.length);
+            raw(b);
+        }
+
+        void optionalText8(String v) {
+            byte[] b = optionalTextBytes(v, 0xff);
+            u8(b.length);
+            raw(b);
+        }
+
+        void sized8(byte[] b) {
+            if (b.length < 1 || b.length > 255) throw invalid();
+            u8(b.length);
+            raw(b);
+        }
+
+        void optionalSized8(byte[] b) {
+            if (b.length > 255) throw invalid();
+            u8(b.length);
+            raw(b);
+        }
+
+        void raw(byte[] b) {
+            out.writeBytes(b);
+        }
+
+        int size() {
+            return out.size();
+        }
+
+        byte[] bytes() {
+            return out.toByteArray();
+        }
 
         private static byte[] textBytes(String value, int maximum) {
             Objects.requireNonNull(value, "text");
@@ -630,39 +706,135 @@ public final class ZLinkCanonicalRelocationAuthorityStateCodec {
             return bytes;
         }
     }
+
     private static final class Reader {
-        private final byte[] bytes; private int offset;
-        Reader(byte[] bytes) { this.bytes=Objects.requireNonNull(bytes); }
-        void expect(byte[] v) { for(byte b:v) if(u8()!=Byte.toUnsignedInt(b)) throw invalid(); }
-        int u8(){ require(1); return Byte.toUnsignedInt(bytes[offset++]); }
-        int u16(){ require(2); int v=(u8()<<8)|u8(); return v; }
-        int u32(){ long v=u32Unsigned(); if(v>Integer.MAX_VALUE) throw invalid(); return (int)v; }
-        long u32Unsigned(){ require(4); long v=Integer.toUnsignedLong(ByteBuffer.wrap(bytes,offset,4).order(ByteOrder.BIG_ENDIAN).getInt()); offset+=4; return v; }
-        long u64(){ require(8); long v=ByteBuffer.wrap(bytes,offset,8).order(ByteOrder.BIG_ENDIAN).getLong(); offset+=8; return v; }
-        long nonzeroU64(){ long v=u64(); if(v==0) throw invalid(); return v; }
-        long ordinalOrZero(){ long v=u64(); if(v<0) throw invalid(); return v; }
-        String text8(){ return text(sized8()); }
-        String text16(){ int n=u16(); if(n<1||n>4096) throw invalid(); return text(take(n)); }
-        byte[] sized8(){ int n=u8(); if(n==0) throw invalid(); return take(n); }
+        private final byte[] bytes;
+        private int offset;
+
+        Reader(byte[] bytes) {
+            this.bytes = Objects.requireNonNull(bytes);
+        }
+
+        void expect(byte[] v) {
+            for (byte b : v) if (u8() != Byte.toUnsignedInt(b)) throw invalid();
+        }
+
+        int u8() {
+            require(1);
+            return Byte.toUnsignedInt(bytes[offset++]);
+        }
+
+        int u16() {
+            require(2);
+            int v = (u8() << 8) | u8();
+            return v;
+        }
+
+        int u32() {
+            long v = u32Unsigned();
+            if (v > Integer.MAX_VALUE) throw invalid();
+            return (int) v;
+        }
+
+        long u32Unsigned() {
+            require(4);
+            long v =
+                    Integer.toUnsignedLong(
+                            ByteBuffer.wrap(bytes, offset, 4).order(ByteOrder.BIG_ENDIAN).getInt());
+            offset += 4;
+            return v;
+        }
+
+        long u64() {
+            require(8);
+            long v = ByteBuffer.wrap(bytes, offset, 8).order(ByteOrder.BIG_ENDIAN).getLong();
+            offset += 8;
+            return v;
+        }
+
+        long nonzeroU64() {
+            long v = u64();
+            if (v == 0) throw invalid();
+            return v;
+        }
+
+        long ordinalOrZero() {
+            long v = u64();
+            if (v < 0) throw invalid();
+            return v;
+        }
+
+        String text8() {
+            return text(sized8());
+        }
+
+        String text16() {
+            int n = u16();
+            if (n < 1 || n > 4096) throw invalid();
+            return text(take(n));
+        }
+
+        byte[] sized8() {
+            int n = u8();
+            if (n == 0) throw invalid();
+            return take(n);
+        }
+
         // optional-text8 / optional-rid: zero length means absent.
-        String optionalText8(){ int n=u8(); return n==0 ? "" : text(take(n)); }
-        byte[] optionalSized8(){ int n=u8(); return n==0 ? new byte[0] : take(n); }
-        Reader reader(int n){ return new Reader(take(n)); }
-        void skip(int n){ take(n); }
-        byte[] take(int n){ require(n); byte[] v=Arrays.copyOfRange(bytes,offset,offset+n); offset+=n; return v; }
-        int offset(){ return offset; }
-        int remaining(){ return bytes.length - offset; }
-        byte[] bytes(){ return bytes; }
-        boolean end(){ return offset==bytes.length; }
-        void require(int n){ if(n<0||offset+n>bytes.length) throw invalid(); }
+        String optionalText8() {
+            int n = u8();
+            return n == 0 ? "" : text(take(n));
+        }
+
+        byte[] optionalSized8() {
+            int n = u8();
+            return n == 0 ? new byte[0] : take(n);
+        }
+
+        Reader reader(int n) {
+            return new Reader(take(n));
+        }
+
+        void skip(int n) {
+            take(n);
+        }
+
+        byte[] take(int n) {
+            require(n);
+            byte[] v = Arrays.copyOfRange(bytes, offset, offset + n);
+            offset += n;
+            return v;
+        }
+
+        int offset() {
+            return offset;
+        }
+
+        int remaining() {
+            return bytes.length - offset;
+        }
+
+        byte[] bytes() {
+            return bytes;
+        }
+
+        boolean end() {
+            return offset == bytes.length;
+        }
+
+        void require(int n) {
+            if (n < 0 || offset + n > bytes.length) throw invalid();
+        }
 
         private static String text(byte[] value) {
             try {
-                String decoded = StandardCharsets.UTF_8.newDecoder()
-                    .onMalformedInput(CodingErrorAction.REPORT)
-                    .onUnmappableCharacter(CodingErrorAction.REPORT)
-                    .decode(ByteBuffer.wrap(value))
-                    .toString();
+                String decoded =
+                        StandardCharsets.UTF_8
+                                .newDecoder()
+                                .onMalformedInput(CodingErrorAction.REPORT)
+                                .onUnmappableCharacter(CodingErrorAction.REPORT)
+                                .decode(ByteBuffer.wrap(value))
+                                .toString();
                 if (decoded.indexOf('\0') >= 0) throw invalid();
                 return decoded;
             } catch (CharacterCodingException invalidText) {

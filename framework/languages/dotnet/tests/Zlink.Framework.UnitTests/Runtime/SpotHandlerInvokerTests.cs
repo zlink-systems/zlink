@@ -13,19 +13,19 @@ public sealed class SpotHandlerInvokerTests
     public async Task InvokePacketAsync_Reuses_Unregistered_Handler_And_Disposes_It_Once()
     {
         var lifetime = new HandlerLifetime();
-        using var provider = new ServiceCollection()
-            .AddSingleton(lifetime)
-            .BuildServiceProvider();
+        using var provider = new ServiceCollection().AddSingleton(lifetime).BuildServiceProvider();
         var handlerInstances = new ZLinkScopedHandlerInstanceOwner(provider);
         var spot = new MemberLifecycleSpot();
         var descriptor = ZLinkSpotDescriptorFactory.CreatePacketDescriptor(
             typeof(DisposablePacketHandler),
-            typeof(MemberLifecycleSpot));
+            typeof(MemberLifecycleSpot)
+        );
         var invoker = new ZLinkSpotHandlerInvoker(
             handlerInstances,
             spot,
             new ZLinkCodecRegistryBuilder(),
-            ZLinkStreamProtocolDefaults.CreateLz4CompressionCodec());
+            ZLinkStreamProtocolDefaults.CreateLz4CompressionCodec()
+        );
 
         await invoker.InvokePacketAsync(descriptor, new HandlerMessage(), CancellationToken.None);
         await invoker.InvokePacketAsync(descriptor, new HandlerMessage(), CancellationToken.None);
@@ -62,9 +62,7 @@ public sealed class SpotHandlerInvokerTests
     public async Task InitializationFailure_Cleans_Up_AlreadyCreated_Fallback_Handler()
     {
         var lifetime = new HandlerLifetime();
-        using var provider = new ServiceCollection()
-            .AddSingleton(lifetime)
-            .BuildServiceProvider();
+        using var provider = new ServiceCollection().AddSingleton(lifetime).BuildServiceProvider();
         var handlerInstances = new ZLinkScopedHandlerInstanceOwner(provider);
         _ = handlerInstances.Resolve<DisposablePacketHandler>();
 
@@ -80,7 +78,10 @@ public sealed class SpotHandlerInvokerTests
         var spot = new MemberLifecycleSpot();
         var actor = new MemberLifecycleActor("player-1");
         var descriptor = ZLinkSpotActorAttributedDescriptorFactory
-            .CreateSpotLifecycleDescriptors(ZLinkSpotActorHandlerSurface.UserSpot, typeof(MemberLifecycleSpot))
+            .CreateSpotLifecycleDescriptors(
+                ZLinkSpotActorHandlerSurface.UserSpot,
+                typeof(MemberLifecycleSpot)
+            )
             .Single(item => item.Joined is not null)
             .Joined!;
 
@@ -90,12 +91,10 @@ public sealed class SpotHandlerInvokerTests
             handlerInstances,
             spot,
             new ZLinkCodecRegistryBuilder(),
-            ZLinkStreamProtocolDefaults.CreateLz4CompressionCodec());
+            ZLinkStreamProtocolDefaults.CreateLz4CompressionCodec()
+        );
 
-        await invoker.InvokeActorLifecycleAsync(
-            descriptor,
-            actor,
-            CancellationToken.None);
+        await invoker.InvokeActorLifecycleAsync(descriptor, actor, CancellationToken.None);
 
         Assert.Equal("player-1", spot.JoinedActorId);
     }
@@ -108,14 +107,13 @@ public sealed class SpotHandlerInvokerTests
             .AddSingleton(lifetime)
             .AddScoped<ActorScopedDependency>()
             .BuildServiceProvider();
-        await using var spotHandlerInstances =
-            new ZLinkScopedHandlerInstanceOwner(provider);
+        await using var spotHandlerInstances = new ZLinkScopedHandlerInstanceOwner(provider);
         var firstState = new ZLinkActorRuntimeState("player-1", services: provider);
         var secondState = new ZLinkActorRuntimeState("player-2", services: provider);
         var states = new Dictionary<string, ZLinkActorRuntimeState>
         {
             ["player-1"] = firstState,
-            ["player-2"] = secondState
+            ["player-2"] = secondState,
         };
         var spot = new MemberLifecycleSpot();
         var descriptor = ZLinkSpotActorInterfaceDescriptorFactory
@@ -123,7 +121,8 @@ public sealed class SpotHandlerInvokerTests
                 ZLinkSpotActorHandlerSurface.UserSpot,
                 typeof(MemberLifecycleSpot),
                 typeof(ActorPacketHandler),
-                packetName: null)
+                packetName: null
+            )
             .Single()
             .Packet!;
         var invoker = new ZLinkSpotHandlerInvoker(
@@ -132,7 +131,8 @@ public sealed class SpotHandlerInvokerTests
             "test-mesh",
             new ZLinkCodecRegistryBuilder(),
             ZLinkStreamProtocolDefaults.CreateLz4CompressionCodec(),
-            actorHandlerInstances: actor => states[actor.Context.ActorId].HandlerInstances);
+            actorHandlerInstances: actor => states[actor.Context.ActorId].HandlerInstances
+        );
         var first = new MemberLifecycleActor("player-1");
         var second = new MemberLifecycleActor("player-2");
 
@@ -160,17 +160,21 @@ public sealed class SpotHandlerInvokerTests
                 ZlinkStreamHeaderFlags.None,
                 null,
                 nameof(ActorHandlerMessage),
-                ZlinkStreamMetadata.Empty);
+                ZlinkStreamMetadata.Empty
+            );
             using var body = Message.From(
                 ZLinkEnvelopeCodec.EncodeJsonBytes(
                     new ActorHandlerMessage(value),
-                    typeof(ActorHandlerMessage)));
+                    typeof(ActorHandlerMessage)
+                )
+            );
             await invoker.InvokeActorPacketAsync(
                 descriptor,
                 actor,
                 header,
                 body,
-                CancellationToken.None);
+                CancellationToken.None
+            );
         }
     }
 
@@ -178,7 +182,10 @@ public sealed class SpotHandlerInvokerTests
     public void CreateSpotLifecycleDescriptors_Uses_onLeaveActor_Hook()
     {
         var descriptor = ZLinkSpotActorAttributedDescriptorFactory
-            .CreateSpotLifecycleDescriptors(ZLinkSpotActorHandlerSurface.UserSpot, typeof(MemberLifecycleSpot))
+            .CreateSpotLifecycleDescriptors(
+                ZLinkSpotActorHandlerSurface.UserSpot,
+                typeof(MemberLifecycleSpot)
+            )
             .Single(item => item.Left is not null)
             .Left!;
 
@@ -193,7 +200,8 @@ public sealed class SpotHandlerInvokerTests
         var descriptor = ZLinkSpotActorAttributedDescriptorFactory
             .CreateSpotLifecycleDescriptors(
                 ZLinkSpotActorHandlerSurface.EntrySpot,
-                typeof(EntryLifecycleSpot))
+                typeof(EntryLifecycleSpot)
+            )
             .Single(item => item.Created is not null)
             .Created!;
 
@@ -210,14 +218,16 @@ public sealed class SpotHandlerInvokerTests
         public ValueTask<ZLinkSpotActorJoinResult> OnActorJoinAsync(
             string actorId,
             ZLinkMessage request,
-            CancellationToken cancellationToken)
+            CancellationToken cancellationToken
+        )
         {
             return ValueTask.FromResult(ZLinkSpotActorJoinResult.Accept());
         }
 
         public ValueTask OnJoinedActorAsync(
             MemberLifecycleActor actor,
-            CancellationToken cancellationToken)
+            CancellationToken cancellationToken
+        )
         {
             _ = cancellationToken;
             JoinedActorId = actor.ActorId;
@@ -226,7 +236,8 @@ public sealed class SpotHandlerInvokerTests
 
         public ValueTask OnLeaveActorAsync(
             MemberLifecycleActor actor,
-            CancellationToken cancellationToken)
+            CancellationToken cancellationToken
+        )
         {
             _ = actor;
             _ = cancellationToken;
@@ -248,7 +259,8 @@ public sealed class SpotHandlerInvokerTests
         public ValueTask<ZLinkActorCreateResponse> OnCreateActorAsync(
             MemberLifecycleActor actor,
             ZLinkMessage createRequest,
-            CancellationToken cancellationToken)
+            CancellationToken cancellationToken
+        )
         {
             _ = actor;
             _ = createRequest;
@@ -258,7 +270,8 @@ public sealed class SpotHandlerInvokerTests
 
         public ValueTask OnJoinedActorAsync(
             MemberLifecycleActor actor,
-            CancellationToken cancellationToken)
+            CancellationToken cancellationToken
+        )
         {
             _ = actor;
             cancellationToken.ThrowIfCancellationRequested();
@@ -267,7 +280,8 @@ public sealed class SpotHandlerInvokerTests
 
         public ValueTask OnLeaveActorAsync(
             MemberLifecycleActor actor,
-            CancellationToken cancellationToken)
+            CancellationToken cancellationToken
+        )
         {
             _ = actor;
             cancellationToken.ThrowIfCancellationRequested();
@@ -288,20 +302,24 @@ public sealed class SpotHandlerInvokerTests
 
     private sealed class ActorHandlerLifetime
     {
-        public List<(ActorPacketHandler Handler, ActorScopedDependency Dependency)>
-            Invocations { get; } = [];
+        public List<(
+            ActorPacketHandler Handler,
+            ActorScopedDependency Dependency
+        )> Invocations { get; } = [];
     }
 
     private sealed class ActorScopedDependency;
 
     private sealed class ActorPacketHandler(
         ActorScopedDependency dependency,
-        ActorHandlerLifetime lifetime)
+        ActorHandlerLifetime lifetime
+    )
         : IZLinkSpotActorSendHandler<
             MemberLifecycleSpot,
             MemberLifecycleActor,
-            ActorHandlerMessage>,
-          IAsyncDisposable
+            ActorHandlerMessage
+        >,
+            IAsyncDisposable
     {
         public int DisposeCount { get; private set; }
 
@@ -310,7 +328,8 @@ public sealed class SpotHandlerInvokerTests
             MemberLifecycleActor actor,
             IZLinkMessageContext context,
             ActorHandlerMessage message,
-            CancellationToken cancellationToken)
+            CancellationToken cancellationToken
+        )
         {
             _ = spot;
             _ = actor;
@@ -329,12 +348,14 @@ public sealed class SpotHandlerInvokerTests
     }
 
     private sealed class DisposablePacketHandler(HandlerLifetime lifetime)
-        : IZLinkSpotPacketHandler<MemberLifecycleSpot, HandlerMessage>, IDisposable
+        : IZLinkSpotPacketHandler<MemberLifecycleSpot, HandlerMessage>,
+            IDisposable
     {
         public ValueTask HandleAsync(
             MemberLifecycleSpot spot,
             HandlerMessage message,
-            CancellationToken cancellationToken)
+            CancellationToken cancellationToken
+        )
         {
             _ = spot;
             _ = message;

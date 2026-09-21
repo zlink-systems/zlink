@@ -1,7 +1,4 @@
-import type {
-  ZLinkStreamCompressionCodec,
-  ZLinkStreamCompressionOptions
-} from '../../contracts';
+import type { ZLinkStreamCompressionCodec, ZLinkStreamCompressionOptions } from '../../contracts';
 import type { Message } from '../../contracts/Common/Message';
 import { ZLinkBufferMessage as ZLinkBindingMessage } from '../backend/runtime-message';
 import { currentOrCreateFlow } from '../diagnostics/flow-context';
@@ -24,11 +21,16 @@ import {
 const DEFAULT_MAX_DECOMPRESSED_STREAM_PAYLOAD_SIZE = 64 * 1024;
 
 export interface ZLinkStreamFramePayloadCodec {
-  encode(payload: unknown, context?: {
-    readonly messageType?: Function;
-    readonly packetName?: string;
-    readonly direction: 'Request' | 'Response' | 'Error' | 'Send';
-  } | Function): {
+  encode(
+    payload: unknown,
+    context?:
+      | {
+          readonly messageType?: Function;
+          readonly packetName?: string;
+          readonly direction: 'Request' | 'Response' | 'Error' | 'Send';
+        }
+      | Function
+  ): {
     readonly codec: ZLinkStreamCodec;
     readonly payload: Uint8Array;
   };
@@ -74,9 +76,10 @@ export class ZLinkStreamFrameMessageFactory {
     payload: unknown,
     correlationId?: string
   ): Message {
-    const flow = (this.options.flowCreationEnabled?.() ?? true)
-      ? currentOrCreateFlow('Application')
-      : undefined;
+    const flow =
+      (this.options.flowCreationEnabled?.() ?? true)
+        ? currentOrCreateFlow('Application')
+        : undefined;
     return this.createJsonFrameMessageWithHeader(
       payload,
       compressed,
@@ -87,9 +90,10 @@ export class ZLinkStreamFrameMessageFactory {
         codec,
         flags,
         requestSeq,
-        name: kind === ZLinkStreamMessageKind.Response || kind === ZLinkStreamMessageKind.Error
-          ? ''
-          : packetName,
+        name:
+          kind === ZLinkStreamMessageKind.Response || kind === ZLinkStreamMessageKind.Error
+            ? ''
+            : packetName,
         metadata,
         correlationId,
         flowId: flow?.flowId,
@@ -110,14 +114,15 @@ export class ZLinkStreamFrameMessageFactory {
       compressed,
       requestHeader.name,
       streamDirection(kind),
-      (codec, flags) => createStreamReplyHeader(
-        requestHeader,
-        kind,
-        codec,
-        flags,
-        metadata,
-        this.options.flowCreationEnabled?.() ?? true
-      )
+      (codec, flags) =>
+        createStreamReplyHeader(
+          requestHeader,
+          kind,
+          codec,
+          flags,
+          metadata,
+          this.options.flowCreationEnabled?.() ?? true
+        )
     );
   }
 
@@ -133,7 +138,9 @@ export class ZLinkStreamFrameMessageFactory {
     if (compressed) {
       body = compressStreamPayload(body, this.compressionCodec);
     }
-    const flags = compressed ? ZLinkStreamHeaderFlags.PayloadCompressed : ZLinkStreamHeaderFlags.None;
+    const flags = compressed
+      ? ZLinkStreamHeaderFlags.PayloadCompressed
+      : ZLinkStreamHeaderFlags.None;
     const frame = encodeStreamFrame(createHeader(encoded.codec, flags), body);
     return this.createOwnedFrameMessage(frame);
   }
@@ -168,14 +175,16 @@ export class ZLinkStreamFrameMessageFactory {
     }
     return {
       codec: ZLinkStreamCodec.Json,
-      payload: utf8Encode(stringifyFrameworkJsonV1(
-        payload,
-        direction === 'Error'
-          ? undefined
-          : readZLinkPacketJsonContract(packetName)?.[
-              direction === 'Response' ? 'reply' : 'payload'
-            ]
-      ))
+      payload: utf8Encode(
+        stringifyFrameworkJsonV1(
+          payload,
+          direction === 'Error'
+            ? undefined
+            : readZLinkPacketJsonContract(packetName)?.[
+                direction === 'Response' ? 'reply' : 'payload'
+              ]
+        )
+      )
     };
   }
 
@@ -186,10 +195,14 @@ export class ZLinkStreamFrameMessageFactory {
 
 function streamDirection(kind: ZLinkStreamMessageKind): 'Request' | 'Response' | 'Error' | 'Send' {
   switch (kind) {
-    case ZLinkStreamMessageKind.Request: return 'Request';
-    case ZLinkStreamMessageKind.Response: return 'Response';
-    case ZLinkStreamMessageKind.Error: return 'Error';
-    default: return 'Send';
+    case ZLinkStreamMessageKind.Request:
+      return 'Request';
+    case ZLinkStreamMessageKind.Response:
+      return 'Response';
+    case ZLinkStreamMessageKind.Error:
+      return 'Error';
+    default:
+      return 'Send';
   }
 }
 
@@ -221,7 +234,9 @@ function compressStreamPayload(
   try {
     return codec.compress(payload);
   } catch (error) {
-    throw new Error(`Compression failed: ${error instanceof Error ? error.message : String(error)}`);
+    throw new Error(
+      `Compression failed: ${error instanceof Error ? error.message : String(error)}`
+    );
   }
 }
 
@@ -237,7 +252,9 @@ export function decompressStreamPayload(
   try {
     decompressed = codec.decompress(payload, maxDecompressedSize);
   } catch (error) {
-    throw new Error(`Decompression failed: ${error instanceof Error ? error.message : String(error)}`);
+    throw new Error(
+      `Decompression failed: ${error instanceof Error ? error.message : String(error)}`
+    );
   }
   if (decompressed.length > maxDecompressedSize) {
     throw new Error('Decompressed stream payload exceeds maximum stream payload size.');

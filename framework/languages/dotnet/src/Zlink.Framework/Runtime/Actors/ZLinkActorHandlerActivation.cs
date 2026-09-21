@@ -15,7 +15,8 @@ internal sealed class ZLinkActorHandlerActivation : IAsyncDisposable
         _instances = new ZLinkScopedHandlerInstanceOwner(_scope.ServiceProvider);
         _disposeTask = new Lazy<Task>(
             DisposeCoreAsync,
-            LazyThreadSafetyMode.ExecutionAndPublication);
+            LazyThreadSafetyMode.ExecutionAndPublication
+        );
     }
 
     public ZLinkScopedHandlerInstanceOwner Instances => _instances;
@@ -45,6 +46,7 @@ internal sealed class ZLinkActorHandlerActivation : IAsyncDisposable
 
         if (failures.Count == 1)
             System.Runtime.ExceptionServices.ExceptionDispatchInfo.Capture(failures[0]).Throw();
-        if (failures.Count > 1) throw new AggregateException(failures);
+        if (failures.Count > 1)
+            throw new AggregateException(failures);
     }
 }

@@ -8,14 +8,8 @@ import type {
 import type { ZLinkProviderResolver } from '../../contracts/Common/ZLinkProviderResolver';
 import type { RoutingId } from '../../contracts';
 import type { ActorRef } from '../../contracts/Common/ActorRef';
-import type {
-  ZLinkRemoteActorPacketTarget,
-  ZLinkRemoteBoundSessionTarget
-} from '../actors';
-import type {
-  ZLinkBackendReceived,
-  ZLinkBackendSpot
-} from '../backend/contracts';
+import type { ZLinkRemoteActorPacketTarget, ZLinkRemoteBoundSessionTarget } from '../actors';
+import type { ZLinkBackendReceived, ZLinkBackendSpot } from '../backend/contracts';
 import type { ZLinkDispatchErrorReporter } from '../channels';
 import type { ZLinkChannelEnvelopeCodecRegistry } from '../channels/channel-envelope';
 import { decodeRemoteActorPacketRelay } from './spot-remote-route-codec';
@@ -79,7 +73,9 @@ interface ZLinkSpotRoutedFrameDispatchOptions {
     actorPacketTarget?: unknown,
     signal?: AbortSignal
   ) => Promise<void>;
-  readonly actorPacketTargetProvider?: (actorId: string) => ZLinkRemoteActorPacketTarget | undefined;
+  readonly actorPacketTargetProvider?: (
+    actorId: string
+  ) => ZLinkRemoteActorPacketTarget | undefined;
   readonly bindRemoteSession?: (
     actor: ActorRef,
     sourceNodeRid: RoutingId,
@@ -148,7 +144,10 @@ export class ZLinkSpotRoutedFrameDispatch {
     }
   }
 
-  async drain(received: ZLinkBackendReceived | undefined = undefined, retryDeadlineMs = performance.now()): Promise<void> {
+  async drain(
+    received: ZLinkBackendReceived | undefined = undefined,
+    retryDeadlineMs = performance.now()
+  ): Promise<void> {
     if (this.routeDraining) {
       if (received !== undefined) {
         try {
@@ -226,7 +225,10 @@ export class ZLinkSpotRoutedFrameDispatch {
       this.channelCodecs(),
       this.options.dispatchErrors?.flow.flowCreationEnabled() ?? true
     );
-    if (actorPacketRelay !== undefined && await this.actorPacketRelayDispatch.dispatch(received, actorPacketRelay)) {
+    if (
+      actorPacketRelay !== undefined &&
+      (await this.actorPacketRelayDispatch.dispatch(received, actorPacketRelay))
+    ) {
       return;
     }
     if (await this.routePacketDispatch.dispatch(received)) {
@@ -237,14 +239,15 @@ export class ZLinkSpotRoutedFrameDispatch {
 }
 
 function isRouteRecvRetryable(error: unknown): boolean {
-  return typeof error === 'object' &&
+  return (
+    typeof error === 'object' &&
     error !== null &&
-    [201, 202, 204].includes(Number((error as { result?: unknown }).result));
+    [201, 202, 204].includes(Number((error as { result?: unknown }).result))
+  );
 }
 
 function closeReceivedQuietly(received: ZLinkBackendReceived): void {
   try {
     received.close();
-  } catch {
-  }
+  } catch {}
 }

@@ -112,10 +112,10 @@ service_topology_registry_t::service_topology_registry_t (
     _metric_channel_names.erase (
       std::unique (_metric_channel_names.begin (), _metric_channel_names.end ()),
       _metric_channel_names.end ());
-    _selection_failures = opentelemetry::metrics::Provider::GetMeterProvider ()
-                            ->GetMeter ("zlink.framework")
-                            ->CreateDoubleCounter ("zlink.mesh_node.channel.selection_failures",
-                                                   "", "{failure}");
+    _selection_failures =
+      opentelemetry::metrics::Provider::GetMeterProvider ()
+        ->GetMeter ("zlink.framework")
+        ->CreateDoubleCounter ("zlink.mesh_node.channel.selection_failures", "", "{failure}");
 }
 
 bool service_topology_registry_t::byte_vector_less_t::operator() (
@@ -295,8 +295,7 @@ service_topology_registry_t::admit_impl (service_node_descriptor_t descriptor,
                 return std::pair{peer_admission_result_t::not_required, _change_handler};
             }
 
-            if (admitted != _peers.end ()
-                && admitted->second.connection_id == connection_id
+            if (admitted != _peers.end () && admitted->second.connection_id == connection_id
                 && admitted->second.descriptor == descriptor) {
                 return std::pair{peer_admission_result_t::duplicate_connection,
                                  std::function<void ()>{}};
@@ -404,8 +403,7 @@ void service_topology_registry_t::materialize_selection_state (selection_state_t
 {
     if (!state.precomputed)
         return;
-    std::vector<std::size_t> selected_counts (
-      state.ordered_node_ids.size (), 0);
+    std::vector<std::size_t> selected_counts (state.ordered_node_ids.size (), 0);
     for (std::size_t step = 0; step < state.precomputed_cursor; ++step)
         ++selected_counts[state.precomputed_schedule[step]];
     const auto total_selections = static_cast<std::int64_t> (state.precomputed_cursor);
@@ -514,11 +512,11 @@ void service_topology_registry_t::rebuild_channel_selections ()
         state.total_weight = 0;
         bool all_draining = true;
         for (const auto &[node_id, peer] : _peers) {
-            const auto channel =
-              std::lower_bound (peer.descriptor.channels.begin (),
-                                peer.descriptor.channels.end (), channel_name,
-                                [] (const service_channel_descriptor_t &entry,
-                                    const std::string &name) { return entry.name < name; });
+            const auto channel = std::lower_bound (
+              peer.descriptor.channels.begin (), peer.descriptor.channels.end (), channel_name,
+              [] (const service_channel_descriptor_t &entry, const std::string &name) {
+                  return entry.name < name;
+              });
             if (channel == peer.descriptor.channels.end () || channel->name != channel_name)
                 continue;
             all_draining &= peer.descriptor.state == service_node_state_t::draining;
@@ -602,19 +600,23 @@ service_topology_registry_t::select (const std::string &channel_name)
       .get ();
 }
 
-void service_topology_registry_t::record_selection_failure (const std::string &channel_name) const noexcept
+void service_topology_registry_t::record_selection_failure (
+  const std::string &channel_name) const noexcept
 {
     // Labels come only from startup registrations; arbitrary requested names
     // and per-peer identities cannot create metric series.
-    if (!std::binary_search (_metric_channel_names.begin (), _metric_channel_names.end (), channel_name))
+    if (!std::binary_search (_metric_channel_names.begin (), _metric_channel_names.end (),
+                             channel_name))
         return;
     const auto found = _selection_state.find (channel_name);
     const char *reason = _local.state == service_node_state_t::draining ? "draining"
-                         : found == _selection_state.end () ? "no_member"
-                         : found->second.unavailable_reason;
+                         : found == _selection_state.end ()             ? "no_member"
+                                                            : found->second.unavailable_reason;
     _selection_failures->Add (
-      1, {{"mesh_name", opentelemetry::nostd::string_view (_local.mesh_name.data (), _local.mesh_name.size ())},
-          {"channel_name", opentelemetry::nostd::string_view (channel_name.data (), channel_name.size ())},
+      1, {{"mesh_name",
+           opentelemetry::nostd::string_view (_local.mesh_name.data (), _local.mesh_name.size ())},
+          {"channel_name",
+           opentelemetry::nostd::string_view (channel_name.data (), channel_name.size ())},
           {"reason", reason}});
 }
 
@@ -623,16 +625,19 @@ void service_topology_registry_t::observe_channel_metrics (
 {
     auto observer = opentelemetry::nostd::get<
       opentelemetry::nostd::shared_ptr<opentelemetry::metrics::ObserverResultT<double>>> (result);
-    _lane.run ([&] {
-        // Selection already maintains the bounded member aggregates. No
-        // application object, mailbox or Location Store traversal is needed.
-        for (const auto &channel : _metric_channel_names) {
-            const auto found = _selection_state.find (channel);
-            const auto count = closed || found == _selection_state.end () ? 0 : found->second.weights.size ();
-            observer->Observe (static_cast<double> (count),
-                               {{"mesh_name", _local.mesh_name}, {"channel_name", channel}});
-        }
-    }).get ();
+    _lane
+      .run ([&] {
+          // Selection already maintains the bounded member aggregates. No
+          // application object, mailbox or Location Store traversal is needed.
+          for (const auto &channel : _metric_channel_names) {
+              const auto found = _selection_state.find (channel);
+              const auto count =
+                closed || found == _selection_state.end () ? 0 : found->second.weights.size ();
+              observer->Observe (static_cast<double> (count),
+                                 {{"mesh_name", _local.mesh_name}, {"channel_name", channel}});
+          }
+      })
+      .get ();
 }
 
 std::vector<admitted_peer_t>

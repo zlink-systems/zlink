@@ -32,26 +32,24 @@ class spot_route_internal_dispatcher_t final : public route_internal_packet_disp
     dispatch_request (const route_received_packet_t &received,
                       const runtime::messaging::envelope_header_t &header,
                       service_provider_t &services) const override;
-    bool dispatch_request_async (
-      const route_received_packet_t &received,
-      const runtime::messaging::envelope_header_t &header,
-      service_provider_t &services,
-      std::function<void (result_t<zlink::message_t>)> completion,
-      runtime::protocol::wire_operation_id_t inbound_operation = {},
-      std::uint64_t inbound_reply_route_id = 0) const;
+    bool dispatch_request_async (const route_received_packet_t &received,
+                                 const runtime::messaging::envelope_header_t &header,
+                                 service_provider_t &services,
+                                 std::function<void (result_t<zlink::message_t>)> completion,
+                                 runtime::protocol::wire_operation_id_t inbound_operation = {},
+                                 std::uint64_t inbound_reply_route_id = 0) const;
 
   private:
-    result_t<void> bind_actor_session_route (
-      actor_gateway_runtime_t &actor_gateway,
-      const actor_ref_t &actor_ref,
-      std::string route_channel_name,
-      zlink::routing_id_t session_node_rid,
-      std::optional<zlink::routing_id_t> session_rid,
-      bool replace_existing) const;
-    result_t<actor_gateway_runtime_t> bind_actor_route (
-      const actor_ref_t &actor_ref,
-      const runtime::messaging::envelope_header_t &header,
-      const route_received_packet_t &received) const;
+    result_t<void> bind_actor_session_route (actor_gateway_runtime_t &actor_gateway,
+                                             const actor_ref_t &actor_ref,
+                                             std::string route_channel_name,
+                                             zlink::routing_id_t session_node_rid,
+                                             std::optional<zlink::routing_id_t> session_rid,
+                                             bool replace_existing) const;
+    result_t<actor_gateway_runtime_t>
+    bind_actor_route (const actor_ref_t &actor_ref,
+                      const runtime::messaging::envelope_header_t &header,
+                      const route_received_packet_t &received) const;
     void dispatch_actor_commit_request (
       spot_actor_commit_route_request_t request,
       const route_received_packet_t &received,

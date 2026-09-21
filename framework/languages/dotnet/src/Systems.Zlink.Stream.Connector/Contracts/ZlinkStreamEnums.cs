@@ -5,7 +5,7 @@ public enum ZlinkStreamTransport
     Tcp,
     Tls,
     WebSocket,
-    WebSocketSecure
+    WebSocketSecure,
 }
 
 public enum ZlinkStreamCodec : byte
@@ -13,19 +13,19 @@ public enum ZlinkStreamCodec : byte
     Raw = 0,
     Json = 1,
     MessagePack = 2,
-    Protobuf = 3
+    Protobuf = 3,
 }
 
 public enum ZlinkStreamCompression
 {
     None,
-    Lz4
+    Lz4,
 }
 
 public enum ZlinkStreamDispatchMode
 {
     Manual,
-    Immediate
+    Immediate,
 }
 
 /// <summary>
@@ -38,7 +38,7 @@ public enum ZlinkStreamDiagnosticsLevel
     Off = 0,
     Errors = 1,
     Normal = 2,
-    Detailed = 3
+    Detailed = 3,
 }
 
 public enum ZlinkStreamMessageKind : byte
@@ -47,7 +47,7 @@ public enum ZlinkStreamMessageKind : byte
     Request = 2,
     Response = 3,
     Error = 4,
-    Control = 5
+    Control = 5,
 }
 
 public enum ZlinkStreamErrorCode
@@ -64,7 +64,7 @@ public enum ZlinkStreamErrorCode
     TlsValidationFailed,
     DecompressionFailed,
     UserCallbackFailed,
-    RemoteError
+    RemoteError,
 }
 
 public enum ZlinkStreamConnectionState
@@ -74,7 +74,7 @@ public enum ZlinkStreamConnectionState
     Connected,
     Reconnecting,
     Disconnected,
-    Closed
+    Closed,
 }
 
 /// <summary>
@@ -90,7 +90,7 @@ public enum ZlinkStreamFlowOrigin
     Inbound,
     Timer,
     Application,
-    Lifecycle
+    Lifecycle,
 }
 
 public enum ZlinkStreamCloseReason
@@ -100,5 +100,5 @@ public enum ZlinkStreamCloseReason
     HeartbeatTimeout = 2,
     ServerDrain = 3,
     ProtocolError = 4,
-    TransportError = 5
+    TransportError = 5,
 }

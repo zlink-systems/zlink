@@ -10,16 +10,14 @@ private fun ZLinkFrameworkOptions.suspendHandlerOptions(): ZLinkSuspendHandlerOp
         ?: error("The configured Framework options do not support Kotlin coroutine handlers")
 
 fun ZLinkFrameworkOptions.useCoroutineHandlers(dispatcher: CoroutineDispatcher) {
-    suspendHandlerOptions().useSuspendHandlerInvoker(
-        ZLinkCoroutineSuspendHandlerInvoker(dispatcher),
-    )
+    suspendHandlerOptions()
+        .useSuspendHandlerInvoker(ZLinkCoroutineSuspendHandlerInvoker(dispatcher))
 }
 
 fun ZLinkFrameworkOptions.useCoroutineHandlers(
     scope: CoroutineScope,
     dispatcher: CoroutineDispatcher,
 ) {
-    suspendHandlerOptions().useSuspendHandlerInvoker(
-        ZLinkCoroutineSuspendHandlerInvoker(scope, dispatcher),
-    )
+    suspendHandlerOptions()
+        .useSuspendHandlerInvoker(ZLinkCoroutineSuspendHandlerInvoker(scope, dispatcher))
 }

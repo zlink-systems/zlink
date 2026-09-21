@@ -22,8 +22,10 @@ internal sealed class ZlinkStreamPacketNameResolver : IZlinkStreamPacketNameReso
     public string Resolve(Type payloadType)
     {
         ArgumentNullException.ThrowIfNull(payloadType);
-        return Cache.GetOrAdd(payloadType, static type =>
-            type.GetCustomAttribute<ZlinkStreamPacketNameAttribute>(true)?.Name
-            ?? type.Name);
+        return Cache.GetOrAdd(
+            payloadType,
+            static type =>
+                type.GetCustomAttribute<ZlinkStreamPacketNameAttribute>(true)?.Name ?? type.Name
+        );
     }
 }

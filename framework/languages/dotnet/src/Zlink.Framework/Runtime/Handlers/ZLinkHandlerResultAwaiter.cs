@@ -4,11 +4,15 @@ namespace Zlink.Framework.Runtime.Handlers;
 
 internal static class ZLinkHandlerResultAwaiter
 {
-    private static readonly ConcurrentDictionary<Type, Func<object, ValueTask<object?>>> GenericAwaiters = new();
+    private static readonly ConcurrentDictionary<
+        Type,
+        Func<object, ValueTask<object?>>
+    > GenericAwaiters = new();
 
     public static ValueTask<object?> AwaitAsync(object? result)
     {
-        if (result is null) return new ValueTask<object?>((object?)null);
+        if (result is null)
+            return new ValueTask<object?>((object?)null);
 
         switch (result)
         {
@@ -30,20 +34,24 @@ internal static class ZLinkHandlerResultAwaiter
     private static bool IsGenericAwaitable(Type resultType)
     {
         return resultType.IsGenericType
-               && (resultType.GetGenericTypeDefinition() == typeof(Task<>)
-                   || resultType.GetGenericTypeDefinition() == typeof(ValueTask<>));
+            && (
+                resultType.GetGenericTypeDefinition() == typeof(Task<>)
+                || resultType.GetGenericTypeDefinition() == typeof(ValueTask<>)
+            );
     }
 
     private static Func<object, ValueTask<object?>> CreateGenericAwaiter(Type resultType)
     {
         var resultValueType = resultType.GetGenericArguments()[0];
-        var methodName = resultType.GetGenericTypeDefinition() == typeof(Task<>)
-            ? nameof(AwaitTaskAsync)
-            : nameof(AwaitValueTaskAsync);
+        var methodName =
+            resultType.GetGenericTypeDefinition() == typeof(Task<>)
+                ? nameof(AwaitTaskAsync)
+                : nameof(AwaitValueTaskAsync);
         var method = typeof(ZLinkHandlerResultAwaiter)
             .GetMethod(methodName)!
             .MakeGenericMethod(resultValueType);
-        return (Func<object, ValueTask<object?>>)method.CreateDelegate(typeof(Func<object, ValueTask<object?>>));
+        return (Func<object, ValueTask<object?>>)
+            method.CreateDelegate(typeof(Func<object, ValueTask<object?>>));
     }
 
     public static ValueTask<object?> AwaitTaskAsync<T>(object result)

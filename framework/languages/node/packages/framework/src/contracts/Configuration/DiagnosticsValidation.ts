@@ -1,12 +1,7 @@
 import type { ZLinkMessageFlowLogMode } from '../Dispatch';
 import { ZLinkConfigurationException } from './ConfigurationException';
 
-const MESSAGE_FLOW_MODES: ReadonlySet<string> = new Set([
-  'off',
-  'errors',
-  'normal',
-  'detailed'
-]);
+const MESSAGE_FLOW_MODES: ReadonlySet<string> = new Set(['off', 'errors', 'normal', 'detailed']);
 
 export function requireMessageFlowLogMode(value: unknown): ZLinkMessageFlowLogMode {
   if (typeof value !== 'string' || !MESSAGE_FLOW_MODES.has(value)) {

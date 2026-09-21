@@ -1,4 +1,7 @@
-import { ZLinkFrameworkInternalErrorKind, createInternalFrameworkException  } from '../framework-errors-internal';
+import {
+  ZLinkFrameworkInternalErrorKind,
+  createInternalFrameworkException
+} from '../framework-errors-internal';
 import type {
   ActorRef,
   RoutingId,
@@ -6,14 +9,9 @@ import type {
   ZLinkActorContext,
   ZLinkSpot
 } from '../../contracts';
-import {
-  ZLinkSpotKind
-} from '../../contracts';
+import { ZLinkSpotKind } from '../../contracts';
 import type { Message } from '../../contracts/Common/Message';
-import type {
-  ZLinkBackendActorRef,
-  ZLinkBackendMeshNode
-} from '../backend/contracts';
+import type { ZLinkBackendActorRef, ZLinkBackendMeshNode } from '../backend/contracts';
 import { routingIdsEqual } from '../routing-id';
 import { lookupNativeActorRef } from './actor-native-lookup';
 
@@ -64,14 +62,12 @@ export function mergeRemoteBoundSessionTarget(
   fallback: ZLinkRemoteBoundSessionTarget | undefined
 ): ZLinkRemoteBoundSessionTarget {
   if (
-    fallback === undefined
-    || fallback.routerChannelId !== target.routerChannelId
-    || !routingIdsEqual(fallback.targetNodeRid, target.targetNodeRid)
-    || (
-      !routingIdsEqual(fallback.spotId, target.spotId)
-      && !samePhysicalRemoteSession(fallback, target)
-    )
-    || isSuccessorSessionBinding(fallback, target)
+    fallback === undefined ||
+    fallback.routerChannelId !== target.routerChannelId ||
+    !routingIdsEqual(fallback.targetNodeRid, target.targetNodeRid) ||
+    (!routingIdsEqual(fallback.spotId, target.spotId) &&
+      !samePhysicalRemoteSession(fallback, target)) ||
+    isSuccessorSessionBinding(fallback, target)
   ) {
     return target;
   }
@@ -91,8 +87,7 @@ export function mergeRemoteBoundSessionTarget(
     previousOwnerLeaseGeneration:
       target.previousOwnerLeaseGeneration ?? fallback.previousOwnerLeaseGeneration,
     relocationSealId: target.relocationSealId ?? fallback.relocationSealId,
-    serviceWireRelocation:
-      target.serviceWireRelocation ?? fallback.serviceWireRelocation
+    serviceWireRelocation: target.serviceWireRelocation ?? fallback.serviceWireRelocation
   };
   return merged;
 }
@@ -120,25 +115,21 @@ function isSuccessorSessionBinding(
   target: ZLinkRemoteBoundSessionTarget
 ): boolean {
   return (
-    fallback.sessionNodeRid !== undefined
-    && target.sessionNodeRid !== undefined
-    && !routingIdsEqual(fallback.sessionNodeRid, target.sessionNodeRid)
-  ) || (
-    fallback.sessionRid !== undefined
-    && target.sessionRid !== undefined
-    && !routingIdsEqual(fallback.sessionRid, target.sessionRid)
-  ) || (
-    fallback.sessionOwnerNodeGeneration !== undefined
-    && target.sessionOwnerNodeGeneration !== undefined
-    && fallback.sessionOwnerNodeGeneration !== target.sessionOwnerNodeGeneration
-  ) || (
-    fallback.sessionOwnerId !== undefined
-    && target.sessionOwnerId !== undefined
-    && fallback.sessionOwnerId !== target.sessionOwnerId
-  ) || (
-    fallback.sessionOwnerLeaseGeneration !== undefined
-    && target.sessionOwnerLeaseGeneration !== undefined
-    && fallback.sessionOwnerLeaseGeneration !== target.sessionOwnerLeaseGeneration
+    (fallback.sessionNodeRid !== undefined &&
+      target.sessionNodeRid !== undefined &&
+      !routingIdsEqual(fallback.sessionNodeRid, target.sessionNodeRid)) ||
+    (fallback.sessionRid !== undefined &&
+      target.sessionRid !== undefined &&
+      !routingIdsEqual(fallback.sessionRid, target.sessionRid)) ||
+    (fallback.sessionOwnerNodeGeneration !== undefined &&
+      target.sessionOwnerNodeGeneration !== undefined &&
+      fallback.sessionOwnerNodeGeneration !== target.sessionOwnerNodeGeneration) ||
+    (fallback.sessionOwnerId !== undefined &&
+      target.sessionOwnerId !== undefined &&
+      fallback.sessionOwnerId !== target.sessionOwnerId) ||
+    (fallback.sessionOwnerLeaseGeneration !== undefined &&
+      target.sessionOwnerLeaseGeneration !== undefined &&
+      fallback.sessionOwnerLeaseGeneration !== target.sessionOwnerLeaseGeneration)
   );
 }
 
@@ -151,65 +142,69 @@ type ZLinkRemoteSessionOwnerIdentity = Pick<
   | 'sessionOwnerLeaseGeneration'
 >;
 
-type ZLinkRemoteSessionOwnerLifecycle = Omit<
-  ZLinkRemoteSessionOwnerIdentity,
-  'sessionRid'
->;
+type ZLinkRemoteSessionOwnerLifecycle = Omit<ZLinkRemoteSessionOwnerIdentity, 'sessionRid'>;
 
 function samePhysicalRemoteSession(
   left: ZLinkRemoteBoundSessionTarget,
   right: Pick<ZLinkRemoteBoundSessionTarget, 'sessionNodeRid' | 'sessionRid'>
 ): boolean {
-  return left.sessionNodeRid !== undefined
-    && right.sessionNodeRid !== undefined
-    && left.sessionRid !== undefined
-    && right.sessionRid !== undefined
-    && routingIdsEqual(left.sessionNodeRid, right.sessionNodeRid)
-    && routingIdsEqual(left.sessionRid, right.sessionRid);
+  return (
+    left.sessionNodeRid !== undefined &&
+    right.sessionNodeRid !== undefined &&
+    left.sessionRid !== undefined &&
+    right.sessionRid !== undefined &&
+    routingIdsEqual(left.sessionNodeRid, right.sessionNodeRid) &&
+    routingIdsEqual(left.sessionRid, right.sessionRid)
+  );
 }
 
 function sameRemoteSessionOwnerLifecycle(
   left: ZLinkRemoteBoundSessionTarget,
   right: ZLinkRemoteSessionOwnerLifecycle
 ): boolean {
-  return left.sessionNodeRid !== undefined
-    && right.sessionNodeRid !== undefined
-    && left.sessionOwnerNodeGeneration !== undefined
-    && right.sessionOwnerNodeGeneration !== undefined
-    && left.sessionOwnerId !== undefined
-    && right.sessionOwnerId !== undefined
-    && left.sessionOwnerLeaseGeneration !== undefined
-    && right.sessionOwnerLeaseGeneration !== undefined
-    && routingIdsEqual(left.sessionNodeRid, right.sessionNodeRid)
-    && left.sessionOwnerNodeGeneration === right.sessionOwnerNodeGeneration
-    && left.sessionOwnerId === right.sessionOwnerId
-    && left.sessionOwnerLeaseGeneration === right.sessionOwnerLeaseGeneration;
+  return (
+    left.sessionNodeRid !== undefined &&
+    right.sessionNodeRid !== undefined &&
+    left.sessionOwnerNodeGeneration !== undefined &&
+    right.sessionOwnerNodeGeneration !== undefined &&
+    left.sessionOwnerId !== undefined &&
+    right.sessionOwnerId !== undefined &&
+    left.sessionOwnerLeaseGeneration !== undefined &&
+    right.sessionOwnerLeaseGeneration !== undefined &&
+    routingIdsEqual(left.sessionNodeRid, right.sessionNodeRid) &&
+    left.sessionOwnerNodeGeneration === right.sessionOwnerNodeGeneration &&
+    left.sessionOwnerId === right.sessionOwnerId &&
+    left.sessionOwnerLeaseGeneration === right.sessionOwnerLeaseGeneration
+  );
 }
 
 function sameRemoteSessionOwner(
   left: ZLinkRemoteBoundSessionTarget,
   right: ZLinkRemoteSessionOwnerIdentity
 ): boolean {
-  return left.sessionRid !== undefined
-    && right.sessionRid !== undefined
-    && routingIdsEqual(left.sessionRid, right.sessionRid)
-    && sameRemoteSessionOwnerLifecycle(left, right);
+  return (
+    left.sessionRid !== undefined &&
+    right.sessionRid !== undefined &&
+    routingIdsEqual(left.sessionRid, right.sessionRid) &&
+    sameRemoteSessionOwnerLifecycle(left, right)
+  );
 }
 
 type ZLinkBoundSessionBindingIdentity = Pick<
   ZLinkRemoteBoundSessionTarget,
-  keyof ZLinkRemoteSessionOwnerIdentity
-  | 'bindingGeneration'
+  keyof ZLinkRemoteSessionOwnerIdentity | 'bindingGeneration'
 >;
 
 function sameRemoteSessionBinding(
   left: ZLinkRemoteBoundSessionTarget,
   right: ZLinkBoundSessionBindingIdentity
 ): boolean {
-  return sameRemoteSessionOwner(left, right)
-    && left.bindingGeneration !== undefined
-    && right.bindingGeneration !== undefined
-    && left.bindingGeneration === right.bindingGeneration;
+  return (
+    sameRemoteSessionOwner(left, right) &&
+    left.bindingGeneration !== undefined &&
+    right.bindingGeneration !== undefined &&
+    left.bindingGeneration === right.bindingGeneration
+  );
 }
 
 /**
@@ -226,8 +221,7 @@ export function preferredRemoteBoundSessionTarget(
 }
 
 function hasRelocationFence(target: ZLinkRemoteBoundSessionTarget): boolean {
-  return target.relocationSealId !== undefined
-    || target.serviceWireRelocation !== undefined;
+  return target.relocationSealId !== undefined || target.serviceWireRelocation !== undefined;
 }
 
 export interface ZLinkRemoteActorPacketTarget {
@@ -433,7 +427,10 @@ export class ZLinkActorRuntimeState {
       return this.destroyTask;
     }
     const actorRef = this.nativeActorRefValue;
-    if (actorRef !== undefined && !routingIdsEqual(toFrameworkRoutingId(actorRef.nodeRid), entryNodeRid)) {
+    if (
+      actorRef !== undefined &&
+      !routingIdsEqual(toFrameworkRoutingId(actorRef.nodeRid), entryNodeRid)
+    ) {
       throw createInternalFrameworkException(
         ZLinkFrameworkInternalErrorKind.ActorRouteNotFound,
         `Actor '${this.actorId}' is not owned by this Entry Spot.`
@@ -541,10 +538,12 @@ export class ZLinkActorRuntimeState {
   ensureNativeActorRef(node: ZLinkBackendMeshNode, request?: Message): ZLinkBackendActorRef {
     if (this.nativeActorRefValue === undefined) {
       const existing = lookupNativeActorRef(node, this.actorId);
-      const native = existing ?? node.createActor(
-        this.actorId,
-        request === undefined ? undefined : Buffer.from(request.data())
-      );
+      const native =
+        existing ??
+        node.createActor(
+          this.actorId,
+          request === undefined ? undefined : Buffer.from(request.data())
+        );
       this.nativeActorRefValue = {
         nodeRid: native.nodeRid as ZLinkBackendActorRef['nodeRid'],
         actorId: native.actorId,
@@ -581,14 +580,16 @@ export class ZLinkActorRuntimeState {
   /** @internal Installs one authority-confirmed binding inside its Actor owner turn. */
   installBoundSessionBinding(target: ZLinkRemoteBoundSessionTarget): boolean {
     if (
-      target.sessionNodeRid === undefined
-      || target.sessionRid === undefined
-      || target.sessionOwnerNodeGeneration === undefined
-      || target.sessionOwnerId === undefined
-      || target.sessionOwnerLeaseGeneration === undefined
-      || target.bindingGeneration === undefined
+      target.sessionNodeRid === undefined ||
+      target.sessionRid === undefined ||
+      target.sessionOwnerNodeGeneration === undefined ||
+      target.sessionOwnerId === undefined ||
+      target.sessionOwnerLeaseGeneration === undefined ||
+      target.bindingGeneration === undefined
     ) {
-      throw new TypeError('An installed bound Session target requires its complete binding identity.');
+      throw new TypeError(
+        'An installed bound Session target requires its complete binding identity.'
+      );
     }
     const current = preferredRemoteBoundSessionTarget(
       this.remoteBoundSessionTargetValue,
@@ -600,9 +601,10 @@ export class ZLinkActorRuntimeState {
       // lifecycle's generation; a late equal/lower generation is stale.
       if (sameRemoteSessionOwner(current, target)) return true;
       if (
-        current.bindingGeneration !== undefined
-        && current.bindingGeneration >= target.bindingGeneration
-      ) return false;
+        current.bindingGeneration !== undefined &&
+        current.bindingGeneration >= target.bindingGeneration
+      )
+        return false;
     }
     const installed = mergeRemoteBoundSessionTarget(target, current);
     // Binding generations are scoped to a Session-owner lifecycle. A restarted
@@ -619,35 +621,36 @@ export class ZLinkActorRuntimeState {
   /** @internal Removes only the exact authority-confirmed Session incarnation. */
   retireBoundSessionBinding(target: ZLinkBoundSessionBindingIdentity): boolean {
     if (
-      target.sessionNodeRid === undefined
-      || target.sessionRid === undefined
-      || target.sessionOwnerNodeGeneration === undefined
-      || target.sessionOwnerId === undefined
-      || target.sessionOwnerLeaseGeneration === undefined
-      || target.bindingGeneration === undefined
+      target.sessionNodeRid === undefined ||
+      target.sessionRid === undefined ||
+      target.sessionOwnerNodeGeneration === undefined ||
+      target.sessionOwnerId === undefined ||
+      target.sessionOwnerLeaseGeneration === undefined ||
+      target.bindingGeneration === undefined
     ) {
       throw new TypeError('A retired bound Session target requires its complete binding identity.');
     }
     let retired = false;
     if (
-      this.remoteBoundSessionTargetValue !== undefined
-      && sameRemoteSessionBinding(this.remoteBoundSessionTargetValue, target)
+      this.remoteBoundSessionTargetValue !== undefined &&
+      sameRemoteSessionBinding(this.remoteBoundSessionTargetValue, target)
     ) {
       this.remoteBoundSessionTargetValue = undefined;
       retired = true;
     }
     if (
-      this.boundSessionTransferTargetValue !== undefined
-      && sameRemoteSessionBinding(this.boundSessionTransferTargetValue, target)
+      this.boundSessionTransferTargetValue !== undefined &&
+      sameRemoteSessionBinding(this.boundSessionTransferTargetValue, target)
     ) {
       this.boundSessionTransferTargetValue = undefined;
       retired = true;
     }
     if (retired) {
-      this.boundSessionBindingGenerationValue = preferredRemoteBoundSessionTarget(
-        this.remoteBoundSessionTargetValue,
-        this.boundSessionTransferTargetValue
-      )?.bindingGeneration ?? 0n;
+      this.boundSessionBindingGenerationValue =
+        preferredRemoteBoundSessionTarget(
+          this.remoteBoundSessionTargetValue,
+          this.boundSessionTransferTargetValue
+        )?.bindingGeneration ?? 0n;
     }
     return retired;
   }
@@ -661,35 +664,37 @@ export class ZLinkActorRuntimeState {
       this.remoteBoundSessionTargetValue,
       this.boundSessionTransferTargetValue
     );
-    const merged = target === undefined
-      ? undefined
-      : mergeRemoteBoundSessionTarget(target, current);
+    const merged =
+      target === undefined ? undefined : mergeRemoteBoundSessionTarget(target, current);
     const bindingGeneration = maxBindingGeneration(
       merged?.bindingGeneration,
       this.remoteBoundSessionTargetValue?.bindingGeneration,
       this.boundSessionBindingGenerationValue
     );
-    this.remoteBoundSessionTargetValue = merged === undefined
-      ? undefined
-      : bindingGeneration === undefined
-        ? merged
-        : { ...merged, bindingGeneration };
+    this.remoteBoundSessionTargetValue =
+      merged === undefined
+        ? undefined
+        : bindingGeneration === undefined
+          ? merged
+          : { ...merged, bindingGeneration };
   }
 
   setBoundSessionTransferTarget(target: ZLinkRemoteBoundSessionTarget | undefined): void {
-    const merged = target === undefined
-      ? undefined
-      : mergeRemoteBoundSessionTarget(target, this.boundSessionTransferTargetValue);
+    const merged =
+      target === undefined
+        ? undefined
+        : mergeRemoteBoundSessionTarget(target, this.boundSessionTransferTargetValue);
     const bindingGeneration = maxBindingGeneration(
       merged?.bindingGeneration,
       this.boundSessionTransferTargetValue?.bindingGeneration,
       this.boundSessionBindingGenerationValue
     );
-    this.boundSessionTransferTargetValue = merged === undefined
-      ? undefined
-      : bindingGeneration === undefined
-        ? merged
-        : { ...merged, bindingGeneration };
+    this.boundSessionTransferTargetValue =
+      merged === undefined
+        ? undefined
+        : bindingGeneration === undefined
+          ? merged
+          : { ...merged, bindingGeneration };
   }
 
   setRemoteActorPacketTarget(target: ZLinkRemoteActorPacketTarget | undefined): void {
@@ -748,10 +753,11 @@ export class ZLinkActorRuntimeState {
 
   prepareForRemoteReentry(): void {
     if (this.remoteActorPacketTargetValue === undefined) return;
-    const relocationTransferTarget = this.boundSessionTransferTargetValue !== undefined
-      && hasRelocationFence(this.boundSessionTransferTargetValue)
-      ? this.boundSessionTransferTargetValue
-      : undefined;
+    const relocationTransferTarget =
+      this.boundSessionTransferTargetValue !== undefined &&
+      hasRelocationFence(this.boundSessionTransferTargetValue)
+        ? this.boundSessionTransferTargetValue
+        : undefined;
     this.creationTask = undefined;
     this.configured = false;
     this.context = undefined;
@@ -790,10 +796,7 @@ export function toFrameworkRoutingId(routingId: unknown): RoutingId {
   return routingId as unknown as RoutingId;
 }
 
-export function toFrameworkActorRef(
-  actor: ZLinkBackendActorRef,
-  meshName: string
-): ActorRef {
+export function toFrameworkActorRef(actor: ZLinkBackendActorRef, meshName: string): ActorRef {
   const actorRef = {
     actorId: actor.actorId,
     objectGeneration: actor.generation,

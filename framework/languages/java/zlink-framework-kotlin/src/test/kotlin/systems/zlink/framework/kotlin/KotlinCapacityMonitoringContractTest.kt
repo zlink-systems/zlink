@@ -1,6 +1,5 @@
 package systems.zlink.framework.kotlin
 
-import org.junit.jupiter.api.Assertions
 import java.time.Instant
 import java.util.Optional
 import org.junit.jupiter.api.Assertions.assertEquals
@@ -14,23 +13,20 @@ import systems.zlink.framework.monitoring.ZLinkTopologyState
 class KotlinCapacityMonitoringContractTest {
     @Test
     fun `Java placement status keeps the exact Kotlin-visible shape`() {
-        val placement = ZLinkPlacementSnapshot(
-            false,
-            3,
-            2,
-            Optional.of(ZLinkTopologyReason.CAPACITY_EXCEEDED),
-        )
-        val snapshot = ZLinkMeshNodeSnapshot(
-            "mesh",
-            ZLinkTopologyState.READY,
-            true,
-            0,
-            emptyList(),
-            emptyList(),
-            placement,
-            1,
-            Instant.now(),
-        )
+        val placement =
+            ZLinkPlacementSnapshot(false, 3, 2, Optional.of(ZLinkTopologyReason.CAPACITY_EXCEEDED))
+        val snapshot =
+            ZLinkMeshNodeSnapshot(
+                "mesh",
+                ZLinkTopologyState.READY,
+                true,
+                0,
+                emptyList(),
+                emptyList(),
+                placement,
+                1,
+                Instant.now(),
+            )
 
         assertFalse(snapshot.placement().isAvailable)
         assertEquals(3, snapshot.placement().activeActorCount())

@@ -1,9 +1,4 @@
 package systems.zlink.framework;
-import java.time.Duration;
-import java.util.Map;
-import systems.zlink.framework.actors.ZLinkActorRequestCall;
-import systems.zlink.framework.configuration.ZLinkUserSpotExecutionMode;
-import systems.zlink.framework.spots.ZLinkWorkerCall;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
@@ -11,19 +6,18 @@ import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
-import java.lang.annotation.Repeatable;
-import java.lang.reflect.Method;
-import java.lang.reflect.Modifier;
-import java.util.Arrays;
-import java.util.List;
-import java.util.concurrent.CompletableFuture;
-import java.util.concurrent.CompletionStage;
 import org.junit.jupiter.api.Test;
-import systems.zlink.contracts.core.RoutingId;
+
+import systems.zlink.framework.actors.ZLinkActor;
+import systems.zlink.framework.actors.ZLinkActorContext;
+import systems.zlink.framework.actors.ZLinkActorFactory;
+import systems.zlink.framework.actors.ZLinkActorJoinCall;
+import systems.zlink.framework.actors.ZLinkActorRequestCall;
+import systems.zlink.framework.channels.ZLinkPublishCall;
 import systems.zlink.framework.channels.ZLinkRequestCall;
 import systems.zlink.framework.channels.ZLinkSendCall;
-import systems.zlink.framework.channels.ZLinkPublishCall;
 import systems.zlink.framework.configuration.ZLinkMetadataPolicyBuilder;
+import systems.zlink.framework.configuration.ZLinkUserSpotExecutionMode;
 import systems.zlink.framework.handlers.ZLinkHandlerGroup;
 import systems.zlink.framework.handlers.ZLinkHandlerGroups;
 import systems.zlink.framework.handlers.ZLinkPublish;
@@ -36,24 +30,20 @@ import systems.zlink.framework.handlers.ZLinkSpotSubscription;
 import systems.zlink.framework.handlers.ZLinkSpotTimer;
 import systems.zlink.framework.handlers.ZLinkStreamPacket;
 import systems.zlink.framework.handlers.ZLinkStreamRaw;
-import systems.zlink.framework.actors.ZLinkActor;
-import systems.zlink.framework.actors.ZLinkActorContext;
-import systems.zlink.framework.actors.ZLinkActorFactory;
-import systems.zlink.framework.actors.ZLinkActorJoinCall;
-import systems.zlink.framework.actors.ZLinkBoundSessionSendCall;
 import systems.zlink.framework.messaging.ZLinkMessage;
-import systems.zlink.framework.spots.ZLinkSpotHandlerRegistry;
+import systems.zlink.framework.spots.ZLinkEntrySpot;
 import systems.zlink.framework.spots.ZLinkEntrySpotActorRequestHandler;
 import systems.zlink.framework.spots.ZLinkEntrySpotActorSendHandler;
-import systems.zlink.framework.spots.ZLinkEntrySpot;
 import systems.zlink.framework.spots.ZLinkSpot;
+import systems.zlink.framework.spots.ZLinkSpotActorJoinResult;
 import systems.zlink.framework.spots.ZLinkSpotActorRequestHandler;
 import systems.zlink.framework.spots.ZLinkSpotActorSendHandler;
-import systems.zlink.framework.spots.ZLinkSpotActorJoinResult;
+import systems.zlink.framework.spots.ZLinkSpotHandlerRegistry;
 import systems.zlink.framework.spots.ZLinkSpotPacketHandler;
 import systems.zlink.framework.spots.ZLinkSpotRequestHandler;
 import systems.zlink.framework.spots.ZLinkSpotSubscriptionHandler;
 import systems.zlink.framework.spots.ZLinkTimerOptions;
+import systems.zlink.framework.spots.ZLinkWorkerCall;
 import systems.zlink.framework.streams.ZLinkSession;
 import systems.zlink.framework.streams.ZLinkSessionActor;
 import systems.zlink.framework.streams.ZLinkSessionContext;
@@ -61,6 +51,15 @@ import systems.zlink.framework.streams.ZLinkSessionDispatchContext;
 import systems.zlink.framework.streams.ZLinkSessionPacketDispatcher;
 import systems.zlink.framework.streams.ZLinkSessionReplyCall;
 import systems.zlink.framework.streams.ZLinkTypedSessionPacketHandler;
+
+import java.lang.annotation.Repeatable;
+import java.lang.reflect.Method;
+import java.lang.reflect.Modifier;
+import java.time.Duration;
+import java.util.Arrays;
+import java.util.List;
+import java.util.Map;
+import java.util.concurrent.CompletionStage;
 
 final class HandlerContractTest {
     @Test
@@ -90,43 +89,38 @@ final class HandlerContractTest {
     void timerOptionsAreImmutableExactInterfaceRecord() {
         assertTrue(ZLinkTimerOptions.class.isRecord());
         assertEquals(
-            List.of("overrunPolicy", "maxCatchUpTicks", "stopOnUnhandledException"),
-            Arrays.stream(ZLinkTimerOptions.class.getRecordComponents())
-                .map(component -> component.getName())
-                .toList());
+                List.of("overrunPolicy", "maxCatchUpTicks", "stopOnUnhandledException"),
+                Arrays.stream(ZLinkTimerOptions.class.getRecordComponents())
+                        .map(component -> component.getName())
+                        .toList());
         assertFalse(hasMethod(ZLinkTimerOptions.class, "setOverrunPolicy"));
         assertFalse(hasMethod(ZLinkTimerOptions.class, "setMaxCatchUpTicks"));
         assertFalse(hasMethod(ZLinkTimerOptions.class, "setStopOnUnhandledException"));
     }
 
     @Test
-    void handlerFilterUsesFilterSpecificContextAndTypedNext()
-        throws NoSuchMethodException {
-        Method method = ZLinkHandlerFilter.class.getMethod(
-            "invoke",
-            ZLinkHandlerFilterContext.class,
-            ZLinkHandlerFilterNext.class);
+    void handlerFilterUsesFilterSpecificContextAndTypedNext() throws NoSuchMethodException {
+        Method method =
+                ZLinkHandlerFilter.class.getMethod(
+                        "invoke", ZLinkHandlerFilterContext.class, ZLinkHandlerFilterNext.class);
 
         assertEquals(1, method.getTypeParameters().length);
-        assertTrue(ZLinkMessageContext.class.isAssignableFrom(
-            ZLinkHandlerFilterContext.class));
+        assertTrue(ZLinkMessageContext.class.isAssignableFrom(ZLinkHandlerFilterContext.class));
         ZLinkHandlerFilterContext.class.getMethod("dispatchKind");
         assertEquals(
-            List.of(
-                ZLinkHandlerDispatchKind.NODE_DIRECT_SEND,
-                ZLinkHandlerDispatchKind.NODE_DIRECT_REQUEST,
-                ZLinkHandlerDispatchKind.CHANNEL_SEND,
-                ZLinkHandlerDispatchKind.CHANNEL_REQUEST,
-                ZLinkHandlerDispatchKind.CLASSIC_FANOUT),
-            List.of(ZLinkHandlerDispatchKind.values()));
+                List.of(
+                        ZLinkHandlerDispatchKind.NODE_DIRECT_SEND,
+                        ZLinkHandlerDispatchKind.NODE_DIRECT_REQUEST,
+                        ZLinkHandlerDispatchKind.CHANNEL_SEND,
+                        ZLinkHandlerDispatchKind.CHANNEL_REQUEST,
+                        ZLinkHandlerDispatchKind.CLASSIC_FANOUT),
+                List.of(ZLinkHandlerDispatchKind.values()));
     }
 
     @Test
     void objectAndMessageContextsMatchTheExactInterface() throws Exception {
         assertFalse(hasMethod(ZLinkActor.class, "actorId"));
-        assertSame(
-            ZLinkActorContext.class,
-            ZLinkActor.class.getMethod("context").getReturnType());
+        assertSame(ZLinkActorContext.class, ZLinkActor.class.getMethod("context").getReturnType());
         ZLinkActorFactory.class.getMethod("create", ZLinkActorContext.class);
 
         ZLinkMessageContext.class.getMethod("meshName");
@@ -152,19 +146,17 @@ final class HandlerContractTest {
 
     @Test
     void metadataContractsMatchTheExactInterface() throws NoSuchMethodException {
+        assertEquals(Map.class, ZLinkMessageContext.class.getMethod("metadata").getReturnType());
         assertEquals(
-            Map.class,
-            ZLinkMessageContext.class.getMethod("metadata").getReturnType());
+                ZLinkMetadataPolicyBuilder.class,
+                ZLinkMetadataPolicyBuilder.class
+                        .getMethod("allowSessionToActor", String.class)
+                        .getReturnType());
         assertEquals(
-            ZLinkMetadataPolicyBuilder.class,
-            ZLinkMetadataPolicyBuilder.class
-                .getMethod("allowSessionToActor", String.class)
-                .getReturnType());
-        assertEquals(
-            ZLinkMetadataPolicyBuilder.class,
-            ZLinkMetadataPolicyBuilder.class
-                .getMethod("allowActorToSession", String.class)
-                .getReturnType());
+                ZLinkMetadataPolicyBuilder.class,
+                ZLinkMetadataPolicyBuilder.class
+                        .getMethod("allowActorToSession", String.class)
+                        .getReturnType());
         assertFalse(hasMethod(ZLinkMetadataPolicyBuilder.class, "addForwardedMetadataKey"));
         assertFalse(hasMethod(ZLinkSessionReplyCall.class, "metadata"));
     }
@@ -199,87 +191,90 @@ final class HandlerContractTest {
         ZLinkSpotRequestHandler.class.getMethod("handle", Object.class, Object.class);
         ZLinkSpotSubscriptionHandler.class.getMethod("handle", Object.class, Object.class);
         ZLinkEntrySpotActorSendHandler.class.getMethod(
-            "handle",
-            ZLinkEntrySpot.class,
-            ZLinkActor.class,
-            ZLinkMessageContext.class,
-            Object.class);
+                "handle",
+                ZLinkEntrySpot.class,
+                ZLinkActor.class,
+                ZLinkMessageContext.class,
+                Object.class);
         ZLinkEntrySpotActorRequestHandler.class.getMethod(
-            "handle",
-            ZLinkEntrySpot.class,
-            ZLinkActor.class,
-            ZLinkMessageContext.class,
-            Object.class);
+                "handle",
+                ZLinkEntrySpot.class,
+                ZLinkActor.class,
+                ZLinkMessageContext.class,
+                Object.class);
         ZLinkSpotActorSendHandler.class.getMethod(
-            "handle",
-            ZLinkSpot.class,
-            ZLinkActor.class,
-            ZLinkMessageContext.class,
-            Object.class);
+                "handle",
+                ZLinkSpot.class,
+                ZLinkActor.class,
+                ZLinkMessageContext.class,
+                Object.class);
         ZLinkSpotActorRequestHandler.class.getMethod(
-            "handle",
-            ZLinkSpot.class,
-            ZLinkActor.class,
-            ZLinkMessageContext.class,
-            Object.class);
+                "handle",
+                ZLinkSpot.class,
+                ZLinkActor.class,
+                ZLinkMessageContext.class,
+                Object.class);
     }
 
     @Test
     void spotLifecycleCallbacksAreMemberContracts() throws NoSuchMethodException {
         ZLinkSpot.class.getMethod("onCreate", ZLinkMessage.class);
-        ZLinkSpot.class.getMethod(
-            "onActorJoin",
-            String.class,
-            ZLinkMessage.class);
+        ZLinkSpot.class.getMethod("onActorJoin", String.class, ZLinkMessage.class);
         ZLinkSpot.class.getMethod("onJoinedActor", ZLinkActor.class);
         ZLinkSpot.class.getMethod("onLeaveActor", ZLinkActor.class);
         ZLinkSpot.class.getMethod("onDisconnectActor", ZLinkActor.class);
-        assertThrows(NoSuchMethodException.class, () -> ZLinkEntrySpot.class.getMethod(
-            "onActorJoin",
-            String.class,
-            ZLinkMessage.class));
-        ZLinkEntrySpot.class.getMethod(
-            "onCreateActor",
-            ZLinkActor.class,
-            ZLinkMessage.class);
-        assertThrows(NoSuchMethodException.class, () -> ZLinkEntrySpot.class.getMethod(
-            "onActorRelocated",
-            ZLinkActor.class));
-        assertEquals(CompletionStage.class,
-            ZLinkSpot.class.getMethod("onJoinedActor", ZLinkActor.class).getReturnType());
-        assertEquals(CompletionStage.class,
-            ZLinkSpot.class.getMethod("onLeaveActor", ZLinkActor.class).getReturnType());
-        assertEquals(CompletionStage.class,
-            ZLinkEntrySpot.class.getMethod("onJoinedActor", ZLinkActor.class).getReturnType());
-        assertEquals(CompletionStage.class,
-            ZLinkEntrySpot.class.getMethod("onLeaveActor", ZLinkActor.class).getReturnType());
+        assertThrows(
+                NoSuchMethodException.class,
+                () ->
+                        ZLinkEntrySpot.class.getMethod(
+                                "onActorJoin", String.class, ZLinkMessage.class));
+        ZLinkEntrySpot.class.getMethod("onCreateActor", ZLinkActor.class, ZLinkMessage.class);
+        assertThrows(
+                NoSuchMethodException.class,
+                () -> ZLinkEntrySpot.class.getMethod("onActorRelocated", ZLinkActor.class));
+        assertEquals(
+                CompletionStage.class,
+                ZLinkSpot.class.getMethod("onJoinedActor", ZLinkActor.class).getReturnType());
+        assertEquals(
+                CompletionStage.class,
+                ZLinkSpot.class.getMethod("onLeaveActor", ZLinkActor.class).getReturnType());
+        assertEquals(
+                CompletionStage.class,
+                ZLinkEntrySpot.class.getMethod("onJoinedActor", ZLinkActor.class).getReturnType());
+        assertEquals(
+                CompletionStage.class,
+                ZLinkEntrySpot.class.getMethod("onLeaveActor", ZLinkActor.class).getReturnType());
         assertTrue(ZLinkSpotActorJoinResult.accept().accepted());
     }
 
     @Test
     void sessionDispatchContractsUseFrameworkMessages() throws NoSuchMethodException {
-        ZLinkSession.class.getMethod("onDispatch", ZLinkSessionDispatchContext.class, ZLinkMessage.class);
-        var replacementCallback = ZLinkSession.class.getMethod(
-            "onActorBindingReplaced", String.class);
+        ZLinkSession.class.getMethod(
+                "onDispatch", ZLinkSessionDispatchContext.class, ZLinkMessage.class);
+        var replacementCallback =
+                ZLinkSession.class.getMethod("onActorBindingReplaced", String.class);
         assertEquals(CompletionStage.class, replacementCallback.getReturnType());
         assertTrue(replacementCallback.isDefault());
         assertClassMissing("systems.zlink.framework.streams.ZLinkSessionPacketHandler");
         ZLinkTypedSessionPacketHandler.class.getMethod(
-            "handle",
-            ZLinkSessionContext.class,
-            ZLinkSessionDispatchContext.class,
-            Object.class);
-        assertEquals(CompletionStage.class,
-            ZLinkTypedSessionPacketHandler.class.getMethod(
                 "handle",
                 ZLinkSessionContext.class,
                 ZLinkSessionDispatchContext.class,
-                Object.class).getReturnType());
+                Object.class);
+        assertEquals(
+                CompletionStage.class,
+                ZLinkTypedSessionPacketHandler.class
+                        .getMethod(
+                                "handle",
+                                ZLinkSessionContext.class,
+                                ZLinkSessionDispatchContext.class,
+                                Object.class)
+                        .getReturnType());
         ZLinkSessionPacketDispatcher.class.getMethod(
-            "tryHandle",
-            ZLinkSessionContext.class,
-            ZLinkSessionDispatchContext.class,
-            ZLinkMessage.class);
+                "tryHandle",
+                ZLinkSessionContext.class,
+                ZLinkSessionDispatchContext.class,
+                ZLinkMessage.class);
         ZLinkSessionActor.class.getMethod("relay", ZLinkMessage.class);
     }
 
@@ -300,22 +295,18 @@ final class HandlerContractTest {
 
     @Test
     void executionTerminatorsAndUserSpotOptionsMatchExactContract() throws Exception {
-        assertTrue(Modifier.isAbstract(
-            ZLinkRequestCall.class.getMethod("yield", Class.class).getModifiers()));
-        assertTrue(Modifier.isAbstract(
-            ZLinkActorRequestCall.class
-                .getMethod("yield", Class.class)
-                .getModifiers()));
-        assertTrue(Modifier.isAbstract(
-            ZLinkWorkerCall.class
-                .getMethod("yield")
-                .getModifiers()));
+        assertTrue(
+                Modifier.isAbstract(
+                        ZLinkRequestCall.class.getMethod("yield", Class.class).getModifiers()));
+        assertTrue(
+                Modifier.isAbstract(
+                        ZLinkActorRequestCall.class
+                                .getMethod("yield", Class.class)
+                                .getModifiers()));
+        assertTrue(Modifier.isAbstract(ZLinkWorkerCall.class.getMethod("yield").getModifiers()));
         assertFalse(hasMethod(ZLinkActorJoinCall.class, "yield"));
 
-        assertEquals(
-            1,
-            ZLinkUserSpotExecutionMode
-                .PER_ACTOR.value());
+        assertEquals(1, ZLinkUserSpotExecutionMode.PER_ACTOR.value());
     }
 
     @Test
@@ -328,28 +319,30 @@ final class HandlerContractTest {
         assertClassMissing("systems.zlink.framework.spots.ZLinkSpotActor" + "LeftHandler");
         assertClassMissing("systems.zlink.framework.handlers.ZLinkSpotActor" + "Disconnected");
         assertClassMissing("systems.zlink.framework.spots.ZLinkSpotActor" + "DisconnectedHandler");
-        assertClassMissing("systems.zlink.framework.spots.ZLinkEntrySpotActor" + "DisconnectedHandler");
+        assertClassMissing(
+                "systems.zlink.framework.spots.ZLinkEntrySpotActor" + "DisconnectedHandler");
         assertClassMissing("systems.zlink.framework.spots.ZLinkSpotActorChange" + "Result");
         assertClassMissing("systems.zlink.framework.spots.ZLinkSpotActorChange" + "Kind");
     }
 
     private static void assertAnnotationMethods(Class<?> annotationType, String... expectedNames) {
-        String[] actualNames = Arrays.stream(annotationType.getDeclaredMethods())
-            .map(Method::getName)
-            .sorted()
-            .toArray(String[]::new);
+        String[] actualNames =
+                Arrays.stream(annotationType.getDeclaredMethods())
+                        .map(Method::getName)
+                        .sorted()
+                        .toArray(String[]::new);
         Arrays.sort(expectedNames);
 
         assertTrue(
-            Arrays.equals(expectedNames, actualNames),
-            () -> annotationType.getSimpleName()
-                + " methods were "
-                + Arrays.toString(actualNames));
+                Arrays.equals(expectedNames, actualNames),
+                () ->
+                        annotationType.getSimpleName()
+                                + " methods were "
+                                + Arrays.toString(actualNames));
     }
 
     private static boolean hasMethod(Class<?> type, String name) {
-        return Arrays.stream(type.getMethods())
-            .anyMatch(method -> method.getName().equals(name));
+        return Arrays.stream(type.getMethods()).anyMatch(method -> method.getName().equals(name));
     }
 
     private static void assertClassIsAbsent(String className) {

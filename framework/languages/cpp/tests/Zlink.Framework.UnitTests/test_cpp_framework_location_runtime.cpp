@@ -44,10 +44,7 @@ class startup_owner_lease_repository_t final : public in_memory_location_reposit
         _claim_delay = delay;
     }
 
-    void cancel_after_next_claim (std::stop_source &cancellation)
-    {
-        _cancellation = &cancellation;
-    }
+    void cancel_after_next_claim (std::stop_source &cancellation) { _cancellation = &cancellation; }
 
     void fail_owner_lease_reads () noexcept { _fail_reads = true; }
 
@@ -74,9 +71,8 @@ class startup_owner_lease_repository_t final : public in_memory_location_reposit
         return in_memory_location_repository_t::read_owner_lease (std::move (owner_id));
     }
 
-    zlink::framework::task_t<zlink::framework::owner_lease_claim_result_t> claim_owner_lease (
-      std::string owner_id,
-      std::chrono::milliseconds lease_ttl) override
+    zlink::framework::task_t<zlink::framework::owner_lease_claim_result_t>
+    claim_owner_lease (std::string owner_id, std::chrono::milliseconds lease_ttl) override
     {
         const auto call = _claim_calls.fetch_add (1);
         if (_claim_mode == claim_mode_t::fail_first && call == 0) {
@@ -112,9 +108,8 @@ class startup_owner_lease_repository_t final : public in_memory_location_reposit
                 "injected owner lease response failure"));
         }
         if (_claim_mode == claim_mode_t::never_complete) {
-            _pending_claim = std::make_shared<
-              zlink::framework::detail::task_completion_source_t<
-                zlink::framework::owner_lease_claim_result_t>> ();
+            _pending_claim = std::make_shared<zlink::framework::detail::task_completion_source_t<
+              zlink::framework::owner_lease_claim_result_t>> ();
             if (_cancellation != nullptr) {
                 _cancellation->request_stop ();
                 _cancellation = nullptr;
@@ -127,8 +122,8 @@ class startup_owner_lease_repository_t final : public in_memory_location_reposit
                 zlink::framework::owner_lease_claim_result_t{
                   zlink::framework::owner_lease_generation_exhausted_t{}}));
         }
-        auto result = in_memory_location_repository_t::claim_owner_lease (
-          std::move (owner_id), lease_ttl);
+        auto result =
+          in_memory_location_repository_t::claim_owner_lease (std::move (owner_id), lease_ttl);
         if (_cancellation != nullptr) {
             _cancellation->request_stop ();
             _cancellation = nullptr;
@@ -136,14 +131,13 @@ class startup_owner_lease_repository_t final : public in_memory_location_reposit
         return result;
     }
 
-    zlink::framework::task_t<zlink::framework::owner_lease_release_result_t> release_owner_lease (
-      zlink::framework::location_owner_token_t token) override
+    zlink::framework::task_t<zlink::framework::owner_lease_release_result_t>
+    release_owner_lease (zlink::framework::location_owner_token_t token) override
     {
         _release_calls.fetch_add (1);
         if (_block_releases) {
-            _pending_release = std::make_shared<
-              zlink::framework::detail::task_completion_source_t<
-                zlink::framework::owner_lease_release_result_t>> ();
+            _pending_release = std::make_shared<zlink::framework::detail::task_completion_source_t<
+              zlink::framework::owner_lease_release_result_t>> ();
             return _pending_release->task ();
         }
         if (_fail_releases) {
@@ -185,20 +179,12 @@ TEST (ZLinkFrameworkLocationRuntime, ClaimsAndReleasesOwnerLease)
 
     runtime.start (zlink::routing_id_t::from ("node-a"));
     EXPECT_TRUE (runtime.owner_lease_healthy ());
-    EXPECT_TRUE (
-      std::holds_alternative<
-        zlink::framework::owner_lease_found_t> (
-        store.read_owner_lease ("owner-a")
-          .result ()
-          .value ()));
+    EXPECT_TRUE (std::holds_alternative<zlink::framework::owner_lease_found_t> (
+      store.read_owner_lease ("owner-a").result ().value ()));
 
     runtime.stop ();
-    EXPECT_TRUE (
-      std::holds_alternative<
-        zlink::framework::owner_lease_missing_t> (
-        store.read_owner_lease ("owner-a")
-          .result ()
-          .value ()));
+    EXPECT_TRUE (std::holds_alternative<zlink::framework::owner_lease_missing_t> (
+      store.read_owner_lease ("owner-a").result ().value ()));
 }
 
 TEST (ZLinkFrameworkLocationRuntime, StartsDegradedAfterInitialOwnerLeaseClaimFailure)
@@ -275,9 +261,8 @@ TEST (ZLinkFrameworkLocationRuntime, InstallsLateCommittedClaimAfterHeartbeatCon
 TEST (ZLinkFrameworkLocationRuntime, RejectsInitialOwnerLeaseClaimConflict)
 {
     in_memory_location_repository_t store;
-    const auto existing = store.claim_owner_lease ("owner-a", std::chrono::seconds (15))
-                            .result ()
-                            .value ();
+    const auto existing =
+      store.claim_owner_lease ("owner-a", std::chrono::seconds (15)).result ().value ();
     ASSERT_TRUE (std::holds_alternative<zlink::framework::owner_lease_claimed_t> (existing));
     location_runtime_t runtime (store, {}, "owner-a");
 
@@ -288,8 +273,7 @@ TEST (ZLinkFrameworkLocationRuntime, RejectsInitialOwnerLeaseClaimConflict)
 TEST (ZLinkFrameworkLocationRuntime, RejectsInitialOwnerLeaseClaimGenerationExhaustion)
 {
     startup_owner_lease_repository_t store;
-    store.set_claim_mode (
-      startup_owner_lease_repository_t::claim_mode_t::generation_exhausted);
+    store.set_claim_mode (startup_owner_lease_repository_t::claim_mode_t::generation_exhausted);
     location_runtime_t runtime (store, {}, "owner-a");
 
     EXPECT_THROW (runtime.start (zlink::routing_id_t::from ("node-a")), std::runtime_error);
@@ -429,8 +413,7 @@ TEST (ZLinkFrameworkLocationRuntime, ReleasesLateCommitWithoutInstalledTokenOnCa
     EXPECT_EQ (1, store.release_calls ());
     EXPECT_FALSE (runtime.current_owner_token ().has_value ());
     const auto remaining = store.read_owner_lease ("owner-a").result ().value ();
-    EXPECT_TRUE (
-      std::holds_alternative<zlink::framework::owner_lease_missing_t> (remaining));
+    EXPECT_TRUE (std::holds_alternative<zlink::framework::owner_lease_missing_t> (remaining));
     std::this_thread::sleep_for (std::chrono::milliseconds (10));
     EXPECT_EQ (1, store.claim_calls ());
 }

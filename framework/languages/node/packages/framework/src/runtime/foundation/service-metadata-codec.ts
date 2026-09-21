@@ -1,9 +1,7 @@
 const MAX_METADATA_BYTES = 1024;
 const FATAL_UTF8 = new TextDecoder('utf-8', { fatal: true });
 
-export function encodeServiceMetadataFrame(
-  entries: ReadonlyMap<string, string>
-): Buffer {
+export function encodeServiceMetadataFrame(entries: ReadonlyMap<string, string>): Buffer {
   if (entries.size > 0xff) {
     throw new RangeError('Application metadata contains more than 255 entries.');
   }
@@ -61,12 +59,7 @@ export function validateServiceMetadataFrame(frame: Uint8Array): Buffer {
   return Buffer.from(bytes);
 }
 
-function textBytes(
-  value: string,
-  minimum: number,
-  maximum: number,
-  name: string
-): Buffer {
+function textBytes(value: string, minimum: number, maximum: number, name: string): Buffer {
   const bytes = Buffer.from(value, 'utf8');
   if (bytes.byteLength < minimum || bytes.byteLength > maximum || bytes.includes(0)) {
     throw new RangeError(`${name} must contain ${minimum}..${maximum} UTF-8 bytes without NUL.`);

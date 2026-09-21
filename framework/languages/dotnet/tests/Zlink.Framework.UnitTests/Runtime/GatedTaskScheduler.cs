@@ -3,8 +3,9 @@ namespace Zlink.Framework.UnitTests;
 internal sealed class GatedTaskScheduler : TaskScheduler
 {
     private readonly Queue<Task> _tasks = new();
-    private readonly TaskCompletionSource _queued =
-        new(TaskCreationOptions.RunContinuationsAsynchronously);
+    private readonly TaskCompletionSource _queued = new(
+        TaskCreationOptions.RunContinuationsAsynchronously
+    );
     private bool _released;
 
     internal Task Queued => _queued.Task;
@@ -44,6 +45,5 @@ internal sealed class GatedTaskScheduler : TaskScheduler
             Schedule(task);
     }
 
-    private void Schedule(Task task) =>
-        ThreadPool.QueueUserWorkItem(_ => TryExecuteTask(task));
+    private void Schedule(Task task) => ThreadPool.QueueUserWorkItem(_ => TryExecuteTask(task));
 }

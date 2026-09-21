@@ -1,15 +1,15 @@
 package systems.zlink.framework.runtime.handlers;
 
+import systems.zlink.framework.handlers.ZLinkHandlerGroup;
+
 import java.lang.reflect.Modifier;
 import java.util.ArrayList;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Set;
-import systems.zlink.framework.handlers.ZLinkHandlerGroup;
 
 public final class ZLinkHandlerScanner {
-    private ZLinkHandlerScanner() {
-    }
+    private ZLinkHandlerScanner() {}
 
     public static ZLinkScannedHandlerCatalog scan(Set<Class<?>> markerTypes) {
         if (markerTypes.isEmpty()) {
@@ -36,9 +36,9 @@ public final class ZLinkHandlerScanner {
     private static boolean isConcrete(Class<?> type) {
         int modifiers = type.getModifiers();
         return !type.isInterface()
-            && !type.isAnnotation()
-            && !type.isEnum()
-            && !Modifier.isAbstract(modifiers);
+                && !type.isAnnotation()
+                && !type.isEnum()
+                && !Modifier.isAbstract(modifiers);
     }
 
     private static Set<String> resolveGroups(Class<?> type) {

@@ -9,7 +9,8 @@ internal readonly record struct ZLinkSpotId
     private static readonly UTF8Encoding StrictUtf8 = new(false, true);
     private static readonly Regex ReservedEntrySpotId = new(
         @"^.+-entry-[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
-        RegexOptions.CultureInvariant | RegexOptions.Compiled);
+        RegexOptions.CultureInvariant | RegexOptions.Compiled
+    );
 
     private ZLinkSpotId(string value) => _value = value;
 
@@ -41,7 +42,8 @@ internal readonly record struct ZLinkSpotId
         if (!IsValid(value))
             throw new ArgumentException(
                 "Spot ID must be valid UTF-8 with an encoded size of 1..255 bytes.",
-                paramName);
+                paramName
+            );
         return value!;
     }
 
@@ -52,21 +54,19 @@ internal readonly record struct ZLinkSpotId
         {
             throw new ZLinkFrameworkException(
                 ZLinkFrameworkErrorKind.InvalidOperation,
-                $"Spot ID '{spotId}' uses the Framework-reserved Entry Spot ID format.");
+                $"Spot ID '{spotId}' uses the Framework-reserved Entry Spot ID format."
+            );
         }
 
         return spotId;
     }
 
-    internal static bool IsReservedEntrySpotId(string value) =>
-        ReservedEntrySpotId.IsMatch(value);
+    internal static bool IsReservedEntrySpotId(string value) => ReservedEntrySpotId.IsMatch(value);
 
     internal static string CreateEntrySpotId(string diagnosticPrefix)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(diagnosticPrefix);
-        return Require(
-            $"{diagnosticPrefix}-entry-{Guid.NewGuid():D}",
-            nameof(diagnosticPrefix));
+        return Require($"{diagnosticPrefix}-entry-{Guid.NewGuid():D}", nameof(diagnosticPrefix));
     }
 
     internal static RoutingId ToNativeRoutingId(string value) =>

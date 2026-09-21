@@ -1,34 +1,35 @@
 package systems.zlink.framework.runtime.spots;
 
-import java.util.HashMap;
-import java.util.Map;
-import java.util.concurrent.CompletableFuture;
-import java.util.concurrent.CompletionStage;
 import systems.zlink.contracts.core.RoutingId;
 import systems.zlink.framework.runtime.internal.locations.ZLinkLocationWriteStatus;
 import systems.zlink.framework.runtime.locations.ZLinkLocationLifecycle;
 import systems.zlink.framework.spots.ZLinkSpotKind;
+
+import java.util.HashMap;
+import java.util.Map;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CompletionStage;
 
 final class ZLinkSpotLocationCoordinator {
     private final Map<RoutingId, NodeLocation> nodes = new HashMap<>();
     private ZLinkLocationLifecycle lifecycle;
 
     void registerNode(
-        String meshName,
-        RoutingId nodeRid,
-        String entrySpotId,
-        long entrySpotGeneration,
-        String routeEndpoint,
-        boolean publisherEnabled) {
+            String meshName,
+            RoutingId nodeRid,
+            String entrySpotId,
+            long entrySpotGeneration,
+            String routeEndpoint,
+            boolean publisherEnabled) {
         nodes.put(
-            nodeRid,
-            new NodeLocation(
-                meshName,
                 nodeRid,
-                entrySpotId,
-                entrySpotGeneration,
-                routeEndpoint,
-                publisherEnabled));
+                new NodeLocation(
+                        meshName,
+                        nodeRid,
+                        entrySpotId,
+                        entrySpotGeneration,
+                        routeEndpoint,
+                        publisherEnabled));
     }
 
     void setLifecycle(ZLinkLocationLifecycle lifecycle) {
@@ -45,45 +46,43 @@ final class ZLinkSpotLocationCoordinator {
         return node == null ? null : node.meshName();
     }
 
-    String meshNameForSpot(
-        String spotId,
-        RoutingId primaryNodeRid,
-        boolean localUserSpot) {
+    String meshNameForSpot(String spotId, RoutingId primaryNodeRid, boolean localUserSpot) {
         if (spotId == null) {
             return null;
         }
-        NodeLocation node = localUserSpot
-            ? nodes.get(primaryNodeRid)
-            : nodes.values().stream()
-                .filter(candidate -> candidate.entrySpotId().equals(spotId))
-                .findFirst()
-                .orElse(null);
+        NodeLocation node =
+                localUserSpot
+                        ? nodes.get(primaryNodeRid)
+                        : nodes.values().stream()
+                                .filter(candidate -> candidate.entrySpotId().equals(spotId))
+                                .findFirst()
+                                .orElse(null);
         return node == null ? null : node.meshName();
     }
 
     CompletionStage<ZLinkLocationWriteStatus> claimUserSpotAsync(
-        RoutingId primaryNodeRid,
-        String spotId,
-        long spotGeneration,
-        Class<?> spotType,
-        Runnable deactivate) {
+            RoutingId primaryNodeRid,
+            String spotId,
+            long spotGeneration,
+            Class<?> spotType,
+            Runnable deactivate) {
         if (lifecycle == null) {
             return CompletableFuture.completedFuture(ZLinkLocationWriteStatus.STORED);
         }
         NodeLocation node = nodes.get(primaryNodeRid);
         if (node == null) {
             return CompletableFuture.failedFuture(
-                new IllegalStateException("Location runtime is not available."));
+                    new IllegalStateException("Location runtime is not available."));
         }
         return lifecycle.claimSpot(
-            node.meshName(),
-            spotId,
-            spotGeneration,
-            spotType.getName(),
-            node.nodeRid(),
-            ZLinkSpotKind.USER,
-            node.routeEndpoint(),
-            deactivate);
+                node.meshName(),
+                spotId,
+                spotGeneration,
+                spotType.getName(),
+                node.nodeRid(),
+                ZLinkSpotKind.USER,
+                node.routeEndpoint(),
+                deactivate);
     }
 
     CompletionStage<Void> claimEntrySpotsAsync() {
@@ -92,7 +91,9 @@ final class ZLinkSpotLocationCoordinator {
         }
         CompletionStage<Void> chain = CompletableFuture.completedFuture(null);
         for (NodeLocation node : nodes.values()) {
-            chain = chain.thenCompose(ignored -> claimEntrySpotAsync(node).thenApply(status -> null));
+            chain =
+                    chain.thenCompose(
+                            ignored -> claimEntrySpotAsync(node).thenApply(status -> null));
         }
         return chain;
     }
@@ -121,23 +122,23 @@ final class ZLinkSpotLocationCoordinator {
             return CompletableFuture.completedFuture(ZLinkLocationWriteStatus.STORED);
         }
         return lifecycle.claimSpot(
-            node.meshName(),
-            node.entrySpotId(),
-            node.entrySpotGeneration(),
-            null,
-            node.nodeRid(),
-            ZLinkSpotKind.ENTRY,
-            node.routeEndpoint(),
-            null);
+                node.meshName(),
+                node.entrySpotId(),
+                node.entrySpotGeneration(),
+                null,
+                node.nodeRid(),
+                ZLinkSpotKind.ENTRY,
+                node.routeEndpoint(),
+                null);
     }
 
     private record NodeLocation(
-        String meshName,
-        RoutingId nodeRid,
-        String entrySpotId,
-        long entrySpotGeneration,
-        String routeEndpoint,
-        boolean publisherEnabled) {
+            String meshName,
+            RoutingId nodeRid,
+            String entrySpotId,
+            long entrySpotGeneration,
+            String routeEndpoint,
+            boolean publisherEnabled) {
 
         boolean hasRouteEndpoint() {
             return routeEndpoint != null && !routeEndpoint.isBlank();

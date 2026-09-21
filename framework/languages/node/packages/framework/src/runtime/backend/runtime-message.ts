@@ -45,7 +45,9 @@ export class ZLinkBufferMessage implements Message {
 }
 
 function isMessage(value: unknown): value is Message {
-  return typeof value === 'object'
-    && value !== null
-    && typeof (value as { data?: unknown }).data === 'function';
+  return (
+    typeof value === 'object' &&
+    value !== null &&
+    typeof (value as { data?: unknown }).data === 'function'
+  );
 }

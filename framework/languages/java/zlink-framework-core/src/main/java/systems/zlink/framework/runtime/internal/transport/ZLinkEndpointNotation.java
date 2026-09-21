@@ -5,68 +5,60 @@ import java.util.Locale;
 /**
  * Deterministic, lossless endpoint-string normalization.
  *
- * <p>Applies the cross-language endpoint-notation contract for Java:
- * lowercase scheme, lowercase host, unify IPv6 literals to bracket
- * notation (zone id preserved verbatim, case included), decimal ports with
- * leading zeros stripped, trailing slash removed from the path, and the
- * whole string trimmed of surrounding whitespace.
+ * <p>Applies the cross-language endpoint-notation contract for Java: lowercase scheme, lowercase
+ * host, unify IPv6 literals to bracket notation (zone id preserved verbatim, case included),
+ * decimal ports with leading zeros stripped, trailing slash removed from the path, and the whole
+ * string trimmed of surrounding whitespace.
  *
  * <p>This mirrors {@code framework/languages/cpp/framework/src/runtime/
- * transport/endpoint_notation.hpp} (commit dfcb2177c9) field-for-field: same
- * authority-scheme allowlist ({@code tcp}/{@code tls}/{@code ws}/{@code wss}),
- * same bracket-aware host/port split, same "refuse to guess" fallback for
- * inputs that cannot be re-shaped without assuming their meaning.
+ * transport/endpoint_notation.hpp} (commit dfcb2177c9) field-for-field: same authority-scheme
+ * allowlist ({@code tcp}/{@code tls}/{@code ws}/{@code wss}), same bracket-aware host/port split,
+ * same "refuse to guess" fallback for inputs that cannot be re-shaped without assuming their
+ * meaning.
  *
- * <p><b>Why a hand-rolled parser instead of {@code java.net.URI}.</b> The
- * host language has a URI parser, and the policy says to prefer it -- but
- * {@code java.net.URI} is unsuitable for this job. Experimentally (see the
- * task record for this change):
+ * <p><b>Why a hand-rolled parser instead of {@code java.net.URI}.</b> The host language has a URI
+ * parser, and the policy says to prefer it -- but {@code java.net.URI} is unsuitable for this job.
+ * Experimentally (see the task record for this change):
+ *
  * <ul>
- *   <li>{@code new URI("tcp://my_service:80")} does not throw, but
- *   {@code getHost()} returns {@code null} because underscores are illegal
- *   in an RFC 3986 reg-name -- and Docker/Kubernetes service hostnames
- *   commonly contain underscores. The structured accessors silently stop
- *   working for a legitimate endpoint.</li>
- *   <li>The 7-arg {@code URI(scheme, userInfo, host, port, path, query,
- *   fragment)} constructor -- which {@code ZLinkChannelSocketRegistry} used
- *   to rebuild the advertised endpoint with a substituted host -- actively
- *   throws {@code URISyntaxException} for that same underscore host,
- *   turning a normal advertise-host configuration into a startup crash.</li>
- *   <li>{@code new URI("tcp://2001:db8::1:80")} (an unbracketed IPv6
- *   literal) does not throw either; it just returns {@code getHost() ==
- *   null} with no signal that the input was ambiguous, which is exactly the
- *   {@code lastIndexOf(':')}-style guessing &sect;2.4 forbids.</li>
+ *   <li>{@code new URI("tcp://my_service:80")} does not throw, but {@code getHost()} returns {@code
+ *       null} because underscores are illegal in an RFC 3986 reg-name -- and Docker/Kubernetes
+ *       service hostnames commonly contain underscores. The structured accessors silently stop
+ *       working for a legitimate endpoint.
+ *   <li>The 7-arg {@code URI(scheme, userInfo, host, port, path, query, fragment)} constructor --
+ *       which {@code ZLinkChannelSocketRegistry} used to rebuild the advertised endpoint with a
+ *       substituted host -- actively throws {@code URISyntaxException} for that same underscore
+ *       host, turning a normal advertise-host configuration into a startup crash.
+ *   <li>{@code new URI("tcp://2001:db8::1:80")} (an unbracketed IPv6 literal) does not throw
+ *       either; it just returns {@code getHost() == null} with no signal that the input was
+ *       ambiguous, which is exactly the {@code lastIndexOf(':')}-style guessing &sect;2.4 forbids.
  * </ul>
- * {@code java.net.URI} is, however, well-behaved for well-formed input (it
- * preserves IPv6 zone ids without throwing, unlike the WHATWG {@code URL}
- * the Node implementation had to abandon) -- it is simply too strict about
- * the reg-name grammar for endpoints this framework must still accept. A
- * small bracket- and colon-count-aware parser, matching the C++ approach,
- * avoids both failure modes while keeping the "refuse to guess" contract.
  *
- * <p>This is intentionally NOT a validator: {@link #normalize} never
- * throws. Input it cannot confidently re-shape (no scheme, a non-authority
- * scheme such as {@code ipc}, or an authority it cannot parse without
- * guessing) is returned with only whitespace trimmed and -- when a scheme
- * is present -- the scheme lowercased. Callers that need to reject
- * malformed endpoints keep doing so where they already do.
+ * {@code java.net.URI} is, however, well-behaved for well-formed input (it preserves IPv6 zone ids
+ * without throwing, unlike the WHATWG {@code URL} the Node implementation had to abandon) -- it is
+ * simply too strict about the reg-name grammar for endpoints this framework must still accept. A
+ * small bracket- and colon-count-aware parser, matching the C++ approach, avoids both failure modes
+ * while keeping the "refuse to guess" contract.
  *
- * <p>Per &sect;2.3 this belongs at write time: call it once when an
- * endpoint is constructed (advertised endpoint assembly) or accepted from
- * outside the process (application-supplied bind/remote endpoints, peer
- * descriptor endpoints read off the wire, Location Store rows). Callers
+ * <p>This is intentionally NOT a validator: {@link #normalize} never throws. Input it cannot
+ * confidently re-shape (no scheme, a non-authority scheme such as {@code ipc}, or an authority it
+ * cannot parse without guessing) is returned with only whitespace trimmed and -- when a scheme is
+ * present -- the scheme lowercased. Callers that need to reject malformed endpoints keep doing so
+ * where they already do.
+ *
+ * <p>Per &sect;2.3 this belongs at write time: call it once when an endpoint is constructed
+ * (advertised endpoint assembly) or accepted from outside the process (application-supplied
+ * bind/remote endpoints, peer descriptor endpoints read off the wire, Location Store rows). Callers
  * elsewhere keep comparing normalized strings with plain {@code equals}.
  */
 public final class ZLinkEndpointNotation {
 
-    private ZLinkEndpointNotation() {
-    }
+    private ZLinkEndpointNotation() {}
 
     /**
-     * Normalizes an endpoint string per the policy above. Total and
-     * non-throwing: unparseable input is trimmed (and scheme-lowercased,
-     * if a scheme is present) and returned as-is rather than corrupted.
-     * Returns {@code null} for {@code null} input.
+     * Normalizes an endpoint string per the policy above. Total and non-throwing: unparseable input
+     * is trimmed (and scheme-lowercased, if a scheme is present) and returned as-is rather than
+     * corrupted. Returns {@code null} for {@code null} input.
      */
     public static String normalize(String raw) {
         if (raw == null) {
@@ -112,28 +104,25 @@ public final class ZLinkEndpointNotation {
     }
 
     /**
-     * Wraps {@code host} in "[...]" when it is an unbracketed IPv6-shaped
-     * literal (contains ':'), otherwise returns it unchanged. Zone ids
-     * travel inside the brackets untouched. Shared by every endpoint
-     * construction seam so IPv6 formatting is identical everywhere a TCP
-     * endpoint string is assembled. Does not lowercase -- pass the result
-     * through {@link #normalize} for that.
+     * Wraps {@code host} in "[...]" when it is an unbracketed IPv6-shaped literal (contains ':'),
+     * otherwise returns it unchanged. Zone ids travel inside the brackets untouched. Shared by
+     * every endpoint construction seam so IPv6 formatting is identical everywhere a TCP endpoint
+     * string is assembled. Does not lowercase -- pass the result through {@link #normalize} for
+     * that.
      */
     public static String bracketIpv6Host(String host) {
-        if (host == null || host.isEmpty() || host.charAt(0) == '['
-            || host.indexOf(':') < 0) {
+        if (host == null || host.isEmpty() || host.charAt(0) == '[' || host.indexOf(':') < 0) {
             return host;
         }
         return "[" + host + "]";
     }
 
     /**
-     * Replaces the host of a {@code scheme://[userInfo@]host[:port][/path]}
-     * endpoint with {@code newHost}, using the same IPv6-safe (bracket- and
-     * colon-count-aware, never {@code lastIndexOf(':')}) parsing as
-     * {@link #normalize}. Scheme, host, and path are formatted per policy
-     * as a side effect. Refuses to guess: an endpoint or host it cannot
-     * parse/format unambiguously is returned as {@code endpoint} unchanged.
+     * Replaces the host of a {@code scheme://[userInfo@]host[:port][/path]} endpoint with {@code
+     * newHost}, using the same IPv6-safe (bracket- and colon-count-aware, never {@code
+     * lastIndexOf(':')}) parsing as {@link #normalize}. Scheme, host, and path are formatted per
+     * policy as a side effect. Refuses to guess: an endpoint or host it cannot parse/format
+     * unambiguously is returned as {@code endpoint} unchanged.
      */
     public static String withHost(String endpoint, String newHost) {
         if (endpoint == null || newHost == null || newHost.isBlank()) {
@@ -165,16 +154,20 @@ public final class ZLinkEndpointNotation {
 
     private static String formatHost(String host) {
         String trimmed = host.strip();
-        boolean bracketed = trimmed.length() >= 2
-            && trimmed.charAt(0) == '[' && trimmed.charAt(trimmed.length() - 1) == ']';
+        boolean bracketed =
+                trimmed.length() >= 2
+                        && trimmed.charAt(0) == '['
+                        && trimmed.charAt(trimmed.length() - 1) == ']';
         String inner = bracketed ? trimmed.substring(1, trimmed.length() - 1) : trimmed;
         boolean ipv6 = bracketed || inner.indexOf(':') >= 0;
         return ipv6 ? "[" + normalizeIpv6Host(inner) + "]" : inner.toLowerCase(Locale.ROOT);
     }
 
     private static boolean isAuthorityScheme(String schemeLower) {
-        return schemeLower.equals("tcp") || schemeLower.equals("tls")
-            || schemeLower.equals("ws") || schemeLower.equals("wss");
+        return schemeLower.equals("tcp")
+                || schemeLower.equals("tls")
+                || schemeLower.equals("ws")
+                || schemeLower.equals("wss");
     }
 
     private static boolean allAsciiDigits(String value) {
@@ -223,12 +216,12 @@ public final class ZLinkEndpointNotation {
         final String tail;
 
         private Authority(
-            String userInfo,
-            String host,
-            boolean isIpv6,
-            String port,
-            String path,
-            String tail) {
+                String userInfo,
+                String host,
+                boolean isIpv6,
+                String port,
+                String path,
+                String tail) {
             this.userInfo = userInfo;
             this.host = host;
             this.isIpv6 = isIpv6;

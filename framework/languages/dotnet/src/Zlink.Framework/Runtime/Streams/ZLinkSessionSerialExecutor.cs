@@ -15,19 +15,22 @@ internal sealed class ZLinkSessionSerialExecutor : IAsyncDisposable
     public ZLinkSessionSerialExecutor(
         object executionOwner,
         IZLinkRuntimeFailureReporter errorSink,
-        ZLinkExecutionLanePolicy? lanePolicy = null)
+        ZLinkExecutionLanePolicy? lanePolicy = null
+    )
     {
         _queue = new ZLinkSerialExecutionQueue(
             new ZLinkRuntimeTaskRunner(errorSink, _stopSource.Token, executionOwner),
             errorSink,
             _stopSource.Token,
-            lanePolicy ?? ZLinkExecutionLanePolicy.Default);
+            lanePolicy ?? ZLinkExecutionLanePolicy.Default
+        );
     }
 
     public ValueTask DisposeAsync()
     {
-        return new ValueTask(AwaitStateLane(_lane.RunAsync(
-            () => _disposeTask ??= StartDisposeCore())));
+        return new ValueTask(
+            AwaitStateLane(_lane.RunAsync(() => _disposeTask ??= StartDisposeCore()))
+        );
     }
 
     private Task StartDisposeCore()
@@ -43,25 +46,29 @@ internal sealed class ZLinkSessionSerialExecutor : IAsyncDisposable
     {
         RequestStop();
         await _queue.DisposeAsync().ConfigureAwait(false);
-        var cancellation = await _lane.RunAsync(() =>
-        {
-            _stopSourceFinalizing = true;
-            return _stopCancellation;
-        }).ConfigureAwait(false);
+        var cancellation = await _lane
+            .RunAsync(() =>
+            {
+                _stopSourceFinalizing = true;
+                return _stopCancellation;
+            })
+            .ConfigureAwait(false);
         try
         {
             await cancellation.ConfigureAwait(false);
         }
         finally
         {
-            await _lane.RunAsync(() =>
-            {
-                if (!_stopSourceDisposed)
+            await _lane
+                .RunAsync(() =>
                 {
-                    _stopSource.Dispose();
-                    _stopSourceDisposed = true;
-                }
-            }).ConfigureAwait(false);
+                    if (!_stopSourceDisposed)
+                    {
+                        _stopSource.Dispose();
+                        _stopSourceDisposed = true;
+                    }
+                })
+                .ConfigureAwait(false);
         }
     }
 
@@ -73,11 +80,18 @@ internal sealed class ZLinkSessionSerialExecutor : IAsyncDisposable
     public void ForceStop()
     {
         _queue.Complete();
-        AwaitStateLane(_lane.RunAsync(() =>
-        {
-            if (_stopSourceDisposed || _stopSourceFinalizing || _stopSource.IsCancellationRequested) return;
-            _stopCancellation = _stopSource.CancelAsync();
-        }));
+        AwaitStateLane(
+            _lane.RunAsync(() =>
+            {
+                if (
+                    _stopSourceDisposed
+                    || _stopSourceFinalizing
+                    || _stopSource.IsCancellationRequested
+                )
+                    return;
+                _stopCancellation = _stopSource.CancelAsync();
+            })
+        );
     }
 
     public bool ExecuteInfrastructure(Func<ValueTask> work)
@@ -85,11 +99,9 @@ internal sealed class ZLinkSessionSerialExecutor : IAsyncDisposable
         return _queue.TryPostNext(_ => work(), out _);
     }
 
-    public void CloseApplicationAdmission() =>
-        _queue.CloseApplicationAdmission();
+    public void CloseApplicationAdmission() => _queue.CloseApplicationAdmission();
 
-    public ZLinkSerialPostAdmission ExecuteApplication(
-        Func<CancellationToken, ValueTask> work)
+    public ZLinkSerialPostAdmission ExecuteApplication(Func<CancellationToken, ValueTask> work)
     {
         return _queue.TryPostApplicationWithAdmission(work, out _);
     }
@@ -98,18 +110,19 @@ internal sealed class ZLinkSessionSerialExecutor : IAsyncDisposable
         Func<CancellationToken, ValueTask> work,
         long payloadBytes,
         long metadataBytes,
-        bool transferred)
+        bool transferred
+    )
     {
         return _queue.TryPostApplicationWithAdmission(
             work,
             payloadBytes,
             metadataBytes,
             transferred,
-            out _);
+            out _
+        );
     }
 
-    public ZLinkSerialPostAdmission ExecuteControl(
-        Func<CancellationToken, ValueTask> work)
+    public ZLinkSerialPostAdmission ExecuteControl(Func<CancellationToken, ValueTask> work)
     {
         return _queue.TryPostNextWithAdmission(work, out _);
     }
@@ -118,14 +131,16 @@ internal sealed class ZLinkSessionSerialExecutor : IAsyncDisposable
         Func<CancellationToken, ValueTask> work,
         long payloadBytes,
         long metadataBytes,
-        bool transferred)
+        bool transferred
+    )
     {
         return _queue.TryPostNextWithAdmission(
             work,
             payloadBytes,
             metadataBytes,
             transferred,
-            out _);
+            out _
+        );
     }
 
     public bool ExecuteFinal(Func<ValueTask> work)
@@ -136,6 +151,5 @@ internal sealed class ZLinkSessionSerialExecutor : IAsyncDisposable
     private static T AwaitStateLane<T>(ValueTask<T> operation) =>
         operation.GetAwaiter().GetResult();
 
-    private static void AwaitStateLane(ValueTask operation) =>
-        operation.GetAwaiter().GetResult();
+    private static void AwaitStateLane(ValueTask operation) => operation.GetAwaiter().GetResult();
 }

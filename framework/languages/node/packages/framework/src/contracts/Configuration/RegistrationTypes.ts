@@ -17,17 +17,11 @@ import type {
 import type { AutoHwmProfileValue } from '@zlink-systems/zlink';
 import type { ZLinkMessageSerializer } from '../Codecs';
 import type { ZLinkMessageTypeSelector } from '../Codecs';
-import type {
-  ZLinkApplicationJobQueueProfile,
-  ZLinkDispatchOptions
-} from '../Dispatch';
+import type { ZLinkApplicationJobQueueProfile, ZLinkDispatchOptions } from '../Dispatch';
 import type { ZLinkLocationStore, ZLinkRelocationStore } from '../Locations';
 import type { ZLinkNetworkOptions } from './Builders';
 import type { ZLinkLocationOptionValues } from '../RouteMesh';
-import {
-  ZLinkSpotRelocationCoordinationMode,
-  ZLinkUserSpotExecutionMode
-} from './ObjectRoles';
+import { ZLinkSpotRelocationCoordinationMode, ZLinkUserSpotExecutionMode } from './ObjectRoles';
 
 declare const zlinkRelocationConfigurationBrand: unique symbol;
 
@@ -150,8 +144,9 @@ export interface ZLinkFrameworkRegistrationOptions {
   readonly routeChannels?: readonly (string | ZLinkRouteChannelOptions)[];
   readonly streamNodes?: Readonly<Record<string, ZLinkStreamNodeOptions>>;
   readonly streamCompression?: ZLinkStreamCompressionOptions;
-  readonly spotNodes?: readonly (string | ZLinkSpotNodeRegistrationOptions)[] |
-    Readonly<Record<string, ZLinkSpotNodeOptions>>;
+  readonly spotNodes?:
+    | readonly (string | ZLinkSpotNodeRegistrationOptions)[]
+    | Readonly<Record<string, ZLinkSpotNodeOptions>>;
   readonly spotPublisherClients?: readonly string[];
   readonly filters?: readonly Type<ZLinkHandlerFilter>[];
   readonly worker?: ZLinkWorkerOptions;
@@ -275,27 +270,28 @@ export interface ZLinkSpotNodeOptions {
   readonly entrySpotType?: Type<ZLinkEntrySpot>;
   readonly spotFactories?: readonly Type<ZLinkSpot>[];
   readonly spotFactoryRegistrations?: Readonly<
-    Record<string, ZLinkObjectFactoryRegistration<
-      ZLinkSpot,
-      ZLinkSpot,
-      ZLinkUserSpotFactoryConfiguration
-    >>
+    Record<
+      string,
+      ZLinkObjectFactoryRegistration<ZLinkSpot, ZLinkSpot, ZLinkUserSpotFactoryConfiguration>
+    >
   >;
   readonly instanceSpotFactories?: Readonly<Record<string, Type<ZLinkInstanceSpot>>>;
   readonly instanceSpotFactoryRegistrations?: Readonly<
-    Record<string, ZLinkObjectFactoryRegistration<
-      ZLinkInstanceSpot,
-      ZLinkInstanceSpot,
-      ZLinkInstanceSpotFactoryConfiguration
-    >>
+    Record<
+      string,
+      ZLinkObjectFactoryRegistration<
+        ZLinkInstanceSpot,
+        ZLinkInstanceSpot,
+        ZLinkInstanceSpotFactoryConfiguration
+      >
+    >
   >;
   readonly actorFactories?: Readonly<Record<string, Type> | Map<string, Type>>;
   readonly actorFactoryRegistrations?: Readonly<
-    Record<string, ZLinkObjectFactoryRegistration<
-      ZLinkActor,
-      ZLinkActorFactory,
-      ZLinkActorFactoryConfiguration
-    >>
+    Record<
+      string,
+      ZLinkObjectFactoryRegistration<ZLinkActor, ZLinkActorFactory, ZLinkActorFactoryConfiguration>
+    >
   >;
   readonly meshChannels?: Readonly<Record<string, ZLinkMeshChannelOptions>>;
   readonly routeSendHandlers?: readonly ZLinkRouteMeshSendHandlerRegistration[];

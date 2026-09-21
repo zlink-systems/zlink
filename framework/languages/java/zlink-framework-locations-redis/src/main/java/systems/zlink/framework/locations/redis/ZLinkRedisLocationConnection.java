@@ -6,19 +6,19 @@ import io.lettuce.core.ScriptOutputType;
 import io.lettuce.core.api.StatefulRedisConnection;
 import io.lettuce.core.api.async.RedisAsyncCommands;
 import io.lettuce.core.codec.RedisCodec;
+
 import java.nio.charset.StandardCharsets;
 import java.util.List;
-import java.util.function.Function;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionStage;
+import java.util.function.Function;
 
 /**
  * Redis connection wrapper shared by the Location Store providers.
  *
- * <p>Parameterized over the value type {@code V}: callers must carry
- * 8-bit-clean opaque bytes through {@code EVAL} ARGV without a base64
- * sub-layer (the opaque record store, the relocation blob store), so they
- * use a byte[] value codec. See {@link #forBytes}.</p>
+ * <p>Parameterized over the value type {@code V}: callers must carry 8-bit-clean opaque bytes
+ * through {@code EVAL} ARGV without a base64 sub-layer (the opaque record store, the relocation
+ * blob store), so they use a byte[] value codec. See {@link #forBytes}.
  */
 final class ZLinkRedisLocationConnection<V> {
     private final RedisURI redisUri;
@@ -32,10 +32,10 @@ final class ZLinkRedisLocationConnection<V> {
     private boolean closed;
 
     private ZLinkRedisLocationConnection(
-        RedisURI redisUri,
-        String schemaKey,
-        RedisCodec<String, V> codec,
-        Function<String, V> literal) {
+            RedisURI redisUri,
+            String schemaKey,
+            RedisCodec<String, V> codec,
+            Function<String, V> literal) {
         this.redisUri = redisUri;
         this.schemaKey = schemaKey;
         this.codec = codec;
@@ -44,8 +44,7 @@ final class ZLinkRedisLocationConnection<V> {
     }
 
     static ZLinkRedisLocationConnection<byte[]> forBytes(
-        ZLinkRedisLocationOptions options,
-        String schemaKey) {
+            ZLinkRedisLocationOptions options, String schemaKey) {
         return forBytes(options.redisUri(), schemaKey);
     }
 
@@ -53,20 +52,18 @@ final class ZLinkRedisLocationConnection<V> {
         return forBytes(redisUri, null);
     }
 
-    static ZLinkRedisLocationConnection<byte[]> forBytes(
-        RedisURI redisUri,
-        String schemaKey) {
+    static ZLinkRedisLocationConnection<byte[]> forBytes(RedisURI redisUri, String schemaKey) {
         return new ZLinkRedisLocationConnection<>(
-            redisUri,
-            schemaKey,
-            ZLinkRedisStringByteArrayCodec.INSTANCE,
-            value -> value.getBytes(StandardCharsets.UTF_8));
+                redisUri,
+                schemaKey,
+                ZLinkRedisStringByteArrayCodec.INSTANCE,
+                value -> value.getBytes(StandardCharsets.UTF_8));
     }
 
     CompletionStage<RedisAsyncCommands<String, V>> commands() {
         return connection()
-            .thenCompose(this::verifySchema)
-            .thenApply(StatefulRedisConnection::async);
+                .thenCompose(this::verifySchema)
+                .thenApply(StatefulRedisConnection::async);
     }
 
     CompletionStage<Void> closeAsync() {
@@ -83,68 +80,73 @@ final class ZLinkRedisLocationConnection<V> {
             close = new CompletableFuture<>();
             closeStage = close;
         }
-        CompletionStage<Void> connectionClosed = current == null
-            ? CompletableFuture.completedFuture(null)
-            : current.handle((connected, failure) -> connected)
-                .thenCompose(connected -> connected == null
-                    ? CompletableFuture.completedFuture(null)
-                    : connected.closeAsync());
+        CompletionStage<Void> connectionClosed =
+                current == null
+                        ? CompletableFuture.completedFuture(null)
+                        : current.handle((connected, failure) -> connected)
+                                .thenCompose(
+                                        connected ->
+                                                connected == null
+                                                        ? CompletableFuture.completedFuture(null)
+                                                        : connected.closeAsync());
         //  closeStage is installed before an already-completed connection
         //  can invoke the close chain inline and reenter closeAsync.
         connectionClosed
-            .thenCompose(ignored -> client.shutdownAsync())
-            .thenApply(ignored -> null)
-            .whenComplete((ignored, failure) -> {
-                if (failure == null) {
-                    close.complete(null);
-                } else {
-                    close.completeExceptionally(failure);
-                }
-            });
+                .thenCompose(ignored -> client.shutdownAsync())
+                .thenApply(ignored -> null)
+                .whenComplete(
+                        (ignored, failure) -> {
+                            if (failure == null) {
+                                close.complete(null);
+                            } else {
+                                close.completeExceptionally(failure);
+                            }
+                        });
         return close;
     }
 
-    private synchronized CompletionStage<StatefulRedisConnection<String, V>>
-        verifySchema(
+    private synchronized CompletionStage<StatefulRedisConnection<String, V>> verifySchema(
             StatefulRedisConnection<String, V> connected) {
         if (schemaKey == null) {
             return CompletableFuture.completedFuture(connected);
         }
         if (schemaReady == null) {
-            schemaReady = connected.async()
-                .<List<Object>>eval(
-                    """
-                    local format = redis.call(
-                        'HGET', KEYS[1], 'format')
-                    local epoch = redis.call(
-                        'HGET', KEYS[1], 'epoch')
-                    if redis.call('EXISTS', KEYS[1]) == 0 then
-                        redis.call('HSET', KEYS[1],
-                            'format', ARGV[1],
-                            'epoch', ARGV[2])
-                        return {'ready'}
-                    end
-                    if format == ARGV[1]
-                        and epoch == ARGV[2] then
-                        return {'ready'}
-                    end
-                    return {'incompatible',
-                        format or '', epoch or ''}
-                    """,
-                    ScriptOutputType.MULTI,
-                    new String[] {schemaKey},
-                    literal.apply("location-authority-hybrid-v1"),
-                    literal.apply("1"))
-                .thenApply(result -> {
-                    if (!"ready".equals(
-                        text(result.getFirst()))) {
-                        throw new IllegalStateException(
-                            "Redis location schema is incompatible: "
-                                + result);
-                    }
-                    return (Void) null;
-                })
-                .toCompletableFuture();
+            schemaReady =
+                    connected
+                            .async()
+                            .<List<Object>>eval(
+                                    """
+                                    local format = redis.call(
+                                        'HGET', KEYS[1], 'format')
+                                    local epoch = redis.call(
+                                        'HGET', KEYS[1], 'epoch')
+                                    if redis.call('EXISTS', KEYS[1]) == 0 then
+                                        redis.call('HSET', KEYS[1],
+                                            'format', ARGV[1],
+                                            'epoch', ARGV[2])
+                                        return {'ready'}
+                                    end
+                                    if format == ARGV[1]
+                                        and epoch == ARGV[2] then
+                                        return {'ready'}
+                                    end
+                                    return {'incompatible',
+                                        format or '', epoch or ''}
+                                    """,
+                                    ScriptOutputType.MULTI,
+                                    new String[] {schemaKey},
+                                    literal.apply("location-authority-hybrid-v1"),
+                                    literal.apply("1"))
+                            .thenApply(
+                                    result -> {
+                                        if (!"ready".equals(text(result.getFirst()))) {
+                                            throw new IllegalStateException(
+                                                    "Redis location schema is incompatible: "
+                                                            + result);
+                                        }
+                                        return (Void) null;
+                                    })
+                            .toCompletableFuture();
         }
         return schemaReady.thenApply(ignored -> connected);
     }
@@ -152,25 +154,26 @@ final class ZLinkRedisLocationConnection<V> {
     private synchronized CompletionStage<StatefulRedisConnection<String, V>> connection() {
         if (closed) {
             return CompletableFuture.failedFuture(
-                new IllegalStateException("Redis location connection is closed."));
+                    new IllegalStateException("Redis location connection is closed."));
         }
         if (connection != null) {
             return connection;
         }
 
         CompletableFuture<StatefulRedisConnection<String, V>> created =
-            client.connectAsync(codec, redisUri).toCompletableFuture();
+                client.connectAsync(codec, redisUri).toCompletableFuture();
         connection = created;
-        created.whenComplete((ignored, failure) -> {
-            if (failure != null) {
-                clearFailedConnection(created);
-            }
-        });
+        created.whenComplete(
+                (ignored, failure) -> {
+                    if (failure != null) {
+                        clearFailedConnection(created);
+                    }
+                });
         return created;
     }
 
     private synchronized void clearFailedConnection(
-        CompletableFuture<StatefulRedisConnection<String, V>> failed) {
+            CompletableFuture<StatefulRedisConnection<String, V>> failed) {
         if (connection == failed) {
             connection = null;
         }

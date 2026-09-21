@@ -1,17 +1,16 @@
 package systems.zlink.framework.runtime.internal.handlers;
-import java.util.Objects;
+
+import systems.zlink.framework.runtime.internal.execution.ZLinkStateLane;
 
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 import java.util.concurrent.CompletionException;
 import java.util.function.Supplier;
-import systems.zlink.framework.runtime.internal.execution.ZLinkStateLane;
 
-/**
- * Owns handler instances for one Framework lifecycle boundary.
- */
+/** Owns handler instances for one Framework lifecycle boundary. */
 public final class ZLinkHandlerInstanceOwner implements AutoCloseable {
     private final ZLinkHandlerActivator activator;
     private final ZLinkHandlerActivator.Activation activation;
@@ -31,27 +30,30 @@ public final class ZLinkHandlerInstanceOwner implements AutoCloseable {
     }
 
     public Object instance(Class<?> handlerType) {
-        return inStateLane(() -> {
-            Objects.requireNonNull(handlerType, "handlerType");
-            if (closed) {
-                throw new IllegalStateException("handler instance owner is closed");
-            }
-            return instances.computeIfAbsent(handlerType, activation::create);
-        });
+        return inStateLane(
+                () -> {
+                    Objects.requireNonNull(handlerType, "handlerType");
+                    if (closed) {
+                        throw new IllegalStateException("handler instance owner is closed");
+                    }
+                    return instances.computeIfAbsent(handlerType, activation::create);
+                });
     }
 
     @Override
     public void close() {
         List<Object> owned;
-        owned = inStateLane(() -> {
-            if (closed) {
-                return null;
-            }
-            closed = true;
-            List<Object> current = new ArrayList<>(instances.values());
-            instances.clear();
-            return current;
-        });
+        owned =
+                inStateLane(
+                        () -> {
+                            if (closed) {
+                                return null;
+                            }
+                            closed = true;
+                            List<Object> current = new ArrayList<>(instances.values());
+                            instances.clear();
+                            return current;
+                        });
         if (owned == null) {
             return;
         }

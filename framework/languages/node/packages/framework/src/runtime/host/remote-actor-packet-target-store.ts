@@ -1,14 +1,6 @@
-import type {
-  ActorRef,
-  RoutingId,
-  SpotId,
-  ZLinkSessionActor
-} from '../../contracts';
+import type { ActorRef, RoutingId, SpotId, ZLinkSessionActor } from '../../contracts';
 import { ZLinkSpotKind } from '../../contracts';
-import type {
-  DefaultZLinkActorManager,
-  ZLinkRemoteActorPacketTarget
-} from '../actors';
+import type { DefaultZLinkActorManager, ZLinkRemoteActorPacketTarget } from '../actors';
 import type { ZLinkStreamActorLookupPort } from '../streams/stream-binding-runtime-ports';
 import { decodeRemoteActorPacketTarget } from '../actors/actor-packet-relay-wire';
 import { normalizeRoutingId as normalizeRuntimeRoutingId } from '../routing-id';
@@ -29,15 +21,25 @@ interface ZLinkSessionActorPacketTargetCacheEntry {
 }
 
 export class ZLinkRemoteActorPacketTargetStore {
-  private readonly sessionActorPacketTargets =
-    new WeakMap<ZLinkSessionActor, ZLinkSessionActorPacketTargetCacheEntry>();
-  private readonly sessionActorPacketTargetsByActor = new Map<string, ZLinkRemoteActorPacketTarget>();
-  private readonly sessionActorPacketTargetsByActorId =
-    new Map<string, ZLinkSessionActorPacketTargetCacheEntry>();
-  private readonly sessionActorPacketTargetOwners = new Map<string, {
-    readonly actors: Set<ZLinkSessionActor>;
-    readonly keys: Set<string>;
-  }>();
+  private readonly sessionActorPacketTargets = new WeakMap<
+    ZLinkSessionActor,
+    ZLinkSessionActorPacketTargetCacheEntry
+  >();
+  private readonly sessionActorPacketTargetsByActor = new Map<
+    string,
+    ZLinkRemoteActorPacketTarget
+  >();
+  private readonly sessionActorPacketTargetsByActorId = new Map<
+    string,
+    ZLinkSessionActorPacketTargetCacheEntry
+  >();
+  private readonly sessionActorPacketTargetOwners = new Map<
+    string,
+    {
+      readonly actors: Set<ZLinkSessionActor>;
+      readonly keys: Set<string>;
+    }
+  >();
 
   constructor(private readonly options: ZLinkRemoteActorPacketTargetStoreOptions) {}
 
@@ -61,17 +63,14 @@ export class ZLinkRemoteActorPacketTargetStore {
     return decodeRemoteActorPacketTarget(value);
   }
 
-  clear(
-    actorId: string,
-    expectedTenureKey?: string,
-    expectedActor?: ZLinkSessionActor
-  ): void {
+  clear(actorId: string, expectedTenureKey?: string, expectedActor?: ZLinkSessionActor): void {
     if (
-      expectedTenureKey !== undefined
-      && (expectedActor === undefined
-        || expectedActor.actorId !== actorId
-        || this.tenureKeyForActor(expectedActor) !== expectedTenureKey)
-    ) return;
+      expectedTenureKey !== undefined &&
+      (expectedActor === undefined ||
+        expectedActor.actorId !== actorId ||
+        this.tenureKeyForActor(expectedActor) !== expectedTenureKey)
+    )
+      return;
     const state = this.options.actorManager()?.getState(actorId);
     if (typeof state?.setRemoteActorPacketTarget === 'function') {
       state.setRemoteActorPacketTarget(undefined);
@@ -93,18 +92,23 @@ export class ZLinkRemoteActorPacketTargetStore {
     const routeKey = sessionActorPacketTargetTenureKey(actor);
     const actorEntry = this.sessionActorPacketTargets.get(actor);
     const actorIdEntry = this.sessionActorPacketTargetsByActorId.get(actor.actorId);
-    return (actorEntry?.routeKey === routeKey ? actorEntry.target : undefined)
-      ?? this.sessionActorPacketTargetsByActor.get(routeKey)
-      ?? (actorIdEntry?.routeKey === routeKey ? actorIdEntry.target : undefined)
-      ?? this.targetForActorRef(actor.ref);
+    return (
+      (actorEntry?.routeKey === routeKey ? actorEntry.target : undefined) ??
+      this.sessionActorPacketTargetsByActor.get(routeKey) ??
+      (actorIdEntry?.routeKey === routeKey ? actorIdEntry.target : undefined) ??
+      this.targetForActorRef(actor.ref)
+    );
   }
 
-  targetForState(actorId: string, routerChannelIdHint?: string): ZLinkRemoteActorPacketTarget | undefined {
+  targetForState(
+    actorId: string,
+    routerChannelIdHint?: string
+  ): ZLinkRemoteActorPacketTarget | undefined {
     const state = this.options.actorManager()?.getState(actorId);
     if (
       state?.remoteActorPacketTarget !== undefined &&
-      (state.spotId === undefined
-        || routingIdsEqual(state.remoteActorPacketTarget.spotId, state.spotId))
+      (state.spotId === undefined ||
+        routingIdsEqual(state.remoteActorPacketTarget.spotId, state.spotId))
     ) {
       return state.remoteActorPacketTarget;
     }
@@ -122,11 +126,12 @@ export class ZLinkRemoteActorPacketTargetStore {
       return undefined;
     }
     const actorRef = state?.nativeActorRef as ActorRef | undefined;
-    const targetNodeRid = actorRef?.nodeRid as RoutingId | undefined
-      ?? this.options.primaryNodeRid();
-    const routerChannelId = routerChannelIdHint
-      ?? this.options.meshRouters.defaultSpotRouterChannelId()
-      ?? this.options.meshRouters.defaultRouterChannelId();
+    const targetNodeRid =
+      (actorRef?.nodeRid as RoutingId | undefined) ?? this.options.primaryNodeRid();
+    const routerChannelId =
+      routerChannelIdHint ??
+      this.options.meshRouters.defaultSpotRouterChannelId() ??
+      this.options.meshRouters.defaultRouterChannelId();
     const localNodeRid = this.options.primaryNodeRid();
     if (
       spotId === undefined &&
@@ -144,9 +149,7 @@ export class ZLinkRemoteActorPacketTargetStore {
       targetNodeRid: normalizeRuntimeRoutingId(targetNodeRid),
       spotId: validateSpotId(spotId),
       spotKind: ZLinkSpotKind.User,
-      ...(state?.spotGeneration === undefined
-        ? {}
-        : { targetSpotGeneration: state.spotGeneration })
+      ...(state?.spotGeneration === undefined ? {} : { targetSpotGeneration: state.spotGeneration })
     };
   }
 
@@ -157,10 +160,11 @@ export class ZLinkRemoteActorPacketTargetStore {
       return undefined;
     }
     const meshName = actorRef.meshName;
-    const routerChannelId = meshName.trim().length === 0
-      ? this.options.meshRouters.defaultSpotRouterChannelId()
-        ?? this.options.meshRouters.defaultRouterChannelId()
-      : this.options.spotRouterChannelIdForMesh(meshName);
+    const routerChannelId =
+      meshName.trim().length === 0
+        ? (this.options.meshRouters.defaultSpotRouterChannelId() ??
+          this.options.meshRouters.defaultRouterChannelId())
+        : this.options.spotRouterChannelIdForMesh(meshName);
     if (routerChannelId === undefined) {
       return undefined;
     }
@@ -185,10 +189,8 @@ export class ZLinkRemoteActorPacketTargetStore {
     target: ZLinkRemoteActorPacketTarget,
     expectedTenureKey?: string
   ): void {
-    if (
-      expectedTenureKey !== undefined
-      && this.tenureKeyForActor(actor) !== expectedTenureKey
-    ) return;
+    if (expectedTenureKey !== undefined && this.tenureKeyForActor(actor) !== expectedTenureKey)
+      return;
     const state = this.options.actorManager()?.getState(actor.actorId);
     if (typeof state?.setRemoteActorPacketTarget === 'function') {
       state.setRemoteActorPacketTarget(target);

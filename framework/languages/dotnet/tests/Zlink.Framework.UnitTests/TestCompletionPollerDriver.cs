@@ -18,7 +18,8 @@ internal sealed class TestCompletionPollerDriver : IDisposable
             Drive,
             CancellationToken.None,
             TaskCreationOptions.LongRunning,
-            TaskScheduler.Default);
+            TaskScheduler.Default
+        );
     }
 
     public void Dispose()
@@ -29,7 +30,8 @@ internal sealed class TestCompletionPollerDriver : IDisposable
         if (_failure is not null)
             throw new InvalidOperationException(
                 "The test completion poller driver failed.",
-                _failure);
+                _failure
+            );
     }
 
     private void Drive()

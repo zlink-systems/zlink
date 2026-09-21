@@ -16,7 +16,8 @@ internal static class ZLinkStreamProtocolDefaults
 
     public static ZlinkStreamHeader DecodeHeader(
         ReadOnlyMemory<byte> header,
-        bool captureFlow = true)
+        bool captureFlow = true
+    )
     {
         return ZLinkStreamHeaderCodec.Decode(header, captureFlow);
     }
@@ -28,9 +29,11 @@ internal static class ZLinkStreamProtocolDefaults
 
     public static ReadOnlyMemory<byte> Compress(
         IZlinkStreamCompressionCodec? compressionCodec,
-        ReadOnlyMemory<byte> payload)
+        ReadOnlyMemory<byte> payload
+    )
     {
-        if (compressionCodec is null) throw new InvalidOperationException("Compression codec is not configured.");
+        if (compressionCodec is null)
+            throw new InvalidOperationException("Compression codec is not configured.");
 
         return compressionCodec.Compress(payload);
     }
@@ -38,13 +41,17 @@ internal static class ZLinkStreamProtocolDefaults
     public static ReadOnlyMemory<byte> Decompress(
         IZlinkStreamCompressionCodec? compressionCodec,
         ReadOnlyMemory<byte> payload,
-        int maxDecompressedPayloadSize = DefaultMaxDecompressedPayloadSize)
+        int maxDecompressedPayloadSize = DefaultMaxDecompressedPayloadSize
+    )
     {
-        if (compressionCodec is null) throw new InvalidOperationException("Compression codec is not configured.");
+        if (compressionCodec is null)
+            throw new InvalidOperationException("Compression codec is not configured.");
 
         var decompressed = compressionCodec.Decompress(payload, maxDecompressedPayloadSize);
         if (decompressed.Length > maxDecompressedPayloadSize)
-            throw new InvalidOperationException("Decoded stream payload exceeds maximum stream payload size.");
+            throw new InvalidOperationException(
+                "Decoded stream payload exceeds maximum stream payload size."
+            );
 
         return decompressed;
     }

@@ -8,9 +8,7 @@ import type {
   ZLinkBackendReadablePoller,
   ZLinkChannelBackendAdapter
 } from '../backend/contracts';
-import {
-  closeMessages
-} from './channel-envelope';
+import { closeMessages } from './channel-envelope';
 import { tryDecodeChannelHeader } from './channel-envelope-inspection';
 // 같은 계약을 두 곳에 두지 않는다 — channel-multipart가 소유한다.
 import type { ZLinkMultipartAsyncSubmitOperation } from './channel-multipart';
@@ -19,10 +17,7 @@ import {
   ZLinkReceiveTaskTracker,
   type ZLinkReceiveTaskErrorReporter
 } from './channel-receive-task-tracker';
-import {
-  ApplicationJobQueue,
-  type ApplicationJobQueuePermit
-} from '../host/application-job-queue';
+import { ApplicationJobQueue, type ApplicationJobQueuePermit } from '../host/application-job-queue';
 import { runWithApplicationJobPermit } from '../application-jobs/application-job-queue-scope';
 
 //  The loop awaits between reads and the signal can abort in that gap. Reading
@@ -31,7 +26,6 @@ import { runWithApplicationJobPermit } from '../application-jobs/application-job
 function signalAborted(signal?: AbortSignal): boolean {
   return signal?.aborted === true;
 }
-
 
 interface ZLinkMultipartOperation<TNext> {
   message(message: MessageLike): TNext;
@@ -127,7 +121,7 @@ export class ZLinkReceiveRoundRobinCoordinator {
   }
 
   setReady(token: symbol, ready: boolean): void {
-    const owner = this.owners.find(candidate => candidate.token === token);
+    const owner = this.owners.find((candidate) => candidate.token === token);
     if (owner !== undefined) owner.ready = ready;
   }
 
@@ -141,7 +135,7 @@ export class ZLinkReceiveRoundRobinCoordinator {
 
   release(token: symbol): void {
     if (this.active !== token) return;
-    const index = this.owners.findIndex(owner => owner.token === token);
+    const index = this.owners.findIndex((owner) => owner.token === token);
     this.active = undefined;
     if (this.owners.length > 0) this.cursor = (index + 1) % this.owners.length;
   }
@@ -151,7 +145,7 @@ export class ZLinkReceiveRoundRobinCoordinator {
   }
 
   unregister(token: symbol): void {
-    const index = this.owners.findIndex(owner => owner.token === token);
+    const index = this.owners.findIndex((owner) => owner.token === token);
     if (index < 0) return;
     if (this.active === token) this.active = undefined;
     this.owners.splice(index, 1);
@@ -244,15 +238,16 @@ export class ZLinkChannelReceiveLoop {
 
   private async runLoop(signal?: AbortSignal): Promise<void> {
     const batch = new ZLinkReceiveBatchBudget();
-    const capacitySignal = signal === undefined
-      ? this.capacityStop.signal
-      : AbortSignal.any([signal, this.capacityStop.signal]);
+    const capacitySignal =
+      signal === undefined
+        ? this.capacityStop.signal
+        : AbortSignal.any([signal, this.capacityStop.signal]);
     while (!this.isStopped() && signal?.aborted !== true) {
       if (!this.poller.wait(0)) {
         this.roundRobin?.setReady(this.receiveOwner, false);
         this.roundRobin?.release(this.receiveOwner);
         batch.reset();
-        if (!await this.poller.waitForReadable(capacitySignal)) break;
+        if (!(await this.poller.waitForReadable(capacitySignal))) break;
         continue;
       }
       const applicationJobPermit = await this.acquirePermit(capacitySignal);
@@ -265,9 +260,10 @@ export class ZLinkChannelReceiveLoop {
         await waitReceiveLoopTurn();
         continue;
       }
-      const releaseRawReceive = this.roundRobin === undefined
-        ? this.rawReceiveReservations.tryAcquire()
-        : this.roundRobin.tryAcquireRawReceiveReservation();
+      const releaseRawReceive =
+        this.roundRobin === undefined
+          ? this.rawReceiveReservations.tryAcquire()
+          : this.roundRobin.tryAcquireRawReceiveReservation();
       if (releaseRawReceive === undefined) {
         applicationJobPermit.releaseAfterInternalProcessing();
         this.roundRobin?.release(this.receiveOwner);
@@ -282,7 +278,7 @@ export class ZLinkChannelReceiveLoop {
         this.roundRobin?.setReady(this.receiveOwner, false);
         this.roundRobin?.release(this.receiveOwner);
         batch.reset();
-        if (!await this.poller.waitForReadable(capacitySignal)) break;
+        if (!(await this.poller.waitForReadable(capacitySignal))) break;
         continue;
       }
       const receivedBytes = messageBytes(received.parts);
@@ -314,12 +310,8 @@ export class ZLinkChannelReceiveLoop {
       }
       applicationJobPermit.markApplicationQueued();
       const task = runWithApplicationJobPermit(applicationJobPermit, () =>
-        this.dispatchAndClose(
-          received,
-          signal,
-          classification.decodedHeader,
-          true
-        ));
+        this.dispatchAndClose(received, signal, classification.decodedHeader, true)
+      );
       releaseRawReceive();
       this.inFlight.track(task);
       if (batch.record(receivedBytes)) {
@@ -350,14 +342,20 @@ export class ZLinkChannelReceiveLoop {
     }
   }
 
-  private async dispatchAndClose(received: {
-    parts: readonly Message[];
-    routingId: unknown;
-    spotId?: unknown;
-    replyToken: unknown | null;
-    send?: () => ZLinkMultipartOperation<ZLinkMultipartAsyncSubmitOperation>;
-    close(): void;
-  }, signal?: AbortSignal, decodedHeader?: ZLinkChannelEnvelopeHeader, infrastructureChecked = false, releaseRawReceive?: () => void): Promise<void> {
+  private async dispatchAndClose(
+    received: {
+      parts: readonly Message[];
+      routingId: unknown;
+      spotId?: unknown;
+      replyToken: unknown | null;
+      send?: () => ZLinkMultipartOperation<ZLinkMultipartAsyncSubmitOperation>;
+      close(): void;
+    },
+    signal?: AbortSignal,
+    decodedHeader?: ZLinkChannelEnvelopeHeader,
+    infrastructureChecked = false,
+    releaseRawReceive?: () => void
+  ): Promise<void> {
     let closeReceived = true;
     try {
       if (!infrastructureChecked) {
@@ -368,15 +366,10 @@ export class ZLinkChannelReceiveLoop {
         }
         decodedHeader = classification.decodedHeader;
       }
-        const consumed = await this.dispatcher.dispatch(
-          received,
-          this.router,
-          signal,
-          decodedHeader
-        );
-        if (consumed === true) {
-          closeReceived = false;
-        }
+      const consumed = await this.dispatcher.dispatch(received, this.router, signal, decodedHeader);
+      if (consumed === true) {
+        closeReceived = false;
+      }
     } finally {
       releaseRawReceive?.();
       if (closeReceived) {
@@ -395,10 +388,13 @@ export class ZLinkChannelReceiveLoop {
     if (this.infrastructureHandler?.(received, this.router) === true) {
       return { kind: 'consumed', closeReceived: true };
     }
-    const decodedHeader = tryDecodeChannelHeader(received.parts, this.dispatcher.flowEnabled?.() ?? true);
+    const decodedHeader = tryDecodeChannelHeader(
+      received.parts,
+      this.dispatcher.flowEnabled?.() ?? true
+    );
     if (
-      decodedHeader === undefined
-      && this.spotRouteBridge?.handleRouterReceived(
+      decodedHeader === undefined &&
+      this.spotRouteBridge?.handleRouterReceived(
         this.channelName,
         received.routingId as RoutingId,
         0n,
@@ -464,15 +460,16 @@ export class ZLinkSubscriberReceiveLoop {
 
   private async runLoop(signal?: AbortSignal): Promise<void> {
     const batch = new ZLinkReceiveBatchBudget();
-    const capacitySignal = signal === undefined
-      ? this.capacityStop.signal
-      : AbortSignal.any([signal, this.capacityStop.signal]);
+    const capacitySignal =
+      signal === undefined
+        ? this.capacityStop.signal
+        : AbortSignal.any([signal, this.capacityStop.signal]);
     while (!this.isStopped() && signal?.aborted !== true) {
       if (!this.poller.wait(0)) {
         this.roundRobin?.setReady(this.receiveOwner, false);
         this.roundRobin?.release(this.receiveOwner);
         batch.reset();
-        if (!await this.poller.waitForReadable(capacitySignal)) break;
+        if (!(await this.poller.waitForReadable(capacitySignal))) break;
         continue;
       }
       const applicationJobPermit = await this.acquirePermit(capacitySignal);
@@ -483,9 +480,10 @@ export class ZLinkSubscriberReceiveLoop {
         await waitReceiveLoopTurn();
         continue;
       }
-      const releaseRawReceive = this.roundRobin === undefined
-        ? this.rawReceiveReservations.tryAcquire()
-        : this.roundRobin.tryAcquireRawReceiveReservation();
+      const releaseRawReceive =
+        this.roundRobin === undefined
+          ? this.rawReceiveReservations.tryAcquire()
+          : this.roundRobin.tryAcquireRawReceiveReservation();
       if (releaseRawReceive === undefined) {
         applicationJobPermit.releaseAfterInternalProcessing();
         this.roundRobin?.release(this.receiveOwner);
@@ -501,7 +499,7 @@ export class ZLinkSubscriberReceiveLoop {
         this.roundRobin?.setReady(this.receiveOwner, false);
         this.roundRobin?.release(this.receiveOwner);
         batch.reset();
-        if (!await this.poller.waitForReadable(capacitySignal)) break;
+        if (!(await this.poller.waitForReadable(capacitySignal))) break;
         continue;
       }
       const receivedBytes = messageBytes(topicMessage.parts as readonly Message[]);
@@ -533,12 +531,8 @@ export class ZLinkSubscriberReceiveLoop {
       }
       applicationJobPermit.markApplicationQueued();
       const task = runWithApplicationJobPermit(applicationJobPermit, () =>
-        this.dispatchAndClose(
-          topicMessage,
-          signal,
-          classification.decodedHeader,
-          true
-        ));
+        this.dispatchAndClose(topicMessage, signal, classification.decodedHeader, true)
+      );
       releaseRawReceive();
       this.inFlight.track(task);
       if (batch.record(receivedBytes)) {
@@ -582,7 +576,7 @@ export class ZLinkSubscriberReceiveLoop {
         if (classification.kind === 'consumed') return;
         decodedHeader = classification.decodedHeader;
       }
-        await this.dispatcher.dispatch(topicMessage, signal, decodedHeader);
+      await this.dispatcher.dispatch(topicMessage, signal, decodedHeader);
     } finally {
       releaseRawReceive?.();
       closeMessages(topicMessage.parts as readonly Message[]);
@@ -595,12 +589,11 @@ export class ZLinkSubscriberReceiveLoop {
     | { readonly kind: 'consumed' }
     | { readonly kind: 'application'; readonly decodedHeader?: ZLinkChannelEnvelopeHeader } {
     const infrastructureResult = this.infrastructureHandler?.(topicMessage);
-    const decodedHeader = typeof infrastructureResult === 'object'
-      ? infrastructureResult.decodedHeader
-      : undefined;
+    const decodedHeader =
+      typeof infrastructureResult === 'object' ? infrastructureResult.decodedHeader : undefined;
     if (
-      infrastructureResult === true
-      || (typeof infrastructureResult === 'object' && infrastructureResult.consumed)
+      infrastructureResult === true ||
+      (typeof infrastructureResult === 'object' && infrastructureResult.consumed)
     ) {
       return { kind: 'consumed' };
     }
@@ -657,15 +650,16 @@ export class ZLinkRouteReceiveLoop {
 
   private async runLoop(signal?: AbortSignal): Promise<void> {
     const batch = new ZLinkReceiveBatchBudget();
-    const capacitySignal = signal === undefined
-      ? this.capacityStop.signal
-      : AbortSignal.any([signal, this.capacityStop.signal]);
+    const capacitySignal =
+      signal === undefined
+        ? this.capacityStop.signal
+        : AbortSignal.any([signal, this.capacityStop.signal]);
     while (!this.isStopped() && signal?.aborted !== true) {
       if (!this.poller.wait(0)) {
         this.roundRobin?.setReady(this.receiveOwner, false);
         this.roundRobin?.release(this.receiveOwner);
         batch.reset();
-        if (!await this.poller.waitForReadable(capacitySignal)) break;
+        if (!(await this.poller.waitForReadable(capacitySignal))) break;
         continue;
       }
       this.roundRobin?.setReady(this.receiveOwner, true);
@@ -673,9 +667,10 @@ export class ZLinkRouteReceiveLoop {
         await waitReceiveLoopTurn();
         continue;
       }
-      const releaseRawReceive = this.roundRobin === undefined
-        ? this.rawReceiveReservations.tryAcquire()
-        : this.roundRobin.tryAcquireRawReceiveReservation();
+      const releaseRawReceive =
+        this.roundRobin === undefined
+          ? this.rawReceiveReservations.tryAcquire()
+          : this.roundRobin.tryAcquireRawReceiveReservation();
       if (releaseRawReceive === undefined) {
         this.roundRobin?.release(this.receiveOwner);
         await waitReceiveLoopTurn();
@@ -688,7 +683,7 @@ export class ZLinkRouteReceiveLoop {
         this.roundRobin?.setReady(this.receiveOwner, false);
         this.roundRobin?.release(this.receiveOwner);
         batch.reset();
-        if (!await this.poller.waitForReadable(capacitySignal)) break;
+        if (!(await this.poller.waitForReadable(capacitySignal))) break;
         continue;
       }
       const receivedBytes = messageBytes(received.parts);
@@ -708,12 +703,14 @@ export class ZLinkRouteReceiveLoop {
           // submit() transfers the parts to Core before returning its admission
           // Promise. Track that terminal without serializing the single route
           // receiver; the held reservation bounds pending infrastructure sends.
-          this.inFlight.track(infrastructure
-            .catch(error => {
-              received.close();
-              throw error;
-            })
-            .finally(releaseRawReceive));
+          this.inFlight.track(
+            infrastructure
+              .catch((error) => {
+                received.close();
+                throw error;
+              })
+              .finally(releaseRawReceive)
+          );
         }
         if (batch.record(receivedBytes)) {
           this.roundRobin?.release(this.receiveOwner);
@@ -741,7 +738,8 @@ export class ZLinkRouteReceiveLoop {
       }
       applicationJobPermit.markApplicationQueued();
       const task = runWithApplicationJobPermit(applicationJobPermit, () =>
-        this.dispatchAndClose(received, signal, true));
+        this.dispatchAndClose(received, signal, true)
+      );
       releaseRawReceive();
       this.inFlight.track(task);
       if (batch.record(receivedBytes)) {
@@ -772,16 +770,21 @@ export class ZLinkRouteReceiveLoop {
     }
   }
 
-  private async dispatchAndClose(received: {
-    parts: readonly Message[];
-    routingId: unknown;
-    spotId?: unknown;
-    replyToken: unknown | null;
-    close(): void;
-  }, signal?: AbortSignal, infrastructureChecked = false, releaseRawReceive?: () => void): Promise<void> {
+  private async dispatchAndClose(
+    received: {
+      parts: readonly Message[];
+      routingId: unknown;
+      spotId?: unknown;
+      replyToken: unknown | null;
+      close(): void;
+    },
+    signal?: AbortSignal,
+    infrastructureChecked = false,
+    releaseRawReceive?: () => void
+  ): Promise<void> {
     let closeReceived = true;
-      try {
-        const consumed = await this.dispatcher.dispatch(
+    try {
+      const consumed = await this.dispatcher.dispatch(
         received,
         this.router,
         signal,
@@ -791,9 +794,9 @@ export class ZLinkRouteReceiveLoop {
       if (consumed === true) {
         closeReceived = false;
       }
-      } finally {
-        releaseRawReceive?.();
-        if (closeReceived) {
+    } finally {
+      releaseRawReceive?.();
+      if (closeReceived) {
         received.close();
       }
     }
@@ -812,13 +815,15 @@ class ZLinkReceiveBatchBudget {
   record(bytes: number): boolean {
     this.messages += 1;
     this.bytes += bytes;
-    return this.messages >= RECEIVE_BATCH_MESSAGE_LIMIT
-      || this.bytes >= RECEIVE_BATCH_BYTE_LIMIT
-      || performance.now() - this.startedAt >= RECEIVE_BATCH_TIME_LIMIT_MS;
+    return (
+      this.messages >= RECEIVE_BATCH_MESSAGE_LIMIT ||
+      this.bytes >= RECEIVE_BATCH_BYTE_LIMIT ||
+      performance.now() - this.startedAt >= RECEIVE_BATCH_TIME_LIMIT_MS
+    );
   }
 
   async yieldAndReset(): Promise<void> {
-    await new Promise<void>(resolve => setImmediate(resolve));
+    await new Promise<void>((resolve) => setImmediate(resolve));
     this.reset();
   }
 
@@ -830,9 +835,8 @@ class ZLinkReceiveBatchBudget {
 }
 
 function waitReceiveLoopTurn(): Promise<void> {
-  return new Promise<void>(resolve => setImmediate(resolve));
+  return new Promise<void>((resolve) => setImmediate(resolve));
 }
-
 
 function messageBytes(parts: readonly Message[]): number {
   return parts.reduce((sum, part) => sum + messagePartBytes(part), 0);

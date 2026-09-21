@@ -7,15 +7,12 @@ internal interface IZlinkStreamConnectorInternal : IZlinkStreamConnector
         string name,
         ZlinkStreamEncodedPayload payload,
         ZlinkStreamMetadata metadata,
-        bool compress);
+        bool compress
+    );
 
-    ValueTask SendFrameAsync(
-        ZlinkStreamOutboundFrame frame,
-        CancellationToken cancellationToken);
+    ValueTask SendFrameAsync(ZlinkStreamOutboundFrame frame, CancellationToken cancellationToken);
 
-    ValueTask SubmitFrameAsync(
-        ZlinkStreamOutboundFrame frame,
-        CancellationToken cancellationToken);
+    ValueTask SubmitFrameAsync(ZlinkStreamOutboundFrame frame, CancellationToken cancellationToken);
 
     ValueTask<ZlinkStreamEncodedPayload> RequestEncodedAsync(
         string name,
@@ -23,7 +20,8 @@ internal interface IZlinkStreamConnectorInternal : IZlinkStreamConnector
         ZlinkStreamMetadata metadata,
         bool compress,
         TimeSpan timeout,
-        CancellationToken cancellationToken);
+        CancellationToken cancellationToken
+    );
 
     void RequestEncoded(
         string name,
@@ -31,7 +29,8 @@ internal interface IZlinkStreamConnectorInternal : IZlinkStreamConnector
         ZlinkStreamMetadata metadata,
         bool compress,
         TimeSpan timeout,
-        Action<ZlinkStreamResult> callback);
+        Action<ZlinkStreamResult> callback
+    );
 
     void RequestEncoded(
         string name,
@@ -39,7 +38,8 @@ internal interface IZlinkStreamConnectorInternal : IZlinkStreamConnector
         ZlinkStreamMetadata metadata,
         bool compress,
         TimeSpan timeout,
-        Action<ZlinkStreamResult<ZlinkStreamEncodedPayload>> callback);
+        Action<ZlinkStreamResult<ZlinkStreamEncodedPayload>> callback
+    );
 
     /// <summary>
     ///     Consumes the next matching unread message, or yields <see langword="null" />
@@ -50,5 +50,6 @@ internal interface IZlinkStreamConnectorInternal : IZlinkStreamConnector
         string name,
         Func<ZlinkStreamMessage<ZlinkStreamEncodedPayload>, bool>? predicate,
         TimeSpan timeout,
-        CancellationToken cancellationToken);
+        CancellationToken cancellationToken
+    );
 }

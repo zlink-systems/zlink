@@ -4,15 +4,12 @@ public interface IZLinkActorManager
 {
     IZLinkActorCreateCall Create(string actorId, string actorType);
     IZLinkActorGetOrCreateCall GetOrCreate(string actorId, string actorType);
-    ValueTask<ActorRef?> FindAsync(
-        string actorId,
-        CancellationToken cancellationToken = default);
+    ValueTask<ActorRef?> FindAsync(string actorId, CancellationToken cancellationToken = default);
     ValueTask<SpotRef?> FindSpotAsync(
         string actorId,
-        CancellationToken cancellationToken = default);
-    ValueTask<bool> DestroyAsync(
-        ActorRef actor,
-        CancellationToken cancellationToken = default);
+        CancellationToken cancellationToken = default
+    );
+    ValueTask<bool> DestroyAsync(ActorRef actor, CancellationToken cancellationToken = default);
 }
 
 public interface IZLinkActorCreateCall
@@ -37,14 +34,11 @@ public interface IZLinkActorGetOrCreateCall
 
 public abstract record ZLinkActorCreateResult
 {
-    private protected ZLinkActorCreateResult()
-    {
-    }
+    private protected ZLinkActorCreateResult() { }
 
     public sealed record Existing(ActorRef Actor) : ZLinkActorCreateResult;
 
-    public sealed record Created(ActorRef Actor, ZLinkMessage? Reply)
-        : ZLinkActorCreateResult;
+    public sealed record Created(ActorRef Actor, ZLinkMessage? Reply) : ZLinkActorCreateResult;
 
     public sealed record Rejected(ZLinkMessage? Reply) : ZLinkActorCreateResult;
 }

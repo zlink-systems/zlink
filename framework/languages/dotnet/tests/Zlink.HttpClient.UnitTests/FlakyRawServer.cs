@@ -75,7 +75,8 @@ internal sealed class FlakyRawServer : IDisposable
                     var buffer = new byte[4096];
                     await stream.ReadAsync(buffer).ConfigureAwait(false);
                     var response = Encoding.ASCII.GetBytes(
-                        "HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: close\r\n\r\n{}");
+                        "HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: close\r\n\r\n{}"
+                    );
                     await stream.WriteAsync(response).ConfigureAwait(false);
                     await stream.FlushAsync().ConfigureAwait(false);
                 }

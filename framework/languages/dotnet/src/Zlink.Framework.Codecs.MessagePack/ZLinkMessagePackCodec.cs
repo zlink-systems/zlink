@@ -4,14 +4,12 @@ using Zlink.Framework.Contracts.Codecs;
 
 namespace Zlink.Framework.Codecs.MessagePack;
 
-public sealed class ZLinkMessagePackCodec :
-    IZLinkCodecExtension,
-    IZlinkStreamPayloadCodec,
-    IZlinkStreamCodecRegistration
+public sealed class ZLinkMessagePackCodec
+    : IZLinkCodecExtension,
+        IZlinkStreamPayloadCodec,
+        IZlinkStreamCodecRegistration
 {
-    private ZLinkMessagePackCodec()
-    {
-    }
+    private ZLinkMessagePackCodec() { }
 
     public static ZLinkMessagePackCodec Default { get; } = new();
 
@@ -21,7 +19,8 @@ public sealed class ZLinkMessagePackCodec :
         codecs.AddSerializer(
             "application/x-msgpack",
             MessagePackSerializerAdapter.Instance,
-            type => type.GetCustomAttributes(typeof(MessagePackObjectAttribute), true).Length > 0);
+            type => type.GetCustomAttributes(typeof(MessagePackObjectAttribute), true).Length > 0
+        );
     }
 
     string IZlinkStreamCodecRegistration.ContentType => "application/x-msgpack";
@@ -33,17 +32,21 @@ public sealed class ZLinkMessagePackCodec :
         return new ZlinkStreamEncodedPayload(
             ZlinkStreamCodec.MessagePack,
             MessagePackSerializer.Serialize(payload, MessagePackSerializerOptions.Standard),
-            typeof(TPayload));
+            typeof(TPayload)
+        );
     }
 
     public TPayload Decode<TPayload>(ZlinkStreamEncodedPayload payload)
     {
         if (payload.Codec != ZlinkStreamCodec.MessagePack)
-            throw new InvalidOperationException($"Stream payload codec is {payload.Codec}, not MessagePack.");
+            throw new InvalidOperationException(
+                $"Stream payload codec is {payload.Codec}, not MessagePack."
+            );
 
         return MessagePackSerializer.Deserialize<TPayload>(
             payload.Payload,
-            MessagePackSerializerOptions.Standard);
+            MessagePackSerializerOptions.Standard
+        );
     }
 
     private sealed class MessagePackSerializerAdapter : IZLinkMessageSerializer
@@ -53,12 +56,17 @@ public sealed class ZLinkMessagePackCodec :
         public ZLinkEncodedPayload Serialize(object value, Type type)
         {
             return ZLinkEncodedPayload.From(
-                MessagePackSerializer.Serialize(type, value, MessagePackSerializerOptions.Standard));
+                MessagePackSerializer.Serialize(type, value, MessagePackSerializerOptions.Standard)
+            );
         }
 
         public object? Deserialize(ZLinkEncodedPayload payload, Type type)
         {
-            return MessagePackSerializer.Deserialize(type, payload.Bytes, MessagePackSerializerOptions.Standard);
+            return MessagePackSerializer.Deserialize(
+                type,
+                payload.Bytes,
+                MessagePackSerializerOptions.Standard
+            );
         }
     }
 }

@@ -11,18 +11,22 @@ public sealed class ProviderStoreContracts
     {
         Assert.Equal(
             new[] { "ReadAsync", "ScanAsync", "WriteAsync" },
-            typeof(IZLinkLocationStore).GetMethods()
+            typeof(IZLinkLocationStore)
+                .GetMethods()
                 .Select(static method => method.Name)
                 .Order(StringComparer.Ordinal)
-                .ToArray());
+                .ToArray()
+        );
 
         var providerAssembly = typeof(IZLinkLocationStore).Assembly;
         Assert.DoesNotContain(
             providerAssembly.GetExportedTypes(),
-            static type => type.Name.Contains("Authority", StringComparison.Ordinal)
-                           || type.Name.Contains("Lease", StringComparison.Ordinal)
-                           || type.Name.Contains("Aggregate", StringComparison.Ordinal)
-                           || type.Name.Contains("Capacity", StringComparison.Ordinal));
+            static type =>
+                type.Name.Contains("Authority", StringComparison.Ordinal)
+                || type.Name.Contains("Lease", StringComparison.Ordinal)
+                || type.Name.Contains("Aggregate", StringComparison.Ordinal)
+                || type.Name.Contains("Capacity", StringComparison.Ordinal)
+        );
     }
 
     [Fact]
@@ -31,13 +35,15 @@ public sealed class ProviderStoreContracts
     {
         Assert.Equal(
             new[] { "DeleteAsync", "PutAsync", "ReadAsync", "RenewAsync" },
-            typeof(IZLinkRelocationStore).GetMethods()
+            typeof(IZLinkRelocationStore)
+                .GetMethods()
                 .Select(static method => method.Name)
                 .Order(StringComparer.Ordinal)
-                .ToArray());
+                .ToArray()
+        );
         Assert.Equal(
             typeof(ZLinkBlobReference),
-            typeof(IZLinkRelocationStore).GetMethod("PutAsync")!
-                .GetParameters()[0].ParameterType);
+            typeof(IZLinkRelocationStore).GetMethod("PutAsync")!.GetParameters()[0].ParameterType
+        );
     }
 }

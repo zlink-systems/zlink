@@ -108,10 +108,11 @@ function normalizeDispatchFailure(event: ZLinkRuntimeDispatchFailure): ZLinkRunt
 
 function channelDropReason(event: ZLinkRuntimeDispatchFailure): string | undefined {
   if (
-    event.action !== ZLinkDispatchErrorAction.Drop
-    || (event.surface !== ZLinkDispatchErrorSurface.Channel
-      && event.surface !== ZLinkDispatchErrorSurface.RouteMeshChannel)
-  ) return undefined;
+    event.action !== ZLinkDispatchErrorAction.Drop ||
+    (event.surface !== ZLinkDispatchErrorSurface.Channel &&
+      event.surface !== ZLinkDispatchErrorSurface.RouteMeshChannel)
+  )
+    return undefined;
   switch (event.reason) {
     case ZLinkDispatchErrorReason.HandlerMissing:
       return 'no_handler';
@@ -145,10 +146,12 @@ function dispatchErrorInfo(event: ZLinkRuntimeDispatchFailure): {
     return {
       errorType: event.error.name,
       errorMessage: event.error.message,
-      ...(cause === event.error ? {} : {
-        errorCauseType: cause instanceof Error ? cause.name : typeof cause,
-        errorCauseMessage: cause instanceof Error ? cause.message : String(cause)
-      })
+      ...(cause === event.error
+        ? {}
+        : {
+            errorCauseType: cause instanceof Error ? cause.name : typeof cause,
+            errorCauseMessage: cause instanceof Error ? cause.message : String(cause)
+          })
     };
   }
   return { errorType: typeof event.error, errorMessage: String(event.error) };

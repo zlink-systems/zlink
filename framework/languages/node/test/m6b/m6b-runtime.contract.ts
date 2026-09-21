@@ -13,9 +13,7 @@ import {
   SubmitResult,
   type StreamSocket
 } from '@zlink-systems/zlink';
-import {
-  DefaultZLinkActorContext
-} from "../../packages/framework/src/runtime/actors/actor-context";
+import { DefaultZLinkActorContext } from '../../packages/framework/src/runtime/actors/actor-context';
 import {
   ServiceWireCommand,
   ServiceWireFlag
@@ -31,22 +29,14 @@ import {
   ReceiveKind,
   type ReceiveRecord
 } from '../../packages/framework/src/runtime/foundation/service-runtime-contracts';
-import {
-  ZLinkNodeRawMeshBackend
-} from '../../packages/framework/src/runtime/backend/node/node-raw-mesh-backend';
-import {
-  ZLinkNodeRawBindingPort
-} from '../../packages/framework/src/runtime/backend/node/node-raw-binding-port';
-import {
-  ZLinkActorRuntimeOptionsFactory
-} from '../../packages/framework/src/runtime/host/actor-runtime-options-factory';
+import { ZLinkNodeRawMeshBackend } from '../../packages/framework/src/runtime/backend/node/node-raw-mesh-backend';
+import { ZLinkNodeRawBindingPort } from '../../packages/framework/src/runtime/backend/node/node-raw-binding-port';
+import { ZLinkActorRuntimeOptionsFactory } from '../../packages/framework/src/runtime/host/actor-runtime-options-factory';
 import type {
   RawServiceIngressRecord,
   RawServiceMeshRuntime
 } from '../../packages/framework/src/runtime/foundation/raw-service-mesh-runtime';
-import {
-  ApplicationIngressRecordOwner
-} from '../../packages/framework/src/runtime/application-jobs/application-ingress-record-owner';
+import { ApplicationIngressRecordOwner } from '../../packages/framework/src/runtime/application-jobs/application-ingress-record-owner';
 import type {
   ApplicationJobPermitPort,
   ApplicationJobQueuePort
@@ -85,9 +75,7 @@ import {
   encodeUserSpotCreateHeader,
   type ServiceInstanceRouteFence
 } from '../../packages/framework/src/runtime/foundation/service-stateful-wire-codec';
-import {
-  encodeApplicationPayload
-} from '../../packages/framework/src/runtime/foundation/service-wire-m6a-codec';
+import { encodeApplicationPayload } from '../../packages/framework/src/runtime/foundation/service-wire-m6a-codec';
 import { crc32c } from '../../packages/framework/src/runtime/foundation/service-relocation-runtime';
 import {
   decodeServiceReadySpotAuthority,
@@ -101,15 +89,9 @@ import {
   encodeServiceMetadataFrame,
   validateServiceMetadataFrame
 } from '../../packages/framework/src/runtime/foundation/service-metadata-codec';
-import {
-  ZLinkStatefulAuthorityRouteRuntime
-} from '../../packages/framework/src/runtime/host/stateful-authority-route-runtime';
-import {
-  ZLinkInstanceActivationAuthority
-} from '../../packages/framework/src/runtime/host/instance-activation-authority';
-import {
-  ZLinkInMemoryAuthorityStore
-} from '../../packages/framework/src/runtime/locations/in-memory-authority-store';
+import { ZLinkStatefulAuthorityRouteRuntime } from '../../packages/framework/src/runtime/host/stateful-authority-route-runtime';
+import { ZLinkInstanceActivationAuthority } from '../../packages/framework/src/runtime/host/instance-activation-authority';
+import { ZLinkInMemoryAuthorityStore } from '../../packages/framework/src/runtime/locations/in-memory-authority-store';
 import { encodeAuthorityKey } from '../../packages/framework/src/runtime/locations/authority-key-codec';
 import type {
   ZLinkAuthorityKey,
@@ -138,9 +120,7 @@ import {
   encodeChannelReplyParts,
   ZLinkChannelMessageKind
 } from '../../packages/framework/src/runtime/channels/channel-envelope';
-import {
-  ZLinkRuntimeRouteTransport
-} from '../../packages/framework/src/runtime/channels/channel-transports';
+import { ZLinkRuntimeRouteTransport } from '../../packages/framework/src/runtime/channels/channel-transports';
 import type {
   ZLinkInstanceSpot,
   ZLinkInstanceSpotContext,
@@ -157,9 +137,7 @@ import {
   ZLinkFrameworkInternalErrorKind,
   internalFrameworkErrorKind
 } from '../../packages/framework/src/runtime/framework-errors-internal';
-import {
-  ZLinkSubmitStatus
-} from '../../packages/framework/src/runtime/messaging/submission-result';
+import { ZLinkSubmitStatus } from '../../packages/framework/src/runtime/messaging/submission-result';
 import { meshActorSessionNodeAdapter } from '../../packages/framework/src/runtime/backend/mesh-actor-session-node-adapter';
 import { ZLinkNativeFallbackBoundSession } from '../../packages/framework/src/runtime/streams/native-fallback-bound-session';
 
@@ -187,15 +165,14 @@ function withIngressOwner<T>(record: T): T {
 
 function hostApplicationJobQueue(): ApplicationJobQueue {
   return new ApplicationJobQueue(
-    resolveApplicationJobQueueConfiguration(
-      { maxQueuedApplicationJobs: 2_048n },
-      () => 1n
-    )
+    resolveApplicationJobQueueConfiguration({ maxQueuedApplicationJobs: 2_048n }, () => 1n)
   );
 }
 
 test('M6B command and flag constants match the generated service wire schema', async () => {
-  for (const name of Object.keys(M6bServiceWireCommand) as Array<keyof typeof M6bServiceWireCommand>) {
+  for (const name of Object.keys(M6bServiceWireCommand) as Array<
+    keyof typeof M6bServiceWireCommand
+  >) {
     assert.equal(M6bServiceWireCommand[name], ServiceWireCommand[name]);
   }
   for (const name of Object.keys(M6bServiceWireFlag) as Array<keyof typeof M6bServiceWireFlag>) {
@@ -253,8 +230,9 @@ test('unbound native fallback does not attempt a native bound-session send', asy
   class SessionNotice {}
   await assert.rejects(
     () => session.send(new SessionNotice()).submit(),
-    error => error instanceof ZLinkFrameworkException
-      && error.kind === ZLinkFrameworkErrorKind.InvalidOperation
+    (error) =>
+      error instanceof ZLinkFrameworkException &&
+      error.kind === ZLinkFrameworkErrorKind.InvalidOperation
   );
   assert.equal(nativeSubmits, 0);
 });
@@ -271,7 +249,7 @@ test('unbound native fallback disconnect reports session-not-bound without nativ
         routedDisconnects += 1;
         throw createInternalFrameworkException(
           ZLinkFrameworkInternalErrorKind.ActorSessionNotBound,
-          'No current session binding exists for actor \'actor-unbound\'.',
+          "No current session binding exists for actor 'actor-unbound'.",
           true
         );
       },
@@ -300,8 +278,9 @@ test('unbound native fallback disconnect reports session-not-bound without nativ
 
   await assert.rejects(
     () => session.disconnect(),
-    error => error instanceof ZLinkFrameworkException
-      && error.kind === ZLinkFrameworkErrorKind.InvalidOperation
+    (error) =>
+      error instanceof ZLinkFrameworkException &&
+      error.kind === ZLinkFrameworkErrorKind.InvalidOperation
   );
   assert.equal(nativeDisconnects, 0);
   assert.equal(routedDisconnects, 1);
@@ -463,30 +442,42 @@ test('Message Follow command preserves route fences and rejects mismatched objec
     originalOperation: { high: 31n, low: 37n },
     originalReplyRouteId: 41n
   });
-  assert.throws(() => encodeMessageFollowHeader({
-    source,
-    target: { ...target, actor: { ...target.actor, actorId: 'other' } },
-    hopCount: 2,
-    queuedMessages: 3,
-    queuedBytes: 4096,
-    originalOperation: { high: 31n, low: 37n },
-    originalReplyRouteId: 41n
-  }), /identities differ/);
+  assert.throws(
+    () =>
+      encodeMessageFollowHeader({
+        source,
+        target: { ...target, actor: { ...target.actor, actorId: 'other' } },
+        hopCount: 2,
+        queuedMessages: 3,
+        queuedBytes: 4096,
+        originalOperation: { high: 31n, low: 37n },
+        originalReplyRouteId: 41n
+      }),
+    /identities differ/
+  );
 });
 
 test('Message Follow invalidates a Spot route only when every source fence still matches', async () => {
-  let ingress: ((record: import('../../packages/framework/src/runtime/foundation/raw-service-mesh-runtime')
-    .RawServiceIngressRecord) => unknown) | undefined;
+  let ingress:
+    | ((
+        record: import('../../packages/framework/src/runtime/foundation/raw-service-mesh-runtime').RawServiceIngressRecord
+      ) => unknown)
+    | undefined;
   const raw = {
     topology: {
-      peer: (nodeRid: string) => nodeRid === 'node-old'
-        ? { descriptor: { lifecycleGeneration: 11n } }
-        : nodeRid === 'node-new'
-          ? { descriptor: { lifecycleGeneration: 19n } }
-          : undefined
+      peer: (nodeRid: string) =>
+        nodeRid === 'node-old'
+          ? { descriptor: { lifecycleGeneration: 11n } }
+          : nodeRid === 'node-new'
+            ? { descriptor: { lifecycleGeneration: 19n } }
+            : undefined
     },
-    observePeerConnectionIntentRemoved() { return () => {}; },
-    setServiceIngress(handler: typeof ingress) { ingress = (record) => handler!(withIngressOwner(record)); },
+    observePeerConnectionIntentRemoved() {
+      return () => {};
+    },
+    setServiceIngress(handler: typeof ingress) {
+      ingress = (record) => handler!(withIngressOwner(record));
+    },
     sendService: () => true
   } as unknown as RawServiceMeshRuntime;
   const runtime = new ServiceStatefulRuntime(raw, 'caller', 5n);
@@ -515,15 +506,20 @@ test('Message Follow invalidates a Spot route only when every source fence still
     originalOperation: { high: 1n, low: 2n },
     originalReplyRouteId: 0n
   });
-  assert.equal(await ingress?.({
-    command: M6bServiceWireCommand.messageFollow,
-    flags: 0,
-    sourceRoutingId: 'node-old',
-    parts: [stale]
-  }), 'infrastructure');
-  const spotRoutes = (runtime as unknown as {
-    readonly spotRoutes: Map<string, unknown>;
-  }).spotRoutes;
+  assert.equal(
+    await ingress?.({
+      command: M6bServiceWireCommand.messageFollow,
+      flags: 0,
+      sourceRoutingId: 'node-old',
+      parts: [stale]
+    }),
+    'infrastructure'
+  );
+  const spotRoutes = (
+    runtime as unknown as {
+      readonly spotRoutes: Map<string, unknown>;
+    }
+  ).spotRoutes;
   assert.equal(spotRoutes.size, 1);
 
   const exact = encodeMessageFollowHeader({
@@ -535,34 +531,45 @@ test('Message Follow invalidates a Spot route only when every source fence still
     originalOperation: { high: 1n, low: 2n },
     originalReplyRouteId: 0n
   });
-  assert.equal(await ingress?.({
-    command: M6bServiceWireCommand.messageFollow,
-    flags: 0,
-    sourceRoutingId: 'node-old',
-    parts: [exact]
-  }), 'infrastructure');
+  assert.equal(
+    await ingress?.({
+      command: M6bServiceWireCommand.messageFollow,
+      flags: 0,
+      sourceRoutingId: 'node-old',
+      parts: [exact]
+    }),
+    'infrastructure'
+  );
   assert.equal(spotRoutes.size, 0);
   runtime.close();
 });
 
 test('Actor Message Follow reaches the owner cache invalidator only from the admitted source', async () => {
-  let ingress: ((record: import('../../packages/framework/src/runtime/foundation/raw-service-mesh-runtime')
-    .RawServiceIngressRecord) => unknown) | undefined;
+  let ingress:
+    | ((
+        record: import('../../packages/framework/src/runtime/foundation/raw-service-mesh-runtime').RawServiceIngressRecord
+      ) => unknown)
+    | undefined;
   const received: unknown[] = [];
   const raw = {
     topology: {
-      peer: (nodeRid: string) => nodeRid === 'node-old'
-        ? { descriptor: { lifecycleGeneration: 11n } }
-        : nodeRid === 'node-new'
-          ? { descriptor: { lifecycleGeneration: 23n } }
-          : undefined
+      peer: (nodeRid: string) =>
+        nodeRid === 'node-old'
+          ? { descriptor: { lifecycleGeneration: 11n } }
+          : nodeRid === 'node-new'
+            ? { descriptor: { lifecycleGeneration: 23n } }
+            : undefined
     },
-    observePeerConnectionIntentRemoved() { return () => {}; },
-    setServiceIngress(handler: typeof ingress) { ingress = (record) => handler!(withIngressOwner(record)); },
+    observePeerConnectionIntentRemoved() {
+      return () => {};
+    },
+    setServiceIngress(handler: typeof ingress) {
+      ingress = (record) => handler!(withIngressOwner(record));
+    },
     sendService: () => true
   } as unknown as RawServiceMeshRuntime;
   const runtime = new ServiceStatefulRuntime(raw, 'caller', 5n);
-  runtime.setMessageFollowHandler(record => received.push(record));
+  runtime.setMessageFollowHandler((record) => received.push(record));
   const source = {
     kind: 'actor' as const,
     actor: { actorId: 'actor-follow', nodeRid: 'node-old', generation: 7n },
@@ -589,29 +596,37 @@ test('Actor Message Follow reaches the owner cache invalidator only from the adm
     originalReplyRouteId: 43n
   });
 
-  assert.equal(await ingress?.({
-    command: M6bServiceWireCommand.messageFollow,
-    flags: 0,
-    sourceRoutingId: 'different-node',
-    parts: [encoded]
-  }), 'protocolError');
+  assert.equal(
+    await ingress?.({
+      command: M6bServiceWireCommand.messageFollow,
+      flags: 0,
+      sourceRoutingId: 'different-node',
+      parts: [encoded]
+    }),
+    'protocolError'
+  );
   assert.equal(received.length, 0);
-  assert.equal(await ingress?.({
-    command: M6bServiceWireCommand.messageFollow,
-    flags: 0,
-    sourceRoutingId: 'node-old',
-    parts: [encoded]
-  }), 'infrastructure');
-  assert.deepEqual(received, [{
-    kind: 'messageFollow',
-    source: { ...source, actor: { ...source.actor, nodeRid: '' } },
-    target: { ...target, actor: { ...target.actor, nodeRid: '' } },
-    hopCount: 1,
-    queuedMessages: 1,
-    queuedBytes: 128,
-    originalOperation: { high: 37n, low: 41n },
-    originalReplyRouteId: 43n
-  }]);
+  assert.equal(
+    await ingress?.({
+      command: M6bServiceWireCommand.messageFollow,
+      flags: 0,
+      sourceRoutingId: 'node-old',
+      parts: [encoded]
+    }),
+    'infrastructure'
+  );
+  assert.deepEqual(received, [
+    {
+      kind: 'messageFollow',
+      source: { ...source, actor: { ...source.actor, nodeRid: '' } },
+      target: { ...target, actor: { ...target.actor, nodeRid: '' } },
+      hopCount: 1,
+      queuedMessages: 1,
+      queuedBytes: 128,
+      originalOperation: { high: 37n, low: 41n },
+      originalReplyRouteId: 43n
+    }
+  ]);
   const nonIncreasing = encodeMessageFollowHeader({
     source,
     target: { ...target, authorityOwnerGeneration: source.authorityOwnerGeneration },
@@ -621,12 +636,15 @@ test('Actor Message Follow reaches the owner cache invalidator only from the adm
     originalOperation: { high: 37n, low: 42n },
     originalReplyRouteId: 43n
   });
-  assert.equal(await ingress?.({
-    command: M6bServiceWireCommand.messageFollow,
-    flags: 0,
-    sourceRoutingId: 'node-old',
-    parts: [nonIncreasing]
-  }), 'protocolError');
+  assert.equal(
+    await ingress?.({
+      command: M6bServiceWireCommand.messageFollow,
+      flags: 0,
+      sourceRoutingId: 'node-old',
+      parts: [nonIncreasing]
+    }),
+    'protocolError'
+  );
   assert.equal(received.length, 1);
   const staleTarget = encodeMessageFollowHeader({
     source,
@@ -637,12 +655,15 @@ test('Actor Message Follow reaches the owner cache invalidator only from the adm
     originalOperation: { high: 37n, low: 42n },
     originalReplyRouteId: 43n
   });
-  assert.equal(await ingress?.({
-    command: M6bServiceWireCommand.messageFollow,
-    flags: 0,
-    sourceRoutingId: 'node-old',
-    parts: [staleTarget]
-  }), 'protocolError');
+  assert.equal(
+    await ingress?.({
+      command: M6bServiceWireCommand.messageFollow,
+      flags: 0,
+      sourceRoutingId: 'node-old',
+      parts: [staleTarget]
+    }),
+    'protocolError'
+  );
   assert.equal(received.length, 1);
   runtime.close();
 });
@@ -768,11 +789,12 @@ test('remote Actor command 49 preserves reservation fences and replays one termi
   const replies: Array<readonly Buffer[]> = [];
   const raw = {
     topology: {
-      peer: (nodeRid: string) => nodeRid === 'source'
-        ? { descriptor: { lifecycleGeneration: 5n } }
-        : undefined
+      peer: (nodeRid: string) =>
+        nodeRid === 'source' ? { descriptor: { lifecycleGeneration: 5n } } : undefined
     },
-    observePeerConnectionIntentRemoved() { return () => {}; },
+    observePeerConnectionIntentRemoved() {
+      return () => {};
+    },
     setServiceIngress: (handler: typeof ingress) => {
       ingress = (record) => handler!(withIngressOwner(record));
     },
@@ -783,9 +805,13 @@ test('remote Actor command 49 preserves reservation fences and replays one termi
   const runtime = new ServiceStatefulRuntime(raw, 'target', 7n);
   let executions = 0;
   runtime.registerUserSpotOperationHandler({
-    create: async () => { throw new Error('not used'); },
-    close: async () => { throw new Error('not used'); },
-    createActor: async record => {
+    create: async () => {
+      throw new Error('not used');
+    },
+    close: async () => {
+      throw new Error('not used');
+    },
+    createActor: async (record) => {
       executions++;
       return {
         terminalResult: RequestResult.Ok,
@@ -829,42 +855,45 @@ test('remote Actor command 49 preserves reservation fences and replays one termi
       decoded.kind === 'actorCreate' ? decoded.reservation : undefined,
       request.reservation
     );
-    assert.equal(await ingress({
-      command: M6bServiceWireCommand.actorCreate,
-      flags: 0,
-      sourceRoutingId: 'source',
-      requestSequence: BigInt(index + 1),
-      parts: [header]
-    }), 'infrastructure');
-    await new Promise(resolve => setImmediate(resolve));
+    assert.equal(
+      await ingress({
+        command: M6bServiceWireCommand.actorCreate,
+        flags: 0,
+        sourceRoutingId: 'source',
+        requestSequence: BigInt(index + 1),
+        parts: [header]
+      }),
+      'infrastructure'
+    );
+    await new Promise((resolve) => setImmediate(resolve));
   }
   const invalidReservation = encodeActorCreateHeader({
     ...request,
     correlation: 37n,
     reservation: { ...request.reservation, pendingCapacityDelta: 9 }
   });
-  assert.equal(await ingress({
-    command: M6bServiceWireCommand.actorCreate,
-    flags: 0,
-    sourceRoutingId: 'source',
-    requestSequence: 3n,
-    parts: [invalidReservation]
-  }), 'protocolError');
+  assert.equal(
+    await ingress({
+      command: M6bServiceWireCommand.actorCreate,
+      flags: 0,
+      sourceRoutingId: 'source',
+      requestSequence: 3n,
+      parts: [invalidReservation]
+    }),
+    'protocolError'
+  );
   assert.equal(executions, 1);
   assert.equal(replies.length, 2);
   for (const [index, correlation] of [29n, 31n].entries()) {
-    assert.deepEqual(
-      decodeStatefulReply(replies[index]![0]!, correlation, 'actorCreate').tail,
-      {
-        kind: 'actorCreate',
-        createResult: 'created',
-        actor: {
-          nodeRid: 'target',
-          actorId: 'actor-command-49',
-          generation: 17n
-        }
+    assert.deepEqual(decodeStatefulReply(replies[index]![0]!, correlation, 'actorCreate').tail, {
+      kind: 'actorCreate',
+      createResult: 'created',
+      actor: {
+        nodeRid: 'target',
+        actorId: 'actor-command-49',
+        generation: 17n
       }
-    );
+    });
   }
   runtime.close();
 });
@@ -880,11 +909,12 @@ test('remote User Spot target executes once and rewrites correlation on terminal
   const replies: Array<readonly Buffer[]> = [];
   const raw = {
     topology: {
-      peer: (nodeRid: string) => nodeRid === 'source'
-        ? { descriptor: { lifecycleGeneration: 5n } }
-        : undefined
+      peer: (nodeRid: string) =>
+        nodeRid === 'source' ? { descriptor: { lifecycleGeneration: 5n } } : undefined
     },
-    observePeerConnectionIntentRemoved() { return () => {}; },
+    observePeerConnectionIntentRemoved() {
+      return () => {};
+    },
     setServiceIngress: (handler: typeof ingress) => {
       ingress = (record) => handler!(withIngressOwner(record));
     },
@@ -895,7 +925,7 @@ test('remote User Spot target executes once and rewrites correlation on terminal
   const runtime = new ServiceStatefulRuntime(raw, 'target', 7n);
   let executions = 0;
   runtime.registerUserSpotOperationHandler({
-    create: async record => {
+    create: async (record) => {
       executions++;
       return {
         terminalResult: RequestResult.Ok,
@@ -933,14 +963,17 @@ test('remote User Spot target executes once and rewrites correlation on terminal
   };
   for (const [index, correlation] of [29n, 31n].entries()) {
     const header = encodeUserSpotCreateHeader({ ...request, correlation });
-    assert.equal(await ingress({
-      command: M6bServiceWireCommand.userSpotCreate,
-      flags: 0,
-      sourceRoutingId: 'source',
-      requestSequence: BigInt(index + 1),
-      parts: [header]
-    }), 'infrastructure');
-    await new Promise(resolve => setImmediate(resolve));
+    assert.equal(
+      await ingress({
+        command: M6bServiceWireCommand.userSpotCreate,
+        flags: 0,
+        sourceRoutingId: 'source',
+        requestSequence: BigInt(index + 1),
+        parts: [header]
+      }),
+      'infrastructure'
+    );
+    await new Promise((resolve) => setImmediate(resolve));
   }
   assert.equal(executions, 1);
   assert.equal(replies.length, 2);
@@ -952,19 +985,22 @@ test('remote User Spot target executes once and rewrites correlation on terminal
     decodeStatefulReply(replies[1]![0]!, 31n, 'userSpotCreate').tail?.kind,
     'userSpotCreate'
   );
-  await new Promise(resolve => setTimeout(resolve, 300));
+  await new Promise((resolve) => setTimeout(resolve, 300));
   const expiredReplay = encodeUserSpotCreateHeader({
     ...request,
     correlation: 33n
   });
-  assert.equal(await ingress({
-    command: M6bServiceWireCommand.userSpotCreate,
-    flags: 0,
-    sourceRoutingId: 'source',
-    requestSequence: 3n,
-    parts: [expiredReplay]
-  }), 'infrastructure');
-  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(
+    await ingress({
+      command: M6bServiceWireCommand.userSpotCreate,
+      flags: 0,
+      sourceRoutingId: 'source',
+      requestSequence: 3n,
+      parts: [expiredReplay]
+    }),
+    'infrastructure'
+  );
+  await new Promise((resolve) => setImmediate(resolve));
   assert.equal(executions, 1);
   assert.equal(
     decodeStatefulReply(replies[2]![0]!, 33n, 'userSpotCreate').tail?.kind,
@@ -976,13 +1012,16 @@ test('remote User Spot target executes once and rewrites correlation on terminal
     operation: { high: 11n, low: 39n },
     deadlineUnixMs: BigInt(Date.now() - 1)
   });
-  assert.equal(await ingress({
-    command: M6bServiceWireCommand.userSpotCreate,
-    flags: 0,
-    sourceRoutingId: 'source',
-    requestSequence: 4n,
-    parts: [expiredNew]
-  }), 'infrastructure');
+  assert.equal(
+    await ingress({
+      command: M6bServiceWireCommand.userSpotCreate,
+      flags: 0,
+      sourceRoutingId: 'source',
+      requestSequence: 4n,
+      parts: [expiredNew]
+    }),
+    'infrastructure'
+  );
   assert.equal(executions, 1);
   assert.equal(
     decodeStatefulReply(replies[3]![0]!, 35n, 'userSpotCreate').terminalResult,
@@ -998,26 +1037,29 @@ test('remote User Spot target executes once and rewrites correlation on terminal
     },
     deadlineUnixMs: BigInt(Date.now() + 10_000)
   });
-  assert.equal(await ingress({
-    command: M6bServiceWireCommand.userSpotCreate,
-    flags: 0,
-    sourceRoutingId: 'source',
-    requestSequence: 5n,
-    parts: [wrongTargetLifecycle]
-  }), 'infrastructure');
-  assert.equal(executions, 1);
   assert.equal(
-    decodeStatefulReply(replies[4]![0]!, 36n, 'userSpotCreate').failureCode,
-    34
+    await ingress({
+      command: M6bServiceWireCommand.userSpotCreate,
+      flags: 0,
+      sourceRoutingId: 'source',
+      requestSequence: 5n,
+      parts: [wrongTargetLifecycle]
+    }),
+    'infrastructure'
   );
+  assert.equal(executions, 1);
+  assert.equal(decodeStatefulReply(replies[4]![0]!, 36n, 'userSpotCreate').failureCode, 34);
   const terminalTable = (
     runtime as unknown as {
-      admittedUserSpotOperations: Map<string, {
-        readonly request: string;
-        readonly replayExpiresAtMs: number;
-        readonly result: Promise<unknown>;
-        settled: boolean;
-      }>;
+      admittedUserSpotOperations: Map<
+        string,
+        {
+          readonly request: string;
+          readonly replayExpiresAtMs: number;
+          readonly result: Promise<unknown>;
+          settled: boolean;
+        }
+      >;
     }
   ).admittedUserSpotOperations;
   for (let index = terminalTable.size; index < 65_536; index++) {
@@ -1034,13 +1076,16 @@ test('remote User Spot target executes once and rewrites correlation on terminal
     operation: { high: 11n, low: 41n },
     deadlineUnixMs: BigInt(Date.now() + 10_000)
   });
-  assert.equal(await ingress({
-    command: M6bServiceWireCommand.userSpotCreate,
-    flags: 0,
-    sourceRoutingId: 'source',
-    requestSequence: 6n,
-    parts: [overflow]
-  }), 'infrastructure');
+  assert.equal(
+    await ingress({
+      command: M6bServiceWireCommand.userSpotCreate,
+      flags: 0,
+      sourceRoutingId: 'source',
+      requestSequence: 6n,
+      parts: [overflow]
+    }),
+    'infrastructure'
+  );
   assert.equal(executions, 1);
   assert.equal(
     decodeStatefulReply(replies[5]![0]!, 37n, 'userSpotCreate').terminalResult,
@@ -1050,14 +1095,17 @@ test('remote User Spot target executes once and rewrites correlation on terminal
   try {
     for (const wallJumpMs of [5 * 60_000 + 1_000, -5 * 60_000 - 1_000]) {
       Date.now = () => originalDateNow() + wallJumpMs;
-      assert.equal(await ingress({
-        command: M6bServiceWireCommand.userSpotCreate,
-        flags: 0,
-        sourceRoutingId: 'source',
-        requestSequence: 7n,
-        parts: [encodeUserSpotCreateHeader({ ...request, correlation: 42n })]
-      }), 'infrastructure');
-      await new Promise(resolve => setImmediate(resolve));
+      assert.equal(
+        await ingress({
+          command: M6bServiceWireCommand.userSpotCreate,
+          flags: 0,
+          sourceRoutingId: 'source',
+          requestSequence: 7n,
+          parts: [encodeUserSpotCreateHeader({ ...request, correlation: 42n })]
+        }),
+        'infrastructure'
+      );
+      await new Promise((resolve) => setImmediate(resolve));
       assert.equal(executions, 1);
       assert.equal(
         decodeStatefulReply(replies.pop()![0]!, 42n, 'userSpotCreate').terminalResult,
@@ -1077,13 +1125,16 @@ test('remote User Spot target executes once and rewrites correlation on terminal
       ...request,
       correlation: 43n
     });
-    assert.equal(await ingress({
-      command: M6bServiceWireCommand.userSpotCreate,
-      flags: 0,
-      sourceRoutingId: 'source',
-      requestSequence: 7n,
-      parts: [retiredReplay]
-    }), 'infrastructure');
+    assert.equal(
+      await ingress({
+        command: M6bServiceWireCommand.userSpotCreate,
+        flags: 0,
+        sourceRoutingId: 'source',
+        requestSequence: 7n,
+        parts: [retiredReplay]
+      }),
+      'infrastructure'
+    );
     assert.equal(executions, 1);
     assert.equal(
       decodeStatefulReply(replies[6]![0]!, 43n, 'userSpotCreate').terminalResult,
@@ -1106,11 +1157,12 @@ test('remote User Spot command 48 close replays one terminal without closing twi
   const replies: Array<readonly Buffer[]> = [];
   const raw = {
     topology: {
-      peer: (nodeRid: string) => nodeRid === 'source'
-        ? { descriptor: { lifecycleGeneration: 5n } }
-        : undefined
+      peer: (nodeRid: string) =>
+        nodeRid === 'source' ? { descriptor: { lifecycleGeneration: 5n } } : undefined
     },
-    observePeerConnectionIntentRemoved() { return () => {}; },
+    observePeerConnectionIntentRemoved() {
+      return () => {};
+    },
     setServiceIngress: (handler: typeof ingress) => {
       ingress = (record) => handler!(withIngressOwner(record));
     },
@@ -1149,38 +1201,35 @@ test('remote User Spot command 48 close replays one terminal without closing twi
   };
 
   for (const [index, correlation] of [47n, 53n].entries()) {
-    assert.equal(await ingress({
-      command: M6bServiceWireCommand.userSpotClose,
-      flags: 0,
-      sourceRoutingId: 'source',
-      requestSequence: BigInt(index + 1),
-      parts: [encodeUserSpotCloseHeader({ ...request, correlation })]
-    }), 'infrastructure');
-    await new Promise(resolve => setImmediate(resolve));
+    assert.equal(
+      await ingress({
+        command: M6bServiceWireCommand.userSpotClose,
+        flags: 0,
+        sourceRoutingId: 'source',
+        requestSequence: BigInt(index + 1),
+        parts: [encodeUserSpotCloseHeader({ ...request, correlation })]
+      }),
+      'infrastructure'
+    );
+    await new Promise((resolve) => setImmediate(resolve));
   }
 
   assert.equal(executions, 1);
   assert.equal(replies.length, 2);
-  assert.deepEqual(
-    decodeStatefulReply(replies[0]![0]!, 47n, 'userSpotClose').tail,
-    { kind: 'userSpotClose', closed: true }
-  );
-  assert.deepEqual(
-    decodeStatefulReply(replies[1]![0]!, 53n, 'userSpotClose').tail,
-    { kind: 'userSpotClose', closed: true }
-  );
+  assert.deepEqual(decodeStatefulReply(replies[0]![0]!, 47n, 'userSpotClose').tail, {
+    kind: 'userSpotClose',
+    closed: true
+  });
+  assert.deepEqual(decodeStatefulReply(replies[1]![0]!, 53n, 'userSpotClose').tail, {
+    kind: 'userSpotClose',
+    closed: true
+  });
   runtime.close();
 });
 
 test('authority keys share the Spot discriminator and preserve colon identities canonically', async () => {
-  assert.equal(
-    encodeAuthorityKey('instance_spot', 'tenant:42').value,
-    'zla1:s:9:tenant%3A42'
-  );
-  assert.equal(
-    encodeAuthorityKey('user_spot', 'tenant:42').value,
-    'zla1:s:9:tenant%3A42'
-  );
+  assert.equal(encodeAuthorityKey('instance_spot', 'tenant:42').value, 'zla1:s:9:tenant%3A42');
+  assert.equal(encodeAuthorityKey('user_spot', 'tenant:42').value, 'zla1:s:9:tenant%3A42');
 });
 
 test('authority payload bytes match the schema fixture shape and reject malformed UTF-8', async () => {
@@ -1215,24 +1264,25 @@ test('authority payload bytes match the schema fixture shape and reject malforme
     activationRecovery
   );
   assert.throws(
-    () => encodeServiceInstanceAuthorityPayload({
-      ...base,
-      state: 'coldActivating',
-      activationRecovery
-    }),
+    () =>
+      encodeServiceInstanceAuthorityPayload({
+        ...base,
+        state: 'coldActivating',
+        activationRecovery
+      }),
     /Ready Instance Spot/
   );
   assert.equal(
     cold.toString('hex'),
-    '5a4c4155010000000000510102001d03001a0100170c54656e616e74576f726b6572'
-      + '0974656e616e743a3432076f776e65722d610000000000000005066d6573682d6106'
-      + '6e6f64652d61000000000000000100000000000000000000cfdf6035'
+    '5a4c4155010000000000510102001d03001a0100170c54656e616e74576f726b6572' +
+      '0974656e616e743a3432076f776e65722d610000000000000005066d6573682d6106' +
+      '6e6f64652d61000000000000000100000000000000000000cfdf6035'
   );
   assert.equal(
     ready.toString('hex'),
-    '5a4c4155010000000000510002001d03001a0200170c54656e616e74576f726b6572'
-      + '0974656e616e743a3432076f776e65722d610000000000000005066d6573682d6106'
-      + '6e6f64652d610000000000000001000000000000000000006761e989'
+    '5a4c4155010000000000510002001d03001a0200170c54656e616e74576f726b6572' +
+      '0974656e616e743a3432076f776e65722d610000000000000005066d6573682d6106' +
+      '6e6f64652d610000000000000001000000000000000000006761e989'
   );
 
   const malformed = Buffer.from(ready);
@@ -1266,7 +1316,9 @@ test('authority payload bytes match the schema fixture shape and reject malforme
   );
   assert.equal(decodeServiceReadySpotAuthority(userSpotWithRecovery), undefined);
 
-  const recoveryReferenceOffset = recoveringReady.indexOf(Buffer.from(activationRecovery.reference));
+  const recoveryReferenceOffset = recoveringReady.indexOf(
+    Buffer.from(activationRecovery.reference)
+  );
   assert.notEqual(recoveryReferenceOffset, -1);
   const activationUnionOffset = recoveryReferenceOffset - 7;
   const relocationUnionOffset = activationUnionOffset - 5;
@@ -1306,10 +1358,7 @@ test('Instance activation recovery envelope preserves the complete first operati
   assert.deepEqual(decodeInstanceActivationRecoveryEnvelope(encoded), input);
   const corrupted = Buffer.from(encoded);
   corrupted[corrupted.byteLength - 1] ^= 0xff;
-  assert.throws(
-    () => decodeInstanceActivationRecoveryEnvelope(corrupted),
-    /checksum/
-  );
+  assert.throws(() => decodeInstanceActivationRecoveryEnvelope(corrupted), /checksum/);
 });
 
 test('Instance activation recovery envelope matches the cross-language golden bytes', async () => {
@@ -1338,12 +1387,12 @@ test('Instance activation recovery envelope matches the cross-language golden by
   });
   assert.equal(
     encoded.toString('hex'),
-    '5a4c4941010000000000a00673706f742d31057175657374046d61696e067461726765'
-      + '74'
-      + '00000000000000070c64657363726970746f722d3906736f7572636500000000000000'
-      + '030105656e7472790200000000000000000000000000000009000000000000000b0000'
-      + '018bcfe56800010101057472616365000361626301000000280b71756573742e73746172'
-      + '74106170706c69636174696f6e2f6a736f6e000000077b2278223a317de138c97b'
+    '5a4c4941010000000000a00673706f742d31057175657374046d61696e067461726765' +
+      '74' +
+      '00000000000000070c64657363726970746f722d3906736f7572636500000000000000' +
+      '030105656e7472790200000000000000000000000000000009000000000000000b0000' +
+      '018bcfe56800010101057472616365000361626301000000280b71756573742e73746172' +
+      '74106170706c69636174696f6e2f6a736f6e000000077b2278223a317de138c97b'
   );
 });
 
@@ -1352,14 +1401,19 @@ test('Spot and Actor wire records preserve identity and reject malformed records
     spotId: 'spot-a',
     generation: 7n
   };
-  const spotHeader = encodeSpotHeader('spotRequest', 'source', {
-    spot,
-    targetNodeRid: 'node-b',
-    targetNodeGeneration: 3n,
-    authorityOwnerGeneration: 9n,
-    ownerLeaseGeneration: 4n,
-    storeVersion: 'store-v1'
-  }, 11n);
+  const spotHeader = encodeSpotHeader(
+    'spotRequest',
+    'source',
+    {
+      spot,
+      targetNodeRid: 'node-b',
+      targetNodeGeneration: 3n,
+      authorityOwnerGeneration: 9n,
+      ownerLeaseGeneration: 4n,
+      storeVersion: 'store-v1'
+    },
+    11n
+  );
   assert.deepEqual(decodeStatefulHeader(spotHeader), {
     kind: 'spotRequest',
     correlation: 11n,
@@ -1462,11 +1516,14 @@ test('outbound stateful routes use resolved authority generations and never obje
   const sent: Array<{ readonly target: string; readonly parts: readonly Buffer[] }> = [];
   const raw = {
     topology: {
-      peer: (nodeRid: string) => nodeRid === 'node-b' || nodeRid === 'node-c'
-        ? { descriptor: { lifecycleGeneration: 7n } }
-        : undefined
+      peer: (nodeRid: string) =>
+        nodeRid === 'node-b' || nodeRid === 'node-c'
+          ? { descriptor: { lifecycleGeneration: 7n } }
+          : undefined
     },
-    observePeerConnectionIntentRemoved() { return () => {}; },
+    observePeerConnectionIntentRemoved() {
+      return () => {};
+    },
     setServiceIngress: () => {},
     sendService: async (target: string, parts: readonly Buffer[]) => {
       sent.push({ target, parts });
@@ -1480,7 +1537,10 @@ test('outbound stateful routes use resolved authority generations and never obje
     payload: Buffer.from('payload')
   };
   const actor = { nodeRid: 'node-b', actorId: 'actor-a', generation: 5n };
-  assert.equal(await runtime.sendToActor(actor, 7n, actor.generation, payload), SubmitResult.NotFound);
+  assert.equal(
+    await runtime.sendToActor(actor, 7n, actor.generation, payload),
+    SubmitResult.NotFound
+  );
   runtime.rememberActorRoute({
     actor,
     targetNodeGeneration: 7n,
@@ -1503,10 +1563,17 @@ test('outbound stateful routes use resolved authority generations and never obje
     ownerLeaseGeneration: 17n,
     storeVersion: 'store-v1'
   };
-  assert.equal(await runtime.sendToSpot('source', {
-    ...firstRoute,
-    targetNodeGeneration: 8n
-  }, payload), SubmitResult.NotFound);
+  assert.equal(
+    await runtime.sendToSpot(
+      'source',
+      {
+        ...firstRoute,
+        targetNodeGeneration: 8n
+      },
+      payload
+    ),
+    SubmitResult.NotFound
+  );
   assert.equal(await runtime.sendToSpot('source', firstRoute, payload), SubmitResult.Ok);
   const firstSpotHeader = decodeStatefulHeader(sent.at(-1)!.parts[0]!);
   assert.equal(firstSpotHeader.kind, 'spotSend');
@@ -1565,7 +1632,9 @@ test('outbound stateful routes use resolved authority generations and never obje
 
 test('general Actor messages resolve the current incarnation while exact controls keep generation fences', async () => {
   const raw = {
-    observePeerConnectionIntentRemoved() { return () => {}; },
+    observePeerConnectionIntentRemoved() {
+      return () => {};
+    },
     setServiceIngress: () => {}
   } as unknown as RawServiceMeshRuntime;
   const runtime = new ServiceStatefulRuntime(raw, 'node-a', 3n);
@@ -1582,22 +1651,29 @@ test('general Actor messages resolve the current incarnation while exact control
     validateActorFence(fence: typeof previousFence): typeof current;
   };
 
-  assert.equal(internals.validateActorMessageFence(previousFence).ref.generation, current.ref.generation);
+  assert.equal(
+    internals.validateActorMessageFence(previousFence).ref.generation,
+    current.ref.generation
+  );
   assert.throws(() => internals.validateActorFence(previousFence), ServiceStaleGenerationError);
   runtime.close();
 });
 
 test('remote Actor request is fenced as moving when the target mailbox rejects admission', async () => {
   let ingress:
-    ((record: import('../../packages/framework/src/runtime/foundation/raw-service-mesh-runtime')
-      .RawServiceIngressRecord) => unknown) | undefined;
+    | ((
+        record: import('../../packages/framework/src/runtime/foundation/raw-service-mesh-runtime').RawServiceIngressRecord
+      ) => unknown)
+    | undefined;
   const replies: Buffer[][] = [];
   const raw = {
     mailbox: { tryEnqueue: () => false },
     topology: {
       peer: () => ({ descriptor: { lifecycleGeneration: 7n } })
     },
-    observePeerConnectionIntentRemoved() { return () => {}; },
+    observePeerConnectionIntentRemoved() {
+      return () => {};
+    },
     setServiceIngress(handler: typeof ingress) {
       ingress = (record) => handler!(withIngressOwner(record));
     },
@@ -1613,22 +1689,29 @@ test('remote Actor request is fenced as moving when the target mailbox rejects a
     payload: Buffer.from('payload')
   });
 
-  assert.equal(await ingress?.({
-    command: M6bServiceWireCommand.actorRequest,
-    flags: 0,
-    sourceRoutingId: 'caller',
-    sourceRoute: Buffer.from('reply-route'),
-    requestSequence: 17n,
-    parts: [
-      encodeActorHeader('actorRequest', {
-        actor: actor.ref,
-        targetNodeGeneration: 3n,
-        authorityOwnerGeneration: actor.authorityOwnerGeneration,
-        ownerLeaseGeneration: 3n
-      }, 91n),
-      payload
-    ]
-  }), 'infrastructure');
+  assert.equal(
+    await ingress?.({
+      command: M6bServiceWireCommand.actorRequest,
+      flags: 0,
+      sourceRoutingId: 'caller',
+      sourceRoute: Buffer.from('reply-route'),
+      requestSequence: 17n,
+      parts: [
+        encodeActorHeader(
+          'actorRequest',
+          {
+            actor: actor.ref,
+            targetNodeGeneration: 3n,
+            authorityOwnerGeneration: actor.authorityOwnerGeneration,
+            ownerLeaseGeneration: 3n
+          },
+          91n
+        ),
+        payload
+      ]
+    }),
+    'infrastructure'
+  );
   assert.equal(replies.length, 1);
   // A `tryEnqueue` refusal is the owner-no-longer-accepts-work path (spec
   // backpressure is a cancellable wait, never a hard refusal), so the target
@@ -1644,7 +1727,9 @@ test('remote Actor request is fenced as moving when the target mailbox rejects a
 test('a new Instance incarnation outranks a reset authority owner generation', async () => {
   const raw = {
     topology: { peer: () => undefined },
-    observePeerConnectionIntentRemoved() { return () => {}; },
+    observePeerConnectionIntentRemoved() {
+      return () => {};
+    },
     setServiceIngress() {},
     sendService: () => true
   } as unknown as RawServiceMeshRuntime;
@@ -1686,7 +1771,11 @@ test('a new Instance incarnation outranks a reset authority owner generation', a
   runtime.registerInstanceIntent('TenantWorker', newIntent);
 
   // Cleanup from the closed generation must not remove its successor.
-  runtime.forgetSpotRoute(oldDirect.spot, oldDirect.authorityOwnerGeneration, oldDirect.storeVersion);
+  runtime.forgetSpotRoute(
+    oldDirect.spot,
+    oldDirect.authorityOwnerGeneration,
+    oldDirect.storeVersion
+  );
   runtime.forgetInstanceIntent(
     oldIntent.targetSpotId,
     oldIntent.objectGeneration,
@@ -1694,32 +1783,46 @@ test('a new Instance incarnation outranks a reset authority owner generation', a
     oldIntent.storeVersion
   );
 
-  const directRoutes = (runtime as unknown as {
-    readonly directSpotRoutes: Map<string, typeof newDirect>;
-  }).directSpotRoutes;
-  const intents = (runtime as unknown as {
-    readonly instanceIntents: Map<string, { readonly route: ServiceInstanceRouteFence }>;
-  }).instanceIntents;
+  const directRoutes = (
+    runtime as unknown as {
+      readonly directSpotRoutes: Map<string, typeof newDirect>;
+    }
+  ).directSpotRoutes;
+  const intents = (
+    runtime as unknown as {
+      readonly instanceIntents: Map<string, { readonly route: ServiceInstanceRouteFence }>;
+    }
+  ).instanceIntents;
   assert.deepEqual(directRoutes.get(newDirect.spot.spotId), newDirect);
   assert.deepEqual(intents.get(newIntent.targetSpotId)?.route, newIntent);
 
-  assert.throws(() => runtime.rememberSpotRoute({
-    ...newDirect,
-    targetNodeRid: 'node-c',
-    storeVersion: 'store-invalid'
-  }), ServiceStaleGenerationError);
-  assert.throws(() => runtime.registerInstanceIntent('TenantWorker', {
-    ...newIntent,
-    ownerId: 'node-c',
-    storeVersion: 'store-invalid'
-  }), ServiceStaleGenerationError);
+  assert.throws(
+    () =>
+      runtime.rememberSpotRoute({
+        ...newDirect,
+        targetNodeRid: 'node-c',
+        storeVersion: 'store-invalid'
+      }),
+    ServiceStaleGenerationError
+  );
+  assert.throws(
+    () =>
+      runtime.registerInstanceIntent('TenantWorker', {
+        ...newIntent,
+        ownerId: 'node-c',
+        storeVersion: 'store-invalid'
+      }),
+    ServiceStaleGenerationError
+  );
   runtime.close();
 });
 
 test('a Ready Instance terminal forgets its route after local close releases authority', async () => {
   const raw = {
     topology: { peer: () => undefined },
-    observePeerConnectionIntentRemoved() { return () => {}; },
+    observePeerConnectionIntentRemoved() {
+      return () => {};
+    },
     setServiceIngress() {},
     sendService: () => true
   } as unknown as RawServiceMeshRuntime;
@@ -1757,13 +1860,15 @@ test('a Ready Instance terminal forgets its route after local close releases aut
     completeTerminal: async () => true
   });
 
-  const terminal = (runtime as unknown as {
-    instanceApplicationTerminalCompletion(target: {
-      targetSpotId: string;
-      stableType: string;
-      objectGeneration: bigint;
-    }): () => Promise<void>;
-  }).instanceApplicationTerminalCompletion({
+  const terminal = (
+    runtime as unknown as {
+      instanceApplicationTerminalCompletion(target: {
+        targetSpotId: string;
+        stableType: string;
+        objectGeneration: bigint;
+      }): () => Promise<void>;
+    }
+  ).instanceApplicationTerminalCompletion({
     targetSpotId: route.targetSpotId,
     stableType: 'TenantWorker',
     objectGeneration: route.objectGeneration
@@ -1777,8 +1882,10 @@ test('a Ready Instance terminal forgets its route after local close releases aut
 
 test('direct Spot ingress accepts a prior incarnation route for the current Ready object', async () => {
   let ingress:
-    ((record: import('../../packages/framework/src/runtime/foundation/raw-service-mesh-runtime')
-      .RawServiceIngressRecord) => unknown) | undefined;
+    | ((
+        record: import('../../packages/framework/src/runtime/foundation/raw-service-mesh-runtime').RawServiceIngressRecord
+      ) => unknown)
+    | undefined;
   const admitted: unknown[] = [];
   const raw = {
     mailbox: {
@@ -1790,7 +1897,9 @@ test('direct Spot ingress accepts a prior incarnation route for the current Read
     topology: {
       peer: () => undefined
     },
-    observePeerConnectionIntentRemoved() { return () => {}; },
+    observePeerConnectionIntentRemoved() {
+      return () => {};
+    },
     setServiceIngress(handler: typeof ingress) {
       ingress = (record) => handler!(withIngressOwner(record));
     }
@@ -1816,12 +1925,15 @@ test('direct Spot ingress accepts a prior incarnation route for the current Read
     contentType: 'application/octet-stream',
     payload: Buffer.from('payload')
   });
-  assert.equal(await ingress?.({
-    command: M6bServiceWireCommand.spotSend,
-    flags: 0,
-    sourceRoutingId: 'source',
-    parts: [encodeSpotHeader('spotSend', 'source-spot', previous), payload]
-  }), 'application');
+  assert.equal(
+    await ingress?.({
+      command: M6bServiceWireCommand.spotSend,
+      flags: 0,
+      sourceRoutingId: 'source',
+      parts: [encodeSpotHeader('spotSend', 'source-spot', previous), payload]
+    }),
+    'application'
+  );
   assert.equal(admitted.length, 1);
   runtime.close();
 });
@@ -1829,8 +1941,10 @@ test('direct Spot ingress accepts a prior incarnation route for the current Read
 test('direct Spot application admission accepts a StoreVersion-only authority advance', async () => {
   for (const operationKind of ['send', 'request'] as const) {
     let ingress:
-      ((record: import('../../packages/framework/src/runtime/foundation/raw-service-mesh-runtime')
-        .RawServiceIngressRecord) => unknown) | undefined;
+      | ((
+          record: import('../../packages/framework/src/runtime/foundation/raw-service-mesh-runtime').RawServiceIngressRecord
+        ) => unknown)
+      | undefined;
     const admitted: unknown[] = [];
     const replies: Buffer[][] = [];
     const raw = {
@@ -1843,7 +1957,9 @@ test('direct Spot application admission accepts a StoreVersion-only authority ad
       topology: {
         peer: () => undefined
       },
-      observePeerConnectionIntentRemoved() { return () => {}; },
+      observePeerConnectionIntentRemoved() {
+        return () => {};
+      },
       setServiceIngress(handler: typeof ingress) {
         ingress = (record) => handler!(withIngressOwner(record));
       },
@@ -1869,28 +1985,29 @@ test('direct Spot application admission accepts a StoreVersion-only authority ad
       payload: Buffer.from('payload')
     });
     const request = operationKind === 'request';
-    assert.equal(await ingress?.({
-      command: request
-        ? M6bServiceWireCommand.spotRequest
-        : M6bServiceWireCommand.spotSend,
-      flags: 0,
-      sourceRoutingId: 'source',
-      ...(request
-        ? {
-            sourceRoute: Buffer.from('reply-route'),
-            requestSequence: 1n
-          }
-        : {}),
-      parts: [
-        encodeSpotHeader(
-          request ? 'spotRequest' : 'spotSend',
-          'source-spot',
-          cached,
-          request ? 7n : undefined
-        ),
-        payload
-      ]
-    }), 'application');
+    assert.equal(
+      await ingress?.({
+        command: request ? M6bServiceWireCommand.spotRequest : M6bServiceWireCommand.spotSend,
+        flags: 0,
+        sourceRoutingId: 'source',
+        ...(request
+          ? {
+              sourceRoute: Buffer.from('reply-route'),
+              requestSequence: 1n
+            }
+          : {}),
+        parts: [
+          encodeSpotHeader(
+            request ? 'spotRequest' : 'spotSend',
+            'source-spot',
+            cached,
+            request ? 7n : undefined
+          ),
+          payload
+        ]
+      }),
+      'application'
+    );
     assert.equal(admitted.length, 1);
     assert.equal(replies.length, 0);
     runtime.close();
@@ -1899,8 +2016,10 @@ test('direct Spot application admission accepts a StoreVersion-only authority ad
 
 test('direct Spot request maps an owner fence mismatch to Unavailable', async () => {
   let ingress:
-    ((record: import('../../packages/framework/src/runtime/foundation/raw-service-mesh-runtime')
-      .RawServiceIngressRecord) => unknown) | undefined;
+    | ((
+        record: import('../../packages/framework/src/runtime/foundation/raw-service-mesh-runtime').RawServiceIngressRecord
+      ) => unknown)
+    | undefined;
   const replies: Buffer[][] = [];
   const raw = {
     mailbox: {
@@ -1909,7 +2028,9 @@ test('direct Spot request maps an owner fence mismatch to Unavailable', async ()
     topology: {
       peer: () => undefined
     },
-    observePeerConnectionIntentRemoved() { return () => {}; },
+    observePeerConnectionIntentRemoved() {
+      return () => {};
+    },
     setServiceIngress(handler: typeof ingress) {
       ingress = (record) => handler!(withIngressOwner(record));
     },
@@ -1933,20 +2054,28 @@ test('direct Spot request maps an owner fence mismatch to Unavailable', async ()
     contentType: 'application/octet-stream',
     payload: Buffer.from('payload')
   });
-  assert.equal(await ingress?.({
-    command: M6bServiceWireCommand.spotRequest,
-    flags: 0,
-    sourceRoutingId: 'caller',
-    sourceRoute: Buffer.from('reply-route'),
-    requestSequence: 1n,
-    parts: [
-      encodeSpotHeader('spotRequest', 'source-spot', {
-        ...route,
-        ownerLeaseGeneration: route.ownerLeaseGeneration + 1n
-      }, 7n),
-      payload
-    ]
-  }), 'infrastructure');
+  assert.equal(
+    await ingress?.({
+      command: M6bServiceWireCommand.spotRequest,
+      flags: 0,
+      sourceRoutingId: 'caller',
+      sourceRoute: Buffer.from('reply-route'),
+      requestSequence: 1n,
+      parts: [
+        encodeSpotHeader(
+          'spotRequest',
+          'source-spot',
+          {
+            ...route,
+            ownerLeaseGeneration: route.ownerLeaseGeneration + 1n
+          },
+          7n
+        ),
+        payload
+      ]
+    }),
+    'infrastructure'
+  );
   assert.equal(replies.length, 1);
   assert.deepEqual(decodeStatefulReply(replies[0]![0]!, 7n, 'spotRequest'), {
     correlation: 7n,
@@ -1978,7 +2107,11 @@ test('Ready Instance application admission uses the current same-owner incarnati
   assert.equal(await harness.ingress(harness.request(previous, 'send')), 'application');
   assert.equal(harness.queued.length, 1);
   assert.deepEqual(
-    (harness.queued[0] as { readonly stateful: { readonly targetSpot: { readonly generation: bigint } } }).stateful.targetSpot,
+    (
+      harness.queued[0] as {
+        readonly stateful: { readonly targetSpot: { readonly generation: bigint } };
+      }
+    ).stateful.targetSpot,
     { spotId: current.targetSpotId, generation: current.objectGeneration }
   );
   harness.runtime.close();
@@ -2020,7 +2153,10 @@ test('Ready Instance application admission preserves generation and owner error 
     ...current,
     objectGeneration: 10n
   };
-  assert.equal(await generationHarness.ingress(generationHarness.request(generationReply, 'request')), 'infrastructure');
+  assert.equal(
+    await generationHarness.ingress(generationHarness.request(generationReply, 'request')),
+    'infrastructure'
+  );
   assert.equal(generationHarness.replies.length, 1);
   const staleReply = decodeStatefulReply(
     generationHarness.replies[0]![0]!,
@@ -2040,12 +2176,11 @@ test('Ready Instance application admission preserves generation and owner error 
     objectGeneration: 8n,
     ownerId: 'owner-b'
   };
-  assert.equal(await ownerHarness.ingress(ownerHarness.request(moved, 'request')), 'infrastructure');
-  const movedReply = decodeStatefulReply(
-    ownerHarness.replies[0]![0]!,
-    2n,
-    'instanceSpotRequest'
+  assert.equal(
+    await ownerHarness.ingress(ownerHarness.request(moved, 'request')),
+    'infrastructure'
   );
+  const movedReply = decodeStatefulReply(ownerHarness.replies[0]![0]!, 2n, 'instanceSpotRequest');
   assert.deepEqual(movedReply, {
     correlation: 2n,
     terminalResult: RequestResult.Conflict,
@@ -2055,7 +2190,9 @@ test('Ready Instance application admission preserves generation and owner error 
 
   const missingHarness = readyInstanceIngressHarness();
   assert.equal(
-    await missingHarness.ingress(missingHarness.request({ ...current, objectGeneration: 1n }, 'request')),
+    await missingHarness.ingress(
+      missingHarness.request({ ...current, objectGeneration: 1n }, 'request')
+    ),
     'infrastructure'
   );
   const missingReply = decodeStatefulReply(
@@ -2082,40 +2219,41 @@ test('Ready Instance application admission preserves generation and owner error 
 });
 
 test('remote Entry Spot actor join derives the well-known node route fence', async () => {
-  const requests: Array<{ readonly target: string; readonly header: ReturnType<typeof decodeStatefulHeader> }> = [];
+  const requests: Array<{
+    readonly target: string;
+    readonly header: ReturnType<typeof decodeStatefulHeader>;
+  }> = [];
   const raw = {
     topology: {
-      peer: (nodeRid: string) => nodeRid === 'entry-node'
-        ? { descriptor: { lifecycleGeneration: 7n } }
-        : undefined
+      peer: (nodeRid: string) =>
+        nodeRid === 'entry-node' ? { descriptor: { lifecycleGeneration: 7n } } : undefined
     },
     mailbox: {
       tryEnqueue: () => true
     },
-    observePeerConnectionIntentRemoved() { return () => {}; },
+    observePeerConnectionIntentRemoved() {
+      return () => {};
+    },
     setServiceIngress: () => {},
     async requestService(target: string, parts: readonly Buffer[]) {
       const header = decodeStatefulHeader(parts[0]!);
       requests.push({ target, header });
       assert.equal(header.kind, 'actorJoin');
       if (header.kind !== 'actorJoin') throw new Error('expected actor join header');
-      return [encodeStatefulReply(header.correlation, RequestResult.Ok, 0, {
-        kind: 'actorJoin',
-        joinResult: 0,
-        spot: { spotId: 'entry-node', generation: 7n },
-        membershipEpoch: 2n
-      })];
+      return [
+        encodeStatefulReply(header.correlation, RequestResult.Ok, 0, {
+          kind: 'actorJoin',
+          joinResult: 0,
+          spot: { spotId: 'entry-node', generation: 7n },
+          membershipEpoch: 2n
+        })
+      ];
     }
   } as unknown as RawServiceMeshRuntime;
   const runtime = new ServiceStatefulRuntime(raw, 'actor-node', 3n);
   const actor = runtime.createActor('remote-entry-actor').ref;
 
-  const result = await runtime.joinActorEntrySpot(
-    actor,
-    'entry-node',
-    undefined,
-    1_000
-  ).promise;
+  const result = await runtime.joinActorEntrySpot(actor, 'entry-node', undefined, 1_000).promise;
 
   assert.equal(result.terminalResult, RequestResult.Ok);
   assert.equal(requests.length, 1);
@@ -2136,8 +2274,10 @@ test('remote Entry Spot actor join derives the well-known node route fence', asy
 
 test('Spot Message Follow holds ingress, relays with the committed fence, and restores on abort', async () => {
   let ingress:
-    ((record: import('../../packages/framework/src/runtime/foundation/raw-service-mesh-runtime')
-      .RawServiceIngressRecord) => unknown) | undefined;
+    | ((
+        record: import('../../packages/framework/src/runtime/foundation/raw-service-mesh-runtime').RawServiceIngressRecord
+      ) => unknown)
+    | undefined;
   const relayed: Array<{ readonly target: string; readonly parts: readonly Buffer[] }> = [];
   const restored: unknown[] = [];
   const replies: Buffer[][] = [];
@@ -2148,7 +2288,9 @@ test('Spot Message Follow holds ingress, relays with the committed fence, and re
         return true;
       }
     },
-    observePeerConnectionIntentRemoved() { return () => {}; },
+    observePeerConnectionIntentRemoved() {
+      return () => {};
+    },
     setServiceIngress(handler: typeof ingress) {
       ingress = (record) => handler!(withIngressOwner(record));
     },
@@ -2157,9 +2299,7 @@ test('Spot Message Follow holds ingress, relays with the committed fence, and re
       return true;
     },
     async requestService(_target: string, _parts: readonly Buffer[]) {
-      return [
-        encodeStatefulReply(91n, RequestResult.Ok, 0)
-      ];
+      return [encodeStatefulReply(91n, RequestResult.Ok, 0)];
     },
     replyService(_record: unknown, parts: readonly Buffer[]) {
       replies.push([...parts]);
@@ -2181,32 +2321,47 @@ test('Spot Message Follow holds ingress, relays with the committed fence, and re
     contentType: 'application/octet-stream',
     payload: Buffer.from('payload')
   });
-  assert.equal(await ingress?.({
-    command: M6bServiceWireCommand.spotSend,
-    flags: 0,
-    sourceRoutingId: 'caller',
-    parts: [encodeSpotHeader('spotSend', 'source-spot', {
-      ...source,
-      ownerLeaseGeneration: source.ownerLeaseGeneration + 1n
-    }), payload]
-  }), 'protocolError');
-  assert.equal(await ingress?.({
-    command: M6bServiceWireCommand.spotSend,
-    flags: 0,
-    sourceRoutingId: 'caller',
-    parts: [encodeSpotHeader('spotSend', 'source-spot', {
-      ...source,
-      storeVersion: 'stale-store-version'
-    }), payload]
-  }), 'application');
+  assert.equal(
+    await ingress?.({
+      command: M6bServiceWireCommand.spotSend,
+      flags: 0,
+      sourceRoutingId: 'caller',
+      parts: [
+        encodeSpotHeader('spotSend', 'source-spot', {
+          ...source,
+          ownerLeaseGeneration: source.ownerLeaseGeneration + 1n
+        }),
+        payload
+      ]
+    }),
+    'protocolError'
+  );
+  assert.equal(
+    await ingress?.({
+      command: M6bServiceWireCommand.spotSend,
+      flags: 0,
+      sourceRoutingId: 'caller',
+      parts: [
+        encodeSpotHeader('spotSend', 'source-spot', {
+          ...source,
+          storeVersion: 'stale-store-version'
+        }),
+        payload
+      ]
+    }),
+    'application'
+  );
   const seal = runtime.sealSpotMessageFollowIngress(source);
   assert.ok(seal);
-  assert.equal(await ingress?.({
-    command: M6bServiceWireCommand.spotSend,
-    flags: 0,
-    sourceRoutingId: 'caller',
-    parts: [encodeSpotHeader('spotSend', 'source-spot', source), payload]
-  }), 'application');
+  assert.equal(
+    await ingress?.({
+      command: M6bServiceWireCommand.spotSend,
+      flags: 0,
+      sourceRoutingId: 'caller',
+      parts: [encodeSpotHeader('spotSend', 'source-spot', source), payload]
+    }),
+    'application'
+  );
   assert.equal(relayed.length, 0);
 
   const target = {
@@ -2217,13 +2372,10 @@ test('Spot Message Follow holds ingress, relays with the committed fence, and re
     ownerLeaseGeneration: 4n,
     storeVersion: 'target-v1'
   };
-  assert.equal(
-    await runtime.commitSpotMessageFollowIngress(seal, target, 30_000),
-    true
-  );
+  assert.equal(await runtime.commitSpotMessageFollowIngress(seal, target, 30_000), true);
   assert.equal(relayed.length, 2);
   const relayedHeader = decodeStatefulHeader(
-    relayed.find(record => record.target === 'node-b')!.parts[0]!
+    relayed.find((record) => record.target === 'node-b')!.parts[0]!
   );
   assert.equal(relayedHeader.kind, 'spotSend');
   if (relayedHeader.kind === 'spotSend') {
@@ -2231,7 +2383,7 @@ test('Spot Message Follow holds ingress, relays with the committed fence, and re
     assert.equal(relayedHeader.sourceSpotId, 'source-spot');
   }
   const sendFollow = decodeStatefulHeader(
-    relayed.find(record => record.target === 'caller')!.parts[0]!
+    relayed.find((record) => record.target === 'caller')!.parts[0]!
   );
   assert.equal(sendFollow.kind, 'messageFollow');
   if (sendFollow.kind === 'messageFollow') {
@@ -2255,17 +2407,20 @@ test('Spot Message Follow holds ingress, relays with the committed fence, and re
     assert.equal(sendFollow.originalOperation.low, 1n);
     assert.equal(sendFollow.originalReplyRouteId, 0n);
   }
-  const callerFollowCount = relayed.filter(record => record.target === 'caller').length;
+  const callerFollowCount = relayed.filter((record) => record.target === 'caller').length;
 
-  assert.equal(await ingress?.({
-    command: M6bServiceWireCommand.spotRequest,
-    flags: 0,
-    sourceRoutingId: 'caller',
-    sourceRoute: Buffer.from('reply-route'),
-    requestSequence: 17n,
-    parts: [encodeSpotHeader('spotRequest', 'source-spot', source, 91n), payload]
-  }), 'application');
-  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(
+    await ingress?.({
+      command: M6bServiceWireCommand.spotRequest,
+      flags: 0,
+      sourceRoutingId: 'caller',
+      sourceRoute: Buffer.from('reply-route'),
+      requestSequence: 17n,
+      parts: [encodeSpotHeader('spotRequest', 'source-spot', source, 91n), payload]
+    }),
+    'application'
+  );
+  await new Promise((resolve) => setImmediate(resolve));
   assert.equal(replies.length, 1);
   assert.deepEqual(decodeStatefulReply(replies[0]![0]!, 91n, 'spotRequest'), {
     correlation: 91n,
@@ -2273,7 +2428,7 @@ test('Spot Message Follow holds ingress, relays with the committed fence, and re
     failureCode: 0
   });
   assert.equal(
-    relayed.filter(record => record.target === 'caller').length,
+    relayed.filter((record) => record.target === 'caller').length,
     callerFollowCount,
     'the exact source/target route sends one Message Follow notification'
   );
@@ -2290,12 +2445,15 @@ test('Spot Message Follow holds ingress, relays with the committed fence, and re
   runtime.rememberSpotRoute(abortSource);
   const abortSeal = runtime.sealSpotMessageFollowIngress(abortSource);
   assert.ok(abortSeal);
-  assert.equal(await ingress?.({
-    command: M6bServiceWireCommand.spotSend,
-    flags: 0,
-    sourceRoutingId: 'caller',
-    parts: [encodeSpotHeader('spotSend', 'source-spot', abortSource), payload]
-  }), 'application');
+  assert.equal(
+    await ingress?.({
+      command: M6bServiceWireCommand.spotSend,
+      flags: 0,
+      sourceRoutingId: 'caller',
+      parts: [encodeSpotHeader('spotSend', 'source-spot', abortSource), payload]
+    }),
+    'application'
+  );
   assert.equal(runtime.abortSpotMessageFollowIngress(abortSeal), true);
   assert.equal(restored.length, 2);
   runtime.close();
@@ -2303,10 +2461,14 @@ test('Spot Message Follow holds ingress, relays with the committed fence, and re
 
 test('Spot Message Follow does not impose a record-count or stored-byte admission bound', async () => {
   let ingress:
-    ((record: import('../../packages/framework/src/runtime/foundation/raw-service-mesh-runtime')
-      .RawServiceIngressRecord) => unknown) | undefined;
+    | ((
+        record: import('../../packages/framework/src/runtime/foundation/raw-service-mesh-runtime').RawServiceIngressRecord
+      ) => unknown)
+    | undefined;
   const raw = {
-    observePeerConnectionIntentRemoved() { return () => {}; },
+    observePeerConnectionIntentRemoved() {
+      return () => {};
+    },
     setServiceIngress(handler: typeof ingress) {
       ingress = (record) => handler!(withIngressOwner(record));
     }
@@ -2329,16 +2491,23 @@ test('Spot Message Follow does not impose a record-count or stored-byte admissio
     payload: Buffer.alloc(17 * 1024)
   });
   for (let index = 0; index < 1_025; index += 1) {
-    assert.equal(await ingress?.({
-      command: M6bServiceWireCommand.spotSend,
-      flags: 0,
-      sourceRoutingId: 'caller',
-      parts: [encodeSpotHeader('spotSend', 'source-spot', source), smallPayload]
-    }), 'application');
+    assert.equal(
+      await ingress?.({
+        command: M6bServiceWireCommand.spotSend,
+        flags: 0,
+        sourceRoutingId: 'caller',
+        parts: [encodeSpotHeader('spotSend', 'source-spot', source), smallPayload]
+      }),
+      'application'
+    );
   }
-  const state = [...(runtime as unknown as {
-    spotMessageFollow: Map<string, { queuedCount: number; queuedBytes: number }>;
-  }).spotMessageFollow.values()][0];
+  const state = [
+    ...(
+      runtime as unknown as {
+        spotMessageFollow: Map<string, { queuedCount: number; queuedBytes: number }>;
+      }
+    ).spotMessageFollow.values()
+  ][0];
   assert.equal(state?.queuedCount, 1_025);
   assert.ok((state?.queuedBytes ?? 0) > 16 * 1024 * 1024);
   runtime.close();
@@ -2350,7 +2519,9 @@ test('Instance activation encoding distinguishes absent metadata from explicit e
     topology: {
       peer: () => ({ descriptor: { lifecycleGeneration: 7n } })
     },
-    observePeerConnectionIntentRemoved() { return () => {}; },
+    observePeerConnectionIntentRemoved() {
+      return () => {};
+    },
     setServiceIngress: () => {},
     isPeerRouteReady: () => true,
     sendService: async (target: string, parts: readonly Buffer[]) => {
@@ -2371,24 +2542,23 @@ test('Instance activation encoding distinguishes absent metadata from explicit e
     contentType: 'application/octet-stream',
     payload: Buffer.from('open')
   };
-  assert.equal(await runtime.sendToMissingInstanceSpot(
-    target,
-    payload,
-    BigInt(Date.now() + 1_000)
-  ), SubmitResult.NotConnected);
-  assert.equal(await runtime.sendToMissingInstanceSpot(
-    target,
-    payload,
-    BigInt(Date.now() + 1_000),
-    undefined,
-    encodeServiceMetadataFrame(new Map())
-  ), SubmitResult.NotConnected);
+  assert.equal(
+    await runtime.sendToMissingInstanceSpot(target, payload, BigInt(Date.now() + 1_000)),
+    SubmitResult.NotConnected
+  );
+  assert.equal(
+    await runtime.sendToMissingInstanceSpot(
+      target,
+      payload,
+      BigInt(Date.now() + 1_000),
+      undefined,
+      encodeServiceMetadataFrame(new Map())
+    ),
+    SubmitResult.NotConnected
+  );
   assert.equal(sent[0]?.parts.length, 2);
   assert.equal(sent[1]?.parts.length, 3);
-  assert.deepEqual(
-    validateServiceMetadataFrame(sent[1]!.parts[1]!),
-    Buffer.from([1, 0])
-  );
+  assert.deepEqual(validateServiceMetadataFrame(sent[1]!.parts[1]!), Buffer.from([1, 0]));
   runtime.close();
 });
 
@@ -2396,11 +2566,12 @@ test('retained peer routes may submit while endpoint convergence reports not rea
   const sent: Array<{ readonly target: string; readonly parts: readonly Buffer[] }> = [];
   const raw = {
     topology: {
-      peer: (nodeRid: string) => nodeRid === 'retained-peer'
-        ? { descriptor: { lifecycleGeneration: 7n } }
-        : undefined
+      peer: (nodeRid: string) =>
+        nodeRid === 'retained-peer' ? { descriptor: { lifecycleGeneration: 7n } } : undefined
     },
-    observePeerConnectionIntentRemoved() { return () => {}; },
+    observePeerConnectionIntentRemoved() {
+      return () => {};
+    },
     setServiceIngress: () => {},
     isPeerRouteReady: () => false,
     sendService: async (target: string, parts: readonly Buffer[]) => {
@@ -2440,12 +2611,7 @@ test('global Spot and Actor identities fence stale generations and retain stable
   assert.equal(entry.stableType, 'entry');
   assert.equal(registry.closeSpot(entry.ref), false);
   assert.throws(
-    () => registry.restoreSpot(
-      { spotId: 'another-entry', generation: 4n },
-      'entry',
-      'entry',
-      4n
-    ),
+    () => registry.restoreSpot({ spotId: 'another-entry', generation: 4n }, 'entry', 'entry', 4n),
     /identity is fixed/
   );
   const spotV1 = registry.createSpot('spot-a', 'user', 'Room');
@@ -2479,11 +2645,17 @@ test('remote create reservations are idempotent per attempt and fence stale atte
   const newer = target.reserve('instanceSpot', 'tenant-42', 'TenantWorker', 11n);
   assert.equal(newer.kind, 'reserved');
   if (newer.kind !== 'reserved') return;
-  assert.equal(target.reserve('instanceSpot', 'tenant-42', 'TenantWorker', 10n).kind, 'attemptStale');
+  assert.equal(
+    target.reserve('instanceSpot', 'tenant-42', 'TenantWorker', 10n).kind,
+    'attemptStale'
+  );
   assert.throws(() => target.commitReservation(first.reservation), ServiceStaleGenerationError);
   const committed = target.commitReservation(newer.reservation);
   assert.equal('kind' in committed ? committed.kind : undefined, 'instance');
-  assert.equal(target.reserve('instanceSpot', 'tenant-42', 'OtherWorker', 12n).kind, 'typeMismatch');
+  assert.equal(
+    target.reserve('instanceSpot', 'tenant-42', 'OtherWorker', 12n).kind,
+    'typeMismatch'
+  );
 });
 
 test('target-owned Instance activation reserves before factory, commits before one queue admission', async () => {
@@ -2496,9 +2668,8 @@ test('target-owned Instance activation reserves before factory, commits before o
   }) => string | undefined;
   const raw = {
     topology: {
-      peer: (nodeRid: string) => nodeRid === 'source'
-        ? { descriptor: { lifecycleGeneration: 7n } }
-        : undefined
+      peer: (nodeRid: string) =>
+        nodeRid === 'source' ? { descriptor: { lifecycleGeneration: 7n } } : undefined
     },
     mailbox: {
       tryEnqueue: (record: unknown) => {
@@ -2506,7 +2677,9 @@ test('target-owned Instance activation reserves before factory, commits before o
         return true;
       }
     },
-    observePeerConnectionIntentRemoved() { return () => {}; },
+    observePeerConnectionIntentRemoved() {
+      return () => {};
+    },
     setServiceIngress: (handler: typeof ingress) => {
       ingress = (record) => handler!(withIngressOwner(record));
     }
@@ -2618,7 +2791,9 @@ test('durable missing Instance authority discards a materialized orphan before r
         return true;
       }
     },
-    observePeerConnectionIntentRemoved() { return () => {}; },
+    observePeerConnectionIntentRemoved() {
+      return () => {};
+    },
     setServiceIngress: (handler: typeof ingress) => {
       ingress = (record) => handler!(withIngressOwner(record));
     }
@@ -2627,7 +2802,7 @@ test('durable missing Instance authority discards a materialized orphan before r
   runtime.restoreSpotAuthority('tenant-orphan', 'instance_spot', 'TenantWorker', 1n, 1n);
   let materialized = true;
   runtime.registerInstanceApplicationLifecycle({
-    isMaterialized: target => {
+    isMaterialized: (target) => {
       events.push(`check:${target.targetSpotId}`);
       return materialized;
     },
@@ -2635,7 +2810,7 @@ test('durable missing Instance authority discards a materialized orphan before r
       events.push(`materialize:${target.targetSpotId}:${String(generation)}`);
       return Promise.resolve();
     },
-    discard: async target => {
+    discard: async (target) => {
       events.push(`discard:${target.targetSpotId}`);
       materialized = false;
     },
@@ -2644,7 +2819,7 @@ test('durable missing Instance authority discards a materialized orphan before r
   });
   const authority: ServiceAsyncInstanceActivationAuthority = {
     read: async () => ({ kind: 'missing' }),
-    reserve: async activation => {
+    reserve: async (activation) => {
       events.push('reserve');
       assert.equal(runtime.registry.spot(activation.target.targetSpotId)?.ref.generation, 1n);
       return {
@@ -2679,34 +2854,37 @@ test('durable missing Instance authority discards a materialized orphan before r
   };
   runtime.registerAsyncInstanceActivationAuthority(authority);
 
-  assert.equal(await ingress({
-    command: M6bServiceWireCommand.instanceSpot,
-    flags: 0,
-    sourceRoutingId: 'source',
-    parts: [
-      encodeInstanceSpotActivationHeader(
-        {
-          targetNodeRid: 'target',
-          targetNodeGeneration: 3n,
-          targetSpotId: 'tenant-orphan',
-          stableType: 'TenantWorker',
-          descriptorVersion: 'descriptor-orphan'
-        },
-        7n,
-        'source',
-        undefined,
-        'send',
-        { high: 7n, low: 45n },
-        BigInt(Date.now() + 10_000)
-      ),
-      encodeApplicationPayload({
-        packetName: 'FirstMessage',
-        contentType: 'application/octet-stream',
-        payload: Buffer.from('first')
-      })
-    ]
-  }), 'infrastructure');
-  await new Promise<void>(resolve => setImmediate(resolve));
+  assert.equal(
+    await ingress({
+      command: M6bServiceWireCommand.instanceSpot,
+      flags: 0,
+      sourceRoutingId: 'source',
+      parts: [
+        encodeInstanceSpotActivationHeader(
+          {
+            targetNodeRid: 'target',
+            targetNodeGeneration: 3n,
+            targetSpotId: 'tenant-orphan',
+            stableType: 'TenantWorker',
+            descriptorVersion: 'descriptor-orphan'
+          },
+          7n,
+          'source',
+          undefined,
+          'send',
+          { high: 7n, low: 45n },
+          BigInt(Date.now() + 10_000)
+        ),
+        encodeApplicationPayload({
+          packetName: 'FirstMessage',
+          contentType: 'application/octet-stream',
+          payload: Buffer.from('first')
+        })
+      ]
+    }),
+    'infrastructure'
+  );
+  await new Promise<void>((resolve) => setImmediate(resolve));
 
   assert.deepEqual(events, [
     'check:tenant-orphan',
@@ -2740,7 +2918,9 @@ test('Instance activation joins a Creating authority when local materialization 
         return true;
       }
     },
-    observePeerConnectionIntentRemoved() { return () => {}; },
+    observePeerConnectionIntentRemoved() {
+      return () => {};
+    },
     setServiceIngress: (handler: typeof ingress) => {
       ingress = (record) => handler!(withIngressOwner(record));
     }
@@ -2795,41 +2975,39 @@ test('Instance activation joins a Creating authority when local materialization 
     abort: async () => assert.fail('Successful activation must not abort')
   });
 
-  assert.equal(await ingress({
-    command: M6bServiceWireCommand.instanceSpot,
-    flags: 0,
-    sourceRoutingId: 'source',
-    parts: [
-      encodeInstanceSpotActivationHeader(
-        {
-          targetNodeRid: 'target',
-          targetNodeGeneration: 3n,
-          targetSpotId: 'tenant-overlap',
-          stableType: 'TenantWorker',
-          descriptorVersion: 'descriptor-overlap'
-        },
-        7n,
-        'source',
-        undefined,
-        'send',
-        { high: 7n, low: 46n },
-        BigInt(Date.now() + 10_000)
-      ),
-      encodeApplicationPayload({
-        packetName: 'FirstMessage',
-        contentType: 'application/octet-stream',
-        payload: Buffer.from('first')
-      })
-    ]
-  }), 'infrastructure');
-  await new Promise<void>(resolve => setImmediate(resolve));
+  assert.equal(
+    await ingress({
+      command: M6bServiceWireCommand.instanceSpot,
+      flags: 0,
+      sourceRoutingId: 'source',
+      parts: [
+        encodeInstanceSpotActivationHeader(
+          {
+            targetNodeRid: 'target',
+            targetNodeGeneration: 3n,
+            targetSpotId: 'tenant-overlap',
+            stableType: 'TenantWorker',
+            descriptorVersion: 'descriptor-overlap'
+          },
+          7n,
+          'source',
+          undefined,
+          'send',
+          { high: 7n, low: 46n },
+          BigInt(Date.now() + 10_000)
+        ),
+        encodeApplicationPayload({
+          packetName: 'FirstMessage',
+          contentType: 'application/octet-stream',
+          payload: Buffer.from('first')
+        })
+      ]
+    }),
+    'infrastructure'
+  );
+  await new Promise<void>((resolve) => setImmediate(resolve));
 
-  assert.deepEqual(events, [
-    'read',
-    'reserve',
-    'materialize:tenant-overlap:4',
-    'commit'
-  ]);
+  assert.deepEqual(events, ['read', 'reserve', 'materialize:tenant-overlap:4', 'commit']);
   assert.equal(queued.length, 1);
   runtime.close();
 });
@@ -2853,7 +3031,9 @@ test('Instance activation joins a Creating authority after local materialization
         return true;
       }
     },
-    observePeerConnectionIntentRemoved() { return () => {}; },
+    observePeerConnectionIntentRemoved() {
+      return () => {};
+    },
     setServiceIngress: (handler: typeof ingress) => {
       ingress = (record) => handler!(withIngressOwner(record));
     }
@@ -2909,34 +3089,37 @@ test('Instance activation joins a Creating authority after local materialization
     abort: async () => assert.fail('Successful activation must not abort')
   });
 
-  assert.equal(await ingress({
-    command: M6bServiceWireCommand.instanceSpot,
-    flags: 0,
-    sourceRoutingId: 'source',
-    parts: [
-      encodeInstanceSpotActivationHeader(
-        {
-          targetNodeRid: 'target',
-          targetNodeGeneration: 3n,
-          targetSpotId: 'tenant-creating',
-          stableType: 'TenantWorker',
-          descriptorVersion: 'descriptor-creating'
-        },
-        7n,
-        'source',
-        undefined,
-        'send',
-        { high: 7n, low: 47n },
-        BigInt(Date.now() + 10_000)
-      ),
-      encodeApplicationPayload({
-        packetName: 'FirstMessage',
-        contentType: 'application/octet-stream',
-        payload: Buffer.from('first')
-      })
-    ]
-  }), 'infrastructure');
-  await new Promise<void>(resolve => setImmediate(resolve));
+  assert.equal(
+    await ingress({
+      command: M6bServiceWireCommand.instanceSpot,
+      flags: 0,
+      sourceRoutingId: 'source',
+      parts: [
+        encodeInstanceSpotActivationHeader(
+          {
+            targetNodeRid: 'target',
+            targetNodeGeneration: 3n,
+            targetSpotId: 'tenant-creating',
+            stableType: 'TenantWorker',
+            descriptorVersion: 'descriptor-creating'
+          },
+          7n,
+          'source',
+          undefined,
+          'send',
+          { high: 7n, low: 47n },
+          BigInt(Date.now() + 10_000)
+        ),
+        encodeApplicationPayload({
+          packetName: 'FirstMessage',
+          contentType: 'application/octet-stream',
+          payload: Buffer.from('first')
+        })
+      ]
+    }),
+    'infrastructure'
+  );
+  await new Promise<void>((resolve) => setImmediate(resolve));
 
   assert.deepEqual(events, ['reserve', 'materialize', 'commit']);
   assert.equal(queued.length, 1);
@@ -2954,9 +3137,8 @@ test('Ready Instance route waits for a closing materialized application before a
   const events: string[] = [];
   const raw = {
     topology: {
-      peer: (nodeRid: string) => nodeRid === 'source'
-        ? { descriptor: { lifecycleGeneration: 7n } }
-        : undefined
+      peer: (nodeRid: string) =>
+        nodeRid === 'source' ? { descriptor: { lifecycleGeneration: 7n } } : undefined
     },
     mailbox: {
       tryEnqueue: (record: unknown) => {
@@ -2964,7 +3146,9 @@ test('Ready Instance route waits for a closing materialized application before a
         return true;
       }
     },
-    observePeerConnectionIntentRemoved() { return () => {}; },
+    observePeerConnectionIntentRemoved() {
+      return () => {};
+    },
     setServiceIngress: (handler: typeof ingress) => {
       ingress = (record) => handler!(withIngressOwner(record));
     }
@@ -2982,11 +3166,11 @@ test('Ready Instance route waits for a closing materialized application before a
   };
   runtime.registerInstanceIntent('TenantWorker', route);
   runtime.registerInstanceApplicationLifecycle({
-    isClosing: target => {
+    isClosing: (target) => {
       events.push(`closing:${target.targetSpotId}`);
       return true;
     },
-    isMaterialized: target => {
+    isMaterialized: (target) => {
       events.push(`check:${target.targetSpotId}`);
       return true;
     },
@@ -2999,32 +3183,25 @@ test('Ready Instance route waits for a closing materialized application before a
     completeTerminal: async () => false
   });
 
-  assert.equal(await ingress({
-    command: M6bServiceWireCommand.instanceSpot,
-    flags: 0,
-    sourceRoutingId: 'source',
-    parts: [
-      encodeInstanceSpotHeader(
-        route,
-        7n,
-        'source',
-        undefined,
-        'send',
-        { high: 0n, low: 0n }
-      ),
-      encodeApplicationPayload({
-        packetName: 'FirstMessage',
-        contentType: 'application/octet-stream',
-        payload: Buffer.from('first')
-      })
-    ]
-  }), 'infrastructure');
-  await new Promise<void>(resolve => setImmediate(resolve));
+  assert.equal(
+    await ingress({
+      command: M6bServiceWireCommand.instanceSpot,
+      flags: 0,
+      sourceRoutingId: 'source',
+      parts: [
+        encodeInstanceSpotHeader(route, 7n, 'source', undefined, 'send', { high: 0n, low: 0n }),
+        encodeApplicationPayload({
+          packetName: 'FirstMessage',
+          contentType: 'application/octet-stream',
+          payload: Buffer.from('first')
+        })
+      ]
+    }),
+    'infrastructure'
+  );
+  await new Promise<void>((resolve) => setImmediate(resolve));
 
-  assert.deepEqual(events, [
-    'closing:tenant-rematerialize',
-    'materialize:TenantWorker:4'
-  ]);
+  assert.deepEqual(events, ['closing:tenant-rematerialize', 'materialize:TenantWorker:4']);
   assert.equal(queued.length, 1);
   assert.equal(runtime.registry.spot('tenant-rematerialize')?.stableType, 'TenantWorker');
   runtime.close();
@@ -3042,7 +3219,9 @@ test('Instance activation CAS loser does not invoke the local factory', async ()
       peer: () => ({ descriptor: { lifecycleGeneration: 7n } })
     },
     mailbox: { tryEnqueue: () => true },
-    observePeerConnectionIntentRemoved() { return () => {}; },
+    observePeerConnectionIntentRemoved() {
+      return () => {};
+    },
     setServiceIngress: (handler: typeof ingress) => {
       ingress = (record) => handler!(withIngressOwner(record));
     }
@@ -3080,19 +3259,20 @@ test('Instance activation CAS loser does not invoke the local factory', async ()
     BigInt(Date.now() + 10_000)
   );
   await assert.rejects(
-    async () => ingress({
-      command: M6bServiceWireCommand.instanceSpot,
-      flags: 0,
-      sourceRoutingId: 'source',
-      parts: [
-        header,
-        encodeApplicationPayload({
-          packetName: 'FirstMessage',
-          contentType: 'application/octet-stream',
-          payload: Buffer.from('first')
-        })
-      ]
-    }),
+    async () =>
+      ingress({
+        command: M6bServiceWireCommand.instanceSpot,
+        flags: 0,
+        sourceRoutingId: 'source',
+        parts: [
+          header,
+          encodeApplicationPayload({
+            packetName: 'FirstMessage',
+            contentType: 'application/octet-stream',
+            payload: Buffer.from('first')
+          })
+        ]
+      }),
     ServiceInstanceActivationRedirectError
   );
   assert.equal(runtime.registry.spot('tenant-42'), undefined);
@@ -3106,9 +3286,7 @@ test('Promise authority redirects the retained activation envelope to the Ready 
     readonly sourceRoutingId: string;
     readonly parts: readonly Buffer[];
   }) => string | undefined;
-  let redirected:
-    | { readonly targetNodeRid: string; readonly parts: readonly Buffer[] }
-    | undefined;
+  let redirected: { readonly targetNodeRid: string; readonly parts: readonly Buffer[] } | undefined;
   const raw = {
     topology: {
       peer: () => ({ descriptor: { lifecycleGeneration: 7n } })
@@ -3118,7 +3296,9 @@ test('Promise authority redirects the retained activation envelope to the Ready 
       redirected = { targetNodeRid, parts };
       return true;
     },
-    observePeerConnectionIntentRemoved() { return () => {}; },
+    observePeerConnectionIntentRemoved() {
+      return () => {};
+    },
     setServiceIngress: (handler: typeof ingress) => {
       ingress = (record) => handler!(withIngressOwner(record));
     }
@@ -3146,34 +3326,37 @@ test('Promise authority redirects the retained activation envelope to the Ready 
   });
 
   const operation = { high: 7n, low: 44n };
-  assert.equal(await ingress({
-    command: M6bServiceWireCommand.instanceSpot,
-    flags: 0,
-    sourceRoutingId: 'source',
-    parts: [
-      encodeInstanceSpotActivationHeader(
-        {
-          targetNodeRid: 'loser',
-          targetNodeGeneration: 3n,
-          targetSpotId: 'tenant-redirect',
-          stableType: 'TenantWorker',
-          descriptorVersion: 'descriptor-loser'
-        },
-        7n,
-        'source',
-        'source-spot',
-        'send',
-        operation,
-        BigInt(Date.now() + 10_000)
-      ),
-      encodeApplicationPayload({
-        packetName: 'FirstMessage',
-        contentType: 'application/octet-stream',
-        payload: Buffer.from('first')
-      })
-    ]
-  }), 'infrastructure');
-  await new Promise<void>(resolve => setImmediate(resolve));
+  assert.equal(
+    await ingress({
+      command: M6bServiceWireCommand.instanceSpot,
+      flags: 0,
+      sourceRoutingId: 'source',
+      parts: [
+        encodeInstanceSpotActivationHeader(
+          {
+            targetNodeRid: 'loser',
+            targetNodeGeneration: 3n,
+            targetSpotId: 'tenant-redirect',
+            stableType: 'TenantWorker',
+            descriptorVersion: 'descriptor-loser'
+          },
+          7n,
+          'source',
+          'source-spot',
+          'send',
+          operation,
+          BigInt(Date.now() + 10_000)
+        ),
+        encodeApplicationPayload({
+          packetName: 'FirstMessage',
+          contentType: 'application/octet-stream',
+          payload: Buffer.from('first')
+        })
+      ]
+    }),
+    'infrastructure'
+  );
+  await new Promise<void>((resolve) => setImmediate(resolve));
 
   assert.equal(redirected?.targetNodeRid, 'winner');
   if (redirected === undefined) throw new Error('Activation envelope was not redirected.');
@@ -3199,19 +3382,21 @@ test('Missing Instance activation joins a new reservation while the prior local 
     readonly sourceRoutingId: string;
     readonly parts: readonly Buffer[];
   }) => string | undefined;
-  let redirected:
-    | { readonly targetNodeRid: string; readonly parts: readonly Buffer[] }
-    | undefined;
+  let redirected: { readonly targetNodeRid: string; readonly parts: readonly Buffer[] } | undefined;
   const raw = {
     topology: {
       peer: () => ({ descriptor: { lifecycleGeneration: 7n } })
     },
-    mailbox: { tryEnqueue: () => assert.fail('Closing local generation must not admit the old projection') },
+    mailbox: {
+      tryEnqueue: () => assert.fail('Closing local generation must not admit the old projection')
+    },
     sendService: (targetNodeRid: string, parts: readonly Buffer[]) => {
       redirected = { targetNodeRid, parts };
       return true;
     },
-    observePeerConnectionIntentRemoved() { return () => {}; },
+    observePeerConnectionIntentRemoved() {
+      return () => {};
+    },
     setServiceIngress: (handler: typeof ingress) => {
       ingress = (record) => handler!(withIngressOwner(record));
     }
@@ -3221,7 +3406,8 @@ test('Missing Instance activation joins a new reservation while the prior local 
   runtime.registerInstanceApplicationLifecycle({
     isClosing: () => true,
     isMaterialized: () => true,
-    materialize: async () => assert.fail('A concurrent reservation must be joined, not materialized here'),
+    materialize: async () =>
+      assert.fail('A concurrent reservation must be joined, not materialized here'),
     discard: async () => undefined,
     beginTerminal: () => undefined,
     completeTerminal: async () => false
@@ -3250,37 +3436,41 @@ test('Missing Instance activation joins a new reservation while the prior local 
   });
 
   const operation = { high: 7n, low: 48n };
-  assert.equal(await ingress({
-    command: M6bServiceWireCommand.instanceSpot,
-    flags: 0,
-    sourceRoutingId: 'source',
-    parts: [
-      encodeInstanceSpotActivationHeader(
-        {
-          targetNodeRid: 'target',
-          targetNodeGeneration: 3n,
-          targetSpotId: 'tenant-close-race',
-          stableType: 'TenantWorker',
-          descriptorVersion: 'descriptor-close-race'
-        },
-        7n,
-        'source',
-        undefined,
-        'send',
-        operation,
-        BigInt(Date.now() + 10_000)
-      ),
-      encodeApplicationPayload({
-        packetName: 'FirstMessage',
-        contentType: 'application/octet-stream',
-        payload: Buffer.from('close-race-payload')
-      })
-    ]
-  }), 'infrastructure');
-  await new Promise<void>(resolve => setImmediate(resolve));
+  assert.equal(
+    await ingress({
+      command: M6bServiceWireCommand.instanceSpot,
+      flags: 0,
+      sourceRoutingId: 'source',
+      parts: [
+        encodeInstanceSpotActivationHeader(
+          {
+            targetNodeRid: 'target',
+            targetNodeGeneration: 3n,
+            targetSpotId: 'tenant-close-race',
+            stableType: 'TenantWorker',
+            descriptorVersion: 'descriptor-close-race'
+          },
+          7n,
+          'source',
+          undefined,
+          'send',
+          operation,
+          BigInt(Date.now() + 10_000)
+        ),
+        encodeApplicationPayload({
+          packetName: 'FirstMessage',
+          contentType: 'application/octet-stream',
+          payload: Buffer.from('close-race-payload')
+        })
+      ]
+    }),
+    'infrastructure'
+  );
+  await new Promise<void>((resolve) => setImmediate(resolve));
 
   assert.equal(redirected?.targetNodeRid, 'winner');
-  if (redirected === undefined) throw new Error('Closing-generation activation was not redirected.');
+  if (redirected === undefined)
+    throw new Error('Closing-generation activation was not redirected.');
   const redirectedHeader = decodeStatefulHeader(redirected.parts[0]!);
   assert.equal(redirectedHeader.kind, 'instanceSpot');
   if (redirectedHeader.kind !== 'instanceSpot') throw new Error('Redirect header is invalid.');
@@ -3304,7 +3494,9 @@ test('draining Instance owner rejects stale Missing activation before materializ
     },
     mailbox: { tryEnqueue: () => assert.fail('A draining owner must not admit the stale message') },
     sendService: () => true,
-    observePeerConnectionIntentRemoved() { return () => {}; },
+    observePeerConnectionIntentRemoved() {
+      return () => {};
+    },
     setServiceIngress: (handler: typeof ingress) => {
       ingress = (record) => handler!(withIngressOwner(record));
     }
@@ -3322,34 +3514,37 @@ test('draining Instance owner rejects stale Missing activation before materializ
     abort: async () => assert.fail('A stale activation must not abort')
   });
 
-  assert.equal(await ingress({
-    command: M6bServiceWireCommand.instanceSpot,
-    flags: 0,
-    sourceRoutingId: 'source',
-    parts: [
-      encodeInstanceSpotActivationHeader(
-        {
-          targetNodeRid: 'target',
-          targetNodeGeneration: 3n,
-          targetSpotId: 'draining-spot',
-          stableType: 'TenantWorker',
-          descriptorVersion: 'descriptor-draining'
-        },
-        7n,
-        'source',
-        undefined,
-        'send',
-        { high: 7n, low: 49n },
-        BigInt(Date.now() + 10_000)
-      ),
-      encodeApplicationPayload({
-        packetName: 'FirstMessage',
-        contentType: 'application/octet-stream',
-        payload: Buffer.from('draining')
-      })
-    ]
-  }), 'infrastructure');
-  await new Promise<void>(resolve => setImmediate(resolve));
+  assert.equal(
+    await ingress({
+      command: M6bServiceWireCommand.instanceSpot,
+      flags: 0,
+      sourceRoutingId: 'source',
+      parts: [
+        encodeInstanceSpotActivationHeader(
+          {
+            targetNodeRid: 'target',
+            targetNodeGeneration: 3n,
+            targetSpotId: 'draining-spot',
+            stableType: 'TenantWorker',
+            descriptorVersion: 'descriptor-draining'
+          },
+          7n,
+          'source',
+          undefined,
+          'send',
+          { high: 7n, low: 49n },
+          BigInt(Date.now() + 10_000)
+        ),
+        encodeApplicationPayload({
+          packetName: 'FirstMessage',
+          contentType: 'application/octet-stream',
+          payload: Buffer.from('draining')
+        })
+      ]
+    }),
+    'infrastructure'
+  );
+  await new Promise<void>((resolve) => setImmediate(resolve));
 
   assert.equal(reserved, false);
   assert.equal(runtime.registry.spot('draining-spot'), undefined);
@@ -3362,22 +3557,21 @@ test('stale local Instance projection redirects to a newer remote Ready authorit
     readonly sourceRoutingId: string;
     readonly parts: readonly Buffer[];
   }) => string | undefined;
-  let redirected:
-    | { readonly targetNodeRid: string; readonly parts: readonly Buffer[] }
-    | undefined;
+  let redirected: { readonly targetNodeRid: string; readonly parts: readonly Buffer[] } | undefined;
   let materializeCalls = 0;
   const raw = {
     topology: {
-      peer: (nodeRid: string) => nodeRid === 'source'
-        ? { descriptor: { lifecycleGeneration: 7n } }
-        : undefined
+      peer: (nodeRid: string) =>
+        nodeRid === 'source' ? { descriptor: { lifecycleGeneration: 7n } } : undefined
     },
     mailbox: { tryEnqueue: () => assert.fail('Remote Ready must not admit locally') },
     sendService: (targetNodeRid: string, parts: readonly Buffer[]) => {
       redirected = { targetNodeRid, parts };
       return true;
     },
-    observePeerConnectionIntentRemoved() { return () => {}; },
+    observePeerConnectionIntentRemoved() {
+      return () => {};
+    },
     setServiceIngress: (handler: typeof ingress) => {
       ingress = (record) => handler!(withIngressOwner(record));
     }
@@ -3421,33 +3615,36 @@ test('stale local Instance projection redirects to a newer remote Ready authorit
     contentType: 'application/octet-stream',
     payload: Buffer.from('remote-ready-payload')
   });
-  assert.equal(await ingress({
-    command: M6bServiceWireCommand.instanceSpot,
-    flags: M6bServiceWireFlag.metadata,
-    sourceRoutingId: 'source',
-    parts: [
-      encodeInstanceSpotActivationHeader(
-        {
-          targetNodeRid: 'target',
-          targetNodeGeneration: 3n,
-          targetSpotId: 'tenant-remote-ready',
-          stableType: 'TenantWorker',
-          descriptorVersion: 'descriptor-remote-ready'
-        },
-        7n,
-        'source',
-        undefined,
-        'send',
-        operation,
-        deadline,
-        undefined,
-        true
-      ),
-      metadata,
-      payload
-    ]
-  }), 'infrastructure');
-  await new Promise<void>(resolve => setImmediate(resolve));
+  assert.equal(
+    await ingress({
+      command: M6bServiceWireCommand.instanceSpot,
+      flags: M6bServiceWireFlag.metadata,
+      sourceRoutingId: 'source',
+      parts: [
+        encodeInstanceSpotActivationHeader(
+          {
+            targetNodeRid: 'target',
+            targetNodeGeneration: 3n,
+            targetSpotId: 'tenant-remote-ready',
+            stableType: 'TenantWorker',
+            descriptorVersion: 'descriptor-remote-ready'
+          },
+          7n,
+          'source',
+          undefined,
+          'send',
+          operation,
+          deadline,
+          undefined,
+          true
+        ),
+        metadata,
+        payload
+      ]
+    }),
+    'infrastructure'
+  );
+  await new Promise<void>((resolve) => setImmediate(resolve));
 
   assert.equal(materializeCalls, 0);
   assert.equal(redirected?.targetNodeRid, 'remote');
@@ -3475,9 +3672,8 @@ test('stale local Instance projection reconciles a newer same-node Ready authori
   const events: string[] = [];
   const raw = {
     topology: {
-      peer: (nodeRid: string) => nodeRid === 'source'
-        ? { descriptor: { lifecycleGeneration: 7n } }
-        : undefined
+      peer: (nodeRid: string) =>
+        nodeRid === 'source' ? { descriptor: { lifecycleGeneration: 7n } } : undefined
     },
     mailbox: {
       tryEnqueue: (record: unknown) => {
@@ -3489,7 +3685,9 @@ test('stale local Instance projection reconciles a newer same-node Ready authori
       sent.push(targetNodeRid);
       return true;
     },
-    observePeerConnectionIntentRemoved() { return () => {}; },
+    observePeerConnectionIntentRemoved() {
+      return () => {};
+    },
     setServiceIngress: (handler: typeof ingress) => {
       ingress = (record) => handler!(withIngressOwner(record));
     }
@@ -3529,40 +3727,39 @@ test('stale local Instance projection reconciles a newer same-node Ready authori
     abort: async () => assert.fail('Ready authority must not abort')
   });
 
-  assert.equal(await ingress({
-    command: M6bServiceWireCommand.instanceSpot,
-    flags: 0,
-    sourceRoutingId: 'source',
-    parts: [
-      encodeInstanceSpotActivationHeader(
-        {
-          targetNodeRid: 'target',
-          targetNodeGeneration: 3n,
-          targetSpotId: 'tenant-same-node-ready',
-          stableType: 'TenantWorker',
-          descriptorVersion: 'descriptor-same-node-ready'
-        },
-        7n,
-        'source',
-        undefined,
-        'send',
-        { high: 9n, low: 2n },
-        BigInt(Date.now() + 10_000)
-      ),
-      encodeApplicationPayload({
-        packetName: 'FirstMessage',
-        contentType: 'application/octet-stream',
-        payload: Buffer.from('same-node-ready-payload')
-      })
-    ]
-  }), 'infrastructure');
-  await new Promise<void>(resolve => setImmediate(resolve));
+  assert.equal(
+    await ingress({
+      command: M6bServiceWireCommand.instanceSpot,
+      flags: 0,
+      sourceRoutingId: 'source',
+      parts: [
+        encodeInstanceSpotActivationHeader(
+          {
+            targetNodeRid: 'target',
+            targetNodeGeneration: 3n,
+            targetSpotId: 'tenant-same-node-ready',
+            stableType: 'TenantWorker',
+            descriptorVersion: 'descriptor-same-node-ready'
+          },
+          7n,
+          'source',
+          undefined,
+          'send',
+          { high: 9n, low: 2n },
+          BigInt(Date.now() + 10_000)
+        ),
+        encodeApplicationPayload({
+          packetName: 'FirstMessage',
+          contentType: 'application/octet-stream',
+          payload: Buffer.from('same-node-ready-payload')
+        })
+      ]
+    }),
+    'infrastructure'
+  );
+  await new Promise<void>((resolve) => setImmediate(resolve));
 
-  assert.deepEqual(events, [
-    'read:1',
-    'materialize:tenant-same-node-ready:2',
-    'read:2'
-  ]);
+  assert.deepEqual(events, ['read:1', 'materialize:tenant-same-node-ready:2', 'read:2']);
   assert.equal(reads, 2);
   assert.deepEqual(sent, []);
   assert.equal(queued.length, 1);
@@ -3591,7 +3788,9 @@ test('Promise authority resumes the retained activation envelope after Store com
         return true;
       }
     },
-    observePeerConnectionIntentRemoved() { return () => {}; },
+    observePeerConnectionIntentRemoved() {
+      return () => {};
+    },
     setServiceIngress: (handler: typeof ingress) => {
       ingress = (record) => handler!(withIngressOwner(record));
     }
@@ -3601,7 +3800,7 @@ test('Promise authority resumes the retained activation envelope after Store com
   let committedRoute: ServiceInstanceRouteFence | undefined;
   let completedRoute: ServiceInstanceRouteFence | undefined;
   let releaseRead!: () => void;
-  const readBarrier = new Promise<void>(resolve => {
+  const readBarrier = new Promise<void>((resolve) => {
     releaseRead = resolve;
   });
   const authority: ServiceAsyncInstanceActivationAuthority = {
@@ -3655,9 +3854,7 @@ test('Promise authority resumes the retained activation envelope after Store com
   };
   runtime.registerAsyncInstanceActivationAuthority(authority);
 
-  const activationMetadata = encodeServiceMetadataFrame(
-    new Map([['trace', 'activation-1']])
-  );
+  const activationMetadata = encodeServiceMetadataFrame(new Map([['trace', 'activation-1']]));
   const header = encodeInstanceSpotActivationHeader(
     {
       targetNodeRid: 'target',
@@ -3675,25 +3872,28 @@ test('Promise authority resumes the retained activation envelope after Store com
     undefined,
     true
   );
-  assert.equal(await ingress({
-    command: M6bServiceWireCommand.instanceSpot,
-    flags: M6bServiceWireFlag.metadata,
-    sourceRoutingId: 'source',
-    parts: [
-      header,
-      activationMetadata,
-      encodeApplicationPayload({
-        packetName: 'FirstMessage',
-        contentType: 'application/octet-stream',
-        payload: Buffer.from('first')
-      })
-    ]
-  }), 'infrastructure');
+  assert.equal(
+    await ingress({
+      command: M6bServiceWireCommand.instanceSpot,
+      flags: M6bServiceWireFlag.metadata,
+      sourceRoutingId: 'source',
+      parts: [
+        header,
+        activationMetadata,
+        encodeApplicationPayload({
+          packetName: 'FirstMessage',
+          contentType: 'application/octet-stream',
+          payload: Buffer.from('first')
+        })
+      ]
+    }),
+    'infrastructure'
+  );
   assert.deepEqual(events, ['read']);
   assert.equal(queued.length, 0);
 
   releaseRead();
-  await new Promise<void>(resolve => setImmediate(resolve));
+  await new Promise<void>((resolve) => setImmediate(resolve));
   assert.deepEqual(events, ['read', 'reserve', 'commit']);
   assert.equal(runtime.registry.spot('tenant-async')?.stableType, 'TenantWorker');
   assert.equal(queued.length, 1);
@@ -3711,10 +3911,7 @@ test('Promise authority resumes the retained activation envelope after Store com
   if (completedRoute === undefined) throw new Error('Terminal route was not committed.');
   const instanceIntent = (
     runtime as unknown as {
-      readonly instanceIntents: ReadonlyMap<
-        string,
-        { readonly route: ServiceInstanceRouteFence }
-      >
+      readonly instanceIntents: ReadonlyMap<string, { readonly route: ServiceInstanceRouteFence }>;
     }
   ).instanceIntents.get('tenant-async');
   assert.deepEqual(instanceIntent?.route, completedRoute);
@@ -3726,26 +3923,32 @@ test('Promise authority resumes the retained activation envelope after Store com
     'send',
     { high: 0n, low: 0n }
   );
-  assert.equal(await ingress({
-    command: M6bServiceWireCommand.instanceSpot,
-    flags: 0,
-    sourceRoutingId: 'source',
-    parts: [
-      followingHeader,
-      encodeApplicationPayload({
-        packetName: 'FollowingMessage',
-        contentType: 'application/octet-stream',
-        payload: Buffer.from('following')
-      })
-    ]
-  }), 'application');
+  assert.equal(
+    await ingress({
+      command: M6bServiceWireCommand.instanceSpot,
+      flags: 0,
+      sourceRoutingId: 'source',
+      parts: [
+        followingHeader,
+        encodeApplicationPayload({
+          packetName: 'FollowingMessage',
+          contentType: 'application/octet-stream',
+          payload: Buffer.from('following')
+        })
+      ]
+    }),
+    'application'
+  );
   assert.equal(queued.length, 2);
   runtime.close();
 });
 
 test('Instance application factory initializes before the first recovered handler turn', async () => {
   const events: string[] = [];
-  class FirstMessageHandler implements ZLinkSpotPacketHandler<ZLinkInstanceSpot, { value: number }> {
+  class FirstMessageHandler implements ZLinkSpotPacketHandler<
+    ZLinkInstanceSpot,
+    { value: number }
+  > {
     async handle(_spot: ZLinkInstanceSpot, message: { value: number }): Promise<void> {
       events.push(`handle:${message.value}`);
     }
@@ -3764,9 +3967,7 @@ test('Instance application factory initializes before the first recovered handle
   }
   const manager = new DefaultZLinkSpotManager({
     spotFactories: [],
-    instanceSpotFactories: new Map([
-      ['mesh-a', new Map([['TenantWorker', TenantInstance]])]
-    ])
+    instanceSpotFactories: new Map([['mesh-a', new Map([['TenantWorker', TenantInstance]])]])
   });
   await manager.materializeInstance('mesh-a', 'TenantWorker', 'tenant:factory', 1n);
   const parts = encodeChannelEnvelopeParts(
@@ -3813,8 +4014,13 @@ test('Instance application factory initializes before the first recovered handle
 test('direct Spot route rematerializes an Instance Spot before dispatch', async () => {
   const events: string[] = [];
   let handlerCompleted!: () => void;
-  const handled = new Promise<void>(resolve => { handlerCompleted = resolve; });
-  class FirstMessageHandler implements ZLinkSpotPacketHandler<ZLinkInstanceSpot, { value: number }> {
+  const handled = new Promise<void>((resolve) => {
+    handlerCompleted = resolve;
+  });
+  class FirstMessageHandler implements ZLinkSpotPacketHandler<
+    ZLinkInstanceSpot,
+    { value: number }
+  > {
     async handle(_spot: ZLinkInstanceSpot, message: { value: number }): Promise<void> {
       events.push(`handle:${message.value}`);
       handlerCompleted();
@@ -3834,9 +4040,7 @@ test('direct Spot route rematerializes an Instance Spot before dispatch', async 
   }
   const manager = new DefaultZLinkSpotManager({
     spotFactories: [],
-    instanceSpotFactories: new Map([
-      ['mesh-a', new Map([['TenantWorker', TenantInstance]])]
-    ]),
+    instanceSpotFactories: new Map([['mesh-a', new Map([['TenantWorker', TenantInstance]])]]),
     instanceSpotApplicationTargetProvider: () => ({
       stableType: 'TenantWorker',
       objectGeneration: 2n
@@ -3886,7 +4090,10 @@ test('direct Spot route rematerializes an Instance Spot before dispatch', async 
 
 test('Instance Spot activation dispatch rematerializes a missing application before the handler turn', async () => {
   const events: string[] = [];
-  class FirstMessageHandler implements ZLinkSpotPacketHandler<ZLinkInstanceSpot, { value: number }> {
+  class FirstMessageHandler implements ZLinkSpotPacketHandler<
+    ZLinkInstanceSpot,
+    { value: number }
+  > {
     async handle(_spot: ZLinkInstanceSpot, message: { value: number }): Promise<void> {
       events.push(`handle:${message.value}`);
     }
@@ -3905,9 +4112,7 @@ test('Instance Spot activation dispatch rematerializes a missing application bef
   }
   const manager = new DefaultZLinkSpotManager({
     spotFactories: [],
-    instanceSpotFactories: new Map([
-      ['mesh-a', new Map([['TenantWorker', TenantInstance]])]
-    ]),
+    instanceSpotFactories: new Map([['mesh-a', new Map([['TenantWorker', TenantInstance]])]]),
     instanceSpotApplicationTargetProvider: () => ({
       stableType: 'TenantWorker',
       objectGeneration: 3n
@@ -3971,7 +4176,10 @@ test('membership and session binding generations advance and remain scoped to th
   assert.equal(transition.previousMembershipEpoch, 1n);
   assert.equal(transition.currentMembershipEpoch, 2n);
   assert.equal(registry.binding(actor.ref)?.membershipEpoch, 2n);
-  assert.equal(registry.validateBoundSession(actor.ref, binding.bindingGeneration).sessionRid, 'session-a');
+  assert.equal(
+    registry.validateBoundSession(actor.ref, binding.bindingGeneration).sessionRid,
+    'session-a'
+  );
   assert.throws(
     () => registry.unbindSession(actor.ref, binding.bindingGeneration + 1n),
     ServiceStaleGenerationError
@@ -3994,21 +4202,17 @@ test('membership and session binding generations advance and remain scoped to th
     bindingGeneration: 2n
   });
   assert.throws(
-    () => registry.installSessionBinding({
-      ...binding,
-      sessionOwnerNodeGeneration: 4n,
-      sessionOwnerLeaseGeneration: 4n,
-      bindingGeneration: 1n
-    }),
+    () =>
+      registry.installSessionBinding({
+        ...binding,
+        sessionOwnerNodeGeneration: 4n,
+        sessionOwnerLeaseGeneration: 4n,
+        bindingGeneration: 1n
+      }),
     ServiceStaleGenerationError
   );
   assert.throws(
-    () => registry.unbindSession(
-      actor.ref,
-      100n,
-      binding.sessionRid,
-      binding.sessionOwnerNodeRid
-    ),
+    () => registry.unbindSession(actor.ref, 100n, binding.sessionRid, binding.sessionOwnerNodeRid),
     ServiceStaleGenerationError
   );
   assert.equal(registry.binding(actor.ref)?.sessionOwnerNodeGeneration, 4n);
@@ -4021,7 +4225,7 @@ test('Spot and Actor turns serialize per owner while independent owners progress
   const registry = new ServiceStatefulRegistry('node-a', 1n);
   const events: string[] = [];
   let releaseFirst!: () => void;
-  const firstBarrier = new Promise<void>(resolve => {
+  const firstBarrier = new Promise<void>((resolve) => {
     releaseFirst = resolve;
   });
   const first = registry.runTurn('spot:a', async () => {
@@ -4078,13 +4282,13 @@ test('durable sender owns deadline settlement while the registry retains identit
   assert.equal(operations.isPending(pending.id), true);
   assert.equal(registry.size, 1);
   const exhausted = new Error('sender classified exhaustion');
-  const rejected = assert.rejects(pending.promise, error => error === exhausted);
+  const rejected = assert.rejects(pending.promise, (error) => error === exhausted);
   assert.equal(operations.fail(pending.id, exhausted), true);
   assert.equal(operations.reply(pending.id, 'late'), false);
   assert.equal(operations.fail(pending.id, exhausted), false);
   await rejected;
   assert.equal(operations.fail(concurrentlyRegistered.id, exhausted), true);
-  await assert.rejects(concurrentlyRegistered.promise, error => error === exhausted);
+  await assert.rejects(concurrentlyRegistered.promise, (error) => error === exhausted);
   assert.equal(registry.size, 0);
 
   const cancelled = operations.register(10, 'sender');
@@ -4129,10 +4333,9 @@ test('bound session transition wire format fences the binding generation', async
 });
 
 test('boundSessionReplaced command 51 matches its golden and malformed fixtures', async () => {
-  const fixture = JSON.parse(readFileSync(
-    '../../runtime/protocol/golden/bound-session-replaced-v1.json',
-    'utf8'
-  )) as {
+  const fixture = JSON.parse(
+    readFileSync('../../runtime/protocol/golden/bound-session-replaced-v1.json', 'utf8')
+  ) as {
     readonly canonical: {
       readonly bytes: readonly number[];
     };
@@ -4171,34 +4374,41 @@ test('bound-session replacement is one-way, does not retry admission, and fences
   const rejectSendOnce = new Set<string>();
   const rejectRequestOnce = new Set<string>();
   const holdBindingControlOnce = new Set<string>();
-  const nodes = new Map<string, {
-    ingress?: (record: RawServiceIngressRecord) => unknown;
-    readonly mailbox: Array<{
-      readonly stateful?: {
-        reply(terminalResult: number, failureCode: number): boolean;
-      };
-    }>;
-  }>();
+  const nodes = new Map<
+    string,
+    {
+      ingress?: (record: RawServiceIngressRecord) => unknown;
+      readonly mailbox: Array<{
+        readonly stateful?: {
+          reply(terminalResult: number, failureCode: number): boolean;
+        };
+      }>;
+    }
+  >();
   const createRaw = (nodeRid: string): RawServiceMeshRuntime => {
-    const state = { mailbox: [] as Array<{
-      readonly stateful?: {
-        reply(terminalResult: number, failureCode: number): boolean;
-      };
-    }>, ingress: undefined as ((record: RawServiceIngressRecord) => unknown) | undefined };
+    const state = {
+      mailbox: [] as Array<{
+        readonly stateful?: {
+          reply(terminalResult: number, failureCode: number): boolean;
+        };
+      }>,
+      ingress: undefined as ((record: RawServiceIngressRecord) => unknown) | undefined
+    };
     nodes.set(nodeRid, state);
     return {
       topology: {
-        peer: (targetNodeRid: string) => nodes.has(targetNodeRid)
-          ? { descriptor: { lifecycleGeneration: 3n } }
-          : undefined
+        peer: (targetNodeRid: string) =>
+          nodes.has(targetNodeRid) ? { descriptor: { lifecycleGeneration: 3n } } : undefined
       },
       mailbox: {
         tryEnqueue(record: unknown) {
-          state.mailbox.push(record as typeof state.mailbox[number]);
+          state.mailbox.push(record as (typeof state.mailbox)[number]);
           return true;
         }
       },
-      observePeerConnectionIntentRemoved() { return () => {}; },
+      observePeerConnectionIntentRemoved() {
+        return () => {};
+      },
       setServiceIngress(handler: (record: RawServiceIngressRecord) => unknown) {
         state.ingress = (record) => handler!(withIngressOwner(record));
       },
@@ -4307,7 +4517,7 @@ test('bound-session replacement is one-way, does not retry admission, and fences
       /Rejected test request/
     );
     assert.deepEqual(
-      oldSessionRuntime.sessionBindings('old-rid').map(binding => binding.bindingGeneration),
+      oldSessionRuntime.sessionBindings('old-rid').map((binding) => binding.bindingGeneration),
       [oldBindingGeneration]
     );
     assert.equal(oldSessionRuntime.sessionBindings('failed-rid').length, 0);
@@ -4323,16 +4533,18 @@ test('bound-session replacement is one-way, does not retry admission, and fences
     assert.equal(newBind.terminalResult, RequestResult.Ok);
 
     // The replacement is current before the old owner receives any notice.
-    const actorRegistry = (actorRuntime as unknown as {
-      readonly registry: ServiceStatefulRegistry;
-    }).registry;
+    const actorRegistry = (
+      actorRuntime as unknown as {
+        readonly registry: ServiceStatefulRegistry;
+      }
+    ).registry;
     assert.equal(actorRegistry.binding(actor)?.sessionRid, 'new-rid');
     assert.equal(actorRegistry.binding(actor)?.sessionOwnerNodeRid, 'session-new');
     assert.deepEqual(replacementNotices, []);
 
     const oldBinding = oldSessionRuntime.sessionBindings('old-rid')[0]!;
     assert.equal(oldSessionRuntime.sessionBindings('old-rid').length, 1);
-    await new Promise(resolve => setTimeout(resolve, 80));
+    await new Promise((resolve) => setTimeout(resolve, 80));
     assert.deepEqual(replacementNotices, []);
 
     // A delayed one-way notice is still accepted once. No framework retry
@@ -4354,17 +4566,22 @@ test('bound-session replacement is one-way, does not retry admission, and fences
       }
     );
     const oldIngress = nodes.get('session-old')!.ingress!;
-    assert.equal(await oldIngress({
-      command: M6bServiceWireCommand.boundSessionReplaced,
-      flags: 0,
-      sourceRoutingId: 'actor-node',
-      parts: [replacementHeader]
-    }), 'infrastructure');
-    assert.deepEqual(replacementNotices, [{
-      actorId: actor.actorId,
-      sessionRid: 'old-rid',
-      bindingGeneration: oldBinding.bindingGeneration
-    }]);
+    assert.equal(
+      await oldIngress({
+        command: M6bServiceWireCommand.boundSessionReplaced,
+        flags: 0,
+        sourceRoutingId: 'actor-node',
+        parts: [replacementHeader]
+      }),
+      'infrastructure'
+    );
+    assert.deepEqual(replacementNotices, [
+      {
+        actorId: actor.actorId,
+        sessionRid: 'old-rid',
+        bindingGeneration: oldBinding.bindingGeneration
+      }
+    ]);
 
     const lateReplies: Buffer[][] = [];
     const lateHeader = encodeBoundSessionBindHeader(
@@ -4384,9 +4601,12 @@ test('bound-session replacement is one-way, does not retry admission, and fences
       flags: 0,
       sourceRoutingId: 'session-old',
       parts: [lateHeader],
-      resolveReply: parts => lateReplies.push([...parts])
+      resolveReply: (parts) => lateReplies.push([...parts])
     } as TestIngress);
-    assert.equal(decodeStatefulReply(lateReplies[0]![0]!, 97n, 'streamUnbind').terminalResult, RequestResult.Ok);
+    assert.equal(
+      decodeStatefulReply(lateReplies[0]![0]!, 97n, 'streamUnbind').terminalResult,
+      RequestResult.Ok
+    );
     assert.equal(actorRegistry.binding(actor)?.sessionRid, 'new-rid');
   } finally {
     newSessionRuntime.close();
@@ -4404,8 +4624,12 @@ test('mailbox saturation reports dropped actor binding control records', async (
       peer: () => ({ descriptor: { lifecycleGeneration: 3n } })
     },
     mailbox: { tryEnqueue: () => false },
-    observePeerConnectionIntentRemoved() { return () => {}; },
-    setServiceIngress(handler: typeof ingress) { ingress = (record) => handler!(withIngressOwner(record)); },
+    observePeerConnectionIntentRemoved() {
+      return () => {};
+    },
+    setServiceIngress(handler: typeof ingress) {
+      ingress = (record) => handler!(withIngressOwner(record));
+    },
     replyService(_record: RawServiceIngressRecord, parts: readonly Buffer[]) {
       replies.push([...parts]);
     }
@@ -4425,13 +4649,16 @@ test('mailbox saturation reports dropped actor binding control records', async (
     { state: 'active', generation: 9n }
   );
 
-  assert.equal(await ingress?.({
-    command: M6bServiceWireCommand.boundSessionBind,
-    flags: 0,
-    sourceRoutingId: 'session-node',
-    requestSequence: 7n,
-    parts: [header]
-  }), 'infrastructure');
+  assert.equal(
+    await ingress?.({
+      command: M6bServiceWireCommand.boundSessionBind,
+      flags: 0,
+      sourceRoutingId: 'session-node',
+      requestSequence: 7n,
+      parts: [header]
+    }),
+    'infrastructure'
+  );
   assert.deepEqual(dropped, [{ kind: 'actor_binding', owner: actor.ref.actorId }]);
   assert.equal(replies.length, 1);
   runtime.close();
@@ -4452,11 +4679,13 @@ test('active session bind replies only after the Actor binding control turn', as
     },
     mailbox: {
       tryEnqueue(record: unknown) {
-        mailbox.push(record as typeof mailbox[number]);
+        mailbox.push(record as (typeof mailbox)[number]);
         return true;
       }
     },
-    observePeerConnectionIntentRemoved() { return () => {}; },
+    observePeerConnectionIntentRemoved() {
+      return () => {};
+    },
     setServiceIngress(handler: typeof ingress) {
       ingress = (record) => handler!(withIngressOwner(record));
     },
@@ -4489,20 +4718,26 @@ test('active session bind replies only after the Actor binding control turn', as
     { state: 'active', generation: 12n }
   );
 
-  assert.equal(await ingress?.({
-    command: M6bServiceWireCommand.boundSessionBind,
-    flags: 0,
-    sourceRoutingId: 'session-node',
-    requestSequence: 8n,
-    parts: [header]
-  }), 'infrastructure');
-  assert.equal(await ingress?.({
-    command: M6bServiceWireCommand.boundSessionBind,
-    flags: 0,
-    sourceRoutingId: 'session-node',
-    requestSequence: 9n,
-    parts: [duplicateHeader]
-  }), 'infrastructure');
+  assert.equal(
+    await ingress?.({
+      command: M6bServiceWireCommand.boundSessionBind,
+      flags: 0,
+      sourceRoutingId: 'session-node',
+      requestSequence: 8n,
+      parts: [header]
+    }),
+    'infrastructure'
+  );
+  assert.equal(
+    await ingress?.({
+      command: M6bServiceWireCommand.boundSessionBind,
+      flags: 0,
+      sourceRoutingId: 'session-node',
+      requestSequence: 9n,
+      parts: [duplicateHeader]
+    }),
+    'infrastructure'
+  );
   assert.equal(replies.length, 0);
   assert.equal(runtime.registry.binding(actor.ref), undefined);
   assert.equal(mailbox.length, 2);
@@ -4535,9 +4770,7 @@ test('active session bind replies only after the Actor binding control turn', as
   assert.equal(duplicateReply.terminalResult, RequestResult.Ok);
   assert.equal(duplicateReply.tail?.kind, 'streamBind');
   assert.equal(
-    duplicateReply.tail?.kind === 'streamBind'
-      ? duplicateReply.tail.bindingGeneration
-      : undefined,
+    duplicateReply.tail?.kind === 'streamBind' ? duplicateReply.tail.bindingGeneration : undefined,
     11n
   );
 
@@ -4552,14 +4785,17 @@ test('active session bind replies only after the Actor binding control turn', as
     'session-linearized',
     { state: 'tombstone', retiredGeneration: 11n }
   );
-  assert.equal(await ingress?.({
-    command: M6bServiceWireCommand.boundSessionBind,
-    flags: 0,
-    sourceRoutingId: 'session-node',
-    sourceNodeGeneration: 3n,
-    requestSequence: 10n,
-    parts: [tombstoneHeader]
-  }), 'infrastructure');
+  assert.equal(
+    await ingress?.({
+      command: M6bServiceWireCommand.boundSessionBind,
+      flags: 0,
+      sourceRoutingId: 'session-node',
+      sourceNodeGeneration: 3n,
+      requestSequence: 10n,
+      parts: [tombstoneHeader]
+    }),
+    'infrastructure'
+  );
   assert.equal(replies.length, 2);
   assert.equal(runtime.registry.binding(actor.ref)?.bindingGeneration, 11n);
   assert.deepEqual(mailbox[0]!.stateful?.kindData, {
@@ -4595,7 +4831,9 @@ test('concurrent remote bind completions publish the newest Session-owner genera
       peer: () => ({ descriptor: { lifecycleGeneration: 3n } })
     },
     mailbox: { tryEnqueue: () => true },
-    observePeerConnectionIntentRemoved() { return () => {}; },
+    observePeerConnectionIntentRemoved() {
+      return () => {};
+    },
     setServiceIngress() {},
     requestService(_targetNodeRid: string, parts: readonly Buffer[]) {
       const header = decodeStatefulHeader(parts[0]!);
@@ -4626,24 +4864,32 @@ test('concurrent remote bind completions publish the newest Session-owner genera
     assert.equal(requests.length, 2);
     assert.equal(runtime.allSessionBindings().length, 0);
 
-    requests[0]!.resolve([encodeStatefulReply(
-      requests[0]!.correlation,
-      RequestResult.Ok,
-      0,
-      { kind: 'streamBind', bindingGeneration: 1n, authorityOwnerGeneration }
-    )]);
+    requests[0]!.resolve([
+      encodeStatefulReply(requests[0]!.correlation, RequestResult.Ok, 0, {
+        kind: 'streamBind',
+        bindingGeneration: 1n,
+        authorityOwnerGeneration
+      })
+    ]);
     assert.equal((await first).terminalResult, RequestResult.Ok);
-    assert.deepEqual(runtime.sessionBindings('session-a').map(value => value.bindingGeneration), [1n]);
+    assert.deepEqual(
+      runtime.sessionBindings('session-a').map((value) => value.bindingGeneration),
+      [1n]
+    );
 
-    requests[1]!.resolve([encodeStatefulReply(
-      requests[1]!.correlation,
-      RequestResult.Ok,
-      0,
-      { kind: 'streamBind', bindingGeneration: 2n, authorityOwnerGeneration }
-    )]);
+    requests[1]!.resolve([
+      encodeStatefulReply(requests[1]!.correlation, RequestResult.Ok, 0, {
+        kind: 'streamBind',
+        bindingGeneration: 2n,
+        authorityOwnerGeneration
+      })
+    ]);
     assert.equal((await second).terminalResult, RequestResult.Ok);
     assert.equal(runtime.sessionBindings('session-a').length, 0);
-    assert.deepEqual(runtime.sessionBindings('session-b').map(value => value.bindingGeneration), [2n]);
+    assert.deepEqual(
+      runtime.sessionBindings('session-b').map((value) => value.bindingGeneration),
+      [2n]
+    );
   } finally {
     runtime.close();
   }
@@ -4657,7 +4903,9 @@ test('remote Session bind publishes its exact Location fence for the first Actor
       peer: () => ({ descriptor: { lifecycleGeneration: 3n } })
     },
     mailbox: { tryEnqueue: () => true },
-    observePeerConnectionIntentRemoved() { return () => {}; },
+    observePeerConnectionIntentRemoved() {
+      return () => {};
+    },
     setServiceIngress() {},
     requestService(_targetNodeRid: string, parts: readonly Buffer[]) {
       const header = decodeStatefulHeader(parts[0]!);
@@ -4665,16 +4913,13 @@ test('remote Session bind publishes its exact Location fence for the first Actor
         throw new Error(`Unexpected request kind '${header.kind}'.`);
       }
       bindHeaders.push(header);
-      return Promise.resolve([encodeStatefulReply(
-        header.correlation,
-        RequestResult.Ok,
-        0,
-        {
+      return Promise.resolve([
+        encodeStatefulReply(header.correlation, RequestResult.Ok, 0, {
           kind: 'streamBind',
           bindingGeneration: 1n,
           authorityOwnerGeneration: 9n
-        }
-      )]);
+        })
+      ]);
     },
     async sendService(_targetNodeRid: string, parts: readonly Buffer[]) {
       relayHeaders.push(decodeStatefulHeader(parts[0]!));
@@ -4716,11 +4961,14 @@ test('remote Session bind publishes its exact Location fence for the first Actor
       assert.deepEqual(bindHeader.actor, { actor, ...exactAuthority });
     }
 
-    assert.equal(await runtime.sendSessionToActor('session', actor, {
-      packetName: 'JoinWorldReq',
-      contentType: 'application/json',
-      payload: Buffer.from('{}')
-    }), SubmitResult.Ok);
+    assert.equal(
+      await runtime.sendSessionToActor('session', actor, {
+        packetName: 'JoinWorldReq',
+        contentType: 'application/json',
+        payload: Buffer.from('{}')
+      }),
+      SubmitResult.Ok
+    );
     assert.equal(relayHeaders.length, 1);
     const relayHeader = relayHeaders[0]!;
     assert.equal(relayHeader.kind, 'actorSend');
@@ -4812,7 +5060,9 @@ test('authority reconciliation exact-reads complete scans and publishes only Rea
 test('live Instance route fences reject an older reconcile snapshot', async () => {
   const raw = {
     topology: { peer: () => undefined },
-    observePeerConnectionIntentRemoved() { return () => {}; },
+    observePeerConnectionIntentRemoved() {
+      return () => {};
+    },
     setServiceIngress() {},
     sendService: () => true
   } as unknown as RawServiceMeshRuntime;
@@ -4851,12 +5101,16 @@ test('live Instance route fences reject an older reconcile snapshot', async () =
   runtime.registerInstanceIntent('TenantWorker', routeV2, routeV1);
   runtime.rememberSpotRoute(directV2, directV1);
 
-  const intents = (runtime as unknown as {
-    readonly instanceIntents: Map<string, { readonly route: ServiceInstanceRouteFence }>;
-  }).instanceIntents;
-  const directRoutes = (runtime as unknown as {
-    readonly directSpotRoutes: Map<string, { readonly storeVersion: string }>;
-  }).directSpotRoutes;
+  const intents = (
+    runtime as unknown as {
+      readonly instanceIntents: Map<string, { readonly route: ServiceInstanceRouteFence }>;
+    }
+  ).instanceIntents;
+  const directRoutes = (
+    runtime as unknown as {
+      readonly directSpotRoutes: Map<string, { readonly storeVersion: string }>;
+    }
+  ).directSpotRoutes;
   assert.equal(intents.get(routeV1.targetSpotId)?.route.storeVersion, 'store-v2');
   assert.equal(directRoutes.get(routeV1.targetSpotId)?.storeVersion, 'store-v2');
   runtime.close();
@@ -4873,10 +5127,7 @@ test('authority reconciliation refuses startup when the recovery scan expires', 
     reportError: () => undefined
   });
 
-  await assert.rejects(
-    runtime.start(),
-    /initial authority recovery scan expired/
-  );
+  await assert.rejects(runtime.start(), /initial authority recovery scan expired/);
 });
 
 test('authority reconciliation restores the durable Instance inbox before startup returns', async () => {
@@ -4937,12 +5188,7 @@ test('authority reconciliation restores the durable Instance inbox before startu
   assert.equal(node.recovered[0]!.envelope.target.targetSpotId, 'tenant:recover');
   assert.equal(node.recovered[0]!.route.storeVersion, 'store-recovery');
 
-  const staleDescriptorNode = new RecordingAuthorityNode(
-    'mesh-a',
-    'node-a',
-    undefined,
-    2n
-  );
+  const staleDescriptorNode = new RecordingAuthorityNode('mesh-a', 'node-a', undefined, 2n);
   const staleDescriptorRuntime = new ZLinkStatefulAuthorityRouteRuntime({
     store: new ReconcileAuthorityStore([['row:tenant:recover', snapshot]]),
     relocationStore: {
@@ -4951,9 +5197,7 @@ test('authority reconciliation restores the durable Instance inbox before startu
       renew: async () => missingRenewal(),
       delete: async () => assert.fail('The authority adapter owns root deletion.')
     },
-    meshNodes: new Map([
-      ['mesh-a', staleDescriptorNode as unknown as ZLinkBackendMeshNode]
-    ]),
+    meshNodes: new Map([['mesh-a', staleDescriptorNode as unknown as ZLinkBackendMeshNode]]),
     pollingIntervalMs: 60_000,
     pageSize: 10,
     reportError: () => undefined
@@ -4988,9 +5232,7 @@ test('authority reconciliation exact-reads Ready Instance activation recovery ca
     authorityOwnerGeneration: 4n,
     state: 'ready'
   });
-  const store = new ReconcileAuthorityStore([
-    ['row:tenant:stale-ready', exactSnapshot]
-  ]);
+  const store = new ReconcileAuthorityStore([['row:tenant:stale-ready', exactSnapshot]]);
   store.scanOverrides.set('row:tenant:stale-ready', scanSnapshot);
   const node = new RecordingAuthorityNode('mesh-a', 'node-a');
   const runtime = new ZLinkStatefulAuthorityRouteRuntime({
@@ -5074,14 +5316,8 @@ test('authority reconciliation resumes an exact Pending Instance reservation', a
   await runtime.reconcile(undefined, true);
   assert.deepEqual(store.readKeys, ['row:tenant:pending']);
   assert.equal(node.recoveredPending.length, 1);
-  assert.equal(
-    node.recoveredPending[0]!.pending.reservationId,
-    'reservation-pending'
-  );
-  assert.equal(
-    node.recoveredPending[0]!.envelope.target.targetSpotId,
-    'tenant:pending'
-  );
+  assert.equal(node.recoveredPending[0]!.pending.reservationId, 'reservation-pending');
+  assert.equal(node.recoveredPending[0]!.envelope.target.targetSpotId, 'tenant:pending');
 });
 
 test('production Instance authority adapter writes schema ColdActivating then Ready payloads', async () => {
@@ -5114,9 +5350,7 @@ test('production Instance authority adapter writes schema ColdActivating then Re
         storeNow: now
       };
     },
-    read: async () => storedRequest === undefined
-      ? missingBlob()
-      : foundBlob(storedRequest),
+    read: async () => (storedRequest === undefined ? missingBlob() : foundBlob(storedRequest)),
     renew: async () => missingRenewal(),
     delete: async () => {
       throw new Error('simulated orphan cleanup failure');
@@ -5164,10 +5398,7 @@ test('production Instance authority adapter writes schema ColdActivating then Re
   });
   assert.ok(storedRequest !== undefined);
   assert.equal(recordedRequestReference, requestReference?.value);
-  assert.equal(
-    decodeInstanceActivationRecoveryEnvelope(storedRequest!).targetMeshName,
-    'mesh-a'
-  );
+  assert.equal(decodeInstanceActivationRecoveryEnvelope(storedRequest!).targetMeshName, 'mesh-a');
 
   let readyCallbackRoute: ServiceInstanceRouteFence | undefined;
   let commitPromiseResolved = false;
@@ -5201,16 +5432,12 @@ test('production Instance authority adapter writes schema ColdActivating then Re
     requestEncodedSize: projection.requestEncodedSize
   });
   assert.deepEqual(resumed, reserved.reservation);
-  const commitPromise = resumedAuthority.commit(
-    target,
-    resumed,
-    {
-      kind: 'instance',
-      stableType: 'TenantWorker',
-      ref: { spotId: 'tenant:42', generation: reserved.reservation.attempt },
-      authorityOwnerGeneration: creating.authorityOwnerGeneration
-    } as never
-  );
+  const commitPromise = resumedAuthority.commit(target, resumed, {
+    kind: 'instance',
+    stableType: 'TenantWorker',
+    ref: { spotId: 'tenant:42', generation: reserved.reservation.attempt },
+    authorityOwnerGeneration: creating.authorityOwnerGeneration
+  } as never);
   void commitPromise.then(() => {
     commitPromiseResolved = true;
   });
@@ -5243,16 +5470,13 @@ test('production Instance authority adapter writes schema ColdActivating then Re
   if (terminalRecorded.kind !== 'snapshot') {
     throw new Error('Terminal completion authority is missing.');
   }
-  assert.deepEqual(
-    decodeServiceReadySpotAuthority(terminalRecorded.payload)?.activationRecovery,
-    {
-      reference: requestReference?.value,
-      sha256: createHash('sha256').update(storedRequest!).digest(),
-      encodedSize: storedRequest!.byteLength,
-      inboxSequence: 1n,
-      replayCursor: 1n
-    }
-  );
+  assert.deepEqual(decodeServiceReadySpotAuthority(terminalRecorded.payload)?.activationRecovery, {
+    reference: requestReference?.value,
+    sha256: createHash('sha256').update(storedRequest!).digest(),
+    encodedSize: storedRequest!.byteLength,
+    inboxSequence: 1n,
+    replayCursor: 1n
+  });
   assert.ok(storedRequest !== undefined);
 
   // A restarted authority observes the durable cursor and performs only the
@@ -5276,9 +5500,7 @@ test('production Instance authority adapter writes schema ColdActivating then Re
   const recoveryRuntime = new ZLinkStatefulAuthorityRouteRuntime({
     store,
     relocationStore,
-    meshNodes: new Map([
-      ['mesh-a', recoveryNode as unknown as ZLinkBackendMeshNode]
-    ]),
+    meshNodes: new Map([['mesh-a', recoveryNode as unknown as ZLinkBackendMeshNode]]),
     pollingIntervalMs: 60_000,
     pageSize: 10,
     reportError: (error) => {
@@ -5320,9 +5542,7 @@ test('production Instance Ready commit Store rejection is exposed as RequestFail
     },
     read: async (reference) => {
       const payload = requestPayloads.get(reference.value);
-      return payload === undefined
-        ? missingBlob()
-        : foundBlob(payload);
+      return payload === undefined ? missingBlob() : foundBlob(payload);
     },
     renew: async () => missingRenewal(),
     delete: async (reference) => {
@@ -5367,18 +5587,20 @@ test('production Instance Ready commit Store rejection is exposed as RequestFail
     throw commitFault;
   };
   await assert.rejects(
-    () => authority.commit(target, reserved.reservation, {
-      kind: 'instance',
-      stableType: target.stableType,
-      ref: {
-        spotId: target.targetSpotId,
-        generation: reserved.reservation.attempt
-      },
-      authorityOwnerGeneration: creating.authorityOwnerGeneration
-    } as never),
-    (error: unknown) => error instanceof ZLinkFrameworkException
-      && error.kind === ZLinkFrameworkErrorKind.InternalFailure
-      && error.cause === commitFault
+    () =>
+      authority.commit(target, reserved.reservation, {
+        kind: 'instance',
+        stableType: target.stableType,
+        ref: {
+          spotId: target.targetSpotId,
+          generation: reserved.reservation.attempt
+        },
+        authorityOwnerGeneration: creating.authorityOwnerGeneration
+      } as never),
+    (error: unknown) =>
+      error instanceof ZLinkFrameworkException &&
+      error.kind === ZLinkFrameworkErrorKind.InternalFailure &&
+      error.cause === commitFault
   );
 });
 
@@ -5398,9 +5620,7 @@ test('concurrent Instance activation CAS loser joins Ready and returns the winne
     },
     read: async (reference) => {
       const payload = roots.get(reference.value);
-      return payload === undefined
-        ? missingBlob()
-        : foundBlob(payload);
+      return payload === undefined ? missingBlob() : foundBlob(payload);
     },
     renew: async () => missingRenewal(),
     delete: async () => {
@@ -5455,25 +5675,21 @@ test('concurrent Instance activation CAS loser joins Ready and returns the winne
     ...activation,
     target: loserTarget
   });
-  await new Promise<void>(resolve => setImmediate(resolve));
+  await new Promise<void>((resolve) => setImmediate(resolve));
   const creating = await store.readAuthority(
     encodeAuthorityKey('instance_spot', winnerTarget.targetSpotId)
   );
   assert.equal(creating.kind, 'snapshot');
   if (creating.kind !== 'snapshot') throw new Error('Winner reservation is missing.');
-  const committed = await winnerAuthority.commit(
-    winnerTarget,
-    winner.reservation,
-    {
-      kind: 'instance',
-      stableType: winnerTarget.stableType,
-      ref: {
-        spotId: winnerTarget.targetSpotId,
-        generation: winner.reservation.attempt
-      },
-      authorityOwnerGeneration: creating.authorityOwnerGeneration
-    } as never
-  );
+  const committed = await winnerAuthority.commit(winnerTarget, winner.reservation, {
+    kind: 'instance',
+    stableType: winnerTarget.stableType,
+    ref: {
+      spotId: winnerTarget.targetSpotId,
+      generation: winner.reservation.attempt
+    },
+    authorityOwnerGeneration: creating.authorityOwnerGeneration
+  } as never);
   assert.equal(committed.kind, 'committed');
 
   const joined = await loser;
@@ -5483,8 +5699,8 @@ test('concurrent Instance activation CAS loser joins Ready and returns the winne
   assert.equal(joined.route.targetNodeGeneration, winnerTarget.targetNodeGeneration);
   assert.equal(joined.route.storeVersion, committed.route.storeVersion);
   assert.ok(
-    new ServiceInstanceActivationRedirectError(joined.route)
-      instanceof ServiceInstanceActivationRedirectError
+    new ServiceInstanceActivationRedirectError(joined.route) instanceof
+      ServiceInstanceActivationRedirectError
   );
   assert.equal(roots.size, 2);
 });
@@ -5511,47 +5727,44 @@ test('raw backend dispatches Spot requests and Actor sends through M6B owners', 
     storeVersion: 'store-v1'
   };
   const authorityRoutes = new ZLinkStatefulAuthorityRouteRuntime({
-    store: singleAuthorityStore(
-      'canonical-authority:tenant:42',
-      {
-        kind: 'snapshot',
-        storeVersion: { value: instanceRoute.storeVersion } as ZLinkAuthoritySnapshot['storeVersion'],
-        payload: encodeServiceInstanceAuthorityPayload({
-          state: 'ready',
-          stableType: 'TenantWorker',
-          spotId: instanceRoute.targetSpotId,
-          ownerId: instanceRoute.ownerId,
-          ownerLeaseGeneration: instanceRoute.leaseGeneration,
-          ownerMeshName: 'm6b-mesh',
-          ownerNodeRid: instanceRoute.targetNodeRid,
-          ownerNodeGeneration: instanceRoute.targetNodeGeneration
-        }),
-        objectGeneration: instanceRoute.objectGeneration,
-        authorityOwnerGeneration: instanceRoute.authorityOwnerGeneration,
+    store: singleAuthorityStore('canonical-authority:tenant:42', {
+      kind: 'snapshot',
+      storeVersion: { value: instanceRoute.storeVersion } as ZLinkAuthoritySnapshot['storeVersion'],
+      payload: encodeServiceInstanceAuthorityPayload({
+        state: 'ready',
+        stableType: 'TenantWorker',
+        spotId: instanceRoute.targetSpotId,
         ownerId: instanceRoute.ownerId,
         ownerLeaseGeneration: instanceRoute.leaseGeneration,
-        allocation: {
-          state: 'active',
-          objectKind: 'instance_spot',
-          stableType: 'TenantWorker',
-          descriptor: {
-            meshName: 'm6b-mesh',
-            rid: instanceRoute.targetNodeRid
-          },
-          descriptorLifecycleGeneration: instanceRoute.targetNodeGeneration,
-          capacity: {
-            actors: 0,
-            spots: 1,
-            spotType: {
-              objectKind: 'instance_spot',
-              stableType: 'TenantWorker',
-              count: 1
-            }
-          }
+        ownerMeshName: 'm6b-mesh',
+        ownerNodeRid: instanceRoute.targetNodeRid,
+        ownerNodeGeneration: instanceRoute.targetNodeGeneration
+      }),
+      objectGeneration: instanceRoute.objectGeneration,
+      authorityOwnerGeneration: instanceRoute.authorityOwnerGeneration,
+      ownerId: instanceRoute.ownerId,
+      ownerLeaseGeneration: instanceRoute.leaseGeneration,
+      allocation: {
+        state: 'active',
+        objectKind: 'instance_spot',
+        stableType: 'TenantWorker',
+        descriptor: {
+          meshName: 'm6b-mesh',
+          rid: instanceRoute.targetNodeRid
         },
-        storeNow: new Date()
-      }
-    ),
+        descriptorLifecycleGeneration: instanceRoute.targetNodeGeneration,
+        capacity: {
+          actors: 0,
+          spots: 1,
+          spotType: {
+            objectKind: 'instance_spot',
+            stableType: 'TenantWorker',
+            count: 1
+          }
+        }
+      },
+      storeNow: new Date()
+    }),
     meshNodes: new Map([['m6b-mesh', backend]]),
     pollingIntervalMs: 60_000,
     pageSize: 100,
@@ -5625,7 +5838,9 @@ test('raw backend dispatches Spot requests and Actor sends through M6B owners', 
       backpressured: false,
       disconnectCount: 0
     };
-    const sessionService = backend.createStreamSessionService(createFakeStream(delivered, streamState));
+    const sessionService = backend.createStreamSessionService(
+      createFakeStream(delivered, streamState)
+    );
     sessionService.start();
     const bindOperation = sessionService.bindActor('session-a', actor, 2_000);
     const bindCompletion = await drainOne(backend, ReadyDomain.Infrastructure);
@@ -5647,31 +5862,36 @@ test('raw backend dispatches Spot requests and Actor sends through M6B owners', 
       ),
       SubmitResult.Ok
     );
-    assert.deepEqual(delivered.map(value => value.toString()), ['session-message']);
+    assert.deepEqual(
+      delivered.map((value) => value.toString()),
+      ['session-message']
+    );
 
     // The binding async terminal owns the exact WRITABLE wait and resubmit.
     streamState.backpressured = true;
     let pendingSettled = false;
-    const pendingSend = backend.sendActorBoundSession(
-      actor,
-      binding.bindingGeneration,
-      Buffer.from('backpressured-session-message'),
-      undefined,
-      actorFence
-    ).finally(() => {
-      pendingSettled = true;
-    });
-    await new Promise<void>(resolve => setImmediate(resolve));
+    const pendingSend = backend
+      .sendActorBoundSession(
+        actor,
+        binding.bindingGeneration,
+        Buffer.from('backpressured-session-message'),
+        undefined,
+        actorFence
+      )
+      .finally(() => {
+        pendingSettled = true;
+      });
+    await new Promise<void>((resolve) => setImmediate(resolve));
     assert.equal(pendingSettled, false);
-    assert.deepEqual(delivered.map(value => value.toString()), ['session-message']);
+    assert.deepEqual(
+      delivered.map((value) => value.toString()),
+      ['session-message']
+    );
     streamState.backpressured = false;
     streamState.releaseWritable?.();
-    assert.equal(
-      await pendingSend,
-      SubmitResult.Ok
-    );
+    assert.equal(await pendingSend, SubmitResult.Ok);
     assert.deepEqual(
-      delivered.map(value => value.toString()),
+      delivered.map((value) => value.toString()),
       ['session-message', 'backpressured-session-message']
     );
 
@@ -5698,12 +5918,8 @@ test('raw backend dispatches Spot requests and Actor sends through M6B owners', 
       SubmitResult.Ok
     );
     assert.deepEqual(
-      delivered.map(value => value.toString()),
-      [
-        'session-message',
-        'backpressured-session-message',
-        'resumed-session-message'
-      ]
+      delivered.map((value) => value.toString()),
+      ['session-message', 'backpressured-session-message', 'resumed-session-message']
     );
 
     // Each typed close terminal requests the existing monitor-driven lifecycle.
@@ -5737,7 +5953,7 @@ test('raw backend dispatches Spot requests and Actor sends through M6B owners', 
         undefined,
         actorFence
       ),
-      error => error === unknownDeliveryError
+      (error) => error === unknownDeliveryError
     );
     assert.equal(streamState.disconnectCount, 3);
     assert.equal(
@@ -5851,30 +6067,32 @@ test('public SpotId call reaches production host Missing Instance placement with
     },
     meshNames: () => ['mesh'],
     meshNode: () => node,
-    completions: () => ({
-      async submit(operation: () => { readonly high: bigint; readonly low: bigint }) {
-        operation();
-        return {
-          terminalResult: 0,
-          failureErrno: 0,
-          operationKind: 39,
-          kindData: null,
-          parts: encodeChannelReplyParts({
-            formatMarker: 0xf2,
-            kind: ZLinkChannelMessageKind.Request,
-            channelName: 'mesh',
-            messageName: 'Ping',
-            contentType: 'application/json',
-            correlationId: '1',
-            deadline: null,
-            topic: null,
-            metadata: {}
-          }, 'ready-reply').map(part =>
-            part instanceof Message ? part : toBindingMessage(part)
-          )
-        };
-      }
-    }) as never,
+    completions: () =>
+      ({
+        async submit(operation: () => { readonly high: bigint; readonly low: bigint }) {
+          operation();
+          return {
+            terminalResult: 0,
+            failureErrno: 0,
+            operationKind: 39,
+            kindData: null,
+            parts: encodeChannelReplyParts(
+              {
+                formatMarker: 0xf2,
+                kind: ZLinkChannelMessageKind.Request,
+                channelName: 'mesh',
+                messageName: 'Ping',
+                contentType: 'application/json',
+                correlationId: '1',
+                deadline: null,
+                topic: null,
+                metadata: {}
+              },
+              'ready-reply'
+            ).map((part) => (part instanceof Message ? part : toBindingMessage(part)))
+          };
+        }
+      }) as never,
     defaultRequestTimeoutMs: 5_000
   });
   const outbound = new DefaultZLinkSpotOutbound({
@@ -5886,7 +6104,8 @@ test('public SpotId call reaches production host Missing Instance placement with
   class Notice {
     readonly text = 'hello';
   }
-  await outbound.sendToSpot('instance-42', new Notice())
+  await outbound
+    .sendToSpot('instance-42', new Notice())
     .metadata('trace', 'abc')
     .instanceSpot('chat-room')
     .inMesh('mesh')
@@ -5903,11 +6122,13 @@ test('public SpotId call reaches production host Missing Instance placement with
   assert.equal(submissions[0]?.metadata?.get('trace'), 'abc');
   assert.ok((submissions[0]?.deadline ?? 0n) > BigInt(Date.now()));
 
-  await outbound.sendToSpot('instance-absent-metadata', new Notice())
+  await outbound
+    .sendToSpot('instance-absent-metadata', new Notice())
     .instanceSpot('chat-room')
     .inMesh('mesh')
     .submit();
-  await outbound.sendToSpot('instance-empty-metadata', new Notice())
+  await outbound
+    .sendToSpot('instance-empty-metadata', new Notice())
     .metadata(ZLinkMessageMetadataEmpty)
     .instanceSpot('chat-room')
     .inMesh('mesh')
@@ -5916,7 +6137,8 @@ test('public SpotId call reaches production host Missing Instance placement with
   assert.equal(submissions[2]?.metadata?.size, 0);
 
   class Ping {}
-  const reply = await outbound.requestToSpot('instance-43', new Ping())
+  const reply = await outbound
+    .requestToSpot('instance-43', new Ping())
     .instanceSpot('chat-room')
     .inMesh('mesh')
     .timeout(250)
@@ -5946,14 +6168,15 @@ test('Missing Instance distinguishes unsupported types from exhausted placement 
       },
       meshNames: () => ['mesh'],
       isMeshConfigured: () => true,
-      meshNode: () => ({
-            instanceSpotPlacementTypes() {
-              return mode === 'zeroTypes' ? [] : ['room'];
-            },
-            selectObjectPlacement() {
-              return { kind: 'capacity' };
-            }
-          } as never),
+      meshNode: () =>
+        ({
+          instanceSpotPlacementTypes() {
+            return mode === 'zeroTypes' ? [] : ['room'];
+          },
+          selectObjectPlacement() {
+            return { kind: 'capacity' };
+          }
+        }) as never,
       completions: () => undefined,
       defaultRequestTimeoutMs: 100
     });
@@ -5963,25 +6186,27 @@ test('Missing Instance distinguishes unsupported types from exhausted placement 
       metadata: new Map<string, string>()
     };
     if (mode === 'zeroTypes') {
-      assert.deepEqual(
-        await address.sendToSpotAddress('missing-room', { hello: true }, call),
-        { status: ZLinkSubmitStatus.TargetNotFound }
-      );
+      assert.deepEqual(await address.sendToSpotAddress('missing-room', { hello: true }, call), {
+        status: ZLinkSubmitStatus.TargetNotFound
+      });
       await assert.rejects(
         () => address.requestToSpotAddress('missing-room', { hello: true }, call),
-        (error: unknown) => error instanceof ZLinkFrameworkException
-          && error.kind === ZLinkFrameworkErrorKind.NotFound
+        (error: unknown) =>
+          error instanceof ZLinkFrameworkException &&
+          error.kind === ZLinkFrameworkErrorKind.NotFound
       );
     } else {
       await assert.rejects(
         () => address.sendToSpotAddress('missing-room', { hello: true }, call),
-        (error: unknown) => error instanceof ZLinkFrameworkException
-          && error.kind === ZLinkFrameworkErrorKind.Unavailable
+        (error: unknown) =>
+          error instanceof ZLinkFrameworkException &&
+          error.kind === ZLinkFrameworkErrorKind.Unavailable
       );
       await assert.rejects(
         () => address.requestToSpotAddress('missing-room', { hello: true }, call),
-        (error: unknown) => error instanceof ZLinkFrameworkException
-          && error.kind === ZLinkFrameworkErrorKind.Unavailable
+        (error: unknown) =>
+          error instanceof ZLinkFrameworkException &&
+          error.kind === ZLinkFrameworkErrorKind.Unavailable
       );
     }
   }
@@ -6023,43 +6248,46 @@ test('Missing Instance placement capacity fails without polling or retaining a c
     },
     meshNames: () => ['mesh'],
     meshNode: () => node,
-    completions: () => ({
-      async submit(operation: () => { readonly high: bigint; readonly low: bigint }) {
-        operation();
-        return {
-          terminalResult: 0,
-          failureErrno: 0,
-          operationKind: 39,
-          kindData: null,
-          parts: encodeChannelReplyParts({
-            formatMarker: 0xf2,
-            kind: ZLinkChannelMessageKind.Request,
-            channelName: 'mesh',
-            messageName: 'Ping',
-            contentType: 'application/json',
-            correlationId: '1',
-            deadline: null,
-            topic: null,
-            metadata: {}
-          }, 'delayed-reply').map(part =>
-            part instanceof Message ? part : toBindingMessage(part)
-          )
-        };
-      }
-    }) as never,
+    completions: () =>
+      ({
+        async submit(operation: () => { readonly high: bigint; readonly low: bigint }) {
+          operation();
+          return {
+            terminalResult: 0,
+            failureErrno: 0,
+            operationKind: 39,
+            kindData: null,
+            parts: encodeChannelReplyParts(
+              {
+                formatMarker: 0xf2,
+                kind: ZLinkChannelMessageKind.Request,
+                channelName: 'mesh',
+                messageName: 'Ping',
+                contentType: 'application/json',
+                correlationId: '1',
+                deadline: null,
+                topic: null,
+                metadata: {}
+              },
+              'delayed-reply'
+            ).map((part) => (part instanceof Message ? part : toBindingMessage(part)))
+          };
+        }
+      }) as never,
     defaultRequestTimeoutMs: 200
   });
 
   class DelayedPing {}
   await assert.rejects(
-    () => address.requestToSpotAddress('delayed-room', new DelayedPing(), {
-      instanceSpot: true,
-      instanceSpotType: 'chat-room',
-      initialMeshName: 'mesh',
-      timeoutMs: 200
-    }),
-    (error: unknown) => error instanceof ZLinkFrameworkException
-      && error.kind === ZLinkFrameworkErrorKind.Unavailable
+    () =>
+      address.requestToSpotAddress('delayed-room', new DelayedPing(), {
+        instanceSpot: true,
+        instanceSpotType: 'chat-room',
+        initialMeshName: 'mesh',
+        timeoutMs: 200
+      }),
+    (error: unknown) =>
+      error instanceof ZLinkFrameworkException && error.kind === ZLinkFrameworkErrorKind.Unavailable
   );
   assert.equal(selectionAttempts, 1);
 });
@@ -6104,35 +6332,33 @@ test('Missing Instance request preserves target-not-found terminal results', asy
     },
     meshNames: () => ['mesh'],
     meshNode: () => node,
-    completions: () => ({
-      async submit(operation: () => { readonly high: bigint; readonly low: bigint }) {
-        operation();
-        return {
-          terminalResult: RequestResult.NotFound,
-          failureErrno: 21,
-          operationKind: 39,
-          kindData: null,
-          parts: []
-        };
-      }
-    }) as never,
+    completions: () =>
+      ({
+        async submit(operation: () => { readonly high: bigint; readonly low: bigint }) {
+          operation();
+          return {
+            terminalResult: RequestResult.NotFound,
+            failureErrno: 21,
+            operationKind: 39,
+            kindData: null,
+            parts: []
+          };
+        }
+      }) as never,
     defaultRequestTimeoutMs: 200
   });
   class MissingPing {}
 
   await assert.rejects(
-    () => address.requestToSpotAddress(
-      'missing-room',
-      new MissingPing(),
-      {
+    () =>
+      address.requestToSpotAddress('missing-room', new MissingPing(), {
         instanceSpot: true,
         instanceSpotType: 'chat-room',
         initialMeshName: 'mesh',
         timeoutMs: 200
-      }
-    ),
-    (error: unknown) => error instanceof ZLinkFrameworkException
-      && error.kind === ZLinkFrameworkErrorKind.NotFound
+      }),
+    (error: unknown) =>
+      error instanceof ZLinkFrameworkException && error.kind === ZLinkFrameworkErrorKind.NotFound
   );
   assert.equal(requests, 1);
 });
@@ -6183,17 +6409,18 @@ test('Ready Instance request ends on a disconnected stale route without resubmis
     defaultRequestTimeoutMs: 100
   });
   await assert.rejects(
-    () => address.requestToSpotAddress(
-      'instance-42',
-      { hello: true },
-      {
-        instanceSpot: true,
-        instanceSpotType: 'chat-room',
-        initialMeshName: 'mesh'
-      }
-    ),
-    (error: unknown) => error instanceof ZLinkFrameworkException
-      && error.kind === ZLinkFrameworkErrorKind.Unavailable
+    () =>
+      address.requestToSpotAddress(
+        'instance-42',
+        { hello: true },
+        {
+          instanceSpot: true,
+          instanceSpotType: 'chat-room',
+          initialMeshName: 'mesh'
+        }
+      ),
+    (error: unknown) =>
+      error instanceof ZLinkFrameworkException && error.kind === ZLinkFrameworkErrorKind.Unavailable
   );
   assert.equal(attempts, 1);
   // The positive route is reused until a specified invalidation event or
@@ -6245,9 +6472,11 @@ test('Instance target-not-found refreshes a Missing authority into one cold acti
         }
       };
     },
-    requestToMissingInstanceSpot(
-      target: { readonly targetNodeRid: string; readonly targetSpotId: string; readonly stableType: string }
-    ) {
+    requestToMissingInstanceSpot(target: {
+      readonly targetNodeRid: string;
+      readonly targetSpotId: string;
+      readonly stableType: string;
+    }) {
       missingAttempts += 1;
       assert.deepEqual(target, {
         targetNodeRid: 'node-b',
@@ -6275,43 +6504,41 @@ test('Instance target-not-found refreshes a Missing authority into one cold acti
     },
     meshNames: () => ['mesh'],
     meshNode: () => node,
-    completions: () => ({
-      async submit(operation: () => { readonly high: bigint; readonly low: bigint }) {
-        operation();
-        return {
-          terminalResult: RequestResult.Ok,
-          failureErrno: 0,
-          operationKind: 39,
-          kindData: null,
-          parts: encodeChannelReplyParts({
-            formatMarker: 0xf2,
-            kind: ZLinkChannelMessageKind.Request,
-            channelName: 'mesh',
-            messageName: 'Lookup',
-            contentType: 'application/json',
-            correlationId: '1',
-            deadline: null,
-            topic: null,
-            metadata: {}
-          }, 'reactivated').map(part =>
-            part instanceof Message ? part : toBindingMessage(part)
-          )
-        };
-      }
-    }) as never,
+    completions: () =>
+      ({
+        async submit(operation: () => { readonly high: bigint; readonly low: bigint }) {
+          operation();
+          return {
+            terminalResult: RequestResult.Ok,
+            failureErrno: 0,
+            operationKind: 39,
+            kindData: null,
+            parts: encodeChannelReplyParts(
+              {
+                formatMarker: 0xf2,
+                kind: ZLinkChannelMessageKind.Request,
+                channelName: 'mesh',
+                messageName: 'Lookup',
+                contentType: 'application/json',
+                correlationId: '1',
+                deadline: null,
+                topic: null,
+                metadata: {}
+              },
+              'reactivated'
+            ).map((part) => (part instanceof Message ? part : toBindingMessage(part)))
+          };
+        }
+      }) as never,
     defaultRequestTimeoutMs: 1_000
   });
 
   class Lookup {}
-  const reply = await address.requestToSpotAddress(
-    'instance-42',
-    new Lookup(),
-    {
-      instanceSpot: true,
-      instanceSpotType: 'chat-room',
-      initialMeshName: 'mesh'
-    }
-  );
+  const reply = await address.requestToSpotAddress('instance-42', new Lookup(), {
+    instanceSpot: true,
+    instanceSpotType: 'chat-room',
+    initialMeshName: 'mesh'
+  });
 
   assert.equal(reply, 'reactivated');
   assert.equal(directAttempts, 1);
@@ -6358,9 +6585,13 @@ test('accepted Instance one-way admission keeps the positive route cache', async
   });
 
   assert.deepEqual(
-    await address.sendToSpotAddress('instance-42', { close: true }, {
-      instanceSpot: false
-    }),
+    await address.sendToSpotAddress(
+      'instance-42',
+      { close: true },
+      {
+        instanceSpot: false
+      }
+    ),
     { status: ZLinkSubmitStatus.Submitted }
   );
   assert.equal(invalidations, 0);
@@ -6405,9 +6636,13 @@ test('successful Instance request keeps the positive route cache', async () => {
   });
 
   assert.equal(
-    await address.requestToSpotAddress('instance-42', { probe: true }, {
-      instanceSpot: false
-    }),
+    await address.requestToSpotAddress(
+      'instance-42',
+      { probe: true },
+      {
+        instanceSpot: false
+      }
+    ),
     'reply'
   );
   assert.equal(invalidations, 0);
@@ -6451,9 +6686,13 @@ test('Instance one-way admission invalidates a route rejected by the target', as
   });
 
   assert.deepEqual(
-    await address.sendToSpotAddress('instance-42', { close: true }, {
-      instanceSpot: false
-    }),
+    await address.sendToSpotAddress(
+      'instance-42',
+      { close: true },
+      {
+        instanceSpot: false
+      }
+    ),
     { status: ZLinkSubmitStatus.RouteNotConnected }
   );
   assert.equal(invalidations, 1);
@@ -6469,25 +6708,32 @@ test('Object Server role includes Object Client calling capability', async () =>
 test('Ready one-way Spot send forwards application metadata through runtime route transport', async () => {
   const metadata = new Map([['trace', 'ready-send']]);
   let observed: ReadonlyMap<string, string> | undefined;
-  const transport = new ZLinkRuntimeRouteTransport(() => ({
-    async routeSendToSpot(
-      _target: unknown,
-      _packet: unknown,
-      _message: unknown,
-      _signal: unknown,
-      forwarded: ReadonlyMap<string, string> | undefined
-    ) {
-      observed = forwarded;
-    }
-  } as never));
-  const result = await transport.sendToSpot({
-    routerChannelId: 'mesh',
-    targetNodeRid: 'node-a',
-    spotId: 'ready-room',
-    spotKind: 2 as never,
-    stableType: 'room',
-    targetSpotGeneration: 9n
-  }, { hello: true }, { metadata });
+  const transport = new ZLinkRuntimeRouteTransport(
+    () =>
+      ({
+        async routeSendToSpot(
+          _target: unknown,
+          _packet: unknown,
+          _message: unknown,
+          _signal: unknown,
+          forwarded: ReadonlyMap<string, string> | undefined
+        ) {
+          observed = forwarded;
+        }
+      }) as never
+  );
+  const result = await transport.sendToSpot(
+    {
+      routerChannelId: 'mesh',
+      targetNodeRid: 'node-a',
+      spotId: 'ready-room',
+      spotKind: 2 as never,
+      stableType: 'room',
+      targetSpotGeneration: 9n
+    },
+    { hello: true },
+    { metadata }
+  );
   assert.equal(result.status, ZLinkSubmitStatus.Submitted);
   assert.equal(observed, metadata);
   assert.equal(observed?.get('trace'), 'ready-send');
@@ -6539,41 +6785,49 @@ test('Ready Instance routes use command 39 with the complete authority fence', a
       throw new Error('Ready Instance traffic must not use the generic Spot route.');
     }
   } as unknown as ZLinkBackendMeshNode;
-  const completionParts = encodeChannelReplyParts({
-    formatMarker: 0xf2,
-    kind: ZLinkChannelMessageKind.Request,
-    channelName: 'mesh',
-    messageName: 'Ping',
-    contentType: 'application/json',
-    correlationId: '1',
-    deadline: null,
-    topic: null,
-    metadata: {}
-  }, 'instance-reply').map(part => part instanceof Message ? part : toBindingMessage(part));
+  const completionParts = encodeChannelReplyParts(
+    {
+      formatMarker: 0xf2,
+      kind: ZLinkChannelMessageKind.Request,
+      channelName: 'mesh',
+      messageName: 'Ping',
+      contentType: 'application/json',
+      correlationId: '1',
+      deadline: null,
+      topic: null,
+      metadata: {}
+    },
+    'instance-reply'
+  ).map((part) => (part instanceof Message ? part : toBindingMessage(part)));
   const transport = new ZLinkRuntimeRouteTransport(
     () => undefined,
     undefined,
     () => ({
       meshNode: () => node,
-      meshCompletionTable: () => ({
-        async submit(operation: () => { readonly high: bigint; readonly low: bigint }) {
-          operation();
-          return {
-            terminalResult: 0,
-            failureErrno: 0,
-            operationKind: 39,
-            kindData: null,
-            parts: completionParts
-          };
-        }
-      }) as never
+      meshCompletionTable: () =>
+        ({
+          async submit(operation: () => { readonly high: bigint; readonly low: bigint }) {
+            operation();
+            return {
+              terminalResult: 0,
+              failureErrno: 0,
+              operationKind: 39,
+              kindData: null,
+              parts: completionParts
+            };
+          }
+        }) as never
     })
   );
 
-  const sendResult = await transport.sendToSpot(target, { hello: true }, {
-    packetName: 'Ping',
-    metadata
-  });
+  const sendResult = await transport.sendToSpot(
+    target,
+    { hello: true },
+    {
+      packetName: 'Ping',
+      metadata
+    }
+  );
   assert.equal(sendResult.status, ZLinkSubmitStatus.Submitted);
   assert.deepEqual(sentRoute, {
     targetNodeRid: 'node-b',
@@ -6587,10 +6841,14 @@ test('Ready Instance routes use command 39 with the complete authority fence', a
   });
   assert.equal(sentMetadata, metadata);
 
-  const reply = await transport.requestToSpot<string>(target, { hello: true }, {
-    packetName: 'Ping',
-    metadata
-  });
+  const reply = await transport.requestToSpot<string>(
+    target,
+    { hello: true },
+    {
+      packetName: 'Ping',
+      metadata
+    }
+  );
   assert.equal(reply, 'instance-reply');
   assert.deepEqual(requestedRoute, sentRoute);
   assert.equal(requestedMetadata, metadata);
@@ -6611,7 +6869,11 @@ test('stateful request failure codes preserve typed Instance route errors', asyn
     authorityStoreVersion: 'store-v9'
   } as const;
   for (const [failureCode, expectedKind, expectedPublicKind] of [
-    [33, ZLinkFrameworkInternalErrorKind.SpotGenerationStale, ZLinkFrameworkErrorKind.InvalidOperation],
+    [
+      33,
+      ZLinkFrameworkInternalErrorKind.SpotGenerationStale,
+      ZLinkFrameworkErrorKind.InvalidOperation
+    ],
     [34, ZLinkFrameworkInternalErrorKind.SpotMoving, ZLinkFrameworkErrorKind.Unavailable]
   ] as const) {
     const node = {
@@ -6627,26 +6889,28 @@ test('stateful request failure codes preserve typed Instance route errors', asyn
       undefined,
       () => ({
         meshNode: () => node,
-        meshCompletionTable: () => ({
-          async submit(operation: () => { readonly high: bigint; readonly low: bigint }) {
-            operation();
-            return {
-              terminalResult: RequestResult.Conflict,
-              failureErrno: failureCode,
-              operationKind: 39,
-              kindData: null,
-              parts: []
-            };
-          }
-        }) as never
+        meshCompletionTable: () =>
+          ({
+            async submit(operation: () => { readonly high: bigint; readonly low: bigint }) {
+              operation();
+              return {
+                terminalResult: RequestResult.Conflict,
+                failureErrno: failureCode,
+                operationKind: 39,
+                kindData: null,
+                parts: []
+              };
+            }
+          }) as never
       })
     );
 
     await assert.rejects(
       () => transport.requestToSpot(target, { ping: true }, { packetName: 'Ping' }),
-      (error: unknown) => error instanceof ZLinkFrameworkException
-        && internalFrameworkErrorKind(error) === expectedKind
-        && error.kind === expectedPublicKind
+      (error: unknown) =>
+        error instanceof ZLinkFrameworkException &&
+        internalFrameworkErrorKind(error) === expectedKind &&
+        error.kind === expectedPublicKind
     );
   }
 });
@@ -6669,9 +6933,8 @@ function readyInstanceIngressHarness(
   const replies: Array<readonly Buffer[]> = [];
   const raw = {
     topology: {
-      peer: (nodeRid: string) => nodeRid === 'source'
-        ? { descriptor: { lifecycleGeneration: 7n } }
-        : undefined
+      peer: (nodeRid: string) =>
+        nodeRid === 'source' ? { descriptor: { lifecycleGeneration: 7n } } : undefined
     },
     mailbox: {
       tryEnqueue: (record: unknown) => {
@@ -6679,7 +6942,9 @@ function readyInstanceIngressHarness(
         return true;
       }
     },
-    observePeerConnectionIntentRemoved() { return () => {}; },
+    observePeerConnectionIntentRemoved() {
+      return () => {};
+    },
     setServiceIngress: (handler: typeof ingressHandler) => {
       ingressHandler = (record) => handler!(withIngressOwner(record));
     },
@@ -6700,7 +6965,7 @@ function readyInstanceIngressHarness(
   }
   return {
     runtime,
-    ingress: record => {
+    ingress: (record) => {
       if (ingressHandler === undefined) throw new Error('Stateful ingress was not registered.');
       return ingressHandler(record);
     },
@@ -6760,10 +7025,7 @@ function toBindingMessage(part: ZLinkBackendMessageLike): Message {
   return Message.from(Buffer.from(part.data()));
 }
 
-async function drainOne(
-  backend: ZLinkNodeRawMeshBackend,
-  domain: number
-): Promise<ReceiveRecord> {
+async function drainOne(backend: ZLinkNodeRawMeshBackend, domain: number): Promise<ReceiveRecord> {
   let ready = backend.createReadyBatch(4);
   await pollUntil(() => {
     ready.close();
@@ -6785,7 +7047,7 @@ async function pollUntil(condition: () => boolean): Promise<void> {
   const deadline = Date.now() + 2_000;
   while (Date.now() < deadline) {
     if (condition()) return;
-    await new Promise(resolve => setTimeout(resolve, 1));
+    await new Promise((resolve) => setTimeout(resolve, 1));
   }
   throw new Error('Timed out waiting for M6B runtime progress.');
 }
@@ -6820,7 +7082,7 @@ function createFakeStream(
         throw new SubmitError(SubmitResult.NotConnected);
       }
       if (state.backpressured) {
-        await new Promise<void>(resolve => writableWaiters.push(resolve));
+        await new Promise<void>((resolve) => writableWaiters.push(resolve));
       }
       if (state.disconnected) {
         throw new SubmitError(SubmitResult.NotConnected);
@@ -6849,24 +7111,21 @@ function createFakeStream(
   };
 }
 
-function singleAuthorityStore(
-  key: string,
-  snapshot: ZLinkAuthoritySnapshot
-): ZLinkAuthorityStore {
+function singleAuthorityStore(key: string, snapshot: ZLinkAuthoritySnapshot): ZLinkAuthorityStore {
   const authorityKey = { value: key } as Parameters<ZLinkAuthorityStore['readAuthority']>[0];
   return {
     async readAuthority(requested: typeof authorityKey) {
-      return requested.value === key
-        ? snapshot
-        : { kind: 'missing', storeNow: new Date() };
+      return requested.value === key ? snapshot : { kind: 'missing', storeNow: new Date() };
     },
     async listAuthorities() {
       return {
         kind: 'page',
-        items: [{
-          key: authorityKey,
-          snapshot
-        }]
+        items: [
+          {
+            key: authorityKey,
+            snapshot
+          }
+        ]
       };
     }
   } as unknown as ZLinkAuthorityStore;
@@ -6930,9 +7189,7 @@ function instanceAuthoritySnapshot(options: {
         }
       }
     },
-    ...(options.pendingCreation === undefined
-      ? {}
-      : { pendingCreation: options.pendingCreation }),
+    ...(options.pendingCreation === undefined ? {} : { pendingCreation: options.pendingCreation }),
     storeNow: new Date()
   };
 }
@@ -6948,14 +7205,14 @@ class ReconcileAuthorityStore implements ZLinkAuthorityStore {
   }
 
   replace(key: string, snapshot: ZLinkAuthoritySnapshot): void {
-    const row = this.rows.find(entry => entry[0] === key);
+    const row = this.rows.find((entry) => entry[0] === key);
     if (row === undefined) throw new Error(`Missing authority row '${key}'.`);
     row[1] = snapshot;
   }
 
   async readAuthority(key: ZLinkAuthorityKey) {
     this.readKeys.push(key.value);
-    const snapshot = this.rows.find(entry => entry[0] === key.value)?.[1];
+    const snapshot = this.rows.find((entry) => entry[0] === key.value)?.[1];
     return snapshot ?? { kind: 'missing' as const, storeNow: new Date() };
   }
 
@@ -6963,43 +7220,32 @@ class ReconcileAuthorityStore implements ZLinkAuthorityStore {
     throw new Error('Not used by the reconciliation test.');
   }
 
-  async listAuthorities(
-    _prefix: string,
-    cursor: ZLinkAuthorityScanCursor | undefined
-  ) {
+  async listAuthorities(_prefix: string, cursor: ZLinkAuthorityScanCursor | undefined) {
     if (this.scanExpired) return { kind: 'scanExpired' as const };
     const index = cursor === undefined ? 0 : 1;
     const row = this.rows[index];
     if (row === undefined) return { kind: 'page' as const, items: [] };
     return {
       kind: 'page' as const,
-      items: [{
-        key: { value: row[0] } as ZLinkAuthorityKey,
-        snapshot: this.scanOverrides.get(row[0]) ?? row[1]
-      }],
-      ...(index === 0
-        ? { nextCursor: ZLinkAuthorityScanCursor.from('page-2') }
-        : {})
+      items: [
+        {
+          key: { value: row[0] } as ZLinkAuthorityKey,
+          snapshot: this.scanOverrides.get(row[0]) ?? row[1]
+        }
+      ],
+      ...(index === 0 ? { nextCursor: ZLinkAuthorityScanCursor.from('page-2') } : {})
     };
   }
 }
 
 class RecordingAuthorityNode {
   readonly recovered: Array<{
-    readonly envelope: Parameters<
-      ZLinkNodeRawMeshBackend['recoverInstanceActivation']
-    >[0];
-    readonly route: Parameters<
-      ZLinkNodeRawMeshBackend['recoverInstanceActivation']
-    >[1];
+    readonly envelope: Parameters<ZLinkNodeRawMeshBackend['recoverInstanceActivation']>[0];
+    readonly route: Parameters<ZLinkNodeRawMeshBackend['recoverInstanceActivation']>[1];
   }> = [];
   readonly recoveredPending: Array<{
-    readonly envelope: Parameters<
-      ZLinkNodeRawMeshBackend['recoverPendingInstanceActivation']
-    >[0];
-    readonly pending: Parameters<
-      ZLinkNodeRawMeshBackend['recoverPendingInstanceActivation']
-    >[1];
+    readonly envelope: Parameters<ZLinkNodeRawMeshBackend['recoverPendingInstanceActivation']>[0];
+    readonly pending: Parameters<ZLinkNodeRawMeshBackend['recoverPendingInstanceActivation']>[1];
   }> = [];
   readonly remembered: Array<{
     readonly route: Parameters<ZLinkNodeRawMeshBackend['rememberSpotRoute']>[0];
@@ -7025,12 +7271,8 @@ class RecordingAuthorityNode {
     private readonly meshName: string,
     private readonly nodeRid: string,
     private readonly completeRecovery: (
-      target: Parameters<
-        ZLinkNodeRawMeshBackend['completeRecoveredInstanceActivation']
-      >[0],
-      route: Parameters<
-        ZLinkNodeRawMeshBackend['completeRecoveredInstanceActivation']
-      >[1]
+      target: Parameters<ZLinkNodeRawMeshBackend['completeRecoveredInstanceActivation']>[0],
+      route: Parameters<ZLinkNodeRawMeshBackend['completeRecoveredInstanceActivation']>[1]
     ) => Promise<ServiceInstanceRouteFence> = async (_target, route) => route,
     private readonly descriptorRevision = 1n
   ) {}
@@ -7081,12 +7323,8 @@ class RecordingAuthorityNode {
   }
 
   async completeRecoveredInstanceActivation(
-    target: Parameters<
-      ZLinkNodeRawMeshBackend['completeRecoveredInstanceActivation']
-    >[0],
-    route: Parameters<
-      ZLinkNodeRawMeshBackend['completeRecoveredInstanceActivation']
-    >[1]
+    target: Parameters<ZLinkNodeRawMeshBackend['completeRecoveredInstanceActivation']>[0],
+    route: Parameters<ZLinkNodeRawMeshBackend['completeRecoveredInstanceActivation']>[1]
   ): Promise<ServiceInstanceRouteFence> {
     return await this.completeRecovery(target, route);
   }
@@ -7097,7 +7335,12 @@ class RecordingAuthorityNode {
     authorityOwnerGeneration: bigint,
     storeVersion: string
   ): void {
-    this.forgottenIntents.push({ spotId, objectGeneration, authorityOwnerGeneration, storeVersion });
+    this.forgottenIntents.push({
+      spotId,
+      objectGeneration,
+      authorityOwnerGeneration,
+      storeVersion
+    });
   }
 }
 

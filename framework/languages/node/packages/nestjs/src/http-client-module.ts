@@ -1,5 +1,11 @@
 import { Module } from '@nestjs/common';
-import type { DynamicModule, InjectionToken, ModuleMetadata, OnModuleDestroy, Provider } from '@nestjs/common';
+import type {
+  DynamicModule,
+  InjectionToken,
+  ModuleMetadata,
+  OnModuleDestroy,
+  Provider
+} from '@nestjs/common';
 import { ModuleRef } from '@nestjs/core';
 import {
   ZLinkHttpClient,
@@ -52,16 +58,12 @@ export function zlinkHttpClientToken(name: string): InjectionToken {
 class ZLinkHttpClientRegistry implements OnModuleDestroy {
   private readonly clients = new Map<string, ZLinkServerHttpClient>();
 
-  constructor(
-    registrations: readonly ZLinkNamedHttpClientOptions[],
-    moduleRef: ModuleRef
-  ) {
+  constructor(registrations: readonly ZLinkNamedHttpClientOptions[], moduleRef: ModuleRef) {
     const runtime = new Proxy({} as ZLinkNestIntegrationRuntimeHost, {
       get: (_target, property) => {
-        const current = moduleRef.get<ZLinkNestIntegrationRuntimeHost>(
-          ZLINK_FRAMEWORK_RUNTIME,
-          { strict: false }
-        );
+        const current = moduleRef.get<ZLinkNestIntegrationRuntimeHost>(ZLINK_FRAMEWORK_RUNTIME, {
+          strict: false
+        });
         return Reflect.get(current as object, property);
       }
     });
@@ -70,7 +72,9 @@ class ZLinkHttpClientRegistry implements OnModuleDestroy {
       const name = registration.name.trim();
       zlinkHttpClientToken(name);
       if (this.clients.has(name)) {
-        throw new framework.ZLinkConfigurationException(`HTTP client '${name}' is already registered.`);
+        throw new framework.ZLinkConfigurationException(
+          `HTTP client '${name}' is already registered.`
+        );
       }
       const builder = ZLinkHttpClient.create(registration.baseUrl).executionScheduler(scheduler);
       registration.configure?.(builder);
@@ -99,8 +103,7 @@ export class ZLinkHttpClientModule {
     const registry: Provider = {
       provide: ZLINK_HTTP_CLIENT_REGISTRY,
       inject: [ModuleRef],
-      useFactory: (moduleRef: ModuleRef) =>
-        new ZLinkHttpClientRegistry(options.clients, moduleRef)
+      useFactory: (moduleRef: ModuleRef) => new ZLinkHttpClientRegistry(options.clients, moduleRef)
     };
     const clients: Provider[] = options.clients.map((registration) => ({
       provide: zlinkHttpClientToken(registration.name),
@@ -122,7 +125,9 @@ function validateRegistrations(registrations: readonly ZLinkNamedHttpClientOptio
     const name = registration.name.trim();
     zlinkHttpClientToken(name);
     if (names.has(name)) {
-      throw new framework.ZLinkConfigurationException(`HTTP client '${name}' is already registered.`);
+      throw new framework.ZLinkConfigurationException(
+        `HTTP client '${name}' is already registered.`
+      );
     }
     names.add(name);
   }
