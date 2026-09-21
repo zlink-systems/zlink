@@ -385,7 +385,7 @@ its **order.**
 === "C++"
 
     ```cpp
-auto status_sequence = co_await customer.wait_for_sequence<delivery_status_notify_t> ()
+    auto status_sequence = co_await customer.wait_for_sequence<delivery_status_notify_t> ()
                          .expect ([&] (const auto &m) {
                              return m.delivery_id == delivery_id
                                     && m.status == delivery_status_t::assigned;
@@ -404,7 +404,7 @@ auto status_sequence = co_await customer.wait_for_sequence<delivery_status_notif
                          })
                          .timeout (customer.options ().wait_timeout)
                          .async ();
-```
+    ```
 
 === "Java"
 
@@ -539,8 +539,8 @@ Reverse the order. Register the wait first, then run the action that triggers th
 === "C++"
 
     ```cpp
-// Register the wait first -- don't co_await it yet.
-auto status_sequence_task = customer.wait_for_sequence<delivery_status_notify_t> ()
+    // Register the wait first -- don't co_await it yet.
+    auto status_sequence_task = customer.wait_for_sequence<delivery_status_notify_t> ()
                               .expect ([&] (const auto &m) {
                                   return m.delivery_id == delivery_id
                                          && m.status == delivery_status_t::assigned;
@@ -548,15 +548,15 @@ auto status_sequence_task = customer.wait_for_sequence<delivery_status_notify_t>
                               .timeout (customer.options ().wait_timeout)
                               .async ();
 
-// Then run the action that triggers the push.
-auto created = http.post ("/deliveries")
+    // Then run the action that triggers the push.
+    auto created = http.post ("/deliveries")
                  .body (
                    create_delivery_req_t{delivery_id, "customer-1", "Kitchen 12", "Customer Lobby"})
                  .fetch<create_delivery_res_t> ();
 
-// Receive the result last.
-auto status_sequence = co_await std::move (status_sequence_task);
-```
+    // Receive the result last.
+    auto status_sequence = co_await std::move (status_sequence_task);
+    ```
 
 === "Java"
 

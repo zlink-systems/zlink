@@ -167,27 +167,6 @@ var statusSequence = await customer.WaitForSequence<DeliveryStatusNotify>()
     .Async(ct);
 ```
 
-auto status_sequence = co_await customer.wait_for_sequence<delivery_status_notify_t> ()
-                         .expect ([&] (const auto &m) {
-                             return m.delivery_id == delivery_id
-                                    && m.status == delivery_status_t::assigned;
-                         })
-                         .expect ([&] (const auto &m) {
-                             return m.delivery_id == delivery_id
-                                    && m.status == delivery_status_t::accepted;
-                         })
-                         .expect ([&] (const auto &m) {
-                             return m.delivery_id == delivery_id
-                                    && m.status == delivery_status_t::picked_up;
-                         })
-                         .expect ([&] (const auto &m) {
-                             return m.delivery_id == delivery_id
-                                    && m.status == delivery_status_t::delivered;
-                         })
-                         .timeout (customer.options ().wait_timeout)
-                         .async ();
-```
-
 ### Confirming a Request Fails
 
 Whether a request with no permission or an out-of-order request **gets rejected** is also
@@ -223,25 +202,6 @@ var created = await http.Post("/deliveries")
 
 // Receive the result last.
 var statusSequence = await statusSequenceTask;
-```
-
-// Register the wait first -- don't co_await it yet.
-auto status_sequence_task = customer.wait_for_sequence<delivery_status_notify_t> ()
-                              .expect ([&] (const auto &m) {
-                                  return m.delivery_id == delivery_id
-                                         && m.status == delivery_status_t::assigned;
-                              })
-                              .timeout (customer.options ().wait_timeout)
-                              .async ();
-
-// Then run the action that triggers the push.
-auto created = http.post ("/deliveries")
-                 .body (
-                   create_delivery_req_t{delivery_id, "customer-1", "Kitchen 12", "Customer Lobby"})
-                 .fetch<create_delivery_res_t> ();
-
-// Receive the result last.
-auto status_sequence = co_await std::move (status_sequence_task);
 ```
 
 If multiple clients need to confirm the same event, register a wait for each and receive

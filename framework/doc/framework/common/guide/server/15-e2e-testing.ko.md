@@ -373,7 +373,7 @@ push가 섞여 들어와도 시나리오가 영향을 받지 않는다.
 === "C++"
 
     ```cpp
-auto status_sequence = co_await customer.wait_for_sequence<delivery_status_notify_t> ()
+    auto status_sequence = co_await customer.wait_for_sequence<delivery_status_notify_t> ()
                          .expect ([&] (const auto &m) {
                              return m.delivery_id == delivery_id
                                     && m.status == delivery_status_t::assigned;
@@ -392,7 +392,7 @@ auto status_sequence = co_await customer.wait_for_sequence<delivery_status_notif
                          })
                          .timeout (customer.options ().wait_timeout)
                          .async ();
-```
+    ```
 
 === "Java"
 
@@ -527,8 +527,8 @@ E2E는 대부분 같은 원인으로 간헐 실패한다. **행동을 먼저 하
 === "C++"
 
     ```cpp
-// 대기를 먼저 등록한다 — 아직 co_await하지 않는다.
-auto status_sequence_task = customer.wait_for_sequence<delivery_status_notify_t> ()
+    // 대기를 먼저 등록한다 — 아직 co_await하지 않는다.
+    auto status_sequence_task = customer.wait_for_sequence<delivery_status_notify_t> ()
                               .expect ([&] (const auto &m) {
                                   return m.delivery_id == delivery_id
                                          && m.status == delivery_status_t::assigned;
@@ -536,15 +536,15 @@ auto status_sequence_task = customer.wait_for_sequence<delivery_status_notify_t>
                               .timeout (customer.options ().wait_timeout)
                               .async ();
 
-// 그다음에 push를 유발하는 행동을 실행한다.
-auto created = http.post ("/deliveries")
+    // 그다음에 push를 유발하는 행동을 실행한다.
+    auto created = http.post ("/deliveries")
                  .body (
                    create_delivery_req_t{delivery_id, "customer-1", "Kitchen 12", "Customer Lobby"})
                  .fetch<create_delivery_res_t> ();
 
-// 마지막에 결과를 받는다.
-auto status_sequence = co_await std::move (status_sequence_task);
-```
+    // 마지막에 결과를 받는다.
+    auto status_sequence = co_await std::move (status_sequence_task);
+    ```
 
 === "Java"
 
