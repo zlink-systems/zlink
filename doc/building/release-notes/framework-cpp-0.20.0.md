@@ -22,7 +22,7 @@ This is a pre-1.0 contract release. No migration procedure is provided for the e
 ## Common Changes
 
 - Added the service-wire lowering path that turns the schema into an operation IR and generates static C++, C#, Java and TypeScript codecs. The generated manifest, fixture catalog, validator and four-language conformance use the same schema. (#736, #780)
-- Prepared tutorials and samples to build and run from distribution zips without a repository. The C++ distribution flow no longer uses a Python proxy, and the release asset path attaches eight tutorial and sample zips for the four languages. (#655, #639, #673)
+- Prepared quickstart, tutorials and samples to build and run without a repository. The C++ distribution flow no longer uses a Python proxy. They are obtained with `git clone https://github.com/zlink-systems/zlink-cpp-examples` (tag `v0.20.0` matches this release); zip distribution is gone. (#655, #639, #673, #831)
 - Added the Instance Spot `MatchQueue` example to the four-language tutorials and aligned the C++, .NET, Java, Kotlin and Node/TypeScript snippet markers. (#666)
 - Reformatted tutorial and sample sources with each language's formatter and made `scripts/format/format.sh --check` the common entry point. (#761)
 - Fixed recursive TLS stream shutdown, a `task_t` continuation lost wakeup, and a coroutine-frame lifetime race, and completed the Windows MSVC full-build path. Instance Spot now closes after sending the current turn's reply, and an explicit Close followed by reuse of the same Spot ID creates a new generation. (#608, #635, #630, #746, #692, #697)

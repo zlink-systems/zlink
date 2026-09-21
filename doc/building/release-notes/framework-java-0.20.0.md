@@ -20,7 +20,7 @@ This is a pre-1.0 contract release. No migration procedure is provided for the e
 ## Common Changes
 
 - Added the service-wire lowering path that turns the schema into an operation IR and generates static C++, C#, Java and TypeScript codecs. The generated manifest, fixture catalog, validator and four-language conformance use the same schema. (#736, #780)
-- Prepared tutorials and samples to build and run from distribution zips without a repository. The release asset path attaches eight tutorial and sample zips for the four languages, including the Java and Kotlin tutorial and sample procedures. (#655, #639, #673)
+- Prepared quickstart, tutorials and samples to build and run without a repository. The Java and Kotlin tutorial and sample procedures are included. They are obtained with `git clone https://github.com/zlink-systems/zlink-java-examples` (tag `v0.20.0` matches this release); zip distribution is gone. (#655, #639, #673, #831)
 - Added the .NET-equivalent Instance Spot `MatchQueue` example to the Java, Kotlin and Node/TypeScript tutorials and aligned the four-language snippet markers. (#666)
 - Reformatted tutorial and sample sources with each language's formatter and made `scripts/format/format.sh --check` the common entry point. (#761)
 - Changed Java receive-queue draining from recursion to iteration so long runs of synchronous handlers do not overflow the stack. Added `closeReason()`, unnamed `expectNone()` and `waitForSequence()` to the Kotlin wrapper. The same-node Join barrier remains ahead of the Actor when the dispatch target changes. (#604, #600, #644)

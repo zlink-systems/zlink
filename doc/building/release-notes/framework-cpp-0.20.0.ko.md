@@ -22,7 +22,7 @@ Framework 0.20.0은 binding 1.2.1과 Core 1.2.0을 사용합니다. Framework �
 ## 공통 변경
 
 - service-wire schema를 operation IR로 낮추고 C++·C#·Java·TypeScript 정적 codec을 생성하는 경로를 추가했습니다. 생성 manifest, fixture catalog, validator와 네 언어 conformance가 같은 schema를 사용합니다. (#736, #780)
-- tutorial·samples를 저장소 없이 배포 zip에서 빌드·실행할 수 있도록 정리했습니다. C++ 배포 절차에서 Python proxy를 제거하고, 릴리스에 네 언어 tutorial·samples zip 8개를 첨부하는 자산 경로를 추가했습니다. (#655, #639, #673)
+- quickstart·tutorial·samples를 저장소 없이 빌드·실행할 수 있도록 정리했습니다. C++ 배포 절차에서 Python proxy를 제거했습니다. 받는 방법은 언어별 examples 저장소 `git clone https://github.com/zlink-systems/zlink-cpp-examples`이며(태그 `v0.20.0`이 이 릴리스와 같은 내용), zip 배포는 없앴습니다. (#655, #639, #673, #831)
 - 네 언어 tutorial에 Instance Spot `MatchQueue` 예제를 추가하고, C++·.NET·Java·Kotlin·Node/TypeScript의 snippet marker를 정렬했습니다. (#666)
 - tutorial·samples 소스를 언어별 포매터 출력에 맞추고 `scripts/format/format.sh --check`를 공통 진입점으로 정했습니다. (#761)
 - C++ TLS stream의 종료 경로 재귀, `task_t` continuation의 lost wakeup, coroutine frame 수명 경합을 수정하고 Windows MSVC 전체 빌드 경로를 정리했습니다. Instance Spot은 현재 turn의 reply 전송 뒤 close하고, explicit Close 뒤 같은 Spot ID는 새 generation으로 재사용됩니다. (#608, #635, #630, #746, #692, #697)
