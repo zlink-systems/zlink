@@ -222,7 +222,9 @@ public sealed partial class RegressionTests
         Assert.DoesNotContain("WaitingForSlot", runner, StringComparison.Ordinal);
         Assert.DoesNotContain("zone node allocation ready", runner, StringComparison.Ordinal);
         Assert.DoesNotContain("sleep 2", runner, StringComparison.Ordinal);
-        Assert.Contains("$0\" --g4-child ZW-G4", runner, StringComparison.Ordinal);
+        // The crash lane runs as a child of the same runner (#823): run_child re-executes $0.
+        Assert.Contains("run_child --g4-child ZW-G4", runner, StringComparison.Ordinal);
+        Assert.Contains("bash \"$0\" \"$@\" &", runner, StringComparison.Ordinal);
         Assert.Contains("if scenario_selected ZW-G3", runner, StringComparison.Ordinal);
         Assert.Contains("if scenario_selected ZW-G5", runner, StringComparison.Ordinal);
         Assert.Contains("config_name=\"$name-replacement\"", runner, StringComparison.Ordinal);
