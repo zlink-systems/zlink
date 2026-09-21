@@ -368,12 +368,12 @@ The declaration of the relocation payload that travels directly from source memo
 `$ref` at the sub-trees the runtime handles separately (application state, saved work, timers).
 `maximumBytes` is the logical bound and `goldenFixture` pins the bytes. `chunkSplit` states that a
 chunk may end at any byte boundary, including inside a frozen record. `replay` is the generated
-decoder's incremental contract, and the schema object owns its values: the decoder is fed the chunks
-in order and decodes without a copy of the complete encoded stream (`wholeStreamInputAllocation`),
-returns success only on the final chunk (`completion`), and ends with the failure kind named by
-`incompleteFinalChunk` when the root is unfinished at the final chunk or by `bytesAfterRoot` when
-bytes remain after the root. A one-shot decode of a whole stream equals feeding that machine a single
-final chunk. The chunk commands and checksum convention are owned by
+decoder's incremental contract, and the five fields of the `replay` object define these values: the
+decoder is fed the chunks in order and decodes without allocating an input buffer for the complete
+encoded stream (`wholeStreamInputAllocation`), returns success only on the final chunk
+(`completion`), and ends with the failure kind named by `incompleteFinalChunk` when the root is
+unfinished at the final chunk or by `bytesAfterRoot` when bytes remain after the root. The chunk
+commands, the checksum convention, and the procedure by which the target feeds chunks are owned by
 [06 §9](06-wire-protocol.en.md#9-maintenance-capture-and-relocation-envelope).
 
 ## 8. Semantic Declarations

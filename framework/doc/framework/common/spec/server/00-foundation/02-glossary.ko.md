@@ -1398,7 +1398,7 @@ connection과 chunk가 실은 identity가 같은지로만 판정한다.
 | 공개 구성 | `RelocationId`, target attempt, chunk 순번과 encoded 길이를 가진다. 조립 결과를 검증하는 전체 payload checksum은 chunk가 아니라 Restore 요청이 싣는다. |
 | 생성·관리 | Source runtime이 capture한 payload를 유효 chunk 크기 이하로 나눠 만든다. 유효 크기는 server 설정 `RelocationPayloadChunkLimit`(기본 256 KiB), target이 알린 유효 수신 chunk 상한과 유효 [in-flight payload 예산](#in-flight-payload-budget) 중 가장 작은 값이다. |
 | 전달 | Restore 요청 뒤 같은 ordered mesh connection으로 `[send]`한다. Application message에는 노출하지 않는다. |
-| 수명 | Core byte charge는 complete chunk message가 binding/Framework로 dequeue될 때 끝난다. Target은 chunk data를 조립 buffer로 복사한 뒤 입력 message buffer를 일반 Framework 소유권 규칙으로 정리한다. 순번 누락·중복, 이미 종료한 attempt의 chunk와 선언한 길이 초과는 조립에 넣지 않고 명시적 실패로 처리한다. |
+| 수명 | Core byte charge는 complete chunk message가 binding/Framework로 dequeue될 때 끝난다. Target은 chunk data를 조립([06 §9](../02-channel-transport/06-wire-protocol.ko.md#9-maintenance-capture와-relocation-envelope): 누적 CRC-32C와 incremental decoder)에 공급한 뒤 입력 message buffer를 일반 Framework 소유권 규칙으로 정리한다. 순번 누락·중복, 이미 종료한 attempt의 chunk와 선언한 길이 초과는 조립에 넣지 않고 명시적 실패로 처리한다. |
 | Application 권한 | Application은 chunk를 생성·해석·변경하지 않는다. |
 
 <a id="in-flight-payload-budget"></a>

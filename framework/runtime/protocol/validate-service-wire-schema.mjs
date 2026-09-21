@@ -169,6 +169,7 @@ function validateSchema(schema) {
   validateRelocationRetentionPolicy(schema.relocationRetentionPolicy, fail);
   validateRelocationStorageProfile(schema.relocationStorageProfile, fail);
   validateRelocationTransferChecksumProfile(schema.relocationTransferChecksumProfile, fail);
+  validateRelocationLogicalStreamReplay(schema.relocationLogicalStreamFormat, fail);
   validateFrameworkJsonV1Profile(schema.frameworkJsonV1Profile, fail);
   validateFrameworkMultipartV1Profile(schema.frameworkMultipartV1Profile, fail);
   validateMaintenanceAdmissionProfile(schema.maintenanceAdmissionProfile, fail);
@@ -6506,6 +6507,30 @@ function validateRelocationStorageProfile(profile, fail) {
   }
 }
 
+// The chunk-split and replay literals are the incremental-decoder contract the
+// generated logical-stream decoder implements (07 §7.2, 06 §9). The object is
+// closed: exactly these keys with exactly these values, so no renderer and no
+// spec sentence can carry a sixth rule.
+function validateRelocationLogicalStreamReplay(format, fail) {
+  const expected = {
+    chunkSplit: "any-byte-boundary-including-within-frozen-record",
+    replay: {
+      mode: "bounded-incremental-decode",
+      wholeStreamInputAllocation: "forbidden",
+      completion: "success-only-on-final-chunk",
+      incompleteFinalChunk: "truncation",
+      bytesAfterRoot: "trailing-bytes",
+    },
+  };
+  if (!isObject(format)
+      || format.chunkSplit !== expected.chunkSplit
+      || !isObject(format.replay)
+      || JSON.stringify(format.replay) !== JSON.stringify(expected.replay)) {
+    fail("$.relocationLogicalStreamFormat.replay",
+      "must be the closed incremental-decoder contract: chunkSplit literal and the five replay values");
+  }
+}
+
 function validateRelocationTransferChecksumProfile(profile, fail) {
   const expected = {
     algorithm: "crc-32c",
@@ -7439,6 +7464,18 @@ function runSelfTests(schema) {
     ["relocation Snapshot rejects empty bytes", (candidate) => {
       const state = candidate.types.find((type) => type.name === "durable-state-blob");
       state.minimumBytes = 1;
+    }],
+    ["logical stream replay drops the completion rule", (candidate) => {
+      delete candidate.relocationLogicalStreamFormat.replay.completion;
+    }],
+    ["logical stream replay carries an unowned key", (candidate) => {
+      candidate.relocationLogicalStreamFormat.replay.unowned = "value";
+    }],
+    ["logical stream replay allows a whole-stream buffer", (candidate) => {
+      candidate.relocationLogicalStreamFormat.replay.wholeStreamInputAllocation = "allowed";
+    }],
+    ["logical stream replay reverts to the old literal", (candidate) => {
+      candidate.relocationLogicalStreamFormat.replay = "bounded-incremental-decode-without-whole-stream-allocation";
     }],
     ["relocation participant state widens beyond 64 MiB", (candidate) => {
       const state = candidate.types.find((type) => type.name === "durable-state-blob");

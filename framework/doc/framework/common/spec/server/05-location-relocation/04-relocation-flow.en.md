@@ -193,8 +193,10 @@ before any state chunk arrives. A target without a temporary queue doesn't start
 or change the Location Store. A message arriving directly at the target during Restore
 enters the temporary queue and isn't delivered to an application handler.
 
-**The target immediately copies each arriving chunk into a Framework-owned assembly buffer.**
-This separates the lifetime of received-message storage from storage assembling the whole payload.
+**The target immediately feeds each arriving chunk to the assembly and releases the input message
+buffer.** Assembly is the in-progress state of feeding the running CRC-32C and the incremental
+decoder as [06 §9](../02-channel-transport/06-wire-protocol.en.md#9-maintenance-capture-and-relocation-envelope)
+defines it; no buffer holds the complete encoded stream.
 Dequeue accounting for Core receive HWM follows the [Core socket contract](../../../../../../../core/doc/spec/core/socket/README.en.md#8-implementation-and-contract-test-verification-requirements);
 Framework payload storage lifetime follows [Payload ownership §8](../01-execution/05-payload-ownership-and-codec.en.md#retained-record-children). After assembling every chunk, the Restore request compares the result against the whole
 checksum it carries, and only on a match runs the factory to restore application state,
@@ -402,7 +404,7 @@ sequenceDiagram
     loop payload sent chunk by chunk
         A->>B: [send] state chunk · same ordered connection
         Note over A,B: messages of other objects may be sent between chunks
-        B->>B: [local] copy into assembly buffer, release chunk lease immediately
+        B->>B: [local] feed the assembly (decoder), release chunk lease immediately
     end
     B->>B: [local] verify checksum, then Restore
     B-->>A: [reply] temporary queue/Restore ready · source remains owner
@@ -742,7 +744,7 @@ The following techniques aren't part of this handoff. Don't reimplement them.
   queue.** When a new identity arrives, the existing prepare is aborted, and the most
   recent attempt always wins — if two prepares occupied the same target queue at the
   same time, the later-arriving identity would risk overwriting the earlier prepare's
-  assembly buffer.
+  assembly state.
 
 Existing resource limits that apply to every feature — runtime memory, frame size,
 Store page, and payload — still apply as-is. This limit isn't duplicated as

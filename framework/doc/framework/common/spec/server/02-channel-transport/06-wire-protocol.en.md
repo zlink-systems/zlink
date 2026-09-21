@@ -682,13 +682,16 @@ receiver MUST NOT require a bound Session to admit a canonical `actorJoin`(28).
 - Source sends the payload as one or more command 52, `relocationState`, `[send]` records
   on the same ordered connection. Each record carries the relocation/target-attempt/
   coordinator fence, the object identity, `senderRole`, and a zero-based `chunkOrdinal`. The
-  chunk bytes reuse the existing `relocation-data-chunk-v1` format. Immediate assembly copy and storage lifetime follow
+  chunk bytes reuse the existing `relocation-data-chunk-v1` format. Feeding the chunks and storage lifetime follow
   [Relocation flow §4.3](../05-location-relocation/04-relocation-flow.en.md#43-restore-the-target-without-running-it).
-- The target feeds each chunk, in order, to the running CRC-32C and to the generated incremental
-  decoder (07 §7.2 `replay`); it never assembles the complete encoded stream in a separate buffer.
-  At the final chunk it checks the accumulated length and CRC-32C against the values Prepare
-  declared, together with decode completion. If any of them disagrees it is an explicit failure;
-  the target never attempts a partial restore and never retries transparently. On
+- Assembly is the target's in-progress state of feeding each chunk directly, in order, to the
+  running CRC-32C and the generated incremental decoder
+  ([07 §7.2 `replay`](07-schema-dialect.en.md#72-relocationlogicalstreamformat)). After feeding a
+  chunk the target releases the input message buffer under ordinary Framework ownership, and the
+  decoder does not allocate a buffer for the complete encoded stream. Restoration starts only when,
+  at the final chunk, the accumulated length and CRC-32C match the values Prepare declared and
+  decoding completes. If any of them disagrees it is an explicit failure; the target never
+  attempts a partial-assembly restore and never retries transparently. On
   failure the target sends command 53, `relocationFailed`, as a reply to the matching
   Prepare, after cleaning its own partial chunks and prepared resources. Only receipt of
   this explicit failure — never a dropped or indeterminate connection — causes the source
