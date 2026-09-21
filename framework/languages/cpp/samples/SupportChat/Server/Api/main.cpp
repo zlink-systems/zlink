@@ -15,6 +15,7 @@
 #include <zlink/locations/redis.hpp>
 
 #include <chrono>
+#include <format>
 #include <iostream>
 #include <map>
 #include <optional>
@@ -71,12 +72,15 @@ class authenticate_user_handler_t
     {
         const auto user = _users.find (request.access_token);
         if (!user) {
-            std::cerr << "supportchat api: authenticate rejected token=" << request.access_token
-                      << "\n";
+            const std::string line = std::format (
+              "supportchat api: authenticate rejected token={}\n", request.access_token);
+            std::cerr << line;
             return authenticate_user_res_t{
               false, std::nullopt, std::nullopt, std::nullopt, std::string ("UnknownAccessToken")};
         }
-        std::cerr << "supportchat api: authenticate actor=" << user->actor_id << "\n";
+        const std::string line =
+          std::format ("supportchat api: authenticate actor={}\n", user->actor_id);
+        std::cerr << line;
         return authenticate_user_res_t{
           true, user->actor_id, user->display_name, user->role, std::nullopt};
     }
@@ -113,8 +117,11 @@ class open_conversation_api_handler_t
                                          "SupportChat conversation creation returned no state");
         }
         const auto response = created.reply->decode<conversation_create_res_t> ();
-        std::cerr << "supportchat api: conversation created id=" << response.state.conversation_id
-                  << " status=" << response.state.status << "\n";
+        const std::string line =
+          std::format ("supportchat api: conversation created id={} status={}\n",
+                       response.state.conversation_id,
+                       response.state.status);
+        std::cerr << line;
         co_return open_conversation_api_res_t{response.state};
     }
 

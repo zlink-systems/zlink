@@ -13,6 +13,7 @@
 #include <chrono>
 #include <condition_variable>
 #include <deque>
+#include <format>
 #include <iomanip>
 #include <iostream>
 #include <map>
@@ -781,8 +782,11 @@ class node_report_service_t final : public fw::hosted_service_t
                       << " kind=" << kind << " " << detail << std::endl;
         }
         catch (const std::exception &error) {
-            std::cerr << "zoneworld-spot-event-report-failed node=" << g_node_state->node_id
-                      << " error=" << error.what () << '\n';
+            const std::string line =
+              std::format ("zoneworld-spot-event-report-failed node={} error={}\n",
+                           g_node_state->node_id,
+                           error.what ());
+            std::cerr << line;
         }
     }
 
@@ -799,8 +803,11 @@ class node_report_service_t final : public fw::hosted_service_t
             std::cout << "zoneworld-status-report node=" << g_node_state->node_id << std::endl;
         }
         catch (const std::exception &error) {
-            std::cerr << "zoneworld-status-report-failed node=" << g_node_state->node_id
-                      << " error=" << error.what () << '\n';
+            const std::string line =
+              std::format ("zoneworld-status-report-failed node={} error={}\n",
+                           g_node_state->node_id,
+                           error.what ());
+            std::cerr << line;
         }
     }
 
@@ -912,7 +919,9 @@ class zone_bootstrap_service_t final : public fw::hosted_service_t
             if (!await_bootstrap (bootstrap (spots, claimed))) {
                 if (_stopping.load ())
                     return;
-                std::cerr << "Zone Spot claim failed. node=" << _configuration.node_id << std::endl;
+                const std::string line =
+                  std::format ("Zone Spot claim failed. node={}\n", _configuration.node_id);
+                std::cerr << line;
             }
             const auto zones = g_node_state->zone_snapshot ();
             if (_configuration.allow_empty_zone_set && zones.empty () && attempt >= 8) {
@@ -920,14 +929,15 @@ class zone_bootstrap_service_t final : public fw::hosted_service_t
                 return;
             }
             if (attempt + 1 >= retry_attempts) {
-                std::cerr << "Zone Spot capacity did not settle. node=" << _configuration.node_id
-                          << " zones=";
+                std::string line = std::format ("Zone Spot capacity did not settle. node={} zones=",
+                                                _configuration.node_id);
                 for (std::size_t index = 0; index < zones.size (); ++index) {
                     if (index != 0)
-                        std::cerr << ',';
-                    std::cerr << zones[index];
+                        line += ',';
+                    line += zones[index];
                 }
-                std::cerr << std::endl;
+                line += '\n';
+                std::cerr << line;
                 return;
             }
             std::unique_lock lock (_retry_mutex);

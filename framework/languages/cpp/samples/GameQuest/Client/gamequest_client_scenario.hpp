@@ -11,6 +11,7 @@
 #include <algorithm>
 #include <chrono>
 #include <filesystem>
+#include <format>
 #include <iostream>
 #include <stdexcept>
 #include <string>
@@ -358,7 +359,8 @@ class gamequest_client_scenario_t
             return true;
         }
         catch (const std::exception &error) {
-            std::cerr << "gamequest scenario failed: " << error.what () << "\n";
+            const std::string line = std::format ("gamequest scenario failed: {}\n", error.what ());
+            std::cerr << line;
             return false;
         }
     }
@@ -404,15 +406,21 @@ class gamequest_client_scenario_t
     static void dump_initial_join_quests (const std::string &player_id,
                                           const std::vector<quest_progress_t> &quests)
     {
-        std::cerr << "gamequest initial join dump player=" << player_id
-                  << " activeQuestCount=" << quests.size () << "\n";
+        const std::string dump_line = std::format (
+          "gamequest initial join dump player={} activeQuestCount={}\n", player_id, quests.size ());
+        std::cerr << dump_line;
         for (const auto &quest : quests) {
-            std::cerr << "gamequest initial join quest" << " questId=" << quest.quest_id
-                      << " creatorPlayer=" << quest.player_id
-                      << " lastEventId=" << quest.last_source_event_id.value_or ("<none>")
-                      << " updatedAtUnixMs=" << quest.updated_at_unix_ms
-                      << " status=" << quest.status << " count=" << quest.current_count << "/"
-                      << quest.required_count << "\n";
+            const std::string quest_line = std::format (
+              "gamequest initial join quest questId={} creatorPlayer={} lastEventId={} "
+              "updatedAtUnixMs={} status={} count={}/{}\n",
+              quest.quest_id,
+              quest.player_id,
+              quest.last_source_event_id.value_or ("<none>"),
+              quest.updated_at_unix_ms,
+              quest.status,
+              quest.current_count,
+              quest.required_count);
+            std::cerr << quest_line;
         }
     }
 
@@ -425,16 +433,18 @@ class gamequest_client_scenario_t
             return;
         }
 
-        std::cerr << "gamequest event id dump label=" << label << " expected=" << expected;
+        std::string line =
+          std::format ("gamequest event id dump label={} expected={}", label, expected);
         if (result) {
-            std::cerr << " actual=" << result.value ().event_id;
+            line += std::format (" actual={}", result.value ().event_id);
         } else {
-            std::cerr << " actual=<no-response>";
+            line += " actual=<no-response>";
             if (result.error ()) {
-                std::cerr << " error=" << result.error ()->message;
+                line += std::format (" error={}", result.error ()->message);
             }
         }
-        std::cerr << "\n";
+        line += '\n';
+        std::cerr << line;
     }
 
     static void assert_server (const std::string &api_http_url)

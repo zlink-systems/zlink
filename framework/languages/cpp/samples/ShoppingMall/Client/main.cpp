@@ -3,6 +3,7 @@
 #include "shoppingmall_client_scenario.hpp"
 
 #include <exception>
+#include <format>
 #include <iostream>
 #include <string>
 
@@ -32,9 +33,11 @@ int main (int argc, char **argv)
       read_option (argc, argv, "--projection-rebuild-order-id");
     if (api_a_http_url.empty () || api_b_http_url.empty () || resume_order_id.empty ()
         || projection_continue_order_id.empty () || projection_rebuild_order_id.empty ()) {
-        std::cerr << "usage: " << argv[0]
-                  << " --api-a-http-url <url> --api-b-http-url <url> --resume-order-id <id>"
-                     " --projection-continue-order-id <id> --projection-rebuild-order-id <id>\n";
+        const std::string line = std::format (
+          "usage: {} --api-a-http-url <url> --api-b-http-url <url> --resume-order-id <id>"
+          " --projection-continue-order-id <id> --projection-rebuild-order-id <id>\n",
+          argv[0]);
+        std::cerr << line;
         return 2;
     }
     try {
@@ -48,7 +51,8 @@ int main (int argc, char **argv)
         return 0;
     }
     catch (const std::exception &error) {
-        std::cerr << "shoppingmall client failed: " << error.what () << std::endl;
+        const std::string line = std::format ("shoppingmall client failed: {}\n", error.what ());
+        std::cerr << line;
         return 1;
     }
 }
