@@ -1,6 +1,6 @@
 {
   "name": "@zlink-systems/stream-connector",
-  "version": "0.19.0",
+  "version": "0.20.0",
   "license": "SEE LICENSE IN LICENSE",
   "repository": {
     "type": "git",
@@ -22,6 +22,6 @@
     }
   },
   "dependencies": {
-    "@zlink-systems/stream-wire": "0.19.0"
+    "@zlink-systems/stream-wire": "0.20.0"
   }
 }
