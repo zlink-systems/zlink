@@ -8,7 +8,7 @@ server의 endpoint를 직접 적는다. 사이트 페이지 `framework/doc/frame
 
 이 디렉터리는 `zlink-cpp-examples` 저장소의 `quickstart/`다. 설치는 `tutorial/`·`samples/`와
 같다: `bootstrap.cmake` 하나, GitHub Release의 Core prebuilt, binding·framework 소스 아카이브,
-그리고 vcpkg.
+그리고 Conan.
 
 | | 목적 |
 |---|---|
@@ -25,10 +25,10 @@ tutorial과 같고 Docker만 빠진다(이 project는 Redis를 쓰지 않는다)
 | C++20 컴파일러 | Visual Studio 2022 17.4 이상, **C++를 사용한 데스크톱 개발** 워크로드 | GCC 13 이상 |
 | CMake | 3.24 이상 | 3.24 이상 |
 | Ninja | 필요 없음 | 권장. 없으면 Makefile을 쓴다 |
-| vcpkg | Visual Studio가 설치한 것을 자동으로 찾는다. 따로 clone했으면 `VCPKG_ROOT` | `git clone https://github.com/microsoft/vcpkg` 뒤 `./bootstrap-vcpkg.sh`. `$HOME/vcpkg`가 아니면 `VCPKG_ROOT` |
+| Conan 2 | `pipx install conan` (`py -m pip install --user conan`도 가능) | `pipx install conan` (`python3 -m pip install --user conan`도 가능) |
 
-vcpkg가 서드파티를 소스에서 빌드하므로 **첫 설치는 20분 정도** 걸린다. `tutorial/`이나
-`samples/`를 이미 bootstrap했으면 다시 빌드하지 말고 그 tree를 재사용한다:
+Conan이 ConanCenter의 서드파티 바이너리를 받으므로 지원 컴파일러에서 **첫 설치는 약 3분**이다.
+`tutorial/`이나 `samples/`를 이미 bootstrap했으면 다시 빌드하지 말고 그 tree를 재사용한다:
 `cmake -DZLINK_ROOT=../tutorial/.zlink -P bootstrap.cmake`.
 
 ## 내려받기와 설치
@@ -39,13 +39,13 @@ vcpkg가 서드파티를 소스에서 빌드하므로 **첫 설치는 20분 정�
 설치는 `bootstrap.cmake` 하나가 한다 — [빌드](#빌드) 블록의 첫 줄이다. 이 script는 GitHub
 Release에서 이 플랫폼의 Core prebuilt, C++ binding 소스, framework 소스를 받아 binding과
 framework를 빌드해 `.zlink/install/`에 설치하고, 이 project를 `build/`에 구성한다. framework
-버전만 script에 적혀 있고 Core·binding 버전은 framework 아카이브가 정한다. 두 번째 실행부터는
-받은 것과 지은 것을 그대로 쓴다. 다시 처음부터 하려면 `.zlink/`와 `build/`를 지운다.
+버전만 script에 적혀 있고 Core·binding·서드파티 버전은 framework 아카이브가 정한다. 기본은
+Conan이고 vcpkg fallback은 `-DZLINK_PACKAGE_MANAGER=vcpkg`로 고른다. 두 번째 실행부터는 받은
+것과 지은 것을 그대로 쓴다. 다시 처음부터 하려면 `.zlink/`와 `build/`를 지운다.
 
 ## 빌드
 
 ```bash title="linux"
-export VCPKG_ROOT="${VCPKG_ROOT:-$HOME/vcpkg}"
 cmake -P bootstrap.cmake
 cmake --build build --parallel
 ```
@@ -94,7 +94,7 @@ Write-Output 'quickstart=ok'
 
 ## 문제 해결
 
-설치 단계의 증상(`vcpkg was not found`, baseline 오류, download 실패, 컴파일러 없음,
+설치 단계의 증상(Conan 없음, 지원하지 않는 컴파일러 설정, download 실패, 컴파일러 없음,
 `RuntimeLibrary` 불일치, `STATUS_DLL_NOT_FOUND`)은 tutorial과 같으므로 그 README를 본다. 이
 project 고유의 것은 다음과 같다.
 

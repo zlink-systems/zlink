@@ -234,6 +234,8 @@ outcome type(
         return exact(codec::decode_application_payload_bytes(input, context), [&](const auto& value) { return codec::encode_application_payload_bytes(value, context); }, input);
     if (name == "application-payload-envelope-v1")
         return exact(codec::decode_application_payload_envelope_v1(input, context), [&](const auto& value) { return codec::encode_application_payload_envelope_v1(value, context); }, input);
+    if (name == "creation-operation-terminal-v1")
+        return exact(codec::decode_creation_operation_terminal_v1(input, context), [&](const auto& value) { return codec::encode_creation_operation_terminal_v1(value, context); }, input);
     return {false, codec::error_code::header};
 }
 
@@ -388,6 +390,14 @@ outcome semantic_encode(
         value.value.assign(input.at("count").get<std::size_t>(), input.at("repeatByte").get<std::uint8_t>());
         return encoded(codec::encode_application_payload_bytes(value, context), expected);
     }
+    if (name == "creation-operation-terminal-v1") {
+        codec::creation_operation_terminal_v1_t value{};
+        value.terminalResult = codec::request_terminal_result_t::timedOut;
+        value.failureCode = codec::framework_error_code_t::requestFailed;
+        value.hasCreation = codec::bool8_t::false_;
+        value.hasApplicationPayload = codec::bool8_t::false_;
+        return encoded(codec::encode_creation_operation_terminal_v1(value, context), expected);
+    }
     return {false, codec::error_code::header};
 }
 
@@ -482,7 +492,7 @@ int main()
             }
         }
     }
-    if (index.at("version") != 3 || acceptedCases != 29 || rejectedCases != 49
+    if (index.at("version") != 3 || acceptedCases != 29 || rejectedCases != 50
         || boundaryPairs.size() != 25) {
         std::cerr << "fixture catalog v3 coverage mismatch: accept=" << acceptedCases
                   << ", reject=" << rejectedCases << ", boundary-pairs=" << boundaryPairs.size() << '\n';

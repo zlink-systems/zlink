@@ -178,7 +178,7 @@ final class GeneratedServiceWireCommandCodecConformanceTest {
         assertEquals(11, canonicalCount);
         assertEquals(12, malformedCount);
         JsonNode operationCases = fixtureIndex().path("operationCases");
-        assertEquals(78, operationCases.size());
+        assertEquals(79, operationCases.size());
         Map<String, Set<String>> boundaryPairs = new HashMap<>();
         for (JsonNode operationCase : operationCases) {
             String operation = operationCase.path("operation").asText();
@@ -369,6 +369,8 @@ final class GeneratedServiceWireCommandCodecConformanceTest {
                     ServiceWireCodec.decodeAggregateParticipantVector(bytes, context);
             case "application-payload-bytes" ->
                     ServiceWireCodec.decodeApplicationPayloadBytes(bytes, context);
+            case "creation-operation-terminal-v1" ->
+                    ServiceWireCodec.decodeCreationOperationTerminalV1(bytes, context);
             default -> throw new IllegalStateException("unknown fixture type: " + type);
         };
     }
@@ -408,6 +410,9 @@ final class GeneratedServiceWireCommandCodecConformanceTest {
             case "application-payload-bytes" ->
                     ServiceWireCodec.encodeApplicationPayloadBytes(
                             (ServiceWireCodec.ApplicationPayloadBytes) value, context);
+            case "creation-operation-terminal-v1" ->
+                    ServiceWireCodec.encodeCreationOperationTerminalV1(
+                            (ServiceWireCodec.CreationOperationTerminalV1) value, context);
             default -> throw new IllegalStateException("unknown fixture type: " + type);
         };
     }
@@ -444,6 +449,18 @@ final class GeneratedServiceWireCommandCodecConformanceTest {
                 Arrays.fill(bytes, (byte) input.path("repeatByte").asInt());
                 yield new ServiceWireCodec.ApplicationPayloadBytes(bytes);
             }
+            case "creation-operation-terminal-v1" ->
+                    new ServiceWireCodec.CreationOperationTerminalV1(
+                            ServiceWireCodec.RequestTerminalResult.valueOf(
+                                    enumName(input.path("terminalResult").asText())),
+                            ServiceWireCodec.FrameworkErrorCode.valueOf(
+                                    enumName(input.path("failureCode").asText())),
+                            ServiceWireCodec.Bool8.valueOf(
+                                    enumName(input.path("hasCreation").asText())),
+                            null,
+                            ServiceWireCodec.Bool8.valueOf(
+                                    enumName(input.path("hasApplicationPayload").asText())),
+                            null);
             default -> throw new IllegalStateException("unsupported fixture input: " + type);
         };
     }

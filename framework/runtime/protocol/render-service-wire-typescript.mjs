@@ -218,10 +218,17 @@ function predicateChecks(owner, value = "value") {
         }
       }
       const failure = pathValue(value, local); const terminal = pathValue(value, local.replace(/failureCode$/, "terminalResult"));
-      const valid = `runtimePredicate(context, ${JSON.stringify(`${entry.reference.asset}.${entry.reference.name}`)}, enumWireRequestTerminalResult(${terminal}), enumWireFrameworkErrorCode(${failure}))`;
+      const valid = `validTerminalFailure(enumWireRequestTerminalResult(${terminal}), enumWireFrameworkErrorCode(${failure}))`;
       return `if (${guard ? `${guard} && !(${valid})` : `!(${valid})`}) fail(${JSON.stringify(owner.name + " runtime predicate")});`;
     });
   }).join("\n");
+}
+function casePredicate(_owner, operation) {
+  if (operation.reference.asset !== "service-wire-constants"
+      || operation.reference.name !== "valid-terminal-failure") {
+    throw new Error("unsupported terminal failure predicate");
+  }
+  return `if (!validTerminalFailure(enumWireRequestTerminalResult(value["terminalResult"]), enumWireFrameworkErrorCode(value["failureCode"]))) fail("terminal failure predicate");`;
 }
 
 function scalar(owner, operation) {
@@ -383,7 +390,7 @@ const emitters = {
   "encoded-limit": { syntax: encodedLimit },
   "logical-stream": { syntax: renderLogical },
   "negotiated-bound": { syntax: negotiatedBound },
-  "runtime-predicate": { syntax: predicateChecks },
+  "runtime-predicate": { syntax: predicateChecks, caseRead: casePredicate, caseWrite: casePredicate },
 };
 function verifyVocabulary() {
   if (JSON.stringify(Object.keys(emitters).sort()) !== JSON.stringify([...ir.operationVocabulary].sort())) throw new Error("TypeScript operation vocabulary mismatch");
@@ -455,18 +462,30 @@ function renderRuntime() {
   const negotiatedContext = [...new Set(ir.types.flatMap((owner) => owner.operations
     .filter((operation) => operation.op === "negotiated-bound")
     .flatMap((operation) => Object.values(operation.applications)
-      .map((application) => application.context.name))))]
+    .map((application) => application.context.name))))]
     .map((name) => `readonly ${prop(name)}?: number | bigint;`).join(" ");
+  const taxonomy = ir.semanticConstraints.find(
+    (constraint) => constraint.kind === "terminal-failure-integrity",
+  );
+  if (!taxonomy) throw new Error("missing terminal failure taxonomy");
+  const terminalValues = new Map(types.get("request-terminal-result").operations
+    .find((operation) => operation.op === "enum").values.map((entry) => [entry.name, entry.value]));
+  const failureValues = new Map(types.get("framework-error-code").operations
+    .find((operation) => operation.op === "enum").values.map((entry) => [entry.name, entry.value]));
+  const boundary = taxonomy.boundaryFailure.terminalResults
+    .map((name) => terminalValues.get(name)).join(", ");
+  const exact = Object.entries(taxonomy.typedFrameworkFailure.exactResultByFailureCode)
+    .map(([failure, terminal]) => `[${failureValues.get(failure)}, ${terminalValues.get(terminal)}]`)
+    .join(", ");
   return String.raw`
-export type ServiceWireRuntimePredicate = (terminalResult: number, failureCode: number) => boolean;
-export type ServiceWireDecoderContext = Readonly<{ originalOperationKind?: MeshOperationKind; durableRelocationPresent?: boolean; applicationSnapshotPresent?: boolean; ${negotiatedContext} runtimePredicates: Readonly<Record<string, ServiceWireRuntimePredicate>> }>;
+export type ServiceWireDecoderContext = Readonly<{ originalOperationKind?: MeshOperationKind; durableRelocationPresent?: boolean; applicationSnapshotPresent?: boolean; ${negotiatedContext} }>;
 function fail(message: string): never { throw new RangeError(message); }
 class ServiceWireCapacityError extends RangeError { constructor(message: string) { super(message); this.name = "ServiceWireCapacityError"; } }
 function capacityFail(message: string): never { throw new ServiceWireCapacityError(message); }
 function numeric(value: unknown): bigint { return typeof value === "bigint" ? value : BigInt(value as number); }
 function same(left: unknown, right: unknown): boolean { return typeof left === "bigint" || typeof right === "bigint" ? numeric(left) === numeric(right) : left === right; }
 function requireContext(context: ServiceWireDecoderContext, name: string): unknown { const value = (context as any)[name]; if (value === undefined) fail("missing decoder context " + name); return value; }
-function runtimePredicate(context: ServiceWireDecoderContext, name: string, terminal: number, failure: number): boolean { const predicate = context.runtimePredicates[name]; if (!predicate) fail("missing runtime predicate " + name); return predicate(terminal, failure); }
+function validTerminalFailure(terminal: number, failure: number): boolean { if (terminal === 0) return failure === 0; if ([${boundary}].includes(terminal)) return failure === 0; return new Map([${exact}]).get(failure) === terminal; }
 const encoder = new TextEncoder(); const decoder = new TextDecoder("utf-8", { fatal: true, ignoreBOM: true });
 function utf8(value: unknown): Uint8Array { const text = value as string; for (let index = 0; index < text.length; ++index) { const unit = text.charCodeAt(index); if (unit >= 0xd800 && unit <= 0xdbff) { const next = text.charCodeAt(++index); if (!(next >= 0xdc00 && next <= 0xdfff)) fail("lone UTF-16 surrogate"); } else if (unit >= 0xdc00 && unit <= 0xdfff) fail("lone UTF-16 surrogate"); } return encoder.encode(text); }
 function decodeUtf8(bytes: Uint8Array, label: string): string { try { return decoder.decode(bytes); } catch { return fail(label + " UTF-8"); } }

@@ -9,6 +9,7 @@ import systems.zlink.framework.errors.ZLinkFrameworkErrorKind;
 import systems.zlink.framework.execution.ZLinkExecutionLanePolicy;
 import systems.zlink.framework.execution.ZLinkSerialExecutionQueue;
 import systems.zlink.framework.runtime.configuration.ZLinkFrameworkRegistration;
+import systems.zlink.framework.runtime.diagnostics.ZLinkDispatchErrorReporter;
 import systems.zlink.framework.runtime.diagnostics.ZLinkMessageFlowTracer;
 import systems.zlink.framework.runtime.handlers.ZLinkHandlerScanner;
 import systems.zlink.framework.runtime.handlers.ZLinkScannedHandler;
@@ -22,7 +23,10 @@ import systems.zlink.framework.runtime.internal.binding.spot.ReceiveRecord;
 import systems.zlink.framework.runtime.internal.binding.spot.RecordKind;
 import systems.zlink.framework.runtime.internal.binding.spot.ReplyToken;
 import systems.zlink.framework.runtime.internal.calls.ZLinkOneWayCalls;
+import systems.zlink.framework.runtime.internal.diagnostics.ZLinkDispatchErrorAction;
+import systems.zlink.framework.runtime.internal.diagnostics.ZLinkDispatchErrorReason;
 import systems.zlink.framework.runtime.internal.diagnostics.ZLinkDispatchErrorSurface;
+import systems.zlink.framework.runtime.internal.diagnostics.ZLinkDispatchFailure;
 import systems.zlink.framework.runtime.internal.diagnostics.ZLinkDispatchMessageKind;
 import systems.zlink.framework.runtime.internal.diagnostics.ZLinkMessageFlowEvent;
 import systems.zlink.framework.runtime.internal.diagnostics.ZLinkMessageFlowOutcome;
@@ -65,6 +69,7 @@ public final class ZLinkMeshApplicationDispatcher implements ZLinkMeshApplicatio
     private final ZLinkMeshMessageMetrics messageMetrics;
     private final ZLinkMeshDrainCoordinator drains;
     private final ZLinkApplicationJobQueue applicationJobQueue;
+    private final ZLinkDispatchErrorReporter dispatchErrors;
     private final ZLinkMessageFlowTracer flow;
     private final Map<String, Namespace> namespaces = new HashMap<>();
 
@@ -119,9 +124,10 @@ public final class ZLinkMeshApplicationDispatcher implements ZLinkMeshApplicatio
         this.messageMetrics = ZLinkMeshMessageMetrics.forMesh(meshName);
         this.drains = drains;
         this.applicationJobQueue = framework.applicationJobQueue();
-        this.flow =
-                new ZLinkMessageFlowTracer(
+        this.dispatchErrors =
+                new ZLinkDispatchErrorReporter(
                         framework.dispatchOptions(), handlerFactory, framework.handlerExecutor());
+        this.flow = dispatchErrors.flow();
         this.replies = Objects.requireNonNull(replies, "replies");
         this.invoker =
                 new ZLinkChannelHandlerInvoker(
@@ -514,14 +520,24 @@ public final class ZLinkMeshApplicationDispatcher implements ZLinkMeshApplicatio
                                             return invocation.<Void>handle(
                                                     (reply, error) -> {
                                                         if (error == null) {
-                                                            replyAndClose(
-                                                                    record,
-                                                                    token,
-                                                                    replyParts(envelope, reply));
-                                                            traceFlow(
-                                                                    ZLinkMessageFlowOutcome.REPLIED,
-                                                                    record,
-                                                                    packetName);
+                                                            try {
+                                                                replyAndClose(
+                                                                        record,
+                                                                        token,
+                                                                        replyParts(
+                                                                                envelope, reply));
+                                                                traceFlow(
+                                                                        ZLinkMessageFlowOutcome
+                                                                                .REPLIED,
+                                                                        record,
+                                                                        packetName);
+                                                            } catch (
+                                                                    RuntimeException replyFailure) {
+                                                                reportReplyPathMissing(
+                                                                        record,
+                                                                        packetName,
+                                                                        replyFailure);
+                                                            }
                                                         } else {
                                                             replyError(
                                                                     record, token, envelope, error);
@@ -684,6 +700,30 @@ public final class ZLinkMeshApplicationDispatcher implements ZLinkMeshApplicatio
                         null,
                         null,
                         null));
+    }
+
+    private void reportReplyPathMissing(
+            ZLinkMeshDispatchRecord record, String packetName, RuntimeException replyFailure) {
+        ReceiveRecord receive = record.receive();
+        dispatchErrors.report(
+                new ZLinkDispatchFailure(
+                        receive.kind() == RecordKind.NODE_REQUEST
+                                ? ZLinkDispatchErrorSurface.NODE
+                                : ZLinkDispatchErrorSurface.ROUTE_MESH_CHANNEL,
+                        ZLinkDispatchMessageKind.REQUEST,
+                        ZLinkDispatchErrorReason.REPLY_PATH_MISSING,
+                        ZLinkDispatchErrorAction.DROP,
+                        packetName,
+                        receive.channelName(),
+                        null,
+                        null,
+                        null,
+                        receive.sourceNodeRid() == null ? null : receive.sourceNodeRid().toString(),
+                        receive.applicationCorrelation() == null
+                                ? null
+                                : Long.toUnsignedString(receive.applicationCorrelation()),
+                        replyFailure.getClass().getName(),
+                        replyFailure.getMessage()));
     }
 
     private void traceLocalNodeSend(

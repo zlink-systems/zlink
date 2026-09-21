@@ -8,7 +8,7 @@
 Actor, Location, STREAM, HTTP client를 담는다.
 
 이 디렉터리는 `zlink-cpp-examples` 저장소의 `tutorial/`이다. 아래 절차는 GitHub Release에
-공개된 Core·binding·framework 패키지와 vcpkg를 사용한다.
+공개된 Core·binding·framework 패키지와 Conan을 사용한다.
 
 | | 목적 |
 |---|---|
@@ -40,16 +40,13 @@ Actor, Location, STREAM, HTTP client를 담는다.
 | C++20 컴파일러 | Visual Studio 2022 17.4 이상, **Desktop development with C++** 워크로드 (MSVC 19.44로 확인) | GCC 13 이상 (13.3으로 확인) |
 | CMake | 3.24 이상 (Visual Studio가 설치하는 3.31로 확인) | 3.24 이상 (3.28로 확인) |
 | Ninja | 필요 없음 | 권장. 없으면 Makefile로 빌드한다 |
-| vcpkg | Visual Studio가 함께 설치하는 것을 자동으로 찾는다. 따로 clone했으면 `VCPKG_ROOT`를 지정한다 | `git clone https://github.com/microsoft/vcpkg` 뒤 `./bootstrap-vcpkg.sh`. 위치가 `$HOME/vcpkg`가 아니면 `VCPKG_ROOT`를 지정한다 |
+| Conan 2 | `pipx install conan` (`py -m pip install --user conan`도 가능) | `pipx install conan` (`python3 -m pip install --user conan`도 가능) |
 | Docker Desktop | Redis 하나를 컨테이너로 띄운다. 설치되어 실행 중이어야 한다 | 같다 (WSL integration 또는 Linux의 Docker Engine) |
 
-이 밖에는 아무것도 필요 없다. zlink 저장소, Python, Node.js, 시스템 패키지의 Boost는 쓰지
-않는다. 세 번째 파티 라이브러리(Boost·nlohmann_json·lz4·protobuf·OpenSSL·opentelemetry-cpp·
-redis-plus-plus)는 vcpkg가 소스에서 빌드하므로 **첫 설치는 20분 안팎**이 걸리고 디스크를
-수 GB 쓴다. 두 번째부터는 vcpkg의 바이너리 캐시로 몇 분에 끝난다.
-
-vcpkg는 `builtin-baseline`으로 세 번째 파티 버전을 고정한다. clone이 그 커밋보다 오래됐으면
-`git -C $VCPKG_ROOT pull`로 갱신한다.
+이 밖에는 아무것도 필요 없다. zlink 저장소, Node.js, 시스템 패키지의 Boost는 쓰지 않는다.
+Conan은 pipx(또는 pip)로 설치하며 ConanCenter의 세 번째 파티 바이너리를 받는다. 지원 컴파일러에서
+**첫 설치는 약 3분**이며, 맞는 바이너리가 없는 패키지만 Conan이 소스에서 빌드한다. 두 번째부터는
+로컬 캐시를 재사용한다.
 
 ## 내려받기와 설치
 
@@ -61,6 +58,7 @@ Release에서 세 아카이브 — 이 플랫폼의 Core prebuilt(`core/v1.2.0`)
 소스(`cpp/v1.2.0`), framework 소스(`framework-cpp/v0.18.0`) — 를 받아 binding과 framework를
 빌드해 `.zlink/install/`에 설치하고, 이 프로젝트를 `build/`에 구성한다. framework 버전만
 스크립트에 적혀 있고, Core·binding 버전과 세 번째 파티 목록은 framework 아카이브가 정한다.
+기본 package manager는 Conan이며 vcpkg fallback은 `-DZLINK_PACKAGE_MANAGER=vcpkg`로 고른다.
 두 번째 실행부터는 받은 것과 지은 것을 그대로 쓴다.
 
 병렬도는 논리 코어 수가 기본이며 `cmake -DZLINK_JOBS=4 -P bootstrap.cmake`처럼 `-P` 앞에
@@ -69,7 +67,6 @@ Release에서 세 아카이브 — 이 플랫폼의 Core prebuilt(`core/v1.2.0`)
 ## 빌드
 
 ```bash title="linux"
-export VCPKG_ROOT="${VCPKG_ROOT:-$HOME/vcpkg}"
 cmake -P bootstrap.cmake
 cmake --build build --parallel
 ```
@@ -181,9 +178,8 @@ Write-Output 'tutorial-stream=ok'
 
 | 증상 | 원인과 조치 |
 |---|---|
-| `bootstrap: vcpkg was not found. Set VCPKG_ROOT ...` | vcpkg가 없다. Windows는 Visual Studio Installer에서 **vcpkg package manager** 구성 요소를 켜거나, 두 플랫폼 모두 clone한 vcpkg의 경로를 `VCPKG_ROOT`에 넣는다 |
-| `error: this vcpkg instance requires a manifest with a specified baseline` | `bootstrap.cmake`가 쓰는 manifest(`.zlink/manifest/vcpkg.json`)를 손으로 바꿨을 때만 난다. `.zlink/manifest`를 지우고 다시 실행한다 |
-| `error: no version database entry for <port> at <version>` 또는 baseline 관련 오류 | vcpkg clone이 baseline 커밋보다 오래됐다. `git -C $VCPKG_ROOT pull` 뒤 다시 실행한다 |
+| `bootstrap: could not find Conan` | `pipx install conan`(또는 `python3 -m pip install --user conan`)으로 Conan 2를 설치하고 실행 파일 경로를 `PATH`에 넣는다 |
+| `ERROR: Invalid setting ...` | 선택한 컴파일러가 ConanCenter의 지원 바이너리 구성과 다르다. 표의 컴파일러 버전을 쓰거나 `-DZLINK_PACKAGE_MANAGER=vcpkg`를 지정한다 |
 | `bootstrap: download failed: https://github.com/...` | GitHub Release에 닿지 못했다. 프록시·방화벽을 확인한다. 다시 실행하면 처음부터 다시 받는다 |
 | `CMake Error ... No CMAKE_CXX_COMPILER could be found` / `Visual Studio 17 2022 could not find any instance` | 컴파일러가 없다. Windows는 **Desktop development with C++** 워크로드, Linux는 `g++`를 설치한다 |
 | `error LNK2038: mismatch detected for 'RuntimeLibrary'` | `.zlink/`가 다른 옵션으로 빌드된 잔재다. `.zlink/build`·`.zlink/cpp`·`.zlink/install`·`build`를 지우고 bootstrap부터 다시 한다 |

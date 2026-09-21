@@ -1556,6 +1556,31 @@
       }
     },
     {
+      "name": "terminal-taxonomy-boundary-failure",
+      "operation": "runtime-predicate",
+      "rule": "boundary-failure-requires-none",
+      "expect": "reject",
+      "surface": {
+        "format": "type",
+        "type": "creation-operation-terminal-v1",
+        "command": null,
+        "commandId": null
+      },
+      "hex": "010000000a00000065000000110000",
+      "directions": [
+        "encode",
+        "decode"
+      ],
+      "input": {
+        "terminalResult": "timedOut",
+        "failureCode": "requestFailed",
+        "hasCreation": "false",
+        "creation": null,
+        "hasApplicationPayload": "false",
+        "applicationPayload": null
+      }
+    },
+    {
       "name": "length-prefixed-large-payload",
       "operation": "length-prefixed",
       "rule": "within-representation-capacity",

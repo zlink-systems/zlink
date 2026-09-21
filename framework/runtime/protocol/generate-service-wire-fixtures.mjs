@@ -436,6 +436,19 @@ function buildOperationCases(schema) {
     { key: "B", value: "second" },
     { key: "A", value: "third" },
   ]);
+  const terminalTaxonomyViolation = {
+    terminalResult: "timedOut",
+    failureCode: "requestFailed",
+    hasCreation: "false",
+    creation: null,
+    hasApplicationPayload: "false",
+    applicationPayload: null,
+  };
+  const terminalTaxonomyViolationBytes = encodeSchemaValue(
+    schema,
+    "creation-operation-terminal-v1",
+    terminalTaxonomyViolation,
+  );
   const negotiatedPayload = encodeSchemaValue(
     schema,
     "application-payload-bytes",
@@ -653,6 +666,15 @@ function buildOperationCases(schema) {
     operationCase("tlv-encode-required-missing", "tlv32", "required-field", "reject", surface("type", tlv.name), encodedDescriptor, { directions: ["encode"], input: { ...descriptorValue, runtimeState: null } }),
     operationCase("tlv-encode-capability-missing", "constraint", "contains-protocol-required-capability", "reject", surface("type", tlv.name), encodedDescriptor, { directions: ["encode"], input: { ...descriptorValue, protocolCapabilities: ["other"] } }),
     operationCase("tlv-encode-field-range", "field", "maximum", "reject", surface("type", tlv.name), encodedDescriptor, { directions: ["encode"], input: { ...descriptorValue, placementWeight: 101 } }),
+    operationCase(
+      "terminal-taxonomy-boundary-failure",
+      "runtime-predicate",
+      "boundary-failure-requires-none",
+      "reject",
+      surface("type", "creation-operation-terminal-v1"),
+      terminalTaxonomyViolationBytes,
+      { directions: ["encode", "decode"], input: terminalTaxonomyViolation },
+    ),
     {
       name: "length-prefixed-large-payload",
       operation: "length-prefixed",
