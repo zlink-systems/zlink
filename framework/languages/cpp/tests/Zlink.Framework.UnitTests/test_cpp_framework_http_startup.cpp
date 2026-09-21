@@ -30,7 +30,8 @@ void expect_bind_failure (const result_t<void> &result, const std::string &endpo
     EXPECT_NE (message.find (endpoint), std::string::npos);
     EXPECT_NE (message.find (expected.message ()), std::string::npos);
     EXPECT_NE (message.find ("error_code=" + std::string (expected.category ().name ()) + ":"
-                            + std::to_string (expected.value ())), std::string::npos);
+                             + std::to_string (expected.value ())),
+               std::string::npos);
 #ifndef _WIN32
     // On POSIX, the system-category value is the original bind errno.
     EXPECT_EQ (expected.value (), EADDRINUSE);

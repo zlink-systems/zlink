@@ -14,7 +14,8 @@ public sealed class ConnectionAndConfigContracts
         typeof(IZLinkSpotSubscriberConfig),
         typeof(IZLinkDispatchOptions),
         typeof(IZLinkUnhandledDispatchOptions),
-        typeof(IZLinkDiagnosticsOptions))]
+        typeof(IZLinkDiagnosticsOptions)
+    )]
     public void Configuration_contracts_keep_socket_routing_spot_and_dispatch_options_typed()
     {
         var socket = new SocketConfig
@@ -31,7 +32,7 @@ public sealed class ConnectionAndConfigContracts
             HandshakeInterval = TimeSpan.FromSeconds(4),
             IPv6 = true,
             TcpNoDelay = true,
-            Immediate = true
+            Immediate = true,
         };
 
         var route = new RouteConfig
@@ -39,26 +40,23 @@ public sealed class ConnectionAndConfigContracts
             RequireKnownPeer = true,
             AllowPeerHandover = true,
             EnablePeerProbe = true,
-            ConnectRoutingId = RoutingId.From("peer")
+            ConnectRoutingId = RoutingId.From("peer"),
         };
 
-        var outbound = new OutboundRouteConfig
-        {
-            ProbeRouterOnConnect = true
-        };
+        var outbound = new OutboundRouteConfig { ProbeRouterOnConnect = true };
 
         IZLinkSpotPublisherConfig publisher = new SpotPublisherConfig
         {
             SendHighWaterMark = 32,
             SendTimeout = TimeSpan.FromMilliseconds(20),
-            Linger = TimeSpan.Zero
+            Linger = TimeSpan.Zero,
         };
 
         IZLinkSpotSubscriberConfig subscriber = new SpotSubscriberConfig
         {
             ReceiveHighWaterMark = 64,
             ReceiveTimeout = TimeSpan.FromMilliseconds(30),
-            Linger = TimeSpan.Zero
+            Linger = TimeSpan.Zero,
         };
 
         var dispatch = new DispatchOptions();

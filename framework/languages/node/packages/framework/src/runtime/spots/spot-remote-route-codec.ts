@@ -107,10 +107,10 @@ function decodeActorRef(payload: {
   readonly actorOwnershipGeneration?: unknown;
 }): ActorRef | undefined {
   if (
-    typeof payload.actorId !== 'string'
-    || typeof payload.actorNodeRid !== 'string'
-    || typeof payload.actorGeneration !== 'string'
-    || typeof payload.actorMeshName !== 'string'
+    typeof payload.actorId !== 'string' ||
+    typeof payload.actorNodeRid !== 'string' ||
+    typeof payload.actorGeneration !== 'string' ||
+    typeof payload.actorMeshName !== 'string'
   ) {
     return undefined;
   }
@@ -134,7 +134,12 @@ export function decodeRemoteBoundSessionResponse(
   codecs?: ZLinkChannelEnvelopeCodecRegistry,
   flowEnabled = true
 ): ZLinkRemoteBoundSessionResponse | undefined {
-  const decoded = decodeRemoteBoundSessionControl(parts, ZLINK_REMOTE_BOUND_SESSION_RESPONSE_PACKET, codecs, flowEnabled);
+  const decoded = decodeRemoteBoundSessionControl(
+    parts,
+    ZLINK_REMOTE_BOUND_SESSION_RESPONSE_PACKET,
+    codecs,
+    flowEnabled
+  );
   if (decoded === undefined) {
     return undefined;
   }
@@ -154,7 +159,12 @@ export function decodeRemoteBoundSessionError(
   codecs?: ZLinkChannelEnvelopeCodecRegistry,
   flowEnabled = true
 ): ZLinkRemoteBoundSessionError | undefined {
-  const decoded = decodeRemoteBoundSessionControl(parts, ZLINK_REMOTE_BOUND_SESSION_ERROR_PACKET, codecs, flowEnabled);
+  const decoded = decodeRemoteBoundSessionControl(
+    parts,
+    ZLINK_REMOTE_BOUND_SESSION_ERROR_PACKET,
+    codecs,
+    flowEnabled
+  );
   if (decoded === undefined) {
     return undefined;
   }
@@ -179,12 +189,15 @@ export function decodeRemoteActorPacketRelay(
     const relay = decodeRemoteActorPacketRelayPayload(multipart.payload);
     return {
       ...relay,
-      actorRef: decodeForwardedActorRef({
-        actorId: relay.actorId,
-        actorNodeRid: relay.actorNodeRid,
-        actorNodeRidHex: relay.actorNodeRidHex,
-        actorGeneration: relay.actorGeneration
-      }, relay.messageFollowContext),
+      actorRef: decodeForwardedActorRef(
+        {
+          actorId: relay.actorId,
+          actorNodeRid: relay.actorNodeRid,
+          actorNodeRidHex: relay.actorNodeRidHex,
+          actorGeneration: relay.actorGeneration
+        },
+        relay.messageFollowContext
+      ),
       bindingActorRef: decodeActorRef({
         actorId: relay.actorId,
         actorNodeRid: relay.bindingActorNodeRid,
@@ -199,12 +212,15 @@ export function decodeRemoteActorPacketRelay(
   }
 }
 
-function decodeForwardedActorRef(payload: {
-  readonly actorId?: unknown;
-  readonly actorNodeRid?: unknown;
-  readonly actorNodeRidHex?: unknown;
-  readonly actorGeneration?: unknown;
-}, messageFollowContext?: import('../actors').ZLinkActorMessageFollowContext): ActorRef | undefined {
+function decodeForwardedActorRef(
+  payload: {
+    readonly actorId?: unknown;
+    readonly actorNodeRid?: unknown;
+    readonly actorNodeRidHex?: unknown;
+    readonly actorGeneration?: unknown;
+  },
+  messageFollowContext?: import('../actors').ZLinkActorMessageFollowContext
+): ActorRef | undefined {
   const actorRef = decodeActorRef(payload);
   return actorRef === undefined || messageFollowContext === undefined
     ? actorRef
@@ -216,25 +232,28 @@ function decodeRemoteBoundSessionControl(
   packetName: string,
   codecs?: ZLinkChannelEnvelopeCodecRegistry,
   flowEnabled = true
-): {
-  readonly actorId: string;
-  readonly packetName: string;
-  readonly requestSeq: bigint;
-  readonly metadata: ReadonlyMap<string, string>;
-  readonly payload: {
-    readonly message?: unknown;
-    readonly error?: unknown;
-    readonly compressPayload?: unknown;
-  };
-  readonly actorPacketTarget?: unknown;
-} | undefined {
+):
+  | {
+      readonly actorId: string;
+      readonly packetName: string;
+      readonly requestSeq: bigint;
+      readonly metadata: ReadonlyMap<string, string>;
+      readonly payload: {
+        readonly message?: unknown;
+        readonly error?: unknown;
+        readonly compressPayload?: unknown;
+      };
+      readonly actorPacketTarget?: unknown;
+    }
+  | undefined {
   try {
     const multipart = decodeMultipartPayload(parts, codecs, flowEnabled);
     if (multipart.packetName !== packetName) return undefined;
     const payload = multipart.payload as Record<string, unknown>;
-    const decoded = packetName === ZLINK_REMOTE_BOUND_SESSION_RESPONSE_PACKET
-      ? decodeRemoteBoundSessionResponsePayload(payload)
-      : decodeRemoteBoundSessionErrorPayload(payload);
+    const decoded =
+      packetName === ZLINK_REMOTE_BOUND_SESSION_RESPONSE_PACKET
+        ? decodeRemoteBoundSessionResponsePayload(payload)
+        : decodeRemoteBoundSessionErrorPayload(payload);
     return {
       actorId: decoded.actorId,
       packetName: decoded.boundPacketName,
@@ -268,17 +287,18 @@ function decodeMultipartPayload(
   const decodedPayload = decodeChannelPayload(envelope, codecs);
   return {
     packetName: envelope.packetName,
-    payload: typeof decodedPayload === 'object' && decodedPayload !== null
-      ? { ...decodedPayload, packetName: envelope.packetName }
-      : decodedPayload,
+    payload:
+      typeof decodedPayload === 'object' && decodedPayload !== null
+        ? { ...decodedPayload, packetName: envelope.packetName }
+        : decodedPayload,
     envelope
   };
 }
 
 function metadataOf(value: unknown): ReadonlyMap<string, string> {
-  return new Map(Object.entries(
-    typeof value === 'object' && value !== null
-      ? value as Record<string, string>
-      : {}
-  ));
+  return new Map(
+    Object.entries(
+      typeof value === 'object' && value !== null ? (value as Record<string, string>) : {}
+    )
+  );
 }

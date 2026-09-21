@@ -20,7 +20,8 @@ async function connect(endpoint: string): Promise<void> {
 
 async function request(value: string, explicitFlowId?: string): Promise<unknown> {
   if (!client) throw new Error('Connector has not been created.');
-  const push = client.waitFor<{ value: string }>('EchoPush')
+  const push = client
+    .waitFor<{ value: string }>('EchoPush')
     .where((message) => message.payload.value === value)
     .submit();
   let call = client.request({ value }, Object).packetName('EchoReq');

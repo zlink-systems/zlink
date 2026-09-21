@@ -1,45 +1,44 @@
 package systems.zlink.framework.runtime.internal.service;
 
-import java.util.Comparator;
-import java.util.List;
-import java.util.Objects;
 import systems.zlink.contracts.core.RoutingId;
 import systems.zlink.framework.runtime.internal.transport.ZLinkEndpointNotation;
 import systems.zlink.framework.runtime.protocol.ServiceWireConstants;
 
+import java.util.Comparator;
+import java.util.List;
+import java.util.Objects;
+
 /** Immutable descriptor owned by the Framework RouteMesh runtime. */
 public record ZLinkServiceNodeDescriptor(
-    String meshName,
-    RoutingId nodeRoutingId,
-    long lifecycleGeneration,
-    long descriptorRevision,
-    String advertisedEndpoint,
-    List<Channel> channels,
-    State state,
-    String securityIdentity,
-    long applicationVersion,
-    List<String> protocolCapabilities,
-    ObjectRole objectRole,
-    int placementWeight,
-    int activeCapacityLimit,
-    int pendingCapacityLimit,
-    int activeCapacityUsed,
-    int pendingCapacityUsed) {
+        String meshName,
+        RoutingId nodeRoutingId,
+        long lifecycleGeneration,
+        long descriptorRevision,
+        String advertisedEndpoint,
+        List<Channel> channels,
+        State state,
+        String securityIdentity,
+        long applicationVersion,
+        List<String> protocolCapabilities,
+        ObjectRole objectRole,
+        int placementWeight,
+        int activeCapacityLimit,
+        int pendingCapacityLimit,
+        int activeCapacityUsed,
+        int pendingCapacityUsed) {
     /**
-     * Admission must be fenced by the generated service-wire capability, not
-     * a hand-maintained revision string.  Other runtimes reject v12-only
-     * descriptors before publishing a RouteMesh peer.
+     * Admission must be fenced by the generated service-wire capability, not a hand-maintained
+     * revision string. Other runtimes reject v12-only descriptors before publishing a RouteMesh
+     * peer.
      */
     public static final String REQUIRED_CAPABILITY = ServiceWireConstants.REQUIRED_CAPABILITY;
 
     /**
-     * Shared admission identity of the plaintext ROUTER transport. The
-     * MeshNode socket exposes no authenticated peer identity, so every
-     * language encodes this single placeholder in {@code securityIdentity}
-     * (C++ {@code service_topology_registry.hpp} default, Node
-     * {@code node-raw-mesh-backend.createDescriptor}, .NET
-     * {@code ZLinkServiceSecurityIdentity.Plaintext}) and compares an
-     * expectation against it. It is NOT a routing id.
+     * Shared admission identity of the plaintext ROUTER transport. The MeshNode socket exposes no
+     * authenticated peer identity, so every language encodes this single placeholder in {@code
+     * securityIdentity} (C++ {@code service_topology_registry.hpp} default, Node {@code
+     * node-raw-mesh-backend.createDescriptor}, .NET {@code ZLinkServiceSecurityIdentity.Plaintext})
+     * and compares an expectation against it. It is NOT a routing id.
      */
     public static final String PLAINTEXT_SECURITY_IDENTITY = "default";
 
@@ -52,8 +51,9 @@ public record ZLinkServiceNodeDescriptor(
         //  record, so normalizing here keeps admission/dedup comparisons
         //  (e.g. ZLinkJavaRawMeshNode's peerIntents endpoint matching)
         //  notation-insensitive without touching each comparison site.
-        advertisedEndpoint = ZLinkEndpointNotation.normalize(
-            requireText(advertisedEndpoint, "advertisedEndpoint"));
+        advertisedEndpoint =
+                ZLinkEndpointNotation.normalize(
+                        requireText(advertisedEndpoint, "advertisedEndpoint"));
         securityIdentity = requireText(securityIdentity, "securityIdentity");
         Objects.requireNonNull(state, "state");
         Objects.requireNonNull(objectRole, "objectRole");
@@ -65,16 +65,13 @@ public record ZLinkServiceNodeDescriptor(
         //  Only the descriptor revision is ordered, so only it is bounded to
         //  the range where signed comparison is the unsigned comparison.
         if (lifecycleGeneration == 0) {
-            throw new IllegalArgumentException(
-                "lifecycle generation must be non-zero");
+            throw new IllegalArgumentException("lifecycle generation must be non-zero");
         }
         if (descriptorRevision <= 0) {
-            throw new IllegalArgumentException(
-                "descriptor revision must be positive");
+            throw new IllegalArgumentException("descriptor revision must be positive");
         }
         if (applicationVersion < 0) {
-            throw new IllegalArgumentException(
-                "application version is invalid");
+            throw new IllegalArgumentException("application version is invalid");
         }
         validateWeight(placementWeight, "placementWeight");
         validateCapacity(activeCapacityLimit, false, "activeCapacityLimit");
@@ -82,7 +79,7 @@ public record ZLinkServiceNodeDescriptor(
         validateCapacity(activeCapacityUsed, true, "activeCapacityUsed");
         validateCapacity(pendingCapacityUsed, true, "pendingCapacityUsed");
         if (activeCapacityUsed > activeCapacityLimit
-            || pendingCapacityUsed > pendingCapacityLimit) {
+                || pendingCapacityUsed > pendingCapacityLimit) {
             throw new IllegalArgumentException("capacity use exceeds its limit");
         }
 
@@ -90,30 +87,30 @@ public record ZLinkServiceNodeDescriptor(
         for (Channel channel : channels) {
             Objects.requireNonNull(channel, "channel");
         }
-        requireSortedUnique(
-            channels.stream().map(Channel::name).toList(),
-            "channels");
+        requireSortedUnique(channels.stream().map(Channel::name).toList(), "channels");
         protocolCapabilities =
-            List.copyOf(Objects.requireNonNull(protocolCapabilities, "protocolCapabilities"));
+                List.copyOf(Objects.requireNonNull(protocolCapabilities, "protocolCapabilities"));
         requireSortedUnique(protocolCapabilities, "protocolCapabilities");
         if (!protocolCapabilities.contains(REQUIRED_CAPABILITY)) {
             throw new IllegalArgumentException(
-                "protocol capability is required: " + REQUIRED_CAPABILITY);
+                    "protocol capability is required: " + REQUIRED_CAPABILITY);
         }
     }
 
     public boolean serves(String channelName) {
         return state == State.SERVING
-            && channels.stream().anyMatch(
-                channel -> channel.name().equals(channelName) && channel.weight() > 0);
+                && channels.stream()
+                        .anyMatch(
+                                channel ->
+                                        channel.name().equals(channelName) && channel.weight() > 0);
     }
 
     public boolean acceptsPlacement() {
         return state == State.SERVING
-            && objectRole == ObjectRole.SERVER
-            && placementWeight > 0
-            && activeCapacityUsed < activeCapacityLimit
-            && pendingCapacityUsed < pendingCapacityLimit;
+                && objectRole == ObjectRole.SERVER
+                && placementWeight > 0
+                && activeCapacityUsed < activeCapacityLimit
+                && pendingCapacityUsed < pendingCapacityLimit;
     }
 
     public record Channel(String name, int weight) {
@@ -142,7 +139,8 @@ public record ZLinkServiceNodeDescriptor(
         String previous = null;
         for (String value : values) {
             String current = requireText(value, field);
-            if (previous != null && Comparator.<String>naturalOrder().compare(previous, current) >= 0) {
+            if (previous != null
+                    && Comparator.<String>naturalOrder().compare(previous, current) >= 0) {
                 throw new IllegalArgumentException(field + " must be sorted and unique");
             }
             previous = current;
@@ -151,16 +149,14 @@ public record ZLinkServiceNodeDescriptor(
 
     private static String requireText(String value, String field) {
         if (value == null || value.isEmpty() || value.indexOf('\0') >= 0) {
-            throw new IllegalArgumentException(
-                field + " must be non-empty text without NUL");
+            throw new IllegalArgumentException(field + " must be non-empty text without NUL");
         }
         return value;
     }
 
     private static void validateWeight(int value, String field) {
         if (value < 0 || value > 10_000) {
-            throw new IllegalArgumentException(
-                field + " must be in the range 0..10000");
+            throw new IllegalArgumentException(field + " must be in the range 0..10000");
         }
     }
 

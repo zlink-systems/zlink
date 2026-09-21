@@ -11,13 +11,19 @@ internal sealed class ZLinkLz4StreamCompressionCodec : IZlinkStreamCompressionCo
 
     public static ReadOnlyMemory<byte> DecompressPayload(
         ReadOnlyMemory<byte> payload,
-        int maxDecompressedPayloadSize)
+        int maxDecompressedPayloadSize
+    )
     {
-        if (!ZlinkStreamLz4PayloadCodec.TryDecompress(
+        if (
+            !ZlinkStreamLz4PayloadCodec.TryDecompress(
                 payload,
                 maxDecompressedPayloadSize,
-                out var decompressed))
-            throw new InvalidOperationException("LZ4 decoded stream payload exceeds maximum stream payload size.");
+                out var decompressed
+            )
+        )
+            throw new InvalidOperationException(
+                "LZ4 decoded stream payload exceeds maximum stream payload size."
+            );
 
         return decompressed;
     }
@@ -27,7 +33,10 @@ internal sealed class ZLinkLz4StreamCompressionCodec : IZlinkStreamCompressionCo
         return CompressPayload(payload);
     }
 
-    public ReadOnlyMemory<byte> Decompress(ReadOnlyMemory<byte> payload, int maxDecompressedPayloadSize)
+    public ReadOnlyMemory<byte> Decompress(
+        ReadOnlyMemory<byte> payload,
+        int maxDecompressedPayloadSize
+    )
     {
         return DecompressPayload(payload, maxDecompressedPayloadSize);
     }

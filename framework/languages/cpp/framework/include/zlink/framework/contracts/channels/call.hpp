@@ -36,10 +36,7 @@ void ensure_blocking_submit_allowed ();
 class submit_once_t
 {
   public:
-    bool try_claim () noexcept
-    {
-        return !_claimed.exchange (true, std::memory_order_acq_rel);
-    }
+    bool try_claim () noexcept { return !_claimed.exchange (true, std::memory_order_acq_rel); }
 
   private:
     std::atomic_bool _claimed{false};
@@ -61,10 +58,9 @@ template <typename TReply> class request_call_t
 
     explicit request_call_t (result_t<TReply> result) : _immediate (std::move (result)) {}
 
-    request_call_t (std::string packet_name,
-                    submit_fn_t submit,
-                    preflight_fn_t preflight = {}) :
-        _packet_name (std::move (packet_name)), _submit (std::move (submit)),
+    request_call_t (std::string packet_name, submit_fn_t submit, preflight_fn_t preflight = {}) :
+        _packet_name (std::move (packet_name)),
+        _submit (std::move (submit)),
         _preflight (std::move (preflight))
     {
     }
@@ -103,9 +99,8 @@ template <typename TReply> class request_call_t
                 return task_t<TReply> (
                   admitted.error ()
                     ? detail::result_access_t::failure<TReply> (*admitted.error ())
-                    : result_t<TReply>::failure (
-                        framework_error_kind_t::internal_failure,
-                        "request preflight failed"));
+                    : result_t<TReply>::failure (framework_error_kind_t::internal_failure,
+                                                 "request preflight failed"));
             }
         }
         if (_immediate) {
@@ -121,8 +116,7 @@ template <typename TReply> class request_call_t
             return _submit (_packet_name, _timeout, _metadata);
         }
         auto pending = _submit (_packet_name, _timeout, _metadata);
-        return detail::reschedule_task (
-          std::move (pending), std::move (turn_plan->scheduler));
+        return detail::reschedule_task (std::move (pending), std::move (turn_plan->scheduler));
     }
 
     std::optional<result_t<TReply>> _immediate;
@@ -180,17 +174,17 @@ class channel_request_call_t
          * by MessageBus::request(). Copy every value needed by the coroutine
          * before the call object can be destroyed. The suspended operation must
          * own its request state instead of retaining this object's address. */
-        return start_owned<TReply> (
-          release_turn, _packet_name, _serializers, _submit, _timeout, _metadata);
+        return start_owned<TReply> (release_turn, _packet_name, _serializers, _submit, _timeout,
+                                    _metadata);
     }
 
     template <typename TReply>
     static task_t<TReply> start_owned (bool release_turn,
-                                      std::string packet_name,
-                                      serializer_registry_t *serializers,
-                                      submit_fn_t submit,
-                                      std::chrono::milliseconds timeout,
-                                      metadata_map_t metadata)
+                                       std::string packet_name,
+                                       serializer_registry_t *serializers,
+                                       submit_fn_t submit,
+                                       std::chrono::milliseconds timeout,
+                                       metadata_map_t metadata)
     {
         if (release_turn && !detail::current_serial_turn_allows_yield ()) {
             co_return co_await detail::unsupported_yield_task<TReply> ();
@@ -203,8 +197,8 @@ class channel_request_call_t
         auto turn_plan = detail::prepare_serial_turn_await (release_turn);
         auto pending = submit (packet_name, timeout, metadata);
         if (turn_plan) {
-            pending = detail::reschedule_task (
-              std::move (pending), std::move (turn_plan->scheduler));
+            pending =
+              detail::reschedule_task (std::move (pending), std::move (turn_plan->scheduler));
         }
         reply = co_await pending;
         co_return decode<TReply> (serializers, reply);
@@ -219,8 +213,8 @@ class channel_request_call_t
                                               "channel request has no serializer registry");
         }
         try {
-            return result_t<TReply>::success (serializers->get<TReply> ().deserialize (
-              detail::encoded_payload_from_raw (reply)));
+            return result_t<TReply>::success (
+              serializers->get<TReply> ().deserialize (detail::encoded_payload_from_raw (reply)));
         }
         catch (const framework_exception_t &error) {
             return detail::result_access_t::failure<TReply> (error);
@@ -252,24 +246,20 @@ class channel_request_call_t
 
 namespace detail
 {
-task_t<void>
-submit_one_way_task (std::function<result_t<void> ()> submit);
+task_t<void> submit_one_way_task (std::function<result_t<void> ()> submit);
 
-task_t<void>
-submit_logical_multicast_task (std::function<result_t<void> ()> submit,
-                               std::chrono::milliseconds timeout);
+task_t<void> submit_logical_multicast_task (std::function<result_t<void> ()> submit,
+                                            std::chrono::milliseconds timeout);
 
-task_t<void>
-submit_logical_multicast_async_task (std::function<task_t<void> ()> submit,
-                                     std::chrono::milliseconds timeout);
+task_t<void> submit_logical_multicast_async_task (std::function<task_t<void> ()> submit,
+                                                  std::chrono::milliseconds timeout);
 } // namespace detail
 
 class send_call_t
 {
   public:
     using metadata_map_t = std::map<std::string, std::string>;
-    using submit_fn_t =
-      std::function<result_t<void> (const std::string &, const metadata_map_t &)>;
+    using submit_fn_t = std::function<result_t<void> (const std::string &, const metadata_map_t &)>;
 
     explicit send_call_t (result_t<void> result) : _immediate (std::move (result)) {}
 
@@ -293,30 +283,30 @@ class send_call_t
     task_t<void> async ()
     {
         if (!_submission->try_claim ()) {
-            return task_t<void> (result_t<void>::failure (
-              framework_error_kind_t::invalid_operation,
-              "one-way call has already been submitted"));
+            return task_t<void> (
+              result_t<void>::failure (framework_error_kind_t::invalid_operation,
+                                       "one-way call has already been submitted"));
         }
         if (_immediate) {
-            return detail::submit_one_way_task (
-              [immediate = *_immediate] { return immediate; });
+            return detail::submit_one_way_task ([immediate = *_immediate] { return immediate; });
         }
         if (_async_submit) {
             auto pending = _async_submit (_packet_name, _metadata);
             if (auto turn_plan = detail::prepare_serial_turn_await (false)) {
-                pending = detail::reschedule_task (
-                  std::move (pending), std::move (turn_plan->scheduler));
+                pending =
+                  detail::reschedule_task (std::move (pending), std::move (turn_plan->scheduler));
             }
             return pending;
         }
         if (!_submit) {
-            return task_t<void> (result_t<void>::failure (
-              framework_error_kind_t::protocol_error,
-              "send call is not bound to a channel client"));
+            return task_t<void> (
+              result_t<void>::failure (framework_error_kind_t::protocol_error,
+                                       "send call is not bound to a channel client"));
         }
         return detail::submit_one_way_task (
-          [packet_name = _packet_name, metadata = _metadata,
-           submit = _submit] () { return submit (packet_name, metadata); });
+          [packet_name = _packet_name, metadata = _metadata, submit = _submit] () {
+              return submit (packet_name, metadata);
+          });
     }
 
   private:
@@ -324,8 +314,7 @@ class send_call_t
       std::function<task_t<void> (const std::string &, const metadata_map_t &)>;
 
     send_call_t (std::string packet_name, async_submit_fn_t submit) :
-        _packet_name (std::move (packet_name)),
-        _async_submit (std::move (submit))
+        _packet_name (std::move (packet_name)), _async_submit (std::move (submit))
     {
     }
 
@@ -346,8 +335,7 @@ class send_call_t
     metadata_map_t _metadata;
     submit_fn_t _submit;
     async_submit_fn_t _async_submit;
-    std::shared_ptr<detail::submit_once_t> _submission =
-      std::make_shared<detail::submit_once_t> ();
+    std::shared_ptr<detail::submit_once_t> _submission = std::make_shared<detail::submit_once_t> ();
 
     friend class message_bus_t;
     friend class bound_session_t;
@@ -361,21 +349,16 @@ class publish_call_t
     using submit_fn_t = std::function<result_t<void> (const metadata_map_t &)>;
     using async_submit_fn_t = std::function<task_t<void> (const metadata_map_t &)>;
 
-    explicit publish_call_t (result_t<void> result) :
-        _immediate (std::move (result))
-    {
-    }
+    explicit publish_call_t (result_t<void> result) : _immediate (std::move (result)) {}
 
-    explicit publish_call_t (
-      submit_fn_t submit,
-      std::chrono::milliseconds timeout = std::chrono::seconds (1)) :
+    explicit publish_call_t (submit_fn_t submit,
+                             std::chrono::milliseconds timeout = std::chrono::seconds (1)) :
         _submit (std::move (submit)), _timeout (timeout)
     {
     }
 
-    explicit publish_call_t (
-      async_submit_fn_t submit,
-      std::chrono::milliseconds timeout = std::chrono::seconds (1)) :
+    explicit publish_call_t (async_submit_fn_t submit,
+                             std::chrono::milliseconds timeout = std::chrono::seconds (1)) :
         _async_submit (std::move (submit)), _timeout (timeout)
     {
     }
@@ -389,9 +372,9 @@ class publish_call_t
     task_t<void> async ()
     {
         if (!_submission->try_claim ()) {
-            return task_t<void> (result_t<void>::failure (
-              framework_error_kind_t::invalid_operation,
-              "logical multicast call has already been submitted"));
+            return task_t<void> (
+              result_t<void>::failure (framework_error_kind_t::invalid_operation,
+                                       "logical multicast call has already been submitted"));
         }
         if (_immediate) {
             return task_t<void> (*_immediate);
@@ -426,8 +409,7 @@ class publish_call_t
     submit_fn_t _submit;
     async_submit_fn_t _async_submit;
     std::chrono::milliseconds _timeout{std::chrono::seconds (1)};
-    std::shared_ptr<detail::submit_once_t> _submission =
-      std::make_shared<detail::submit_once_t> ();
+    std::shared_ptr<detail::submit_once_t> _submission = std::make_shared<detail::submit_once_t> ();
 };
 
 class bound_session_send_call_t
@@ -479,10 +461,9 @@ class stream_write_call_t
     void submit ();
 
   private:
-    using submit_fn_t =
-      std::function<task_t<void> (
-        const detail::stream_header_t &, const zlink::message_t &,
-        std::optional<std::chrono::milliseconds>)>;
+    using submit_fn_t = std::function<task_t<void> (const detail::stream_header_t &,
+                                                    const zlink::message_t &,
+                                                    std::optional<std::chrono::milliseconds>)>;
 
     friend class stream_t;
     friend class detail::stream_write_call_state_t;
@@ -516,10 +497,9 @@ class stream_send_call_t
     void submit ();
 
   private:
-    using submit_fn_t =
-      std::function<task_t<void> (
-        const detail::stream_header_t &, const zlink::message_t &,
-        std::optional<std::chrono::milliseconds>)>;
+    using submit_fn_t = std::function<task_t<void> (const detail::stream_header_t &,
+                                                    const zlink::message_t &,
+                                                    std::optional<std::chrono::milliseconds>)>;
 
     friend class stream_t;
 

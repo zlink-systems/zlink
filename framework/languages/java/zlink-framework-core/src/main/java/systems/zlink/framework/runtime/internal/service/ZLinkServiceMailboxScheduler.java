@@ -11,10 +11,9 @@ import java.util.function.Consumer;
 /**
  * Level-ready mailbox scheduler shared by service runtime domains.
  *
- * <p>Admission, budget accounting, and the empty-to-ready transition occur
- * under one monitor. A mailbox can have only one active claim, matching the
- * preserved Core owner-mailbox state machine without exposing claim handles
- * through the Framework public API.
+ * <p>Admission, budget accounting, and the empty-to-ready transition occur under one monitor. A
+ * mailbox can have only one active claim, matching the preserved Core owner-mailbox state machine
+ * without exposing claim handles through the Framework public API.
  */
 final class ZLinkServiceMailboxScheduler {
     enum Domain {
@@ -50,8 +49,7 @@ final class ZLinkServiceMailboxScheduler {
     private final Set<Key> ready = new LinkedHashSet<>();
     private boolean sealed;
 
-    ZLinkServiceMailboxScheduler() {
-    }
+    ZLinkServiceMailboxScheduler() {}
 
     synchronized Admission admit(Owner owner, Domain domain, Work work) {
         Objects.requireNonNull(owner, "owner");
@@ -137,8 +135,7 @@ final class ZLinkServiceMailboxScheduler {
         return mailboxes.values().stream().mapToLong(mailbox -> mailbox.pendingBytes).sum();
     }
 
-    private record Key(Owner owner, Domain domain) {
-    }
+    private record Key(Owner owner, Domain domain) {}
 
     private static final class Mailbox {
         private final ArrayDeque<Work> queue = new ArrayDeque<>();

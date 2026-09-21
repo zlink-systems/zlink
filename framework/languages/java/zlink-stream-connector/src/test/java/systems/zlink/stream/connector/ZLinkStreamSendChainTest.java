@@ -5,16 +5,17 @@ import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
+import org.junit.jupiter.api.Test;
+
 import java.io.IOException;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.atomic.AtomicInteger;
-import org.junit.jupiter.api.Test;
 
 /**
- * The outbound chain carries every send of a connector, so a single failed
- * write must not decide the fate of the ones that follow it.
+ * The outbound chain carries every send of a connector, so a single failed write must not decide
+ * the fate of the ones that follow it.
  */
 final class ZLinkStreamSendChainTest {
     @Test
@@ -26,10 +27,11 @@ final class ZLinkStreamSendChainTest {
             int position = index;
             CompletableFuture<Void> gate = new CompletableFuture<>();
             gates.add(gate);
-            chain.enqueue(() -> {
-                started.add(position);
-                return gate;
-            });
+            chain.enqueue(
+                    () -> {
+                        started.add(position);
+                        return gate;
+                    });
         }
 
         assertEquals(List.of(0), started);
@@ -45,14 +47,18 @@ final class ZLinkStreamSendChainTest {
         ZLinkStreamSendChain chain = new ZLinkStreamSendChain();
         AtomicInteger writes = new AtomicInteger();
 
-        CompletableFuture<Void> first = chain.enqueue(() -> {
-            writes.incrementAndGet();
-            return CompletableFuture.failedFuture(new IOException("write failed"));
-        });
-        CompletableFuture<Void> second = chain.enqueue(() -> {
-            writes.incrementAndGet();
-            return CompletableFuture.completedFuture(null);
-        });
+        CompletableFuture<Void> first =
+                chain.enqueue(
+                        () -> {
+                            writes.incrementAndGet();
+                            return CompletableFuture.failedFuture(new IOException("write failed"));
+                        });
+        CompletableFuture<Void> second =
+                chain.enqueue(
+                        () -> {
+                            writes.incrementAndGet();
+                            return CompletableFuture.completedFuture(null);
+                        });
 
         assertTrue(first.isCompletedExceptionally());
         //  The second write ran, and it reports its own outcome rather than
@@ -65,16 +71,20 @@ final class ZLinkStreamSendChainTest {
     void oneFailureDoesNotPoisonTheChainForGood() {
         ZLinkStreamSendChain chain = new ZLinkStreamSendChain();
         AtomicInteger writes = new AtomicInteger();
-        chain.enqueue(() -> {
-            writes.incrementAndGet();
-            return CompletableFuture.failedFuture(new IOException("write failed"));
-        });
+        chain.enqueue(
+                () -> {
+                    writes.incrementAndGet();
+                    return CompletableFuture.failedFuture(new IOException("write failed"));
+                });
 
         for (int index = 0; index < 5; index++) {
-            assertNull(chain.enqueue(() -> {
-                writes.incrementAndGet();
-                return CompletableFuture.completedFuture(null);
-            }).join());
+            assertNull(
+                    chain.enqueue(
+                                    () -> {
+                                        writes.incrementAndGet();
+                                        return CompletableFuture.completedFuture(null);
+                                    })
+                            .join());
         }
 
         assertEquals(6, writes.get());
@@ -86,14 +96,18 @@ final class ZLinkStreamSendChainTest {
         CompletableFuture<Void> gate = new CompletableFuture<>();
         AtomicInteger writes = new AtomicInteger();
 
-        CompletableFuture<Void> first = chain.enqueue(() -> {
-            writes.incrementAndGet();
-            return gate;
-        });
-        CompletableFuture<Void> second = chain.enqueue(() -> {
-            writes.incrementAndGet();
-            return CompletableFuture.completedFuture(null);
-        });
+        CompletableFuture<Void> first =
+                chain.enqueue(
+                        () -> {
+                            writes.incrementAndGet();
+                            return gate;
+                        });
+        CompletableFuture<Void> second =
+                chain.enqueue(
+                        () -> {
+                            writes.incrementAndGet();
+                            return CompletableFuture.completedFuture(null);
+                        });
         assertEquals(1, writes.get());
 
         gate.completeExceptionally(new IOException("the connection went away"));
@@ -114,10 +128,12 @@ final class ZLinkStreamSendChainTest {
         chain.reset();
 
         AtomicInteger writes = new AtomicInteger();
-        CompletableFuture<Void> afterReset = chain.enqueue(() -> {
-            writes.incrementAndGet();
-            return CompletableFuture.completedFuture(null);
-        });
+        CompletableFuture<Void> afterReset =
+                chain.enqueue(
+                        () -> {
+                            writes.incrementAndGet();
+                            return CompletableFuture.completedFuture(null);
+                        });
 
         assertEquals(1, writes.get());
         assertNull(afterReset.join());

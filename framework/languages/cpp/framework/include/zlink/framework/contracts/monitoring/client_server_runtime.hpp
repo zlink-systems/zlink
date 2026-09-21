@@ -40,8 +40,7 @@ struct client_server_server_snapshot_t
     std::uint64_t lifecycle_generation = 0;
     int weight = 0;
     bool ready = false;
-    client_server_server_state_t state =
-      client_server_server_state_t::configured;
+    client_server_server_state_t state = client_server_server_state_t::configured;
     std::string descriptor_source;
     std::optional<std::string> last_failure;
 
@@ -82,13 +81,11 @@ class client_server_runtime_t
   public:
     virtual ~client_server_runtime_t () = default;
 
-    virtual client_server_channel_snapshot_t snapshot (
-      std::string channel_name) const = 0;
+    virtual client_server_channel_snapshot_t snapshot (std::string channel_name) const = 0;
     virtual std::unique_ptr<mesh_runtime_observation_t> observe (
       std::string channel_name,
       std::size_t capacity,
-      std::function<void (
-        const observed_status_t<client_server_runtime_event_t> &)> observer) = 0;
+      std::function<void (const observed_status_t<client_server_runtime_event_t> &)> observer) = 0;
     virtual bool is_ready (std::string channel_name) const = 0;
 };
 

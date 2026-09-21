@@ -80,8 +80,7 @@ void coroutine_executor_t::drain ()
     _pool.join ();
 }
 
-void coroutine_executor_t::post_native_continuation (
-  std::function<void ()> work)
+void coroutine_executor_t::post_native_continuation (std::function<void ()> work)
 {
     std::lock_guard lock (_mutex);
     if (_drained) {
@@ -168,17 +167,14 @@ task_scheduler_t capture_runtime_native_continuation_scheduler ()
 {
     {
         std::lock_guard lock (runtime::executor_mutex ());
-        if (runtime::executor_shutdown_requested ()
-            || runtime::executor_owner_count () == 0) {
+        if (runtime::executor_shutdown_requested () || runtime::executor_owner_count () == 0) {
             return {};
         }
     }
     return [] (std::function<void ()> work) {
         std::lock_guard lock (runtime::executor_mutex ());
-        if (runtime::executor_shutdown_requested ()
-            || runtime::executor_owner_count () == 0) {
-            throw std::runtime_error (
-              "handler coroutine executor is not accepting continuations");
+        if (runtime::executor_shutdown_requested () || runtime::executor_owner_count () == 0) {
+            throw std::runtime_error ("handler coroutine executor is not accepting continuations");
         }
         auto &configured = runtime::executor_instance ();
         if (!configured) {
@@ -186,8 +182,7 @@ task_scheduler_t capture_runtime_native_continuation_scheduler ()
                                    ? runtime::default_worker_count ()
                                    : runtime::configured_worker_count ();
             configured = std::make_unique<runtime::coroutine_executor_t> (workers);
-            runtime::executor_fast_path ().store (
-              configured.get (), std::memory_order_release);
+            runtime::executor_fast_path ().store (configured.get (), std::memory_order_release);
         }
         configured->post_native_continuation (std::move (work));
     };

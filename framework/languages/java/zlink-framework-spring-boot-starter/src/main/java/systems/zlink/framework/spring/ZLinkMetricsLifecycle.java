@@ -2,9 +2,12 @@ package systems.zlink.framework.spring;
 
 import io.micrometer.core.instrument.MeterRegistry;
 import io.micrometer.core.instrument.Metrics;
-import java.util.List;
+
 import org.springframework.context.SmartLifecycle;
+
 import systems.zlink.framework.runtime.internal.metrics.ZLinkRuntimeMetrics;
+
+import java.util.List;
 
 final class ZLinkMetricsLifecycle implements SmartLifecycle {
     private final MeterRegistry registry;
@@ -30,11 +33,17 @@ final class ZLinkMetricsLifecycle implements SmartLifecycle {
     @Override
     public void stop() {
         if (registration != null) {
-            try { registration.close(); } catch (Exception ignored) { }
+            try {
+                registration.close();
+            } catch (Exception ignored) {
+            }
         }
         Metrics.removeRegistry(registry);
         running = false;
     }
 
-    @Override public boolean isRunning() { return running; }
+    @Override
+    public boolean isRunning() {
+        return running;
+    }
 }

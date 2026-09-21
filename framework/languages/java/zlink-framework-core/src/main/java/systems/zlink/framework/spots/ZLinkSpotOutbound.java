@@ -1,28 +1,17 @@
 package systems.zlink.framework.spots;
 
 import systems.zlink.framework.channels.ZLinkPublishCall;
-import systems.zlink.framework.channels.ZLinkSendCall;
 import systems.zlink.framework.channels.ZLinkRequestCall;
+import systems.zlink.framework.channels.ZLinkSendCall;
 
 public interface ZLinkSpotOutbound {
-    ZLinkSpotSendCall sendToSpot(
-        String spotId,
-        Object message);
+    ZLinkSpotSendCall sendToSpot(String spotId, Object message);
 
-    ZLinkSpotRequestCall requestToSpot(
-        String spotId,
-        Object request);
+    ZLinkSpotRequestCall requestToSpot(String spotId, Object request);
 
-    ZLinkPublishCall publish(
-        String channelName,
-        String topic,
-        Object message);
+    ZLinkPublishCall publish(String channelName, String topic, Object message);
 
-    ZLinkSendCall sendToChannel(
-        String channelName,
-        Object message);
+    ZLinkSendCall sendToChannel(String channelName, Object message);
 
-    ZLinkRequestCall requestToChannel(
-        String channelName,
-        Object request);
+    ZLinkRequestCall requestToChannel(String channelName, Object request);
 }

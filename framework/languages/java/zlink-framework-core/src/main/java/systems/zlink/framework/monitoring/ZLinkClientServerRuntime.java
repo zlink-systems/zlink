@@ -6,8 +6,7 @@ public interface ZLinkClientServerRuntime {
     ZLinkClientServerStatus snapshot(String channelName);
 
     Flow.Publisher<ZLinkObservedStatus<ZLinkClientServerStatus>> observe(
-        String channelName,
-        int capacity);
+            String channelName, int capacity);
 
     boolean isReady(String channelName);
 }

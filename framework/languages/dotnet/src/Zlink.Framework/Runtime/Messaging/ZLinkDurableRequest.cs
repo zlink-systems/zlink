@@ -9,10 +9,15 @@ internal static class ZLinkDurableRequest
         IReadOnlyList<ReadOnlyMemory<byte>> wire,
         long startTimestamp,
         TimeSpan timeout,
-        Func<IReadOnlyList<ReadOnlyMemory<byte>>, TimeSpan, CancellationToken,
-            ValueTask<TReply>> submit,
+        Func<
+            IReadOnlyList<ReadOnlyMemory<byte>>,
+            TimeSpan,
+            CancellationToken,
+            ValueTask<TReply>
+        > submit,
         CancellationToken cancellationToken,
-        TimeProvider? timeProvider = null)
+        TimeProvider? timeProvider = null
+    )
     {
         timeProvider ??= TimeProvider.System;
         var admitted = false;
@@ -25,8 +30,7 @@ internal static class ZLinkDurableRequest
                 throw Exhausted(admitted, lastFailure);
             try
             {
-                return await submit(wire, remaining, cancellationToken)
-                    .ConfigureAwait(false);
+                return await submit(wire, remaining, cancellationToken).ConfigureAwait(false);
             }
             catch (Exception error) when (CanReplay(error, out var requestAdmitted))
             {
@@ -39,9 +43,11 @@ internal static class ZLinkDurableRequest
                 throw Exhausted(admitted, lastFailure);
             await Task.Delay(
                     remaining < TimeSpan.FromMilliseconds(10)
-                        ? remaining : TimeSpan.FromMilliseconds(10),
+                        ? remaining
+                        : TimeSpan.FromMilliseconds(10),
                     timeProvider,
-                    cancellationToken)
+                    cancellationToken
+                )
                 .ConfigureAwait(false);
         }
     }
@@ -53,24 +59,30 @@ internal static class ZLinkDurableRequest
         if (error is ZLinkFrameworkException { InnerException: { } cause })
             error = cause;
         admitted = error is ZlinkRequestException;
-        return error is ZlinkRequestException
-        {
-            Result: ZlinkRequestException.ErrorCode.NotConnected
-                or ZlinkRequestException.ErrorCode.TimedOut
-        } or ZlinkSubmitException
-        {
-            Result: ZlinkSubmitException.ErrorCode.NotConnected
-                or ZlinkSubmitException.ErrorCode.NotFound
-                or ZlinkSubmitException.ErrorCode.Backpressured
-                or ZlinkSubmitException.ErrorCode.NotAdmitted
-        };
+        return error
+            is ZlinkRequestException
+                {
+                    Result: ZlinkRequestException.ErrorCode.NotConnected
+                        or ZlinkRequestException.ErrorCode.TimedOut
+                }
+                or ZlinkSubmitException
+                {
+                    Result: ZlinkSubmitException.ErrorCode.NotConnected
+                        or ZlinkSubmitException.ErrorCode.NotFound
+                        or ZlinkSubmitException.ErrorCode.Backpressured
+                        or ZlinkSubmitException.ErrorCode.NotAdmitted
+                };
     }
 
     private static ZLinkFrameworkException Exhausted(bool admitted, Exception? cause) =>
-        new(admitted ? ZLinkFrameworkErrorKind.DeadlineExceeded
+        new(
+            admitted
+                ? ZLinkFrameworkErrorKind.DeadlineExceeded
                 : ZLinkFrameworkErrorKind.Unavailable,
-            admitted ? "Durable request reply was not received before its deadline."
+            admitted
+                ? "Durable request reply was not received before its deadline."
                 : "Durable request was not admitted before its deadline.",
             ZLinkRetryAdvice.RetryAfterBackoff,
-            cause);
+            cause
+        );
 }

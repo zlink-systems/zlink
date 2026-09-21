@@ -72,9 +72,10 @@ export class ZLinkInMemoryProviderLocationStore implements ZLinkLocationStore {
       }
       requireValue(mutation.bytes, mutation.retentionMs);
       const version = storeVersion((++this.nextVersion).toString());
-      const expiresAt = mutation.retentionMs === undefined
-        ? undefined
-        : new Date(storeNow.getTime() + mutation.retentionMs);
+      const expiresAt =
+        mutation.retentionMs === undefined
+          ? undefined
+          : new Date(storeNow.getTime() + mutation.retentionMs);
       this.values.set(mutation.key.value, {
         bytes: mutation.bytes.slice(),
         version,
@@ -85,10 +86,7 @@ export class ZLinkInMemoryProviderLocationStore implements ZLinkLocationStore {
     return { kind: 'applied', putVersions, storeNow };
   }
 
-  async scan(
-    request: ZLinkStoreScanRequest,
-    signal?: AbortSignal
-  ): Promise<ZLinkStoreScanResult> {
+  async scan(request: ZLinkStoreScanRequest, signal?: AbortSignal): Promise<ZLinkStoreScanResult> {
     signal?.throwIfAborted();
     requireScanRequest(request);
     const storeNow = this.now();
@@ -102,7 +100,7 @@ export class ZLinkInMemoryProviderLocationStore implements ZLinkLocationStore {
         items: [...this.values.entries()]
           .filter(([key]) => key.startsWith(request.prefix))
           .map(([key, value]) => ({ key: storeKey(key), value }))
-          .filter(item => this.liveValue(item.key.value, storeNow) !== undefined)
+          .filter((item) => this.liveValue(item.key.value, storeNow) !== undefined)
           .sort((left, right) => left.key.value.localeCompare(right.key.value))
       };
       this.scans.set(snapshotId, snapshot);
@@ -114,14 +112,13 @@ export class ZLinkInMemoryProviderLocationStore implements ZLinkLocationStore {
 
     const selected = snapshot.items.slice(offset, offset + request.limit);
     const nextOffset = offset + selected.length;
-    const nextCursor = nextOffset < snapshot.items.length
-      ? scanCursor(`${snapshotId}:${nextOffset}`)
-      : undefined;
+    const nextCursor =
+      nextOffset < snapshot.items.length ? scanCursor(`${snapshotId}:${nextOffset}`) : undefined;
     if (nextCursor === undefined) this.scans.delete(snapshotId);
     return {
       kind: 'page',
       value: {
-        items: selected.map(item => ({
+        items: selected.map((item) => ({
           key: item.key,
           value: {
             bytes: item.value.bytes.slice(),
@@ -169,12 +166,14 @@ function parseCursor(cursor: ZLinkStoreScanCursor): [string, number] {
 }
 
 function requireWriteRequest(request: ZLinkStoreWriteRequest): void {
-  const conditionKeys = request.conditions.map(condition => condition.key.value);
-  const mutationKeys = request.mutations.map(mutation => mutation.key.value);
+  const conditionKeys = request.conditions.map((condition) => condition.key.value);
+  const mutationKeys = request.mutations.map((mutation) => mutation.key.value);
   const keys = [...new Set([...conditionKeys, ...mutationKeys])];
-  if (new Set(conditionKeys).size !== conditionKeys.length
-    || new Set(mutationKeys).size !== mutationKeys.length
-    || keys.length > 2_048) {
+  if (
+    new Set(conditionKeys).size !== conditionKeys.length ||
+    new Set(mutationKeys).size !== mutationKeys.length ||
+    keys.length > 2_048
+  ) {
     throw new RangeError('Location Store write keys must be unique and bounded to 2,048.');
   }
   for (const key of keys) requireKey(key);

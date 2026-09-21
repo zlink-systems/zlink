@@ -6,7 +6,8 @@ internal readonly record struct ZLinkApplicationExecutionScope(
     string? ActorId,
     bool YieldAllowed,
     Func<string, bool>? IsMemberActor = null,
-    ZLinkApplicationExecutionClaim? Claim = null);
+    ZLinkApplicationExecutionClaim? Claim = null
+);
 
 internal sealed class ZLinkApplicationExecutionClaim
 {
@@ -20,7 +21,7 @@ internal sealed class ZLinkApplicationExecutionClaim
 internal enum ZLinkNestedRequestTerminator
 {
     Async = 0,
-    Yield = 1
+    Yield = 1,
 }
 
 internal static class ZLinkApplicationExecutionContext
@@ -28,18 +29,19 @@ internal static class ZLinkApplicationExecutionContext
     private static readonly AsyncLocal<ZLinkApplicationExecutionScope?> CurrentScope = new();
 
     public static ZLinkApplicationExecutionScope? Current =>
-        CurrentScope.Value is { Claim.IsActive: true } current
-            ? current
-            : null;
+        CurrentScope.Value is { Claim.IsActive: true } current ? current : null;
 
     public static void EnsureBlockingSubmitAllowed()
     {
-        if (ZLinkApplicationJobQueueInvocation.IsActive
+        if (
+            ZLinkApplicationJobQueueInvocation.IsActive
             || ZLinkSpotAmbientContext.CurrentOrDefault is not null
-            || ZLinkStateLane.Current is not null)
+            || ZLinkStateLane.Current is not null
+        )
             throw new ZLinkFrameworkException(
                 ZLinkFrameworkErrorKind.InvalidOperation,
-                "Blocking Submit is only valid on an application thread outside a runtime execution context.");
+                "Blocking Submit is only valid on an application thread outside a runtime execution context."
+            );
     }
 
     public static IDisposable Push(ZLinkApplicationExecutionScope scope)
@@ -52,79 +54,89 @@ internal static class ZLinkApplicationExecutionContext
 
     public static ZLinkSerialTurn RequireYieldTurn(string operation)
     {
-        if (Current is not { YieldAllowed: true }
-            || ZLinkSerialTurn.Current is not { } turn)
+        if (Current is not { YieldAllowed: true } || ZLinkSerialTurn.Current is not { } turn)
             throw new ZLinkFrameworkException(
                 ZLinkFrameworkErrorKind.InvalidOperation,
-                $"{operation} Yield is only valid in a SpotWide User Spot or Instance Spot application callback.");
+                $"{operation} Yield is only valid in a SpotWide User Spot or Instance Spot application callback."
+            );
 
         return turn;
     }
 
-    public static ZLinkSerialTurn RequireYieldTurn(
-        ZLinkSerialTurn? capturedTurn,
-        string operation)
+    public static ZLinkSerialTurn RequireYieldTurn(ZLinkSerialTurn? capturedTurn, string operation)
     {
         var current = RequireYieldTurn(operation);
         if (!ReferenceEquals(current, capturedTurn))
             throw new ZLinkFrameworkException(
                 ZLinkFrameworkErrorKind.InvalidOperation,
-                $"{operation} Yield must execute in the callback turn that created the call.");
+                $"{operation} Yield must execute in the callback turn that created the call."
+            );
         return current;
     }
 
     public static void ValidateActorRequest(
         string targetActorId,
         ZLinkNestedRequestTerminator terminator,
-        ZLinkApplicationExecutionScope? capturedScope = null)
+        ZLinkApplicationExecutionScope? capturedScope = null
+    )
     {
-        if (!TryResolveActive(capturedScope, out var current)) return;
-        if (current.ActorId is { } actorId
-            && string.Equals(actorId, targetActorId, StringComparison.Ordinal))
+        if (!TryResolveActive(capturedScope, out var current))
+            return;
+        if (
+            current.ActorId is { } actorId
+            && string.Equals(actorId, targetActorId, StringComparison.Ordinal)
+        )
             throw SameGate("An awaited request to the current Actor");
-        if (terminator == ZLinkNestedRequestTerminator.Async
+        if (
+            terminator == ZLinkNestedRequestTerminator.Async
             && current.ExecutionMode == ZLinkUserSpotExecutionMode.SpotWide
-            && current.IsMemberActor?.Invoke(targetActorId) == true)
+            && current.IsMemberActor?.Invoke(targetActorId) == true
+        )
             throw SameGate("An awaited request to a member Actor of the current User Spot");
     }
 
     public static void ValidateSpotRequest(
         string targetSpotId,
         ZLinkNestedRequestTerminator terminator,
-        ZLinkApplicationExecutionScope? capturedScope = null)
+        ZLinkApplicationExecutionScope? capturedScope = null
+    )
     {
-        if (terminator == ZLinkNestedRequestTerminator.Async
+        if (
+            terminator == ZLinkNestedRequestTerminator.Async
             && TryResolveActive(capturedScope, out var current)
-            && current is
-            {
-                ExecutionMode: ZLinkUserSpotExecutionMode.SpotWide,
-                SpotId: var spotId
-            }
-            && string.Equals(spotId, targetSpotId, StringComparison.Ordinal))
+            && current is { ExecutionMode: ZLinkUserSpotExecutionMode.SpotWide, SpotId: var spotId }
+            && string.Equals(spotId, targetSpotId, StringComparison.Ordinal)
+        )
             throw SameGate("An awaited request to the current User Spot");
     }
 
     public static void RejectActorJoinWhenSameGate(
         string? targetSpotId,
-        ZLinkApplicationExecutionScope? capturedScope = null)
+        ZLinkApplicationExecutionScope? capturedScope = null
+    )
     {
-        if (!TryResolveActive(capturedScope, out var current)
-            || current is not
-            {
-                ExecutionMode: ZLinkUserSpotExecutionMode.SpotWide,
-                ActorId: not null,
-                SpotId: var currentSpotId
-            })
+        if (
+            !TryResolveActive(capturedScope, out var current)
+            || current
+                is not {
+                    ExecutionMode: ZLinkUserSpotExecutionMode.SpotWide,
+                    ActorId: not null,
+                    SpotId: var currentSpotId
+                }
+        )
             return;
 
-        if (targetSpotId is null
-            || !string.Equals(currentSpotId, targetSpotId, StringComparison.Ordinal))
+        if (
+            targetSpotId is null
+            || !string.Equals(currentSpotId, targetSpotId, StringComparison.Ordinal)
+        )
             throw SameGate("Actor join from a SpotWide User Spot callback");
     }
 
     private static bool TryResolveActive(
         ZLinkApplicationExecutionScope? capturedScope,
-        out ZLinkApplicationExecutionScope scope)
+        out ZLinkApplicationExecutionScope scope
+    )
     {
         if (CurrentScope.Value is { Claim.IsActive: true } current)
         {
@@ -145,12 +157,14 @@ internal static class ZLinkApplicationExecutionContext
     {
         return new ZLinkFrameworkException(
             ZLinkFrameworkErrorKind.InvalidOperation,
-            $"{operation} would wait for the execution gate held by the current callback.");
+            $"{operation} would wait for the execution gate held by the current callback."
+        );
     }
 
     private sealed class Revert(
         ZLinkApplicationExecutionScope? previous,
-        ZLinkApplicationExecutionClaim claim) : IDisposable
+        ZLinkApplicationExecutionClaim claim
+    ) : IDisposable
     {
         public void Dispose()
         {

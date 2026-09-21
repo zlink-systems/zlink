@@ -2,7 +2,9 @@ namespace Zlink.Framework.Runtime.Spots;
 
 internal sealed class ZLinkSpotPacketRegistry
 {
-    private readonly Dictionary<string, ZLinkSpotDescriptor> _descriptorsByName = new(StringComparer.Ordinal);
+    private readonly Dictionary<string, ZLinkSpotDescriptor> _descriptorsByName = new(
+        StringComparer.Ordinal
+    );
     private readonly List<ZLinkSpotPacketRegistration> _registrations = [];
 
     public bool HasPackets => _descriptorsByName.Count > 0;
@@ -36,12 +38,19 @@ internal sealed class ZLinkSpotPacketRegistry
         {
             var descriptor = packet.Method is { } method
                 ? ZLinkSpotDescriptorFactory.CreateAttributedRequestDescriptor(
-                    packet.HandlerType, method, packet.PacketName)
+                    packet.HandlerType,
+                    method,
+                    packet.PacketName
+                )
                 : ZLinkSpotDescriptorFactory.CreatePacketDescriptor(
-                    packet.HandlerType, spot.GetType(), packet.PacketName);
+                    packet.HandlerType,
+                    spot.GetType(),
+                    packet.PacketName
+                );
             if (!_descriptorsByName.TryAdd(descriptor.MessageName, descriptor))
                 throw new ZLinkConfigurationException(
-                    $"SPOT packet handler '{descriptor.MessageName}' is already registered.");
+                    $"SPOT packet handler '{descriptor.MessageName}' is already registered."
+                );
         }
     }
 

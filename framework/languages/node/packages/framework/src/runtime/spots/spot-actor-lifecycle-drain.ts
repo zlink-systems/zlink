@@ -1,8 +1,5 @@
 import type { ZLinkActor } from '../../contracts';
-import type {
-  ZLinkBackendActorRef,
-  ZLinkBackendSpot
-} from '../backend/contracts';
+import type { ZLinkBackendActorRef, ZLinkBackendSpot } from '../backend/contracts';
 import type { ZLinkSpotSerialTurnExecutor } from './spot-serial-turn-executor';
 import { ZLINK_RECV_DONT_WAIT } from './spot-native-flags';
 
@@ -47,9 +44,10 @@ export class ZLinkSpotActorLifecycleDrain {
         await this.options.waitIdle();
         return;
       }
-      const actorRef = event.kind === ZLINK_SPOT_ACTOR_LIFECYCLE_LEFT
-        ? event.info.previousActor
-        : event.info.currentActor;
+      const actorRef =
+        event.kind === ZLINK_SPOT_ACTOR_LIFECYCLE_LEFT
+          ? event.info.previousActor
+          : event.info.currentActor;
       const actorId = actorRef?.actorId;
       if (actorId === undefined || this.options.resolveActor(actorId) === undefined) {
         continue;

@@ -66,8 +66,8 @@ export class ZLinkStateLane {
   throwIfReentrant(): void {
     if (this.isOnLane) {
       throw new Error(
-        'This code already runs on the state lane it is trying to enter. Call the component\'s '
-        + 'private state method directly instead of re-entering its public surface.'
+        "This code already runs on the state lane it is trying to enter. Call the component's " +
+          'private state method directly instead of re-entering its public surface.'
       );
     }
   }

@@ -5,7 +5,7 @@ internal enum ZLinkLocationKind
     Invalid = 0,
     MeshNode = 1,
     Spot = 2,
-    Actor = 3
+    Actor = 3,
 }
 
 internal abstract record ZLinkLocationKey
@@ -13,7 +13,9 @@ internal abstract record ZLinkLocationKey
     private ZLinkLocationKey() { }
 
     internal sealed record MeshNode(ZLinkMeshNodeDescriptorKey Key) : ZLinkLocationKey;
+
     internal sealed record Spot(ZLinkSpotLocationKey Key) : ZLinkLocationKey;
+
     internal sealed record Actor(ZLinkActorLocationKey Key) : ZLinkLocationKey;
 }
 
@@ -27,18 +29,17 @@ internal interface IZLinkLocationWatchStore
 {
     IAsyncEnumerable<ZLinkLocationChanged> WatchAsync(
         ZLinkLocationWatchFilter filter,
-        CancellationToken cancellationToken = default);
+        CancellationToken cancellationToken = default
+    );
 }
 
-internal sealed record ZLinkLocationWatchFilter(
-    ZLinkLocationKind Kind,
-    string? MeshName = null);
+internal sealed record ZLinkLocationWatchFilter(ZLinkLocationKind Kind, string? MeshName = null);
 
 internal enum ZLinkLocationChangeType
 {
     Upserted = 1,
     Removed = 2,
-    Expired = 3
+    Expired = 3,
 }
 
 /// <summary>
@@ -50,4 +51,5 @@ internal sealed record ZLinkLocationChanged(
     ZLinkLocationKey Key,
     ZLinkLocationChangeType ChangeType,
     ulong Generation,
-    DateTimeOffset UpdatedAt);
+    DateTimeOffset UpdatedAt
+);

@@ -16,7 +16,8 @@ internal sealed class ZLinkSessionContext : IZLinkSessionContext
         IZLinkSessionHandlerRegistry handlers,
         Func<ValueTask> closeAsync,
         Func<CancellationToken, ValueTask> closeByProxyAsync,
-        bool actorDispatchEnabled = true)
+        bool actorDispatchEnabled = true
+    )
     {
         Runtime = runtime;
         _stream = stream;
@@ -28,8 +29,8 @@ internal sealed class ZLinkSessionContext : IZLinkSessionContext
         _actorSurface = new ZLinkSessionActorsContext(this, ActorCoordinator);
     }
 
-    private ZLinkSessionStreamTransport Transport
-        => _transport ??= new ZLinkSessionStreamTransport(_stream, TraceWritten);
+    private ZLinkSessionStreamTransport Transport =>
+        _transport ??= new ZLinkSessionStreamTransport(_stream, TraceWritten);
 
     internal ZLinkFrameworkRuntime Runtime { get; }
 
@@ -38,7 +39,8 @@ internal sealed class ZLinkSessionContext : IZLinkSessionContext
     internal ZLinkStreamSessionRuntime? SessionRuntime { get; set; }
 
     internal ZLinkCodecRegistryBuilder Codecs => Runtime.Registration.Codecs;
-    internal IZlinkStreamCompressionCodec? CompressionCodec => Runtime.Registration.StreamCompressionCodec;
+    internal IZlinkStreamCompressionCodec? CompressionCodec =>
+        Runtime.Registration.StreamCompressionCodec;
     internal ZLinkSessionDispatchContext? CurrentDispatchContext => _currentDispatch;
 
     public string SessionId => _stream.SessionId;
@@ -68,22 +70,24 @@ internal sealed class ZLinkSessionContext : IZLinkSessionContext
     internal async ValueTask<ZLinkOneWaySubmitResult> RelayActorRefAsync(
         ZLinkSessionActor actor,
         Message payload,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken
+    )
     {
-        var dispatch = _currentDispatch
-                       ?? throw new InvalidOperationException(
-                           "Session actor relay requires an active stream dispatch.");
-        var header = dispatch.RuntimeState as ZlinkStreamHeader
-                     ?? throw new InvalidOperationException("Session actor relay requires runtime dispatch state.");
+        var dispatch =
+            _currentDispatch
+            ?? throw new InvalidOperationException(
+                "Session actor relay requires an active stream dispatch."
+            );
+        var header =
+            dispatch.RuntimeState as ZlinkStreamHeader
+            ?? throw new InvalidOperationException(
+                "Session actor relay requires runtime dispatch state."
+            );
 
         try
         {
-            await ActorCoordinator.RelayToActorAsync(
-                    actor,
-                    header,
-                    payload,
-                    ReplyActorRawAsync,
-                    cancellationToken)
+            await ActorCoordinator
+                .RelayToActorAsync(actor, header, payload, ReplyActorRawAsync, cancellationToken)
                 .ConfigureAwait(false);
             return new ZLinkOneWaySubmitResult(ZLinkOneWaySubmitStatus.Submitted);
         }
@@ -104,32 +108,35 @@ internal sealed class ZLinkSessionContext : IZLinkSessionContext
 
     internal async ValueTask NotifyActorRefDisconnectedAsync(
         ZLinkSessionActor actor,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken
+    )
     {
-        await ActorCoordinator.NotifyActorDisconnectedAsync(actor, cancellationToken)
+        await ActorCoordinator
+            .NotifyActorDisconnectedAsync(actor, cancellationToken)
             .ConfigureAwait(false);
     }
 
     internal async ValueTask CleanupAsync(CancellationToken cancellationToken)
     {
         await ActorCoordinator.CleanupAsync(this, cancellationToken).ConfigureAwait(false);
-        if (_stream.RoutingId is { } sessionRid) Runtime.CleanupActorSessionsForSession(sessionRid);
+        if (_stream.RoutingId is { } sessionRid)
+            Runtime.CleanupActorSessionsForSession(sessionRid);
     }
 
-    internal ZLinkSessionDispatchContext EnterDispatch(
-        ZlinkStreamHeader header)
+    internal ZLinkSessionDispatchContext EnterDispatch(ZlinkStreamHeader header)
     {
-        var metadata = header.Metadata.Count == 0
-            ? ZLinkMessageMetadata.Empty
-            : new ZLinkMessageMetadata(
-                new Dictionary<string, string>(
-                    header.Metadata.Values,
-                    StringComparer.Ordinal));
+        var metadata =
+            header.Metadata.Count == 0
+                ? ZLinkMessageMetadata.Empty
+                : new ZLinkMessageMetadata(
+                    new Dictionary<string, string>(header.Metadata.Values, StringComparer.Ordinal)
+                );
         _currentDispatch = new ZLinkSessionDispatchContext(
             header.Name,
             metadata,
             header.RequestSeq.HasValue,
-            header);
+            header
+        );
         return _currentDispatch;
     }
 
@@ -147,7 +154,8 @@ internal sealed class ZLinkSessionContext : IZLinkSessionContext
         Message payload,
         CancellationToken cancellationToken,
         bool isReply = false,
-        TimeSpan? admissionTimeout = null)
+        TimeSpan? admissionTimeout = null
+    )
     {
         try
         {
@@ -156,42 +164,39 @@ internal sealed class ZLinkSessionContext : IZLinkSessionContext
                 : null;
             if (deadline is not null)
                 deadline.CancelAfter(admissionTimeout!.Value);
-            await Transport.SubmitAsync(
-                    payload,
-                    deadline?.Token ?? cancellationToken)
+            await Transport
+                .SubmitAsync(payload, deadline?.Token ?? cancellationToken)
                 .ConfigureAwait(false);
-            return new ZLinkOneWaySubmitResult(
-                ZLinkOneWaySubmitStatus.Submitted);
+            return new ZLinkOneWaySubmitResult(ZLinkOneWaySubmitStatus.Submitted);
         }
         catch (OperationCanceledException)
-            when (admissionTimeout is not null
-                  && !cancellationToken.IsCancellationRequested)
+            when (admissionTimeout is not null && !cancellationToken.IsCancellationRequested)
         {
-            return new ZLinkOneWaySubmitResult(
-                ZLinkOneWaySubmitStatus.TimedOut);
+            return new ZLinkOneWaySubmitResult(ZLinkOneWaySubmitStatus.TimedOut);
         }
         catch (ZlinkSubmitException failure)
-            when (failure.Result is
-                  ZlinkSubmitException.ErrorCode.Backpressured
-                  or ZlinkSubmitException.ErrorCode.NotFound
-                  or ZlinkSubmitException.ErrorCode.NotConnected
-                  or ZlinkSubmitException.ErrorCode.Terminated)
+            when (failure.Result
+                    is ZlinkSubmitException.ErrorCode.Backpressured
+                        or ZlinkSubmitException.ErrorCode.NotFound
+                        or ZlinkSubmitException.ErrorCode.NotConnected
+                        or ZlinkSubmitException.ErrorCode.Terminated
+            )
         {
             return failure.Result switch
             {
-                ZlinkSubmitException.ErrorCode.Backpressured =>
-                    new ZLinkOneWaySubmitResult(
-                        ZLinkOneWaySubmitStatus.TimedOut),
-                ZlinkSubmitException.ErrorCode.NotFound =>
-                    new ZLinkOneWaySubmitResult(
-                        ZLinkOneWaySubmitStatus.TargetNotFound),
-                ZlinkSubmitException.ErrorCode.NotConnected =>
-                    new ZLinkOneWaySubmitResult(
-                        ZLinkOneWaySubmitStatus.RouteNotConnected),
-                ZlinkSubmitException.ErrorCode.Terminated =>
-                    new ZLinkOneWaySubmitResult(
-                        ZLinkOneWaySubmitStatus.Shutdown),
-                _ => throw new System.Diagnostics.UnreachableException()
+                ZlinkSubmitException.ErrorCode.Backpressured => new ZLinkOneWaySubmitResult(
+                    ZLinkOneWaySubmitStatus.TimedOut
+                ),
+                ZlinkSubmitException.ErrorCode.NotFound => new ZLinkOneWaySubmitResult(
+                    ZLinkOneWaySubmitStatus.TargetNotFound
+                ),
+                ZlinkSubmitException.ErrorCode.NotConnected => new ZLinkOneWaySubmitResult(
+                    ZLinkOneWaySubmitStatus.RouteNotConnected
+                ),
+                ZlinkSubmitException.ErrorCode.Terminated => new ZLinkOneWaySubmitResult(
+                    ZLinkOneWaySubmitStatus.Shutdown
+                ),
+                _ => throw new System.Diagnostics.UnreachableException(),
             };
         }
         catch
@@ -206,52 +211,52 @@ internal sealed class ZLinkSessionContext : IZLinkSessionContext
             ? ZLinkMessageFlowOutcome.Replied
             : ZLinkMessageFlowOutcome.Sent;
         var flow = Runtime.Flow;
-        if (!flow.Enabled(outcome)) return;
+        if (!flow.Enabled(outcome))
+            return;
 
         var messageKind = header.Kind switch
         {
             ZlinkStreamMessageKind.Response => ZLinkDispatchMessageKind.Response,
             ZlinkStreamMessageKind.Error => ZLinkDispatchMessageKind.Error,
-            _ => ZLinkDispatchMessageKind.Send
+            _ => ZLinkDispatchMessageKind.Send,
         };
-        flow.Trace(new ZLinkMessageFlowEvent(
-            outcome,
-            ZLinkDispatchErrorSurface.StreamSession,
-            messageKind,
-            header.Name,
-            CorrelationId: header.CorrelationId,
-            SourceRid: RoutingId?.ToString()));
+        flow.Trace(
+            new ZLinkMessageFlowEvent(
+                outcome,
+                ZLinkDispatchErrorSurface.StreamSession,
+                messageKind,
+                header.Name,
+                CorrelationId: header.CorrelationId,
+                SourceRid: RoutingId?.ToString()
+            )
+        );
     }
 
     internal ValueTask ReplyActorRawAsync(
         ZlinkStreamHeader requestHeader,
         ZLinkActorReply reply,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken
+    )
     {
         if (!TryClaimReply(requestHeader))
             throw new InvalidOperationException("The reply token has already been used.");
-        return Transport.ReplyRawAsync(
-            requestHeader,
-            reply,
-            cancellationToken);
+        return Transport.ReplyRawAsync(requestHeader, reply, cancellationToken);
     }
 
     internal ValueTask ReplyErrorAsync(
         ZlinkStreamHeader requestHeader,
         Exception exception,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken
+    )
     {
-        return Transport.ReplyErrorAsync(
-            requestHeader,
-            exception,
-            cancellationToken);
+        return Transport.ReplyErrorAsync(requestHeader, exception, cancellationToken);
     }
 
     private bool TryClaimReply(ZlinkStreamHeader requestHeader)
     {
         return _currentDispatch is { } dispatch
-               && ReferenceEquals(dispatch.RuntimeState, requestHeader)
-               && dispatch.TryClaimReply();
+            && ReferenceEquals(dispatch.RuntimeState, requestHeader)
+            && dispatch.TryClaimReply();
     }
 }
 
@@ -270,20 +275,23 @@ internal sealed class ZLinkSessionClientContext(ZLinkSessionContext context) : I
 
 internal sealed class ZLinkSessionActorsContext(
     ZLinkSessionContext context,
-    ZLinkSessionActorCoordinator actors) : IZLinkSessionActors
+    ZLinkSessionActorCoordinator actors
+) : IZLinkSessionActors
 {
     public IReadOnlyCollection<IZLinkSessionActor> Bound => actors.BoundActors;
 
     public ValueTask<IZLinkSessionActor> BindAsync(
         ActorRef actor,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default
+    )
     {
         return actors.BindActorAsync(context, actor, cancellationToken);
     }
 
     public ValueTask<IZLinkSessionActor> BindOrGetAsync(
         ActorRef actor,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default
+    )
     {
         return actors.BindOrGetActorAsync(context, actor, cancellationToken);
     }

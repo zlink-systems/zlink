@@ -5,7 +5,12 @@ import { request, type Dispatcher } from 'undici';
 import type { BodyChunkProvider, DownloadSink, ZLinkHttpMethod } from '../types';
 import type { HttpClientOptions } from './options';
 import { CookieJar } from './cookie-jar';
-import { isRedirectStatus, makeTarget, resolveLocation, rewriteForRedirect } from './redirect-policy';
+import {
+  isRedirectStatus,
+  makeTarget,
+  resolveLocation,
+  rewriteForRedirect
+} from './redirect-policy';
 import { ResponseBodyReader } from './response-body-reader';
 import { redirectLimitExceeded } from './http-client-errors';
 import { httpClientUserAgent } from './version';
@@ -39,7 +44,7 @@ export class RequestPerformer {
   constructor(
     private readonly options: HttpClientOptions,
     private readonly cookieJar: CookieJar,
-    private readonly dispatcher: Dispatcher | undefined,
+    private readonly dispatcher: Dispatcher | undefined
   ) {
     this.bodyReader = new ResponseBodyReader(options);
   }
@@ -64,20 +69,29 @@ export class RequestPerformer {
         body: this.buildBody(body, bodyProvider),
         dispatcher: this.dispatcher,
         maxRedirections: 0,
-        signal,
+        signal
       });
 
       const status = response.statusCode;
       if (this.options.cookies) {
         const setCookie = response.headers['set-cookie'];
-        const values = Array.isArray(setCookie) ? setCookie : setCookie === undefined ? [] : [setCookie];
+        const values = Array.isArray(setCookie)
+          ? setCookie
+          : setCookie === undefined
+            ? []
+            : [setCookie];
         for (const value of values) {
           this.cookieJar.store(current.hostname, value);
         }
       }
 
       const location = headerValue(response.headers, 'location');
-      if (this.options.followRedirects > 0 && isRedirectStatus(status) && location !== undefined && location.length > 0) {
+      if (
+        this.options.followRedirects > 0 &&
+        isRedirectStatus(status) &&
+        location !== undefined &&
+        location.length > 0
+      ) {
         if (redirectsLeft === 0) {
           await drain(response.body);
           throw redirectLimitExceeded();
@@ -112,7 +126,7 @@ export class RequestPerformer {
         get body(): string {
           text ??= bytes.toString('utf8');
           return text;
-        },
+        }
       };
     }
   }
@@ -121,11 +135,11 @@ export class RequestPerformer {
     spec: HttpRequestSpec,
     target: URL,
     keepAuthorization: boolean,
-    hasBody: boolean,
+    hasBody: boolean
   ): Record<string, string> {
     const headers: Record<string, string> = {
       'user-agent': httpClientUserAgent,
-      accept: 'application/json',
+      accept: 'application/json'
     };
     if (this.options.compression) {
       headers['accept-encoding'] = 'gzip, deflate';
@@ -142,7 +156,11 @@ export class RequestPerformer {
     }
 
     if (this.options.cookies) {
-      const cookieHeader = this.cookieJar.headerFor(target.hostname, target.pathname, target.protocol === 'https:');
+      const cookieHeader = this.cookieJar.headerFor(
+        target.hostname,
+        target.pathname,
+        target.protocol === 'https:'
+      );
       if (cookieHeader.length > 0) {
         headers['cookie'] = cookieHeader;
       }
@@ -152,7 +170,7 @@ export class RequestPerformer {
 
   private buildBody(
     body: string | undefined,
-    bodyProvider: BodyChunkProvider | undefined,
+    bodyProvider: BodyChunkProvider | undefined
   ): string | Readable | undefined {
     if (bodyProvider !== undefined) {
       const provider = bodyProvider;
@@ -163,7 +181,7 @@ export class RequestPerformer {
               yield chunk;
             }
           }
-        })(),
+        })()
       );
     }
     return body;
@@ -173,7 +191,7 @@ export class RequestPerformer {
 function applyHeaders(
   target: Record<string, string>,
   headers: Readonly<Record<string, string>>,
-  keepAuthorization: boolean,
+  keepAuthorization: boolean
 ): void {
   for (const [name, value] of Object.entries(headers)) {
     const lower = name.toLowerCase();
@@ -186,7 +204,7 @@ function applyHeaders(
 
 function headerValue(
   headers: Record<string, string | string[] | undefined>,
-  name: string,
+  name: string
 ): string | undefined {
   const value = headers[name];
   if (value === undefined) {

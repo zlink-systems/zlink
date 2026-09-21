@@ -10,17 +10,9 @@ import {
   SubmitResult,
   type ZLinkBackendMessageLike as MessageLike
 } from '../backend/runtime-values';
-import {
-  ZLinkFrameworkException,
-  type RoutingId
-} from '../../contracts';
-import {
-  ZLinkSubmitStatus,
-  type ZLinkSubmitResult
-} from '../messaging/submission-result';
-import {
-  ZLinkSpotKind
-} from '../../contracts';
+import { ZLinkFrameworkException, type RoutingId } from '../../contracts';
+import { ZLinkSubmitStatus, type ZLinkSubmitResult } from '../messaging/submission-result';
+import { ZLinkSpotKind } from '../../contracts';
 import {
   ZLinkRuntimeMessageFlowOutcome as ZLinkMessageFlowOutcome,
   ZLinkRuntimeDispatchErrorAction as ZLinkDispatchErrorAction,
@@ -28,9 +20,7 @@ import {
   ZLinkDispatchErrorSurface,
   ZLinkDispatchMessageKind
 } from '../../contracts/Dispatch/ZLinkDispatchOptions';
-import {
-  awaitWithAbort
-} from '../abort';
+import { awaitWithAbort } from '../abort';
 import type { ZLinkBackendMeshNode } from '../backend/contracts';
 import {
   closeMeshCompletion,
@@ -52,10 +42,7 @@ import type {
   ZLinkSpotAddressTransport,
   ZLinkSpotRoutedTransport
 } from '../spots/spot-outbound';
-import type {
-  ZLinkSpotRouteResolver,
-  ZLinkSpotRouteTarget
-} from '../spots/spot-routing-internal';
+import type { ZLinkSpotRouteResolver, ZLinkSpotRouteTarget } from '../spots/spot-routing-internal';
 
 export interface ZLinkHostSpotAddressTransportOptions {
   readonly resolver: () => ZLinkSpotRouteResolver | undefined;
@@ -75,9 +62,7 @@ export interface ZLinkHostSpotAddressTransportOptions {
   readonly dispatchErrors?: ZLinkDispatchErrorReporter;
 }
 
-export function hasObjectClientCapability(
-  role: 'none' | 'client' | 'server' | undefined
-): boolean {
+export function hasObjectClientCapability(role: 'none' | 'client' | 'server' | undefined): boolean {
   return role === 'client' || role === 'server';
 }
 
@@ -130,136 +115,142 @@ export class ZLinkHostSpotAddressTransport implements ZLinkSpotAddressTransport 
     const timeoutMs = initialSendTimeoutMs(this.options, call);
     const deadline = createSpotAddressDeadline(timeoutMs, call.signal);
     try {
-    const existing = await this.resolveExisting(spotId, deadline.signal);
-    deadline.requireRemaining();
-    if (existing !== undefined) {
-      this.validateExisting(existing, call);
-      deadline.setOwnerTimeout(this.sendTimeoutMsForRouteChannel(existing.routerChannelId));
-      try {
-        const result = await awaitWithAbort(this.options.routed.sendToSpot(existing, message, {
-          timeoutMs: deadline.requireRemaining(),
-          signal: deadline.signal,
-          metadata: call.metadata
-        }), deadline.signal);
-        if (result.status === ZLinkSubmitStatus.Submitted) {
-          this.traceInstanceAddress(
-            ZLinkMessageFlowOutcome.Sent,
-            ZLinkDispatchMessageKind.Send,
-            spotId,
-            message,
-            existing.routerChannelId,
-            existing.stableType,
-            existing.targetNodeRid
+      const existing = await this.resolveExisting(spotId, deadline.signal);
+      deadline.requireRemaining();
+      if (existing !== undefined) {
+        this.validateExisting(existing, call);
+        deadline.setOwnerTimeout(this.sendTimeoutMsForRouteChannel(existing.routerChannelId));
+        try {
+          const result = await awaitWithAbort(
+            this.options.routed.sendToSpot(existing, message, {
+              timeoutMs: deadline.requireRemaining(),
+              signal: deadline.signal,
+              metadata: call.metadata
+            }),
+            deadline.signal
           );
-        } else {
+          if (result.status === ZLinkSubmitStatus.Submitted) {
+            this.traceInstanceAddress(
+              ZLinkMessageFlowOutcome.Sent,
+              ZLinkDispatchMessageKind.Send,
+              spotId,
+              message,
+              existing.routerChannelId,
+              existing.stableType,
+              existing.targetNodeRid
+            );
+          } else {
+            this.traceInstanceAddress(
+              submitResultFlowOutcome(result.status),
+              ZLinkDispatchMessageKind.Send,
+              spotId,
+              message,
+              existing.routerChannelId,
+              existing.stableType,
+              existing.targetNodeRid,
+              submitResultReason(result.status)
+            );
+          }
+          if (
+            result.status === ZLinkSubmitStatus.TargetNotFound ||
+            result.status === ZLinkSubmitStatus.RouteNotConnected
+          ) {
+            this.options.resolver()?.invalidate?.(spotId);
+          }
+          return result;
+        } catch (error) {
+          if (isSpotRouteRefreshError(error)) {
+            this.options.resolver()?.invalidate?.(spotId);
+          }
+          const reason = addressedInstanceErrorReason(error);
           this.traceInstanceAddress(
-            submitResultFlowOutcome(result.status),
+            reason === ZLinkDispatchErrorReason.Backpressure
+              ? ZLinkMessageFlowOutcome.Backpressured
+              : ZLinkMessageFlowOutcome.Dropped,
             ZLinkDispatchMessageKind.Send,
             spotId,
             message,
             existing.routerChannelId,
             existing.stableType,
             existing.targetNodeRid,
-            submitResultReason(result.status)
+            reason
           );
+          throw error;
         }
-        if (
-          result.status === ZLinkSubmitStatus.TargetNotFound
-          || result.status === ZLinkSubmitStatus.RouteNotConnected
-        ) {
-          this.options.resolver()?.invalidate?.(spotId);
-        }
-        return result;
-      } catch (error) {
-        if (isSpotRouteRefreshError(error)) {
-          this.options.resolver()?.invalidate?.(spotId);
-        }
-        const reason = addressedInstanceErrorReason(error);
+      }
+      if (!call.instanceSpot) {
+        return { status: ZLinkSubmitStatus.TargetNotFound };
+      }
+      const selected = this.selectMissingTarget(spotId, call);
+      if (selected.kind === 'unsupported') {
         this.traceInstanceAddress(
-          reason === ZLinkDispatchErrorReason.Backpressure
-            ? ZLinkMessageFlowOutcome.Backpressured
-            : ZLinkMessageFlowOutcome.Dropped,
+          ZLinkMessageFlowOutcome.Dropped,
           ZLinkDispatchMessageKind.Send,
           spotId,
           message,
-          existing.routerChannelId,
-          existing.stableType,
-          existing.targetNodeRid,
-          reason
+          call.initialMeshName,
+          call.instanceSpotType,
+          undefined,
+          ZLinkDispatchErrorReason.StaleTarget
+        );
+        return { status: ZLinkSubmitStatus.TargetNotFound };
+      }
+      if (selected.kind === 'capacity') {
+        const error = missingInstancePlacementCapacity(spotId, call.instanceSpotType);
+        this.traceInstanceAddress(
+          ZLinkMessageFlowOutcome.Backpressured,
+          ZLinkDispatchMessageKind.Send,
+          spotId,
+          message,
+          call.initialMeshName,
+          call.instanceSpotType,
+          undefined,
+          ZLinkDispatchErrorReason.Backpressure
         );
         throw error;
       }
-    }
-    if (!call.instanceSpot) {
-      return { status: ZLinkSubmitStatus.TargetNotFound };
-    }
-    const selected = this.selectMissingTarget(spotId, call);
-    if (selected.kind === 'unsupported') {
+      if (selected.kind === 'unavailable') {
+        this.traceInstanceAddress(
+          ZLinkMessageFlowOutcome.Dropped,
+          ZLinkDispatchMessageKind.Send,
+          spotId,
+          message,
+          call.initialMeshName,
+          call.instanceSpotType,
+          undefined,
+          ZLinkDispatchErrorReason.StaleTarget
+        );
+        return { status: ZLinkSubmitStatus.RouteNotConnected };
+      }
+      deadline.setOwnerTimeout(this.sendTimeoutMsForMesh(selected.meshName));
+      const encoded = this.encode(ZLinkChannelMessageKind.Command, selected.meshName, message);
+      const sourceSpotId =
+        call.sourceSpot === undefined ? undefined : String(call.sourceSpot.routingId);
+      const mapped = mapSubmitResult(
+        await awaitWithAbort(
+          selected.node.sendToMissingInstanceSpot(
+            selected.target,
+            encoded,
+            BigInt(deadline.deadlineUnixMs),
+            sourceSpotId,
+            call.metadata
+          ),
+          deadline.signal
+        )
+      );
       this.traceInstanceAddress(
-        ZLinkMessageFlowOutcome.Dropped,
+        submitResultFlowOutcome(mapped.status),
         ZLinkDispatchMessageKind.Send,
         spotId,
         message,
-        call.initialMeshName,
-        call.instanceSpotType,
-        undefined,
-        ZLinkDispatchErrorReason.StaleTarget
+        selected.meshName,
+        selected.target.stableType,
+        selected.target.targetNodeRid,
+        mapped.status === ZLinkSubmitStatus.Submitted
+          ? undefined
+          : submitResultReason(mapped.status)
       );
-      return { status: ZLinkSubmitStatus.TargetNotFound };
-    }
-    if (selected.kind === 'capacity') {
-      const error = missingInstancePlacementCapacity(spotId, call.instanceSpotType);
-      this.traceInstanceAddress(
-        ZLinkMessageFlowOutcome.Backpressured,
-        ZLinkDispatchMessageKind.Send,
-        spotId,
-        message,
-        call.initialMeshName,
-        call.instanceSpotType,
-        undefined,
-        ZLinkDispatchErrorReason.Backpressure
-      );
-      throw error;
-    }
-    if (selected.kind === 'unavailable') {
-      this.traceInstanceAddress(
-        ZLinkMessageFlowOutcome.Dropped,
-        ZLinkDispatchMessageKind.Send,
-        spotId,
-        message,
-        call.initialMeshName,
-        call.instanceSpotType,
-        undefined,
-        ZLinkDispatchErrorReason.StaleTarget
-      );
-      return { status: ZLinkSubmitStatus.RouteNotConnected };
-    }
-    deadline.setOwnerTimeout(this.sendTimeoutMsForMesh(selected.meshName));
-    const encoded = this.encode(ZLinkChannelMessageKind.Command, selected.meshName, message);
-    const sourceSpotId = call.sourceSpot === undefined
-      ? undefined
-      : String(call.sourceSpot.routingId);
-    const mapped = mapSubmitResult(await awaitWithAbort(
-      selected.node.sendToMissingInstanceSpot(
-        selected.target,
-        encoded,
-        BigInt(deadline.deadlineUnixMs),
-        sourceSpotId,
-        call.metadata
-      ),
-      deadline.signal
-    ));
-    this.traceInstanceAddress(
-      submitResultFlowOutcome(mapped.status),
-      ZLinkDispatchMessageKind.Send,
-      spotId,
-      message,
-      selected.meshName,
-      selected.target.stableType,
-      selected.target.targetNodeRid,
-      mapped.status === ZLinkSubmitStatus.Submitted ? undefined : submitResultReason(mapped.status)
-    );
-    return mapped;
+      return mapped;
     } catch (error) {
       if (deadline.expired()) {
         return { status: ZLinkSubmitStatus.TimedOut };
@@ -338,18 +329,16 @@ export class ZLinkHostSpotAddressTransport implements ZLinkSpotAddressTransport 
           // reaches this process. Refresh authority and select again under the
           // same end-to-end deadline; the old envelope was not admitted.
           this.options.resolver()?.invalidate?.(spotId);
-          await waitForSpotRouteRefresh(
-            Math.min(10, deadline.requireRemaining()),
-            deadline.signal
-          );
+          await waitForSpotRouteRefresh(Math.min(10, deadline.requireRemaining()), deadline.signal);
         }
       }
     } catch (error) {
       if (
-        deadline.expired()
-        && !(
-          error instanceof ZLinkFrameworkException
-          && internalFrameworkErrorKind(error) === ZLinkFrameworkInternalErrorKind.RequestTargetNotFound
+        deadline.expired() &&
+        !(
+          error instanceof ZLinkFrameworkException &&
+          internalFrameworkErrorKind(error) ===
+            ZLinkFrameworkInternalErrorKind.RequestTargetNotFound
         )
       ) {
         throw createInternalFrameworkException(
@@ -381,11 +370,14 @@ export class ZLinkHostSpotAddressTransport implements ZLinkSpotAddressTransport 
       existing.stableType,
       existing.targetNodeRid
     );
-    const reply = await awaitWithAbort(this.options.routed.requestToSpot<TReply>(existing, request, {
-      timeoutMs: deadline.requireRemaining(),
-      signal: deadline.signal,
-      metadata: call.metadata
-    }), deadline.signal);
+    const reply = await awaitWithAbort(
+      this.options.routed.requestToSpot<TReply>(existing, request, {
+        timeoutMs: deadline.requireRemaining(),
+        signal: deadline.signal,
+        metadata: call.metadata
+      }),
+      deadline.signal
+    );
     this.traceInstanceAddress(
       ZLinkMessageFlowOutcome.ReplyReceived,
       ZLinkDispatchMessageKind.Request,
@@ -419,50 +411,100 @@ export class ZLinkHostSpotAddressTransport implements ZLinkSpotAddressTransport 
         ZLinkFrameworkInternalErrorKind.RequestTargetNotFound,
         `No eligible Instance Spot target serves '${String(spotId)}'.`
       );
-      this.reportInstanceRequestError(spotId, request, error, call.initialMeshName,
-        undefined, call.instanceSpotType, ZLinkDispatchErrorReason.StaleTarget);
+      this.reportInstanceRequestError(
+        spotId,
+        request,
+        error,
+        call.initialMeshName,
+        undefined,
+        call.instanceSpotType,
+        ZLinkDispatchErrorReason.StaleTarget
+      );
       throw error;
     }
     if (selected.kind === 'unavailable') {
       const error = missingInstancePlacementUnavailable(spotId, call.instanceSpotType);
-      this.reportInstanceRequestError(spotId, request, error, call.initialMeshName,
-        undefined, call.instanceSpotType, ZLinkDispatchErrorReason.StaleTarget);
+      this.reportInstanceRequestError(
+        spotId,
+        request,
+        error,
+        call.initialMeshName,
+        undefined,
+        call.instanceSpotType,
+        ZLinkDispatchErrorReason.StaleTarget
+      );
       throw error;
     }
     const deadlineUnixMs = BigInt(deadline.deadlineUnixMs);
-    const encoded = this.encodeAtDeadline(ZLinkChannelMessageKind.Request,
-      selected.meshName, request, deadline.deadlineUnixMs);
+    const encoded = this.encodeAtDeadline(
+      ZLinkChannelMessageKind.Request,
+      selected.meshName,
+      request,
+      deadline.deadlineUnixMs
+    );
     deadline.requireRemaining();
     const table = this.options.completions(selected.meshName);
-    if (table === undefined) throw new Error(`MeshNode '${selected.meshName}' completion table is not started.`);
+    if (table === undefined)
+      throw new Error(`MeshNode '${selected.meshName}' completion table is not started.`);
     let completionPromise: ReturnType<ZLinkMeshCompletionTable['submit']>;
     try {
       completionPromise = table.submit(
-        () => selected.node.requestToMissingInstanceSpot(selected.target, encoded,
-          deadlineUnixMs, call.sourceSpot === undefined ? undefined : String(call.sourceSpot.routingId),
-          call.metadata),
+        () =>
+          selected.node.requestToMissingInstanceSpot(
+            selected.target,
+            encoded,
+            deadlineUnixMs,
+            call.sourceSpot === undefined ? undefined : String(call.sourceSpot.routingId),
+            call.metadata
+          ),
         deadline.signal
       );
     } catch (error) {
-      if (error instanceof ZLinkFrameworkException
-        && internalFrameworkErrorKind(error) === ZLinkFrameworkInternalErrorKind.RequestTargetNotFound) {
+      if (
+        error instanceof ZLinkFrameworkException &&
+        internalFrameworkErrorKind(error) === ZLinkFrameworkInternalErrorKind.RequestTargetNotFound
+      ) {
         PRE_ADMISSION_MISSING_INSTANCE_ERRORS.add(error);
       }
       throw error;
     }
-    this.traceInstanceAddress(ZLinkMessageFlowOutcome.Sent, ZLinkDispatchMessageKind.Request,
-      spotId, request, selected.meshName, selected.target.stableType, selected.target.targetNodeRid);
+    this.traceInstanceAddress(
+      ZLinkMessageFlowOutcome.Sent,
+      ZLinkDispatchMessageKind.Request,
+      spotId,
+      request,
+      selected.meshName,
+      selected.target.stableType,
+      selected.target.targetNodeRid
+    );
     const completion = await awaitWithAbort(completionPromise, deadline.signal);
     try {
       if (completion.terminalResult !== 0 || completion.failureErrno !== 0) {
-        const error = missingInstanceRequestFailure(completion.terminalResult, completion.failureErrno);
-        this.reportInstanceRequestError(spotId, request, error, selected.meshName,
-          selected.target.targetNodeRid, selected.target.stableType, addressedInstanceErrorReason(error));
+        const error = missingInstanceRequestFailure(
+          completion.terminalResult,
+          completion.failureErrno
+        );
+        this.reportInstanceRequestError(
+          spotId,
+          request,
+          error,
+          selected.meshName,
+          selected.target.targetNodeRid,
+          selected.target.stableType,
+          addressedInstanceErrorReason(error)
+        );
         throw error;
       }
       const reply = decodeChannelReply<TReply>(completion.parts, this.options.codecs);
-      this.traceInstanceAddress(ZLinkMessageFlowOutcome.ReplyReceived, ZLinkDispatchMessageKind.Request,
-        spotId, request, selected.meshName, selected.target.stableType, selected.target.targetNodeRid);
+      this.traceInstanceAddress(
+        ZLinkMessageFlowOutcome.ReplyReceived,
+        ZLinkDispatchMessageKind.Request,
+        spotId,
+        request,
+        selected.meshName,
+        selected.target.stableType,
+        selected.target.targetNodeRid
+      );
       return reply;
     } finally {
       closeMeshCompletion(completion);
@@ -529,8 +571,8 @@ export class ZLinkHostSpotAddressTransport implements ZLinkSpotAddressTransport 
       return await awaitWithAbort(resolver.resolve(spotId, signal), signal);
     } catch (error) {
       if (
-        error instanceof ZLinkFrameworkException
-        && internalFrameworkErrorKind(error) === ZLinkFrameworkInternalErrorKind.SpotRouteNotFound
+        error instanceof ZLinkFrameworkException &&
+        internalFrameworkErrorKind(error) === ZLinkFrameworkInternalErrorKind.SpotRouteNotFound
       ) {
         return undefined;
       }
@@ -550,9 +592,9 @@ export class ZLinkHostSpotAddressTransport implements ZLinkSpotAddressTransport 
     | { readonly kind: 'fail' }
   > {
     if (
-      !call.instanceSpot
-      || !(error instanceof ZLinkFrameworkException)
-      || !isInstanceRouteStaleError(error)
+      !call.instanceSpot ||
+      !(error instanceof ZLinkFrameworkException) ||
+      !isInstanceRouteStaleError(error)
     ) {
       return { kind: 'fail' };
     }
@@ -563,10 +605,7 @@ export class ZLinkHostSpotAddressTransport implements ZLinkSpotAddressTransport 
       if (!sameSpotRouteSnapshot(current, staleRoute)) {
         return { kind: 'route', route: current };
       }
-      await waitForSpotRouteRefresh(
-        Math.min(10, deadline.requireRemaining()),
-        deadline.signal
-      );
+      await waitForSpotRouteRefresh(Math.min(10, deadline.requireRemaining()), deadline.signal);
     }
   }
 
@@ -576,8 +615,8 @@ export class ZLinkHostSpotAddressTransport implements ZLinkSpotAddressTransport 
   ): MissingTargetSelection {
     const configuredMeshes = this.options.meshNames();
     if (
-      call.initialMeshName !== undefined
-      && this.options.isMeshConfigured?.(call.initialMeshName) === false
+      call.initialMeshName !== undefined &&
+      this.options.isMeshConfigured?.(call.initialMeshName) === false
     ) {
       throw createInternalFrameworkException(
         ZLinkFrameworkInternalErrorKind.MeshNotFound,
@@ -602,17 +641,21 @@ export class ZLinkHostSpotAddressTransport implements ZLinkSpotAddressTransport 
         'Multiple object-client RouteMeshes are configured; call inMesh(...).'
       );
     }
-    const meshNames = call.initialMeshName === undefined
-      ? configuredMeshes
-      : [call.initialMeshName];
-    const distinctTypes = [...new Set(meshNames.flatMap(meshName =>
-      this.options.meshNode(meshName)?.instanceSpotPlacementTypes?.() ?? []
-    ))];
-    const canInspectPlacementTypes = meshNames.some(meshName =>
-      typeof this.options.meshNode(meshName)?.instanceSpotPlacementTypes === 'function'
+    const meshNames =
+      call.initialMeshName === undefined ? configuredMeshes : [call.initialMeshName];
+    const distinctTypes = [
+      ...new Set(
+        meshNames.flatMap(
+          (meshName) => this.options.meshNode(meshName)?.instanceSpotPlacementTypes?.() ?? []
+        )
+      )
+    ];
+    const canInspectPlacementTypes = meshNames.some(
+      (meshName) =>
+        typeof this.options.meshNode(meshName)?.instanceSpotPlacementTypes === 'function'
     );
-    const stableType = call.instanceSpotType
-      ?? (distinctTypes.length === 1 ? distinctTypes[0] : undefined);
+    const stableType =
+      call.instanceSpotType ?? (distinctTypes.length === 1 ? distinctTypes[0] : undefined);
     if (stableType === undefined) {
       if (distinctTypes.length === 0) return { kind: 'unsupported' };
       throw createInternalFrameworkException(
@@ -656,15 +699,19 @@ export class ZLinkHostSpotAddressTransport implements ZLinkSpotAddressTransport 
   }
 
   private sendTimeoutMsForMesh(meshName: string): number {
-    return this.options.sendTimeoutMsForMesh?.(meshName)
-      ?? this.options.defaultSendTimeoutMs
-      ?? this.options.defaultRequestTimeoutMs;
+    return (
+      this.options.sendTimeoutMsForMesh?.(meshName) ??
+      this.options.defaultSendTimeoutMs ??
+      this.options.defaultRequestTimeoutMs
+    );
   }
 
   private sendTimeoutMsForRouteChannel(routeChannelId: string): number {
-    return this.options.sendTimeoutMsForRouteChannel?.(routeChannelId)
-      ?? this.options.defaultSendTimeoutMs
-      ?? this.options.defaultRequestTimeoutMs;
+    return (
+      this.options.sendTimeoutMsForRouteChannel?.(routeChannelId) ??
+      this.options.defaultSendTimeoutMs ??
+      this.options.defaultRequestTimeoutMs
+    );
   }
 
   private validateExisting(
@@ -673,11 +720,8 @@ export class ZLinkHostSpotAddressTransport implements ZLinkSpotAddressTransport 
   ): void {
     if (!call.instanceSpot) return;
     if (
-      target.spotKind !== ZLinkSpotKind.Instance
-      || (
-        call.instanceSpotType !== undefined
-        && target.stableType !== call.instanceSpotType
-      )
+      target.spotKind !== ZLinkSpotKind.Instance ||
+      (call.instanceSpotType !== undefined && target.stableType !== call.instanceSpotType)
     ) {
       throw createInternalFrameworkException(
         ZLinkFrameworkInternalErrorKind.SpotTypeMismatch,
@@ -741,8 +785,9 @@ function isInstanceRouteStaleError(error: unknown): error is ZLinkFrameworkExcep
 }
 
 function isMissingInstanceRetryError(error: unknown): error is ZLinkFrameworkException {
-  return error instanceof ZLinkFrameworkException
-    && PRE_ADMISSION_MISSING_INSTANCE_ERRORS.has(error);
+  return (
+    error instanceof ZLinkFrameworkException && PRE_ADMISSION_MISSING_INSTANCE_ERRORS.has(error)
+  );
 }
 
 function missingInstanceRequestFailure(
@@ -762,12 +807,12 @@ function missingInstanceRequestFailure(
         : result === RequestResult.Terminated
           ? ZLinkFrameworkInternalErrorKind.RuntimeShutdown
           : result === RequestResult.Backpressured
-            //  Spec 32-framework-error-model:104-108 — the bounded admission
-            //  terminal is target placement capacity: Unavailable.
-            ? ZLinkFrameworkInternalErrorKind.PlacementCapacityExhausted
+            ? //  Spec 32-framework-error-model:104-108 — the bounded admission
+              //  terminal is target placement capacity: Unavailable.
+              ZLinkFrameworkInternalErrorKind.PlacementCapacityExhausted
             : result === RequestResult.NotConnected
               ? ZLinkFrameworkInternalErrorKind.RouteNotConnected
-              : wireKind ?? ZLinkFrameworkInternalErrorKind.RequestFailed;
+              : (wireKind ?? ZLinkFrameworkInternalErrorKind.RequestFailed);
   return createInternalFrameworkException(
     kind,
     `Instance Spot request failed with result ${result} and errno ${nativeErrno}.`
@@ -822,29 +867,30 @@ function missingInstancePlacementUnavailable(
 function isSpotRouteRefreshError(error: unknown): error is ZLinkFrameworkException {
   if (!(error instanceof ZLinkFrameworkException)) return false;
   const kind = internalFrameworkErrorKind(error);
-  return kind === ZLinkFrameworkInternalErrorKind.SpotRouteNotFound
-    || kind === ZLinkFrameworkInternalErrorKind.SpotGenerationStale
-    || kind === ZLinkFrameworkInternalErrorKind.SpotMoving
-    || kind === ZLinkFrameworkInternalErrorKind.RequestTargetNotFound
-    || kind === ZLinkFrameworkInternalErrorKind.ActorLocationStale
-    || kind === ZLinkFrameworkInternalErrorKind.RouteNotConnected;
+  return (
+    kind === ZLinkFrameworkInternalErrorKind.SpotRouteNotFound ||
+    kind === ZLinkFrameworkInternalErrorKind.SpotGenerationStale ||
+    kind === ZLinkFrameworkInternalErrorKind.SpotMoving ||
+    kind === ZLinkFrameworkInternalErrorKind.RequestTargetNotFound ||
+    kind === ZLinkFrameworkInternalErrorKind.ActorLocationStale ||
+    kind === ZLinkFrameworkInternalErrorKind.RouteNotConnected
+  );
 }
 
-function sameSpotRouteSnapshot(
-  left: ZLinkSpotRouteTarget,
-  right: ZLinkSpotRouteTarget
-): boolean {
-  return String(left.targetNodeRid) === String(right.targetNodeRid)
-    && String(left.spotId) === String(right.spotId)
-    && left.routerChannelId === right.routerChannelId
-    && left.spotKind === right.spotKind
-    && left.stableType === right.stableType
-    && left.targetSpotGeneration === right.targetSpotGeneration
-    && left.targetNodeGeneration === right.targetNodeGeneration
-    && left.authorityOwnerGeneration === right.authorityOwnerGeneration
-    && left.targetOwnerId === right.targetOwnerId
-    && left.ownerLeaseGeneration === right.ownerLeaseGeneration
-    && left.authorityStoreVersion === right.authorityStoreVersion;
+function sameSpotRouteSnapshot(left: ZLinkSpotRouteTarget, right: ZLinkSpotRouteTarget): boolean {
+  return (
+    String(left.targetNodeRid) === String(right.targetNodeRid) &&
+    String(left.spotId) === String(right.spotId) &&
+    left.routerChannelId === right.routerChannelId &&
+    left.spotKind === right.spotKind &&
+    left.stableType === right.stableType &&
+    left.targetSpotGeneration === right.targetSpotGeneration &&
+    left.targetNodeGeneration === right.targetNodeGeneration &&
+    left.authorityOwnerGeneration === right.authorityOwnerGeneration &&
+    left.targetOwnerId === right.targetOwnerId &&
+    left.ownerLeaseGeneration === right.ownerLeaseGeneration &&
+    left.authorityStoreVersion === right.authorityStoreVersion
+  );
 }
 
 function waitForSpotRouteRefresh(delayMs: number, signal: AbortSignal): Promise<void> {
@@ -864,9 +910,7 @@ function waitForSpotRouteRefresh(delayMs: number, signal: AbortSignal): Promise<
   });
 }
 
-function submitResultReason(
-  status: ZLinkSubmitStatus
-): ZLinkDispatchErrorReason {
+function submitResultReason(status: ZLinkSubmitStatus): ZLinkDispatchErrorReason {
   switch (status) {
     case ZLinkSubmitStatus.Backpressured:
     case ZLinkSubmitStatus.TimedOut:
@@ -899,12 +943,12 @@ function addressedInstanceErrorReason(error: unknown): ZLinkDispatchErrorReason 
   if (error instanceof ZLinkFrameworkException) {
     const kind = internalFrameworkErrorKind(error);
     if (
-      kind === ZLinkFrameworkInternalErrorKind.SpotRouteNotFound
-      || kind === ZLinkFrameworkInternalErrorKind.SpotGenerationStale
-      || kind === ZLinkFrameworkInternalErrorKind.SpotMoving
-      || kind === ZLinkFrameworkInternalErrorKind.RequestTargetNotFound
-      || kind === ZLinkFrameworkInternalErrorKind.ActorLocationStale
-      || kind === ZLinkFrameworkInternalErrorKind.RouteNotConnected
+      kind === ZLinkFrameworkInternalErrorKind.SpotRouteNotFound ||
+      kind === ZLinkFrameworkInternalErrorKind.SpotGenerationStale ||
+      kind === ZLinkFrameworkInternalErrorKind.SpotMoving ||
+      kind === ZLinkFrameworkInternalErrorKind.RequestTargetNotFound ||
+      kind === ZLinkFrameworkInternalErrorKind.ActorLocationStale ||
+      kind === ZLinkFrameworkInternalErrorKind.RouteNotConnected
     ) {
       return ZLinkDispatchErrorReason.StaleTarget;
     }
@@ -912,10 +956,10 @@ function addressedInstanceErrorReason(error: unknown): ZLinkDispatchErrorReason 
       return ZLinkDispatchErrorReason.Shutdown;
     }
     if (
-      kind === ZLinkFrameworkInternalErrorKind.PlacementCapacityExhausted
-      || kind === ZLinkFrameworkInternalErrorKind.WorkerQueueFull
-      || kind === ZLinkFrameworkInternalErrorKind.WorkerTimedOut
-      || kind === ZLinkFrameworkInternalErrorKind.DeadlineExceeded
+      kind === ZLinkFrameworkInternalErrorKind.PlacementCapacityExhausted ||
+      kind === ZLinkFrameworkInternalErrorKind.WorkerQueueFull ||
+      kind === ZLinkFrameworkInternalErrorKind.WorkerTimedOut ||
+      kind === ZLinkFrameworkInternalErrorKind.DeadlineExceeded
     ) {
       return ZLinkDispatchErrorReason.Backpressure;
     }
@@ -928,10 +972,10 @@ function initialSendTimeoutMs(
   call: ZLinkSpotAddressCallOptions
 ): number {
   return call.initialMeshName === undefined
-    ? options.defaultSendTimeoutMs ?? options.defaultRequestTimeoutMs
-    : options.sendTimeoutMsForMesh?.(call.initialMeshName)
-      ?? options.defaultSendTimeoutMs
-      ?? options.defaultRequestTimeoutMs;
+    ? (options.defaultSendTimeoutMs ?? options.defaultRequestTimeoutMs)
+    : (options.sendTimeoutMsForMesh?.(call.initialMeshName) ??
+        options.defaultSendTimeoutMs ??
+        options.defaultRequestTimeoutMs);
 }
 
 interface ZLinkSpotAddressDeadline {
@@ -943,7 +987,10 @@ interface ZLinkSpotAddressDeadline {
   close(): void;
 }
 
-function createSpotAddressDeadline(timeoutMs: number, parent?: AbortSignal): ZLinkSpotAddressDeadline {
+function createSpotAddressDeadline(
+  timeoutMs: number,
+  parent?: AbortSignal
+): ZLinkSpotAddressDeadline {
   const startedAtMs = performance.now();
   const startedAtUnixMs = Date.now();
   let deadlineMs = startedAtMs + Math.max(0, timeoutMs);

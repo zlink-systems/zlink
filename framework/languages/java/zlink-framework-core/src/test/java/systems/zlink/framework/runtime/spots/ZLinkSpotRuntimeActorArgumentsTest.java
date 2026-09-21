@@ -1,40 +1,39 @@
 package systems.zlink.framework.runtime.spots;
-import java.util.Map;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertSame;
 
-import java.lang.reflect.Method;
-import java.util.Optional;
-import java.util.concurrent.CompletableFuture;
-import java.util.concurrent.CompletionStage;
 import org.junit.jupiter.api.Test;
+
+import systems.zlink.framework.ZLinkMessageContext;
 import systems.zlink.framework.actors.ZLinkActor;
 import systems.zlink.framework.actors.ZLinkActorContext;
 import systems.zlink.framework.spots.ZLinkSpot;
-import systems.zlink.framework.ZLinkMessageContext;
 import systems.zlink.framework.spots.ZLinkSpotContext;
+
+import java.lang.reflect.Method;
+import java.util.Map;
+import java.util.Optional;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CompletionStage;
 
 final class ZLinkSpotRuntimeActorArgumentsTest {
     @Test
     void bindsSpotActorRequestArguments() throws Exception {
-        Method method = DotnetShapeHandler.class.getMethod(
-            "request",
-            TestSpot.class,
-            TestActor.class,
-            ZLinkMessageContext.class,
-            Request.class);
+        Method method =
+                DotnetShapeHandler.class.getMethod(
+                        "request",
+                        TestSpot.class,
+                        TestActor.class,
+                        ZLinkMessageContext.class,
+                        Request.class);
         TestSpot spot = new TestSpot();
         TestActor actor = new TestActor();
         Request request = new Request();
         ZLinkMessageContext context = requestContext("PlaceMarkReq");
 
-        Object[] args = ZLinkSpotHandlerInvoker.actorPacketArguments(
-            method,
-            spot,
-            actor,
-            context,
-            request);
+        Object[] args =
+                ZLinkSpotHandlerInvoker.actorPacketArguments(method, spot, actor, context, request);
 
         assertSame(spot, args[0]);
         assertSame(actor, args[1]);
@@ -79,10 +78,7 @@ final class ZLinkSpotRuntimeActorArgumentsTest {
 
     public static final class DotnetShapeHandler {
         public CompletionStage<Reply> request(
-            TestSpot spot,
-            TestActor actor,
-            ZLinkMessageContext context,
-            Request request) {
+                TestSpot spot, TestActor actor, ZLinkMessageContext context, Request request) {
             return CompletableFuture.completedFuture(new Reply());
         }
     }
@@ -93,10 +89,13 @@ final class ZLinkSpotRuntimeActorArgumentsTest {
             throw new UnsupportedOperationException();
         }
 
-        @Override public CompletionStage<Void> onJoinedActor(ZLinkActor actor) {
+        @Override
+        public CompletionStage<Void> onJoinedActor(ZLinkActor actor) {
             return CompletableFuture.completedFuture(null);
         }
-        @Override public CompletionStage<Void> onLeaveActor(ZLinkActor actor) {
+
+        @Override
+        public CompletionStage<Void> onLeaveActor(ZLinkActor actor) {
             return CompletableFuture.completedFuture(null);
         }
     }
@@ -108,9 +107,7 @@ final class ZLinkSpotRuntimeActorArgumentsTest {
         }
     }
 
-    public record Request() {
-    }
+    public record Request() {}
 
-    public record Reply() {
-    }
+    public record Reply() {}
 }

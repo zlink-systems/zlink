@@ -1,4 +1,7 @@
-import { ZLinkFrameworkInternalErrorKind, createInternalFrameworkException  } from '../framework-errors-internal';
+import {
+  ZLinkFrameworkInternalErrorKind,
+  createInternalFrameworkException
+} from '../framework-errors-internal';
 import { randomUUID } from 'node:crypto';
 import type { ZLinkLocationOptionOverrides } from '../../contracts/Locations/Options';
 import type {
@@ -14,29 +17,20 @@ import type {
 } from '../../contracts';
 import type { ZLinkProviderResolver } from '../../contracts/Common/ZLinkProviderResolver';
 import type { ZLinkRuntimeEventPublisher } from '../diagnostics';
-import {
-  ZLinkLocationWriteIntent,
-  ZLinkLocationWriteStatus
-} from '../../contracts/Locations';
+import { ZLinkLocationWriteIntent, ZLinkLocationWriteStatus } from '../../contracts/Locations';
 import {
   ZLinkFrameworkRuntimeState,
   ZLinkFrameworkException,
   ZLinkObjectRole
 } from '../../contracts';
-import {
-  ZLinkSubmitStatus,
-  type ZLinkSubmitResult
-} from '../messaging/submission-result';
+import { ZLinkSubmitStatus, type ZLinkSubmitResult } from '../messaging/submission-result';
 import {
   ZLinkRuntimeDispatchErrorAction as ZLinkDispatchErrorAction,
   ZLinkRuntimeDispatchErrorReason as ZLinkDispatchErrorReason,
   ZLinkDispatchErrorSurface,
   ZLinkDispatchMessageKind
 } from '../../contracts/Dispatch/ZLinkDispatchOptions';
-import {
-  SubmitResult,
-  isZLinkBackendResultError
-} from '../backend/runtime-values';
+import { SubmitResult, isZLinkBackendResultError } from '../backend/runtime-values';
 import {
   ReceiveKind,
   type ReadyRecord,
@@ -154,8 +148,7 @@ export class ZLinkSpotNodeRuntimeManager {
   >();
   private disposed = false;
   private readonly autoConnectLoops: ZLinkAutoConnectLoop[] = [];
-  private readonly publishedMeshNodeDescriptors =
-    new Map<string, ZLinkMeshNodeDescriptor>();
+  private readonly publishedMeshNodeDescriptors = new Map<string, ZLinkMeshNodeDescriptor>();
   // Keep the revision source separate from the cached Store row. A new owner
   // lease may require a NewClaim against an empty Store, while peers still
   // retain the monotonic revision from this MeshNode lifecycle.
@@ -170,8 +163,9 @@ export class ZLinkSpotNodeRuntimeManager {
   private readonly applicationJobQueue: ApplicationJobQueue;
 
   constructor(private readonly options: ZLinkSpotNodeRuntimeManagerOptions) {
-    this.applicationJobQueue = options.applicationJobQueue
-      ?? new ApplicationJobQueue(resolveApplicationJobQueueConfiguration());
+    this.applicationJobQueue =
+      options.applicationJobQueue ??
+      new ApplicationJobQueue(resolveApplicationJobQueueConfiguration());
   }
 
   createReceived() {
@@ -188,7 +182,12 @@ export class ZLinkSpotNodeRuntimeManager {
     options: ZLinkLocationOptionOverrides,
     events?: ZLinkLocationEventSink
   ): void {
-    this.locationAutoConnect = createSpotNodeLocationAutoConnectContext(runtime, stores, options, events);
+    this.locationAutoConnect = createSpotNodeLocationAutoConnectContext(
+      runtime,
+      stores,
+      options,
+      events
+    );
   }
 
   async startLocationAutoConnect(signal?: AbortSignal): Promise<void> {
@@ -254,10 +253,11 @@ export class ZLinkSpotNodeRuntimeManager {
     }
     const meshAdapter = this.options.backendAdapterFactory.createMeshAdapter();
     for (const [spotNodeName, spotNode] of this.options.registration.spotNodes.entries()) {
-      const routingId = spotNode.routingId
-        ?? spotNode.router?.routingId
-        ?? spotNode.pubSub?.routingId
-        ?? `${spotNode.routingIdPrefix ?? spotNodeName}-${randomUUID()}`;
+      const routingId =
+        spotNode.routingId ??
+        spotNode.router?.routingId ??
+        spotNode.pubSub?.routingId ??
+        `${spotNode.routingIdPrefix ?? spotNodeName}-${randomUUID()}`;
       const bind = spotNode.router?.bind;
       if (bind === undefined) {
         throw new ZLinkConfigurationException(
@@ -269,8 +269,7 @@ export class ZLinkSpotNodeRuntimeManager {
         routingId,
         receiveTimeoutMs: spotNode.router?.receiveTimeoutMs,
         applicationJobQueue: this.applicationJobQueue,
-        applicationJobReceiveFlowFailureSink:
-          this.options.applicationJobReceiveFlowFailureSink,
+        applicationJobReceiveFlowFailureSink: this.options.applicationJobReceiveFlowFailureSink,
         peerAdmissionSealed: () => this.options.peerAdmissionSealed?.(spotNodeName) ?? false
       });
       node.setMailboxRecordDroppedHandler?.((record) =>
@@ -283,7 +282,8 @@ export class ZLinkSpotNodeRuntimeManager {
           error: new Error(
             `MeshNode '${spotNodeName}' no longer accepts ${record.kind} for '${record.owner}'.`
           )
-        }));
+        })
+      );
       node.setProtocolErrorHandler?.((record) =>
         this.options.dispatchErrors?.report({
           surface: ZLinkDispatchErrorSurface.RouteMeshChannel,
@@ -297,10 +297,11 @@ export class ZLinkSpotNodeRuntimeManager {
           channelName: spotNodeName,
           sourceRid: record.sourceNodeRid,
           error: new Error(
-            `MeshNode '${spotNodeName}' rejected an invalid service wire record from '${record.sourceNodeRid}'`
-            + (record.command === undefined ? '.' : ` (command ${record.command}).`)
+            `MeshNode '${spotNodeName}' rejected an invalid service wire record from '${record.sourceNodeRid}'` +
+              (record.command === undefined ? '.' : ` (command ${record.command}).`)
           )
-        }));
+        })
+      );
       let pump: ZLinkMeshDispatchPump | undefined;
       const completions = new ZLinkMeshCompletionTable();
       try {
@@ -313,30 +314,24 @@ export class ZLinkSpotNodeRuntimeManager {
           ...Object.keys(spotNode.instanceSpotFactoryRegistrations ?? {}),
           ...Object.keys(spotNode.actorFactoryRegistrations ?? {})
         ];
-        const instanceSpotTypes = Object.keys(
-          spotNode.instanceSpotFactoryRegistrations ?? {}
-        );
+        const instanceSpotTypes = Object.keys(spotNode.instanceSpotFactoryRegistrations ?? {});
         const hasLegacyObjectFactories =
-          (spotNode.spotFactories?.length ?? 0) > 0
-          || Object.keys(spotNode.instanceSpotFactories ?? {}).length > 0
-          || (
-            spotNode.actorFactories instanceof Map
-              ? spotNode.actorFactories.size
-              : Object.keys(spotNode.actorFactories ?? {}).length
-          ) > 0;
+          (spotNode.spotFactories?.length ?? 0) > 0 ||
+          Object.keys(spotNode.instanceSpotFactories ?? {}).length > 0 ||
+          (spotNode.actorFactories instanceof Map
+            ? spotNode.actorFactories.size
+            : Object.keys(spotNode.actorFactories ?? {}).length) > 0;
         node.configureObjectPlacement({
-          role: spotNode.objectRole
-            ?? (hasLegacyObjectFactories ? 'server' : 'none'),
+          role: spotNode.objectRole ?? (hasLegacyObjectFactories ? 'server' : 'none'),
           placementWeight: spotNode.placementWeight ?? 100,
-          activeCapacityLimit:
-            aggregatePlacementCapacity(
-              spotNode.actorLimit ?? 0,
-              spotNode.spotLimit ?? 0
-            ),
+          activeCapacityLimit: aggregatePlacementCapacity(
+            spotNode.actorLimit ?? 0,
+            spotNode.spotLimit ?? 0
+          ),
           pendingCapacityLimit: spotNode.activationConcurrencyLimit ?? 128,
           objectCapabilities: [
-            ...stableTypes.map(type => `object-type:${type}`),
-            ...instanceSpotTypes.map(type => `instance-spot-type:${type}`)
+            ...stableTypes.map((type) => `object-type:${type}`),
+            ...instanceSpotTypes.map((type) => `instance-spot-type:${type}`)
           ],
           ...(this.options.registration.maintenanceWave === undefined
             ? {}
@@ -363,17 +358,18 @@ export class ZLinkSpotNodeRuntimeManager {
         pump = new ZLinkMeshDispatchPump(node, {
           applicationJobQueue: this.applicationJobQueue,
           dispatch: (owner, record) => this.dispatchMeshRecord(spotNodeName, owner, record),
-          reportError: (error, context) => this.options.dispatchErrors?.report({
-            surface: ZLinkDispatchErrorSurface.Node,
-            messageKind: ZLinkDispatchMessageKind.Control,
-            reason: ZLinkDispatchErrorReason.HandlerException,
-            action: ZLinkDispatchErrorAction.Drop,
-            meshName: spotNodeName,
-            packetName: context?.packetName,
-            sourceRid: context?.sourceNodeRid,
-            commandId: context?.commandId,
-            error
-          })
+          reportError: (error, context) =>
+            this.options.dispatchErrors?.report({
+              surface: ZLinkDispatchErrorSurface.Node,
+              messageKind: ZLinkDispatchMessageKind.Control,
+              reason: ZLinkDispatchErrorReason.HandlerException,
+              action: ZLinkDispatchErrorAction.Drop,
+              meshName: spotNodeName,
+              packetName: context?.packetName,
+              sourceRid: context?.sourceNodeRid,
+              commandId: context?.commandId,
+              error
+            })
         });
         pump.start();
         this.meshNodes.set(spotNodeName, node);
@@ -401,7 +397,9 @@ export class ZLinkSpotNodeRuntimeManager {
   ): Promise<void> {
     const previous = this.statePublication;
     let release!: () => void;
-    this.statePublication = new Promise<void>((resolve) => { release = resolve; });
+    this.statePublication = new Promise<void>((resolve) => {
+      release = resolve;
+    });
     await previous;
     try {
       await this.publishMeshNodeStateCore(state, signal, selectedMeshName);
@@ -418,8 +416,8 @@ export class ZLinkSpotNodeRuntimeManager {
     const location = this.locationAutoConnect;
     const owner = location?.runtime.currentOwnerToken;
     if (location === undefined || owner === undefined) return;
-    const ownerChanged = this.publishedOwnerToken !== undefined
-      && !sameOwnerToken(this.publishedOwnerToken, owner);
+    const ownerChanged =
+      this.publishedOwnerToken !== undefined && !sameOwnerToken(this.publishedOwnerToken, owner);
     if (ownerChanged) {
       // A new owner token can refer to an empty or replaced Store. The cached
       // descriptor was written under the previous lease and must not force a
@@ -436,16 +434,15 @@ export class ZLinkSpotNodeRuntimeManager {
       const actors = effectiveActorRegistrations(registration);
       const capabilities = [
         ...userSpots.map(([stableType, factory]) =>
-          objectCapability('user_spot', stableType, factory)),
+          objectCapability('user_spot', stableType, factory)
+        ),
         ...instanceSpots.map(([stableType, factory]) =>
-          objectCapability('instance_spot', stableType, factory)),
-        ...actors.map(([stableType, factory]) =>
-          objectCapability('actor', stableType, factory))
+          objectCapability('instance_spot', stableType, factory)
+        ),
+        ...actors.map(([stableType, factory]) => objectCapability('actor', stableType, factory))
       ].sort((left, right) => {
         const kindOrder = left.objectKind.localeCompare(right.objectKind);
-        return kindOrder !== 0
-          ? kindOrder
-          : left.stableType.localeCompare(right.stableType);
+        return kindOrder !== 0 ? kindOrder : left.stableType.localeCompare(right.stableType);
       });
       const current = this.publishedMeshNodeDescriptors.get(meshName);
       const previousRevision = this.descriptorRevisionByMesh.get(meshName) ?? 0n;
@@ -472,11 +469,13 @@ export class ZLinkSpotNodeRuntimeManager {
             limit: registration.spotLimit ?? 0
           },
           spotTypes: capabilities
-            .filter(capability => capability.objectKind !== 'actor')
-            .map(capability => {
-              const previous = current?.populationCapacity.spotTypes.find(candidate =>
-                candidate.objectKind === capability.objectKind
-                && candidate.stableType === capability.stableType);
+            .filter((capability) => capability.objectKind !== 'actor')
+            .map((capability) => {
+              const previous = current?.populationCapacity.spotTypes.find(
+                (candidate) =>
+                  candidate.objectKind === capability.objectKind &&
+                  candidate.stableType === capability.stableType
+              );
               return {
                 objectKind: capability.objectKind as 'user_spot' | 'instance_spot',
                 stableType: capability.stableType,
@@ -487,35 +486,33 @@ export class ZLinkSpotNodeRuntimeManager {
             })
         },
         activationConcurrency: {
-          active: this.options.instanceActivationConcurrencyProvider?.(meshName).active
-            ?? current?.activationConcurrency.active
-            ?? 0,
-          limit: this.options.instanceActivationConcurrencyProvider?.(meshName).limit
-            ?? registration.activationConcurrencyLimit
-            ?? 128
+          active:
+            this.options.instanceActivationConcurrencyProvider?.(meshName).active ??
+            current?.activationConcurrency.active ??
+            0,
+          limit:
+            this.options.instanceActivationConcurrencyProvider?.(meshName).limit ??
+            registration.activationConcurrencyLimit ??
+            128
         },
         channelWeights: Object.fromEntries(
-          this.serverChannels(meshName)
-            .map(([channelName, channel]) => [
-              channelName,
-              state === ZLinkFrameworkRuntimeState.Draining
-                ? 0
-                : this.effectiveChannelWeight(meshName, channelName, channel.weight ?? 100)
-            ])
+          this.serverChannels(meshName).map(([channelName, channel]) => [
+            channelName,
+            state === ZLinkFrameworkRuntimeState.Draining
+              ? 0
+              : this.effectiveChannelWeight(meshName, channelName, channel.weight ?? 100)
+          ])
         ),
         applicationVersion: this.options.registration.applicationVersion,
         maintenanceWave: this.options.registration.maintenanceWave,
         spotTypes: [
           ...userSpots.map(([stableType]) => stableType),
           ...instanceSpots.map(([stableType]) => stableType),
-          ...(registration.entrySpotType === undefined
-            ? []
-            : [registration.entrySpotType.name])
-        ]
-          .sort(),
+          ...(registration.entrySpotType === undefined ? [] : [registration.entrySpotType.name])
+        ].sort(),
         objectCapabilities: capabilities,
         state,
-        securityIdentity: 'default',
+        securityIdentity: 'default'
       };
       const result = await location.runtime.writeMeshNode(
         descriptor,
@@ -553,12 +550,13 @@ export class ZLinkSpotNodeRuntimeManager {
     const status = node.status();
     const owner = location.runtime.currentOwnerToken;
     if (owner === undefined) return;
-    const current = (await location.runtime.listLiveMeshNodes(meshName, signal))
-      .find((descriptor) =>
-        String(descriptor.rid) === String(status.routingId)
-        && descriptor.lifecycleGeneration === status.lifecycleGeneration
-        && descriptor.ownerId === owner.ownerId
-        && descriptor.leaseGeneration === owner.leaseGeneration);
+    const current = (await location.runtime.listLiveMeshNodes(meshName, signal)).find(
+      (descriptor) =>
+        String(descriptor.rid) === String(status.routingId) &&
+        descriptor.lifecycleGeneration === status.lifecycleGeneration &&
+        descriptor.ownerId === owner.ownerId &&
+        descriptor.leaseGeneration === owner.leaseGeneration
+    );
     if (current !== undefined) {
       this.publishedMeshNodeDescriptors.set(meshName, current);
       this.descriptorRevisionByMesh.set(
@@ -570,10 +568,7 @@ export class ZLinkSpotNodeRuntimeManager {
     await this.publishMeshNodeState(state, signal, meshName);
   }
 
-  private entrySpotId(
-    meshName: string,
-    registration: ZLinkSpotNodeOptions
-  ): string | undefined {
+  private entrySpotId(meshName: string, registration: ZLinkSpotNodeOptions): string | undefined {
     if (effectiveObjectRole(registration) !== ZLinkObjectRole.Server) {
       return undefined;
     }
@@ -608,9 +603,7 @@ export class ZLinkSpotNodeRuntimeManager {
 
   entrySpotIdForMesh(meshName: string): string | undefined {
     const registration = this.options.registration.spotNodes.get(meshName);
-    return registration === undefined
-      ? undefined
-      : this.entrySpotId(meshName, registration);
+    return registration === undefined ? undefined : this.entrySpotId(meshName, registration);
   }
 
   meshNodeDescriptor(meshName: string): ZLinkMeshNodeDescriptor | undefined {
@@ -622,9 +615,7 @@ export class ZLinkSpotNodeRuntimeManager {
     if (registration === undefined) {
       throw new ZLinkConfigurationException(`Mesh '${meshName}' is not registered.`);
     }
-    return this.runtimePlacementWeights.get(meshName)
-      ?? registration.placementWeight
-      ?? 100;
+    return this.runtimePlacementWeights.get(meshName) ?? registration.placementWeight ?? 100;
   }
 
   channelWeight(channelName: string): number {
@@ -656,7 +647,10 @@ export class ZLinkSpotNodeRuntimeManager {
       );
     }
     const validated = requirePublicRuntimeWeight(weight, 'Channel weight');
-    if (this.effectiveChannelWeight(match.meshName, channelName, match.configuredWeight) === validated) return;
+    if (
+      this.effectiveChannelWeight(match.meshName, channelName, match.configuredWeight) === validated
+    )
+      return;
     let weights = this.runtimeChannelWeights.get(match.meshName);
     if (weights === undefined) {
       weights = new Map();
@@ -694,15 +688,14 @@ export class ZLinkSpotNodeRuntimeManager {
     readonly meshName: string;
     readonly configuredWeight: number;
   } {
-    const matches = [...this.options.registration.spotNodes]
-      .flatMap(([meshName, registration]) => {
-        const channel = registration.meshChannels?.[channelName];
-        return channel === undefined
-          ? []
-          : [{ meshName, configuredWeight: channel.weight ?? 100 }];
-      });
+    const matches = [...this.options.registration.spotNodes].flatMap(([meshName, registration]) => {
+      const channel = registration.meshChannels?.[channelName];
+      return channel === undefined ? [] : [{ meshName, configuredWeight: channel.weight ?? 100 }];
+    });
     if (matches.length === 0) {
-      throw new ZLinkConfigurationException(`RouteMesh channel '${channelName}' is not registered.`);
+      throw new ZLinkConfigurationException(
+        `RouteMesh channel '${channelName}' is not registered.`
+      );
     }
     if (matches.length > 1) {
       throw new ZLinkConfigurationException(
@@ -716,12 +709,15 @@ export class ZLinkSpotNodeRuntimeManager {
     meshName: string,
     applyWeight: () => Promise<void>
   ): void {
-    const publish = this.runtimeWeightPublication.catch(() => undefined).then(async () => {
-      await applyWeight();
-      const state = this.publishedMeshNodeDescriptors.get(meshName)?.state
-        ?? ZLinkFrameworkRuntimeState.Serving;
-      await this.publishMeshNodeState(state, undefined, meshName);
-    });
+    const publish = this.runtimeWeightPublication
+      .catch(() => undefined)
+      .then(async () => {
+        await applyWeight();
+        const state =
+          this.publishedMeshNodeDescriptors.get(meshName)?.state ??
+          ZLinkFrameworkRuntimeState.Serving;
+        await this.publishMeshNodeState(state, undefined, meshName);
+      });
     this.runtimeWeightPublication = publish;
     if (this.options.detachedTaskRunner !== undefined) {
       this.options.detachedTaskRunner.runDetached(
@@ -744,13 +740,14 @@ export class ZLinkSpotNodeRuntimeManager {
     createRequest: ZLinkMessage,
     signal?: AbortSignal
   ): Promise<import('../../contracts').ZLinkActorCreateResponse | undefined> {
-    let activation = [...this.entryActivations.values()].find(
-      (entryActivation) => routingIdsEqual(entryActivation.nodeRid, nodeRid)
+    let activation = [...this.entryActivations.values()].find((entryActivation) =>
+      routingIdsEqual(entryActivation.nodeRid, nodeRid)
     );
     if (activation === undefined) {
       for (const [meshName, node] of this.meshNodes) {
         if (!routingIdsEqual(node.status().routingId, nodeRid)) continue;
-        if (this.options.registration.spotNodes.get(meshName)?.entrySpotType === undefined) continue;
+        if (this.options.registration.spotNodes.get(meshName)?.entrySpotType === undefined)
+          continue;
         await this.ensureEntryActivation(meshName);
         activation = this.entryActivations.get(meshName);
         break;
@@ -759,10 +756,7 @@ export class ZLinkSpotNodeRuntimeManager {
     return activation?.notifyCreateActor(actor, createRequest, signal);
   }
 
-  notifyPrimaryEntrySpotActorJoined(
-    actor: ZLinkActor,
-    signal?: AbortSignal
-  ): Promise<void> {
+  notifyPrimaryEntrySpotActorJoined(actor: ZLinkActor, signal?: AbortSignal): Promise<void> {
     const activation = this.primaryEntryActivation();
     return activation?.notifyJoinActor(actor, signal) ?? Promise.resolve();
   }
@@ -774,13 +768,12 @@ export class ZLinkSpotNodeRuntimeManager {
     membershipEpoch?: bigint
   ): Promise<void> {
     const activation = this.primaryEntryActivation();
-    return activation?.notifyLeaveActor(actor, signal, actorRef, membershipEpoch) ?? Promise.resolve();
+    return (
+      activation?.notifyLeaveActor(actor, signal, actorRef, membershipEpoch) ?? Promise.resolve()
+    );
   }
 
-  notifyPrimaryEntrySpotActorDisconnected(
-    actor: ZLinkActor,
-    signal?: AbortSignal
-  ): Promise<void> {
+  notifyPrimaryEntrySpotActorDisconnected(actor: ZLinkActor, signal?: AbortSignal): Promise<void> {
     const activation = this.primaryEntryActivation();
     return activation?.notifyDisconnectActor(actor, signal) ?? Promise.resolve();
   }
@@ -795,8 +788,9 @@ export class ZLinkSpotNodeRuntimeManager {
   }
 
   serverChannels(meshName: string) {
-    return Object.entries(this.options.registration.spotNodes.get(meshName)?.meshChannels ?? {})
-      .filter(([, channel]) => channel.server === true);
+    return Object.entries(
+      this.options.registration.spotNodes.get(meshName)?.meshChannels ?? {}
+    ).filter(([, channel]) => channel.server === true);
   }
 
   async dispose(signal?: AbortSignal, deadline?: Date): Promise<void> {
@@ -814,18 +808,22 @@ export class ZLinkSpotNodeRuntimeManager {
     const errors: unknown[] = [];
     const settle = async (operations: readonly Promise<unknown>[]) => {
       const results = await Promise.allSettled(operations);
-      errors.push(...results
-        .filter((result): result is PromiseRejectedResult => result.status === 'rejected')
-        .map((result) => result.reason));
+      errors.push(
+        ...results
+          .filter((result): result is PromiseRejectedResult => result.status === 'rejected')
+          .map((result) => result.reason)
+      );
     };
     await settle(publishers.map(async (publisher) => publisher.close()));
     await settle(autoConnectLoops.map((loop) => loop.prepareTransportShutdown()));
     await settle(entryActivations.reverse().map((activation) => activation.dispose(deadline)));
     await settle(meshPumps.reverse().map((pump) => pump.dispose()));
-    await settle(meshNodes.reverse().map(async (node) => {
-      node.shutdown(1000);
-      node.close();
-    }));
+    await settle(
+      meshNodes.reverse().map(async (node) => {
+        node.shutdown(1000);
+        node.close();
+      })
+    );
     for (const completions of meshCompletions) {
       completions.dispose();
     }
@@ -853,18 +851,18 @@ export class ZLinkSpotNodeRuntimeManager {
       return;
     }
     const node = this.meshNodes.get(meshName);
-    const targetsEntrySpot = owner.spotId === null
-      || (node !== undefined && routingIdsEqual(
-        owner.spotId as unknown as RoutingId,
-        String(node.status().routingId)
-      ));
-    if (targetsEntrySpot && (
-      record.kind === ReceiveKind.ActorSend
-      || record.kind === ReceiveKind.ActorRequest
-      || record.kind === ReceiveKind.SpotSend
-      || record.kind === ReceiveKind.SpotRequest
-      || record.kind === ReceiveKind.SpotMulticast
-    )) {
+    const targetsEntrySpot =
+      owner.spotId === null ||
+      (node !== undefined &&
+        routingIdsEqual(owner.spotId as unknown as RoutingId, String(node.status().routingId)));
+    if (
+      targetsEntrySpot &&
+      (record.kind === ReceiveKind.ActorSend ||
+        record.kind === ReceiveKind.ActorRequest ||
+        record.kind === ReceiveKind.SpotSend ||
+        record.kind === ReceiveKind.SpotRequest ||
+        record.kind === ReceiveKind.SpotMulticast)
+    ) {
       await this.ensureEntryActivation(meshName);
     }
     const dispatcher = this.options.meshRecordDispatcher;
@@ -881,23 +879,23 @@ export class ZLinkSpotNodeRuntimeManager {
     owner: ReadyRecord,
     record: ReceiveRecord
   ): Promise<boolean> {
-    if (record.kind !== ReceiveKind.SpotSend
-      && record.kind !== ReceiveKind.SpotRequest
-      && record.kind !== ReceiveKind.SpotMulticast) {
+    if (
+      record.kind !== ReceiveKind.SpotSend &&
+      record.kind !== ReceiveKind.SpotRequest &&
+      record.kind !== ReceiveKind.SpotMulticast
+    ) {
       return false;
     }
     await this.ensureEntryActivation(meshName);
     const activation = this.entryActivations.get(meshName);
-    if (
-      activation === undefined
-      || owner.spotId === null
-      || activation.spotId !== owner.spotId
-    ) {
+    if (activation === undefined || owner.spotId === null || activation.spotId !== owner.spotId) {
       return false;
     }
     if (record.kind === ReceiveKind.SpotMulticast) {
       if (record.topic === null || record.topic.length === 0) {
-        throw new ZLinkConfigurationException('MeshNode Entry Spot multicast record is missing its topic.');
+        throw new ZLinkConfigurationException(
+          'MeshNode Entry Spot multicast record is missing its topic.'
+        );
       }
       await activation.dispatchSubscriptionRecord(
         record.topic,
@@ -928,7 +926,9 @@ export class ZLinkSpotNodeRuntimeManager {
         context,
         true
       );
-      requireEntrySpotReply(record.reply(encodeChannelReplyParts(envelope.header, response, codecs)));
+      requireEntrySpotReply(
+        record.reply(encodeChannelReplyParts(envelope.header, response, codecs))
+      );
     } catch (error) {
       requireEntrySpotReply(record.reply(encodeChannelErrorReplyParts(envelope.header, error)));
     }
@@ -982,10 +982,8 @@ export class ZLinkSpotNodeRuntimeManager {
       spotPublisherClient: this.options.spotPublisherClient,
       routedTransport: this.options.routedTransport,
       spotRouterChannelIdForMesh: this.options.spotRouterChannelIdForMesh,
-      channelMeshNameForChannel: (channelName) => resolveChannelMeshName(
-        this.options.registration,
-        channelName
-      ),
+      channelMeshNameForChannel: (channelName) =>
+        resolveChannelMeshName(this.options.registration, channelName),
       timerHandlers: spotNode.entrySpotTimerHandlers,
       packetHandlers: spotNode.entrySpotPacketHandlers,
       subscriptionHandlers: spotNode.entrySpotSubscriptionHandlers,
@@ -1034,11 +1032,15 @@ export class ZLinkSpotNodeRuntimeManager {
   ): Promise<unknown> {
     let activation = this.primaryEntryActivation();
     if (activation === undefined) {
-      const candidates = this.options.primaryMeshName === undefined
-        ? this.options.registration.spotNodes
-        : new Map([[this.options.primaryMeshName, this.options.registration.spotNodes.get(
-          this.options.primaryMeshName
-        )]]);
+      const candidates =
+        this.options.primaryMeshName === undefined
+          ? this.options.registration.spotNodes
+          : new Map([
+              [
+                this.options.primaryMeshName,
+                this.options.registration.spotNodes.get(this.options.primaryMeshName)
+              ]
+            ]);
       for (const [spotNodeName, spotNode] of candidates) {
         if (spotNode === undefined) {
           continue;
@@ -1054,7 +1056,9 @@ export class ZLinkSpotNodeRuntimeManager {
       }
     }
     if (activation === undefined) {
-      throw new ZLinkConfigurationException('Entry Spot actor packet dispatch requires an Entry Spot.');
+      throw new ZLinkConfigurationException(
+        'Entry Spot actor packet dispatch requires an Entry Spot.'
+      );
     }
     return await activation.dispatchActorPacket({
       actorId,
@@ -1114,15 +1118,16 @@ export class ZLinkSpotNodeRuntimeManager {
   ): Promise<ZLinkSubmitResult> {
     const parts = runWithOutboundFlow(
       this.options.dispatchErrors?.flow.flowCreationEnabled() ?? true,
-      () => encodeChannelPublishEnvelopeParts(
-        channelName,
-        topic,
-        packetName,
-        event,
-        undefined,
-        this.options.dispatchErrors?.flow.flowCreationEnabled() ?? true,
-        metadata
-      )
+      () =>
+        encodeChannelPublishEnvelopeParts(
+          channelName,
+          topic,
+          packetName,
+          event,
+          undefined,
+          this.options.dispatchErrors?.flow.flowCreationEnabled() ?? true,
+          metadata
+        )
     );
     const processing = publisher.publishAsync(channelName, topic, parts, undefined, undefined);
     void Promise.resolve(processing).catch(() => undefined);
@@ -1137,7 +1142,15 @@ export class ZLinkSpotNodeRuntimeManager {
     event: Message,
     metadata: ReadonlyMap<string, string> = EMPTY_SPOT_METADATA
   ): ZLinkSubmitResult {
-    return this.publishWithFlags(meshName, channelName, topic, packetName, event, ZLINK_SEND_DONT_WAIT, metadata);
+    return this.publishWithFlags(
+      meshName,
+      channelName,
+      topic,
+      packetName,
+      event,
+      ZLINK_SEND_DONT_WAIT,
+      metadata
+    );
   }
 
   private publishWithFlags(
@@ -1158,15 +1171,16 @@ export class ZLinkSpotNodeRuntimeManager {
     }
     const parts = runWithOutboundFlow(
       this.options.dispatchErrors?.flow.flowCreationEnabled() ?? true,
-      () => encodeChannelPublishEnvelopeParts(
-        channelName,
-        topic,
-        packetName,
-        event,
-        undefined,
-        this.options.dispatchErrors?.flow.flowCreationEnabled() ?? true,
-        metadata
-      )
+      () =>
+        encodeChannelPublishEnvelopeParts(
+          channelName,
+          topic,
+          packetName,
+          event,
+          undefined,
+          this.options.dispatchErrors?.flow.flowCreationEnabled() ?? true,
+          metadata
+        )
     );
     try {
       publisher.publish(channelName, topic, parts, { flags });
@@ -1178,7 +1192,6 @@ export class ZLinkSpotNodeRuntimeManager {
       throw error;
     }
   }
-
 }
 
 function runtimeShutdownError(): ZLinkFrameworkException {
@@ -1202,7 +1215,9 @@ function resolveChannelMeshName(
   channelName: string
 ): string | undefined {
   const matches = [...registration.spotNodes.entries()]
-    .filter(([, node]) => Object.prototype.hasOwnProperty.call(node.meshChannels ?? {}, channelName))
+    .filter(([, node]) =>
+      Object.prototype.hasOwnProperty.call(node.meshChannels ?? {}, channelName)
+    )
     .map(([meshName]) => meshName);
   return matches.length === 1 ? matches[0] : undefined;
 }
@@ -1224,7 +1239,9 @@ function mapPublishSubmitStatus(result: number): ZLinkSubmitStatus {
     case SubmitResult.InvalidHandle:
       return ZLinkSubmitStatus.Shutdown;
     default:
-      throw new ZLinkConfigurationException(`Logical Multicast failed with submit result '${result}'.`);
+      throw new ZLinkConfigurationException(
+        `Logical Multicast failed with submit result '${result}'.`
+      );
   }
 }
 
@@ -1238,9 +1255,7 @@ function requireEntrySpotReply(result: number): void {
 
 function requirePublicRuntimeWeight(value: number, label: string): number {
   if (!Number.isInteger(value) || value < 0 || value > 10_000) {
-    throw new ZLinkConfigurationException(
-      `${label} must be an integer in 0..10000.`
-    );
+    throw new ZLinkConfigurationException(`${label} must be an integer in 0..10000.`);
   }
   return value;
 }
@@ -1261,8 +1276,9 @@ function effectiveUserSpotRegistrations(
     Object.entries(registration.spotFactoryRegistrations ?? {})
   );
   const explicitImplementations = new Set(
-    Object.values(registration.spotFactoryRegistrations ?? {})
-      .map(({ implementation }) => implementation)
+    Object.values(registration.spotFactoryRegistrations ?? {}).map(
+      ({ implementation }) => implementation
+    )
   );
   for (const implementation of registration.spotFactories ?? []) {
     // `spotFactories` is also retained as the runtime implementation set.
@@ -1295,23 +1311,22 @@ function effectiveActorRegistrations(
   const registrations = new Map<string, DescriptorFactoryRegistration>(
     Object.entries(registration.actorFactoryRegistrations ?? {})
   );
-  const legacy = registration.actorFactories instanceof Map
-    ? registration.actorFactories.keys()
-    : Object.keys(registration.actorFactories ?? {});
+  const legacy =
+    registration.actorFactories instanceof Map
+      ? registration.actorFactories.keys()
+      : Object.keys(registration.actorFactories ?? {});
   for (const stableType of legacy) {
     if (!registrations.has(stableType)) registrations.set(stableType, {});
   }
   return [...registrations];
 }
 
-function effectiveObjectRole(
-  registration: ZLinkSpotNodeOptions
-): ZLinkObjectRole {
+function effectiveObjectRole(registration: ZLinkSpotNodeOptions): ZLinkObjectRole {
   if (registration.objectRole === 'server') return ZLinkObjectRole.Server;
   if (registration.objectRole === 'client') return ZLinkObjectRole.Client;
-  return effectiveUserSpotRegistrations(registration).length > 0
-    || effectiveInstanceSpotRegistrations(registration).length > 0
-    || effectiveActorRegistrations(registration).length > 0
+  return effectiveUserSpotRegistrations(registration).length > 0 ||
+    effectiveInstanceSpotRegistrations(registration).length > 0 ||
+    effectiveActorRegistrations(registration).length > 0
     ? ZLinkObjectRole.Server
     : ZLinkObjectRole.None;
 }
@@ -1327,9 +1342,7 @@ function objectCapability(
     stableType,
     policy,
     hasSnapshotAdapter: policy === 'snapshot',
-    limit: objectKind === 'actor'
-      ? 0
-      : factory.options?.stableTypeLimit ?? 0
+    limit: objectKind === 'actor' ? 0 : (factory.options?.stableTypeLimit ?? 0)
   };
 }
 
@@ -1344,10 +1357,6 @@ function maxBigInt(left: bigint, right: bigint): bigint {
   return left > right ? left : right;
 }
 
-function sameOwnerToken(
-  left: ZLinkLocationOwnerToken,
-  right: ZLinkLocationOwnerToken
-): boolean {
-  return left.ownerId === right.ownerId
-    && left.leaseGeneration === right.leaseGeneration;
+function sameOwnerToken(left: ZLinkLocationOwnerToken, right: ZLinkLocationOwnerToken): boolean {
+  return left.ownerId === right.ownerId && left.leaseGeneration === right.leaseGeneration;
 }

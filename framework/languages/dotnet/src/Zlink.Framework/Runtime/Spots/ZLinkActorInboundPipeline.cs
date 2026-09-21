@@ -6,9 +6,7 @@ internal interface IZLinkActorInboundEndpoint
 {
     IZLinkActor? ResolveActor(ZLinkActorRuntimeState state);
 
-    ValueTask NotifyDisconnectedAsync(
-        string actorId,
-        CancellationToken cancellationToken);
+    ValueTask NotifyDisconnectedAsync(string actorId, CancellationToken cancellationToken);
 
     ValueTask DispatchAsync(
         IZLinkActor actor,
@@ -16,7 +14,8 @@ internal interface IZLinkActorInboundEndpoint
         ZlinkStreamHeader header,
         Message body,
         bool relocationReplay,
-        CancellationToken cancellationToken);
+        CancellationToken cancellationToken
+    );
 
     ValueTask<ZLinkActorReply?> DispatchForReplyAsync(
         IZLinkActor actor,
@@ -24,21 +23,23 @@ internal interface IZLinkActorInboundEndpoint
         ZlinkStreamHeader header,
         Message body,
         bool relocationReplay,
-        CancellationToken cancellationToken);
+        CancellationToken cancellationToken
+    );
 }
 
 internal sealed class ZLinkActorInboundPipeline(
     ZLinkFrameworkRuntime runtime,
-    IZLinkActorInboundEndpoint endpoint)
+    IZLinkActorInboundEndpoint endpoint
+)
 {
     public async ValueTask DispatchAsync(
         ZLinkSpotActorFrameBatch frames,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken
+    )
     {
-        using var applicationAdmission =
-            frames.ApplicationJobAdmission is { } admission
-                ? ZLinkApplicationJobQueueInvocation.Enter(admission)
-                : null;
+        using var applicationAdmission = frames.ApplicationJobAdmission is { } admission
+            ? ZLinkApplicationJobQueueInvocation.Enter(admission)
+            : null;
         Exception? dispatchFailure = null;
         try
         {
@@ -58,7 +59,8 @@ internal sealed class ZLinkActorInboundPipeline(
                 }
             }
 
-            if (dispatchFailure is not null) throw dispatchFailure;
+            if (dispatchFailure is not null)
+                throw dispatchFailure;
         }
         finally
         {
@@ -69,7 +71,8 @@ internal sealed class ZLinkActorInboundPipeline(
     internal async ValueTask RejectAsync(
         ZLinkSpotActorFrameBatch frames,
         ZLinkFrameworkException error,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken
+    )
     {
         ArgumentNullException.ThrowIfNull(error);
         try
@@ -77,7 +80,8 @@ internal sealed class ZLinkActorInboundPipeline(
             for (var index = 0; index < frames.Count; index++)
             {
                 var frame = frames[index];
-                await ZLinkActorBoundSessionRelay.ReplyStaleActorAsync(
+                await ZLinkActorBoundSessionRelay
+                    .ReplyStaleActorAsync(
                         runtime,
                         frame.Actor,
                         frame.SourceNodeRid,
@@ -88,7 +92,8 @@ internal sealed class ZLinkActorInboundPipeline(
                         frame.Header,
                         error,
                         cancellationToken,
-                        frame.DirectReply)
+                        frame.DirectReply
+                    )
                     .ConfigureAwait(false);
             }
         }
@@ -101,12 +106,12 @@ internal sealed class ZLinkActorInboundPipeline(
     public async ValueTask DispatchAsync(
         ZLinkSpotActorFrameBatch frames,
         ZLinkSpotSerialExecutor executor,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken
+    )
     {
-        using var applicationAdmission =
-            frames.ApplicationJobAdmission is { } admission
-                ? ZLinkApplicationJobQueueInvocation.Enter(admission)
-                : null;
+        using var applicationAdmission = frames.ApplicationJobAdmission is { } admission
+            ? ZLinkApplicationJobQueueInvocation.Enter(admission)
+            : null;
         ArgumentNullException.ThrowIfNull(executor);
         var dispatches = new Task[frames.Count];
         try
@@ -114,22 +119,27 @@ internal sealed class ZLinkActorInboundPipeline(
             for (var i = 0; i < frames.Count; i++)
             {
                 var frame = frames[i];
-                dispatches[i] = executor.ExecuteActorAsync(
-                    frame.Actor.ActorId,
-                    async static (_, state, ct) =>
-                    {
-                        using (state.Frame)
-                            await state.Pipeline.DispatchFrameAsync(
-                                    state.Frame,
-                                    ct,
-                                    allowCapture: true)
-                                .ConfigureAwait(false);
-                    },
-                    new ScheduledFrame(this, frame),
-                    frame.Body.Size,
-                    frame.ApplicationMetadata.Length,
-                    i == 0 && frames.ApplicationJobAdmission is not null,
-                    cancellationToken).AsTask();
+                dispatches[i] = executor
+                    .ExecuteActorAsync(
+                        frame.Actor.ActorId,
+                        static async (_, state, ct) =>
+                        {
+                            using (state.Frame)
+                                await state
+                                    .Pipeline.DispatchFrameAsync(
+                                        state.Frame,
+                                        ct,
+                                        allowCapture: true
+                                    )
+                                    .ConfigureAwait(false);
+                        },
+                        new ScheduledFrame(this, frame),
+                        frame.Body.Size,
+                        frame.ApplicationMetadata.Length,
+                        i == 0 && frames.ApplicationJobAdmission is not null,
+                        cancellationToken
+                    )
+                    .AsTask();
             }
 
             await Task.WhenAll(dispatches).ConfigureAwait(false);
@@ -143,20 +153,23 @@ internal sealed class ZLinkActorInboundPipeline(
     public async ValueTask DispatchReplayAsync(
         ZLinkSpotActorFrameBatch frames,
         Action<long> acknowledgeFrame,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken
+    )
     {
         await DispatchReplayAsync(
                 frames,
                 acknowledgeFrame,
                 replayAdmission: null,
-                cancellationToken)
+                cancellationToken
+            )
             .ConfigureAwait(false);
     }
 
     internal async ValueTask DispatchSourceRestoreAsync(
         ZLinkSpotActorFrameBatch frames,
         Action acknowledgeFrame,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken
+    )
     {
         ArgumentNullException.ThrowIfNull(acknowledgeFrame);
         try
@@ -169,7 +182,8 @@ internal sealed class ZLinkActorInboundPipeline(
                         cancellationToken,
                         allowCapture: false,
                         acknowledgeHandledFrame: acknowledgeFrame,
-                        relocationReplay: false)
+                        relocationReplay: false
+                    )
                     .ConfigureAwait(false);
             }
         }
@@ -183,7 +197,8 @@ internal sealed class ZLinkActorInboundPipeline(
         ZLinkSpotActorFrameBatch frames,
         Action<long> acknowledgeFrame,
         ZLinkSpotRelocationReplayAdmission? replayAdmission,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken
+    )
     {
         ArgumentNullException.ThrowIfNull(acknowledgeFrame);
         using var replayScope = replayAdmission is null
@@ -194,17 +209,21 @@ internal sealed class ZLinkActorInboundPipeline(
             for (var i = 0; i < frames.Count; i++)
             {
                 using var frame = frames[i];
-                var arrivalIndex = frame.HandoffArrivalIndex
-                                   ?? throw new InvalidOperationException(
-                                       "Actor replay frame is missing its handoff arrival identity.");
+                var arrivalIndex =
+                    frame.HandoffArrivalIndex
+                    ?? throw new InvalidOperationException(
+                        "Actor replay frame is missing its handoff arrival identity."
+                    );
                 ZLinkFrameworkDebugLog.SpotDiscovery(
                     $"actor_replay_frame_begin actor={frame.Actor.ActorId} "
-                    + $"request_id={frame.RequestId} arrival={arrivalIndex}");
+                        + $"request_id={frame.RequestId} arrival={arrivalIndex}"
+                );
                 await DispatchFrameAsync(
                         frame,
                         cancellationToken,
                         allowCapture: false,
-                        acknowledgeHandledFrame: () => acknowledgeFrame(arrivalIndex))
+                        acknowledgeHandledFrame: () => acknowledgeFrame(arrivalIndex)
+                    )
                     .ConfigureAwait(false);
             }
         }
@@ -217,23 +236,24 @@ internal sealed class ZLinkActorInboundPipeline(
 
     internal Task QueueCanonicalReplayAsync(
         ZLinkSpotActorFrameBatch frames,
-        Func<ZLinkSpotActorFrame, ZLinkActorReply?, CancellationToken, ValueTask>
-            completeFrame,
-        CancellationToken cancellationToken)
+        Func<ZLinkSpotActorFrame, ZLinkActorReply?, CancellationToken, ValueTask> completeFrame,
+        CancellationToken cancellationToken
+    )
     {
         return QueueCanonicalReplayAsync(
             frames,
             completeFrame,
             replayAdmission: null,
-            cancellationToken);
+            cancellationToken
+        );
     }
 
     internal Task QueueCanonicalReplayAsync(
         ZLinkSpotActorFrameBatch frames,
-        Func<ZLinkSpotActorFrame, ZLinkActorReply?, CancellationToken, ValueTask>
-            completeFrame,
+        Func<ZLinkSpotActorFrame, ZLinkActorReply?, CancellationToken, ValueTask> completeFrame,
         ZLinkSpotRelocationReplayAdmission? replayAdmission,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken
+    )
     {
         ArgumentNullException.ThrowIfNull(completeFrame);
         var dispatches = new Task[frames.Count];
@@ -244,17 +264,18 @@ internal sealed class ZLinkActorInboundPipeline(
                 frame,
                 completeFrame,
                 replayAdmission,
-                cancellationToken);
+                cancellationToken
+            );
         }
         return CompleteQueuedCanonicalBatchAsync(dispatches, frames);
     }
 
     private async Task DispatchQueuedCanonicalFrameAsync(
         ZLinkSpotActorFrame frame,
-        Func<ZLinkSpotActorFrame, ZLinkActorReply?, CancellationToken, ValueTask>
-            completeFrame,
+        Func<ZLinkSpotActorFrame, ZLinkActorReply?, CancellationToken, ValueTask> completeFrame,
         ZLinkSpotRelocationReplayAdmission? replayAdmission,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken
+    )
     {
         using var replayScope = replayAdmission is null
             ? null
@@ -266,7 +287,8 @@ internal sealed class ZLinkActorInboundPipeline(
                         frame,
                         cancellationToken,
                         allowCapture: false,
-                        completeCanonicalReplay: completeFrame)
+                        completeCanonicalReplay: completeFrame
+                    )
                     .ConfigureAwait(false);
         }
         finally
@@ -277,7 +299,8 @@ internal sealed class ZLinkActorInboundPipeline(
 
     private static async Task CompleteQueuedCanonicalBatchAsync(
         Task[] dispatches,
-        ZLinkSpotActorFrameBatch frames)
+        ZLinkSpotActorFrameBatch frames
+    )
     {
         try
         {
@@ -294,9 +317,14 @@ internal sealed class ZLinkActorInboundPipeline(
         CancellationToken cancellationToken,
         bool allowCapture,
         Action? acknowledgeHandledFrame = null,
-        Func<ZLinkSpotActorFrame, ZLinkActorReply?, CancellationToken, ValueTask>?
-            completeCanonicalReplay = null,
-        bool? relocationReplay = null)
+        Func<
+            ZLinkSpotActorFrame,
+            ZLinkActorReply?,
+            CancellationToken,
+            ValueTask
+        >? completeCanonicalReplay = null,
+        bool? relocationReplay = null
+    )
     {
         using var flow = ZLinkFlowContext.Enter(
             frame.Header.FlowId,
@@ -304,9 +332,9 @@ internal sealed class ZLinkActorInboundPipeline(
                 ? ZLinkStreamHeaderCodec.ToFrameworkOrigin(streamOrigin)
                 : null,
             runtime.Flow.CaptureEnabled,
-            ZLinkFlowOrigin.Inbound);
-        var state = frame.AcceptedState
-                    ?? runtime.GetOrCreateActorState(frame.Actor.ActorId);
+            ZLinkFlowOrigin.Inbound
+        );
+        var state = frame.AcceptedState ?? runtime.GetOrCreateActorState(frame.Actor.ActorId);
         ZLinkActorHandoffIngressStateSnapshot ingress;
         ZLinkActorHandoffCaptureResult capture;
         try
@@ -316,7 +344,8 @@ internal sealed class ZLinkActorInboundPipeline(
                 frame,
                 allowCapture,
                 runtime,
-                static (rt, fr) => EnsureRelocationReplyRoute(rt, fr));
+                static (rt, fr) => EnsureRelocationReplyRoute(rt, fr)
+            );
             capture = ingress.Capture;
         }
         catch (ZLinkActorHandoffRejectedException)
@@ -326,10 +355,7 @@ internal sealed class ZLinkActorInboundPipeline(
             // on the pre-Captured deadline contract: the caller receives the
             // observable moving retry terminal — like the Full boundary —
             // and its own deadline owns the DeadlineExceeded decision.
-            await CompleteMovingBoundaryAsync(
-                    frame,
-                    acknowledgeHandledFrame,
-                    cancellationToken)
+            await CompleteMovingBoundaryAsync(frame, acknowledgeHandledFrame, cancellationToken)
                 .ConfigureAwait(false);
             return;
         }
@@ -337,27 +363,20 @@ internal sealed class ZLinkActorInboundPipeline(
             return;
         if (capture == ZLinkActorHandoffCaptureResult.Full)
         {
-            await CompleteMovingBoundaryAsync(
-                    frame,
-                    acknowledgeHandledFrame,
-                    cancellationToken)
+            await CompleteMovingBoundaryAsync(frame, acknowledgeHandledFrame, cancellationToken)
                 .ConfigureAwait(false);
             return;
         }
-        if (allowCapture
-            && ingress.BlocksLocalDispatch
-            && !frame.RouteContext.IsDirectRoute)
+        if (allowCapture && ingress.BlocksLocalDispatch && !frame.RouteContext.IsDirectRoute)
         {
-            await CompleteMovingBoundaryAsync(
-                    frame,
-                    acknowledgeHandledFrame,
-                    cancellationToken)
+            await CompleteMovingBoundaryAsync(frame, acknowledgeHandledFrame, cancellationToken)
                 .ConfigureAwait(false);
             return;
         }
         if (state.IsDispatchBlocked)
         {
-            await ZLinkActorBoundSessionRelay.ReplyStaleActorAsync(
+            await ZLinkActorBoundSessionRelay
+                .ReplyStaleActorAsync(
                     runtime,
                     frame.Actor,
                     frame.SourceNodeRid,
@@ -368,19 +387,19 @@ internal sealed class ZLinkActorInboundPipeline(
                     frame.Header,
                     new ZLinkFrameworkException(
                         ZLinkFrameworkErrorKind.NotFound,
-                        $"Actor '{frame.Actor.ActorId}' is being destroyed."),
+                        $"Actor '{frame.Actor.ActorId}' is being destroyed."
+                    ),
                     cancellationToken,
-                    frame.DirectReply)
+                    frame.DirectReply
+                )
                 .ConfigureAwait(false);
             acknowledgeHandledFrame?.Invoke();
             return;
         }
-        if (await RouteAwayFromCurrentActorAsync(
-                state,
-                ingress.Route,
-                frame,
-                cancellationToken)
-                .ConfigureAwait(false))
+        if (
+            await RouteAwayFromCurrentActorAsync(state, ingress.Route, frame, cancellationToken)
+                .ConfigureAwait(false)
+        )
         {
             acknowledgeHandledFrame?.Invoke();
             return;
@@ -389,7 +408,8 @@ internal sealed class ZLinkActorInboundPipeline(
         var actor = endpoint.ResolveActor(state);
         Diagnostics.ZLinkFrameworkDebugLog.SpotDiscovery(
             $"inbound_resolve actor={frame.Actor.ActorId} resolved={actor is not null} "
-            + $"request_id={frame.RequestId}");
+                + $"request_id={frame.RequestId}"
+        );
         if (actor is null)
         {
             //  Spec 15 §4.2: this ActorId may be the target of an in-flight
@@ -408,19 +428,24 @@ internal sealed class ZLinkActorInboundPipeline(
             //  all: the helper below answers no-bind requests only, and the frame
             //  was then acknowledged and dropped, leaving the caller to time out.
             //  Spec 07-stream-session names this case ActorGenerationStale.
-            if (!await ZLinkActorBoundSessionRelay.TryReplyMissingNoBindActorAsync(
-                    runtime,
-                    frame.Actor,
-                    frame.SourceNodeRid,
-                    frame.SourceSessionRid,
-                    frame.RequestId,
-                    frame.Flags,
-                    frame.RouteContext.ReplyCapability,
-                    frame.Header,
-                    frame.DirectReply,
-                    cancellationToken)
-                .ConfigureAwait(false))
-                await ZLinkActorBoundSessionRelay.ReplyStaleActorAsync(
+            if (
+                !await ZLinkActorBoundSessionRelay
+                    .TryReplyMissingNoBindActorAsync(
+                        runtime,
+                        frame.Actor,
+                        frame.SourceNodeRid,
+                        frame.SourceSessionRid,
+                        frame.RequestId,
+                        frame.Flags,
+                        frame.RouteContext.ReplyCapability,
+                        frame.Header,
+                        frame.DirectReply,
+                        cancellationToken
+                    )
+                    .ConfigureAwait(false)
+            )
+                await ZLinkActorBoundSessionRelay
+                    .ReplyStaleActorAsync(
                         runtime,
                         frame.Actor,
                         frame.SourceNodeRid,
@@ -431,9 +456,11 @@ internal sealed class ZLinkActorInboundPipeline(
                         frame.Header,
                         new ZLinkFrameworkException(
                             ZLinkFrameworkErrorKind.InvalidOperation,
-                            $"Actor '{frame.Actor.ActorId}' session binding names an incarnation that no longer exists."),
+                            $"Actor '{frame.Actor.ActorId}' session binding names an incarnation that no longer exists."
+                        ),
                         cancellationToken,
-                        frame.DirectReply)
+                        frame.DirectReply
+                    )
                     .ConfigureAwait(false);
             acknowledgeHandledFrame?.Invoke();
             return;
@@ -443,11 +470,10 @@ internal sealed class ZLinkActorInboundPipeline(
         //  가이드 07-actor-spot은 actor가 처리 중인 request 수를 `surface=actor`로
         //  관측한다고 정한다. Channel·spot surface만 계측돼 있어 actor request는
         //  어느 값에도 잡히지 않았다.
-        var requestMetric = frame.RequestId != 0
-            ? Diagnostics.ZLinkRuntimeMetrics.StartRequest(
-                actor.Context.MeshName,
-                "actor")
-            : null;
+        var requestMetric =
+            frame.RequestId != 0
+                ? Diagnostics.ZLinkRuntimeMetrics.StartRequest(actor.Context.MeshName, "actor")
+                : null;
         var requestOutcome = "completed";
         try
         {
@@ -458,7 +484,8 @@ internal sealed class ZLinkActorInboundPipeline(
                     acknowledgeHandledFrame,
                     completeCanonicalReplay,
                     relocationReplay,
-                    cancellationToken)
+                    cancellationToken
+                )
                 .ConfigureAwait(false);
         }
         catch (TimeoutException)
@@ -473,8 +500,9 @@ internal sealed class ZLinkActorInboundPipeline(
         }
         catch (ZLinkFrameworkException exception)
             when (allowCapture
-                  && exception.Kind == ZLinkFrameworkErrorKind.NotFound
-                  && state.Handoff.BlocksLocalDispatch)
+                && exception.Kind == ZLinkFrameworkErrorKind.NotFound
+                && state.Handoff.BlocksLocalDispatch
+            )
         {
             ZLinkActorHandoffCaptureResult retryCapture;
             try
@@ -482,7 +510,8 @@ internal sealed class ZLinkActorInboundPipeline(
                 retryCapture = state.Handoff.TryCapture(
                     frame,
                     runtime,
-                    static (rt, fr) => EnsureRelocationReplyRoute(rt, fr));
+                    static (rt, fr) => EnsureRelocationReplyRoute(rt, fr)
+                );
             }
             catch (ZLinkActorHandoffRejectedException)
             {
@@ -494,26 +523,21 @@ internal sealed class ZLinkActorInboundPipeline(
             // A bound-session frame cannot be made durable because it has no
             // owner lease fence. Requests receive an observable retry terminal;
             // one-way sends have no reply contract and stop at this boundary.
-            await CompleteMovingBoundaryAsync(
-                    frame,
-                    acknowledgeHandledFrame,
-                    cancellationToken)
+            await CompleteMovingBoundaryAsync(frame, acknowledgeHandledFrame, cancellationToken)
                 .ConfigureAwait(false);
         }
         catch (ZLinkFrameworkException exception)
             when (allowCapture
-                  && exception.Kind == ZLinkFrameworkErrorKind.Rejected
-                  && IsRelocationAdmissionRejection(state))
+                && exception.Kind == ZLinkFrameworkErrorKind.Rejected
+                && IsRelocationAdmissionRejection(state)
+            )
         {
             // The frame won the inbound handoff race, but its actor turn
             // reached the Spot admission barrier after relocation sealed the
             // application queue. It still owns a reply route; letting this
             // rejection escape would leave the session's accepted frame
             // pending until timeout and block the route seal.
-            await CompleteMovingBoundaryAsync(
-                    frame,
-                    acknowledgeHandledFrame,
-                    cancellationToken)
+            await CompleteMovingBoundaryAsync(frame, acknowledgeHandledFrame, cancellationToken)
                 .ConfigureAwait(false);
         }
         catch
@@ -527,50 +551,59 @@ internal sealed class ZLinkActorInboundPipeline(
         }
     }
 
-    internal static void EnsureRelocationReplyRoute(
-        ZLinkSpotActorFrame frame)
+    internal static void EnsureRelocationReplyRoute(ZLinkSpotActorFrame frame)
     {
-        if (frame.RelocationReplyRouteId != 0
+        if (
+            frame.RelocationReplyRouteId != 0
             || !frame.RouteContext.IsDirectRoute
-            || frame.Header.Kind != ZlinkStreamMessageKind.Request)
+            || frame.Header.Kind != ZlinkStreamMessageKind.Request
+        )
             return;
         var routeId = frame.RouteContext.ReplyRequestId;
-        if (routeId == 0
+        if (
+            routeId == 0
             || frame.RouteContext.OperationId.Low == 0
-            || frame.RouteContext.OperationId.High == 0)
+            || frame.RouteContext.OperationId.High == 0
+        )
             throw new ZLinkFrameworkException(
                 ZLinkFrameworkErrorKind.Rejected,
-                "A direct Actor request has no source-owned relocation reply route.");
+                "A direct Actor request has no source-owned relocation reply route."
+            );
         frame.BindRelocationReplyRoute(routeId);
     }
 
     internal static void EnsureRelocationReplyRoute(
         ZLinkFrameworkRuntime runtime,
-        ZLinkSpotActorFrame frame)
+        ZLinkSpotActorFrame frame
+    )
     {
         EnsureRelocationReplyRoute(frame);
-        if (frame.Header.Kind != ZlinkStreamMessageKind.Request
-            || frame.RouteContext.ReplyCapability is not null)
+        if (
+            frame.Header.Kind != ZlinkStreamMessageKind.Request
+            || frame.RouteContext.ReplyCapability is not null
+        )
             return;
-        var directReply = frame.DirectReply
-                          ?? throw new ZLinkFrameworkException(
-                              ZLinkFrameworkErrorKind.Rejected,
-                              "A direct Actor request has no reply route to preserve for relocation.");
+        var directReply =
+            frame.DirectReply
+            ?? throw new ZLinkFrameworkException(
+                ZLinkFrameworkErrorKind.Rejected,
+                "A direct Actor request has no reply route to preserve for relocation."
+            );
         var preserved = runtime.ActorMessageFollower.PreserveDirectReply(
             frame.Actor.NodeRid,
             frame.Actor.ActorId,
             frame.RequestId,
             frame.RouteContext.DeadlineUnixMs,
-            directReply);
-        frame.BindRelocationReplyCapability(
-            preserved.Capability,
-            preserved.Reply);
+            directReply
+        );
+        frame.BindRelocationReplyCapability(preserved.Capability, preserved.Reply);
     }
 
     private async ValueTask CompleteMovingBoundaryAsync(
         ZLinkSpotActorFrame frame,
         Action? acknowledgeHandledFrame,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken
+    )
     {
         if (frame.Header.Kind == ZlinkStreamMessageKind.Request)
             await ReplyMovingAsync(frame, cancellationToken).ConfigureAwait(false);
@@ -579,7 +612,8 @@ internal sealed class ZLinkActorInboundPipeline(
 
     private ValueTask ReplyMovingAsync(
         ZLinkSpotActorFrame frame,
-        CancellationToken cancellationToken) =>
+        CancellationToken cancellationToken
+    ) =>
         ZLinkActorBoundSessionRelay.ReplyStaleActorAsync(
             runtime,
             frame.Actor,
@@ -591,24 +625,26 @@ internal sealed class ZLinkActorInboundPipeline(
             frame.Header,
             new ZLinkFrameworkException(
                 ZLinkFrameworkErrorKind.Unavailable,
-                $"Actor '{frame.Actor.ActorId}' is moving."),
+                $"Actor '{frame.Actor.ActorId}' is moving."
+            ),
             cancellationToken,
-            frame.DirectReply);
+            frame.DirectReply
+        );
 
-    private static bool IsRelocationAdmissionRejection(
-        ZLinkActorRuntimeState state) =>
-        state.Handoff.BlocksLocalDispatch
-        || state.LiveActivation?.HasRelocationBarrier == true;
+    private static bool IsRelocationAdmissionRejection(ZLinkActorRuntimeState state) =>
+        state.Handoff.BlocksLocalDispatch || state.LiveActivation?.HasRelocationBarrier == true;
 
     private async ValueTask<bool> RouteAwayFromCurrentActorAsync(
         ZLinkActorRuntimeState state,
         ZLinkActorMessageFollowRouteResolution route,
         ZLinkSpotActorFrame frame,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken
+    )
     {
         try
         {
-            if (!ZLinkActorMessageFollowDispatcher.TryFollow(
+            if (
+                !ZLinkActorMessageFollowDispatcher.TryFollow(
                     runtime,
                     state,
                     route,
@@ -622,13 +658,16 @@ internal sealed class ZLinkActorInboundPipeline(
                     frame.Body,
                     frame.SourceNodeGeneration,
                     frame.RequestSource,
-                    frame.DirectReply))
+                    frame.DirectReply
+                )
+            )
                 return false;
         }
         catch (ZLinkFrameworkException exception)
             when (exception.Kind == ZLinkFrameworkErrorKind.Unavailable)
         {
-            await ZLinkActorBoundSessionRelay.ReplyStaleActorAsync(
+            await ZLinkActorBoundSessionRelay
+                .ReplyStaleActorAsync(
                     runtime,
                     frame.Actor,
                     frame.SourceNodeRid,
@@ -639,7 +678,8 @@ internal sealed class ZLinkActorInboundPipeline(
                     frame.Header,
                     exception,
                     cancellationToken,
-                    frame.DirectReply)
+                    frame.DirectReply
+                )
                 .ConfigureAwait(false);
             return true;
         }
@@ -652,37 +692,49 @@ internal sealed class ZLinkActorInboundPipeline(
         ZLinkActorRuntimeState state,
         ZLinkSpotActorFrame frame,
         Action? acknowledgeHandledFrame,
-        Func<ZLinkSpotActorFrame, ZLinkActorReply?, CancellationToken, ValueTask>?
-            completeCanonicalReplay,
+        Func<
+            ZLinkSpotActorFrame,
+            ZLinkActorReply?,
+            CancellationToken,
+            ValueTask
+        >? completeCanonicalReplay,
         bool? relocationReplay,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken
+    )
     {
         //  Between the relay dispatch and this branch there is no record of
         //  what arrived, so a frame that is not recognised as a disconnect
         //  simply continues as ordinary traffic.
         if (ZLinkActorBoundSessionRelay.IsSessionDisconnectedPacket(frame.Header))
         {
-            if (!ZLinkActorBoundSessionRelay.TryValidateDisconnectedBinding(
+            if (
+                !ZLinkActorBoundSessionRelay.TryValidateDisconnectedBinding(
                     state,
                     frame.SourceNodeRid,
                     frame.SourceSessionRid,
                     frame.Body,
-                    out var bindingToken))
+                    out var bindingToken
+                )
+            )
             {
                 if (runtime.Flow.CaptureEnabled)
-                    runtime.Flow.TraceDispatchError(new ZLinkDispatchFailure(
-                        ZLinkDispatchErrorSurface.StreamSession,
-                        ZLinkDispatchMessageKind.Send,
-                        ZLinkDispatchErrorReason.InvalidFrame,
-                        ZLinkDispatchErrorAction.Drop,
-                        null,
-                        ActorId: actor.Context.ActorId));
+                    runtime.Flow.TraceDispatchError(
+                        new ZLinkDispatchFailure(
+                            ZLinkDispatchErrorSurface.StreamSession,
+                            ZLinkDispatchMessageKind.Send,
+                            ZLinkDispatchErrorReason.InvalidFrame,
+                            ZLinkDispatchErrorAction.Drop,
+                            null,
+                            ActorId: actor.Context.ActorId
+                        )
+                    );
                 acknowledgeHandledFrame?.Invoke();
                 return;
             }
             try
             {
-                await endpoint.NotifyDisconnectedAsync(actor.Context.ActorId, cancellationToken)
+                await endpoint
+                    .NotifyDisconnectedAsync(actor.Context.ActorId, cancellationToken)
                     .ConfigureAwait(false);
             }
             finally
@@ -699,51 +751,65 @@ internal sealed class ZLinkActorInboundPipeline(
             frame.SourceNodeRid,
             frame.SourceSessionRid,
             frame.RequestId,
-            frame.Flags);
+            frame.Flags
+        );
 
         try
         {
-            if (await ZLinkRemoteSessionBindingHandler.TryHandleAsync(
-                    runtime,
-                    actor,
-                    state,
-                    frame,
-                    boundSession,
-                    acknowledgeHandledFrame,
-                    cancellationToken).ConfigureAwait(false))
+            if (
+                await ZLinkRemoteSessionBindingHandler
+                    .TryHandleAsync(
+                        runtime,
+                        actor,
+                        state,
+                        frame,
+                        boundSession,
+                        acknowledgeHandledFrame,
+                        cancellationToken
+                    )
+                    .ConfigureAwait(false)
+            )
             {
                 return;
             }
 
-            if (frame.Header.Kind == ZlinkStreamMessageKind.Request
-                && frame.Header.RequestSeq is not null)
+            if (
+                frame.Header.Kind == ZlinkStreamMessageKind.Request
+                && frame.Header.RequestSeq is not null
+            )
             {
-                var reply = await endpoint.DispatchForReplyAsync(
+                var reply = await endpoint
+                    .DispatchForReplyAsync(
                         actor,
                         state,
                         frame.Header,
                         frame.Body,
                         relocationReplay: relocationReplay
-                            ?? (acknowledgeHandledFrame is not null
-                                || completeCanonicalReplay is not null),
-                        cancellationToken)
+                            ?? (
+                                acknowledgeHandledFrame is not null
+                                || completeCanonicalReplay is not null
+                            ),
+                        cancellationToken
+                    )
                     .ConfigureAwait(false);
                 ZLinkFrameworkDebugLog.SpotDiscovery(
                     $"actor_dispatch_reply actor={actor.Context.ActorId} "
-                    + $"request_id={frame.RequestId} reply={reply is not null} "
-                    + $"activation={state.LiveActivation?.SpotId ?? "<entry>"}");
+                        + $"request_id={frame.RequestId} reply={reply is not null} "
+                        + $"activation={state.LiveActivation?.SpotId ?? "<entry>"}"
+                );
                 if (completeCanonicalReplay is not null)
                 {
                     ZLinkFrameworkDebugLog.SpotDiscovery(
                         $"actor_canonical_replay_begin actor={actor.Context.ActorId} "
-                        + $"request_id={frame.RequestId} reply={reply is not null}");
-                    await boundSession.DrainAsync(cancellationToken)
-                        .ConfigureAwait(false);
+                            + $"request_id={frame.RequestId} reply={reply is not null}"
+                    );
+                    await boundSession.DrainAsync(cancellationToken).ConfigureAwait(false);
                     await completeCanonicalReplay(frame, reply, cancellationToken)
                         .ConfigureAwait(false);
                     ZLinkFrameworkDebugLog.SpotDiscovery(
                         $"actor_canonical_replay_completed actor={actor.Context.ActorId} "
-                        + $"request_id={frame.RequestId}");
+                            + $"request_id={frame.RequestId}"
+                    );
                     return;
                 }
                 if (acknowledgeHandledFrame is not null)
@@ -753,14 +819,16 @@ internal sealed class ZLinkActorInboundPipeline(
                         acknowledgeHandledFrame.Invoke();
                         ZLinkFrameworkDebugLog.SpotDiscovery(
                             $"actor_replay_frame_acknowledged actor={actor.Context.ActorId} "
-                            + $"request_id={frame.RequestId}");
+                                + $"request_id={frame.RequestId}"
+                        );
                     }
                     catch (Exception exception)
                     {
                         ZLinkFrameworkDebugLog.SpotDiscovery(
                             $"actor_replay_frame_ack_failed actor={actor.Context.ActorId} "
-                            + $"request_id={frame.RequestId} "
-                            + $"error={exception.GetType().Name}:{exception.Message}");
+                                + $"request_id={frame.RequestId} "
+                                + $"error={exception.GetType().Name}:{exception.Message}"
+                        );
                         throw;
                     }
                 }
@@ -768,10 +836,12 @@ internal sealed class ZLinkActorInboundPipeline(
                 {
                     ZLinkFrameworkDebugLog.SpotDiscovery(
                         $"actor_handoff_reply_begin actor={actor.Context.ActorId} "
-                        + $"request_id={frame.RequestId} source_node={frame.SourceNodeRid} "
-                        + $"no_bind={boundSession.IsNoBind}");
+                            + $"request_id={frame.RequestId} source_node={frame.SourceNodeRid} "
+                            + $"no_bind={boundSession.IsNoBind}"
+                    );
                     if (acknowledgeHandledFrame is null)
-                        await ZLinkActorBoundSessionRelay.SendReplyAsync(
+                        await ZLinkActorBoundSessionRelay
+                            .SendReplyAsync(
                                 runtime,
                                 actor.Context.ActorId,
                                 frame.Actor,
@@ -784,25 +854,29 @@ internal sealed class ZLinkActorInboundPipeline(
                                 frame.Header,
                                 reply,
                                 cancellationToken,
-                                frame.DirectReply)
+                                frame.DirectReply
+                            )
                             .ConfigureAwait(false);
                     else
                         await ReconcileReplayFinalizationAsync(
                                 "actor handoff reply",
-                                ct => ZLinkActorBoundSessionRelay.SendReplyAsync(
-                                    runtime,
-                                    actor.Context.ActorId,
-                                    frame.Actor,
-                                    frame.SourceNodeRid,
-                                    frame.SourceSessionRid,
-                                    frame.RequestId,
-                                    frame.Flags,
-                                    frame.RouteContext.ReplyCapability,
-                                    boundSession.IsNoBind,
-                                    frame.Header,
-                                    reply,
-                                    ct,
-                                    frame.DirectReply))
+                                ct =>
+                                    ZLinkActorBoundSessionRelay.SendReplyAsync(
+                                        runtime,
+                                        actor.Context.ActorId,
+                                        frame.Actor,
+                                        frame.SourceNodeRid,
+                                        frame.SourceSessionRid,
+                                        frame.RequestId,
+                                        frame.Flags,
+                                        frame.RouteContext.ReplyCapability,
+                                        boundSession.IsNoBind,
+                                        frame.Header,
+                                        reply,
+                                        ct,
+                                        frame.DirectReply
+                                    )
+                            )
                             .ConfigureAwait(false);
                 }
 
@@ -811,34 +885,38 @@ internal sealed class ZLinkActorInboundPipeline(
                 else
                     await ReconcileReplayFinalizationAsync(
                             "actor handoff deferred operation",
-                            boundSession.DrainAsync)
+                            boundSession.DrainAsync
+                        )
                         .ConfigureAwait(false);
                 return;
             }
 
-            await endpoint.DispatchAsync(
+            await endpoint
+                .DispatchAsync(
                     actor,
                     state,
                     frame.Header,
                     frame.Body,
                     relocationReplay: relocationReplay
-                        ?? (acknowledgeHandledFrame is not null
-                            || completeCanonicalReplay is not null),
-                    cancellationToken)
+                        ?? (
+                            acknowledgeHandledFrame is not null
+                            || completeCanonicalReplay is not null
+                        ),
+                    cancellationToken
+                )
                 .ConfigureAwait(false);
             if (completeCanonicalReplay is not null)
             {
-                await boundSession.DrainAsync(cancellationToken)
-                    .ConfigureAwait(false);
-                await completeCanonicalReplay(frame, null, cancellationToken)
-                    .ConfigureAwait(false);
+                await boundSession.DrainAsync(cancellationToken).ConfigureAwait(false);
+                await completeCanonicalReplay(frame, null, cancellationToken).ConfigureAwait(false);
                 return;
             }
             acknowledgeHandledFrame?.Invoke();
             if (acknowledgeHandledFrame is not null)
                 await ReconcileReplayFinalizationAsync(
                         "actor handoff deferred operation",
-                        boundSession.DrainAsync)
+                        boundSession.DrainAsync
+                    )
                     .ConfigureAwait(false);
         }
         finally
@@ -848,43 +926,51 @@ internal sealed class ZLinkActorInboundPipeline(
             else
                 await ReconcileReplayFinalizationAsync(
                         "actor handoff dispatch scope disposal",
-                        _ => boundSession.DisposeAsync())
+                        _ => boundSession.DisposeAsync()
+                    )
                     .ConfigureAwait(false);
         }
     }
 
     private async ValueTask ReconcileReplayFinalizationAsync(
         string operation,
-        Func<CancellationToken, ValueTask> finalize)
+        Func<CancellationToken, ValueTask> finalize
+    )
     {
-        ZLinkFrameworkDebugLog.SpotDiscovery(
-            $"actor_handoff_finalize_begin operation={operation}");
-        await ZLinkReconciliationRunner.RunAsync(
+        ZLinkFrameworkDebugLog.SpotDiscovery($"actor_handoff_finalize_begin operation={operation}");
+        await ZLinkReconciliationRunner
+            .RunAsync(
                 finalize,
-                exception => ZLinkFrameworkDebugLog.SpotDiscovery(
-                    $"{operation} retry: {exception.Message}"),
-                runtime.ShutdownToken)
+                exception =>
+                    ZLinkFrameworkDebugLog.SpotDiscovery($"{operation} retry: {exception.Message}"),
+                runtime.ShutdownToken
+            )
             .ConfigureAwait(false);
     }
 
     private sealed record ScheduledFrame(
         ZLinkActorInboundPipeline Pipeline,
-        ZLinkSpotActorFrame Frame);
-
+        ZLinkSpotActorFrame Frame
+    );
 }
 
-internal sealed class ZLinkEntrySpotActorInboundEndpoint(
-    ZLinkFrameworkRuntime runtime) : IZLinkActorInboundEndpoint
+internal sealed class ZLinkEntrySpotActorInboundEndpoint(ZLinkFrameworkRuntime runtime)
+    : IZLinkActorInboundEndpoint
 {
     public IZLinkActor? ResolveActor(ZLinkActorRuntimeState state) => state.Actor;
 
     public async ValueTask NotifyDisconnectedAsync(
         string actorId,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken
+    )
     {
-        if (!await runtime.TryNotifyJoinedSpotActorDisconnectedAsync(actorId, cancellationToken)
-                .ConfigureAwait(false))
-            await runtime.NotifyActorDisconnectedByIdAsync(actorId, cancellationToken)
+        if (
+            !await runtime
+                .TryNotifyJoinedSpotActorDisconnectedAsync(actorId, cancellationToken)
+                .ConfigureAwait(false)
+        )
+            await runtime
+                .NotifyActorDisconnectedByIdAsync(actorId, cancellationToken)
                 .ConfigureAwait(false);
     }
 
@@ -894,7 +980,8 @@ internal sealed class ZLinkEntrySpotActorInboundEndpoint(
         ZlinkStreamHeader header,
         Message body,
         bool relocationReplay,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken
+    )
     {
         return runtime.SubmitActorAsync(
             actor,
@@ -902,7 +989,8 @@ internal sealed class ZLinkEntrySpotActorInboundEndpoint(
             header,
             body,
             relocationReplay,
-            cancellationToken);
+            cancellationToken
+        );
     }
 
     public async ValueTask<ZLinkActorReply?> DispatchForReplyAsync(
@@ -911,43 +999,52 @@ internal sealed class ZLinkEntrySpotActorInboundEndpoint(
         ZlinkStreamHeader header,
         Message body,
         bool relocationReplay,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken
+    )
     {
         ZLinkFrameworkDebugLog.SpotDiscovery(
             $"actor_dispatch_entry_path actor={actor.Context.ActorId} "
-            + $"correlation_id={header.CorrelationId} live_activation={state.LiveActivation is not null}");
+                + $"correlation_id={header.CorrelationId} live_activation={state.LiveActivation is not null}"
+        );
         if (state.LiveActivation is not null)
-            return await runtime.SubmitActorForReplyAsync(
+            return await runtime
+                .SubmitActorForReplyAsync(
                     actor,
                     state,
                     header,
                     body,
                     relocationReplay,
-                    cancellationToken)
+                    cancellationToken
+                )
                 .ConfigureAwait(false);
 
-        var result = await runtime.TrySubmitEntrySpotActorForReplyAsync(
+        var result = await runtime
+            .TrySubmitEntrySpotActorForReplyAsync(
                 actor,
                 state,
                 header,
                 body,
                 callerOwnsDispatchTurn: false,
                 relocationReplay,
-                cancellationToken)
+                cancellationToken
+            )
             .ConfigureAwait(false);
         ZLinkFrameworkDebugLog.SpotDiscovery(
             $"actor_dispatch_entry_result actor={actor.Context.ActorId} "
-            + $"correlation_id={header.CorrelationId} handled={result.Handled} "
-            + $"reply={result.Reply is not null}");
+                + $"correlation_id={header.CorrelationId} handled={result.Handled} "
+                + $"reply={result.Reply is not null}"
+        );
         return result.Handled
             ? result.Reply
-            : await runtime.SubmitActorForReplyAsync(
+            : await runtime
+                .SubmitActorForReplyAsync(
                     actor,
                     state,
                     header,
                     body,
                     relocationReplay,
-                    cancellationToken)
+                    cancellationToken
+                )
                 .ConfigureAwait(false);
     }
 }
@@ -955,21 +1052,21 @@ internal sealed class ZLinkEntrySpotActorInboundEndpoint(
 internal sealed class ZLinkUserSpotActorInboundEndpoint(
     ZLinkFrameworkRuntime runtime,
     ZLinkSpotActorMembership actors,
-    ZLinkSpotActorPacketDispatcher dispatcher) : IZLinkActorInboundEndpoint
+    ZLinkSpotActorPacketDispatcher dispatcher
+) : IZLinkActorInboundEndpoint
 {
     public IZLinkActor? ResolveActor(ZLinkActorRuntimeState state)
     {
-        return actors.TryGetActor(
-                   ZLinkActorId.FromBoundary(state.ActorId, nameof(state)),
-                   out var actor)
-               && actor is not null
+        return
+            actors.TryGetActor(
+                ZLinkActorId.FromBoundary(state.ActorId, nameof(state)),
+                out var actor
+            ) && actor is not null
             ? actor
             : state.Actor;
     }
 
-    public ValueTask NotifyDisconnectedAsync(
-        string actorId,
-        CancellationToken cancellationToken)
+    public ValueTask NotifyDisconnectedAsync(string actorId, CancellationToken cancellationToken)
     {
         return runtime.NotifyActorDisconnectedByIdAsync(actorId, cancellationToken);
     }
@@ -980,7 +1077,8 @@ internal sealed class ZLinkUserSpotActorInboundEndpoint(
         ZlinkStreamHeader header,
         Message body,
         bool relocationReplay,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken
+    )
     {
         return dispatcher.DispatchAsync(actor, state, header, body, cancellationToken);
     }
@@ -991,7 +1089,8 @@ internal sealed class ZLinkUserSpotActorInboundEndpoint(
         ZlinkStreamHeader header,
         Message body,
         bool relocationReplay,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken
+    )
     {
         return dispatcher.DispatchForReplyAsync(actor, state, header, body, cancellationToken);
     }

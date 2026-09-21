@@ -1,12 +1,6 @@
 import type { ActorRef, RoutingId } from '../../contracts/Common';
-import type {
-  ZLinkActorLocation,
-  ZLinkLocationWriteStatus
-} from './internal-location-contracts';
-import type {
-  ZLinkActorLocationStore,
-  ZLinkSpotLocationStore
-} from './internal-store-contracts';
+import type { ZLinkActorLocation, ZLinkLocationWriteStatus } from './internal-location-contracts';
+import type { ZLinkActorLocationStore, ZLinkSpotLocationStore } from './internal-store-contracts';
 import { ZLinkSpotKind } from '../../contracts/Spots';
 import {
   ZLinkActorLocationClaims,
@@ -25,14 +19,8 @@ import type {
   ZLinkTrackedInstanceAuthority
 } from './spot-location-claims';
 import type { ZLinkAuthorityStore } from './internal-store-contracts';
-import type {
-  IZLinkLocationLifecycleRuntime,
-  ZLinkOwnershipLostEvent
-} from './lifecycle-runtime';
-export type {
-  IZLinkLocationLifecycleRuntime,
-  ZLinkOwnershipLostEvent
-} from './lifecycle-runtime';
+import type { IZLinkLocationLifecycleRuntime, ZLinkOwnershipLostEvent } from './lifecycle-runtime';
+export type { IZLinkLocationLifecycleRuntime, ZLinkOwnershipLostEvent } from './lifecycle-runtime';
 
 export class ZLinkLocationLifecycle {
   private readonly actorClaims: ZLinkActorLocationClaims;
@@ -40,7 +28,8 @@ export class ZLinkLocationLifecycle {
   private readonly spotClaims: ZLinkSpotLocationClaims;
   private readonly actorSessionRoutes: ZLinkActorSessionRouteClaims;
   private disposed = false;
-  private readonly ownershipLostHandler = (event: ZLinkOwnershipLostEvent) => this.onOwnershipLost(event);
+  private readonly ownershipLostHandler = (event: ZLinkOwnershipLostEvent) =>
+    this.onOwnershipLost(event);
 
   constructor(
     private readonly runtime: IZLinkLocationLifecycleRuntime,
@@ -50,7 +39,12 @@ export class ZLinkLocationLifecycle {
     spotStore?: ZLinkSpotLocationStore,
     invalidateSpotRoute?: (spotId: RoutingId) => void
   ) {
-    this.actorClaims = new ZLinkActorLocationClaims(runtime, actorStore, entryMeshName, authorityStore);
+    this.actorClaims = new ZLinkActorLocationClaims(
+      runtime,
+      actorStore,
+      entryMeshName,
+      authorityStore
+    );
     this.spotClaims = new ZLinkSpotLocationClaims(
       runtime,
       authorityStore,
@@ -73,7 +67,13 @@ export class ZLinkLocationLifecycle {
     deactivate: (() => Promise<void>) | undefined,
     activate: () => Promise<TActor>
   ): Promise<ZLinkActorClaimActivation<TActor>> {
-    return await this.actorClaims.executeClaimThenActivate(actorType, actorId, nodeRid, deactivate, activate);
+    return await this.actorClaims.executeClaimThenActivate(
+      actorType,
+      actorId,
+      nodeRid,
+      deactivate,
+      activate
+    );
   }
 
   async claimActor(
@@ -165,8 +165,9 @@ export class ZLinkLocationLifecycle {
     if (existing !== undefined) {
       return existing;
     }
-    const cleanup = this.retryActorRelease(actorType, actorId)
-      .finally(() => this.actorCleanupTasks.delete(actorId));
+    const cleanup = this.retryActorRelease(actorType, actorId).finally(() =>
+      this.actorCleanupTasks.delete(actorId)
+    );
     this.actorCleanupTasks.set(actorId, cleanup);
     return cleanup;
   }
@@ -240,7 +241,11 @@ export class ZLinkLocationLifecycle {
     await this.spotClaims.reclaimOwnerRows();
   }
 
-  async bindActorSessionRoute(sessionRid: RoutingId, actorId: string, ownerNodeRid: RoutingId): Promise<void> {
+  async bindActorSessionRoute(
+    sessionRid: RoutingId,
+    actorId: string,
+    ownerNodeRid: RoutingId
+  ): Promise<void> {
     await this.actorSessionRoutes.bind(sessionRid, actorId, ownerNodeRid);
   }
 
@@ -255,13 +260,13 @@ export class ZLinkLocationLifecycle {
   }
 }
 
-function inferSpotStore(
-  actorStore: ZLinkActorLocationStore
-): ZLinkSpotLocationStore | undefined {
+function inferSpotStore(actorStore: ZLinkActorLocationStore): ZLinkSpotLocationStore | undefined {
   const candidate = actorStore as Partial<ZLinkSpotLocationStore>;
-  if (typeof candidate.updateSpot === 'function'
-    && typeof candidate.removeSpot === 'function'
-    && typeof candidate.resolveSpot === 'function') {
+  if (
+    typeof candidate.updateSpot === 'function' &&
+    typeof candidate.removeSpot === 'function' &&
+    typeof candidate.resolveSpot === 'function'
+  ) {
     return actorStore as unknown as ZLinkSpotLocationStore;
   }
   return undefined;

@@ -6,6 +6,7 @@ import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import org.junit.jupiter.api.Test;
+
 import systems.zlink.httpclient.internal.CookieJar;
 
 /** Direct unit tests for the wrapper-owned cookie jar (mirrors C++ {@code cookie_jar.cpp}). */

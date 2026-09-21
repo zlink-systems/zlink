@@ -21,8 +21,7 @@ namespace zlink::framework::runtime::eventing
 class runtime_wake_timer_t final
 {
   public:
-    static constexpr std::uintptr_t slot =
-      std::numeric_limits<std::uintptr_t>::max ();
+    static constexpr std::uintptr_t slot = std::numeric_limits<std::uintptr_t>::max ();
 
     runtime_wake_timer_t () = default;
     ~runtime_wake_timer_t () noexcept { detach (); }
@@ -56,8 +55,7 @@ class runtime_wake_timer_t final
 
     bool is_event (const zlink::poll_event_t &event) const noexcept
     {
-        return event.source_kind == zlink::poll_source_kind_t::timer
-               && event.slot == slot;
+        return event.source_kind == zlink::poll_source_kind_t::timer && event.slot == slot;
     }
 
     void consume () noexcept

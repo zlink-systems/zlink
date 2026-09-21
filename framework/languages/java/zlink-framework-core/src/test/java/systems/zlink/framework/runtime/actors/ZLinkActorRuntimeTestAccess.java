@@ -7,21 +7,16 @@ import systems.zlink.framework.runtime.internal.spots.SpotTransportAddress;
 
 /** Test-only access to package-owned Message Follow retention. */
 public final class ZLinkActorRuntimeTestAccess {
-    private ZLinkActorRuntimeTestAccess() {
-    }
+    private ZLinkActorRuntimeTestAccess() {}
 
     public static void retainMessageFollowSource(
-        ZLinkActorRuntime runtime,
-        ZLinkActor actor,
-        ZLinkBackendActorRef sourceActorRef,
-        ZLinkBackendActorRef targetActorRef,
-        SpotTransportAddress targetAddress,
-        ZLinkServiceMessageFollowWireCodec.ActorRoute targetRoute) {
+            ZLinkActorRuntime runtime,
+            ZLinkActor actor,
+            ZLinkBackendActorRef sourceActorRef,
+            ZLinkBackendActorRef targetActorRef,
+            SpotTransportAddress targetAddress,
+            ZLinkServiceMessageFollowWireCodec.ActorRoute targetRoute) {
         runtime.retainMessageFollowSource(
-            actor,
-            sourceActorRef,
-            targetActorRef,
-            targetAddress,
-            targetRoute);
+                actor, sourceActorRef, targetActorRef, targetAddress, targetRoute);
     }
 }

@@ -40,16 +40,13 @@ export function wrapSocket<T extends { close(): void }>(
     };
   };
   const hasRequest = typeof (nativeInstance as { request?: unknown }).request === 'function';
-  const hasRoutedPeer = hasRequest
-    && typeof (nativeInstance as { reply?: unknown }).reply === 'function';
+  const hasRoutedPeer =
+    hasRequest && typeof (nativeInstance as { reply?: unknown }).reply === 'function';
   const hasStream = typeof (nativeInstance as { recvPacket?: unknown }).recvPacket === 'function';
-  const eventLoopPoller = pollCompletion === undefined
-    ? undefined
-    : new ZLinkNodeEventLoopPoller(
-      nativeInstance as unknown as Socket,
-      pollCompletion,
-      () => {}
-    );
+  const eventLoopPoller =
+    pollCompletion === undefined
+      ? undefined
+      : new ZLinkNodeEventLoopPoller(nativeInstance as unknown as Socket, pollCompletion, () => {});
   const adapter = {
     nativeInstance,
     async dispose(): Promise<void> {
@@ -74,20 +71,24 @@ export function wrapSocket<T extends { close(): void }>(
       (nativeInstance as T & { disconnect(endpoint: string): void }).disconnect(endpoint);
     },
     setChannelName(channelName: string): void {
-      const setChannelName = (nativeInstance as T & { setChannelName?: (value: string) => void }).setChannelName;
+      const setChannelName = (nativeInstance as T & { setChannelName?: (value: string) => void })
+        .setChannelName;
       setChannelName?.call(nativeInstance, channelName);
     },
     setReceiveFlowState(state: 0 | 1): void {
-      (nativeInstance as T & { setReceiveFlowState(value: 0 | 1): void })
-        .setReceiveFlowState(state);
+      (nativeInstance as T & { setReceiveFlowState(value: 0 | 1): void }).setReceiveFlowState(
+        state
+      );
     },
     setProbe(enabled: boolean): void {
       requireSocketOptions(socket).probe = enabled;
     },
     setTlsServer(cert: string, key: string, requireClientCert?: boolean): void {
-      (nativeInstance as T & {
-        setTlsServer(cert: string, key: string, requireClientCert?: boolean): void;
-      }).setTlsServer(cert, key, requireClientCert);
+      (
+        nativeInstance as T & {
+          setTlsServer(cert: string, key: string, requireClientCert?: boolean): void;
+        }
+      ).setTlsServer(cert, key, requireClientCert);
     },
     setSubscription(topic: string): void {
       (nativeInstance as T & { setSubscription(topic: string): void }).setSubscription(topic);
@@ -96,15 +97,21 @@ export function wrapSocket<T extends { close(): void }>(
       (nativeInstance as T & { unsetSubscription(topic: string): void }).unsetSubscription(topic);
     },
     subscribe(result: unknown, flags?: number): boolean {
-      return Boolean((nativeInstance as T & {
-        subscribe(result: unknown, flags?: number): boolean;
-      }).subscribe(result, flags));
+      return Boolean(
+        (
+          nativeInstance as T & {
+            subscribe(result: unknown, flags?: number): boolean;
+          }
+        ).subscribe(result, flags)
+      );
     },
     get lastEndpoint(): string | undefined {
       return socket.options?.lastEndpoint;
     },
     setRoutingId(routingId: unknown): void {
-      (nativeInstance as T & { setRoutingId(value: unknown): void }).setRoutingId(toNativeRoutingId(routingId));
+      (nativeInstance as T & { setRoutingId(value: unknown): void }).setRoutingId(
+        toNativeRoutingId(routingId)
+      );
     },
     get peerWeight(): number {
       return socket.options?.peerWeight ?? 100;
@@ -151,17 +158,20 @@ export function wrapSocket<T extends { close(): void }>(
     send(...args: unknown[]): unknown {
       if (hasStream) {
         const [routingId, payload] = args as [unknown, unknown];
-        const operation = (nativeInstance as T & {
-          send(routingId: unknown): ZLinkBindingAsyncSendOperation;
-        }).send(toNativeRoutingId(routingId));
+        const operation = (
+          nativeInstance as T & {
+            send(routingId: unknown): ZLinkBindingAsyncSendOperation;
+          }
+        ).send(toNativeRoutingId(routingId));
         submitBindingSyncSend(operation, payload);
         return true;
       }
       if (hasRoutedPeer) {
         const [routingId, payload] = args as [unknown, unknown];
         return submitBindingAsyncSend(
-          (nativeInstance as T & { send(routingId: unknown): ZLinkBindingAsyncSendOperation })
-            .send(toNativeRoutingId(routingId)),
+          (nativeInstance as T & { send(routingId: unknown): ZLinkBindingAsyncSendOperation }).send(
+            toNativeRoutingId(routingId)
+          ),
           payload
         );
       }
@@ -172,9 +182,11 @@ export function wrapSocket<T extends { close(): void }>(
           payload
         );
       }
-      const operation = (nativeInstance as T & {
-        send(): ZLinkBindingAsyncSendOperation;
-      }).send();
+      const operation = (
+        nativeInstance as T & {
+          send(): ZLinkBindingAsyncSendOperation;
+        }
+      ).send();
       if ((flags ?? zlink.SendFlags.None) === zlink.SendFlags.DontWait) {
         submitBindingSyncSend(operation, payload);
         return true;
@@ -184,8 +196,9 @@ export function wrapSocket<T extends { close(): void }>(
     submit(routingId: unknown, payload: unknown, _timeoutMs?: number): Promise<void> {
       if (!hasStream) throw new TypeError('Async stream send requires a STREAM socket.');
       return submitBindingAsyncSend(
-        (nativeInstance as T & { send(routingId: unknown): ZLinkBindingAsyncSendOperation })
-          .send(toNativeRoutingId(routingId)),
+        (nativeInstance as T & { send(routingId: unknown): ZLinkBindingAsyncSendOperation }).send(
+          toNativeRoutingId(routingId)
+        ),
         payload
       );
     },
@@ -193,8 +206,9 @@ export function wrapSocket<T extends { close(): void }>(
       if (hasRoutedPeer) {
         const [routingId, payload, timeoutMs] = args as [unknown, unknown, number | undefined];
         return submitBindingRequest(
-          (nativeInstance as T & { request(routingId: unknown): ZLinkBindingRequestOperation })
-            .request(toNativeRoutingId(routingId)),
+          (
+            nativeInstance as T & { request(routingId: unknown): ZLinkBindingRequestOperation }
+          ).request(toNativeRoutingId(routingId)),
           payload,
           timeoutMs
         );
@@ -211,18 +225,22 @@ export function wrapSocket<T extends { close(): void }>(
     },
     reply(...args: unknown[]): unknown {
       const [routingId, replyToken, payload] = args as [unknown, unknown, unknown];
-      const operation = (nativeInstance as T & {
-        reply(routingId: unknown, replyToken: unknown): ZLinkBindingReplyOperation;
-      }).reply(toNativeRoutingId(routingId), replyToken);
+      const operation = (
+        nativeInstance as T & {
+          reply(routingId: unknown, replyToken: unknown): ZLinkBindingReplyOperation;
+        }
+      ).reply(toNativeRoutingId(routingId), replyToken);
       return args.length < 3 ? operation : submitBindingReply(operation, payload);
     },
     recv(flags?: number): unknown {
       const received = new zlink.Received();
       let ok = false;
       try {
-        ok = (nativeInstance as T & {
-          recv(result: unknown, flags?: number): boolean;
-        }).recv(received, flags);
+        ok = (
+          nativeInstance as T & {
+            recv(result: unknown, flags?: number): boolean;
+          }
+        ).recv(received, flags);
       } catch (error) {
         received.close();
         if (isRouteRecvRetryable(error)) {
@@ -239,9 +257,11 @@ export function wrapSocket<T extends { close(): void }>(
     recvPacket(packet: unknown, flags?: number): boolean {
       if (!hasStream) throw new TypeError('Packet receive requires a STREAM socket.');
       try {
-        return (nativeInstance as T & {
-          recvPacket(result: unknown, flags?: number): boolean;
-        }).recvPacket(packet, flags);
+        return (
+          nativeInstance as T & {
+            recvPacket(result: unknown, flags?: number): boolean;
+          }
+        ).recvPacket(packet, flags);
       } catch (error) {
         if (isRouteRecvRetryable(error)) return false;
         throw error;
@@ -251,7 +271,9 @@ export function wrapSocket<T extends { close(): void }>(
       if (args.length >= 2) {
         const [topic, payload] = args as [string, unknown];
         submitBindingPublish(
-          (nativeInstance as T & { publish(topic: string): ZLinkBindingPublishOperation }).publish(topic),
+          (nativeInstance as T & { publish(topic: string): ZLinkBindingPublishOperation }).publish(
+            topic
+          ),
           payload
         );
         return;
@@ -264,9 +286,11 @@ export function wrapSocket<T extends { close(): void }>(
       payload: unknown,
       _flags?: number
     ): Promise<void> {
-      const operation = (nativeInstance as T & {
-        sendToSpot(targetRid: unknown, targetSpot: unknown): ZLinkBindingAsyncSendOperation;
-      }).sendToSpot(toNativeRoutingId(targetRid), toNativeRoutingId(targetSpot));
+      const operation = (
+        nativeInstance as T & {
+          sendToSpot(targetRid: unknown, targetSpot: unknown): ZLinkBindingAsyncSendOperation;
+        }
+      ).sendToSpot(toNativeRoutingId(targetRid), toNativeRoutingId(targetSpot));
       await submitBindingAsyncSend(operation, payload);
     },
     requestToSpot(
@@ -276,27 +300,47 @@ export function wrapSocket<T extends { close(): void }>(
       timeoutMs?: number
     ): Promise<readonly unknown[]> {
       return submitBindingRequest(
-        (nativeInstance as T & {
-          requestToSpot(targetRid: unknown, targetSpot: unknown): ZLinkBindingRequestOperation;
-        }).requestToSpot(toNativeRoutingId(targetRid), toNativeRoutingId(targetSpot)),
+        (
+          nativeInstance as T & {
+            requestToSpot(targetRid: unknown, targetSpot: unknown): ZLinkBindingRequestOperation;
+          }
+        ).requestToSpot(toNativeRoutingId(targetRid), toNativeRoutingId(targetSpot)),
         payload,
         timeoutMs
       );
     },
     disconnectPeer(routingId: unknown): void {
-      disconnectStreamPeer(nativeInstance as T & { disconnectRid(value: unknown): void }, routingId);
+      disconnectStreamPeer(
+        nativeInstance as T & { disconnectRid(value: unknown): void },
+        routingId
+      );
     },
-    async bindActor(_sessionRid: unknown, _actor: unknown, _timeoutMs: number, _signal?: AbortSignal): Promise<void> {
+    async bindActor(
+      _sessionRid: unknown,
+      _actor: unknown,
+      _timeoutMs: number,
+      _signal?: AbortSignal
+    ): Promise<void> {
       throw new Error(
         'Session Actor dispatch requires enableActorDispatch() and a Framework MeshNode service route.'
       );
     },
-    async unbindActor(_sessionRid: unknown, _actorId: string, _timeoutMs: number, _signal?: AbortSignal): Promise<void> {
+    async unbindActor(
+      _sessionRid: unknown,
+      _actorId: string,
+      _timeoutMs: number,
+      _signal?: AbortSignal
+    ): Promise<void> {
       throw new Error(
         'Session Actor dispatch requires enableActorDispatch() and a Framework MeshNode service route.'
       );
     },
-    sendBoundActor(_sessionRid: unknown, _actorId: string, _parts: readonly unknown[], _flags: number): boolean {
+    sendBoundActor(
+      _sessionRid: unknown,
+      _actorId: string,
+      _parts: readonly unknown[],
+      _flags: number
+    ): boolean {
       return false;
     }
   };
@@ -333,8 +377,11 @@ function requireSocketOptions<TOptions>(socket: { readonly options?: TOptions })
 }
 
 export function isEndpointCloseIgnorableError(error: unknown): boolean {
-  return isContextTerminatedError(error) || (
-    error instanceof Error && 'code' in error &&
-    ((error as { code: unknown }).code === 604 || (error as { code: unknown }).code === zlink.ConnectResult.NotFound)
+  return (
+    isContextTerminatedError(error) ||
+    (error instanceof Error &&
+      'code' in error &&
+      ((error as { code: unknown }).code === 604 ||
+        (error as { code: unknown }).code === zlink.ConnectResult.NotFound))
   );
 }

@@ -4,8 +4,8 @@ import java.time.Duration;
 import java.util.Map;
 import java.util.concurrent.CompletionStage;
 
-record ZLinkTypedStreamConnectorSendCall(
-    ZLinkStreamSendCall delegate) implements ZLinkTypedStreamSendCall {
+record ZLinkTypedStreamConnectorSendCall(ZLinkStreamSendCall delegate)
+        implements ZLinkTypedStreamSendCall {
     @Override
     public ZLinkTypedStreamSendCall packetName(String name) {
         return new ZLinkTypedStreamConnectorSendCall(delegate.packetName(name));
@@ -32,8 +32,8 @@ record ZLinkTypedStreamConnectorSendCall(
     }
 }
 
-record ZLinkTypedStreamConnectorRequestCall(
-    ZLinkStreamRequestCall delegate) implements ZLinkTypedStreamRequestCall {
+record ZLinkTypedStreamConnectorRequestCall(ZLinkStreamRequestCall delegate)
+        implements ZLinkTypedStreamRequestCall {
     @Override
     public ZLinkTypedStreamRequestCall packetName(String name) {
         return new ZLinkTypedStreamConnectorRequestCall(delegate.packetName(name));

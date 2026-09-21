@@ -42,7 +42,7 @@ export class ResponseBodyReader {
 
   async decompress(
     bytes: Buffer,
-    headers: Record<string, string>,
+    headers: Record<string, string>
   ): Promise<{ body: Buffer; headers: Record<string, string> }> {
     const encoding = Object.prototype.hasOwnProperty.call(headers, 'content-encoding')
       ? headers['content-encoding']
@@ -54,19 +54,21 @@ export class ResponseBodyReader {
     if (encoding.toLowerCase() === 'gzip') {
       return {
         body: await gunzip(bytes, this.options.maxResponseBodySize),
-        headers: stripEncodingHeaders(headers),
+        headers: stripEncodingHeaders(headers)
       };
     }
     if (encoding.toLowerCase() === 'deflate') {
       return {
         body: await inflateDeflate(bytes, this.options.maxResponseBodySize),
-        headers: stripEncodingHeaders(headers),
+        headers: stripEncodingHeaders(headers)
       };
     }
     return { body: bytes, headers };
   }
 
-  static collectHeaders(headers: Record<string, string | string[] | undefined>): Record<string, string> {
+  static collectHeaders(
+    headers: Record<string, string | string[] | undefined>
+  ): Record<string, string> {
     const result: Record<string, string> = {};
     for (const [name, value] of Object.entries(headers)) {
       if (value === undefined) {
@@ -76,7 +78,6 @@ export class ResponseBodyReader {
     }
     return result;
   }
-
 }
 
 // After decoding, drop Content-Encoding and the now-stale Content-Length (it described the

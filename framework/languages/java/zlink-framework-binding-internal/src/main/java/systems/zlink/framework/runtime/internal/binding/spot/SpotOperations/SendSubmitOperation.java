@@ -4,12 +4,12 @@ package systems.zlink.framework.runtime.internal.binding.spot;
 
 import systems.zlink.contracts.messaging.Message;
 import systems.zlink.contracts.sockets.SendFlags;
+
 /** Accepts further parts, flags, and the terminal submit of a send builder. */
-public interface SendSubmitOperation
-  extends MessageBuilderStage<SendSubmitOperation> {
+public interface SendSubmitOperation extends MessageBuilderStage<SendSubmitOperation> {
     /**
-     * Adds another message part; consumed on a successful submit (see
-     * {@link SendOperation} for the ownership contract).
+     * Adds another message part; consumed on a successful submit (see {@link SendOperation} for the
+     * ownership contract).
      *
      * @param part the message part
      * @return this operation for chaining
@@ -27,10 +27,9 @@ public interface SendSubmitOperation
     /**
      * Submits the accumulated parts.
      *
-     * @return {@code true} when the parts were queued; {@code false} only when
-     *         {@link SendFlags#DONT_WAIT} is set and the send would have
-     *         blocked (back-pressure); other failures throw
-     *         {@link systems.zlink.contracts.errors.ZlinkException}
+     * @return {@code true} when the parts were queued; {@code false} only when {@link
+     *     SendFlags#DONT_WAIT} is set and the send would have blocked (back-pressure); other
+     *     failures throw {@link systems.zlink.contracts.errors.ZlinkException}
      */
     boolean submit();
 }

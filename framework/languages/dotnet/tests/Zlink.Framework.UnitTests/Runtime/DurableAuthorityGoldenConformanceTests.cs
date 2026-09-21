@@ -22,12 +22,14 @@ public sealed class DurableAuthorityGoldenConformanceTests
     {
         var fixturePath = Path.Combine(
             Common.FrameworkTestEnvironment.GetRepoRoot(),
-            "framework/runtime/protocol/golden/durable-authority-v1.json");
+            "framework/runtime/protocol/golden/durable-authority-v1.json"
+        );
         using var fixture = JsonDocument.Parse(File.ReadAllText(fixturePath));
         var root = fixture.RootElement;
 
         Assert.Equal("authority-payload-v1", root.GetProperty("format").GetString());
-        var consumers = root.GetProperty("consumers").EnumerateArray()
+        var consumers = root.GetProperty("consumers")
+            .EnumerateArray()
             .Select(item => item.GetString())
             .ToArray();
         Assert.Contains("dotnet", consumers);
@@ -38,7 +40,8 @@ public sealed class DurableAuthorityGoldenConformanceTests
         Assert.True(DurableAuthorityEnvelope.TryDecode(encoded, out var envelope));
         Assert.Equal(
             encodedHex,
-            Convert.ToHexString(DurableAuthorityEnvelope.Encode(envelope)).ToLowerInvariant());
+            Convert.ToHexString(DurableAuthorityEnvelope.Encode(envelope)).ToLowerInvariant()
+        );
     }
 
     /// <summary>
@@ -49,26 +52,24 @@ public sealed class DurableAuthorityGoldenConformanceTests
     /// ZLinkActorAuthorityPayloadCodec already use, without decoding the
     /// instance-spot union body those production codecs do not yet cover.
     /// </summary>
-    private readonly record struct DurableAuthorityEnvelope(
-        byte Version,
-        ushort Flags,
-        byte[] Body)
+    private readonly record struct DurableAuthorityEnvelope(byte Version, ushort Flags, byte[] Body)
     {
         private static ReadOnlySpan<byte> Magic => "ZLAU"u8;
 
         internal static bool TryDecode(
             ReadOnlySpan<byte> encoded,
-            out DurableAuthorityEnvelope value)
+            out DurableAuthorityEnvelope value
+        )
         {
             value = default;
-            if (encoded.Length < 4 + 1 + 2 + 4 + 4
-                || !encoded[..4].SequenceEqual(Magic))
+            if (encoded.Length < 4 + 1 + 2 + 4 + 4 || !encoded[..4].SequenceEqual(Magic))
                 return false;
 
             var version = encoded[4];
             var flags = (ushort)((encoded[5] << 8) | encoded[6]);
-            var length = (uint)((encoded[7] << 24) | (encoded[8] << 16)
-                                 | (encoded[9] << 8) | encoded[10]);
+            var length = (uint)(
+                (encoded[7] << 24) | (encoded[8] << 16) | (encoded[9] << 8) | encoded[10]
+            );
             var bodyStart = 11;
             if (checked(bodyStart + (int)length + 4) != encoded.Length)
                 return false;
@@ -79,7 +80,8 @@ public sealed class DurableAuthorityGoldenConformanceTests
                 (encoded[checksumOffset] << 24)
                 | (encoded[checksumOffset + 1] << 16)
                 | (encoded[checksumOffset + 2] << 8)
-                | encoded[checksumOffset + 3]);
+                | encoded[checksumOffset + 3]
+            );
             if (expectedChecksum != ZLinkCrc32C.Compute(encoded[..checksumOffset]))
                 return false;
 

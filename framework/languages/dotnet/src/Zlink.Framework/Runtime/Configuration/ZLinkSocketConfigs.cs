@@ -5,8 +5,8 @@ namespace Zlink.Framework.Runtime.Configuration;
 // member exposed by that mesh-node interface is kept in this configuration object.
 internal sealed class ZLinkSocketConfig
     : IZLinkSocketConfig,
-      IZLinkStreamSocketConfig,
-      IZLinkMeshNodeSocketConfig
+        IZLinkStreamSocketConfig,
+        IZLinkMeshNodeSocketConfig
 {
     internal const long DefaultMaxMessageSize = 16L * 1024L * 1024L;
     internal const long DefaultStreamMaxMessageSize = 64L * 1024L;
@@ -38,10 +38,7 @@ internal sealed class ZLinkSocketConfig
     public TimeSpan? SendTimeout
     {
         get => _sendTimeout;
-        set
-        {
-            _sendTimeout = NormalizeSendTimeout(value);
-        }
+        set { _sendTimeout = NormalizeSendTimeout(value); }
     }
 
     public TimeSpan? ConnectTimeout { get; set; }
@@ -66,15 +63,18 @@ internal sealed class ZLinkSocketConfig
 
     internal static TimeSpan? NormalizeSendTimeout(TimeSpan? value)
     {
-        if (value is not { } timeout) return null;
+        if (value is not { } timeout)
+            return null;
         if (timeout <= TimeSpan.Zero)
             throw new ZLinkConfigurationException("SendTimeout must be greater than zero.");
 
         var wholeMilliseconds = timeout.Ticks / TimeSpan.TicksPerMillisecond;
-        if (timeout.Ticks % TimeSpan.TicksPerMillisecond != 0) wholeMilliseconds++;
+        if (timeout.Ticks % TimeSpan.TicksPerMillisecond != 0)
+            wholeMilliseconds++;
         if (wholeMilliseconds > int.MaxValue)
             throw new ZLinkConfigurationException(
-                $"SendTimeout must not exceed {int.MaxValue} milliseconds.");
+                $"SendTimeout must not exceed {int.MaxValue} milliseconds."
+            );
 
         return TimeSpan.FromMilliseconds(wholeMilliseconds);
     }
@@ -83,7 +83,8 @@ internal sealed class ZLinkSocketConfig
     {
         if (value is < 0 or > MaximumPeerWeight)
             throw new ZLinkConfigurationException(
-                $"Weight must be between 0 and {MaximumPeerWeight}.");
+                $"Weight must be between 0 and {MaximumPeerWeight}."
+            );
     }
 }
 
@@ -116,10 +117,7 @@ internal sealed class ZLinkSpotPublisherConfig : IZLinkSpotPublisherConfig
     public TimeSpan? SendTimeout
     {
         get => _sendTimeout;
-        set
-        {
-            _sendTimeout = ZLinkSocketConfig.NormalizeSendTimeout(value);
-        }
+        set { _sendTimeout = ZLinkSocketConfig.NormalizeSendTimeout(value); }
     }
 
     public TimeSpan? Linger { get; set; }

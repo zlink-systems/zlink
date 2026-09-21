@@ -1,22 +1,19 @@
 package systems.zlink.framework.kotlin
 
-
-import org.junit.jupiter.api.Assertions
-import java.time.Duration
-import java.util.concurrent.TimeoutException
-import java.net.URI
 import java.net.ServerSocket
 import java.net.Socket
+import java.net.URI
 import java.nio.ByteBuffer
 import java.nio.charset.StandardCharsets
+import java.time.Duration
 import java.time.Duration.ofMillis
 import java.time.Duration.ofSeconds
-import java.util.concurrent.CompletionException
 import java.util.concurrent.LinkedBlockingQueue
 import java.util.concurrent.TimeUnit
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.CoroutineStart
+import java.util.concurrent.TimeoutException
 import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.CoroutineStart
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.async
 import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.future.await
@@ -24,6 +21,7 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withTimeout
 import kotlinx.coroutines.yield
+import org.junit.jupiter.api.Assertions
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertNotNull
 import org.junit.jupiter.api.Assertions.assertNull
@@ -33,15 +31,15 @@ import org.junit.jupiter.api.Test
 import systems.zlink.contracts.messaging.Message
 import systems.zlink.framework.runtime.configuration.DefaultZLinkFrameworkOptions
 import systems.zlink.framework.streams.ZLinkStreamCompressionCodec as FrameworkStreamCompressionCodec
+import systems.zlink.stream.connector.ZLinkFlowOrigin
 import systems.zlink.stream.connector.ZLinkStreamCloseReason
 import systems.zlink.stream.connector.ZLinkStreamCompression
 import systems.zlink.stream.connector.ZLinkStreamCompressionCodec
 import systems.zlink.stream.connector.ZLinkStreamConnectorFactory
 import systems.zlink.stream.connector.ZLinkStreamConnectorOptions
+import systems.zlink.stream.connector.ZLinkStreamDiagnosticsLevel
 import systems.zlink.stream.connector.ZLinkStreamDispatchMode
 import systems.zlink.stream.connector.ZLinkStreamEncodedPayload
-import systems.zlink.stream.connector.ZLinkFlowOrigin
-import systems.zlink.stream.connector.ZLinkStreamDiagnosticsLevel
 import systems.zlink.stream.connector.ZLinkStreamError
 import systems.zlink.stream.connector.ZLinkStreamErrorCode
 import systems.zlink.stream.connector.ZLinkStreamException
@@ -54,9 +52,7 @@ final class KotlinConnectorWrapperTest {
         val codec = PrefixCompressionCodec("kotlin:")
         val frameworkOptions = DefaultZLinkFrameworkOptions()
 
-        frameworkOptions.configureStreamCompression {
-            use(codec)
-        }
+        frameworkOptions.configureStreamCompression { use(codec) }
 
         assertSame(codec, frameworkOptions.registration().streamCompressionCodec())
 
@@ -73,37 +69,35 @@ final class KotlinConnectorWrapperTest {
     fun kotlinCompressionDslPreservesReceivedMessageLimit() {
         //  수신 한도를 기본값과 다르게 두어야 복사가 그 값을 보존하는지 볼 수 있다.
         //  `ZLinkStreamConnectorOptions`의 구성 요소 순서를 그대로 따른다.
-        val connectorOptions = ZLinkStreamConnectorOptions(
-            URI.create("tcp://127.0.0.1:7200"),
-            ZLinkStreamDispatchMode.MANUAL,
-            ofSeconds(1),
-            ofSeconds(5),
-            1,
-            ofSeconds(1),
-            64 * 1024,
-            32 * 1024,
-            true,
-            ofSeconds(1),
-            ofSeconds(5),
-            true,
-            ofMillis(250),
-            ofSeconds(5),
-            2.0,
-            false,
-            ZLinkStreamCompression.LZ4,
-            null,
-            null,
-            null,
-            null,
-        )
+        val connectorOptions =
+            ZLinkStreamConnectorOptions(
+                URI.create("tcp://127.0.0.1:7200"),
+                ZLinkStreamDispatchMode.MANUAL,
+                ofSeconds(1),
+                ofSeconds(5),
+                1,
+                ofSeconds(1),
+                64 * 1024,
+                32 * 1024,
+                true,
+                ofSeconds(1),
+                ofSeconds(5),
+                true,
+                ofMillis(250),
+                ofSeconds(5),
+                2.0,
+                false,
+                ZLinkStreamCompression.LZ4,
+                null,
+                null,
+                null,
+                null,
+            )
 
         //  Java spec 03 12: 옵션을 복사하는 확장은 지금 정의된 옵션을 모두 보존한다.
         //  수신 한도도 그중 하나다.
         assertEquals(32 * 1024, connectorOptions.maxReceivePayloadSize())
-        assertEquals(
-            32 * 1024,
-            connectorOptions.withoutStreamCompression().maxReceivePayloadSize(),
-        )
+        assertEquals(32 * 1024, connectorOptions.withoutStreamCompression().maxReceivePayloadSize())
         assertEquals(
             32 * 1024,
             connectorOptions.withDefaultStreamCompression().maxReceivePayloadSize(),
@@ -111,22 +105,25 @@ final class KotlinConnectorWrapperTest {
         assertEquals(ZLinkStreamCompression.LZ4, connectorOptions.compression())
         assertNotNull(connectorOptions.compressionCodec())
     }
+
     @Test
     fun kotlinRequestCompletionSurfaceUsesOnlyContractNames() {
-        val extensionMethods = Class.forName(
-            "systems.zlink.framework.kotlin.ZLinkConnectorExtensionsKt",
-        ).declaredMethods
+        val extensionMethods =
+            Class.forName("systems.zlink.framework.kotlin.ZLinkConnectorExtensionsKt")
+                .declaredMethods
 
-        assertTrue(extensionMethods.none { method ->
-            method.name == "awaitTyped"
-        })
-        assertTrue(extensionMethods.none { method ->
-            method.name == "await" &&
-                method.parameterTypes.firstOrNull() == ZLinkTypedStreamRequestCall::class.java
-        })
-        assertTrue(ZLinkKotlinStreamConnector::class.java.methods.none { method ->
-            method.name == "disconnect" || method.name == "reconnect"
-        })
+        assertTrue(extensionMethods.none { method -> method.name == "awaitTyped" })
+        assertTrue(
+            extensionMethods.none { method ->
+                method.name == "await" &&
+                    method.parameterTypes.firstOrNull() == ZLinkTypedStreamRequestCall::class.java
+            }
+        )
+        assertTrue(
+            ZLinkKotlinStreamConnector::class.java.methods.none { method ->
+                method.name == "disconnect" || method.name == "reconnect"
+            }
+        )
     }
 
     @Test
@@ -138,7 +135,8 @@ final class KotlinConnectorWrapperTest {
 
                 //  Java spec 03 12: the Kotlin send builder has the same
                 //  packetName/metadata/compress steps as the Java one.
-                connector.send(payload("Echo", "send"))
+                connector
+                    .send(payload("Echo", "send"))
                     .packetName("Renamed")
                     .metadata("seq", "7")
                     .await()
@@ -149,9 +147,7 @@ final class KotlinConnectorWrapperTest {
                 assertEquals(0x02, sent.flags and 0x02)
 
                 //  compress() reaches the wire as the compressed flag.
-                connector.send(payload("Echo", "a".repeat(64)))
-                    .compress()
-                    .await()
+                connector.send(payload("Echo", "a".repeat(64))).compress().await()
                 val compressed = server.readApplicationFrame()
                 assertEquals(0x04, compressed.flags and 0x04)
             } finally {
@@ -162,13 +158,14 @@ final class KotlinConnectorWrapperTest {
 
     @Test
     fun kotlinFlowContextSurvivesSuspensionPoints() = runBlocking {
-        val flow = ZLinkStreamMessage(
-            "Push",
-            payload("Push", "body"),
-            mapOf(),
-            "0192f0c2-1c3a-7000-8000-0123456789ab",
-            ZLinkFlowOrigin.INBOUND,
-        )
+        val flow =
+            ZLinkStreamMessage(
+                "Push",
+                payload("Push", "body"),
+                mapOf(),
+                "0192f0c2-1c3a-7000-8000-0123456789ab",
+                ZLinkFlowOrigin.INBOUND,
+            )
 
         assertEquals(null, currentZLinkStreamFlow())
 
@@ -203,10 +200,7 @@ final class KotlinConnectorWrapperTest {
 
                 connector.setDiagnosticsLevel(ZLinkStreamDiagnosticsLevel.OFF)
                 assertEquals(ZLinkStreamDiagnosticsLevel.OFF, connector.diagnosticsLevel)
-                assertEquals(
-                    ZLinkStreamDiagnosticsLevel.OFF,
-                    connector.options.diagnosticsLevel(),
-                )
+                assertEquals(ZLinkStreamDiagnosticsLevel.OFF, connector.options.diagnosticsLevel())
             } finally {
                 connector.close().await()
             }
@@ -221,13 +215,12 @@ final class KotlinConnectorWrapperTest {
                 connector.connect().await()
                 //  Java spec 03 12: Kotlin adds no exception hierarchy of
                 //  its own and propagates ZLinkStreamException as is.
-                val failure = Assertions.assertThrows(ZLinkStreamException::class.java) {
-                    runBlocking {
-                        connector.waitFor<String>("Never")
-                            .timeout(ofMillis(50))
-                            .await()
+                val failure =
+                    Assertions.assertThrows(ZLinkStreamException::class.java) {
+                        runBlocking {
+                            connector.waitFor<String>("Never").timeout(ofMillis(50)).await()
+                        }
                     }
-                }
                 assertEquals(ZLinkStreamErrorCode.VALIDATION_FAILED, failure.errorCode())
             } finally {
                 connector.close().await()
@@ -249,20 +242,19 @@ final class KotlinConnectorWrapperTest {
                 assertEquals("Echo", sent.name)
                 assertEquals("send", sent.payload.toString(StandardCharsets.UTF_8))
 
-                val replyFuture = async(Dispatchers.IO) {
-                    connector.request(payload("Echo", "request")).await()
-                }
+                val replyFuture =
+                    async(Dispatchers.IO) { connector.request(payload("Echo", "request")).await() }
                 val request = server.readApplicationFrame()
                 assertEquals(2, request.kind)
                 assertEquals("Echo", request.name)
                 assertEquals("request", request.payload.toString(StandardCharsets.UTF_8))
                 server.sendFrame(
-                Frame(
-                    kind = 3,
-                    requestSeq = request.requestSeq,
-                    name = "",
-                    payload = "reply".toByteArray(StandardCharsets.UTF_8),
-                ),
+                    Frame(
+                        kind = 3,
+                        requestSeq = request.requestSeq,
+                        name = "",
+                        payload = "reply".toByteArray(StandardCharsets.UTF_8),
+                    )
                 )
 
                 val reply = replyFuture.await()
@@ -271,7 +263,6 @@ final class KotlinConnectorWrapperTest {
                 } finally {
                     reply.payload().close()
                 }
-
             } finally {
                 connector.close().await()
             }
@@ -286,17 +277,16 @@ final class KotlinConnectorWrapperTest {
                 connector.connect().await()
 
                 val received = CompletableDeferred<ZLinkStreamEncodedPayload>()
-                val collector = launch(start = CoroutineStart.UNDISPATCHED) {
-                    connector.messages("Push").collect { message ->
-                        received.complete(message.payload())
+                val collector =
+                    launch(start = CoroutineStart.UNDISPATCHED) {
+                        connector.messages("Push").collect { message ->
+                            received.complete(message.payload())
+                        }
                     }
-                }
 
                 sendAndDispatchUntilReceived(server, connector, received)
 
-                val payload = withTimeout(1_000) {
-                    received.await()
-                }
+                val payload = withTimeout(1_000) { received.await() }
                 try {
                     assertEquals("Push", payload.packetName())
                     assertEquals("event", payload.payload().toUtf8String())
@@ -318,17 +308,14 @@ final class KotlinConnectorWrapperTest {
                 connector.connect().await()
 
                 val received = CompletableDeferred<ZLinkStreamError>()
-                val collector = launch(start = CoroutineStart.UNDISPATCHED) {
-                    connector.errors().collect { error ->
-                        received.complete(error)
+                val collector =
+                    launch(start = CoroutineStart.UNDISPATCHED) {
+                        connector.errors().collect { error -> received.complete(error) }
                     }
-                }
 
                 sendErrorAndDispatchUntilReceived(server, connector, received)
 
-                val error = withTimeout(1_000) {
-                    received.await()
-                }
+                val error = withTimeout(1_000) { received.await() }
                 assertEquals(ZLinkStreamErrorCode.REMOTE_ERROR, error.code())
                 assertEquals("remote failed", error.message())
                 collector.cancel()
@@ -337,6 +324,7 @@ final class KotlinConnectorWrapperTest {
             }
         }
     }
+
     @Test
     fun kotlinObservationBuildersPreserveJavaQueueSemantics() = runBlocking {
         TcpServer().use { server ->
@@ -344,48 +332,63 @@ final class KotlinConnectorWrapperTest {
             try {
                 connector.connect().await()
 
-                connector.expectNone<Map<String, String>>("Notice")
+                connector
+                    .expectNone<Map<String, String>>("Notice")
                     .within(Duration.ofMillis(25))
                     .await()
 
-                val sequence = async(start = CoroutineStart.UNDISPATCHED) {
-                    connector.waitForSequence<Map<String, String>>("Notice")
-                        .expect { it.payload()["value"] == "first" }
-                        .expect { it.payload()["value"] == "second" }
-                        .timeout(ofSeconds(1))
-                        .await()
-                }
-                server.sendFrame(Frame(
-                    kind = 1,
-                    codec = 1,
-                    requestSeq = null,
-                    name = "Notice",
-                    payload = "{\"value\":\"first\"}".toByteArray(StandardCharsets.UTF_8),
-                ))
-                server.sendFrame(Frame(
-                    kind = 1,
-                    codec = 1,
-                    requestSeq = null,
-                    name = "Notice",
-                    payload = "{\"value\":\"second\"}".toByteArray(StandardCharsets.UTF_8),
-                ))
-
-                assertEquals(listOf("first", "second"), sequence.await().map { it.payload()["value"] })
-
-                val unexpected = async(start = CoroutineStart.UNDISPATCHED) {
-                    runCatching {
-                        connector.expectNone<Map<String, String>>("Notice")
-                            .within(ofSeconds(1))
+                val sequence =
+                    async(start = CoroutineStart.UNDISPATCHED) {
+                        connector
+                            .waitForSequence<Map<String, String>>("Notice")
+                            .expect { it.payload()["value"] == "first" }
+                            .expect { it.payload()["value"] == "second" }
+                            .timeout(ofSeconds(1))
                             .await()
-                    }.exceptionOrNull()
-                }
-                server.sendFrame(Frame(
-                    kind = 1,
-                    codec = 1,
-                    requestSeq = null,
-                    name = "Notice",
-                    payload = "{\"value\":\"unexpected\"}".toByteArray(StandardCharsets.UTF_8),
-                ))
+                    }
+                server.sendFrame(
+                    Frame(
+                        kind = 1,
+                        codec = 1,
+                        requestSeq = null,
+                        name = "Notice",
+                        payload = "{\"value\":\"first\"}".toByteArray(StandardCharsets.UTF_8),
+                    )
+                )
+                server.sendFrame(
+                    Frame(
+                        kind = 1,
+                        codec = 1,
+                        requestSeq = null,
+                        name = "Notice",
+                        payload = "{\"value\":\"second\"}".toByteArray(StandardCharsets.UTF_8),
+                    )
+                )
+
+                assertEquals(
+                    listOf("first", "second"),
+                    sequence.await().map { it.payload()["value"] },
+                )
+
+                val unexpected =
+                    async(start = CoroutineStart.UNDISPATCHED) {
+                        runCatching {
+                                connector
+                                    .expectNone<Map<String, String>>("Notice")
+                                    .within(ofSeconds(1))
+                                    .await()
+                            }
+                            .exceptionOrNull()
+                    }
+                server.sendFrame(
+                    Frame(
+                        kind = 1,
+                        codec = 1,
+                        requestSeq = null,
+                        name = "Notice",
+                        payload = "{\"value\":\"unexpected\"}".toByteArray(StandardCharsets.UTF_8),
+                    )
+                )
                 assertTrue(unexpected.await() != null)
             } finally {
                 connector.close().await()
@@ -400,30 +403,34 @@ final class KotlinConnectorWrapperTest {
             try {
                 connector.connect().await()
 
-                val failure = runCatching {
-                    connector.waitFor<Map<String, String>>("Late")
-                        .timeout(ofMillis(25))
-                        .await()
-                }.exceptionOrNull()
+                val failure =
+                    runCatching {
+                            connector
+                                .waitFor<Map<String, String>>("Late")
+                                .timeout(ofMillis(25))
+                                .await()
+                        }
+                        .exceptionOrNull()
                 assertTrue(failure != null)
 
-                server.sendFrame(Frame(
-                    kind = 1,
-                    codec = 1,
-                    requestSeq = null,
-                    name = "Late",
-                    payload = "{\"value\":\"after-timeout\"}"
-                        .toByteArray(StandardCharsets.UTF_8),
-                ))
+                server.sendFrame(
+                    Frame(
+                        kind = 1,
+                        codec = 1,
+                        requestSeq = null,
+                        name = "Late",
+                        payload =
+                            "{\"value\":\"after-timeout\"}".toByteArray(StandardCharsets.UTF_8),
+                    )
+                )
                 withTimeout(1_000) {
                     while (connector.pendingDispatchCount == 0) {
                         yield()
                     }
                 }
 
-                val message = connector.waitFor<Map<String, String>>("Late")
-                    .timeout(ofSeconds(1))
-                    .await()
+                val message =
+                    connector.waitFor<Map<String, String>>("Late").timeout(ofSeconds(1)).await()
                 assertEquals("after-timeout", message.payload()["value"])
             } finally {
                 connector.close().await()
@@ -438,30 +445,35 @@ final class KotlinConnectorWrapperTest {
             try {
                 connector.connect().await()
 
-                val cancelled = async(start = CoroutineStart.UNDISPATCHED) {
-                    connector.waitFor<Map<String, String>>("Cancelled")
-                        .timeout(ofSeconds(1))
-                        .await()
-                }
+                val cancelled =
+                    async(start = CoroutineStart.UNDISPATCHED) {
+                        connector
+                            .waitFor<Map<String, String>>("Cancelled")
+                            .timeout(ofSeconds(1))
+                            .await()
+                    }
                 cancelled.cancelAndJoin()
 
-                server.sendFrame(Frame(
-                    kind = 1,
-                    codec = 1,
-                    requestSeq = null,
-                    name = "Cancelled",
-                    payload = "{\"value\":\"after-cancel\"}"
-                        .toByteArray(StandardCharsets.UTF_8),
-                ))
+                server.sendFrame(
+                    Frame(
+                        kind = 1,
+                        codec = 1,
+                        requestSeq = null,
+                        name = "Cancelled",
+                        payload = "{\"value\":\"after-cancel\"}".toByteArray(StandardCharsets.UTF_8),
+                    )
+                )
                 withTimeout(1_000) {
                     while (connector.pendingDispatchCount == 0) {
                         yield()
                     }
                 }
 
-                val message = connector.waitFor<Map<String, String>>("Cancelled")
-                    .timeout(ofSeconds(1))
-                    .await()
+                val message =
+                    connector
+                        .waitFor<Map<String, String>>("Cancelled")
+                        .timeout(ofSeconds(1))
+                        .await()
                 assertEquals("after-cancel", message.payload()["value"])
             } finally {
                 connector.close().await()
@@ -496,22 +508,18 @@ final class KotlinConnectorWrapperTest {
         }
     }
 
-
     @Test
     fun kotlinAssertionsUseJavaFailureClassification() = runBlocking {
         ZLinkKotlinStreamAssert.ensure(true, "condition should pass")
-        val timeout = ZLinkKotlinStreamAssert.expectFailure("REQUEST_TIMEOUT") {
-            throw TimeoutException("request timed out")
-        }
+        val timeout =
+            ZLinkKotlinStreamAssert.expectFailure("REQUEST_TIMEOUT") {
+                throw TimeoutException("request timed out")
+            }
         assertEquals(ZLinkStreamErrorCode.REQUEST_TIMEOUT, timeout.code())
-        ZLinkKotlinStreamAssert.expectTimeout {
-            throw TimeoutException("request timed out")
-        }
+        ZLinkKotlinStreamAssert.expectTimeout { throw TimeoutException("request timed out") }
     }
 
-    private fun options(
-        endpoint: URI = URI.create("tcp://127.0.0.1:7200"),
-    ) =
+    private fun options(endpoint: URI = URI.create("tcp://127.0.0.1:7200")) =
         ZLinkStreamConnectorOptions(
             endpoint,
             ZLinkStreamDispatchMode.MANUAL,
@@ -539,8 +547,7 @@ final class KotlinConnectorWrapperTest {
         ZLinkStreamEncodedPayload(packetName, Message.from(body), mapOf())
 
     private class PrefixCompressionCodec(private val prefix: String) :
-        ZLinkStreamCompressionCodec,
-        FrameworkStreamCompressionCodec {
+        ZLinkStreamCompressionCodec, FrameworkStreamCompressionCodec {
         override fun compress(payload: ByteArray): ByteArray =
             (prefix + payload.toString(StandardCharsets.UTF_8)).toByteArray(StandardCharsets.UTF_8)
 
@@ -566,7 +573,7 @@ final class KotlinConnectorWrapperTest {
                     requestSeq = null,
                     name = "Push",
                     payload = "event".toByteArray(StandardCharsets.UTF_8),
-                ),
+                )
             )
             connector.dispatch().await()
             yield()
@@ -600,9 +607,10 @@ final class KotlinConnectorWrapperTest {
                     codec = 1,
                     requestSeq = null,
                     name = "",
-                    payload = """{"code":"remote","message":"remote failed"}"""
-                        .toByteArray(StandardCharsets.UTF_8),
-                ),
+                    payload =
+                        """{"code":"remote","message":"remote failed"}"""
+                            .toByteArray(StandardCharsets.UTF_8),
+                )
             )
             connector.dispatch().await()
             yield()
@@ -617,31 +625,31 @@ final class KotlinConnectorWrapperTest {
     private class TcpServer : AutoCloseable {
         private val server = ServerSocket(0)
         private val sockets = LinkedBlockingQueue<Socket>()
-        @Volatile
-        private var current: Socket? = null
-        private val acceptThread = Thread {
-            while (!server.isClosed) {
-                try {
-                    sockets.add(server.accept())
-                } catch (_: Exception) {
-                    if (!server.isClosed) {
-                        throw RuntimeException("accept failed")
+        @Volatile private var current: Socket? = null
+        private val acceptThread =
+            Thread {
+                    while (!server.isClosed) {
+                        try {
+                            sockets.add(server.accept())
+                        } catch (_: Exception) {
+                            if (!server.isClosed) {
+                                throw RuntimeException("accept failed")
+                            }
+                        }
                     }
                 }
-            }
-        }.apply {
-            name = "zlink-kotlin-connector-test-server"
-            isDaemon = true
-            start()
-        }
+                .apply {
+                    name = "zlink-kotlin-connector-test-server"
+                    isDaemon = true
+                    start()
+                }
 
         fun endpoint(): URI = URI.create("tcp://127.0.0.1:${server.localPort}")
 
         fun readFrame(): Frame {
             val input = socket().getInputStream()
             val prefix = input.readNBytes(6)
-            val headerLength = ((prefix[0].toInt() and 0xff) shl 8) or
-                (prefix[1].toInt() and 0xff)
+            val headerLength = ((prefix[0].toInt() and 0xff) shl 8) or (prefix[1].toInt() and 0xff)
             val payloadLength = ByteBuffer.wrap(prefix, 2, 4).int
             val header = input.readNBytes(headerLength)
             val payload = input.readNBytes(payloadLength)
@@ -664,10 +672,8 @@ final class KotlinConnectorWrapperTest {
 
         fun sendRawFrame(header: ByteArray, payload: ByteArray) {
             val output = socket().getOutputStream()
-            val prefix = ByteBuffer.allocate(6)
-                .putShort(header.size.toShort())
-                .putInt(payload.size)
-                .array()
+            val prefix =
+                ByteBuffer.allocate(6).putShort(header.size.toShort()).putInt(payload.size).array()
             output.write(prefix)
             output.write(header)
             output.write(payload)
@@ -685,8 +691,7 @@ final class KotlinConnectorWrapperTest {
             if (existing != null && !existing.isClosed) {
                 return existing
             }
-            return sockets.poll(5, TimeUnit.SECONDS)
-                ?.also { current = it }
+            return sockets.poll(5, TimeUnit.SECONDS)?.also { current = it }
                 ?: throw AssertionError("client did not connect within 5s")
         }
 
@@ -713,7 +718,8 @@ final class KotlinConnectorWrapperTest {
         private fun encodeHeader(frame: Frame): ByteArray {
             val name = frame.name.toByteArray(StandardCharsets.UTF_8)
             val flags = if (frame.requestSeq == null) 0 else 0x01
-            val buffer = ByteBuffer.allocate(4 + (if (frame.requestSeq == null) 0 else 8) + 1 + name.size)
+            val buffer =
+                ByteBuffer.allocate(4 + (if (frame.requestSeq == null) 0 else 8) + 1 + name.size)
             buffer.put(0xF2.toByte())
             buffer.put(frame.kind.toByte())
             buffer.put(frame.codec.toByte())

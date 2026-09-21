@@ -10,19 +10,45 @@ public final class ZLinkHttpServerRequestBuilder {
     private final ZLinkHttpExecutionTurn executionTurn;
 
     ZLinkHttpServerRequestBuilder(
-        ZLinkHttpRequestBuilder request,
-        ZLinkHttpExecutionTurn executionTurn) {
+            ZLinkHttpRequestBuilder request, ZLinkHttpExecutionTurn executionTurn) {
         this.request = request;
         this.executionTurn = executionTurn;
     }
 
-    public ZLinkHttpServerRequestBuilder header(String name, String value) { request.header(name, value); return this; }
-    public ZLinkHttpServerRequestBuilder query(String name, String value) { request.query(name, value); return this; }
-    public ZLinkHttpServerRequestBuilder timeout(Duration value) { request.timeout(value); return this; }
-    public ZLinkHttpServerRequestBuilder body(Object value) { request.body(value); return this; }
-    public ZLinkHttpServerRequestBuilder body(String content, String contentType) { request.body(content, contentType); return this; }
-    public ZLinkHttpServerRequestBuilder form(String name, String value) { request.form(name, value); return this; }
-    public ZLinkHttpServerRequestBuilder multipart(String name, String value) { request.multipart(name, value); return this; }
+    public ZLinkHttpServerRequestBuilder header(String name, String value) {
+        request.header(name, value);
+        return this;
+    }
+
+    public ZLinkHttpServerRequestBuilder query(String name, String value) {
+        request.query(name, value);
+        return this;
+    }
+
+    public ZLinkHttpServerRequestBuilder timeout(Duration value) {
+        request.timeout(value);
+        return this;
+    }
+
+    public ZLinkHttpServerRequestBuilder body(Object value) {
+        request.body(value);
+        return this;
+    }
+
+    public ZLinkHttpServerRequestBuilder body(String content, String contentType) {
+        request.body(content, contentType);
+        return this;
+    }
+
+    public ZLinkHttpServerRequestBuilder form(String name, String value) {
+        request.form(name, value);
+        return this;
+    }
+
+    public ZLinkHttpServerRequestBuilder multipart(String name, String value) {
+        request.multipart(name, value);
+        return this;
+    }
 
     public <T> CompletionStage<HttpResponse<T>> submit(Class<T> type) {
         return executionTurn.async(request.submit(type));
@@ -38,7 +64,10 @@ public final class ZLinkHttpServerRequestBuilder {
 
     public <T> void submit(Class<T> type, ZLinkHttpCallback<T> callback) {
         Objects.requireNonNull(callback, "callback");
-        executionTurn.yield(request.submit(type)).whenComplete((response, error) ->
-            callback.complete(error, error == null ? response : null));
+        executionTurn
+                .yield(request.submit(type))
+                .whenComplete(
+                        (response, error) ->
+                                callback.complete(error, error == null ? response : null));
     }
 }

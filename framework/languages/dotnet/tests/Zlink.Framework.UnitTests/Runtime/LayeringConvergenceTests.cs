@@ -9,9 +9,7 @@ public sealed class LayeringConvergenceTests
     [Fact]
     public void MeshMetadataPolicyBelongsToMessagingNotConcreteBackend()
     {
-        Assert.Equal(
-            "Zlink.Framework.Runtime.Messaging",
-            typeof(ZLinkMeshMetadataCodec).Namespace);
+        Assert.Equal("Zlink.Framework.Runtime.Messaging", typeof(ZLinkMeshMetadataCodec).Namespace);
     }
 
     [Fact]
@@ -19,14 +17,11 @@ public sealed class LayeringConvergenceTests
     {
         var methods = typeof(ZLinkActorRuntimeState)
             .GetMethods(BindingFlags.Instance | BindingFlags.Public)
-            .Where(static method =>
-                method.Name == "MarkRelocationSessionAuthorityCommitted")
+            .Where(static method => method.Name == "MarkRelocationSessionAuthorityCommitted")
             .ToArray();
 
         var method = Assert.Single(methods);
-        Assert.Equal(
-            typeof(ZLinkMeshName),
-            method.GetParameters()[3].ParameterType);
+        Assert.Equal(typeof(ZLinkMeshName), method.GetParameters()[3].ParameterType);
     }
 
     [Fact]
@@ -34,8 +29,7 @@ public sealed class LayeringConvergenceTests
     {
         var methods = typeof(ZLinkActorOwnershipCoordinator)
             .GetMethods(BindingFlags.Instance | BindingFlags.Public)
-            .Where(static method =>
-                method.Name == "ExecuteActorClaimThenActivateAsync")
+            .Where(static method => method.Name == "ExecuteActorClaimThenActivateAsync")
             .ToArray();
 
         var method = Assert.Single(methods);

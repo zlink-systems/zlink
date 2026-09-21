@@ -50,10 +50,9 @@ void require_manual (const endpoint_connections_state_t &state)
 }
 } // namespace
 
-void endpoint_connections_runtime_t::attach (
-  endpoint_connections_t &connections,
-  std::function<void (const std::string &)> connect,
-  std::function<void (const std::string &)> disconnect)
+void endpoint_connections_runtime_t::attach (endpoint_connections_t &connections,
+                                             std::function<void (const std::string &)> connect,
+                                             std::function<void (const std::string &)> disconnect)
 {
     auto &state = *connections._state;
     const std::lock_guard lock (state.mutex);

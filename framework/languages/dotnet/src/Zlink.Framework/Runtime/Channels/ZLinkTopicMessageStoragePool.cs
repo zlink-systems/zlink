@@ -12,9 +12,7 @@ internal sealed class ZLinkTopicMessageStoragePool
 
     internal TopicMessage Rent()
     {
-        return _available.TryTake(out var storage)
-            ? storage
-            : new TopicMessage();
+        return _available.TryTake(out var storage) ? storage : new TopicMessage();
     }
 
     internal void Return(TopicMessage storage)

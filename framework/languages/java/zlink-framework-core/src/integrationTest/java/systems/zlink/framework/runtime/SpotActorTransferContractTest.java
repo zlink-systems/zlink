@@ -4,14 +4,9 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertInstanceOf;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
-import java.time.Duration;
-import java.util.concurrent.CompletableFuture;
-import java.util.concurrent.CompletionStage;
-import java.util.concurrent.CountDownLatch;
-import java.util.concurrent.TimeUnit;
-import java.util.concurrent.atomic.AtomicReference;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+
 import systems.zlink.contracts.core.RoutingId;
 import systems.zlink.framework.ZLinkMessageContext;
 import systems.zlink.framework.actors.ZLinkActor;
@@ -32,6 +27,13 @@ import systems.zlink.framework.spots.ZLinkSpotActorJoinResult;
 import systems.zlink.framework.spots.ZLinkSpotActorRequestHandler;
 import systems.zlink.framework.spots.ZLinkSpotContext;
 
+import java.time.Duration;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CompletionStage;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicReference;
+
 final class SpotActorTransferContractTest {
     private static final AtomicReference<ContractActor> ACTOR = new AtomicReference<>();
     private static CountDownLatch joinCompleted;
@@ -45,59 +47,59 @@ final class SpotActorTransferContractTest {
     }
 
     @Test
-    void deferredJoinUsesCurrentSpotIdContractAndCompletesOnActorTurn()
-        throws Exception {
+    void deferredJoinUsesCurrentSpotIdContractAndCompletesOnActorTurn() throws Exception {
         DefaultZLinkFrameworkOptions options = new DefaultZLinkFrameworkOptions();
         options.addLocationStore(new ZLinkInMemoryLocationStore());
         var node = options.addRouteMesh("game");
         node.listen("inproc://deferred-join-" + System.nanoTime())
-            .setRoutingId(RoutingId.from("deferred-join-node"));
+                .setRoutingId(RoutingId.from("deferred-join-node"));
         var objects = node.objects().server();
         objects.addEntrySpot(ContractEntrySpot.class);
         objects.addSpotFactory(
-            "target",
-            ContractTargetSpot.class,
-            factory -> factory.disableRelocation());
+                "target", ContractTargetSpot.class, factory -> factory.disableRelocation());
         objects.addActorFactory(
-            "player",
-            ContractActor.class,
-            ContractActorFactory.class,
-            factory -> factory.disableRelocation());
+                "player",
+                ContractActor.class,
+                ContractActorFactory.class,
+                factory -> factory.disableRelocation());
 
-        try (ZLinkFrameworkRuntime runtime = RuntimeTestSupport.startFramework(
-            options,
-            new ZLinkJavaBackendAdapterFactory())) {
+        try (ZLinkFrameworkRuntime runtime =
+                RuntimeTestSupport.startFramework(options, new ZLinkJavaBackendAdapterFactory())) {
             runtime.spotManager()
-                .getOrCreate("target-room", "target")
-                .submit()
-                .toCompletableFuture()
-                .get(3, TimeUnit.SECONDS);
-            ZLinkActorCreateResult.Created created = assertInstanceOf(
-                ZLinkActorCreateResult.Created.class,
-                runtime.actorManager()
-                    .create("player-1", "player")
+                    .getOrCreate("target-room", "target")
                     .submit()
                     .toCompletableFuture()
-                    .get(3, TimeUnit.SECONDS));
+                    .get(3, TimeUnit.SECONDS);
+            ZLinkActorCreateResult.Created created =
+                    assertInstanceOf(
+                            ZLinkActorCreateResult.Created.class,
+                            runtime.actorManager()
+                                    .create("player-1", "player")
+                                    .submit()
+                                    .toCompletableFuture()
+                                    .get(3, TimeUnit.SECONDS));
 
-            String scheduled = runtime.actorClient()
-                .requestToActor(created.actor().actorId(), new JoinRequest("target-room"))
-                .timeout(Duration.ofSeconds(3))
-                .submit(String.class)
-                .toCompletableFuture()
-                .get(3, TimeUnit.SECONDS);
+            String scheduled =
+                    runtime.actorClient()
+                            .requestToActor(
+                                    created.actor().actorId(), new JoinRequest("target-room"))
+                            .timeout(Duration.ofSeconds(3))
+                            .submit(String.class)
+                            .toCompletableFuture()
+                            .get(3, TimeUnit.SECONDS);
 
             assertEquals("scheduled", scheduled);
             assertTrue(targetJoined.await(3, TimeUnit.SECONDS));
             assertTrue(joinCompleted.await(3, TimeUnit.SECONDS));
             assertEquals("target-room", ACTOR.get().context().spotId().orElseThrow());
 
-            String currentSpot = runtime.actorClient()
-                .requestToActor(created.actor().actorId(), new ProbeRequest())
-                .timeout(Duration.ofSeconds(3))
-                .submit(String.class)
-                .toCompletableFuture()
-                .get(3, TimeUnit.SECONDS);
+            String currentSpot =
+                    runtime.actorClient()
+                            .requestToActor(created.actor().actorId(), new ProbeRequest())
+                            .timeout(Duration.ofSeconds(3))
+                            .submit(String.class)
+                            .toCompletableFuture()
+                            .get(3, TimeUnit.SECONDS);
             assertEquals("target-room", currentSpot);
         }
     }
@@ -116,8 +118,7 @@ final class SpotActorTransferContractTest {
         }
 
         @Override
-        public CompletionStage<Void> onJoinCompleted(
-            ZLinkActorJoinCompletion completion) {
+        public CompletionStage<Void> onJoinCompleted(ZLinkActorJoinCompletion completion) {
             assertInstanceOf(ZLinkActorJoinCompletion.Accepted.class, completion);
             joinCompleted.countDown();
             return CompletableFuture.completedFuture(null);
@@ -131,8 +132,7 @@ final class SpotActorTransferContractTest {
         }
     }
 
-    public static final class ContractEntrySpot
-        implements ZLinkEntrySpot<ContractActor> {
+    public static final class ContractEntrySpot implements ZLinkEntrySpot<ContractActor> {
         private final ZLinkEntrySpotContext context;
 
         public ContractEntrySpot(ZLinkEntrySpotContext context) {
@@ -179,10 +179,8 @@ final class SpotActorTransferContractTest {
 
         @Override
         public CompletionStage<ZLinkSpotActorJoinResult> onActorJoin(
-            String actorId,
-            ZLinkMessage request) {
-            return CompletableFuture.completedFuture(
-                ZLinkSpotActorJoinResult.accept());
+                String actorId, ZLinkMessage request) {
+            return CompletableFuture.completedFuture(ZLinkSpotActorJoinResult.accept());
         }
 
         @Override
@@ -197,42 +195,34 @@ final class SpotActorTransferContractTest {
         }
     }
 
-    public record JoinRequest(String spotId) {
-    }
+    public record JoinRequest(String spotId) {}
 
-    public record ProbeRequest() {
-    }
+    public record ProbeRequest() {}
 
-    public static final class JoinHandler implements
-        ZLinkEntrySpotActorRequestHandler<
-            ContractEntrySpot,
-            ContractActor,
-            JoinRequest,
-            String> {
+    public static final class JoinHandler
+            implements ZLinkEntrySpotActorRequestHandler<
+                    ContractEntrySpot, ContractActor, JoinRequest, String> {
         @Override
         public CompletionStage<String> handle(
-            ContractEntrySpot spot,
-            ContractActor actor,
-            ZLinkMessageContext context,
-            JoinRequest request) {
+                ContractEntrySpot spot,
+                ContractActor actor,
+                ZLinkMessageContext context,
+                JoinRequest request) {
             actor.context().joinSpot(request.spotId()).defer();
             return CompletableFuture.completedFuture("scheduled");
         }
     }
 
-    public static final class ProbeHandler implements ZLinkSpotActorRequestHandler<
-        ContractTargetSpot,
-        ContractActor,
-        ProbeRequest,
-        String> {
+    public static final class ProbeHandler
+            implements ZLinkSpotActorRequestHandler<
+                    ContractTargetSpot, ContractActor, ProbeRequest, String> {
         @Override
         public CompletionStage<String> handle(
-            ContractTargetSpot spot,
-            ContractActor actor,
-            ZLinkMessageContext context,
-            ProbeRequest request) {
-            return CompletableFuture.completedFuture(
-                actor.context().spotId().orElseThrow());
+                ContractTargetSpot spot,
+                ContractActor actor,
+                ZLinkMessageContext context,
+                ProbeRequest request) {
+            return CompletableFuture.completedFuture(actor.context().spotId().orElseThrow());
         }
     }
 }

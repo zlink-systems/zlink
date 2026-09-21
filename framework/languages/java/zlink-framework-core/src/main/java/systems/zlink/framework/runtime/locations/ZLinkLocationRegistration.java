@@ -1,7 +1,7 @@
 package systems.zlink.framework.runtime.locations;
 
-import systems.zlink.framework.locations.ZLinkLocationOptions;
 import systems.zlink.framework.locationprovider.ZLinkLocationStore;
+import systems.zlink.framework.locations.ZLinkLocationOptions;
 
 public final class ZLinkLocationRegistration {
     private final ZLinkLocationOptions options = new ZLinkLocationOptions();

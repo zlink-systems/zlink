@@ -45,9 +45,9 @@ function frameworkJsonV1Replacer(
     throw new TypeError('framework-json-v1 does not implicitly encode Date values.');
   }
   if (
-    typeof source === 'object'
-    && source !== null
-    && typeof (source as { readonly toJSON?: unknown }).toJSON === 'function'
+    typeof source === 'object' &&
+    source !== null &&
+    typeof (source as { readonly toJSON?: unknown }).toJSON === 'function'
   ) {
     throw new TypeError('framework-json-v1 does not implicitly invoke custom toJSON methods.');
   }
@@ -64,9 +64,7 @@ export function parseFrameworkJsonV1(
   }
   new JsonPropertyScanner(text, options).scan();
   const parsed = JSON.parse(text);
-  return schema === undefined
-    ? parsed
-    : validateFrameworkJsonV1Value(parsed, schema, '$', true);
+  return schema === undefined ? parsed : validateFrameworkJsonV1Value(parsed, schema, '$', true);
 }
 
 //  Sticky pattern shared across scans; matching happens synchronously so the
@@ -92,10 +90,15 @@ function validateFrameworkJsonV1Value(
       if (typeof value !== 'string') schemaFailure(path, 'a string');
       return value;
     case 'number':
-      if (typeof value !== 'number' || !Number.isFinite(value)) schemaFailure(path, 'a finite number');
+      if (typeof value !== 'number' || !Number.isFinite(value))
+        schemaFailure(path, 'a finite number');
       return value;
     case 'int32':
-      if (!Number.isInteger(value) || (value as number) < INT32_MIN || (value as number) > INT32_MAX) {
+      if (
+        !Number.isInteger(value) ||
+        (value as number) < INT32_MIN ||
+        (value as number) > INT32_MAX
+      ) {
         schemaFailure(path, 'an int32 JSON number');
       }
       return value;
@@ -113,7 +116,8 @@ function validateFrameworkJsonV1Value(
         schemaFailure(path, 'padded RFC 4648 base64');
       }
       const bytes = Buffer.from(value as string, 'base64');
-      if (bytes.toString('base64') !== value) schemaFailure(path, 'canonical padded RFC 4648 base64');
+      if (bytes.toString('base64') !== value)
+        schemaFailure(path, 'canonical padded RFC 4648 base64');
       return decode ? Uint8Array.from(bytes) : value;
     }
     case 'enum':
@@ -128,7 +132,8 @@ function validateFrameworkJsonV1Value(
     case 'array':
       if (!Array.isArray(value)) schemaFailure(path, 'an array');
       return (value as unknown[]).map((item, index) =>
-        validateFrameworkJsonV1Value(item, schema.items, `${path}[${index}]`, decode));
+        validateFrameworkJsonV1Value(item, schema.items, `${path}[${index}]`, decode)
+      );
     case 'record': {
       if (!isJsonObject(value)) schemaFailure(path, 'an object');
       const result: Record<string, unknown> = {};
@@ -154,21 +159,35 @@ function validateFrameworkJsonV1Value(
           }
           continue;
         }
-        result[name] = validateFrameworkJsonV1Value(item, propertySchema as ZLinkJsonSchema, `${path}.${name}`, decode);
+        result[name] = validateFrameworkJsonV1Value(
+          item,
+          propertySchema as ZLinkJsonSchema,
+          `${path}.${name}`,
+          decode
+        );
       }
       return decode ? result : value;
     }
   }
 }
 
-function validateDecimalInteger(value: unknown, path: string, signed: boolean, decode: boolean): unknown {
+function validateDecimalInteger(
+  value: unknown,
+  path: string,
+  signed: boolean,
+  decode: boolean
+): unknown {
   if (typeof value !== 'string' || !/^(?:0|[1-9][0-9]*|-[1-9][0-9]*)$/u.test(value)) {
-    schemaFailure(path, signed ? 'a canonical int64 decimal string' : 'a canonical uint64 decimal string');
+    schemaFailure(
+      path,
+      signed ? 'a canonical int64 decimal string' : 'a canonical uint64 decimal string'
+    );
   }
   const parsed = BigInt(value as string);
   const minimum = signed ? SIGNED_64_MIN : 0n;
   const maximum = signed ? (1n << 63n) - 1n : UNSIGNED_64_MAX;
-  if (parsed < minimum || parsed > maximum) schemaFailure(path, signed ? 'an int64 value' : 'a uint64 value');
+  if (parsed < minimum || parsed > maximum)
+    schemaFailure(path, signed ? 'an int64 value' : 'a uint64 value');
   return decode ? parsed : value;
 }
 
@@ -266,7 +285,7 @@ class JsonPropertyScanner {
         //  Without escapes the token content is verbatim; the outer
         //  JSON.parse pass still rejects any raw control characters.
         return sawEscape
-          ? JSON.parse(this.text.slice(start, this.index)) as string
+          ? (JSON.parse(this.text.slice(start, this.index)) as string)
           : this.text.slice(start + 1, this.index - 1);
       }
       if (character === '\\') {

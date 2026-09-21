@@ -1,31 +1,29 @@
 package systems.zlink.framework.runtime.streams;
-import java.util.concurrent.atomic.AtomicBoolean;
 
-import systems.zlink.framework.runtime.internal.calls.ZLinkOneWayCalls;
-
-import java.util.HashMap;
-import java.util.List;
-import java.util.Map;
-import java.util.Optional;
-import java.time.Duration;
-import java.util.concurrent.CompletableFuture;
-import java.util.concurrent.CompletionStage;
 import systems.zlink.contracts.core.RoutingId;
 import systems.zlink.contracts.messaging.Message;
 import systems.zlink.framework.ZLinkMessageSerializer;
-import systems.zlink.framework.errors.ZLinkConfigurationException;
+import systems.zlink.framework.monitoring.ZLinkFlowOrigin;
+import systems.zlink.framework.runtime.diagnostics.ZLinkMessageFlowTracer;
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendStreamSocket;
+import systems.zlink.framework.runtime.internal.calls.ZLinkOneWayCalls;
+import systems.zlink.framework.runtime.internal.diagnostics.ZLinkFlowContext;
 import systems.zlink.framework.runtime.messaging.ZLinkPayloadEncoding;
-
 import systems.zlink.framework.streams.ZLinkSessionClient;
 import systems.zlink.framework.streams.ZLinkSessionReplyCall;
 import systems.zlink.framework.streams.ZLinkSessionSendCall;
 import systems.zlink.framework.streams.ZLinkStreamCodec;
 import systems.zlink.framework.streams.ZLinkStreamCompressionCodec;
 import systems.zlink.framework.streams.ZLinkStreamMessageKind;
-import systems.zlink.framework.monitoring.ZLinkFlowOrigin;
-import systems.zlink.framework.runtime.diagnostics.ZLinkMessageFlowTracer;
-import systems.zlink.framework.runtime.internal.diagnostics.ZLinkFlowContext;
+
+import java.time.Duration;
+import java.util.HashMap;
+import java.util.List;
+import java.util.Map;
+import java.util.Optional;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CompletionStage;
+import java.util.concurrent.atomic.AtomicBoolean;
 
 final class ZLinkStreamSessionClient implements ZLinkSessionClient {
     private final ZLinkBackendStreamSocket stream;
@@ -37,13 +35,13 @@ final class ZLinkStreamSessionClient implements ZLinkSessionClient {
     private final ZLinkMessageFlowTracer flow;
 
     ZLinkStreamSessionClient(
-        ZLinkBackendStreamSocket stream,
-        RoutingId routingId,
-        ZLinkStreamSessionContextState context,
-        ZLinkMessageSerializer serializer,
-        ZLinkStreamCodec defaultCodec,
-        ZLinkStreamCompressionCodec compressionCodec,
-        ZLinkMessageFlowTracer flow) {
+            ZLinkBackendStreamSocket stream,
+            RoutingId routingId,
+            ZLinkStreamSessionContextState context,
+            ZLinkMessageSerializer serializer,
+            ZLinkStreamCodec defaultCodec,
+            ZLinkStreamCompressionCodec compressionCodec,
+            ZLinkMessageFlowTracer flow) {
         this.stream = stream;
         this.routingId = routingId;
         this.context = context;
@@ -55,69 +53,42 @@ final class ZLinkStreamSessionClient implements ZLinkSessionClient {
 
     @Override
     public ZLinkSessionSendCall send(Object message) {
-        ZLinkStreamCodec codec = ZLinkPayloadEncoding.streamCodec(
-            serializer, message, defaultCodec);
+        ZLinkStreamCodec codec =
+                ZLinkPayloadEncoding.streamCodec(serializer, message, defaultCodec);
         ZLinkPayloadEncoding.EncodedPayload encoded =
-            ZLinkPayloadEncoding.encode(serializer, message);
+                ZLinkPayloadEncoding.encode(serializer, message);
         return new ZLinkStreamSessionSendCall(
-            stream,
-            routingId,
-            encoded.payload(),
-            encoded.packetName(),
-            Map.of(),
-            false,
-            codec,
-            compressionCodec,
-            flow);
+                stream,
+                routingId,
+                encoded.payload(),
+                encoded.packetName(),
+                Map.of(),
+                false,
+                codec,
+                compressionCodec,
+                flow);
     }
 
     @Override
     public ZLinkSessionReplyCall reply(Object message) {
-        ZLinkStreamCodec codec = ZLinkPayloadEncoding.streamCodec(
-            serializer, message, defaultCodec);
+        ZLinkStreamCodec codec =
+                ZLinkPayloadEncoding.streamCodec(serializer, message, defaultCodec);
         ZLinkPayloadEncoding.EncodedPayload encoded =
-            ZLinkPayloadEncoding.encode(serializer, message);
+                ZLinkPayloadEncoding.encode(serializer, message);
         return new ZLinkStreamSessionReplyCall(
-            stream,
-            routingId,
-            encoded.payload(),
-            context,
-            encoded.packetName(),
-            false,
-            codec,
-            compressionCodec,
-            flow);
+                stream,
+                routingId,
+                encoded.payload(),
+                context,
+                encoded.packetName(),
+                false,
+                codec,
+                compressionCodec,
+                flow);
     }
 }
 
 record ZLinkStreamSessionSendCall(
-    ZLinkBackendStreamSocket stream,
-    RoutingId routingId,
-    Message payload,
-    String packetName,
-    Map<String, String> metadata,
-    boolean compressed,
-    ZLinkStreamCodec codec,
-    ZLinkStreamCompressionCodec compressionCodec,
-    ZLinkMessageFlowTracer flow,
-    Duration timeout,
-    AtomicBoolean submitGate)
-    implements ZLinkSessionSendCall {
-    ZLinkStreamSessionSendCall(
-        ZLinkBackendStreamSocket stream,
-        RoutingId routingId,
-        Message payload,
-        String packetName,
-        Map<String, String> metadata,
-        boolean compressed,
-        ZLinkStreamCodec codec,
-        ZLinkStreamCompressionCodec compressionCodec) {
-        this(stream, routingId, payload, packetName, metadata, compressed, codec,
-            compressionCodec, null, null,
-            new AtomicBoolean());
-    }
-
-    ZLinkStreamSessionSendCall(
         ZLinkBackendStreamSocket stream,
         RoutingId routingId,
         Message payload,
@@ -126,26 +97,73 @@ record ZLinkStreamSessionSendCall(
         boolean compressed,
         ZLinkStreamCodec codec,
         ZLinkStreamCompressionCodec compressionCodec,
-        ZLinkMessageFlowTracer flow) {
-        this(stream, routingId, payload, packetName, metadata, compressed, codec,
-            compressionCodec, flow, null, new AtomicBoolean());
+        ZLinkMessageFlowTracer flow,
+        Duration timeout,
+        AtomicBoolean submitGate)
+        implements ZLinkSessionSendCall {
+    ZLinkStreamSessionSendCall(
+            ZLinkBackendStreamSocket stream,
+            RoutingId routingId,
+            Message payload,
+            String packetName,
+            Map<String, String> metadata,
+            boolean compressed,
+            ZLinkStreamCodec codec,
+            ZLinkStreamCompressionCodec compressionCodec) {
+        this(
+                stream,
+                routingId,
+                payload,
+                packetName,
+                metadata,
+                compressed,
+                codec,
+                compressionCodec,
+                null,
+                null,
+                new AtomicBoolean());
     }
+
+    ZLinkStreamSessionSendCall(
+            ZLinkBackendStreamSocket stream,
+            RoutingId routingId,
+            Message payload,
+            String packetName,
+            Map<String, String> metadata,
+            boolean compressed,
+            ZLinkStreamCodec codec,
+            ZLinkStreamCompressionCodec compressionCodec,
+            ZLinkMessageFlowTracer flow) {
+        this(
+                stream,
+                routingId,
+                payload,
+                packetName,
+                metadata,
+                compressed,
+                codec,
+                compressionCodec,
+                flow,
+                null,
+                new AtomicBoolean());
+    }
+
     @Override
     public ZLinkSessionSendCall metadata(String key, String value) {
         Map<String, String> next = new HashMap<>(metadata);
         next.put(key, value);
         return new ZLinkStreamSessionSendCall(
-            stream,
-            routingId,
-            payload,
-            packetName,
-            Map.copyOf(next),
-            compressed,
-            codec,
-            compressionCodec,
-            flow,
-            timeout,
-            submitGate);
+                stream,
+                routingId,
+                payload,
+                packetName,
+                Map.copyOf(next),
+                compressed,
+                codec,
+                compressionCodec,
+                flow,
+                timeout,
+                submitGate);
     }
 
     public ZLinkSessionSendCall packetName(String messageName) {
@@ -153,33 +171,33 @@ record ZLinkStreamSessionSendCall(
             throw new IllegalArgumentException("messageName is required");
         }
         return new ZLinkStreamSessionSendCall(
-            stream,
-            routingId,
-            payload,
-            messageName,
-            metadata,
-            compressed,
-            codec,
-            compressionCodec,
-            flow,
-            timeout,
-            submitGate);
+                stream,
+                routingId,
+                payload,
+                messageName,
+                metadata,
+                compressed,
+                codec,
+                compressionCodec,
+                flow,
+                timeout,
+                submitGate);
     }
 
     @Override
     public ZLinkSessionSendCall compress() {
         return new ZLinkStreamSessionSendCall(
-            stream,
-            routingId,
-            payload,
-            packetName,
-            metadata,
-            true,
-            codec,
-            compressionCodec,
-            flow,
-            timeout,
-            submitGate);
+                stream,
+                routingId,
+                payload,
+                packetName,
+                metadata,
+                true,
+                codec,
+                compressionCodec,
+                flow,
+                timeout,
+                submitGate);
     }
 
     @Override
@@ -188,79 +206,54 @@ record ZLinkStreamSessionSendCall(
             throw new IllegalArgumentException("timeout must be positive");
         }
         return new ZLinkStreamSessionSendCall(
-            stream,
-            routingId,
-            payload,
-            packetName,
-            metadata,
-            compressed,
-            codec,
-            compressionCodec,
-            flow,
-            value,
-            submitGate);
+                stream,
+                routingId,
+                payload,
+                packetName,
+                metadata,
+                compressed,
+                codec,
+                compressionCodec,
+                flow,
+                value,
+                submitGate);
     }
 
     @Override
     public CompletionStage<Void> submit() {
-        CompletionStage<Void> duplicate =
-            ZLinkOneWayCalls.beginOneWay(submitGate);
+        CompletionStage<Void> duplicate = ZLinkOneWayCalls.beginOneWay(submitGate);
         if (duplicate != null) {
             return duplicate;
         }
-        try (var flowScope = ZLinkFlowContext.enterCurrentOrCreate(
-            ZLinkFlowOrigin.APPLICATION,
-            flow != null && flow.captureEnabled())) {
-        ZLinkStreamPayloadCodec.Encoded encoded = ZLinkStreamPayloadCodec.encode(
-            payload,
-            compressed,
-            compressionCodec);
-        ZLinkStreamHeader header = new ZLinkStreamHeader(
-            ZLinkStreamMessageKind.SEND,
-            codec,
-            encoded.flags(),
-            Optional.empty(),
-            packetName,
-            metadata,
-            Optional.of(ZLinkStreamCorrelation.next()));
-        List<Message> parts = List.of(Message.from(encoded.payload()));
-        CompletionStage<Void> result = ZLinkOneWayCalls.adaptOneWay(
-            stream.sendAsync(routingId, header, parts, timeout));
-        result.whenComplete((ignored, failure) -> {
-            parts.forEach(Message::close);
-            payload.close();
-        });
-        return result;
+        try (var flowScope =
+                ZLinkFlowContext.enterCurrentOrCreate(
+                        ZLinkFlowOrigin.APPLICATION, flow != null && flow.captureEnabled())) {
+            ZLinkStreamPayloadCodec.Encoded encoded =
+                    ZLinkStreamPayloadCodec.encode(payload, compressed, compressionCodec);
+            ZLinkStreamHeader header =
+                    new ZLinkStreamHeader(
+                            ZLinkStreamMessageKind.SEND,
+                            codec,
+                            encoded.flags(),
+                            Optional.empty(),
+                            packetName,
+                            metadata,
+                            Optional.of(ZLinkStreamCorrelation.next()));
+            List<Message> parts = List.of(Message.from(encoded.payload()));
+            CompletionStage<Void> result =
+                    ZLinkOneWayCalls.adaptOneWay(
+                            stream.sendAsync(routingId, header, parts, timeout));
+            result.whenComplete(
+                    (ignored, failure) -> {
+                        parts.forEach(Message::close);
+                        payload.close();
+                    });
+            return result;
         }
     }
 }
 
 record ZLinkStreamSessionReplyCall(
-    ZLinkBackendStreamSocket stream,
-    RoutingId routingId,
-    Message payload,
-    ZLinkStreamSessionContextState context,
-    String packetName,
-    boolean compressed,
-    ZLinkStreamCodec codec,
-    ZLinkStreamCompressionCodec compressionCodec,
-    ZLinkMessageFlowTracer flow,
-    AtomicBoolean submitGate)
-    implements ZLinkSessionReplyCall {
-    ZLinkStreamSessionReplyCall(
-        ZLinkBackendStreamSocket stream,
-        RoutingId routingId,
-        Message payload,
-        ZLinkStreamSessionContextState context,
-        String packetName,
-        boolean compressed,
-        ZLinkStreamCodec codec,
-        ZLinkStreamCompressionCodec compressionCodec) {
-        this(stream, routingId, payload, context, packetName, compressed, codec, compressionCodec,
-            null, new AtomicBoolean());
-    }
-
-    ZLinkStreamSessionReplyCall(
         ZLinkBackendStreamSocket stream,
         RoutingId routingId,
         Message payload,
@@ -269,76 +262,116 @@ record ZLinkStreamSessionReplyCall(
         boolean compressed,
         ZLinkStreamCodec codec,
         ZLinkStreamCompressionCodec compressionCodec,
-        ZLinkMessageFlowTracer flow) {
-        this(stream, routingId, payload, context, packetName, compressed, codec,
-            compressionCodec, flow, new AtomicBoolean());
+        ZLinkMessageFlowTracer flow,
+        AtomicBoolean submitGate)
+        implements ZLinkSessionReplyCall {
+    ZLinkStreamSessionReplyCall(
+            ZLinkBackendStreamSocket stream,
+            RoutingId routingId,
+            Message payload,
+            ZLinkStreamSessionContextState context,
+            String packetName,
+            boolean compressed,
+            ZLinkStreamCodec codec,
+            ZLinkStreamCompressionCodec compressionCodec) {
+        this(
+                stream,
+                routingId,
+                payload,
+                context,
+                packetName,
+                compressed,
+                codec,
+                compressionCodec,
+                null,
+                new AtomicBoolean());
     }
+
+    ZLinkStreamSessionReplyCall(
+            ZLinkBackendStreamSocket stream,
+            RoutingId routingId,
+            Message payload,
+            ZLinkStreamSessionContextState context,
+            String packetName,
+            boolean compressed,
+            ZLinkStreamCodec codec,
+            ZLinkStreamCompressionCodec compressionCodec,
+            ZLinkMessageFlowTracer flow) {
+        this(
+                stream,
+                routingId,
+                payload,
+                context,
+                packetName,
+                compressed,
+                codec,
+                compressionCodec,
+                flow,
+                new AtomicBoolean());
+    }
+
     @Override
     public ZLinkSessionReplyCall compress() {
         return new ZLinkStreamSessionReplyCall(
-            stream,
-            routingId,
-            payload,
-            context,
-            packetName,
-            true,
-            codec,
-            compressionCodec,
-            flow,
-            submitGate);
+                stream,
+                routingId,
+                payload,
+                context,
+                packetName,
+                true,
+                codec,
+                compressionCodec,
+                flow,
+                submitGate);
     }
 
     @Override
     public CompletionStage<Void> submit() {
         Optional<ZLinkStreamHeader> currentHeader = context.currentDispatchHeader();
         if (currentHeader.isEmpty() || currentHeader.get().requestSequence().isEmpty()) {
-            CompletionStage<Void> duplicate =
-                ZLinkOneWayCalls.beginOneWay(submitGate);
+            CompletionStage<Void> duplicate = ZLinkOneWayCalls.beginOneWay(submitGate);
             if (duplicate != null) {
                 return duplicate;
             }
             payload.close();
-            return CompletableFuture.failedFuture(new IllegalStateException(
-                "Reply is only available while handling a request packet."));
+            return CompletableFuture.failedFuture(
+                    new IllegalStateException(
+                            "Reply is only available while handling a request packet."));
         }
-        CompletionStage<Void> duplicate =
-            ZLinkOneWayCalls.beginOneWay(submitGate);
+        CompletionStage<Void> duplicate = ZLinkOneWayCalls.beginOneWay(submitGate);
         if (duplicate != null) {
             return duplicate;
         }
-        try (var flowScope = ZLinkFlowContext.enterCurrentOrCreate(
-            ZLinkFlowOrigin.APPLICATION,
-            flow != null && flow.captureEnabled())) {
-        if (!context.claimReplyHeader(currentHeader.get())) {
-            payload.close();
-            return CompletableFuture.failedFuture(
-                new IllegalStateException("The request reply token has already been used."));
-        }
-        ZLinkStreamPayloadCodec.Encoded encoded = ZLinkStreamPayloadCodec.encode(
-            payload,
-            compressed,
-            compressionCodec);
-        List<Message> parts = List.of(Message.from(encoded.payload()));
-        ZLinkStreamHeader current = currentHeader.get();
-        ZLinkStreamHeader replyHeader = ZLinkStreamHeader.createResponse(
-            current,
-            codec,
-            encoded.flags(),
-            packetName,
-            Map.of());
-        CompletionStage<Void> result = ZLinkOneWayCalls.adaptOneWay(
-            stream.replyAsync(routingId, replyHeader, parts));
-        result.whenComplete((ignored, failure) -> {
-            try {
-                if (failure == null) {
-                    context.traceStreamReplied(current);
-                }
-            } finally {
-                parts.forEach(Message::close);
+        try (var flowScope =
+                ZLinkFlowContext.enterCurrentOrCreate(
+                        ZLinkFlowOrigin.APPLICATION, flow != null && flow.captureEnabled())) {
+            if (!context.claimReplyHeader(currentHeader.get())) {
                 payload.close();
+                return CompletableFuture.failedFuture(
+                        new IllegalStateException(
+                                "The request reply token has already been used."));
             }
-        });
-        return result;
+            ZLinkStreamPayloadCodec.Encoded encoded =
+                    ZLinkStreamPayloadCodec.encode(payload, compressed, compressionCodec);
+            List<Message> parts = List.of(Message.from(encoded.payload()));
+            ZLinkStreamHeader current = currentHeader.get();
+            ZLinkStreamHeader replyHeader =
+                    ZLinkStreamHeader.createResponse(
+                            current, codec, encoded.flags(), packetName, Map.of());
+            CompletionStage<Void> result =
+                    ZLinkOneWayCalls.adaptOneWay(stream.replyAsync(routingId, replyHeader, parts));
+            result.whenComplete(
+                    (ignored, failure) -> {
+                        try {
+                            if (failure == null) {
+                                context.traceStreamReplied(current);
+                            }
+                        } finally {
+                            parts.forEach(Message::close);
+                            payload.close();
+                        }
+                    });
+            return result;
         }
     }
 }

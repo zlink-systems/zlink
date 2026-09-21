@@ -40,11 +40,9 @@ class channel_native_publisher_t;
 class zlink_builder_access_t
 {
   public:
-    static std::shared_ptr<zlink::context_t>
-    shared_core_context (const zlink_builder_t &builder);
-    static void bind_shared_core_context (
-      zlink_builder_t &builder,
-      std::shared_ptr<zlink::context_t> context);
+    static std::shared_ptr<zlink::context_t> shared_core_context (const zlink_builder_t &builder);
+    static void bind_shared_core_context (zlink_builder_t &builder,
+                                          std::shared_ptr<zlink::context_t> context);
 };
 
 } // namespace zlink::framework::detail
@@ -63,22 +61,20 @@ class route_client_runtime_t
 {
   public:
     template <typename TRequest, typename TReply>
-    static task_t<TReply> request_to_spot_address (
-      const route_client_t &client,
-      runtime::spot_address_t address,
-      TRequest request,
-      std::chrono::milliseconds timeout)
+    static task_t<TReply> request_to_spot_address (const route_client_t &client,
+                                                   runtime::spot_address_t address,
+                                                   TRequest request,
+                                                   std::chrono::milliseconds timeout)
     {
         if (client._serializers == nullptr) {
-            co_return result_t<TReply>::failure (
-              framework_error_kind_t::protocol_error,
-              "route client has no serializer registry");
+            co_return result_t<TReply>::failure (framework_error_kind_t::protocol_error,
+                                                 "route client has no serializer registry");
         }
         auto request_value = std::make_shared<TRequest> (std::move (request));
         auto reply = co_await route_client_t::submit_spot_request_reply_message_erased (
           client._state, std::move (address.mesh_name), std::move (address.node_rid),
-          std::move (address.spot_id), address.spot_generation,
-          detail::message_name<TRequest> (), std::type_index (typeid (TRequest)),
+          std::move (address.spot_id), address.spot_generation, detail::message_name<TRequest> (),
+          std::type_index (typeid (TRequest)),
           [request_value] (serializer_registry_t &serializers) {
               return serializers.template get<TRequest> ().serialize_with_content_type (
                 *request_value);
@@ -141,55 +137,50 @@ class channel_runtime_state_t
   public:
     runtime::spot_address_resolver_t *spot_resolver = nullptr;
     using instance_spot_send_t = std::function<task_t<result_t<void>> (
-      const spot_id_t &, const spot_activation_intent_t &,
-      const std::string &, std::type_index,
+      const spot_id_t &,
+      const spot_activation_intent_t &,
+      const std::string &,
+      std::type_index,
       std::function<serialized_payload_t (serializer_registry_t &)>,
       const std::map<std::string, std::string> &)>;
     using instance_spot_request_t = std::function<task_t<zlink::message_t> (
-      const spot_id_t &, const spot_activation_intent_t &,
-      std::string, std::type_index,
+      const spot_id_t &,
+      const spot_activation_intent_t &,
+      std::string,
+      std::type_index,
       std::function<serialized_payload_t (serializer_registry_t &)>,
       std::chrono::milliseconds,
       std::map<std::string, std::string>)>;
     using mesh_node_send_t = std::function<task_t<result_t<void>> (
-      const zlink::routing_id_t &,
-      runtime::messaging::message_parts_t)>;
-    using mesh_node_request_t = std::function<task_t<result_t<runtime::messaging::message_parts_t>> (
-      const zlink::routing_id_t &,
-      runtime::messaging::message_parts_t,
-      std::chrono::milliseconds)>;
-    using mesh_channel_send_t = std::function<task_t<result_t<void>> (
-      runtime::messaging::message_parts_t)>;
-    using mesh_channel_request_t = std::function<task_t<result_t<runtime::messaging::message_parts_t>> (
-      runtime::messaging::message_parts_t,
-      std::chrono::milliseconds)>;
+      const zlink::routing_id_t &, runtime::messaging::message_parts_t)>;
+    using mesh_node_request_t =
+      std::function<task_t<result_t<runtime::messaging::message_parts_t>> (
+        const zlink::routing_id_t &,
+        runtime::messaging::message_parts_t,
+        std::chrono::milliseconds)>;
+    using mesh_channel_send_t =
+      std::function<task_t<result_t<void>> (runtime::messaging::message_parts_t)>;
+    using mesh_channel_request_t =
+      std::function<task_t<result_t<runtime::messaging::message_parts_t>> (
+        runtime::messaging::message_parts_t, std::chrono::milliseconds)>;
     using client_server_send_t = std::function<task_t<void> (
-      std::string,
-      std::string,
-      zlink::message_t,
-      std::chrono::milliseconds)>;
+      std::string, std::string, zlink::message_t, std::chrono::milliseconds)>;
     using client_server_request_t = std::function<task_t<zlink::message_t> (
-      std::string,
-      std::string,
-      zlink::message_t,
-      std::chrono::milliseconds)>;
+      std::string, std::string, zlink::message_t, std::chrono::milliseconds)>;
     using fanout_publish_t = std::function<task_t<void> (
-      std::string,
-      std::string,
-      std::string,
-      zlink::message_t,
-      std::chrono::milliseconds)>;
-    using spot_mesh_send_t = std::function<task_t<result_t<void>> (
-      const zlink::routing_id_t &,
-      const std::string &,
-      std::uint64_t,
-      runtime::messaging::message_parts_t)>;
-    using spot_mesh_request_t = std::function<task_t<result_t<runtime::messaging::message_parts_t>> (
-      const zlink::routing_id_t &,
-      const std::string &,
-      std::uint64_t,
-      runtime::messaging::message_parts_t,
-      std::chrono::milliseconds)>;
+      std::string, std::string, std::string, zlink::message_t, std::chrono::milliseconds)>;
+    using spot_mesh_send_t =
+      std::function<task_t<result_t<void>> (const zlink::routing_id_t &,
+                                            const std::string &,
+                                            std::uint64_t,
+                                            runtime::messaging::message_parts_t)>;
+    using spot_mesh_request_t =
+      std::function<task_t<result_t<runtime::messaging::message_parts_t>> (
+        const zlink::routing_id_t &,
+        const std::string &,
+        std::uint64_t,
+        runtime::messaging::message_parts_t,
+        std::chrono::milliseconds)>;
 
     struct outbound_call_record_t
     {
@@ -263,15 +254,15 @@ class channel_runtime_t
 
     std::vector<channel_snapshot_t> channel_snapshots () const;
 
-    result_t<zlink::message_t> dispatch_request (std::string channel_name,
-                                                 std::string topic,
-                                                 std::string packet_name,
-                                                 service_provider_t &services,
-                                                 serializer_registry_t &serializers,
-                                                 const handler_registry_t &handlers,
-                                                 const zlink::message_t &message,
-                                                 const detail::inbound_message_context_t
-                                                   &inbound = {}) const;
+    result_t<zlink::message_t>
+    dispatch_request (std::string channel_name,
+                      std::string topic,
+                      std::string packet_name,
+                      service_provider_t &services,
+                      serializer_registry_t &serializers,
+                      const handler_registry_t &handlers,
+                      const zlink::message_t &message,
+                      const detail::inbound_message_context_t &inbound = {}) const;
 
     result_t<void> dispatch_send (std::string channel_name,
                                   std::string topic,
@@ -282,15 +273,14 @@ class channel_runtime_t
                                   const zlink::message_t &message,
                                   const detail::inbound_message_context_t &inbound = {}) const;
 
-    task_t<void> dispatch_send_async (
-      std::string channel_name,
-      std::string topic,
-      std::string packet_name,
-      service_provider_t &services,
-      serializer_registry_t &serializers,
-      const handler_registry_t &handlers,
-      zlink::message_t message,
-      detail::inbound_message_context_t inbound) const;
+    task_t<void> dispatch_send_async (std::string channel_name,
+                                      std::string topic,
+                                      std::string packet_name,
+                                      service_provider_t &services,
+                                      serializer_registry_t &serializers,
+                                      const handler_registry_t &handlers,
+                                      zlink::message_t message,
+                                      detail::inbound_message_context_t inbound) const;
 
     result_t<std::uint64_t> reserve_outbound_request (std::string channel_name);
     result_t<void> complete_outbound_reply (std::uint64_t request_seq);
@@ -310,38 +300,32 @@ class channel_runtime_t
     std::size_t pending_count () const noexcept;
     std::vector<channel_runtime_state_t::outbound_call_record_t> outbound_calls () const;
     void bind_serializers (serializer_registry_t &serializers) noexcept;
-    void bind_listener_statuses (
-      std::shared_ptr<runtime::listener_status_registry_t> statuses) noexcept;
+    void
+    bind_listener_statuses (std::shared_ptr<runtime::listener_status_registry_t> statuses) noexcept;
     void bind_core_context (std::shared_ptr<zlink::context_t> context);
     std::shared_ptr<zlink::context_t> core_context () const;
-    void bind_fanout_advertise_hosts (
-      std::map<std::string, std::string> hosts) noexcept;
+    void bind_fanout_advertise_hosts (std::map<std::string, std::string> hosts) noexcept;
     void initialize_manual_channel_publishers ();
     void close_manual_channel_publishers () noexcept;
     void bind_spot_mesh_transport (std::string mesh_name,
                                    channel_runtime_state_t::spot_mesh_send_t send,
                                    channel_runtime_state_t::spot_mesh_request_t request);
     void bind_spot_address_resolver (runtime::spot_address_resolver_t &resolver) noexcept;
-    void bind_instance_spot_activator (
-      channel_runtime_state_t::instance_spot_send_t send,
-      channel_runtime_state_t::instance_spot_request_t request);
+    void bind_instance_spot_activator (channel_runtime_state_t::instance_spot_send_t send,
+                                       channel_runtime_state_t::instance_spot_request_t request);
     void bind_mesh_node_transport (std::string mesh_name,
                                    channel_runtime_state_t::mesh_node_send_t send,
                                    channel_runtime_state_t::mesh_node_request_t request);
-    void bind_mesh_channel_transport (
-      std::string channel_name,
-      channel_runtime_state_t::mesh_channel_send_t send,
-      channel_runtime_state_t::mesh_channel_request_t request);
-    void bind_client_server_transport (
-      std::string channel_name,
-      channel_runtime_state_t::client_server_send_t send,
-      channel_runtime_state_t::client_server_request_t request);
+    void bind_mesh_channel_transport (std::string channel_name,
+                                      channel_runtime_state_t::mesh_channel_send_t send,
+                                      channel_runtime_state_t::mesh_channel_request_t request);
+    void bind_client_server_transport (std::string channel_name,
+                                       channel_runtime_state_t::client_server_send_t send,
+                                       channel_runtime_state_t::client_server_request_t request);
     void unbind_client_server_transport (const std::string &channel_name) noexcept;
-    void bind_fanout_transport (
-      std::string channel_name,
-      channel_runtime_state_t::fanout_publish_t publish);
-    void unbind_fanout_transport (
-      const std::string &channel_name) noexcept;
+    void bind_fanout_transport (std::string channel_name,
+                                channel_runtime_state_t::fanout_publish_t publish);
+    void unbind_fanout_transport (const std::string &channel_name) noexcept;
     dispatch_options_t dispatch_options () const;
     const dispatch_options_t &dispatch_options_ref () const noexcept { return _state->dispatch; }
     void mark_auto_connect_active ();
@@ -352,8 +336,7 @@ class channel_runtime_t
                                std::string local_address = {},
                                std::string remote_address = {}) const;
     void set_server_weight (const std::string &channel_name, int value);
-    std::optional<int>
-    server_peer_weight_override (const std::string &channel_name) const;
+    std::optional<int> server_peer_weight_override (const std::string &channel_name) const;
 
     static channel_runtime_t from (const message_bus_t &bus);
 

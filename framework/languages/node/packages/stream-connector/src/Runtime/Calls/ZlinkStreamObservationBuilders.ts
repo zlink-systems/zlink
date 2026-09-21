@@ -36,12 +36,20 @@ export class ZlinkStreamExpectNoneBuilder<TPayload> implements ZlinkStreamExpect
   async run(signal?: AbortSignal): Promise<void> {
     this.markExecuted();
     if (this.windowMs === undefined) {
-      throw connectorError(ZlinkStreamErrorCode.ValidationFailed, 'expectNone requires within(windowMs).');
+      throw connectorError(
+        ZlinkStreamErrorCode.ValidationFailed,
+        'expectNone requires within(windowMs).'
+      );
     }
     // Spec stream-connector 32 §10.1.1: the window elapsing is this surface's
     // success; a message inside it is the violated observation. A connection
     // that ended rejects the wait itself, as `Disconnected`.
-    const message = await this.connector.waitForMessage<TPayload>(this.name, this.windowMs, () => true, signal);
+    const message = await this.connector.waitForMessage<TPayload>(
+      this.name,
+      this.windowMs,
+      () => true,
+      signal
+    );
     if (message === undefined) {
       return;
     }
@@ -53,7 +61,10 @@ export class ZlinkStreamExpectNoneBuilder<TPayload> implements ZlinkStreamExpect
 
   private ensureConfigurable(): void {
     if (this.executed) {
-      throw connectorError(ZlinkStreamErrorCode.ValidationFailed, 'Builder instances can be executed only once.');
+      throw connectorError(
+        ZlinkStreamErrorCode.ValidationFailed,
+        'Builder instances can be executed only once.'
+      );
     }
   }
 
@@ -92,7 +103,10 @@ export class ZlinkStreamSequenceBuilder<TPayload> implements ZlinkStreamSequence
   async run(signal?: AbortSignal): Promise<readonly ZlinkStreamMessage<TPayload>[]> {
     this.markExecuted();
     if (this.predicates.length === 0) {
-      throw connectorError(ZlinkStreamErrorCode.ValidationFailed, 'waitForSequence requires at least one expectation.');
+      throw connectorError(
+        ZlinkStreamErrorCode.ValidationFailed,
+        'waitForSequence requires at least one expectation.'
+      );
     }
     const timeoutMs = this.timeoutMs ?? this.connector.options.waitTimeoutMs;
     const deadline = Date.now() + timeoutMs;
@@ -127,7 +141,10 @@ export class ZlinkStreamSequenceBuilder<TPayload> implements ZlinkStreamSequence
 
   private ensureConfigurable(): void {
     if (this.executed) {
-      throw connectorError(ZlinkStreamErrorCode.ValidationFailed, 'Builder instances can be executed only once.');
+      throw connectorError(
+        ZlinkStreamErrorCode.ValidationFailed,
+        'Builder instances can be executed only once.'
+      );
     }
   }
 
@@ -139,6 +156,9 @@ export class ZlinkStreamSequenceBuilder<TPayload> implements ZlinkStreamSequence
 
 function validateTimeout(timeoutMs: number): void {
   if (!Number.isFinite(timeoutMs) || timeoutMs < 0) {
-    throw connectorError(ZlinkStreamErrorCode.ValidationFailed, 'Timeout must be a non-negative finite number.');
+    throw connectorError(
+      ZlinkStreamErrorCode.ValidationFailed,
+      'Timeout must be a non-negative finite number.'
+    );
   }
 }

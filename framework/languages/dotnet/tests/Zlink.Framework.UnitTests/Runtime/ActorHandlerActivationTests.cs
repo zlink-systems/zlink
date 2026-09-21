@@ -54,11 +54,11 @@ public sealed class ActorHandlerActivationTests
             .AddScoped<ScopedDependency>()
             .BuildServiceProvider();
         var registry = new ZLinkActorSessionRegistry(services);
-        var first = registry.GetOrCreate(
-                ZLinkActorId.FromBoundary("actor-1", "actorId"))
+        var first = registry
+            .GetOrCreate(ZLinkActorId.FromBoundary("actor-1", "actorId"))
             .HandlerInstances.Resolve<ProbeHandler>();
-        var second = registry.GetOrCreate(
-                ZLinkActorId.FromBoundary("actor-2", "actorId"))
+        var second = registry
+            .GetOrCreate(ZLinkActorId.FromBoundary("actor-2", "actorId"))
             .HandlerInstances.Resolve<ProbeHandler>();
 
         await registry.ResetGenerationAsync();
@@ -73,31 +73,34 @@ public sealed class ActorHandlerActivationTests
     public async Task Runtime_Generation_Reset_Fences_States_Before_The_Next_Registry_Turn()
     {
         var registry = new ZLinkActorSessionRegistry();
-        var state = registry.GetOrCreate(
-            ZLinkActorId.FromBoundary("actor-reset-fence", "actorId"));
+        var state = registry.GetOrCreate(ZLinkActorId.FromBoundary("actor-reset-fence", "actorId"));
         var lane = Assert.IsType<ZLinkStateLane>(
             typeof(ZLinkActorSessionRegistry)
                 .GetField("_lane", BindingFlags.Instance | BindingFlags.NonPublic)!
-                .GetValue(registry));
+                .GetValue(registry)
+        );
         var mailbox = Assert.IsType<ConcurrentQueue<Func<ValueTask>>>(
             typeof(ZLinkStateLane)
                 .GetField("_mailbox", BindingFlags.Instance | BindingFlags.NonPublic)!
-                .GetValue(lane));
+                .GetValue(lane)
+        );
         var blockerStarted = new TaskCompletionSource(
-            TaskCreationOptions.RunContinuationsAsynchronously);
+            TaskCreationOptions.RunContinuationsAsynchronously
+        );
         var releaseBlocker = new TaskCompletionSource(
-            TaskCreationOptions.RunContinuationsAsynchronously);
-        Assert.True(lane.TryPost(async () =>
-        {
-            blockerStarted.TrySetResult();
-            await releaseBlocker.Task.ConfigureAwait(false);
-        }));
+            TaskCreationOptions.RunContinuationsAsynchronously
+        );
+        Assert.True(
+            lane.TryPost(async () =>
+            {
+                blockerStarted.TrySetResult();
+                await releaseBlocker.Task.ConfigureAwait(false);
+            })
+        );
         await blockerStarted.Task.WaitAsync(TimeSpan.FromSeconds(5));
 
         var reset = Task.Run(async () => await registry.ResetGenerationAsync());
-        Assert.True(SpinWait.SpinUntil(
-            () => mailbox.Count == 1,
-            TimeSpan.FromSeconds(5)));
+        Assert.True(SpinWait.SpinUntil(() => mailbox.Count == 1, TimeSpan.FromSeconds(5)));
         var observedByNextTurn = lane.RunAsync(() => state.ContextInvalidated).AsTask();
 
         releaseBlocker.TrySetResult();
@@ -116,9 +119,11 @@ public sealed class ActorHandlerActivationTests
             .BuildServiceProvider();
         var registry = new ZLinkActorSessionRegistry(services);
         var firstState = registry.GetOrCreate(
-            ZLinkActorId.FromBoundary("actor-force-1", "actorId"));
+            ZLinkActorId.FromBoundary("actor-force-1", "actorId")
+        );
         var secondState = registry.GetOrCreate(
-            ZLinkActorId.FromBoundary("actor-force-2", "actorId"));
+            ZLinkActorId.FromBoundary("actor-force-2", "actorId")
+        );
         var firstHandler = firstState.HandlerInstances.Resolve<BlockingHandler>();
         var secondHandler = secondState.HandlerInstances.Resolve<BlockingHandler>();
         var header = new ZlinkStreamHeader(
@@ -127,44 +132,37 @@ public sealed class ActorHandlerActivationTests
             ZlinkStreamHeaderFlags.None,
             null,
             "force-stop-handler",
-            ZlinkStreamMetadata.Empty);
-        var firstDispatch = firstState.ExecuteDispatchAsync(
-                header,
-                firstHandler.HandleAsync,
-                CancellationToken.None)
+            ZlinkStreamMetadata.Empty
+        );
+        var firstDispatch = firstState
+            .ExecuteDispatchAsync(header, firstHandler.HandleAsync, CancellationToken.None)
             .AsTask();
-        var secondDispatch = secondState.ExecuteDispatchAsync(
-                header,
-                secondHandler.HandleAsync,
-                CancellationToken.None)
+        var secondDispatch = secondState
+            .ExecuteDispatchAsync(header, secondHandler.HandleAsync, CancellationToken.None)
             .AsTask();
-        await Task.WhenAll(
-            firstHandler.Started.Task,
-            secondHandler.Started.Task).WaitAsync(TimeSpan.FromSeconds(5));
+        await Task.WhenAll(firstHandler.Started.Task, secondHandler.Started.Task)
+            .WaitAsync(TimeSpan.FromSeconds(5));
 
         using var deadline = new CancellationTokenSource();
         var reset = registry.ResetGenerationAsync(deadline.Token).AsTask();
         Assert.Throws<InvalidOperationException>(() => firstState.HandlerInstances);
         Assert.Throws<InvalidOperationException>(() => secondState.HandlerInstances);
-        Assert.Throws<ZLinkFrameworkException>(
-            firstState.EnsureContextValid);
-        Assert.Throws<ZLinkFrameworkException>(
-            secondState.EnsureContextValid);
+        Assert.Throws<ZLinkFrameworkException>(firstState.EnsureContextValid);
+        Assert.Throws<ZLinkFrameworkException>(secondState.EnsureContextValid);
 
         deadline.Cancel();
-        await Assert.ThrowsAnyAsync<OperationCanceledException>(
-            () => reset);
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => reset);
         Assert.Equal(0, firstHandler.DisposeCount);
         Assert.Equal(0, secondHandler.DisposeCount);
 
         firstHandler.Release.TrySetResult();
         secondHandler.Release.TrySetResult();
-        await Task.WhenAll(firstDispatch, secondDispatch)
-            .WaitAsync(TimeSpan.FromSeconds(5));
-        await WaitUntilAsync(
-            () => firstHandler.DisposeCount == 1
-                  && secondHandler.DisposeCount == 1
-                  && Volatile.Read(ref probe.DisposedDependencies) == 2);
+        await Task.WhenAll(firstDispatch, secondDispatch).WaitAsync(TimeSpan.FromSeconds(5));
+        await WaitUntilAsync(() =>
+            firstHandler.DisposeCount == 1
+            && secondHandler.DisposeCount == 1
+            && Volatile.Read(ref probe.DisposedDependencies) == 2
+        );
         Assert.Equal(2, probe.DisposedDependencies);
     }
 
@@ -172,11 +170,11 @@ public sealed class ActorHandlerActivationTests
     public async Task Detached_Force_Stop_Cleanup_Reports_Disposal_Failure()
     {
         Exception? reported = null;
-        await using var services = new ServiceCollection()
-            .BuildServiceProvider();
+        await using var services = new ServiceCollection().BuildServiceProvider();
         var registry = new ZLinkActorSessionRegistry(services);
         var state = registry.GetOrCreate(
-            ZLinkActorId.FromBoundary("actor-force-failure", "actorId"));
+            ZLinkActorId.FromBoundary("actor-force-failure", "actorId")
+        );
         var handler = state.HandlerInstances.Resolve<FailingBlockingHandler>();
         var header = new ZlinkStreamHeader(
             ZlinkStreamMessageKind.Send,
@@ -184,18 +182,16 @@ public sealed class ActorHandlerActivationTests
             ZlinkStreamHeaderFlags.None,
             null,
             "force-stop-failure",
-            ZlinkStreamMetadata.Empty);
-        var dispatch = state.ExecuteDispatchAsync(
-                header,
-                handler.HandleAsync,
-                CancellationToken.None)
+            ZlinkStreamMetadata.Empty
+        );
+        var dispatch = state
+            .ExecuteDispatchAsync(header, handler.HandleAsync, CancellationToken.None)
             .AsTask();
         await handler.Started.Task.WaitAsync(TimeSpan.FromSeconds(5));
 
         using var deadline = new CancellationTokenSource();
-        var reset = registry.ResetGenerationAsync(
-                deadline.Token,
-                exception => reported = exception)
+        var reset = registry
+            .ResetGenerationAsync(deadline.Token, exception => reported = exception)
             .AsTask();
         deadline.Cancel();
         await Assert.ThrowsAnyAsync<OperationCanceledException>(() => reset);
@@ -212,17 +208,13 @@ public sealed class ActorHandlerActivationTests
         Exception? processFailure = null;
         Exception? originFailure = null;
         Exception? successorFailure = null;
-        using var origin = new ZLinkRuntimeErrorSink(
-            exception => processFailure = exception);
-        origin.UnhandledCallbackException +=
-            exception => originFailure = exception;
+        using var origin = new ZLinkRuntimeErrorSink(exception => processFailure = exception);
+        origin.UnhandledCallbackException += exception => originFailure = exception;
         var reporter = origin.CaptureGenerationReporter();
         origin.Dispose();
         using var successor = new ZLinkRuntimeErrorSink();
-        successor.UnhandledCallbackException +=
-            exception => successorFailure = exception;
-        var failure = new InvalidOperationException(
-            "origin generation cleanup failed");
+        successor.UnhandledCallbackException += exception => successorFailure = exception;
+        var failure = new InvalidOperationException("origin generation cleanup failed");
 
         reporter(failure);
 
@@ -247,22 +239,21 @@ public sealed class ActorHandlerActivationTests
             ZlinkStreamHeaderFlags.None,
             null,
             "blocking-handler",
-            ZlinkStreamMetadata.Empty);
+            ZlinkStreamMetadata.Empty
+        );
 
-        var dispatch = state.ExecuteDispatchAsync(
-                header,
-                handler.HandleAsync,
-                CancellationToken.None)
+        var dispatch = state
+            .ExecuteDispatchAsync(header, handler.HandleAsync, CancellationToken.None)
             .AsTask();
         await handler.Started.Task.WaitAsync(TimeSpan.FromSeconds(5));
 
         state.BeginTeardown();
-        var cleanup = state.BeginHandlerActivationCompletion(
-                () =>
-                {
-                        state.ClearAfterDestroyOnLane();
-                    return true;
-                })
+        var cleanup = state
+            .BeginHandlerActivationCompletion(() =>
+            {
+                state.ClearAfterDestroyOnLane();
+                return true;
+            })
             .Completion;
         await Task.Delay(50);
 
@@ -290,7 +281,8 @@ public sealed class ActorHandlerActivationTests
             .BuildServiceProvider();
         var registry = new ZLinkActorSessionRegistry(services);
         var state = registry.GetOrCreate(
-            ZLinkActorId.FromBoundary("actor-reset-terminal", "actorId"));
+            ZLinkActorId.FromBoundary("actor-reset-terminal", "actorId")
+        );
         var handler = state.HandlerInstances.Resolve<BlockingHandler>();
         var header = new ZlinkStreamHeader(
             ZlinkStreamMessageKind.Send,
@@ -298,21 +290,19 @@ public sealed class ActorHandlerActivationTests
             ZlinkStreamHeaderFlags.None,
             null,
             "reset-terminal",
-            ZlinkStreamMetadata.Empty);
+            ZlinkStreamMetadata.Empty
+        );
 
-        var dispatch = state.ExecuteDispatchAsync(
-                header,
-                handler.HandleAsync,
-                CancellationToken.None)
+        var dispatch = state
+            .ExecuteDispatchAsync(header, handler.HandleAsync, CancellationToken.None)
             .AsTask();
         await handler.Started.Task.WaitAsync(TimeSpan.FromSeconds(5));
 
-        var terminal = state.BeginHandlerActivationCompletion(
-            () =>
-            {
-                state.ClearAfterDestroyOnLane();
-                return true;
-            });
+        var terminal = state.BeginHandlerActivationCompletion(() =>
+        {
+            state.ClearAfterDestroyOnLane();
+            return true;
+        });
         var reset = registry.ResetGenerationAsync().AsTask();
 
         Assert.False(reset.IsCompleted);
@@ -333,8 +323,9 @@ public sealed class ActorHandlerActivationTests
         var accepted = mailbox.EnterAsync(CancellationToken.None).AsTask();
         var terminal = mailbox.CloseAdmissionAndReserveLifecycleBarrier();
 
-        await Assert.ThrowsAsync<ZLinkFrameworkException>(
-            () => mailbox.EnterAsync(CancellationToken.None).AsTask());
+        await Assert.ThrowsAsync<ZLinkFrameworkException>(() =>
+            mailbox.EnterAsync(CancellationToken.None).AsTask()
+        );
 
         current.Dispose();
         var acceptedTurn = await accepted.WaitAsync(TimeSpan.FromSeconds(5));
@@ -362,7 +353,8 @@ public sealed class ActorHandlerActivationTests
             ZlinkStreamHeaderFlags.None,
             null,
             "self-teardown",
-            ZlinkStreamMetadata.Empty);
+            ZlinkStreamMetadata.Empty
+        );
         Task<bool>? terminalTask = null;
 
         await state.ExecuteDispatchAsync(
@@ -370,22 +362,21 @@ public sealed class ActorHandlerActivationTests
             _ =>
             {
                 state.BeginTeardown();
-                var terminal = state.BeginHandlerActivationCompletion(
-                    () =>
-                    {
-                        state.ClearAfterDestroyOnLane();
-                        return true;
-                    });
+                var terminal = state.BeginHandlerActivationCompletion(() =>
+                {
+                    state.ClearAfterDestroyOnLane();
+                    return true;
+                });
                 Assert.True(terminal.RequiresDispatchRelease);
                 Assert.False(terminal.Completion.IsCompleted);
                 terminalTask = terminal.Completion;
                 return ValueTask.CompletedTask;
             },
-            CancellationToken.None);
+            CancellationToken.None
+        );
 
         Assert.NotNull(terminalTask);
-        Assert.True(
-            await terminalTask.WaitAsync(TimeSpan.FromSeconds(5)));
+        Assert.True(await terminalTask.WaitAsync(TimeSpan.FromSeconds(5)));
         Assert.Equal(1, handler.DisposeCount);
         Assert.Equal(1, handler.Dependency.DisposeCount);
         Assert.Throws<InvalidOperationException>(() => state.HandlerInstances);
@@ -406,12 +397,11 @@ public sealed class ActorHandlerActivationTests
         using (state.EnterDeferredJoinExecution())
         {
             state.BeginTeardown();
-            var terminal = state.BeginHandlerActivationCompletion(
-                () =>
-                {
-                    state.ClearAfterDestroyOnLane();
-                    return true;
-                });
+            var terminal = state.BeginHandlerActivationCompletion(() =>
+            {
+                state.ClearAfterDestroyOnLane();
+                return true;
+            });
 
             // A relocated Entry Spot joined callback executes outside the
             // actor mailbox. DestroyActorAsync must therefore release the
@@ -455,9 +445,8 @@ public sealed class ActorHandlerActivationTests
         }
     }
 
-    private sealed class ProbeHandler(
-        ScopedDependency dependency,
-        LifetimeProbe probe) : IAsyncDisposable
+    private sealed class ProbeHandler(ScopedDependency dependency, LifetimeProbe probe)
+        : IAsyncDisposable
     {
         public ScopedDependency Dependency { get; } = dependency;
 
@@ -471,8 +460,7 @@ public sealed class ActorHandlerActivationTests
         }
     }
 
-    private sealed class BlockingHandler(ScopedDependency dependency)
-        : IAsyncDisposable
+    private sealed class BlockingHandler(ScopedDependency dependency) : IAsyncDisposable
     {
         public ScopedDependency Dependency { get; } = dependency;
 
@@ -512,7 +500,6 @@ public sealed class ActorHandlerActivationTests
         }
 
         public ValueTask DisposeAsync() =>
-            ValueTask.FromException(
-                new InvalidOperationException("detached cleanup failed"));
+            ValueTask.FromException(new InvalidOperationException("detached cleanup failed"));
     }
 }

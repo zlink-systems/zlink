@@ -35,7 +35,8 @@ internal sealed class HttpClientCodecRegistry : IZLinkCodecRegistryBuilder, IZLi
     public void AddSerializer(
         string contentType,
         IZLinkMessageSerializer serializer,
-        Func<Type, bool> canSerialize)
+        Func<Type, bool> canSerialize
+    )
     {
         AddSerializer(contentType, serializer, canSerialize, false);
     }
@@ -47,47 +48,48 @@ internal sealed class HttpClientCodecRegistry : IZLinkCodecRegistryBuilder, IZLi
 
     public (byte[] Body, string ContentType) Encode(object? value, Type type)
     {
-        if (value is null) return ([], JsonContentType);
+        if (value is null)
+            return ([], JsonContentType);
 
-        if (_serializerSelections.TryResolve(
-                type,
-                out var contentType,
-                out var serializer))
+        if (_serializerSelections.TryResolve(type, out var contentType, out var serializer))
         {
             var payload = serializer.Serialize(value, type);
             return (payload.ToArray(), contentType);
         }
 
-        return (
-            JsonSerializer.SerializeToUtf8Bytes(value, type, JsonOptions),
-            JsonContentType);
+        return (JsonSerializer.SerializeToUtf8Bytes(value, type, JsonOptions), JsonContentType);
     }
 
     public object? Decode(byte[] body, Type type, string? contentType)
     {
-        if (type == typeof(byte[])) return body;
+        if (type == typeof(byte[]))
+            return body;
 
-        if (type == typeof(ReadOnlyMemory<byte>)) return new ReadOnlyMemory<byte>(body);
+        if (type == typeof(ReadOnlyMemory<byte>))
+            return new ReadOnlyMemory<byte>(body);
 
         string? normalizedContentType = null;
         if (contentType is not null)
         {
-            if (!ZLinkSerializerSelectionRegistry.TryNormalizeResponseContentType(
+            if (
+                !ZLinkSerializerSelectionRegistry.TryNormalizeResponseContentType(
                     contentType,
-                    out var normalized))
+                    out var normalized
+                )
+            )
                 throw InvalidResponseContentType(contentType);
             normalizedContentType = normalized;
             if (_serializerSelections.TryGetExact(normalized, out var found))
                 return found.Deserialize(ZLinkEncodedPayload.FromOwned(body), type);
         }
 
-        if (type == typeof(string)) return DecodeString(body);
+        if (type == typeof(string))
+            return DecodeString(body);
 
-        if (normalizedContentType is not null
-            && !string.Equals(
-                normalizedContentType,
-                JsonContentType,
-                StringComparison.Ordinal))
+        if (
+            normalizedContentType is not null
+            && !string.Equals(normalizedContentType, JsonContentType, StringComparison.Ordinal)
+        )
             throw InvalidResponseContentType(contentType!);
 
         if (body.Length == 0)
@@ -100,8 +102,7 @@ internal sealed class HttpClientCodecRegistry : IZLinkCodecRegistryBuilder, IZLi
     {
         try
         {
-            return JsonSerializer.Deserialize<string>(body, JsonOptions)
-                   ?? string.Empty;
+            return JsonSerializer.Deserialize<string>(body, JsonOptions) ?? string.Empty;
         }
         catch (JsonException)
         {
@@ -113,20 +114,17 @@ internal sealed class HttpClientCodecRegistry : IZLinkCodecRegistryBuilder, IZLi
         string contentType,
         IZLinkMessageSerializer serializer,
         Func<Type, bool> canSerialize,
-        bool isFallbackSerializer)
+        bool isFallbackSerializer
+    )
     {
         ArgumentNullException.ThrowIfNull(serializer);
         ArgumentNullException.ThrowIfNull(canSerialize);
-        _serializerSelections.Add(
-            contentType,
-            serializer,
-            canSerialize,
-            isFallbackSerializer);
+        _serializerSelections.Add(contentType, serializer, canSerialize, isFallbackSerializer);
     }
 
-    private static ZLinkFrameworkException InvalidResponseContentType(
-        string contentType) =>
+    private static ZLinkFrameworkException InvalidResponseContentType(string contentType) =>
         new(
             ZLinkFrameworkErrorKind.ProtocolError,
-            $"HTTP response content type '{contentType}' has no registered codec.");
+            $"HTTP response content type '{contentType}' has no registered codec."
+        );
 }

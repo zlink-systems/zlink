@@ -1,6 +1,3 @@
 package systems.zlink.framework.streams;
 
-public record ZLinkStreamError(
-    ZLinkStreamSessionError error,
-    String message) {
-}
+public record ZLinkStreamError(ZLinkStreamSessionError error, String message) {}

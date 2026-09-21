@@ -8,12 +8,14 @@ internal sealed record ZLinkActorCreationTerminal(
     RequestResult Result,
     ServiceWireConstants.FrameworkErrorCode FailureCode,
     ZLinkActorCreationCompletion? Completion,
-    IReadOnlyList<ReadOnlyMemory<byte>>? ReplyParts);
+    IReadOnlyList<ReadOnlyMemory<byte>>? ReplyParts
+);
 
 internal sealed record ZLinkActorCreationCompletion(
     ActorCreateResult Result,
     string ActorId,
-    ulong ObjectGeneration);
+    ulong ObjectGeneration
+);
 
 internal static class ZLinkActorCreationTerminalCodec
 {
@@ -21,7 +23,8 @@ internal static class ZLinkActorCreationTerminalCodec
 
     internal static byte[] Encode(
         ActorCreateOperationTerminal terminal,
-        ZLinkCodecRegistryBuilder codecs)
+        ZLinkCodecRegistryBuilder codecs
+    )
     {
         var body = new MemoryStream();
         WriteU32(body, checked((uint)terminal.Result));
@@ -36,7 +39,8 @@ internal static class ZLinkActorCreationTerminalCodec
             if (reply.Count < 2)
                 throw new ZLinkFrameworkException(
                     ZLinkFrameworkErrorKind.ProtocolError,
-                    "Actor creation reply envelope is incomplete.");
+                    "Actor creation reply envelope is incomplete."
+                );
             var messages = reply.Select(static part => Message.From(part.Span)).ToArray();
             try
             {
@@ -46,7 +50,8 @@ internal static class ZLinkActorCreationTerminalCodec
                         ? ZLinkApplicationPayloadEnvelopeCodec.CreationPacketName
                         : header.MessageName,
                     header.ContentType,
-                    reply[1].Span);
+                    reply[1].Span
+                );
             }
             finally
             {
@@ -65,20 +70,24 @@ internal static class ZLinkActorCreationTerminalCodec
         if (result.Length > MaximumBytes)
             throw new ZLinkFrameworkException(
                 ZLinkFrameworkErrorKind.ProtocolError,
-                "Actor creation terminal exceeds 1 MiB.");
+                "Actor creation terminal exceeds 1 MiB."
+            );
         return result;
     }
 
     internal static bool TryDecode(
         ReadOnlyMemory<byte> envelope,
         ZLinkCodecRegistryBuilder codecs,
-        out ZLinkActorCreationTerminal terminal)
+        out ZLinkActorCreationTerminal terminal
+    )
     {
         terminal = null!;
         var span = envelope.Span;
-        if (span.Length is < 15 or > MaximumBytes
+        if (
+            span.Length is < 15 or > MaximumBytes
             || span[0] != 1
-            || BinaryPrimitives.ReadUInt32BigEndian(span.Slice(1, 4)) != span.Length - 5)
+            || BinaryPrimitives.ReadUInt32BigEndian(span.Slice(1, 4)) != span.Length - 5
+        )
             return false;
         var offset = 5;
         var result = (RequestResult)ReadU32(span, ref offset);
@@ -97,10 +106,7 @@ internal static class ZLinkActorCreationTerminalCodec
             if (!ZLinkApplicationPayloadEnvelopeCodec.TryDecode(payload, out var application))
                 return false;
             using var raw = Message.From(application.Payload.Span);
-            var message = ZLinkMessage.FromEnvelopePayload(
-                application.ContentType,
-                raw,
-                codecs);
+            var message = ZLinkMessage.FromEnvelopePayload(application.ContentType, raw, codecs);
             var parts = ZLinkEnvelopeCodec.EncodeParts(
                 new ZLinkEnvelopeHeader(
                     ZLinkMessageKind.Response,
@@ -108,14 +114,20 @@ internal static class ZLinkActorCreationTerminalCodec
                     string.Empty,
                     application.ContentType,
                     "0",
-                    null, null, null, null),
+                    null,
+                    null,
+                    null,
+                    null
+                ),
                 message,
                 typeof(ZLinkMessage),
-                codecs);
+                codecs
+            );
             try
             {
-                reply = parts.Select(static part =>
-                    (ReadOnlyMemory<byte>)part.AsReadOnlyMemory().ToArray()).ToArray();
+                reply = parts
+                    .Select(static part => (ReadOnlyMemory<byte>)part.AsReadOnlyMemory().ToArray())
+                    .ToArray();
             }
             finally
             {
@@ -123,19 +135,15 @@ internal static class ZLinkActorCreationTerminalCodec
             }
             offset = span.Length;
         }
-        if (offset != span.Length
+        if (
+            offset != span.Length
             || result == RequestResult.Ok != (completion is not null)
-            || !ServiceWireConstants.ValidTerminalFailure(
-                (uint)result,
-                (uint)failure)
+            || !ServiceWireConstants.ValidTerminalFailure((uint)result, (uint)failure)
             || result != RequestResult.Ok && hasPayload
-            || completion?.Result == ActorCreateResult.Existing && hasPayload)
+            || completion?.Result == ActorCreateResult.Existing && hasPayload
+        )
             return false;
-        terminal = new ZLinkActorCreationTerminal(
-            result,
-            failure,
-            completion,
-            reply);
+        terminal = new ZLinkActorCreationTerminal(result, failure, completion, reply);
         return true;
     }
 
@@ -156,53 +164,54 @@ internal static class ZLinkActorCreationTerminalCodec
     private static bool TryReadCompletion(
         ReadOnlySpan<byte> span,
         ref int offset,
-        out ZLinkActorCreationCompletion? completion)
+        out ZLinkActorCreationCompletion? completion
+    )
     {
         completion = null;
-        if (offset + 3 > span.Length) return false;
+        if (offset + 3 > span.Length)
+            return false;
         var result = (ActorCreateResult)span[offset++];
         var length = ReadU16(span, ref offset);
-        if (offset + length > span.Length
-            || result is < ActorCreateResult.Existing or > ActorCreateResult.Rejected)
+        if (
+            offset + length > span.Length
+            || result is < ActorCreateResult.Existing or > ActorCreateResult.Rejected
+        )
             return false;
         var end = offset + length;
         var actorId = string.Empty;
         ulong objectGeneration = 0;
         if (result != ActorCreateResult.Rejected)
         {
-            if (!TryText8(span, ref offset, end, out actorId)
-                || offset + 8 > end)
+            if (!TryText8(span, ref offset, end, out actorId) || offset + 8 > end)
                 return false;
             objectGeneration = ReadU64(span, ref offset);
-            if (objectGeneration == 0 || offset != end) return false;
+            if (objectGeneration == 0 || offset != end)
+                return false;
         }
-        else if (length != 0) return false;
+        else if (length != 0)
+            return false;
         offset = end;
-        completion = new ZLinkActorCreationCompletion(
-            result,
-            actorId,
-            objectGeneration);
+        completion = new ZLinkActorCreationCompletion(result, actorId, objectGeneration);
         return true;
     }
 
     private static void WriteText8(Stream stream, string value)
     {
         var bytes = System.Text.Encoding.UTF8.GetBytes(value);
-        if (bytes.Length is 0 or > byte.MaxValue) throw new ArgumentOutOfRangeException(nameof(value));
+        if (bytes.Length is 0 or > byte.MaxValue)
+            throw new ArgumentOutOfRangeException(nameof(value));
         stream.WriteByte((byte)bytes.Length);
         stream.Write(bytes);
     }
 
-    private static bool TryText8(
-        ReadOnlySpan<byte> span,
-        ref int offset,
-        int end,
-        out string value)
+    private static bool TryText8(ReadOnlySpan<byte> span, ref int offset, int end, out string value)
     {
         value = string.Empty;
-        if (offset >= end) return false;
+        if (offset >= end)
+            return false;
         var length = span[offset++];
-        if (length == 0 || offset + length > end) return false;
+        if (length == 0 || offset + length > end)
+            return false;
         value = System.Text.Encoding.UTF8.GetString(span.Slice(offset, length));
         offset += length;
         return true;
@@ -211,7 +220,8 @@ internal static class ZLinkActorCreationTerminalCodec
     private static bool TryBool(ReadOnlySpan<byte> span, ref int offset, out bool value)
     {
         value = false;
-        if (offset >= span.Length || span[offset] > 1) return false;
+        if (offset >= span.Length || span[offset] > 1)
+            return false;
         value = span[offset++] == 1;
         return true;
     }

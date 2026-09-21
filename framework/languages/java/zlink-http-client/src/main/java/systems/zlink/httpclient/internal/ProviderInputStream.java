@@ -5,11 +5,10 @@ import java.io.InputStream;
 import java.util.function.Supplier;
 
 /**
- * {@link InputStream} that pulls request body chunks from a provider. Wrapped in a
- * {@code BodyPublishers.ofInputStream} so the runtime streams the body with chunked transfer
- * encoding. The provider returns {@code null} when the body is complete. Mirrors the C++
- * {@code body_stream} path; such requests are excluded from automatic retry because the provider
- * cannot be rewound.
+ * {@link InputStream} that pulls request body chunks from a provider. Wrapped in a {@code
+ * BodyPublishers.ofInputStream} so the runtime streams the body with chunked transfer encoding. The
+ * provider returns {@code null} when the body is complete. Mirrors the C++ {@code body_stream}
+ * path; such requests are excluded from automatic retry because the provider cannot be rewound.
  */
 final class ProviderInputStream extends InputStream {
 

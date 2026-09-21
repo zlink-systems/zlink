@@ -1,4 +1,7 @@
-import { ZLinkFrameworkInternalErrorKind, createInternalFrameworkException  } from '../framework-errors-internal';
+import {
+  ZLinkFrameworkInternalErrorKind,
+  createInternalFrameworkException
+} from '../framework-errors-internal';
 import { createAbortError, throwIfAborted } from '../abort';
 import { AsyncResource } from 'node:async_hooks';
 import { ZLinkStateLane } from '../execution/state-lane';
@@ -140,11 +143,14 @@ export class ZLinkActorSessionBindingRegistry<
 > {
   private readonly lane = new ZLinkStateLane();
   private readonly routes = new Map<string, ZLinkActorSessionRoute<TContext, TActor>>();
-  private readonly sealWaiters = new Map<string, Set<{
-    readonly bindingToken: string;
-    readonly resolve: () => void;
-    readonly reject: (error: unknown) => void;
-  }>>();
+  private readonly sealWaiters = new Map<
+    string,
+    Set<{
+      readonly bindingToken: string;
+      readonly resolve: () => void;
+      readonly reject: (error: unknown) => void;
+    }>
+  >();
   private readonly activeFrameWaiters = new Map<string, Set<ZLinkActorSessionActiveFrameWaiter>>();
   private readonly relocations = new Map<string, ZLinkActorSessionRelocationQueue>();
   private readonly terminalRelocations = new Map<ZLinkActorSessionRelocationState, true>();
@@ -178,7 +184,9 @@ export class ZLinkActorSessionBindingRegistry<
     authorityFence?: ZLinkActorSessionAuthorityFence,
     sessionIdentity?: string
   ): Promise<void> {
-    await this.lane.run(() => this.bindCore(context, actor, bindingToken, authorityFence, sessionIdentity));
+    await this.lane.run(() =>
+      this.bindCore(context, actor, bindingToken, authorityFence, sessionIdentity)
+    );
   }
 
   private bindCore(
@@ -207,9 +215,9 @@ export class ZLinkActorSessionBindingRegistry<
     authorityFence?: ZLinkActorSessionAuthorityFence,
     sessionIdentity?: string
   ): Promise<void> {
-    await this.lane.run(() => this.replaceCore(
-      previous, context, actor, bindingToken, authorityFence, sessionIdentity
-    ));
+    await this.lane.run(() =>
+      this.replaceCore(previous, context, actor, bindingToken, authorityFence, sessionIdentity)
+    );
   }
 
   private replaceCore(
@@ -230,8 +238,7 @@ export class ZLinkActorSessionBindingRegistry<
     }
 
     context.bindLocal(actor, bindingToken);
-    const sameLocalBinding = previous.context === context
-      && previous.bindingToken === bindingToken;
+    const sameLocalBinding = previous.context === context && previous.bindingToken === bindingToken;
     if (!sameLocalBinding) {
       try {
         previous.context.unbindLocal(actor.actorId, previous.bindingToken);
@@ -261,9 +268,17 @@ export class ZLinkActorSessionBindingRegistry<
     authorityFence?: ZLinkActorSessionAuthorityFence,
     sessionIdentity?: string
   ): Promise<void> {
-    await this.lane.run(() => this.replaceAndReleaseSealCore(
-      previous, context, actor, bindingToken, sealId, authorityFence, sessionIdentity
-    ));
+    await this.lane.run(() =>
+      this.replaceAndReleaseSealCore(
+        previous,
+        context,
+        actor,
+        bindingToken,
+        sealId,
+        authorityFence,
+        sessionIdentity
+      )
+    );
   }
 
   private replaceAndReleaseSealCore(
@@ -316,7 +331,9 @@ export class ZLinkActorSessionBindingRegistry<
     actor: ZLinkActorSessionBindingActor,
     bindingToken: string
   ): Promise<{ readonly context: TContext } | undefined> {
-    return await this.lane.run(() => this.capturePendingReplyClaimCore(actorId, actor, bindingToken));
+    return await this.lane.run(() =>
+      this.capturePendingReplyClaimCore(actorId, actor, bindingToken)
+    );
   }
 
   private capturePendingReplyClaimCore(
@@ -476,7 +493,9 @@ export class ZLinkActorSessionBindingRegistry<
   ): Promise<ZLinkActorSessionFrameAdmission> {
     for (;;) {
       throwIfAborted(signal);
-      const admission = await this.lane.run(() => this.beginAcceptedFrameCore(actorId, bindingToken));
+      const admission = await this.lane.run(() =>
+        this.beginAcceptedFrameCore(actorId, bindingToken)
+      );
       if (admission !== undefined) return admission;
       await this.waitForSealRelease(actorId, bindingToken, signal);
     }
@@ -496,8 +515,8 @@ export class ZLinkActorSessionBindingRegistry<
       completed = true;
       route.activeFrames.count--;
       if (
-        route.activeFrames.count === 0
-        && this.routes.get(actorId)?.activeFrames === route.activeFrames
+        route.activeFrames.count === 0 &&
+        this.routes.get(actorId)?.activeFrames === route.activeFrames
       ) {
         this.resolveActiveFrameWaiters(actorId);
       }
@@ -516,7 +535,9 @@ export class ZLinkActorSessionBindingRegistry<
     signal?: AbortSignal
   ): Promise<ZLinkActorSessionRequestFrameAdmission> {
     const frame = await this.beginAcceptedFrameWhenReady(actorId, bindingToken, signal);
-    return await this.lane.run(() => this.beginAcceptedRequestFrameCore(actorId, bindingToken, frame));
+    return await this.lane.run(() =>
+      this.beginAcceptedRequestFrameCore(actorId, bindingToken, frame)
+    );
   }
 
   private beginAcceptedRequestFrameCore(
@@ -570,11 +591,7 @@ export class ZLinkActorSessionBindingRegistry<
     operation: () => Promise<TResult>,
     signal?: AbortSignal
   ): Promise<TResult> {
-    const admission = await this.beginAcceptedFrameWhenReady(
-      actorId,
-      bindingToken,
-      signal
-    );
+    const admission = await this.beginAcceptedFrameWhenReady(actorId, bindingToken, signal);
     try {
       return await operation();
     } finally {
@@ -582,7 +599,11 @@ export class ZLinkActorSessionBindingRegistry<
     }
   }
 
-  async seal(actorId: string, sealId: string, expected: ZLinkActorSessionRouteFence): Promise<void> {
+  async seal(
+    actorId: string,
+    sealId: string,
+    expected: ZLinkActorSessionRouteFence
+  ): Promise<void> {
     await this.lane.run(() => this.sealCore(actorId, sealId, expected));
   }
 
@@ -658,9 +679,8 @@ export class ZLinkActorSessionBindingRegistry<
       assertRelocationClaim(existing, claim);
       return { kind: 'existing', wait: existing.ready };
     }
-    const predecessor = queue?.activeSealId === undefined
-      ? undefined
-      : queue.seals.get(queue.activeSealId);
+    const predecessor =
+      queue?.activeSealId === undefined ? undefined : queue.seals.get(queue.activeSealId);
     if (predecessor !== undefined && predecessor.phase !== 'terminal') {
       if (predecessor.sessionIdentity === undefined || claim.sessionIdentity === undefined) {
         throw createInternalFrameworkException(
@@ -675,7 +695,9 @@ export class ZLinkActorSessionBindingRegistry<
 
     this.sealCore(claim.actorId, claim.sealId, expected);
     let resolveTerminal!: () => void;
-    const terminal = new Promise<void>((resolve) => { resolveTerminal = resolve; });
+    const terminal = new Promise<void>((resolve) => {
+      resolveTerminal = resolve;
+    });
     const ready = this.waitForActiveFramesCore(claim.actorId, signal);
     const actorQueue: ZLinkActorSessionRelocationQueue = queue ?? {
       actorId: claim.actorId,
@@ -716,7 +738,9 @@ export class ZLinkActorSessionBindingRegistry<
     operation: ZLinkActorSessionRetainedOutbound,
     sealId?: string
   ): Promise<ServiceSessionBindingAdmissionResult> {
-    return await this.lane.run(() => this.retainRelocationOutboundCorePublic(actorId, operation, sealId));
+    return await this.lane.run(() =>
+      this.retainRelocationOutboundCorePublic(actorId, operation, sealId)
+    );
   }
 
   private retainRelocationOutboundCorePublic(
@@ -728,10 +752,10 @@ export class ZLinkActorSessionBindingRegistry<
       const queue = this.relocations.get(actorId);
       const state = queue?.seals.get(sealId);
       if (
-        queue === undefined
-        || state === undefined
-        || (queue.activeSealId !== sealId
-          && !(queue.activeSealId === undefined && state.phase === 'terminal'))
+        queue === undefined ||
+        state === undefined ||
+        (queue.activeSealId !== sealId &&
+          !(queue.activeSealId === undefined && state.phase === 'terminal'))
       ) {
         failRetainedOutbound(
           operation,
@@ -755,9 +779,8 @@ export class ZLinkActorSessionBindingRegistry<
     operation: ZLinkActorSessionRetainedOutbound
   ): ServiceSessionBindingAdmissionResult {
     const queue = this.relocations.get(claim.actorId);
-    const state = queue?.activeSealId === undefined
-      ? undefined
-      : queue.seals.get(queue.activeSealId);
+    const state =
+      queue?.activeSealId === undefined ? undefined : queue.seals.get(queue.activeSealId);
     const error = this.outboundAdmissionError(claim);
     if (error !== undefined) {
       failRetainedOutbound(operation, error);
@@ -767,48 +790,32 @@ export class ZLinkActorSessionBindingRegistry<
       if (!this.matchesCurrentProducerNode(claim)) {
         failRetainedOutbound(
           operation,
-          new Error(`Actor '${claim.actorId}' Session outbound admission was fenced by its current binding.`)
+          new Error(
+            `Actor '${claim.actorId}' Session outbound admission was fenced by its current binding.`
+          )
         );
         return 'rejected';
       }
       if (queue === undefined) return 'passThrough';
-      return this.retainRelocationOutboundCore(
-        claim.actorId,
-        operation,
-        'source',
-        claim
-      );
+      return this.retainRelocationOutboundCore(claim.actorId, operation, 'source', claim);
     }
     if (state.phase === 'sealed' || state.phase === 'applying') {
       const matchesSource = matchesRelocationSourceProof(state, claim);
       const matchesCurrent = this.matchesCurrentProducerNode(claim);
-      const authorization = matchesSource || matchesCurrent
-        ? 'source'
-        : 'pendingTarget';
-      return this.retainRelocationOutboundCore(
-        claim.actorId,
-        operation,
-        authorization,
-        claim
-      );
+      const authorization = matchesSource || matchesCurrent ? 'source' : 'pendingTarget';
+      return this.retainRelocationOutboundCore(claim.actorId, operation, authorization, claim);
     }
     const acceptedProof = state.acceptedProducerProof;
-    if (
-      acceptedProof === undefined
-      || !matchesAcceptedProducerProof(acceptedProof, claim)
-    ) {
+    if (acceptedProof === undefined || !matchesAcceptedProducerProof(acceptedProof, claim)) {
       failRetainedOutbound(
         operation,
-        new Error(`Actor '${claim.actorId}' Session outbound admission did not match its accepted producer proof.`)
+        new Error(
+          `Actor '${claim.actorId}' Session outbound admission did not match its accepted producer proof.`
+        )
       );
       return 'rejected';
     }
-    return this.retainRelocationOutboundCore(
-      claim.actorId,
-      operation,
-      'source',
-      claim
-    );
+    return this.retainRelocationOutboundCore(claim.actorId, operation, 'source', claim);
   }
 
   private retainRelocationOutboundCore(
@@ -818,9 +825,8 @@ export class ZLinkActorSessionBindingRegistry<
     claim?: ServiceSessionBindingAdmissionClaim
   ): ServiceSessionBindingAdmissionResult {
     const queue = this.relocations.get(actorId);
-    const state = queue?.activeSealId === undefined
-      ? undefined
-      : queue.seals.get(queue.activeSealId);
+    const state =
+      queue?.activeSealId === undefined ? undefined : queue.seals.get(queue.activeSealId);
     if (queue === undefined) return 'passThrough';
     if (state === undefined || state.phase === 'applied' || state.phase === 'terminal') {
       if (queue.drainPromise === undefined && queue.outbound.length === 0) return 'passThrough';
@@ -873,13 +879,9 @@ export class ZLinkActorSessionBindingRegistry<
     commitOwnerTransition: () => Promise<void>,
     acceptedProducerProof?: ZLinkActorSessionAcceptedProducerProof
   ): Promise<void> {
-    const prepared = await this.lane.run(() => this.prepareRelocationApply(
-      actorId,
-      sealId,
-      applyFingerprint,
-      action,
-      acceptedProducerProof
-    ));
+    const prepared = await this.lane.run(() =>
+      this.prepareRelocationApply(actorId, sealId, applyFingerprint, action, acceptedProducerProof)
+    );
     if (prepared.applyPromise !== undefined) {
       await prepared.applyPromise;
       return;
@@ -937,9 +939,9 @@ export class ZLinkActorSessionBindingRegistry<
       return { queue, state, applyPromise: state.applyPromise };
     }
     if (
-      action === 'commit'
-      && acceptedProducerProof !== undefined
-      && !validAcceptedTargetProof(state, acceptedProducerProof)
+      action === 'commit' &&
+      acceptedProducerProof !== undefined &&
+      !validAcceptedTargetProof(state, acceptedProducerProof)
     ) {
       throw createInternalFrameworkException(
         ZLinkFrameworkInternalErrorKind.ActorLocationStale,
@@ -986,9 +988,10 @@ export class ZLinkActorSessionBindingRegistry<
     readonly sealId?: string;
   }): void {
     const { queue, state, action, acceptedProducerProof, actorId, sealId } = prepared;
-    const proof = action === 'commit'
-      ? acceptedProducerProof ?? this.currentProducerProof(actorId!)
-      : relocationSourceProof(state);
+    const proof =
+      action === 'commit'
+        ? (acceptedProducerProof ?? this.currentProducerProof(actorId!))
+        : relocationSourceProof(state);
     state.acceptedProducerProof = proof;
     for (let index = queue.outbound.length - 1; index >= 0; index--) {
       const entry = queue.outbound[index]!;
@@ -998,10 +1001,10 @@ export class ZLinkActorSessionBindingRegistry<
         continue;
       }
       if (
-        action === 'commit'
-        && proof !== undefined
-        && entry.claim !== undefined
-        && matchesAcceptedProducerProof(proof, entry.claim)
+        action === 'commit' &&
+        proof !== undefined &&
+        entry.claim !== undefined &&
+        matchesAcceptedProducerProof(proof, entry.claim)
       ) {
         entry.released = true;
         continue;
@@ -1030,27 +1033,32 @@ export class ZLinkActorSessionBindingRegistry<
     actorId: string
   ): ZLinkActorSessionAcceptedProducerProof | undefined {
     const route = this.routes.get(actorId);
-    const actorRef = (route?.actor as TActor & { readonly ref?: {
-      readonly actorId?: unknown;
-      readonly objectGeneration?: unknown;
-      readonly generation?: unknown;
-      readonly nodeRid?: unknown;
-      readonly ownerNodeGeneration?: unknown;
-      readonly bindingGeneration?: unknown;
-    } }).ref;
+    const actorRef = (
+      route?.actor as TActor & {
+        readonly ref?: {
+          readonly actorId?: unknown;
+          readonly objectGeneration?: unknown;
+          readonly generation?: unknown;
+          readonly nodeRid?: unknown;
+          readonly ownerNodeGeneration?: unknown;
+          readonly bindingGeneration?: unknown;
+        };
+      }
+    ).ref;
     const sessionIdentity = route?.sessionIdentity;
     if (
-      route === undefined
-      || actorRef === undefined
-      || sessionIdentity === undefined
-      || actorRef.ownerNodeGeneration === undefined
-    ) return undefined;
+      route === undefined ||
+      actorRef === undefined ||
+      sessionIdentity === undefined ||
+      actorRef.ownerNodeGeneration === undefined
+    )
+      return undefined;
     return {
       actorId,
       objectGeneration: BigInt(
-        actorRef.objectGeneration as bigint | number | string | boolean | undefined
-          ?? actorRef.generation as bigint | number | string | boolean | undefined
-          ?? -1
+        (actorRef.objectGeneration as bigint | number | string | boolean | undefined) ??
+          (actorRef.generation as bigint | number | string | boolean | undefined) ??
+          -1
       ),
       actorNodeRid: String(actorRef.nodeRid ?? ''),
       actorNodeGeneration: BigInt(
@@ -1058,7 +1066,7 @@ export class ZLinkActorSessionBindingRegistry<
       ),
       sessionIdentity: String(sessionIdentity),
       bindingGeneration: BigInt(
-        actorRef.bindingGeneration as bigint | number | string | boolean | undefined ?? -1
+        (actorRef.bindingGeneration as bigint | number | string | boolean | undefined) ?? -1
       )
     };
   }
@@ -1068,7 +1076,9 @@ export class ZLinkActorSessionBindingRegistry<
     sealId: string,
     applyFingerprint: string
   ): Promise<void> {
-    await this.lane.run(() => this.observeRelocationTerminalCore(actorId, sealId, applyFingerprint));
+    await this.lane.run(() =>
+      this.observeRelocationTerminalCore(actorId, sealId, applyFingerprint)
+    );
   }
 
   private observeRelocationTerminalCore(
@@ -1079,10 +1089,10 @@ export class ZLinkActorSessionBindingRegistry<
     const queue = this.relocations.get(actorId);
     const state = queue?.seals.get(sealId);
     if (
-      queue === undefined
-      || state === undefined
-      || state.applyFingerprint !== applyFingerprint
-      || (state.phase !== 'applied' && state.phase !== 'terminal')
+      queue === undefined ||
+      state === undefined ||
+      state.applyFingerprint !== applyFingerprint ||
+      (state.phase !== 'applied' && state.phase !== 'terminal')
     ) {
       throw createInternalFrameworkException(
         ZLinkFrameworkInternalErrorKind.ActorLocationStale,
@@ -1143,9 +1153,10 @@ export class ZLinkActorSessionBindingRegistry<
     if (queue === undefined) return;
     const activeSealId = queue.activeSealId;
     const activeState = activeSealId === undefined ? undefined : queue.seals.get(activeSealId);
-    const ownsActiveSeal = activeState !== undefined
-      && activeState.phase !== 'terminal'
-      && activeState.sessionIdentity === route.sessionIdentity;
+    const ownsActiveSeal =
+      activeState !== undefined &&
+      activeState.phase !== 'terminal' &&
+      activeState.sessionIdentity === route.sessionIdentity;
     if (!ownsActiveSeal) {
       // Nothing this exact route still holds open — leave terminal
       // retention and any other Session's active seal untouched.
@@ -1184,7 +1195,10 @@ export class ZLinkActorSessionBindingRegistry<
     await this.lane.run(() => this.updateAuthorityFenceCore(actorId, authorityFence));
   }
 
-  private updateAuthorityFenceCore(actorId: string, authorityFence: ZLinkActorSessionAuthorityFence): void {
+  private updateAuthorityFenceCore(
+    actorId: string,
+    authorityFence: ZLinkActorSessionAuthorityFence
+  ): void {
     const route = this.requireRouteCore(actorId);
     route.authorityFence = authorityFence;
   }
@@ -1195,8 +1209,7 @@ export class ZLinkActorSessionBindingRegistry<
 
   private validateSealCore(actorId: string, sealId: string): boolean {
     const route = this.routes.get(actorId);
-    return route !== undefined
-      && route.sealId === sealId;
+    return route !== undefined && route.sealId === sealId;
   }
 
   /** True while a relocation seal currently holds this actor's ingress. */
@@ -1254,16 +1267,20 @@ export class ZLinkActorSessionBindingRegistry<
         waiters.delete(waiter);
         if (waiters.size === 0) this.sealWaiters.delete(actorId);
       };
-      timer = startOutsideStateLane(() => setTimeout(() => {
-        this.lane.tryPost(() => {
-          removeWaiter();
-          rejectWaiter(createInternalFrameworkException(
-            ZLinkFrameworkInternalErrorKind.DeadlineExceeded,
-            `Actor '${actorId}' session seal was not released within the relocation seal timeout.`,
-            true
-          ));
-        });
-      }, this.sealWaitTimeoutMs));
+      timer = startOutsideStateLane(() =>
+        setTimeout(() => {
+          this.lane.tryPost(() => {
+            removeWaiter();
+            rejectWaiter(
+              createInternalFrameworkException(
+                ZLinkFrameworkInternalErrorKind.DeadlineExceeded,
+                `Actor '${actorId}' session seal was not released within the relocation seal timeout.`,
+                true
+              )
+            );
+          });
+        }, this.sealWaitTimeoutMs)
+      );
       timer.unref();
       const onAbort = () => {
         this.lane.tryPost(() => {
@@ -1324,17 +1341,21 @@ export class ZLinkActorSessionBindingRegistry<
       //  Spec 48:205 — transport/deadline limits keep applying during
       //  relocation: the sealing side must not wait forever for active
       //  frames that themselves may be waiting on this relocation.
-      timer = startOutsideStateLane(() => setTimeout(() => {
-        this.lane.tryPost(() => {
-          waiters.delete(waiter);
-          if (waiters.size === 0) this.activeFrameWaiters.delete(actorId);
-          waiter.reject(createInternalFrameworkException(
-            ZLinkFrameworkInternalErrorKind.DeadlineExceeded,
-            `Actor '${actorId}' session seal timed out waiting for active frames.`,
-            true
-          ));
-        });
-      }, this.sealWaitTimeoutMs));
+      timer = startOutsideStateLane(() =>
+        setTimeout(() => {
+          this.lane.tryPost(() => {
+            waiters.delete(waiter);
+            if (waiters.size === 0) this.activeFrameWaiters.delete(actorId);
+            waiter.reject(
+              createInternalFrameworkException(
+                ZLinkFrameworkInternalErrorKind.DeadlineExceeded,
+                `Actor '${actorId}' session seal timed out waiting for active frames.`,
+                true
+              )
+            );
+          });
+        }, this.sealWaitTimeoutMs)
+      );
       timer.unref();
       if (signal === undefined) return;
       if (signal.aborted) onAbort();
@@ -1375,11 +1396,14 @@ export class ZLinkActorSessionBindingRegistry<
           const delivered = await entry.operation.deliver();
           await this.lane.run(() => {
             if (delivered) this.settleOutbound(queue, entry);
-            else this.failOutbound(
-              queue,
-              entry,
-              new Error(`Actor '${queue.actorId}' retained Session outbound delivery was rejected.`)
-            );
+            else
+              this.failOutbound(
+                queue,
+                entry,
+                new Error(
+                  `Actor '${queue.actorId}' retained Session outbound delivery was rejected.`
+                )
+              );
             if (queue.outbound[0] === entry) queue.outbound.shift();
           });
         } catch (error) {
@@ -1391,11 +1415,14 @@ export class ZLinkActorSessionBindingRegistry<
       }
     });
     startOutsideStateLane(() => {
-      void drain.finally(async () => await this.lane.run(() => {
-        if (queue.drainPromise === drain) queue.drainPromise = undefined;
-        if (queue.outbound[0]?.released === true) this.startOutboundDrain(queue);
-        else this.deleteEmptyRelocationQueue(queue);
-      }));
+      void drain.finally(
+        async () =>
+          await this.lane.run(() => {
+            if (queue.drainPromise === drain) queue.drainPromise = undefined;
+            if (queue.outbound[0]?.released === true) this.startOutboundDrain(queue);
+            else this.deleteEmptyRelocationQueue(queue);
+          })
+      );
     });
     queue.drainPromise = drain;
   }
@@ -1434,59 +1461,69 @@ export class ZLinkActorSessionBindingRegistry<
     failRetainedOutbound(entry.operation, error);
   }
 
-  private outboundAdmissionError(
-    claim: ServiceSessionBindingAdmissionClaim
-  ): Error | undefined {
+  private outboundAdmissionError(claim: ServiceSessionBindingAdmissionClaim): Error | undefined {
     if (
-      claim.actorId.length === 0
-      || claim.objectGeneration <= 0n
-      || claim.actorNodeRid.length === 0
-      || claim.actorNodeGeneration <= 0n
-      || claim.producerNodeRid.length === 0
-      || claim.producerNodeGeneration <= 0n
-      || claim.bindingGeneration <= 0n
-      || claim.sessionIdentity.length === 0
-      || !routingIdsEqual(claim.producerNodeRid, claim.actorNodeRid)
-      || claim.producerNodeGeneration !== claim.actorNodeGeneration
+      claim.actorId.length === 0 ||
+      claim.objectGeneration <= 0n ||
+      claim.actorNodeRid.length === 0 ||
+      claim.actorNodeGeneration <= 0n ||
+      claim.producerNodeRid.length === 0 ||
+      claim.producerNodeGeneration <= 0n ||
+      claim.bindingGeneration <= 0n ||
+      claim.sessionIdentity.length === 0 ||
+      !routingIdsEqual(claim.producerNodeRid, claim.actorNodeRid) ||
+      claim.producerNodeGeneration !== claim.actorNodeGeneration
     ) {
       return new Error(`Actor '${claim.actorId}' Session outbound admission claim is invalid.`);
     }
     const route = this.routes.get(claim.actorId);
-    const ref = route?.actor as (TActor & { readonly ref?: {
-      readonly actorId?: unknown;
-      readonly objectGeneration?: unknown;
-      readonly generation?: unknown;
-      readonly bindingGeneration?: unknown;
-    } }) | undefined;
+    const ref = route?.actor as
+      | (TActor & {
+          readonly ref?: {
+            readonly actorId?: unknown;
+            readonly objectGeneration?: unknown;
+            readonly generation?: unknown;
+            readonly bindingGeneration?: unknown;
+          };
+        })
+      | undefined;
     const actorRef = ref?.ref;
     const routeSessionIdentity = route?.sessionIdentity;
     if (
-      route === undefined
-      || actorRef === undefined
-      || String(actorRef.actorId ?? claim.actorId) !== claim.actorId
-      || BigInt(
-        actorRef.objectGeneration as bigint | number | string | boolean | undefined
-          ?? actorRef.generation as bigint | number | string | boolean | undefined
-          ?? -1
-      ) !== claim.objectGeneration
-      || BigInt(
-        actorRef.bindingGeneration as bigint | number | string | boolean | undefined ?? -1
-      ) !== claim.bindingGeneration
-      || String(routeSessionIdentity ?? '') !== claim.sessionIdentity
+      route === undefined ||
+      actorRef === undefined ||
+      String(actorRef.actorId ?? claim.actorId) !== claim.actorId ||
+      BigInt(
+        (actorRef.objectGeneration as bigint | number | string | boolean | undefined) ??
+          (actorRef.generation as bigint | number | string | boolean | undefined) ??
+          -1
+      ) !== claim.objectGeneration ||
+      BigInt(
+        (actorRef.bindingGeneration as bigint | number | string | boolean | undefined) ?? -1
+      ) !== claim.bindingGeneration ||
+      String(routeSessionIdentity ?? '') !== claim.sessionIdentity
     ) {
-      return new Error(`Actor '${claim.actorId}' Session outbound admission was fenced by its current binding.`);
+      return new Error(
+        `Actor '${claim.actorId}' Session outbound admission was fenced by its current binding.`
+      );
     }
     return undefined;
   }
 
   private matchesCurrentProducerNode(claim: ServiceSessionBindingAdmissionClaim): boolean {
     const route = this.routes.get(claim.actorId);
-    const actorRef = (route?.actor as TActor & { readonly ref?: {
-      readonly nodeRid?: unknown;
-    } }).ref;
-    return route !== undefined
-      && actorRef !== undefined
-      && routingIdsEqual(String(actorRef.nodeRid ?? ''), claim.actorNodeRid);
+    const actorRef = (
+      route?.actor as TActor & {
+        readonly ref?: {
+          readonly nodeRid?: unknown;
+        };
+      }
+    ).ref;
+    return (
+      route !== undefined &&
+      actorRef !== undefined &&
+      routingIdsEqual(String(actorRef.nodeRid ?? ''), claim.actorNodeRid)
+    );
   }
 
   private rememberTerminalRelocation(state: ZLinkActorSessionRelocationState): void {
@@ -1507,11 +1544,11 @@ export class ZLinkActorSessionBindingRegistry<
 
   private deleteEmptyRelocationQueue(queue: ZLinkActorSessionRelocationQueue): void {
     if (
-      queue.activeSealId === undefined
-      && queue.seals.size === 0
-      && queue.outbound.length === 0
-      && queue.drainPromise === undefined
-      && this.relocations.get(queue.actorId) === queue
+      queue.activeSealId === undefined &&
+      queue.seals.size === 0 &&
+      queue.outbound.length === 0 &&
+      queue.drainPromise === undefined &&
+      this.relocations.get(queue.actorId) === queue
     ) {
       this.relocations.delete(queue.actorId);
     }
@@ -1537,11 +1574,11 @@ function assertRelocationClaim(
   claim: ZLinkActorSessionRelocationClaim
 ): void {
   if (
-    state.actorGeneration !== claim.actorGeneration
-    || state.bindingGeneration !== claim.bindingGeneration
-    || state.sessionIdentity !== claim.sessionIdentity
-    || state.actorNodeRid !== claim.actorNodeRid
-    || state.actorNodeGeneration !== claim.actorNodeGeneration
+    state.actorGeneration !== claim.actorGeneration ||
+    state.bindingGeneration !== claim.bindingGeneration ||
+    state.sessionIdentity !== claim.sessionIdentity ||
+    state.actorNodeRid !== claim.actorNodeRid ||
+    state.actorNodeGeneration !== claim.actorNodeGeneration
   ) {
     throw createInternalFrameworkException(
       ZLinkFrameworkInternalErrorKind.ActorLocationStale,
@@ -1559,47 +1596,54 @@ function matchesRelocationSourceProof(
   state: ZLinkActorSessionRelocationState,
   claim: ServiceSessionBindingAdmissionClaim
 ): boolean {
-  return state.actorId === claim.actorId
-    && state.actorGeneration === claim.objectGeneration
-    && state.bindingGeneration === claim.bindingGeneration
-    && state.sessionIdentity === claim.sessionIdentity
-    && state.actorNodeRid !== undefined
-    && routingIdsEqual(state.actorNodeRid, claim.actorNodeRid)
-    && state.actorNodeGeneration === claim.actorNodeGeneration;
+  return (
+    state.actorId === claim.actorId &&
+    state.actorGeneration === claim.objectGeneration &&
+    state.bindingGeneration === claim.bindingGeneration &&
+    state.sessionIdentity === claim.sessionIdentity &&
+    state.actorNodeRid !== undefined &&
+    routingIdsEqual(state.actorNodeRid, claim.actorNodeRid) &&
+    state.actorNodeGeneration === claim.actorNodeGeneration
+  );
 }
 
 function matchesAcceptedProducerProof(
   proof: ZLinkActorSessionAcceptedProducerProof,
   claim: ServiceSessionBindingAdmissionClaim
 ): boolean {
-  return proof.actorId === claim.actorId
-    && proof.objectGeneration === claim.objectGeneration
-    && routingIdsEqual(proof.actorNodeRid, claim.actorNodeRid)
-    && proof.actorNodeGeneration === claim.actorNodeGeneration
-    && proof.sessionIdentity === claim.sessionIdentity
-    && proof.bindingGeneration === claim.bindingGeneration;
+  return (
+    proof.actorId === claim.actorId &&
+    proof.objectGeneration === claim.objectGeneration &&
+    routingIdsEqual(proof.actorNodeRid, claim.actorNodeRid) &&
+    proof.actorNodeGeneration === claim.actorNodeGeneration &&
+    proof.sessionIdentity === claim.sessionIdentity &&
+    proof.bindingGeneration === claim.bindingGeneration
+  );
 }
 
 function validAcceptedTargetProof(
   state: ZLinkActorSessionRelocationState,
   proof: ZLinkActorSessionAcceptedProducerProof
 ): boolean {
-  return proof.actorId === state.actorId
-    && proof.objectGeneration === state.actorGeneration
-    && proof.actorNodeRid.length > 0
-    && proof.actorNodeGeneration > 0n
-    && proof.sessionIdentity === state.sessionIdentity
-    && proof.bindingGeneration === state.bindingGeneration;
+  return (
+    proof.actorId === state.actorId &&
+    proof.objectGeneration === state.actorGeneration &&
+    proof.actorNodeRid.length > 0 &&
+    proof.actorNodeGeneration > 0n &&
+    proof.sessionIdentity === state.sessionIdentity &&
+    proof.bindingGeneration === state.bindingGeneration
+  );
 }
 
 function relocationSourceProof(
   state: ZLinkActorSessionRelocationState
 ): ZLinkActorSessionAcceptedProducerProof | undefined {
   if (
-    state.sessionIdentity === undefined
-    || state.actorNodeRid === undefined
-    || state.actorNodeGeneration === undefined
-  ) return undefined;
+    state.sessionIdentity === undefined ||
+    state.actorNodeRid === undefined ||
+    state.actorNodeGeneration === undefined
+  )
+    return undefined;
   return {
     actorId: state.actorId,
     objectGeneration: state.actorGeneration,
@@ -1610,10 +1654,7 @@ function relocationSourceProof(
   };
 }
 
-function failRetainedOutbound(
-  operation: ZLinkActorSessionRetainedOutbound,
-  error: unknown
-): void {
+function failRetainedOutbound(operation: ZLinkActorSessionRetainedOutbound, error: unknown): void {
   try {
     operation.fail(error);
   } catch {
@@ -1627,9 +1668,9 @@ function assertSuccessorSessionIdentity(
   successor: ZLinkActorSessionRelocationClaim
 ): void {
   if (
-    predecessor.actorGeneration !== successor.actorGeneration
-    || predecessor.bindingGeneration !== successor.bindingGeneration
-    || predecessor.sessionIdentity !== successor.sessionIdentity
+    predecessor.actorGeneration !== successor.actorGeneration ||
+    predecessor.bindingGeneration !== successor.bindingGeneration ||
+    predecessor.sessionIdentity !== successor.sessionIdentity
   ) {
     throw createInternalFrameworkException(
       ZLinkFrameworkInternalErrorKind.ActorLocationStale,
@@ -1648,14 +1689,18 @@ function routeMatchesFence<
   TContext extends ZLinkActorSessionBindingContext<TActor>,
   TActor extends ZLinkActorSessionBindingActor
 >(route: ZLinkActorSessionRoute<TContext, TActor>, expected: ZLinkActorSessionRouteFence): boolean {
-  const ref = (route.actor as TActor & { readonly ref?: unknown }).ref as {
-    readonly objectGeneration?: bigint;
-    readonly generation?: bigint;
-    readonly bindingGeneration?: bigint;
-  } | undefined;
-  return ref !== undefined
-    && BigInt(ref.objectGeneration ?? ref.generation ?? -1n) === expected.objectGeneration
-    && ref.bindingGeneration === expected.bindingGeneration;
+  const ref = (route.actor as TActor & { readonly ref?: unknown }).ref as
+    | {
+        readonly objectGeneration?: bigint;
+        readonly generation?: bigint;
+        readonly bindingGeneration?: bigint;
+      }
+    | undefined;
+  return (
+    ref !== undefined &&
+    BigInt(ref.objectGeneration ?? ref.generation ?? -1n) === expected.objectGeneration &&
+    ref.bindingGeneration === expected.bindingGeneration
+  );
 }
 
 function sessionIdentityFromContext<
@@ -1665,10 +1710,7 @@ function sessionIdentityFromContext<
   return context.routingId === undefined ? undefined : String(context.routingId);
 }
 
-function waitForSessionRelocation(
-  operation: Promise<void>,
-  signal?: AbortSignal
-): Promise<void> {
+function waitForSessionRelocation(operation: Promise<void>, signal?: AbortSignal): Promise<void> {
   if (signal === undefined) return operation;
   if (signal.aborted) return Promise.reject(signal.reason ?? createAbortError());
   return new Promise<void>((resolve, reject) => {
@@ -1682,7 +1724,7 @@ function waitForSessionRelocation(
         signal.removeEventListener('abort', onAbort);
         resolve();
       },
-      error => {
+      (error) => {
         signal.removeEventListener('abort', onAbort);
         reject(error);
       }

@@ -16,12 +16,15 @@ internal sealed class ZLinkRedisLocationKeys
     public ZLinkRedisLocationKeys(string prefix)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(prefix);
-        if (prefix.Contains('{', StringComparison.Ordinal)
-            || prefix.Contains('}', StringComparison.Ordinal))
+        if (
+            prefix.Contains('{', StringComparison.Ordinal)
+            || prefix.Contains('}', StringComparison.Ordinal)
+        )
         {
             throw new ArgumentException(
                 "Redis location key prefix must not contain '{' or '}'.",
-                nameof(prefix));
+                nameof(prefix)
+            );
         }
 
         _prefix = prefix;
@@ -29,39 +32,28 @@ internal sealed class ZLinkRedisLocationKeys
 
     private string Base => $"{_prefix}:{HashTag}";
 
-    public RedisKey OpaqueRecordKey(string key) =>
-        $"{Base}:opaque:{Digest(key)}";
+    public RedisKey OpaqueRecordKey(string key) => $"{Base}:opaque:{Digest(key)}";
 
-    public RedisKey OpaqueIndexKey() =>
-        $"{Base}:opaque:index";
+    public RedisKey OpaqueIndexKey() => $"{Base}:opaque:index";
 
-    public RedisKey OpaqueMapKey() =>
-        $"{Base}:opaque:map";
+    public RedisKey OpaqueMapKey() => $"{Base}:opaque:map";
 
-    public RedisKey OpaqueCleanupKey() =>
-        $"{Base}:opaque:cleanup";
+    public RedisKey OpaqueCleanupKey() => $"{Base}:opaque:cleanup";
 
-    public RedisKey OpaqueSequenceKey() =>
-        $"{Base}:opaque:sequence";
+    public RedisKey OpaqueSequenceKey() => $"{Base}:opaque:sequence";
 
-    public RedisKey OpaqueSnapshotExpiryKey() =>
-        $"{Base}:opaque:snapshot-expiry";
+    public RedisKey OpaqueSnapshotExpiryKey() => $"{Base}:opaque:snapshot-expiry";
 
-    public RedisKey OpaqueSnapshotBoundaryKey() =>
-        $"{Base}:opaque:snapshot-boundary";
+    public RedisKey OpaqueSnapshotBoundaryKey() => $"{Base}:opaque:snapshot-boundary";
 
-    public RedisKey OpaqueScanKey(string scanId) =>
-        $"{Base}:opaque:scan:{NormalizeId(scanId)}";
+    public RedisKey OpaqueScanKey(string scanId) => $"{Base}:opaque:scan:{NormalizeId(scanId)}";
 
     private static string Digest(string value) =>
-        Convert.ToHexString(
-                SHA256.HashData(Encoding.UTF8.GetBytes(value)))
-            .ToLowerInvariant();
+        Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(value))).ToLowerInvariant();
 
     private static string NormalizeId(string value)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(value);
-        return value.Replace("-", string.Empty, StringComparison.Ordinal)
-            .ToLowerInvariant();
+        return value.Replace("-", string.Empty, StringComparison.Ordinal).ToLowerInvariant();
     }
 }

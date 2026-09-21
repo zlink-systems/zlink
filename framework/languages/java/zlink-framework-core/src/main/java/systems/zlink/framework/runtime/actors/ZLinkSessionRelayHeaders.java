@@ -1,24 +1,23 @@
 package systems.zlink.framework.runtime.actors;
 
+import systems.zlink.framework.runtime.streams.ZLinkStreamHeader;
+import systems.zlink.framework.streams.ZLinkSessionDispatchContext;
+
 import java.util.Collections;
 import java.util.Map;
 import java.util.Optional;
 import java.util.WeakHashMap;
-import systems.zlink.framework.runtime.streams.ZLinkStreamHeader;
-import systems.zlink.framework.streams.ZLinkSessionDispatchContext;
 
 final class ZLinkSessionRelayHeaders {
     private final ThreadLocal<ZLinkStreamHeader> current = new ThreadLocal<>();
     private final Map<ZLinkSessionDispatchContext, ZLinkStreamHeader> byDispatch =
-        Collections.synchronizedMap(new WeakHashMap<>());
+            Collections.synchronizedMap(new WeakHashMap<>());
 
     void enter(ZLinkStreamHeader header) {
         current.set(header);
     }
 
-    void enter(
-        ZLinkSessionDispatchContext dispatch,
-        ZLinkStreamHeader header) {
+    void enter(ZLinkSessionDispatchContext dispatch, ZLinkStreamHeader header) {
         if (dispatch != null && header != null) {
             byDispatch.put(dispatch, header);
         }

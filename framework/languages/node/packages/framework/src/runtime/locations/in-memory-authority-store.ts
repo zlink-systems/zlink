@@ -82,8 +82,10 @@ interface AggregateRecord {
  */
 export class ZLinkInMemoryAuthorityStore {
   private readonly rows = new Map<string, AuthorityRow>();
-  private readonly creationTerminals =
-    new Map<string, 'committed' | 'rejected' | 'failed' | 'aborted'>();
+  private readonly creationTerminals = new Map<
+    string,
+    'committed' | 'rejected' | 'failed' | 'aborted'
+  >();
   private readonly operationTerminals = new Map<string, ZLinkCreationTerminalRecord>();
   private readonly aggregates = new Map<string, AggregateRecord>();
   private readonly activeCapacity = new Map<string, number>();
@@ -118,9 +120,9 @@ export class ZLinkInMemoryAuthorityStore {
     validateAuthorityMutation(mutation);
     const row = this.rows.get(keyValue);
     if (
-      row === undefined
-      || row.snapshot.allocation.state !== 'active'
-      || row.snapshot.storeVersion.value !== expectedStoreVersion.value
+      row === undefined ||
+      row.snapshot.allocation.state !== 'active' ||
+      row.snapshot.storeVersion.value !== expectedStoreVersion.value
     ) {
       return { kind: 'conflict', current: this.read(keyValue) };
     }
@@ -144,10 +146,10 @@ export class ZLinkInMemoryAuthorityStore {
         leaseGeneration: row.snapshot.ownerLeaseGeneration
       };
       if (
-        !sameOwner(mutation.expectedOwner, currentOwner)
-        || mutation.targetOwner.ownerId !== currentOwner.ownerId
-        || mutation.targetOwner.leaseGeneration === currentOwner.leaseGeneration
-        || !this.validation.isTargetLive(
+        !sameOwner(mutation.expectedOwner, currentOwner) ||
+        mutation.targetOwner.ownerId !== currentOwner.ownerId ||
+        mutation.targetOwner.leaseGeneration === currentOwner.leaseGeneration ||
+        !this.validation.isTargetLive(
           row.snapshot.allocation.descriptor,
           row.snapshot.allocation.descriptorLifecycleGeneration,
           mutation.targetOwner
@@ -167,10 +169,12 @@ export class ZLinkInMemoryAuthorityStore {
       return this.stored(row.snapshot);
     }
     if (mutation.kind === 'restore') {
-      if (!sameOwner(mutation.expectedOwner, {
-        ownerId: row.snapshot.ownerId,
-        leaseGeneration: row.snapshot.ownerLeaseGeneration
-      })) {
+      if (
+        !sameOwner(mutation.expectedOwner, {
+          ownerId: row.snapshot.ownerId,
+          leaseGeneration: row.snapshot.ownerLeaseGeneration
+        })
+      ) {
         return { kind: 'conflict', current: this.read(keyValue) };
       }
       const nextVersion = this.tryNextStoreVersion();
@@ -207,9 +211,10 @@ export class ZLinkInMemoryAuthorityStore {
     if (!Number.isInteger(limit) || limit < 1 || limit > 1000) {
       throw new RangeError('Authority scan limit must be in 1..1000.');
     }
-    const decoded = cursor === undefined
-      ? { revision: this.scanRevision, offset: 0, prefix }
-      : decodeCursor(cursor.encoded);
+    const decoded =
+      cursor === undefined
+        ? { revision: this.scanRevision, offset: 0, prefix }
+        : decodeCursor(cursor.encoded);
     if (decoded.revision !== this.scanRevision || decoded.prefix !== prefix) {
       return { kind: 'scanExpired' };
     }
@@ -224,23 +229,20 @@ export class ZLinkInMemoryAuthorityStore {
         key: authorityKey(key),
         snapshot: this.snapshot(row.snapshot)
       })),
-      nextCursor: nextOffset < rows.length
-        ? scanCursor(this.scanRevision, nextOffset, prefix)
-        : undefined
+      nextCursor:
+        nextOffset < rows.length ? scanCursor(this.scanRevision, nextOffset, prefix) : undefined
     };
   }
 
-  async removeAllByOwner(
-    owner: ZLinkLocationOwnerToken,
-    signal?: AbortSignal
-  ): Promise<bigint> {
+  async removeAllByOwner(owner: ZLinkLocationOwnerToken, signal?: AbortSignal): Promise<bigint> {
     signal?.throwIfAborted();
     let removed = 0;
     for (const [key, row] of [...this.rows.entries()]) {
       if (
-        row.snapshot.ownerId !== owner.ownerId
-        || row.snapshot.ownerLeaseGeneration !== owner.leaseGeneration
-      ) continue;
+        row.snapshot.ownerId !== owner.ownerId ||
+        row.snapshot.ownerLeaseGeneration !== owner.leaseGeneration
+      )
+        continue;
       if (row.snapshot.allocation.state === 'active') {
         this.adjustCapacity(this.activeCapacity, row.snapshot.allocation, -1);
       } else {
@@ -266,8 +268,8 @@ export class ZLinkInMemoryAuthorityStore {
     const current = this.rows.get(key);
     if (current !== undefined) {
       if (
-        current.snapshot.allocation.objectKind !== request.key.kind
-        || current.snapshot.allocation.stableType !== request.intent.stableType
+        current.snapshot.allocation.objectKind !== request.key.kind ||
+        current.snapshot.allocation.stableType !== request.intent.stableType
       ) {
         return { kind: 'typeMismatch', current: this.snapshot(current.snapshot) };
       }
@@ -285,7 +287,9 @@ export class ZLinkInMemoryAuthorityStore {
       this.scanRevision++;
     }
     const target = creationTarget(request);
-    if (!this.validation.isTargetLive(target.descriptor, target.lifecycleGeneration, target.owner)) {
+    if (
+      !this.validation.isTargetLive(target.descriptor, target.lifecycleGeneration, target.owner)
+    ) {
       return { kind: 'conflict', current: this.read(key) };
     }
     const allocation: ZLinkPlacementAllocation = {
@@ -300,9 +304,9 @@ export class ZLinkInMemoryAuthorityStore {
       return { kind: 'placementCapacityExhausted' };
     }
     if (
-      this.storeVersion >= MAX_GENERATION
-      || this.objectGeneration >= MAX_GENERATION
-      || this.ownerGeneration >= MAX_GENERATION
+      this.storeVersion >= MAX_GENERATION ||
+      this.objectGeneration >= MAX_GENERATION ||
+      this.ownerGeneration >= MAX_GENERATION
     ) {
       return { kind: 'generationExhausted' };
     }
@@ -350,12 +354,12 @@ export class ZLinkInMemoryAuthorityStore {
       return { kind: 'alreadyCommitted', ready: this.snapshot(row.snapshot) };
     }
     if (
-      row === undefined
-      || row.snapshot.allocation.state !== 'reserved'
-      || row.creation?.reservationId !== request.reservationId
-      || row.snapshot.storeVersion.value !== request.expectedStoreVersion
-      || !sameCreationTarget(row.creation.target, request.target)
-      || !this.validation.isTargetLive(
+      row === undefined ||
+      row.snapshot.allocation.state !== 'reserved' ||
+      row.creation?.reservationId !== request.reservationId ||
+      row.snapshot.storeVersion.value !== request.expectedStoreVersion ||
+      !sameCreationTarget(row.creation.target, request.target) ||
+      !this.validation.isTargetLive(
         row.creation.target.descriptor,
         row.creation.target.lifecycleGeneration,
         row.creation.target.owner
@@ -393,27 +397,26 @@ export class ZLinkInMemoryAuthorityStore {
     if (request.completion.kind === 'created') {
       validatePayload(request.completion.readyPayload);
     }
-    const terminalRecord = validateTerminalForMutation(
-      request.completion.terminal,
-      this.now()
-    )!;
+    const terminalRecord = validateTerminalForMutation(request.completion.terminal, this.now())!;
     const existingTerminal = this.operationTerminals.get(
       creationOperationKey(terminalRecord.operation)
     );
-    if (existingTerminal !== undefined
-      && existingTerminal.expiresAt.getTime() > this.now().getTime()) {
+    if (
+      existingTerminal !== undefined &&
+      existingTerminal.expiresAt.getTime() > this.now().getTime()
+    ) {
       return {
         kind: 'alreadyCompleted',
         terminal: copyTerminalRecord(existingTerminal)
       };
     }
     const reservationTerminal = this.creationTerminals.get(request.reservationId);
-    if (reservationTerminal === 'committed'
-      || reservationTerminal === 'rejected'
-      || reservationTerminal === 'failed') {
-      const retained = this.operationTerminals.get(
-        creationOperationKey(terminalRecord.operation)
-      );
+    if (
+      reservationTerminal === 'committed' ||
+      reservationTerminal === 'rejected' ||
+      reservationTerminal === 'failed'
+    ) {
+      const retained = this.operationTerminals.get(creationOperationKey(terminalRecord.operation));
       return retained === undefined
         ? { kind: 'stale' }
         : { kind: 'alreadyCompleted', terminal: copyTerminalRecord(retained) };
@@ -421,12 +424,12 @@ export class ZLinkInMemoryAuthorityStore {
     const key = creationKey(request.key);
     const row = this.rows.get(key);
     if (
-      row === undefined
-      || row.snapshot.allocation.state !== 'reserved'
-      || row.creation?.reservationId !== request.reservationId
-      || row.snapshot.storeVersion.value !== request.expectedStoreVersion
-      || !sameCreationTarget(row.creation.target, request.target)
-      || !this.validation.isTargetLive(
+      row === undefined ||
+      row.snapshot.allocation.state !== 'reserved' ||
+      row.creation?.reservationId !== request.reservationId ||
+      row.snapshot.storeVersion.value !== request.expectedStoreVersion ||
+      !sameCreationTarget(row.creation.target, request.target) ||
+      !this.validation.isTargetLive(
         row.creation.target.descriptor,
         row.creation.target.lifecycleGeneration,
         row.creation.target.owner
@@ -460,10 +463,7 @@ export class ZLinkInMemoryAuthorityStore {
       row.creation.terminal = request.completion.kind;
       this.creationTerminals.set(request.reservationId, request.completion.kind);
     }
-    this.operationTerminals.set(
-      creationOperationKey(terminalRecord.operation),
-      terminalRecord
-    );
+    this.operationTerminals.set(creationOperationKey(terminalRecord.operation), terminalRecord);
     this.scanRevision++;
     const terminal = copyTerminalRecord(terminalRecord);
     return request.completion.kind === 'created'
@@ -508,11 +508,11 @@ export class ZLinkInMemoryAuthorityStore {
     const key = creationKey(request.key);
     const row = this.rows.get(key);
     if (
-      row === undefined
-      || row.snapshot.allocation.state !== 'reserved'
-      || row.creation?.reservationId !== request.reservationId
-      || row.snapshot.storeVersion.value !== request.expectedStoreVersion
-      || !sameCreationTarget(row.creation.target, request.target)
+      row === undefined ||
+      row.snapshot.allocation.state !== 'reserved' ||
+      row.creation?.reservationId !== request.reservationId ||
+      row.snapshot.storeVersion.value !== request.expectedStoreVersion ||
+      !sameCreationTarget(row.creation.target, request.target)
     ) {
       return { kind: 'stale' };
     }
@@ -535,15 +535,15 @@ export class ZLinkInMemoryAuthorityStore {
       if (existing.state === 'prepared' && sameAggregateRequest(existing.request, request)) {
         return { kind: 'alreadyPrepared', fence: existing.fence };
       }
-      return existing.state === 'committed'
-        ? { kind: 'stale' }
-        : { kind: 'conflict' };
+      return existing.state === 'committed' ? { kind: 'stale' } : { kind: 'conflict' };
     }
-    if (!this.validation.isTargetLive(
-      request.targetDescriptor,
-      request.targetDescriptorLifecycleGeneration,
-      request.targetOwner
-    )) {
+    if (
+      !this.validation.isTargetLive(
+        request.targetDescriptor,
+        request.targetDescriptorLifecycleGeneration,
+        request.targetOwner
+      )
+    ) {
       return { kind: 'conflict' };
     }
     const target = aggregateTargetAllocation(request);
@@ -554,9 +554,9 @@ export class ZLinkInMemoryAuthorityStore {
     for (const participant of request.participants) {
       const row = this.rows.get(participant.authorityKey.value);
       if (
-        row === undefined
-        || row.snapshot.allocation.state !== 'active'
-        || row.snapshot.storeVersion.value !== participant.expectedStoreVersion.value
+        row === undefined ||
+        row.snapshot.allocation.state !== 'active' ||
+        row.snapshot.storeVersion.value !== participant.expectedStoreVersion.value
       ) {
         return { kind: 'conflict' };
       }
@@ -600,18 +600,20 @@ export class ZLinkInMemoryAuthorityStore {
     for (const participant of aggregate.request.participants) {
       const row = this.rows.get(participant.authorityKey.value);
       if (
-        row === undefined
-        || row.snapshot.allocation.state !== 'active'
-        || row.snapshot.storeVersion.value !== participant.expectedStoreVersion.value
+        row === undefined ||
+        row.snapshot.allocation.state !== 'active' ||
+        row.snapshot.storeVersion.value !== participant.expectedStoreVersion.value
       ) {
         return { kind: 'stale' };
       }
       if (participant.ownerTransition === 'newOwner') {
-        if (!this.validation.isTargetLive(
-          aggregate.request.targetDescriptor,
-          aggregate.request.targetDescriptorLifecycleGeneration,
-          aggregate.request.targetOwner
-        )) {
+        if (
+          !this.validation.isTargetLive(
+            aggregate.request.targetDescriptor,
+            aggregate.request.targetDescriptorLifecycleGeneration,
+            aggregate.request.targetOwner
+          )
+        ) {
           return { kind: 'stale' };
         }
         ownersNeeded++;
@@ -622,8 +624,8 @@ export class ZLinkInMemoryAuthorityStore {
       rows.push({ participant, row, changesOwner: participant.ownerTransition === 'newOwner' });
     }
     if (
-      this.storeVersion + versionsNeeded > MAX_GENERATION
-      || this.ownerGeneration + ownersNeeded > MAX_GENERATION
+      this.storeVersion + versionsNeeded > MAX_GENERATION ||
+      this.ownerGeneration + ownersNeeded > MAX_GENERATION
     ) {
       return { kind: 'generationExhausted' };
     }
@@ -648,8 +650,7 @@ export class ZLinkInMemoryAuthorityStore {
           allocation: {
             ...entry.row.snapshot.allocation,
             descriptor: { ...aggregate.request.targetDescriptor },
-            descriptorLifecycleGeneration:
-              aggregate.request.targetDescriptorLifecycleGeneration,
+            descriptorLifecycleGeneration: aggregate.request.targetDescriptorLifecycleGeneration,
             capacity: cloneCapacity(entry.row.snapshot.allocation.capacity)
           }
         };
@@ -673,11 +674,7 @@ export class ZLinkInMemoryAuthorityStore {
     if (aggregate === undefined) return { kind: 'stale' };
     if (aggregate.state === 'aborted') return { kind: 'alreadyAborted' };
     if (aggregate.state !== 'prepared') return { kind: 'stale' };
-    this.adjustCapacity(
-      this.pendingCapacity,
-      aggregateTargetAllocation(aggregate.request),
-      -1
-    );
+    this.adjustCapacity(this.pendingCapacity, aggregateTargetAllocation(aggregate.request), -1);
     aggregate.state = 'aborted';
     return { kind: 'aborted' };
   }
@@ -722,12 +719,14 @@ export class ZLinkInMemoryAuthorityStore {
   }
 
   private hasPendingCapacity(allocation: ZLinkPlacementAllocation): boolean {
-    return this.validation.placementCapacityAvailable?.(
-      allocation.descriptor,
-      allocation.capacity,
-      this.capacityVectorUsage(this.pendingCapacity, allocation),
-      this.capacityVectorUsage(this.activeCapacity, allocation)
-    ) ?? true;
+    return (
+      this.validation.placementCapacityAvailable?.(
+        allocation.descriptor,
+        allocation.capacity,
+        this.capacityVectorUsage(this.pendingCapacity, allocation),
+        this.capacityVectorUsage(this.activeCapacity, allocation)
+      ) ?? true
+    );
   }
 
   private adjustCapacity(
@@ -754,17 +753,17 @@ export class ZLinkInMemoryAuthorityStore {
     return {
       actors: values.get(capacityKey(descriptor, lifecycle, 'actor', '')) ?? 0,
       spots: values.get(capacityKey(descriptor, lifecycle, 'spot', '')) ?? 0,
-      ...(spotType === undefined ? {} : {
-        spotType: {
-          ...spotType,
-          count: values.get(capacityKey(
-            descriptor,
-            lifecycle,
-            spotType.objectKind,
-            spotType.stableType
-          )) ?? 0
-        }
-      })
+      ...(spotType === undefined
+        ? {}
+        : {
+            spotType: {
+              ...spotType,
+              count:
+                values.get(
+                  capacityKey(descriptor, lifecycle, spotType.objectKind, spotType.stableType)
+                ) ?? 0
+            }
+          })
     };
   }
 
@@ -781,11 +780,12 @@ export class ZLinkInMemoryAuthorityStore {
     objectKind: string,
     stableType: string
   ): { readonly active: number; readonly reserved: number } {
-    const key = objectKind === 'actor'
-      ? capacityKey(descriptor, lifecycleGeneration, 'actor', '')
-      : objectKind === 'user_spot' || objectKind === 'instance_spot'
-        ? capacityKey(descriptor, lifecycleGeneration, objectKind, stableType)
-        : capacityKey(descriptor, lifecycleGeneration, 'spot', '');
+    const key =
+      objectKind === 'actor'
+        ? capacityKey(descriptor, lifecycleGeneration, 'actor', '')
+        : objectKind === 'user_spot' || objectKind === 'instance_spot'
+          ? capacityKey(descriptor, lifecycleGeneration, objectKind, stableType)
+          : capacityKey(descriptor, lifecycleGeneration, 'spot', '');
     return {
       active: this.activeCapacity.get(key) ?? 0,
       reserved: this.pendingCapacity.get(key) ?? 0
@@ -801,18 +801,19 @@ function validateAuthorityMutation(mutation: ZLinkAuthorityMutation): void {
   if (mutation.kind === 'delete' || mutation.kind === 'restore') return;
   if (mutation.kind === 'rebindOwnerLease') {
     if (
-      mutation.expectedOwner.ownerId !== mutation.targetOwner.ownerId
-      || mutation.expectedOwner.leaseGeneration === mutation.targetOwner.leaseGeneration
-      || mutation.expectedOwner.leaseGeneration <= 0n
-      || mutation.targetOwner.leaseGeneration <= 0n
+      mutation.expectedOwner.ownerId !== mutation.targetOwner.ownerId ||
+      mutation.expectedOwner.leaseGeneration === mutation.targetOwner.leaseGeneration ||
+      mutation.expectedOwner.leaseGeneration <= 0n ||
+      mutation.targetOwner.leaseGeneration <= 0n
     ) {
-      throw new TypeError('Authority lease rebind must retain the owner and change the lease generation.');
+      throw new TypeError(
+        'Authority lease rebind must retain the owner and change the lease generation.'
+      );
     }
     return;
   }
-  const generationTransition = (
-    mutation as { readonly generationTransition?: unknown }
-  ).generationTransition;
+  const generationTransition = (mutation as { readonly generationTransition?: unknown })
+    .generationTransition;
   if (generationTransition !== 'preserve') {
     throw new TypeError('Authority owner transitions require an aggregate CAS.');
   }
@@ -825,9 +826,9 @@ function validateReserve(request: ZLinkObjectReserveRequest): void {
   validatePayload(request.creatingPayload);
   validateCapacityVector(request.capacity);
   if (
-    request.intent.requestSha256.byteLength !== 32
-    || request.intent.requestEncodedSize < 0n
-    || request.intent.requestEncodedSize > BigInt(MAX_PAYLOAD_BYTES)
+    request.intent.requestSha256.byteLength !== 32 ||
+    request.intent.requestEncodedSize < 0n ||
+    request.intent.requestEncodedSize > BigInt(MAX_PAYLOAD_BYTES)
   ) {
     throw new TypeError('Object creation content receipt is invalid.');
   }
@@ -837,16 +838,18 @@ function validateCreationOperation(operation: ZLinkCreationOperationIdentity): v
   const sourceRid = String(operation.sourceNodeRid);
   const sourceRidBytes = Buffer.byteLength(sourceRid, 'utf8');
   if (sourceRidBytes < 1 || sourceRidBytes > 255 || sourceRid.includes('\0')) {
-    throw new TypeError('Creation terminal source node RID must contain 1..255 UTF-8 bytes without NUL.');
+    throw new TypeError(
+      'Creation terminal source node RID must contain 1..255 UTF-8 bytes without NUL.'
+    );
   }
   if (
-    operation.sourceNodeGeneration < 1n
-    || operation.sourceNodeGeneration > MAX_U64
-    || operation.operationId.high < 0n
-    || operation.operationId.high > MAX_U64
-    || operation.operationId.low < 0n
-    || operation.operationId.low > MAX_U64
-    || (operation.operationId.high === 0n && operation.operationId.low === 0n)
+    operation.sourceNodeGeneration < 1n ||
+    operation.sourceNodeGeneration > MAX_U64 ||
+    operation.operationId.high < 0n ||
+    operation.operationId.high > MAX_U64 ||
+    operation.operationId.low < 0n ||
+    operation.operationId.low > MAX_U64 ||
+    (operation.operationId.high === 0n && operation.operationId.low === 0n)
   ) {
     throw new RangeError('Creation terminal source generation and operation ID are invalid.');
   }
@@ -864,11 +867,13 @@ function validateTerminalForMutation(
   const deadlineMs = publication.operationDeadline.getTime();
   const expiresAtMs = deadlineMs + CREATION_TERMINAL_RETENTION_MS;
   if (
-    !Number.isSafeInteger(deadlineMs)
-    || !Number.isSafeInteger(expiresAtMs)
-    || expiresAtMs <= storeNow.getTime()
+    !Number.isSafeInteger(deadlineMs) ||
+    !Number.isSafeInteger(expiresAtMs) ||
+    expiresAtMs <= storeNow.getTime()
   ) {
-    throw new RangeError('Creation terminal expiry must be the live operation deadline plus five minutes.');
+    throw new RangeError(
+      'Creation terminal expiry must be the live operation deadline plus five minutes.'
+    );
   }
   return {
     operation: copyCreationOperation(publication.operation),
@@ -914,7 +919,7 @@ function validateAggregateRequest(request: ZLinkAggregatePrepareRequest): void {
     throw new TypeError('Aggregate inventory digest must contain 32 bytes.');
   }
   validateCapacityVector(request.capacity);
-  const keys = request.participants.map(participant => participant.authorityKey.value);
+  const keys = request.participants.map((participant) => participant.authorityKey.value);
   const sorted = [...keys].sort();
   if (new Set(keys).size !== keys.length || keys.some((key, index) => key !== sorted[index])) {
     throw new TypeError('Aggregate participants must be unique and canonically sorted.');
@@ -929,9 +934,11 @@ function validatePayload(payload: Uint8Array): void {
 
 function validateCapacityVector(value: ZLinkCapacityVector): void {
   const counts = [value.actors, value.spots, value.spotType?.count ?? 0];
-  if (counts.some(count => !Number.isInteger(count) || count < 0 || count > 0x7fff_ffff)
-    || counts.every(count => count === 0)
-    || value.spotType !== undefined && value.spotType.count === 0) {
+  if (
+    counts.some((count) => !Number.isInteger(count) || count < 0 || count > 0x7fff_ffff) ||
+    counts.every((count) => count === 0) ||
+    (value.spotType !== undefined && value.spotType.count === 0)
+  ) {
     throw new RangeError('Placement capacity vector is invalid.');
   }
 }
@@ -949,15 +956,14 @@ function aggregateTargetAllocation(
   };
 }
 
-function addCapacity(
-  left: ZLinkCapacityVector,
-  right: ZLinkCapacityVector
-): ZLinkCapacityVector {
+function addCapacity(left: ZLinkCapacityVector, right: ZLinkCapacityVector): ZLinkCapacityVector {
   let spotType = left.spotType;
   if (right.spotType !== undefined) {
-    if (spotType !== undefined
-      && (spotType.objectKind !== right.spotType.objectKind
-        || spotType.stableType !== right.spotType.stableType)) {
+    if (
+      spotType !== undefined &&
+      (spotType.objectKind !== right.spotType.objectKind ||
+        spotType.stableType !== right.spotType.stableType)
+    ) {
       throw new TypeError('Aggregate capacity contains more than one Spot type.');
     }
     spotType = {
@@ -988,18 +994,26 @@ function creationTarget(request: ZLinkObjectReserveRequest): CreationTarget {
   };
 }
 
-function sameCreationTarget(target: CreationTarget, actual: ZLinkObjectCommitRequest['target']): boolean {
-  return target.descriptor.meshName === actual.meshName
-    && sameRid(target.descriptor.rid, actual.nodeRid)
-    && target.lifecycleGeneration === actual.nodeLifecycleGeneration
-    && sameOwner(target.owner, actual.owner);
+function sameCreationTarget(
+  target: CreationTarget,
+  actual: ZLinkObjectCommitRequest['target']
+): boolean {
+  return (
+    target.descriptor.meshName === actual.meshName &&
+    sameRid(target.descriptor.rid, actual.nodeRid) &&
+    target.lifecycleGeneration === actual.nodeLifecycleGeneration &&
+    sameOwner(target.owner, actual.owner)
+  );
 }
 
 function sameOwner(left: ZLinkLocationOwnerToken, right: ZLinkLocationOwnerToken): boolean {
   return left.ownerId === right.ownerId && left.leaseGeneration === right.leaseGeneration;
 }
 
-function sameDescriptor(left: ZLinkMeshNodeDescriptorKey, right: ZLinkMeshNodeDescriptorKey): boolean {
+function sameDescriptor(
+  left: ZLinkMeshNodeDescriptorKey,
+  right: ZLinkMeshNodeDescriptorKey
+): boolean {
   return left.meshName === right.meshName && sameRid(left.rid, right.rid);
 }
 
@@ -1013,23 +1027,35 @@ function capacityEntries(
   capacity: ZLinkCapacityVector
 ): readonly { readonly key: string; readonly count: number }[] {
   return [
-    ...(capacity.actors === 0 ? [] : [{
-      key: capacityKey(descriptor, lifecycle, 'actor', ''),
-      count: capacity.actors
-    }]),
-    ...(capacity.spots === 0 ? [] : [{
-      key: capacityKey(descriptor, lifecycle, 'spot', ''),
-      count: capacity.spots
-    }]),
-    ...(capacity.spotType === undefined ? [] : [{
-      key: capacityKey(
-        descriptor,
-        lifecycle,
-        capacity.spotType.objectKind,
-        capacity.spotType.stableType
-      ),
-      count: capacity.spotType.count
-    }])
+    ...(capacity.actors === 0
+      ? []
+      : [
+          {
+            key: capacityKey(descriptor, lifecycle, 'actor', ''),
+            count: capacity.actors
+          }
+        ]),
+    ...(capacity.spots === 0
+      ? []
+      : [
+          {
+            key: capacityKey(descriptor, lifecycle, 'spot', ''),
+            count: capacity.spots
+          }
+        ]),
+    ...(capacity.spotType === undefined
+      ? []
+      : [
+          {
+            key: capacityKey(
+              descriptor,
+              lifecycle,
+              capacity.spotType.objectKind,
+              capacity.spotType.stableType
+            ),
+            count: capacity.spotType.count
+          }
+        ])
   ];
 }
 
@@ -1042,11 +1068,13 @@ function cloneCapacity(value: ZLinkCapacityVector): ZLinkCapacityVector {
 }
 
 function sameCapacity(left: ZLinkCapacityVector, right: ZLinkCapacityVector): boolean {
-  return left.actors === right.actors
-    && left.spots === right.spots
-    && left.spotType?.objectKind === right.spotType?.objectKind
-    && left.spotType?.stableType === right.spotType?.stableType
-    && left.spotType?.count === right.spotType?.count;
+  return (
+    left.actors === right.actors &&
+    left.spots === right.spots &&
+    left.spotType?.objectKind === right.spotType?.objectKind &&
+    left.spotType?.stableType === right.spotType?.stableType &&
+    left.spotType?.count === right.spotType?.count
+  );
 }
 
 function capacityKey(
@@ -1071,18 +1099,20 @@ function version(value: bigint): ZLinkAuthorityStoreVersion {
 }
 
 function scanCursor(revision: bigint, offset: number, prefix: string): ZLinkAuthorityScanCursor {
-  const encoded = Buffer.from(JSON.stringify({
-    revision: revision.toString(),
-    offset,
-    prefix
-  })).toString('base64url');
+  const encoded = Buffer.from(
+    JSON.stringify({
+      revision: revision.toString(),
+      offset,
+      prefix
+    })
+  ).toString('base64url');
   const factory = requireScanCursorFactory();
   return factory(encoded);
 }
 
 function requireScanCursorFactory(): (encoded: string) => ZLinkAuthorityScanCursor {
   // Imported as a type to keep the provider contract free of runtime cycles.
-  return (encoded) => ({ encoded } as ZLinkAuthorityScanCursor);
+  return (encoded) => ({ encoded }) as ZLinkAuthorityScanCursor;
 }
 
 function decodeCursor(encoded: string): { revision: bigint; offset: number; prefix: string } {
@@ -1110,29 +1140,32 @@ function sameAggregateRequest(
   right: ZLinkAggregatePrepareRequest
 ): boolean {
   if (
-    left.aggregateId.value !== right.aggregateId.value
-    || left.aggregateGeneration !== right.aggregateGeneration
-    || !sameOwner(left.targetOwner, right.targetOwner)
-    || !Buffer.from(left.inventoryDigest).equals(Buffer.from(right.inventoryDigest))
-    || left.participants.length !== right.participants.length
-    || !sameDescriptor(left.targetDescriptor, right.targetDescriptor)
-    || left.targetDescriptorLifecycleGeneration
-      !== right.targetDescriptorLifecycleGeneration
-    || !sameCapacity(left.capacity, right.capacity)
+    left.aggregateId.value !== right.aggregateId.value ||
+    left.aggregateGeneration !== right.aggregateGeneration ||
+    !sameOwner(left.targetOwner, right.targetOwner) ||
+    !Buffer.from(left.inventoryDigest).equals(Buffer.from(right.inventoryDigest)) ||
+    left.participants.length !== right.participants.length ||
+    !sameDescriptor(left.targetDescriptor, right.targetDescriptor) ||
+    left.targetDescriptorLifecycleGeneration !== right.targetDescriptorLifecycleGeneration ||
+    !sameCapacity(left.capacity, right.capacity)
   ) {
     return false;
   }
   return left.participants.every((participant, index) => {
     const other = right.participants[index]!;
-    return participant.authorityKey.value === other.authorityKey.value
-      && participant.expectedStoreVersion.value === other.expectedStoreVersion.value
-      && participant.ownerTransition === other.ownerTransition
-      && Buffer.from(participant.authorityPayload).equals(Buffer.from(other.authorityPayload))
-      && Buffer.from(participant.membershipMutation).equals(Buffer.from(other.membershipMutation));
+    return (
+      participant.authorityKey.value === other.authorityKey.value &&
+      participant.expectedStoreVersion.value === other.expectedStoreVersion.value &&
+      participant.ownerTransition === other.ownerTransition &&
+      Buffer.from(participant.authorityPayload).equals(Buffer.from(other.authorityPayload)) &&
+      Buffer.from(participant.membershipMutation).equals(Buffer.from(other.membershipMutation))
+    );
   });
 }
 
-function cloneAggregateRequest(request: ZLinkAggregatePrepareRequest): ZLinkAggregatePrepareRequest {
+function cloneAggregateRequest(
+  request: ZLinkAggregatePrepareRequest
+): ZLinkAggregatePrepareRequest {
   return {
     ...request,
     aggregateId: { ...request.aggregateId },
@@ -1140,7 +1173,7 @@ function cloneAggregateRequest(request: ZLinkAggregatePrepareRequest): ZLinkAggr
     targetDescriptor: { ...request.targetDescriptor },
     capacity: cloneCapacity(request.capacity),
     inventoryDigest: Buffer.from(request.inventoryDigest),
-    participants: request.participants.map(participant => ({
+    participants: request.participants.map((participant) => ({
       ...participant,
       authorityKey: { ...participant.authorityKey },
       expectedStoreVersion: { ...participant.expectedStoreVersion },

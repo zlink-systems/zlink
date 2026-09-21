@@ -48,7 +48,7 @@ class http_route_invoker_access_t
                   auto pending = [&] {
                       const detail::ambient_context_scope_t invocation (nullptr, &route);
                       return route.invoke (services, context, owned_request, owned_body);
-                  } ();
+                  }();
                   co_return co_await await_task_result (std::move (pending));
               }
               catch (const framework_exception_t &error) {
@@ -56,7 +56,8 @@ class http_route_invoker_access_t
               }
               catch (...) {
                   co_return result_t<http_response_t>::failure (
-                    framework_error_kind_t::internal_failure, "HTTP route handler threw an exception");
+                    framework_error_kind_t::internal_failure,
+                    "HTTP route handler threw an exception");
               }
           });
     }
@@ -675,8 +676,8 @@ void invoke_matched_route (http::response<http::string_body> &response,
                            const matched_route_t &match)
 {
     const detail::ambient_context_scope_t invocation (nullptr, &match);
-    auto request_scope = detail::service_scope_t::create (
-      services, detail::service_scope_kind_t::handler_invocation);
+    auto request_scope =
+      detail::service_scope_t::create (services, detail::service_scope_kind_t::handler_invocation);
     auto &request_services = request_scope.provider ();
     std::vector<middleware_invocation_t> middleware_invocations;
     middleware_invocations.reserve (options.middleware.size ());
@@ -714,9 +715,8 @@ void invoke_matched_route (http::response<http::string_body> &response,
             const auto http_request =
               make_http_request (context, request, match.route_values, match.query_values);
             auto route_result =
-              http_route_invoker_access_t::invoke (handler_executor, *match.route,
-                                                   request_services, context, http_request,
-                                                   bound_body)
+              http_route_invoker_access_t::invoke (handler_executor, *match.route, request_services,
+                                                   context, http_request, bound_body)
                 .result ();
             if (!route_result) {
                 throw *route_result.error ();

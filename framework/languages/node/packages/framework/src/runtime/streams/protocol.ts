@@ -30,20 +30,28 @@ export enum ZLinkStreamCodec {
 
 export function streamCodecContentType(codec: ZLinkStreamCodec): string {
   switch (codec) {
-    case ZLinkStreamCodec.Json: return 'application/json';
-    case ZLinkStreamCodec.MessagePack: return 'application/x-msgpack';
-    case ZLinkStreamCodec.Protobuf: return 'application/x-protobuf';
-    case ZLinkStreamCodec.Raw: return 'application/octet-stream';
+    case ZLinkStreamCodec.Json:
+      return 'application/json';
+    case ZLinkStreamCodec.MessagePack:
+      return 'application/x-msgpack';
+    case ZLinkStreamCodec.Protobuf:
+      return 'application/x-protobuf';
+    case ZLinkStreamCodec.Raw:
+      return 'application/octet-stream';
   }
   throw new TypeError(`Unsupported STREAM codec '${codec}'.`);
 }
 
 export function streamCodecForContentType(contentType: string): ZLinkStreamCodec {
   switch (contentType) {
-    case 'application/json': return ZLinkStreamCodec.Json;
-    case 'application/x-msgpack': return ZLinkStreamCodec.MessagePack;
-    case 'application/x-protobuf': return ZLinkStreamCodec.Protobuf;
-    case 'application/octet-stream': return ZLinkStreamCodec.Raw;
+    case 'application/json':
+      return ZLinkStreamCodec.Json;
+    case 'application/x-msgpack':
+      return ZLinkStreamCodec.MessagePack;
+    case 'application/x-protobuf':
+      return ZLinkStreamCodec.Protobuf;
+    case 'application/octet-stream':
+      return ZLinkStreamCodec.Raw;
   }
   throw new TypeError(`Unsupported STREAM content type '${contentType}'.`);
 }
@@ -90,15 +98,17 @@ export interface ZLinkStreamFrameHeader {
 }
 
 export type ZLinkStreamReplyMessageKind =
-  | ZLinkStreamMessageKind.Response
-  | ZLinkStreamMessageKind.Error;
+  ZLinkStreamMessageKind.Response | ZLinkStreamMessageKind.Error;
 
 export interface ZLinkStreamFrame {
   readonly header: Uint8Array;
   readonly payload: Uint8Array;
 }
 
-export function resolvePacketName(message: unknown, explicitPacketName: string | undefined): string {
+export function resolvePacketName(
+  message: unknown,
+  explicitPacketName: string | undefined
+): string {
   const packetName = resolveFrameworkPacketName(message, explicitPacketName, 'Stream');
   if (packetName.trim().length === 0) {
     throw new Error('Stream packet name must not be empty.');
@@ -117,13 +127,16 @@ export function encodeStreamFrame(header: ZLinkStreamFrameHeader, payload: Uint8
 }
 
 export function encodeStreamControlFrame(name: string): Uint8Array {
-  return encodeStreamFrame({
-    kind: ZLinkStreamMessageKind.Control,
-    codec: ZLinkStreamCodec.Raw,
-    flags: ZLinkStreamHeaderFlags.None,
-    name,
-    metadata: EMPTY_STREAM_METADATA
-  }, new Uint8Array());
+  return encodeStreamFrame(
+    {
+      kind: ZLinkStreamMessageKind.Control,
+      codec: ZLinkStreamCodec.Raw,
+      flags: ZLinkStreamHeaderFlags.None,
+      name,
+      metadata: EMPTY_STREAM_METADATA
+    },
+    new Uint8Array()
+  );
 }
 
 export function encodeSessionClosingFrame(
@@ -138,13 +151,16 @@ export function encodeSessionClosingFrame(
   payload[2] = diagnosticBytes.length >>> 8;
   payload[3] = diagnosticBytes.length & 0xff;
   payload.set(diagnosticBytes, 4);
-  return encodeStreamFrame({
-    kind: ZLinkStreamMessageKind.Control,
-    codec: ZLinkStreamCodec.Raw,
-    flags: ZLinkStreamHeaderFlags.None,
-    name: 'session-closing',
-    metadata: new Map()
-  }, payload);
+  return encodeStreamFrame(
+    {
+      kind: ZLinkStreamMessageKind.Control,
+      codec: ZLinkStreamCodec.Raw,
+      flags: ZLinkStreamHeaderFlags.None,
+      name: 'session-closing',
+      metadata: new Map()
+    },
+    payload
+  );
 }
 
 export function decodeStreamFrame(frame: Uint8Array): ZLinkStreamFrame {
@@ -160,8 +176,13 @@ export function encodeStreamHeader(header: ZLinkStreamFrameHeader): Uint8Array {
   const hasMetadata = header.metadata.size > 0;
   const hasCorrelation = header.correlationId !== undefined && header.correlationId.length > 0;
   const hasFlow = header.flowId !== undefined || header.flowOrigin !== undefined;
-  if (header.kind === ZLinkStreamMessageKind.Control && (hasCorrelation || hasRequestSeq || hasMetadata || hasFlow)) {
-    throw new Error('Control packet must not contain a request sequence, metadata, correlation id, or flow id.');
+  if (
+    header.kind === ZLinkStreamMessageKind.Control &&
+    (hasCorrelation || hasRequestSeq || hasMetadata || hasFlow)
+  ) {
+    throw new Error(
+      'Control packet must not contain a request sequence, metadata, correlation id, or flow id.'
+    );
   }
   //  Explicit construction: this runs for every outbound frame, so avoid a
   //  per-message spread of the whole header.
@@ -178,10 +199,7 @@ export function encodeStreamHeader(header: ZLinkStreamFrameHeader): Uint8Array {
   });
 }
 
-export function decodeStreamHeader(
-  header: Uint8Array,
-  flowEnabled = true
-): ZLinkStreamFrameHeader {
+export function decodeStreamHeader(header: Uint8Array, flowEnabled = true): ZLinkStreamFrameHeader {
   const decoded = decodeStreamWireHeader(header, undefined, flowEnabled);
   const kind = decoded.kind as ZLinkStreamMessageKind;
   const flags = decoded.flags as ZLinkStreamHeaderFlags;
@@ -189,16 +207,21 @@ export function decodeStreamHeader(
   const hasMetadata = (flags & ZLinkStreamHeaderFlags.HasMetadata) !== 0;
   const hasCorrelation = (flags & ZLinkStreamHeaderFlags.HasCorrelationId) !== 0;
   const hasFlow = (flags & ZLinkStreamHeaderFlags.HasFlowId) !== 0;
-  if (kind === ZLinkStreamMessageKind.Control && (hasCorrelation || hasRequestSeq || hasMetadata || hasFlow)) {
-    throw new Error('Control packet must not contain a request sequence, metadata, correlation id, or flow id.');
+  if (
+    kind === ZLinkStreamMessageKind.Control &&
+    (hasCorrelation || hasRequestSeq || hasMetadata || hasFlow)
+  ) {
+    throw new Error(
+      'Control packet must not contain a request sequence, metadata, correlation id, or flow id.'
+    );
   }
   const metadata = publicStreamMetadata(decoded.metadata);
   return {
     kind,
     codec: decoded.codec as ZLinkStreamCodec,
-    flags: (metadata.size === 0
-      ? flags & ~ZLinkStreamHeaderFlags.HasMetadata
-      : flags) & (flowEnabled ? ~0 : ~ZLinkStreamHeaderFlags.HasFlowId),
+    flags:
+      (metadata.size === 0 ? flags & ~ZLinkStreamHeaderFlags.HasMetadata : flags) &
+      (flowEnabled ? ~0 : ~ZLinkStreamHeaderFlags.HasFlowId),
     requestSeq: decoded.requestSeq,
     name: decoded.name,
     metadata,
@@ -208,7 +231,9 @@ export function decodeStreamHeader(
   };
 }
 
-export function actorRequestDeadlineMetadata(deadlineUnixMs: number | undefined): ReadonlyMap<string, string> {
+export function actorRequestDeadlineMetadata(
+  deadlineUnixMs: number | undefined
+): ReadonlyMap<string, string> {
   return deadlineUnixMs === undefined
     ? EMPTY_STREAM_METADATA
     : new Map([[actorRequestDeadlineMetadataKey, String(deadlineUnixMs)]]);
@@ -250,18 +275,20 @@ export function createStreamReplyHeader(
     // observation-only and is not copied into the reply when tracing is Off
     // (spec 27 §4, §7).
     correlationId: requestHeader.correlationId,
-    ...(includeFlow
-      ? { flowId: requestHeader.flowId, flowOrigin: requestHeader.flowOrigin }
-      : {})
+    ...(includeFlow ? { flowId: requestHeader.flowId, flowOrigin: requestHeader.flowOrigin } : {})
   };
 }
 
 function encodeFlowOrigin(origin: ZLinkFlowOrigin | undefined): number | undefined {
-  return origin === undefined ? undefined : ({ Inbound: 1, Timer: 2, Application: 3, Lifecycle: 4 } as const)[origin];
+  return origin === undefined
+    ? undefined
+    : ({ Inbound: 1, Timer: 2, Application: 3, Lifecycle: 4 } as const)[origin];
 }
 
 function decodeFlowOrigin(origin: number | undefined): ZLinkFlowOrigin | undefined {
-  return origin === undefined ? undefined : ({ 1: 'Inbound', 2: 'Timer', 3: 'Application', 4: 'Lifecycle' } as const)[origin];
+  return origin === undefined
+    ? undefined
+    : ({ 1: 'Inbound', 2: 'Timer', 3: 'Application', 4: 'Lifecycle' } as const)[origin];
 }
 
 export function messageToBytes(message: Message): Uint8Array {
@@ -286,6 +313,9 @@ export function lz4Pickle(payload: Uint8Array): Uint8Array {
   return lz4PickleUncompressed(payload);
 }
 
-export function lz4Unpickle(payload: Uint8Array, maxDecompressedSize = defaultMaxDecompressedPayloadSize): Uint8Array {
+export function lz4Unpickle(
+  payload: Uint8Array,
+  maxDecompressedSize = defaultMaxDecompressedPayloadSize
+): Uint8Array {
   return lz4UnpicklePayload(payload, maxDecompressedSize);
 }

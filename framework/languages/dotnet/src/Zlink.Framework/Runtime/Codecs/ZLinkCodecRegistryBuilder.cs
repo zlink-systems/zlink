@@ -1,16 +1,16 @@
 namespace Zlink.Framework.Runtime.Codecs;
 
-internal sealed class ZLinkCodecRegistryBuilder :
-    IZLinkCodecRegistryBuilder,
-    IZLinkCodecRegistrar,
-    IZLinkMessageCodecRegistry
+internal sealed class ZLinkCodecRegistryBuilder
+    : IZLinkCodecRegistryBuilder,
+        IZLinkCodecRegistrar,
+        IZLinkMessageCodecRegistry
 {
-    private readonly Dictionary<ZlinkStreamCodec, string> _contentTypesByStreamCodec =
-        [];
+    private readonly Dictionary<ZlinkStreamCodec, string> _contentTypesByStreamCodec = [];
     private readonly ZLinkSerializerSelectionRegistry _serializerSelections = new();
 
-    private readonly Dictionary<string, ZlinkStreamCodec> _streamCodecsByContentType =
-        new(StringComparer.Ordinal);
+    private readonly Dictionary<string, ZlinkStreamCodec> _streamCodecsByContentType = new(
+        StringComparer.Ordinal
+    );
 
     private int _frozen;
     private ZLinkCodecRegistrySnapshot _snapshot = ZLinkCodecRegistrySnapshot.Empty;
@@ -34,18 +34,18 @@ internal sealed class ZLinkCodecRegistryBuilder :
     public void AddSerializer(
         string contentType,
         IZLinkMessageSerializer serializer,
-        Func<Type, bool> canSerialize)
+        Func<Type, bool> canSerialize
+    )
     {
         AddSerializer(contentType, serializer, canSerialize, false);
     }
 
-    internal void RegisterStreamCodec(
-        string contentType,
-        ZlinkStreamCodec codec)
+    internal void RegisterStreamCodec(string contentType, ZlinkStreamCodec codec)
     {
         ThrowIfFrozen();
-        var normalized = ZLinkSerializerSelectionRegistry
-            .NormalizeRegisteredContentType(contentType);
+        var normalized = ZLinkSerializerSelectionRegistry.NormalizeRegisteredContentType(
+            contentType
+        );
         if (_streamCodecsByContentType.TryGetValue(normalized, out var replacedCodec))
             _contentTypesByStreamCodec.Remove(replacedCodec);
         if (_contentTypesByStreamCodec.TryGetValue(codec, out var replacedContentType))
@@ -59,16 +59,13 @@ internal sealed class ZLinkCodecRegistryBuilder :
         string contentType,
         IZLinkMessageSerializer serializer,
         Func<Type, bool> canSerialize,
-        bool isFallbackSerializer)
+        bool isFallbackSerializer
+    )
     {
         ThrowIfFrozen();
         ArgumentNullException.ThrowIfNull(serializer);
         ArgumentNullException.ThrowIfNull(canSerialize);
-        _serializerSelections.Add(
-            contentType,
-            serializer,
-            canSerialize,
-            isFallbackSerializer);
+        _serializerSelections.Add(contentType, serializer, canSerialize, isFallbackSerializer);
         RefreshSnapshot();
     }
 
@@ -86,12 +83,13 @@ internal sealed class ZLinkCodecRegistryBuilder :
         return _serializerSelections.TryGetExact(contentType, out serializer);
     }
 
-    public bool TryResolveSerializer(Type payloadType, out string contentType, out IZLinkMessageSerializer serializer)
+    public bool TryResolveSerializer(
+        Type payloadType,
+        out string contentType,
+        out IZLinkMessageSerializer serializer
+    )
     {
-        return _serializerSelections.TryResolve(
-            payloadType,
-            out contentType,
-            out serializer);
+        return _serializerSelections.TryResolve(payloadType, out contentType, out serializer);
     }
 
     public bool TryResolveStreamCodec(string contentType, out ZlinkStreamCodec codec)
@@ -99,9 +97,7 @@ internal sealed class ZLinkCodecRegistryBuilder :
         return _streamCodecsByContentType.TryGetValue(contentType, out codec);
     }
 
-    public bool TryResolveStreamContentType(
-        ZlinkStreamCodec codec,
-        out string contentType)
+    public bool TryResolveStreamContentType(ZlinkStreamCodec codec, out string contentType)
     {
         return _contentTypesByStreamCodec.TryGetValue(codec, out contentType!);
     }
@@ -127,23 +123,28 @@ internal sealed class ZLinkCodecRegistryBuilder :
     {
         if (Volatile.Read(ref _frozen) != 0)
             throw new InvalidOperationException(
-                "The codec registry is immutable after Framework runtime startup.");
+                "The codec registry is immutable after Framework runtime startup."
+            );
     }
 }
 
 internal sealed class ZLinkCodecRegistrySnapshot(
     ZLinkSerializerSelectionRegistry serializers,
-    IReadOnlyDictionary<ZlinkStreamCodec, string> contentTypesByStreamCodec) :
-    IZLinkMessageCodecResolver
+    IReadOnlyDictionary<ZlinkStreamCodec, string> contentTypesByStreamCodec
+) : IZLinkMessageCodecResolver
 {
-    internal static ZLinkCodecRegistrySnapshot Empty { get; } = new(
-        new ZLinkSerializerSelectionRegistry().FrozenCopy(),
-        new Dictionary<ZlinkStreamCodec, string>());
+    internal static ZLinkCodecRegistrySnapshot Empty { get; } =
+        new(
+            new ZLinkSerializerSelectionRegistry().FrozenCopy(),
+            new Dictionary<ZlinkStreamCodec, string>()
+        );
 
     internal bool TryGetSerializer(string contentType, out IZLinkMessageSerializer serializer)
     {
-        if (!string.IsNullOrEmpty(contentType)
-            && serializers.TryGetExact(contentType, out var found))
+        if (
+            !string.IsNullOrEmpty(contentType)
+            && serializers.TryGetExact(contentType, out var found)
+        )
         {
             serializer = found;
             return true;
@@ -155,21 +156,20 @@ internal sealed class ZLinkCodecRegistrySnapshot(
 
     bool IZLinkMessageCodecResolver.TryGetSerializer(
         string contentType,
-        out IZLinkMessageSerializer serializer) =>
-        TryGetSerializer(contentType, out serializer);
+        out IZLinkMessageSerializer serializer
+    ) => TryGetSerializer(contentType, out serializer);
 
-    internal bool TryResolveStreamContentType(
-        ZlinkStreamCodec codec,
-        out string contentType) => contentTypesByStreamCodec.TryGetValue(codec, out contentType!);
+    internal bool TryResolveStreamContentType(ZlinkStreamCodec codec, out string contentType) =>
+        contentTypesByStreamCodec.TryGetValue(codec, out contentType!);
 
     bool IZLinkMessageCodecResolver.TryResolveStreamContentType(
         ZlinkStreamCodec codec,
-        out string contentType) =>
-        TryResolveStreamContentType(codec, out contentType);
+        out string contentType
+    ) => TryResolveStreamContentType(codec, out contentType);
 
     bool IZLinkMessageCodecResolver.TryResolveSerializer(
         Type payloadType,
         out string contentType,
-        out IZLinkMessageSerializer serializer) =>
-        serializers.TryResolve(payloadType, out contentType, out serializer);
+        out IZLinkMessageSerializer serializer
+    ) => serializers.TryResolve(payloadType, out contentType, out serializer);
 }

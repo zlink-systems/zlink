@@ -51,7 +51,8 @@ public sealed class DirectReplyCompletionRegistryTests
         time.AdvanceWallClockOnly(TimeSpan.FromSeconds(5));
 
         var deadline = clock.FromUnixTimeMilliseconds(
-            time.GetUtcNow().AddSeconds(2).ToUnixTimeMilliseconds());
+            time.GetUtcNow().AddSeconds(2).ToUnixTimeMilliseconds()
+        );
 
         Assert.Equal(TimeSpan.FromSeconds(2), deadline - clock.Elapsed);
     }
@@ -61,14 +62,17 @@ public sealed class DirectReplyCompletionRegistryTests
     {
         var registry = new ZLinkDirectReplyCompletionRegistry<string, object>(
             capacity: 1,
-            terminalRetention: TimeSpan.FromMinutes(1));
+            terminalRetention: TimeSpan.FromMinutes(1)
+        );
         using var start = new ManualResetEventSlim();
         var attempts = new[] { "first", "second" }
-            .Select(key => Task.Run(() =>
-            {
-                start.Wait();
-                return registry.TryRegister(key, new object());
-            }))
+            .Select(key =>
+                Task.Run(() =>
+                {
+                    start.Wait();
+                    return registry.TryRegister(key, new object());
+                })
+            )
             .ToArray();
 
         start.Set();
@@ -80,19 +84,14 @@ public sealed class DirectReplyCompletionRegistryTests
     {
         var registry = new ZLinkDirectReplyCompletionRegistry<string, object>(
             capacity: 1,
-            terminalRetention: TimeSpan.FromMinutes(1));
+            terminalRetention: TimeSpan.FromMinutes(1)
+        );
         var owner = new object();
         Assert.True(registry.TryRegister("reply", owner));
         Assert.Same(owner, registry.TryGet("reply"));
 
-        Assert.False(registry.TryRemove(
-            "reply",
-            new object(),
-            rememberTerminal: true));
-        Assert.True(registry.TryRemove(
-            "reply",
-            owner,
-            rememberTerminal: true));
+        Assert.False(registry.TryRemove("reply", new object(), rememberTerminal: true));
+        Assert.True(registry.TryRemove("reply", owner, rememberTerminal: true));
         Assert.False(registry.TryRegister("reply", new object()));
     }
 
@@ -105,13 +104,11 @@ public sealed class DirectReplyCompletionRegistryTests
         var registry = new ZLinkDirectReplyCompletionRegistry<string, object>(
             capacity: 1,
             terminalRetention: TimeSpan.FromMilliseconds(20),
-            timeProvider: time);
+            timeProvider: time
+        );
         var owner = new object();
         Assert.True(registry.TryRegister("reply", owner));
-        Assert.True(registry.TryRemove(
-            "reply",
-            owner,
-            rememberTerminal: true));
+        Assert.True(registry.TryRemove("reply", owner, rememberTerminal: true));
 
         time.AdvanceWallClockOnly(TimeSpan.FromSeconds(wallJumpSeconds));
         time.AdvanceMonotonicOnly(TimeSpan.FromMilliseconds(19));

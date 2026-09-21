@@ -6,8 +6,8 @@ import systems.zlink.httpclient.internal.HttpClientRuntime;
 /**
  * ZLink-style fluent HTTP client. Wraps {@code java.net.http.HttpClient} behind a builder so
  * transport types never leak into application code. A general HTTP client; the typed-JSON path
- * ({@code body(dto)} / {@code submit(Type)}) is a convenience layer on top.
- * Mirrors the C++ {@code zlink::http_client::client_t}.
+ * ({@code body(dto)} / {@code submit(Type)}) is a convenience layer on top. Mirrors the C++ {@code
+ * zlink::http_client::client_t}.
  */
 public final class ZLinkHttpClient implements AutoCloseable {
 

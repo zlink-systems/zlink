@@ -15,17 +15,14 @@ public sealed class SpotRouteDispatcherTests
         var activities = new ConcurrentBag<Activity>();
         using var listener = new ActivityListener
         {
-            ShouldListenTo = source =>
-                source.Name == ZLinkTelemetry.ActivitySourceName,
+            ShouldListenTo = source => source.Name == ZLinkTelemetry.ActivitySourceName,
             Sample = (ref ActivityCreationOptions<ActivityContext> _) =>
                 ActivitySamplingResult.AllDataAndRecorded,
-            ActivityStopped = activities.Add
+            ActivityStopped = activities.Add,
         };
         ActivitySource.AddActivityListener(listener);
         var probe = new DispatchProbe();
-        using var services = new ServiceCollection()
-            .AddSingleton(probe)
-            .BuildServiceProvider();
+        using var services = new ServiceCollection().AddSingleton(probe).BuildServiceProvider();
         await using var handlerInstances = new ZLinkScopedHandlerInstanceOwner(services);
         var spot = new TestSpot();
         var packets = new ZLinkSpotPacketRegistry();
@@ -42,7 +39,8 @@ public sealed class SpotRouteDispatcherTests
             packets,
             () => invoker,
             codecs,
-            new ZLinkDispatchErrorReporter(options));
+            new ZLinkDispatchErrorReporter(options)
+        );
 
         var malformed = Encode(new TestMessage("ignored"));
         malformed[1].Dispose();
@@ -64,15 +62,14 @@ public sealed class SpotRouteDispatcherTests
         var spotTraces = activities
             .Where(activity =>
                 activity.OperationName == "zlink.message_flow"
-                && Equals(
-                    activity.GetTagItem("surface")?.ToString(),
-                    "spot"))
+                && Equals(activity.GetTagItem("surface")?.ToString(), "spot")
+            )
             .ToArray();
         Assert.NotEmpty(spotTraces);
-        Assert.All(spotTraces, activity =>
-            Assert.Equal(
-                "target-spot",
-                activity.GetTagItem("spot_id")));
+        Assert.All(
+            spotTraces,
+            activity => Assert.Equal("target-spot", activity.GetTagItem("spot_id"))
+        );
     }
 
     private static IReadOnlyList<Message> Encode(TestMessage message)
@@ -87,10 +84,12 @@ public sealed class SpotRouteDispatcherTests
                 null,
                 null,
                 null,
-                null),
+                null
+            ),
             message,
             typeof(TestMessage),
-            null);
+            null
+        );
     }
 
     // RouteMesh 10.0.0 delivers per-spot route records to the dispatcher as a
@@ -99,15 +98,14 @@ public sealed class SpotRouteDispatcherTests
     // disposes it via `using (received)`, so the caller's originals stay valid.
     private static ZLinkBackendRouteReceived CreateRoutedReceived(IReadOnlyList<Message> parts)
     {
-        var owned = parts
-            .Select(static part => Message.From(part.AsReadOnlySpan()))
-            .ToArray();
+        var owned = parts.Select(static part => Message.From(part.AsReadOnlySpan())).ToArray();
         return new ZLinkBackendRouteReceived(
             owned,
             sourceNodeRid: RoutingId.From("route-source"),
             spotId: "route-target",
             requestSeq: null,
-            reply: null);
+            reply: null
+        );
     }
 
     private sealed record TestMessage(string Value);
@@ -128,7 +126,8 @@ public sealed class SpotRouteDispatcherTests
         public ValueTask HandleAsync(
             TestSpot spot,
             TestMessage message,
-            CancellationToken cancellationToken)
+            CancellationToken cancellationToken
+        )
         {
             _ = spot;
             cancellationToken.ThrowIfCancellationRequested();

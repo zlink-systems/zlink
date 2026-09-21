@@ -2,9 +2,9 @@ package systems.zlink.framework.runtime.configuration;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 
-import java.time.Duration;
 import org.junit.jupiter.api.Test;
-import systems.zlink.framework.runtime.configuration.DefaultZLinkFrameworkOptions;
+
+import java.time.Duration;
 
 final class ZLinkFrameworkRegistrationTest {
     @Test
@@ -12,8 +12,6 @@ final class ZLinkFrameworkRegistrationTest {
         var registration = new ZLinkFrameworkRegistration();
 
         assertEquals(
-            Duration.ofSeconds(30),
-            registration.locations().options().messageFollowDuration());
+                Duration.ofSeconds(30), registration.locations().options().messageFollowDuration());
     }
-
 }

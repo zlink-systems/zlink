@@ -1,24 +1,26 @@
 package systems.zlink.framework.runtime.spots;
-import java.util.concurrent.CompletionStage;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
+import org.junit.jupiter.api.Test;
+
+import systems.zlink.framework.ZLinkEncodedPayload;
+import systems.zlink.framework.ZLinkMessageSerializer;
+import systems.zlink.framework.errors.ZLinkConfigurationException;
+import systems.zlink.framework.handlers.ZLinkPacket;
+import systems.zlink.framework.handlers.ZLinkSpotActorRequest;
+import systems.zlink.framework.handlers.ZLinkSpotSubscription;
+import systems.zlink.framework.runtime.handlers.ZLinkScannedHandlerCatalog;
+import systems.zlink.framework.runtime.handlers.ZLinkScannedHandlerKind;
+import systems.zlink.framework.runtime.internal.handlers.ZLinkHandlerActivator;
+
 import java.util.HashSet;
 import java.util.List;
 import java.util.Set;
 import java.util.concurrent.CompletableFuture;
-import org.junit.jupiter.api.Test;
-import systems.zlink.framework.ZLinkEncodedPayload;
-import systems.zlink.framework.ZLinkMessageSerializer;
-import systems.zlink.framework.handlers.ZLinkSpotActorRequest;
-import systems.zlink.framework.handlers.ZLinkPacket;
-import systems.zlink.framework.handlers.ZLinkSpotSubscription;
-import systems.zlink.framework.errors.ZLinkConfigurationException;
-import systems.zlink.framework.runtime.handlers.ZLinkScannedHandlerCatalog;
-import systems.zlink.framework.runtime.handlers.ZLinkScannedHandlerKind;
-import systems.zlink.framework.runtime.internal.handlers.ZLinkHandlerActivator;
+import java.util.concurrent.CompletionStage;
 
 final class ZLinkSpotHandlerLoaderTest {
     @Test
@@ -26,20 +28,19 @@ final class ZLinkSpotHandlerLoaderTest {
         TrackingSerializer serializer = new TrackingSerializer();
         ZLinkScannedHandlerCatalog scannedHandlers = new ZLinkScannedHandlerCatalog(List.of());
         ZLinkSpotActorHandlerCatalog actorHandlers =
-            new ZLinkSpotActorHandlerCatalog(scannedHandlers, serializer);
+                new ZLinkSpotActorHandlerCatalog(scannedHandlers, serializer);
         Set<Class<?>> preparedHandlers = new HashSet<>();
-        ZLinkSpotHandlerLoader loader = new ZLinkSpotHandlerLoader(
-            scannedHandlers,
-            actorHandlers,
-            trackingActivator(preparedHandlers));
+        ZLinkSpotHandlerLoader loader =
+                new ZLinkSpotHandlerLoader(
+                        scannedHandlers, actorHandlers, trackingActivator(preparedHandlers));
 
         loader.load(
-            TestSpot.class,
-            List.of(ConfiguredActorHandler.class),
-            (name, period, handlerType, options) -> CompletableFuture.completedFuture(null));
+                TestSpot.class,
+                List.of(ConfiguredActorHandler.class),
+                (name, period, handlerType, options) -> CompletableFuture.completedFuture(null));
 
         List<SpotActorPacketHandlerRegistration> registrations =
-            actorHandlers.handlers("configured-request");
+                actorHandlers.handlers("configured-request");
         assertEquals(1, registrations.size());
         assertEquals(ZLinkScannedHandlerKind.ACTOR_REQUEST, registrations.get(0).kind());
         assertEquals(TestSpot.class, registrations.get(0).spotType());
@@ -51,22 +52,23 @@ final class ZLinkSpotHandlerLoaderTest {
     @Test
     void sameTopicAndPacketCannotDeclareDifferentSubscriptionTypes() {
         ZLinkScannedHandlerCatalog scannedHandlers = new ZLinkScannedHandlerCatalog(List.of());
-        ZLinkSpotHandlerLoader loader = new ZLinkSpotHandlerLoader(
-            scannedHandlers,
-            new ZLinkSpotActorHandlerCatalog(scannedHandlers, new TrackingSerializer()),
-            handlerType -> null);
+        ZLinkSpotHandlerLoader loader =
+                new ZLinkSpotHandlerLoader(
+                        scannedHandlers,
+                        new ZLinkSpotActorHandlerCatalog(scannedHandlers, new TrackingSerializer()),
+                        handlerType -> null);
 
         assertThrows(
-            ZLinkConfigurationException.class,
-            () -> loader.load(
-                TestSpot.class,
-                List.of(FirstSubscription.class, SecondSubscription.class),
-                (name, period, handlerType, options) ->
-                    CompletableFuture.completedFuture(null)));
+                ZLinkConfigurationException.class,
+                () ->
+                        loader.load(
+                                TestSpot.class,
+                                List.of(FirstSubscription.class, SecondSubscription.class),
+                                (name, period, handlerType, options) ->
+                                        CompletableFuture.completedFuture(null)));
     }
 
-    private static ZLinkHandlerActivator trackingActivator(
-        Set<Class<?>> preparedHandlers) {
+    private static ZLinkHandlerActivator trackingActivator(Set<Class<?>> preparedHandlers) {
         return new ZLinkHandlerActivator() {
             @Override
             public Object create(Class<?> handlerType) {
@@ -82,32 +84,24 @@ final class ZLinkSpotHandlerLoaderTest {
 
     private static final class ConfiguredActorHandler {
         @ZLinkSpotActorRequest(packetName = "configured-request")
-        public CompletionStage<Reply> handle(
-            TestActor actor,
-            Request request) {
+        public CompletionStage<Reply> handle(TestActor actor, Request request) {
             return CompletableFuture.completedFuture(new Reply());
         }
     }
 
-    private static final class TestSpot {
-    }
+    private static final class TestSpot {}
 
-    private static final class TestActor {
-    }
+    private static final class TestActor {}
 
-    private static final class Request {
-    }
+    private static final class Request {}
 
-    private static final class Reply {
-    }
+    private static final class Reply {}
 
     @ZLinkPacket("shared-packet")
-    private static final class FirstEvent {
-    }
+    private static final class FirstEvent {}
 
     @ZLinkPacket("shared-packet")
-    private static final class SecondEvent {
-    }
+    private static final class SecondEvent {}
 
     private static final class FirstSubscription {
         @ZLinkSpotSubscription(topic = "shared-topic")

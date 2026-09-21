@@ -1,11 +1,11 @@
 using System.Buffers.Binary;
 using System.Reflection;
-using Systems.Zlink.Framework.Runtime.Protocol;
 using System.Security.Cryptography;
+using Systems.Zlink.Framework.Runtime.Protocol;
 using Zlink.Framework.Runtime.Backend.Contracts;
 using Zlink.Framework.Runtime.Locations;
-using Zlink.Framework.Runtime.Spots;
 using Zlink.Framework.Runtime.Service;
+using Zlink.Framework.Runtime.Spots;
 
 namespace Zlink.Framework.UnitTests.Runtime;
 
@@ -23,13 +23,12 @@ public sealed class InstanceSpotActivationJournalTests
             3,
             "owner",
             5,
-            null);
+            null
+        );
 
         var encoded = ZLinkInstanceSpotAuthorityPayloadCodec.Encode(expected);
         Assert.Equal("ZLAU", System.Text.Encoding.ASCII.GetString(encoded, 0, 4));
-        Assert.True(ZLinkInstanceSpotAuthorityPayloadCodec.TryDecode(
-            encoded,
-            out var restored));
+        Assert.True(ZLinkInstanceSpotAuthorityPayloadCodec.TryDecode(encoded, out var restored));
         Assert.Equal(expected, restored);
     }
 
@@ -41,7 +40,8 @@ public sealed class InstanceSpotActivationJournalTests
             Enumerable.Range(0, 32).Select(static value => (byte)value).ToArray(),
             257,
             7,
-            3);
+            3
+        );
         var expected = new ZLinkInstanceSpotAuthorityPayload(
             ZLinkInstanceSpotAuthorityState.Ready,
             "spot",
@@ -51,15 +51,17 @@ public sealed class InstanceSpotActivationJournalTests
             3,
             "owner",
             5,
-            recovery);
+            recovery
+        );
 
         var encoded = ZLinkInstanceSpotAuthorityPayloadCodec.Encode(expected);
         var nodeEncoded = Convert.FromHexString(
             "5a4c4155010000000000880002001203000f02000c0673616d706c650473706f74"
-            + "056f776e65720000000000000005046d657368067461726765740000000000000003"
-            + "00000000000100000046000f61637469766174696f6e2d726f6f7420000102030405"
-            + "060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f0000010100000000"
-            + "000000070000000000000003bfd1b955");
+                + "056f776e65720000000000000005046d657368067461726765740000000000000003"
+                + "00000000000100000046000f61637469766174696f6e2d726f6f7420000102030405"
+                + "060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f0000010100000000"
+                + "000000070000000000000003bfd1b955"
+        );
 
         Assert.Equal(nodeEncoded, encoded);
         Assert.True(ZLinkInstanceSpotAuthorityPayloadCodec.TryDecode(encoded, out var restored));
@@ -76,14 +78,16 @@ public sealed class InstanceSpotActivationJournalTests
     {
         var encoded = Convert.FromHexString(
             "5a4c4155010000000000880002001203000f02000c0673616d706c650473706f74"
-            + "056f776e65720000000000000005046d657368067461726765740000000000000003"
-            + "00000000000100000046000f61637469766174696f6e2d726f6f7420000102030405"
-            + "060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f0000010100000000"
-            + "000000070000000000000003bfd1b955");
+                + "056f776e65720000000000000005046d657368067461726765740000000000000003"
+                + "00000000000100000046000f61637469766174696f6e2d726f6f7420000102030405"
+                + "060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f0000010100000000"
+                + "000000070000000000000003bfd1b955"
+        );
         encoded[^5] = 8;
         BinaryPrimitives.WriteUInt32BigEndian(
             encoded.AsSpan(encoded.Length - 4),
-            ZLinkCrc32C.Compute(encoded.AsSpan(0, encoded.Length - 4)));
+            ZLinkCrc32C.Compute(encoded.AsSpan(0, encoded.Length - 4))
+        );
 
         Assert.False(ZLinkInstanceSpotAuthorityPayloadCodec.TryDecode(encoded, out _));
     }
@@ -91,27 +95,36 @@ public sealed class InstanceSpotActivationJournalTests
     [Fact]
     public async Task ReadyCommitCrashBeforeQueueRestoreRetainsAcceptedRoot()
     {
-        var (store, reservation, activationEnvelope) =
-            await ReserveCreatingAsync("ready-crash");
+        var (store, reservation, activationEnvelope) = await ReserveCreatingAsync("ready-crash");
         var reserved = Assert.IsType<ZLinkAuthorityReadResult.Found>(
-            await store.ReadAuthorityAsync(reservation.Key));
-        Assert.True(ZLinkInstanceSpotAuthorityPayloadCodec.TryDecode(
-            reserved.Snapshot.Payload.Span,
-            out var creating));
+            await store.ReadAuthorityAsync(reservation.Key)
+        );
+        Assert.True(
+            ZLinkInstanceSpotAuthorityPayloadCodec.TryDecode(
+                reserved.Snapshot.Payload.Span,
+                out var creating
+            )
+        );
         await store.CommitAsync(
             reservation,
             ZLinkInstanceSpotAuthorityPayloadCodec.Encode(
                 creating with
                 {
                     State = ZLinkInstanceSpotAuthorityState.Ready,
-                    ActivationRecovery = Recovery(activationEnvelope)
-                }));
+                    ActivationRecovery = Recovery(activationEnvelope),
+                }
+            )
+        );
 
         var afterCrash = Assert.IsType<ZLinkAuthorityReadResult.Found>(
-            await store.ReadAuthorityAsync(reservation.Key));
-        Assert.True(ZLinkInstanceSpotAuthorityPayloadCodec.TryDecode(
-            afterCrash.Snapshot.Payload.Span,
-            out var restored));
+            await store.ReadAuthorityAsync(reservation.Key)
+        );
+        Assert.True(
+            ZLinkInstanceSpotAuthorityPayloadCodec.TryDecode(
+                afterCrash.Snapshot.Payload.Span,
+                out var restored
+            )
+        );
         Assert.Equal(ZLinkInstanceSpotAuthorityState.Ready, restored.State);
         Assert.Equal(0UL, restored.ActivationRecovery?.ReplayCursor);
         Assert.Equal("activation-root", restored.ActivationRecovery?.Reference);
@@ -120,12 +133,11 @@ public sealed class InstanceSpotActivationJournalTests
     [Fact]
     public async Task ReserveCrashCanReconstructExactReservationAndCommitReady()
     {
-        var (store, reservation, activationEnvelope) =
-            await ReserveCreatingAsync("reserve-crash");
+        var (store, reservation, activationEnvelope) = await ReserveCreatingAsync("reserve-crash");
         var found = Assert.IsType<ZLinkAuthorityReadResult.Found>(
-            await store.ReadAuthorityAsync(reservation.Key));
-        var pending = Assert.IsType<ZLinkReservedObjectCreation>(
-            found.Snapshot.ReservedCreation);
+            await store.ReadAuthorityAsync(reservation.Key)
+        );
+        var pending = Assert.IsType<ZLinkReservedObjectCreation>(found.Snapshot.ReservedCreation);
         var reconstructed = new ZLinkObjectReservation(
             reservation.Key,
             found.Snapshot.StoreVersion,
@@ -134,12 +146,14 @@ public sealed class InstanceSpotActivationJournalTests
             pending.ReservationId,
             found.Snapshot.Allocation.Descriptor,
             found.Snapshot.Allocation.DescriptorLifecycleGeneration,
-            new ZLinkLocationOwnerToken(
-                found.Snapshot.OwnerId,
-                found.Snapshot.OwnerLeaseGeneration));
-        Assert.True(ZLinkInstanceSpotAuthorityPayloadCodec.TryDecode(
-            found.Snapshot.Payload.Span,
-            out var creating));
+            new ZLinkLocationOwnerToken(found.Snapshot.OwnerId, found.Snapshot.OwnerLeaseGeneration)
+        );
+        Assert.True(
+            ZLinkInstanceSpotAuthorityPayloadCodec.TryDecode(
+                found.Snapshot.Payload.Span,
+                out var creating
+            )
+        );
 
         var committed = Assert.IsType<ZLinkObjectCommitResult.Committed>(
             await store.CommitAsync(
@@ -148,8 +162,11 @@ public sealed class InstanceSpotActivationJournalTests
                     creating with
                     {
                         State = ZLinkInstanceSpotAuthorityState.Ready,
-                        ActivationRecovery = Recovery(activationEnvelope)
-                    })));
+                        ActivationRecovery = Recovery(activationEnvelope),
+                    }
+                )
+            )
+        );
 
         Assert.Equal(ZLinkPlacementAllocationState.Active, committed.Snapshot.Allocation.State);
         Assert.Equal(reservation.ObjectGeneration, committed.Snapshot.ObjectGeneration);
@@ -158,13 +175,16 @@ public sealed class InstanceSpotActivationJournalTests
     [Fact]
     public async Task CompletionCursorCrashRetainsImmutableRecoveryRoot()
     {
-        var (store, reservation, activationEnvelope) =
-            await ReserveCreatingAsync("terminal-crash");
+        var (store, reservation, activationEnvelope) = await ReserveCreatingAsync("terminal-crash");
         var reserved = Assert.IsType<ZLinkAuthorityReadResult.Found>(
-            await store.ReadAuthorityAsync(reservation.Key));
-        Assert.True(ZLinkInstanceSpotAuthorityPayloadCodec.TryDecode(
-            reserved.Snapshot.Payload.Span,
-            out var creating));
+            await store.ReadAuthorityAsync(reservation.Key)
+        );
+        Assert.True(
+            ZLinkInstanceSpotAuthorityPayloadCodec.TryDecode(
+                reserved.Snapshot.Payload.Span,
+                out var creating
+            )
+        );
         var ready = Assert.IsType<ZLinkObjectCommitResult.Committed>(
             await store.CommitAsync(
                 reservation,
@@ -172,12 +192,15 @@ public sealed class InstanceSpotActivationJournalTests
                     creating with
                     {
                         State = ZLinkInstanceSpotAuthorityState.Ready,
-                        ActivationRecovery = Recovery(activationEnvelope)
-                    })));
+                        ActivationRecovery = Recovery(activationEnvelope),
+                    }
+                )
+            )
+        );
         var completedAuthority = creating with
         {
             State = ZLinkInstanceSpotAuthorityState.Ready,
-            ActivationRecovery = Recovery(activationEnvelope) with { ReplayCursor = 1 }
+            ActivationRecovery = Recovery(activationEnvelope) with { ReplayCursor = 1 },
         };
 
         Assert.IsType<ZLinkAuthorityCompareExchangeResult.Stored>(
@@ -188,12 +211,19 @@ public sealed class InstanceSpotActivationJournalTests
                     ZLinkInstanceSpotAuthorityPayloadCodec.Encode(completedAuthority),
                     ZLinkAuthorityGenerationTransition.Preserve,
                     null,
-                    null)));
+                    null
+                )
+            )
+        );
         var afterCrash = Assert.IsType<ZLinkAuthorityReadResult.Found>(
-            await store.ReadAuthorityAsync(reservation.Key));
-        Assert.True(ZLinkInstanceSpotAuthorityPayloadCodec.TryDecode(
-            afterCrash.Snapshot.Payload.Span,
-            out var retained));
+            await store.ReadAuthorityAsync(reservation.Key)
+        );
+        Assert.True(
+            ZLinkInstanceSpotAuthorityPayloadCodec.TryDecode(
+                afterCrash.Snapshot.Payload.Span,
+                out var retained
+            )
+        );
         Assert.Equal("activation-root", retained.ActivationRecovery?.Reference);
         Assert.Equal(1UL, retained.ActivationRecovery?.ReplayCursor);
         Assert.Equal(1UL, retained.ActivationRecovery?.InboxSequence);
@@ -202,22 +232,29 @@ public sealed class InstanceSpotActivationJournalTests
     [Fact]
     public async Task RestartReleasesDurablyCompletedRecoveryPointer()
     {
-        var (store, reservation, activationEnvelope) =
-            await ReserveCreatingAsync("completed-restart");
+        var (store, reservation, activationEnvelope) = await ReserveCreatingAsync(
+            "completed-restart"
+        );
         var reserved = Assert.IsType<ZLinkAuthorityReadResult.Found>(
-            await store.ReadAuthorityAsync(reservation.Key));
-        Assert.True(ZLinkInstanceSpotAuthorityPayloadCodec.TryDecode(
-            reserved.Snapshot.Payload.Span,
-            out var creating));
+            await store.ReadAuthorityAsync(reservation.Key)
+        );
+        Assert.True(
+            ZLinkInstanceSpotAuthorityPayloadCodec.TryDecode(
+                reserved.Snapshot.Payload.Span,
+                out var creating
+            )
+        );
         var completed = creating with
         {
             State = ZLinkInstanceSpotAuthorityState.Ready,
-            ActivationRecovery = Recovery(activationEnvelope) with { ReplayCursor = 1 }
+            ActivationRecovery = Recovery(activationEnvelope) with { ReplayCursor = 1 },
         };
         Assert.IsType<ZLinkObjectCommitResult.Committed>(
             await store.CommitAsync(
                 reservation,
-                ZLinkInstanceSpotAuthorityPayloadCodec.Encode(completed)));
+                ZLinkInstanceSpotAuthorityPayloadCodec.Encode(completed)
+            )
+        );
         var node = RecoverySpotNode.Create(creating.NodeRid, creating.NodeGeneration);
         var target = new ZLinkInstanceSpotActivationTarget(
             store,
@@ -227,15 +264,21 @@ public sealed class InstanceSpotActivationJournalTests
             null!,
             new ZLinkLocationOwnerToken(
                 creating.OwnerId,
-                checked((long)creating.OwnerLeaseGeneration)));
+                checked((long)creating.OwnerLeaseGeneration)
+            )
+        );
 
         await target.RecoverAsync(CancellationToken.None);
 
         var recovered = Assert.IsType<ZLinkAuthorityReadResult.Found>(
-            await store.ReadAuthorityAsync(reservation.Key));
-        Assert.True(ZLinkInstanceSpotAuthorityPayloadCodec.TryDecode(
-            recovered.Snapshot.Payload.Span,
-            out var cleared));
+            await store.ReadAuthorityAsync(reservation.Key)
+        );
+        Assert.True(
+            ZLinkInstanceSpotAuthorityPayloadCodec.TryDecode(
+                recovered.Snapshot.Payload.Span,
+                out var cleared
+            )
+        );
         Assert.Null(cleared.ActivationRecovery);
     }
 
@@ -248,24 +291,30 @@ public sealed class InstanceSpotActivationJournalTests
                 .GetMethods()
                 .Single(method =>
                     method.Name == nameof(IZLinkSpotClient.SendToSpot)
-                    && method.GetParameters()[0].ParameterType == typeof(string))
-                .ReturnType);
-        Assert.NotNull(typeof(IZLinkSpotSendCall).GetMethod(
-            nameof(IZLinkSpotSendCall.InstanceSpot),
-            Type.EmptyTypes));
-        Assert.NotNull(typeof(IZLinkSpotRequestCall).GetMethod(
-            nameof(IZLinkSpotRequestCall.InMesh),
-            [typeof(string)]));
+                    && method.GetParameters()[0].ParameterType == typeof(string)
+                )
+                .ReturnType
+        );
+        Assert.NotNull(
+            typeof(IZLinkSpotSendCall).GetMethod(
+                nameof(IZLinkSpotSendCall.InstanceSpot),
+                Type.EmptyTypes
+            )
+        );
+        Assert.NotNull(
+            typeof(IZLinkSpotRequestCall).GetMethod(
+                nameof(IZLinkSpotRequestCall.InMesh),
+                [typeof(string)]
+            )
+        );
     }
 
     [Fact]
     public async Task ConcurrentLoserJoinsRunningOperationInsteadOfSubmittingAgain()
     {
         var gate = new ZLinkInstanceSpotOperationGate();
-        var entered = new TaskCompletionSource(
-            TaskCreationOptions.RunContinuationsAsynchronously);
-        var release = new TaskCompletionSource(
-            TaskCreationOptions.RunContinuationsAsynchronously);
+        var entered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var submissions = 0;
         async Task<InstanceSpotActivationTerminal> Execute()
         {
@@ -275,7 +324,8 @@ public sealed class InstanceSpotActivationJournalTests
             return new InstanceSpotActivationTerminal(
                 RequestResult.Ok,
                 ServiceWireConstants.FrameworkErrorCode.None,
-                [new byte[] { 9 }]);
+                [new byte[] { 9 }]
+            );
         }
 
         var first = gate.RunAsync("spot\0operation", Execute);
@@ -296,33 +346,31 @@ public sealed class InstanceSpotActivationJournalTests
                 3,
                 "spot",
                 "sample",
-                "descriptor"),
+                "descriptor"
+            ),
             RoutingId.From("source"),
             5,
             "entry",
             id,
             true,
             7,
-            4_102_444_800_000);
+            4_102_444_800_000
+        );
 
     private static ZLinkServiceWireCodec.RequestSourceFence RequestSource(
-        InstanceSpotActivationOperation operation) =>
-        new(
-            "source-owner",
-            11,
-            operation.SourceNodeRid,
-            operation.SourceNodeGeneration);
+        InstanceSpotActivationOperation operation
+    ) => new("source-owner", 11, operation.SourceNodeRid, operation.SourceNodeGeneration);
 
     private static async Task<(
         ZLinkInMemoryLocationStore Store,
         ZLinkObjectReservation Reservation,
-        byte[] ActivationEnvelope)> ReserveCreatingAsync(string spotId)
+        byte[] ActivationEnvelope
+    )> ReserveCreatingAsync(string spotId)
     {
         var store = new ZLinkInMemoryLocationStore();
         var owner = Assert.IsType<ZLinkOwnerLeaseClaimResult.Claimed>(
-            await store.ClaimOwnerLeaseAsync(
-                $"owner-{spotId}",
-                TimeSpan.FromMinutes(1)));
+            await store.ClaimOwnerLeaseAsync($"owner-{spotId}", TimeSpan.FromMinutes(1))
+        );
         var nodeRid = RoutingId.From($"node-{spotId}");
         var descriptor = new ZLinkMeshNodeDescriptor(
             "mesh",
@@ -334,7 +382,8 @@ public sealed class InstanceSpotActivationJournalTests
             string.Empty,
             owner.Token.OwnerId,
             owner.Token.LeaseGeneration,
-            DateTimeOffset.UtcNow)
+            DateTimeOffset.UtcNow
+        )
         {
             ObjectRole = ZLinkMeshNodeObjectRole.Server,
             EntrySpotId = $"entry-{spotId}",
@@ -346,7 +395,8 @@ public sealed class InstanceSpotActivationJournalTests
                     "sample",
                     ZLinkObjectMaintenancePolicyKind.Disabled,
                     false,
-                    0)
+                    0
+                ),
             ],
             Capacity = new ZLinkPlacementCapacity(
                 new ZLinkPopulationCapacity(0, 0, 0),
@@ -357,20 +407,22 @@ public sealed class InstanceSpotActivationJournalTests
                         "sample",
                         0,
                         0,
-                        0)
-                ])
+                        0
+                    ),
+                ]
+            ),
         };
         Assert.Equal(
             ZLinkLocationWriteStatus.Stored,
-            (await store.UpdateMeshNodeAsync(
-                descriptor,
-                ZLinkLocationWriteIntent.NewClaim)).Status);
+            (await store.UpdateMeshNodeAsync(descriptor, ZLinkLocationWriteIntent.NewClaim)).Status
+        );
         var operation = Operation(new MeshOperationId(101, 103));
         var envelope = ZLinkInstanceSpotActivationEnvelopeCodec.Encode(
             operation,
             RequestSource(operation),
             null,
-            [new byte[] { 1 }]);
+            [new byte[] { 1 }]
+        );
         var key = ZLinkUserSpotAuthorityPayloadCodec.AuthorityKey(spotId);
         var creating = new ZLinkInstanceSpotAuthorityPayload(
             ZLinkInstanceSpotAuthorityState.Creating,
@@ -381,7 +433,8 @@ public sealed class InstanceSpotActivationJournalTests
             3,
             owner.Token.OwnerId,
             checked((ulong)owner.Token.LeaseGeneration),
-            null);
+            null
+        );
         var reserved = Assert.IsType<ZLinkObjectReserveResult.Reserved>(
             await store.ReserveAsync(
                 new ZLinkObjectReservationRequest(
@@ -401,27 +454,25 @@ public sealed class InstanceSpotActivationJournalTests
                         new ZLinkSpotTypeCapacityDelta(
                             ZLinkPlacementObjectKind.InstanceSpot,
                             "sample",
-                            1)))));
+                            1
+                        )
+                    )
+                )
+            )
+        );
         return (store, reserved.Reservation, envelope);
     }
 
     private static ZLinkInstanceSpotActivationRecoveryPointer Recovery(
-        ReadOnlySpan<byte> envelope) =>
-        new(
-            "activation-root",
-            SHA256.HashData(envelope),
-            checked((uint)envelope.Length),
-            1,
-            0);
+        ReadOnlySpan<byte> envelope
+    ) => new("activation-root", SHA256.HashData(envelope), checked((uint)envelope.Length), 1, 0);
 
     private class RecoverySpotNode : DispatchProxy
     {
         private RoutingId routingId;
         private ulong generation;
 
-        internal static IZLinkBackendSpotNode Create(
-            RoutingId routingId,
-            ulong generation)
+        internal static IZLinkBackendSpotNode Create(RoutingId routingId, ulong generation)
         {
             var proxy = Create<IZLinkBackendSpotNode, RecoverySpotNode>();
             var state = (RecoverySpotNode)(object)proxy;
@@ -449,8 +500,9 @@ public sealed class InstanceSpotActivationJournalTests
                     0,
                     0,
                     0,
-                    0),
-                _ => throw new NotSupportedException(targetMethod?.Name)
+                    0
+                ),
+                _ => throw new NotSupportedException(targetMethod?.Name),
             };
     }
 }

@@ -56,10 +56,11 @@ public final class ZLinkMeshDrainCoordinator {
     }
 
     public CompletionStage<Void> awaitAllZero() {
-        CompletableFuture<?>[] barriers = meshes.keySet().stream()
-            .map(this::awaitZero)
-            .map(CompletionStage::toCompletableFuture)
-            .toArray(CompletableFuture[]::new);
+        CompletableFuture<?>[] barriers =
+                meshes.keySet().stream()
+                        .map(this::awaitZero)
+                        .map(CompletionStage::toCompletableFuture)
+                        .toArray(CompletableFuture[]::new);
         return CompletableFuture.allOf(barriers);
     }
 

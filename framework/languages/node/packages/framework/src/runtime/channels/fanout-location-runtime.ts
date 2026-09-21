@@ -13,10 +13,7 @@ import {
 } from '../../contracts/Locations/Options';
 import type { ZLinkFrameworkRegistration } from '../configuration';
 import { buildAdvertisedEndpoint, ZLinkConfigurationException } from '../configuration';
-import type {
-  ZLinkLocationRuntime,
-  ZLinkLocationRuntimeStores
-} from '../locations';
+import type { ZLinkLocationRuntime, ZLinkLocationRuntimeStores } from '../locations';
 import type { ZLinkBackendSubscriberSocket } from '../backend/contracts';
 import { ZLinkChannelSocketRegistry } from './channel-socket-registry';
 import { ZLinkStateLane } from '../execution/state-lane';
@@ -34,12 +31,14 @@ export class ZLinkFanoutLocationRuntime {
   private readonly lane = new ZLinkStateLane();
   private readonly options: Required<ZLinkLocationOptionOverrides>;
   private readonly store: ZLinkFanoutLocationStore;
-  private readonly localDescriptors =
-    new Map<string, ZLinkFanoutPublisherDescriptor>();
-  private readonly publisherIdentities = new Map<string, {
-    readonly publisherRid: string;
-    readonly lifecycleGeneration: bigint;
-  }>();
+  private readonly localDescriptors = new Map<string, ZLinkFanoutPublisherDescriptor>();
+  private readonly publisherIdentities = new Map<
+    string,
+    {
+      readonly publisherRid: string;
+      readonly lifecycleGeneration: bigint;
+    }
+  >();
   private readonly connections = new Map<string, ActiveFanoutTarget>();
   private controller?: AbortController;
   private timer?: NodeJS.Timeout;
@@ -97,25 +96,22 @@ export class ZLinkFanoutLocationRuntime {
     });
     if (timer !== undefined) clearTimeout(timer);
     const connectionIds = await this.lane.run(() => [...this.connections.keys()]);
-    await Promise.allSettled(
-      connectionIds.map(id => this.closeConnection(id))
-    );
+    await Promise.allSettled(connectionIds.map((id) => this.closeConnection(id)));
     await this.removeLocalPublishers(signal);
   }
 
   activeTargets(channelName: string): readonly ZLinkFanoutPublisherDescriptor[] {
     return [...this.connections.values()]
-      .filter(target => target.state === 'ready')
-      .map(target => target.descriptor)
-      .filter(descriptor => descriptor.channelName === channelName);
+      .filter((target) => target.state === 'ready')
+      .map((target) => target.descriptor)
+      .filter((descriptor) => descriptor.channelName === channelName);
   }
 
   async reclaimOwnerRows(signal?: AbortSignal): Promise<void> {
     const owner = this.requireOwnerToken();
     const descriptors = await this.lane.run(() => [...this.localDescriptors]);
     for (const [channelName, current] of descriptors) {
-      if (current.ownerId === owner.ownerId
-        && current.leaseGeneration === owner.leaseGeneration) {
+      if (current.ownerId === owner.ownerId && current.leaseGeneration === owner.leaseGeneration) {
         continue;
       }
       const candidate = {
@@ -133,10 +129,12 @@ export class ZLinkFanoutLocationRuntime {
           `Fanout publisher '${channelName}' descriptor recovery was fenced.`
         );
       }
-      await this.lane.run(() => this.localDescriptors.set(channelName, {
-        ...candidate,
-        updatedAt: result.updatedAt
-      }));
+      await this.lane.run(() =>
+        this.localDescriptors.set(channelName, {
+          ...candidate,
+          updatedAt: result.updatedAt
+        })
+      );
     }
   }
 
@@ -166,24 +164,23 @@ export class ZLinkFanoutLocationRuntime {
             `Fanout publisher '${channelName}' descriptor renewal was fenced.`
           );
         }
-        await this.lane.run(() => this.localDescriptors.set(channelName, {
-          ...current,
-          updatedAt: result.updatedAt
-        }));
+        await this.lane.run(() =>
+          this.localDescriptors.set(channelName, {
+            ...current,
+            updatedAt: result.updatedAt
+          })
+        );
         continue;
       }
-      const generatedLifecycle = BigInt(
-        `0x${randomUUID().replaceAll('-', '').slice(0, 16)}`
-      ) & 0x7fff_ffff_ffff_ffffn;
+      const generatedLifecycle =
+        BigInt(`0x${randomUUID().replaceAll('-', '').slice(0, 16)}`) & 0x7fff_ffff_ffff_ffffn;
       const identity = await this.lane.run(() => {
         const currentIdentity = this.publisherIdentities.get(channelName);
         if (currentIdentity !== undefined) return currentIdentity;
         const created = {
-        publisherRid: channel.routingId
-          ?? `${channel.routingIdPrefix ?? 'fanout'}-${randomUUID()}`,
-        lifecycleGeneration: generatedLifecycle === 0n
-          ? 1n
-          : generatedLifecycle
+          publisherRid:
+            channel.routingId ?? `${channel.routingIdPrefix ?? 'fanout'}-${randomUUID()}`,
+          lifecycleGeneration: generatedLifecycle === 0n ? 1n : generatedLifecycle
         };
         this.publisherIdentities.set(channelName, created);
         return created;
@@ -210,36 +207,35 @@ export class ZLinkFanoutLocationRuntime {
           `Fanout publisher '${channelName}' descriptor claim failed with '${result.status}'.`
         );
       }
-      await this.lane.run(() => this.localDescriptors.set(channelName, {
-        ...descriptor,
-        updatedAt: result.updatedAt
-      }));
+      await this.lane.run(() =>
+        this.localDescriptors.set(channelName, {
+          ...descriptor,
+          updatedAt: result.updatedAt
+        })
+      );
     }
   }
 
   private async reconcileSubscribers(signal?: AbortSignal): Promise<void> {
     for (const [channelName, channel] of this.registration.channels) {
-      if (channel.subscriber === undefined
-        || (channel.subscriber.manualConnections?.length ?? 0) > 0) {
+      if (
+        channel.subscriber === undefined ||
+        (channel.subscriber.manualConnections?.length ?? 0) > 0
+      ) {
         continue;
       }
       const rows = await this.listLivePublishers(channelName, signal);
-      const desired = new Map(rows.map(row => [
-        fanoutConnectionId(row),
-        row
-      ]));
+      const desired = new Map(rows.map((row) => [fanoutConnectionId(row), row]));
       for (const [connectionId, descriptor] of desired) {
         const current = await this.lane.run(() => this.connections.get(connectionId));
         if (current === undefined) {
           await this.openConnection(connectionId, descriptor);
           continue;
         }
-        if (descriptor.descriptorRevision
-          < current.descriptor.descriptorRevision) {
+        if (descriptor.descriptorRevision < current.descriptor.descriptorRevision) {
           continue;
         }
-        if (descriptor.descriptorRevision
-          === current.descriptor.descriptorRevision) {
+        if (descriptor.descriptorRevision === current.descriptor.descriptorRevision) {
           if (!sameFanoutDescriptor(descriptor, current.descriptor)) {
             await this.closeConnection(connectionId);
           }
@@ -258,8 +254,7 @@ export class ZLinkFanoutLocationRuntime {
       }
       const connections = await this.lane.run(() => [...this.connections]);
       for (const [connectionId, current] of connections) {
-        if (current.descriptor.channelName === channelName
-          && !desired.has(connectionId)) {
+        if (current.descriptor.channelName === channelName && !desired.has(connectionId)) {
           await this.closeConnection(connectionId);
         }
       }
@@ -285,15 +280,13 @@ export class ZLinkFanoutLocationRuntime {
         },
         onTerminated: () => {
           const current = this.connections.get(connectionId);
-          if (target !== undefined
-            && current === target
-            && current.reconnectEligible) {
+          if (target !== undefined && current === target && current.reconnectEligible) {
             this.sockets.removeFanoutPublisher(descriptor, connectionId);
             current.state = 'connecting';
             setImmediate(() => {
-              void this.replaceConnection(current)
-                .catch(error =>
-                  this.locationRuntime.reportDiscoveryFailure(error));
+              void this.replaceConnection(current).catch((error) =>
+                this.locationRuntime.reportDiscoveryFailure(error)
+              );
             });
           }
         }
@@ -308,11 +301,7 @@ export class ZLinkFanoutLocationRuntime {
       state: 'connecting'
     };
     await this.lane.run(() => this.connections.set(connectionId, target));
-    target.stopReceiver = this.onSubscriberOpened(
-      descriptor.channelName,
-      connectionId,
-      subscriber
-    );
+    target.stopReceiver = this.onSubscriberOpened(descriptor.channelName, connectionId, subscriber);
   }
 
   private async closeConnection(connectionId: string): Promise<void> {
@@ -330,14 +319,15 @@ export class ZLinkFanoutLocationRuntime {
     await this.sockets.closeFanoutSubscriberConnection(connectionId);
   }
 
-  private async replaceConnection(
-    expected: ActiveFanoutTarget
-  ): Promise<void> {
+  private async replaceConnection(expected: ActiveFanoutTarget): Promise<void> {
     const prepared = await this.lane.run(() => {
       const controller = this.controller;
-      if (this.connections.get(expected.connectionId) !== expected
-        || !expected.reconnectEligible
-        || controller === undefined) return undefined;
+      if (
+        this.connections.get(expected.connectionId) !== expected ||
+        !expected.reconnectEligible ||
+        controller === undefined
+      )
+        return undefined;
       return { controller, descriptor: expected.descriptor };
     });
     if (prepared === undefined) {
@@ -368,9 +358,11 @@ export class ZLinkFanoutLocationRuntime {
     for (const descriptor of rows) {
       if (descriptor.state !== ZLinkFrameworkRuntimeState.Serving) continue;
       const lease = await this.storeOwnerLease(descriptor.ownerId, signal);
-      if (lease.kind === 'found'
-        && lease.token.leaseGeneration === descriptor.leaseGeneration
-        && lease.leaseExpiresAt.getTime() > lease.storeNow.getTime()) {
+      if (
+        lease.kind === 'found' &&
+        lease.token.leaseGeneration === descriptor.leaseGeneration &&
+        lease.leaseExpiresAt.getTime() > lease.storeNow.getTime()
+      ) {
         live.push(descriptor);
       }
     }
@@ -378,10 +370,7 @@ export class ZLinkFanoutLocationRuntime {
   }
 
   private storeOwnerLease(ownerId: string, signal?: AbortSignal) {
-    return this.stores.ownerLeaseStore.readOwnerLease(
-      ownerId,
-      signal
-    );
+    return this.stores.ownerLeaseStore.readOwnerLease(ownerId, signal);
   }
 
   private async removeLocalPublishers(signal?: AbortSignal): Promise<void> {
@@ -389,10 +378,14 @@ export class ZLinkFanoutLocationRuntime {
     if (owner === undefined) return;
     const descriptors = await this.lane.run(() => [...this.localDescriptors.values()]);
     for (const descriptor of descriptors) {
-      await this.store.removeFanoutPublisher({
-        channelName: descriptor.channelName,
-        publisherRid: descriptor.publisherRid
-      }, owner, signal);
+      await this.store.removeFanoutPublisher(
+        {
+          channelName: descriptor.channelName,
+          publisherRid: descriptor.publisherRid
+        },
+        owner,
+        signal
+      );
     }
     await this.lane.run(() => this.localDescriptors.clear());
   }
@@ -412,7 +405,7 @@ export class ZLinkFanoutLocationRuntime {
     this.timer = setTimeout(() => {
       this.timer = undefined;
       void this.tickCore(this.controller?.signal)
-        .catch(error => this.locationRuntime.reportDiscoveryFailure(error))
+        .catch((error) => this.locationRuntime.reportDiscoveryFailure(error))
         .finally(() => this.schedule());
     }, this.options.pollingIntervalMs);
     this.timer.unref();
@@ -429,31 +422,35 @@ function advertisedEndpoint(boundEndpoint: string, advertiseHost: string | undef
   return result;
 }
 
-function fanoutConnectionId(
-  descriptor: ZLinkFanoutPublisherDescriptor
-): string {
-  return `${descriptor.channelName}\0${String(descriptor.publisherRid)}\0`
-    + descriptor.lifecycleGeneration.toString();
+function fanoutConnectionId(descriptor: ZLinkFanoutPublisherDescriptor): string {
+  return (
+    `${descriptor.channelName}\0${String(descriptor.publisherRid)}\0` +
+    descriptor.lifecycleGeneration.toString()
+  );
 }
 
 function sameFanoutImmutableIdentity(
   left: ZLinkFanoutPublisherDescriptor,
   right: ZLinkFanoutPublisherDescriptor
 ): boolean {
-  return left.channelName === right.channelName
-    && left.publisherRid === right.publisherRid
-    && left.lifecycleGeneration === right.lifecycleGeneration
-    && left.endpoint === right.endpoint
-    && left.securityIdentity === right.securityIdentity
-    && left.ownerId === right.ownerId
-    && left.leaseGeneration === right.leaseGeneration;
+  return (
+    left.channelName === right.channelName &&
+    left.publisherRid === right.publisherRid &&
+    left.lifecycleGeneration === right.lifecycleGeneration &&
+    left.endpoint === right.endpoint &&
+    left.securityIdentity === right.securityIdentity &&
+    left.ownerId === right.ownerId &&
+    left.leaseGeneration === right.leaseGeneration
+  );
 }
 
 function sameFanoutDescriptor(
   left: ZLinkFanoutPublisherDescriptor,
   right: ZLinkFanoutPublisherDescriptor
 ): boolean {
-  return sameFanoutImmutableIdentity(left, right)
-    && left.descriptorRevision === right.descriptorRevision
-    && left.state === right.state;
+  return (
+    sameFanoutImmutableIdentity(left, right) &&
+    left.descriptorRevision === right.descriptorRevision &&
+    left.state === right.state
+  );
 }

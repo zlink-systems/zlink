@@ -5,7 +5,7 @@ internal enum ZLinkHandlerArgumentKind
     Message,
     Context,
     CancellationToken,
-    Default
+    Default,
 }
 
 internal sealed record ZLinkHandlerEndpointDescriptor(
@@ -19,7 +19,8 @@ internal sealed record ZLinkHandlerEndpointDescriptor(
     Type? ContextType,
     bool HasCancellationToken,
     IReadOnlySet<string> Groups,
-    string? ExplicitChannelName);
+    string? ExplicitChannelName
+);
 
 internal sealed record ZLinkRouteHandlerEndpointDescriptor(
     ZLinkMessageKind Kind,
@@ -28,19 +29,22 @@ internal sealed record ZLinkRouteHandlerEndpointDescriptor(
     ZLinkHandlerMethodInvoker Invoker,
     Type MessageType,
     Type? ReplyType,
-    IReadOnlySet<string> Groups);
+    IReadOnlySet<string> Groups
+);
 
 internal enum ZLinkHandlerEndpointSurface
 {
     Channel,
-    Route
+    Route,
 }
 
 internal readonly record struct ZLinkHandlerGroupCatalogEntry(
     ZLinkHandlerEndpointSurface Surface,
-    ZLinkMessageKind Kind);
+    ZLinkMessageKind Kind
+);
 
 internal readonly record struct ZLinkHandlerSelectionKey(
     ZLinkMessageKind Kind,
     string ChannelName,
-    string MessageName);
+    string MessageName
+);

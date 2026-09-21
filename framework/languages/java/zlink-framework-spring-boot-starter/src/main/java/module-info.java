@@ -14,11 +14,11 @@ module zlink.framework.spring.boot.starter {
     exports systems.zlink.framework.spring;
 
     opens systems.zlink.framework.spring to
-        spring.beans,
-        spring.context,
-        spring.core;
+            spring.beans,
+            spring.context,
+            spring.core;
     opens systems.zlink.framework.spring.internal.runtime to
-        spring.beans,
-        spring.context,
-        spring.core;
+            spring.beans,
+            spring.context,
+            spring.core;
 }

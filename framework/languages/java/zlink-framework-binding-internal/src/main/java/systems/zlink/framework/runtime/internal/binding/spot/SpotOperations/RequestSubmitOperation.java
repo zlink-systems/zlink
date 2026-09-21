@@ -3,17 +3,17 @@
 package systems.zlink.framework.runtime.internal.binding.spot;
 
 import systems.zlink.contracts.messaging.Message;
+
 import java.time.Duration;
 import java.util.List;
 import java.util.concurrent.CompletionStage;
 
 /** Accepts further parts, timeout, flags, and the terminal submit of a request. */
 interface RequestSubmitOperation
-  extends MessageBuilderStage<RequestSubmitOperation>,
-          TimeoutSubmitOperation<List<Message>> {
+        extends MessageBuilderStage<RequestSubmitOperation>, TimeoutSubmitOperation<List<Message>> {
     /**
-     * Adds another request part; consumed on a successful submit (see
-     * {@link RequestOperation} for the ownership contract).
+     * Adds another request part; consumed on a successful submit (see {@link RequestOperation} for
+     * the ownership contract).
      *
      * @param part the request part
      * @return this operation for chaining
@@ -36,5 +36,4 @@ interface RequestSubmitOperation
      * @return a future that completes with the reply message list
      */
     CompletionStage<List<Message>> submit();
-
 }

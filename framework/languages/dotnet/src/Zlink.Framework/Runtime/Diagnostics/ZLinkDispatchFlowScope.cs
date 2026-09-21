@@ -11,14 +11,13 @@ internal readonly struct ZLinkDispatchFlowScope(
     string? topic = null,
     string? sourceRid = null,
     string? spotId = null,
-    string? actorId = null)
+    string? actorId = null
+)
 {
     // The request owns the flow observed at its dispatch boundary. Application
     // awaits and nested downstream calls may change the ambient context before
     // the terminal trace is emitted.
-    private readonly ZLinkFlowValue? capturedFlow = captureFlow
-        ? ZLinkFlowContext.Current
-        : null;
+    private readonly ZLinkFlowValue? capturedFlow = captureFlow ? ZLinkFlowContext.Current : null;
 
     public string? ChannelName => channelName;
 
@@ -33,7 +32,8 @@ internal readonly struct ZLinkDispatchFlowScope(
         ZLinkCodecRegistryBuilder codecs,
         ZLinkDispatchErrorReporter dispatchErrors,
         ZLinkDispatchErrorAction failureAction,
-        out object? message) =>
+        out object? message
+    ) =>
         TryDecode(
             parts,
             messageType,
@@ -43,7 +43,8 @@ internal readonly struct ZLinkDispatchFlowScope(
             failureAction,
             decodeErrorSubject: null,
             out message,
-            out _);
+            out _
+        );
 
     public bool TryDecode(
         ZLinkMultipartPayloadView parts,
@@ -52,7 +53,8 @@ internal readonly struct ZLinkDispatchFlowScope(
         ZLinkCodecRegistryBuilder codecs,
         ZLinkDispatchErrorReporter dispatchErrors,
         ZLinkDispatchErrorAction failureAction,
-        out object? message) =>
+        out object? message
+    ) =>
         TryDecode(
             parts,
             messageType,
@@ -62,7 +64,8 @@ internal readonly struct ZLinkDispatchFlowScope(
             failureAction,
             decodeErrorSubject: null,
             out message,
-            out _);
+            out _
+        );
 
     // decodeErrorSubject names the payload in the reported wrapper exception
     // (e.g. "request"); passing it instead of a wrapping callback keeps the
@@ -76,15 +79,12 @@ internal readonly struct ZLinkDispatchFlowScope(
         ZLinkDispatchErrorAction failureAction,
         string? decodeErrorSubject,
         out object? message,
-        out ZLinkFrameworkException? decodeError)
+        out ZLinkFrameworkException? decodeError
+    )
     {
         try
         {
-            message = ZLinkEnvelopeCodec.DecodeBody(
-                parts,
-                messageType,
-                contentType,
-                codecs);
+            message = ZLinkEnvelopeCodec.DecodeBody(parts, messageType, contentType, codecs);
             decodeError = null;
             return true;
         }
@@ -99,16 +99,13 @@ internal readonly struct ZLinkDispatchFlowScope(
                 : new ZLinkFrameworkException(
                     ZLinkFrameworkErrorKind.ProtocolError,
                     $"PayloadDecodeFailed: failed to decode {decodeErrorSubject} payload "
-                    + $"for '{channelName}:{packetName}'.",
-                    innerException: ex)
+                        + $"for '{channelName}:{packetName}'.",
+                    innerException: ex
+                )
                 {
-                    Origin = ZLinkErrorOrigin.Framework
+                    Origin = ZLinkErrorOrigin.Framework,
                 };
-            PayloadDecodeFailed(
-                dispatchErrors,
-                failureAction,
-                ex,
-                decodeError);
+            PayloadDecodeFailed(dispatchErrors, failureAction, ex, decodeError);
             return false;
         }
     }
@@ -122,15 +119,12 @@ internal readonly struct ZLinkDispatchFlowScope(
         ZLinkDispatchErrorAction failureAction,
         string? decodeErrorSubject,
         out object? message,
-        out ZLinkFrameworkException? decodeError)
+        out ZLinkFrameworkException? decodeError
+    )
     {
         try
         {
-            message = ZLinkEnvelopeCodec.DecodeBody(
-                parts,
-                messageType,
-                contentType,
-                codecs);
+            message = ZLinkEnvelopeCodec.DecodeBody(parts, messageType, contentType, codecs);
             decodeError = null;
             return true;
         }
@@ -142,16 +136,13 @@ internal readonly struct ZLinkDispatchFlowScope(
                 : new ZLinkFrameworkException(
                     ZLinkFrameworkErrorKind.ProtocolError,
                     $"PayloadDecodeFailed: failed to decode {decodeErrorSubject} payload "
-                    + $"for '{channelName}:{packetName}'.",
-                    innerException: ex)
+                        + $"for '{channelName}:{packetName}'.",
+                    innerException: ex
+                )
                 {
-                    Origin = ZLinkErrorOrigin.Framework
+                    Origin = ZLinkErrorOrigin.Framework,
                 };
-            PayloadDecodeFailed(
-                dispatchErrors,
-                failureAction,
-                ex,
-                decodeError);
+            PayloadDecodeFailed(dispatchErrors, failureAction, ex, decodeError);
             return false;
         }
     }
@@ -159,66 +150,58 @@ internal readonly struct ZLinkDispatchFlowScope(
     public void HandlerMissing(
         ZLinkDispatchErrorReporter dispatchErrors,
         ZLinkDispatchErrorAction action,
-        Exception? exception = null)
+        Exception? exception = null
+    )
     {
-        Report(
-            dispatchErrors,
-            ZLinkDispatchErrorReason.HandlerMissing,
-            action,
-            exception);
+        Report(dispatchErrors, ZLinkDispatchErrorReason.HandlerMissing, action, exception);
     }
 
     public void Dropped(
         ZLinkDispatchErrorReporter dispatchErrors,
-        ZLinkDispatchErrorReason reason = ZLinkDispatchErrorReason.HandlerMissing)
+        ZLinkDispatchErrorReason reason = ZLinkDispatchErrorReason.HandlerMissing
+    )
     {
-        Report(
-            dispatchErrors,
-            reason,
-            ZLinkDispatchErrorAction.Drop);
+        Report(dispatchErrors, reason, ZLinkDispatchErrorAction.Drop);
     }
 
     public void PayloadDecodeFailed(
         ZLinkDispatchErrorReporter dispatchErrors,
         ZLinkDispatchErrorAction action,
         Exception exception,
-        Exception? reportedException = null)
+        Exception? reportedException = null
+    )
     {
         Report(
             dispatchErrors,
             ZLinkDispatchErrorReason.PayloadDecodeFailed,
             action,
-            reportedException ?? exception);
+            reportedException ?? exception
+        );
     }
 
     public void HandlerException(
         ZLinkDispatchErrorReporter dispatchErrors,
         ZLinkDispatchErrorAction action,
-        Exception exception)
+        Exception exception
+    )
     {
-        Report(
-            dispatchErrors,
-            ZLinkDispatchErrorReason.HandlerException,
-            action,
-            exception);
+        Report(dispatchErrors, ZLinkDispatchErrorReason.HandlerException, action, exception);
     }
 
-    public void ReplyPathMissing(
-        ZLinkDispatchErrorReporter dispatchErrors,
-        Exception exception)
+    public void ReplyPathMissing(ZLinkDispatchErrorReporter dispatchErrors, Exception exception)
     {
         Report(
             dispatchErrors,
             ZLinkDispatchErrorReason.ReplyPathMissing,
             ZLinkDispatchErrorAction.FailCaller,
-            exception);
+            exception
+        );
     }
 
-    public void Trace(
-        ZLinkDispatchErrorReporter dispatchErrors,
-        ZLinkMessageFlowOutcome outcome)
+    public void Trace(ZLinkDispatchErrorReporter dispatchErrors, ZLinkMessageFlowOutcome outcome)
     {
-        if (!dispatchErrors.Flow.Enabled(outcome)) return;
+        if (!dispatchErrors.Flow.Enabled(outcome))
+            return;
 
         dispatchErrors.Flow.Trace(CreateEvent(outcome));
     }
@@ -227,25 +210,30 @@ internal readonly struct ZLinkDispatchFlowScope(
         ZLinkDispatchErrorReporter dispatchErrors,
         ZLinkDispatchErrorReason reason,
         ZLinkDispatchErrorAction action,
-        Exception? exception = null)
+        Exception? exception = null
+    )
     {
-        if (!dispatchErrors.Enabled) return;
+        if (!dispatchErrors.Enabled)
+            return;
 
-        dispatchErrors.Report(new ZLinkDispatchFailure(
-            surface,
-            messageKind,
-            reason,
-            action,
-            packetName,
-            channelName,
-            topic,
-            SourceRid: sourceRid,
-            SpotId: spotId,
-            ActorId: actorId,
-            CorrelationId: correlationId,
-            Exception: exception,
-            FlowId: capturedFlow?.FlowId,
-            FlowOrigin: capturedFlow?.Origin));
+        dispatchErrors.Report(
+            new ZLinkDispatchFailure(
+                surface,
+                messageKind,
+                reason,
+                action,
+                packetName,
+                channelName,
+                topic,
+                SourceRid: sourceRid,
+                SpotId: spotId,
+                ActorId: actorId,
+                CorrelationId: correlationId,
+                Exception: exception,
+                FlowId: capturedFlow?.FlowId,
+                FlowOrigin: capturedFlow?.Origin
+            )
+        );
     }
 
     private ZLinkMessageFlowEvent CreateEvent(ZLinkMessageFlowOutcome outcome)
@@ -260,11 +248,11 @@ internal readonly struct ZLinkDispatchFlowScope(
             correlationId,
             sourceRid,
             SpotId: spotId,
-            ActorId: actorId)
+            ActorId: actorId
+        )
         {
             FlowId = capturedFlow?.FlowId ?? string.Empty,
-            FlowOrigin = capturedFlow?.Origin
+            FlowOrigin = capturedFlow?.Origin,
         };
     }
-
 }

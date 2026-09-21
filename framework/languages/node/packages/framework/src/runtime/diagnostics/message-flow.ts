@@ -1,8 +1,4 @@
-import {
-  SpanStatusCode,
-  trace as openTelemetryTrace,
-  type Attributes
-} from '@opentelemetry/api';
+import { SpanStatusCode, trace as openTelemetryTrace, type Attributes } from '@opentelemetry/api';
 import { logs as openTelemetryLogs, SeverityNumber } from '@opentelemetry/api-logs';
 import {
   MESSAGE_FLOW_MODE_RANK,
@@ -45,8 +41,15 @@ interface ZLinkTelemetryRecord {
   readonly timestamp: Date;
   readonly phase?: string;
   readonly outcome: ZLinkRuntimeMessageFlowResult;
-  readonly surface: 'node' | 'channel' | 'spot' | 'instance_spot' | 'actor' | 'stream'
-    | 'actor_relocation' | 'classic_fanout';
+  readonly surface:
+    | 'node'
+    | 'channel'
+    | 'spot'
+    | 'instance_spot'
+    | 'actor'
+    | 'stream'
+    | 'actor_relocation'
+    | 'classic_fanout';
   readonly messageKind: 'request' | 'send' | 'response' | 'error' | 'control';
   readonly reason?: string;
   readonly action?: string;
@@ -102,10 +105,10 @@ function requiredMode(
 ): ZLinkMessageFlowLogMode {
   //  succeeded가 아닌 terminal은 Errors level에서도 보여야 한다 — 기록 범위 설정
   //  절의 level 규칙.
-  return outcome === ZLinkMessageFlowOutcome.Dropped
-    || outcome === ZLinkMessageFlowOutcome.Backpressured
-    || outcome === ZLinkMessageFlowOutcome.Error
-    || (result !== undefined && result !== 'succeeded')
+  return outcome === ZLinkMessageFlowOutcome.Dropped ||
+    outcome === ZLinkMessageFlowOutcome.Backpressured ||
+    outcome === ZLinkMessageFlowOutcome.Error ||
+    (result !== undefined && result !== 'succeeded')
     ? 'errors'
     : 'normal';
 }
@@ -120,7 +123,9 @@ export function flowIfEnabled(
   if (flow === undefined) return undefined;
   return typeof flow.begin === 'function'
     ? flow.begin(outcome, result, flowId, sourceMeshGeneration)
-    : flow.accepts(outcome) ? flow : undefined;
+    : flow.accepts(outcome)
+      ? flow
+      : undefined;
 }
 
 export interface ZLinkMessageFlowTracePoint {
@@ -174,17 +179,17 @@ export class ZLinkMessageFlowTracer {
     }
     switch (mode) {
       case 'errors':
-        return this.errorsTracePoint ??= {
-          trace: flowInput => this.traceAcceptedAtMode(flowInput, 'errors')
-        };
+        return (this.errorsTracePoint ??= {
+          trace: (flowInput) => this.traceAcceptedAtMode(flowInput, 'errors')
+        });
       case 'normal':
-        return this.normalTracePoint ??= {
-          trace: flowInput => this.traceAcceptedAtMode(flowInput, 'normal')
-        };
+        return (this.normalTracePoint ??= {
+          trace: (flowInput) => this.traceAcceptedAtMode(flowInput, 'normal')
+        });
       case 'detailed':
-        return this.detailedTracePoint ??= {
-          trace: flowInput => this.traceAcceptedAtMode(flowInput, 'detailed')
-        };
+        return (this.detailedTracePoint ??= {
+          trace: (flowInput) => this.traceAcceptedAtMode(flowInput, 'detailed')
+        });
       case 'off':
         return undefined;
     }
@@ -197,17 +202,21 @@ export class ZLinkMessageFlowTracer {
   trace(flowInput: MessageFlowInput): void {
     const effectiveMode = effectiveMessageFlow(this.ctx);
     if (
-      MESSAGE_FLOW_MODE_RANK[effectiveMode]
-      < MESSAGE_FLOW_MODE_RANK[requiredMode(flowInput.outcome, flowInput.result)]
-    ) return;
+      MESSAGE_FLOW_MODE_RANK[effectiveMode] <
+      MESSAGE_FLOW_MODE_RANK[requiredMode(flowInput.outcome, flowInput.result)]
+    )
+      return;
     const ambient = currentFlowContext();
     const flowId = flowInput.flowId ?? ambient?.flowId;
-    if (!this.acceptsSample(
-      flowInput.outcome,
-      flowInput.result,
-      flowId,
-      flowInput.sourceMeshGeneration
-    )) return;
+    if (
+      !this.acceptsSample(
+        flowInput.outcome,
+        flowInput.result,
+        flowId,
+        flowInput.sourceMeshGeneration
+      )
+    )
+      return;
     this.traceAcceptedAtMode(flowInput, effectiveMode, flowId, ambient?.flowOrigin);
   }
 
@@ -226,15 +235,17 @@ export class ZLinkMessageFlowTracer {
       effectiveMode
     };
     this.tracedEvents += 1;
-    this.publish(toTelemetryRecord(
-      flow,
-      effectiveMode === 'detailed' && this.ctx.diagnostics.includeMessageSizes
-        ? flow.messageSize
-        : undefined,
-      // Spec 26 §4: terminal elapsed time is a Detailed-level addition; the
-      // other languages strip it below that level.
-      effectiveMode === 'detailed' ? flow.durationSeconds : undefined
-    ));
+    this.publish(
+      toTelemetryRecord(
+        flow,
+        effectiveMode === 'detailed' && this.ctx.diagnostics.includeMessageSizes
+          ? flow.messageSize
+          : undefined,
+        // Spec 26 §4: terminal elapsed time is a Detailed-level addition; the
+        // other languages strip it below that level.
+        effectiveMode === 'detailed' ? flow.durationSeconds : undefined
+      )
+    );
   }
 
   private acceptsSample(
@@ -243,11 +254,13 @@ export class ZLinkMessageFlowTracer {
     flowId: string | undefined,
     sourceMeshGeneration: bigint | string | undefined
   ): boolean {
-    return outcome === ZLinkMessageFlowOutcome.Dropped
-      || outcome === ZLinkMessageFlowOutcome.Backpressured
-      || outcome === ZLinkMessageFlowOutcome.Error
-      || (result !== undefined && result !== 'succeeded')
-      || this.sample(flowId, sourceMeshGeneration);
+    return (
+      outcome === ZLinkMessageFlowOutcome.Dropped ||
+      outcome === ZLinkMessageFlowOutcome.Backpressured ||
+      outcome === ZLinkMessageFlowOutcome.Error ||
+      (result !== undefined && result !== 'succeeded') ||
+      this.sample(flowId, sourceMeshGeneration)
+    );
   }
 
   get tracedCount(): number {
@@ -258,12 +271,16 @@ export class ZLinkMessageFlowTracer {
     return this.providerFailures;
   }
 
-  private sample(flowId: string | undefined, sourceMeshGeneration: bigint | string | undefined): boolean {
+  private sample(
+    flowId: string | undefined,
+    sourceMeshGeneration: bigint | string | undefined
+  ): boolean {
     const rate = this.ctx.diagnostics.sampleRate;
     if (rate >= 1.0) return true;
     if (rate <= 0.0) return false;
-    const samplingKey = flowId
-      ?? `${sourceMeshGeneration ?? this.ctx.sourceMeshGeneration}:${this.nextSamplingSequence()}`;
+    const samplingKey =
+      flowId ??
+      `${sourceMeshGeneration ?? this.ctx.sourceMeshGeneration}:${this.nextSamplingSequence()}`;
     return hashFlowId(samplingKey) / 0x1_0000_0000 < rate;
   }
 
@@ -279,9 +296,8 @@ export class ZLinkMessageFlowTracer {
 
   private publishToLogger(record: ZLinkTelemetryRecord): void {
     try {
-      const severityNumber = record.eventId === 'zlink.dispatch_error'
-        ? SeverityNumber.ERROR
-        : SeverityNumber.INFO;
+      const severityNumber =
+        record.eventId === 'zlink.dispatch_error' ? SeverityNumber.ERROR : SeverityNumber.INFO;
       telemetryLogger.emit({
         eventName: record.eventId,
         timestamp: record.timestamp,
@@ -337,9 +353,10 @@ function toTelemetryRecord(
   durationSeconds: number | undefined
 ): ZLinkTelemetryRecord {
   return {
-    eventId: flow.outcome === ZLinkMessageFlowOutcome.Error
-      ? 'zlink.dispatch_error'
-      : 'zlink.message_flow',
+    eventId:
+      flow.outcome === ZLinkMessageFlowOutcome.Error
+        ? 'zlink.dispatch_error'
+        : 'zlink.message_flow',
     timestamp: new Date(),
     phase: messageFlowPhase(flow.outcome),
     outcome: flow.result ?? messageFlowOutcome(flow.outcome),
@@ -357,9 +374,8 @@ function toTelemetryRecord(
     targetRid: flow.targetRid,
     serverRid: flow.serverRid,
     flowId: flow.flowId,
-    flowOrigin: flow.flowOrigin === undefined
-      ? undefined
-      : FLOW_ORIGIN_TELEMETRY_VALUES[flow.flowOrigin],
+    flowOrigin:
+      flow.flowOrigin === undefined ? undefined : FLOW_ORIGIN_TELEMETRY_VALUES[flow.flowOrigin],
     spotId: flow.spotId,
     instanceSpotType: flow.instanceSpotType,
     activationState: flow.activationState,
@@ -455,7 +471,6 @@ function structuredLogBody(record: ZLinkTelemetryRecord): string {
     .join(' ')}`;
 }
 
-
 function compactAttributes(values: Record<string, string | number | undefined>): Attributes {
   const attributes: Attributes = {};
   for (const [key, value] of Object.entries(values)) {
@@ -466,31 +481,37 @@ function compactAttributes(values: Record<string, string | number | undefined>):
 
 function messageFlowPhase(outcome: ZLinkMessageFlowOutcome): string | undefined {
   switch (outcome) {
-    case ZLinkMessageFlowOutcome.Received: return 'received';
-    case ZLinkMessageFlowOutcome.Admitted: return 'admitted';
-    case ZLinkMessageFlowOutcome.Dispatched: return 'dispatched';
-    case ZLinkMessageFlowOutcome.Completed: return 'completed';
-    case ZLinkMessageFlowOutcome.Replied: return 'replied';
-    case ZLinkMessageFlowOutcome.Dropped: return 'dropped';
-    case ZLinkMessageFlowOutcome.Sent: return 'sent';
-    case ZLinkMessageFlowOutcome.ReplyReceived: return 'reply_received';
-    case ZLinkMessageFlowOutcome.Backpressured: return 'backpressured';
-    case ZLinkMessageFlowOutcome.Error: return undefined;
+    case ZLinkMessageFlowOutcome.Received:
+      return 'received';
+    case ZLinkMessageFlowOutcome.Admitted:
+      return 'admitted';
+    case ZLinkMessageFlowOutcome.Dispatched:
+      return 'dispatched';
+    case ZLinkMessageFlowOutcome.Completed:
+      return 'completed';
+    case ZLinkMessageFlowOutcome.Replied:
+      return 'replied';
+    case ZLinkMessageFlowOutcome.Dropped:
+      return 'dropped';
+    case ZLinkMessageFlowOutcome.Sent:
+      return 'sent';
+    case ZLinkMessageFlowOutcome.ReplyReceived:
+      return 'reply_received';
+    case ZLinkMessageFlowOutcome.Backpressured:
+      return 'backpressured';
+    case ZLinkMessageFlowOutcome.Error:
+      return undefined;
   }
 }
 
-function messageFlowOutcome(
-  outcome: ZLinkMessageFlowOutcome
-): ZLinkTelemetryRecord['outcome'] {
+function messageFlowOutcome(outcome: ZLinkMessageFlowOutcome): ZLinkTelemetryRecord['outcome'] {
   if (outcome === ZLinkMessageFlowOutcome.Error) return 'failed';
   if (outcome === ZLinkMessageFlowOutcome.Backpressured) return 'backpressured';
   if (outcome === ZLinkMessageFlowOutcome.Dropped) return 'dropped';
   return 'succeeded';
 }
 
-function messageFlowSurface(
-  surface: ZLinkDispatchErrorSurface
-): ZLinkTelemetryRecord['surface'] {
+function messageFlowSurface(surface: ZLinkDispatchErrorSurface): ZLinkTelemetryRecord['surface'] {
   switch (surface) {
     case ZLinkDispatchErrorSurface.Node:
       return 'node';
@@ -513,9 +534,7 @@ function messageFlowSurface(
   }
 }
 
-function messageFlowKind(
-  kind: ZLinkDispatchMessageKind
-): ZLinkTelemetryRecord['messageKind'] {
+function messageFlowKind(kind: ZLinkDispatchMessageKind): ZLinkTelemetryRecord['messageKind'] {
   switch (kind) {
     case ZLinkDispatchMessageKind.Request:
     case ZLinkDispatchMessageKind.ActorRequest:

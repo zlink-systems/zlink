@@ -7,10 +7,7 @@ import {
   type ZLinkRouteLocation
 } from './internal-location-contracts';
 import { ZLinkLocationKeyCodec } from './key-codec';
-import type {
-  IZLinkLocationLifecycleRuntime,
-  ZLinkOwnershipLostEvent
-} from './lifecycle-runtime';
+import type { IZLinkLocationLifecycleRuntime, ZLinkOwnershipLostEvent } from './lifecycle-runtime';
 
 const encodeRoutingIdHex = ZLinkLocationKeyCodec.encodeRoutingIdHex;
 

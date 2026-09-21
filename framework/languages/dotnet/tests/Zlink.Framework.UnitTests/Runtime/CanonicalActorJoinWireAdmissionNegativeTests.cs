@@ -1,7 +1,7 @@
 using System.Diagnostics;
-using Microsoft.Extensions.DependencyInjection;
 using System.Net;
 using System.Net.Sockets;
+using Microsoft.Extensions.DependencyInjection;
 using Systems.Zlink.Framework.Runtime.Protocol;
 using Zlink.Framework.Contracts.Messaging;
 using Zlink.Framework.Runtime.Backend.Contracts;
@@ -16,7 +16,8 @@ public sealed class CanonicalActorJoinWireAdmissionNegativeTests
     [InlineData(ActorFenceMismatch.NodeRid)]
     [InlineData(ActorFenceMismatch.NodeGeneration)]
     public async Task Canonical_actor_join_authority_fence_mismatch_returns_location_stale(
-        ActorFenceMismatch mismatch)
+        ActorFenceMismatch mismatch
+    )
     {
         await using var fixture = await WireAdmissionFixture.CreateAsync(mismatch);
         var request = fixture.CreateRequest();
@@ -25,8 +26,8 @@ public sealed class CanonicalActorJoinWireAdmissionNegativeTests
             {
                 Actor = request.Actor with
                 {
-                    ObjectGeneration = checked(request.Actor.ObjectGeneration + 1)
-                }
+                    ObjectGeneration = checked(request.Actor.ObjectGeneration + 1),
+                },
             };
 
         var reply = await fixture.SendAsync(request);
@@ -34,7 +35,8 @@ public sealed class CanonicalActorJoinWireAdmissionNegativeTests
         AssertTerminal(
             reply,
             RequestResult.Conflict,
-            ServiceWireConstants.FrameworkErrorCode.ActorLocationStale);
+            ServiceWireConstants.FrameworkErrorCode.ActorLocationStale
+        );
     }
 
     [Fact]
@@ -46,7 +48,8 @@ public sealed class CanonicalActorJoinWireAdmissionNegativeTests
             "other-actor-type",
             failIfExists: false,
             () => Task.FromResult<IZLinkActor>(new TestActor(WireAdmissionFixture.ActorId)),
-            CancellationToken.None);
+            CancellationToken.None
+        );
         _ = await operation.Task;
 
         var reply = await fixture.SendAsync(fixture.CreateRequest());
@@ -54,7 +57,8 @@ public sealed class CanonicalActorJoinWireAdmissionNegativeTests
         AssertTerminal(
             reply,
             RequestResult.Conflict,
-            ServiceWireConstants.FrameworkErrorCode.ActorTypeMismatch);
+            ServiceWireConstants.FrameworkErrorCode.ActorTypeMismatch
+        );
     }
 
     [Fact]
@@ -65,14 +69,16 @@ public sealed class CanonicalActorJoinWireAdmissionNegativeTests
         var malformed = ZLinkMeshRecordAdapters.EncodeCanonicalActorJoinHead(request);
         Array.Resize(ref malformed, malformed.Length - 1);
         Assert.Throws<EndOfStreamException>(() =>
-            ServiceWirePilotCodec.DecodeActorJoin28([malformed]));
+            ServiceWirePilotCodec.DecodeActorJoin28([malformed])
+        );
 
         var reply = await fixture.SendAsync(request, malformed);
 
         AssertTerminal(
             reply,
             RequestResult.ProtocolError,
-            ServiceWireConstants.FrameworkErrorCode.RequestProtocolError);
+            ServiceWireConstants.FrameworkErrorCode.RequestProtocolError
+        );
     }
 
     private static ActorJoinRequest CreateDirectRequest(
@@ -80,50 +86,59 @@ public sealed class CanonicalActorJoinWireAdmissionNegativeTests
         RoutingId targetRid,
         ulong targetNodeGeneration,
         ulong targetSpotGeneration,
-        ulong correlation) => new(
-        correlation,
-        new ActorRef("actor-1", 1, "wire-admission", sourceRid),
-        1,
-        1,
-        1,
-        false,
-        "target-spot",
-        targetSpotGeneration,
-        targetRid,
-        targetNodeGeneration,
-        1,
-        1);
+        ulong correlation
+    ) =>
+        new(
+            correlation,
+            new ActorRef("actor-1", 1, "wire-admission", sourceRid),
+            1,
+            1,
+            1,
+            false,
+            "target-spot",
+            targetSpotGeneration,
+            targetRid,
+            targetNodeGeneration,
+            1,
+            1
+        );
 
     private static Task<IReadOnlyList<Message>> SendRequestAsync(
         IDealerSocket source,
-        ActorJoinRequest request)
+        ActorJoinRequest request
+    )
     {
         using var head = Message.From(
-            ZLinkMeshRecordAdapters.EncodeCanonicalActorJoinHead(request));
+            ZLinkMeshRecordAdapters.EncodeCanonicalActorJoinHead(request)
+        );
         using var payload = Message.From(
-            ZLinkApplicationPayloadEnvelopeCodec.Encode(
-                "JoinRequest",
-                "application/json",
-                "{}"u8));
-        return source.Request()
+            ZLinkApplicationPayloadEnvelopeCodec.Encode("JoinRequest", "application/json", "{}"u8)
+        );
+        return source
+            .Request()
             .Message(head)
             .Message(payload)
             .Timeout(TimeSpan.FromSeconds(2))
-            .Async(CancellationToken.None).Reply;
+            .Async(CancellationToken.None)
+            .Reply;
     }
 
     private static void AssertTerminal(
         IReadOnlyList<Message> parts,
         RequestResult expectedResult,
-        ServiceWireConstants.FrameworkErrorCode expectedCode)
+        ServiceWireConstants.FrameworkErrorCode expectedCode
+    )
     {
         try
         {
             var part = Assert.Single(parts);
-            Assert.True(ZLinkServiceWireCodec.TryDecodeReply(
-                part.AsReadOnlyMemory().Span,
-                out var reply,
-                out var error));
+            Assert.True(
+                ZLinkServiceWireCodec.TryDecodeReply(
+                    part.AsReadOnlyMemory().Span,
+                    out var reply,
+                    out var error
+                )
+            );
             Assert.Equal(ZLinkServiceWireCodec.DecodeError.None, error);
             Assert.Equal((int)expectedResult, reply.TerminalResult);
             Assert.Equal((uint)expectedCode, reply.FailureCode);
@@ -139,7 +154,7 @@ public sealed class CanonicalActorJoinWireAdmissionNegativeTests
     {
         ObjectGeneration,
         NodeRid,
-        NodeGeneration
+        NodeGeneration,
     }
 
     private sealed class WireAdmissionFixture : IAsyncDisposable
@@ -168,7 +183,8 @@ public sealed class CanonicalActorJoinWireAdmissionNegativeTests
             RoutingId targetRid,
             ulong targetNodeGeneration,
             ZLinkAuthoritySnapshot actorAuthority,
-            ZLinkAuthoritySnapshot targetSpotAuthority)
+            ZLinkAuthoritySnapshot targetSpotAuthority
+        )
         {
             _sourceContext = sourceContext;
             _source = source;
@@ -186,7 +202,8 @@ public sealed class CanonicalActorJoinWireAdmissionNegativeTests
         internal ZLinkFrameworkRuntime Runtime { get; }
 
         internal static async Task<WireAdmissionFixture> CreateAsync(
-            ActorFenceMismatch? mismatch = null)
+            ActorFenceMismatch? mismatch = null
+        )
         {
             var provider = new ZLinkInMemoryProviderLocationStore();
             var store = new ZLinkProviderLocationRepository(provider);
@@ -194,36 +211,30 @@ public sealed class CanonicalActorJoinWireAdmissionNegativeTests
             var registration = new ZLinkFrameworkRegistration
             {
                 DefaultRequestTimeout = TimeSpan.FromSeconds(2),
-                ImplicitHandlerAutoRegistrationEnabled = false
+                ImplicitHandlerAutoRegistrationEnabled = false,
             };
             registration.Locations.StoreInstance = provider;
-            var locationOptions = new ZLinkLocationOptions
-            {
-                PollingInterval = TimeSpan.Zero
-            };
-            var locationRuntime = new ZLinkLocationRuntime(
-                locationOptions,
-                store);
+            var locationOptions = new ZLinkLocationOptions { PollingInterval = TimeSpan.Zero };
+            var locationRuntime = new ZLinkLocationRuntime(locationOptions, store);
             Assert.True(await locationRuntime.RenewOwnerLeaseOnceAsync());
             var locationResolvers = new ZLinkStoreLocationResolvers(
                 store,
                 new ZLinkOwnerLeaseTracker(store, locationOptions),
                 new ZLinkObservedLocationGenerations(),
-                options: locationOptions);
-            var locationLifecycle = new ZLinkLocationLifecycle(
-                locationRuntime,
-                locationResolvers);
+                options: locationOptions
+            );
+            var locationLifecycle = new ZLinkLocationLifecycle(locationRuntime, locationResolvers);
             var services = new ServiceCollection()
                 .AddSingleton(locationRuntime)
                 .AddSingleton(locationLifecycle)
                 .AddSingleton(locationResolvers)
-                .AddSingleton(new ZLinkLocationAddressResolvers(
-                    locationResolvers,
-                    new ZLinkSpotHandleRegistry()))
-                .AddSingleton(new ZLinkSpotRetireTargetRuntime(
-                    null!,
-                    null!,
-                    registration))
+                .AddSingleton(
+                    new ZLinkLocationAddressResolvers(
+                        locationResolvers,
+                        new ZLinkSpotHandleRegistry()
+                    )
+                )
+                .AddSingleton(new ZLinkSpotRetireTargetRuntime(null!, null!, registration))
                 .BuildServiceProvider();
             var node = new ZLinkSpotNodeRegistration
             {
@@ -233,8 +244,8 @@ public sealed class CanonicalActorJoinWireAdmissionNegativeTests
                 Router = new ZLinkSpotRouterCapabilityRegistration
                 {
                     BindEndpoint = endpoint,
-                    AcquisitionMode = ZLinkPeerAcquisitionMode.Manual
-                }
+                    AcquisitionMode = ZLinkPeerAcquisitionMode.Manual,
+                },
             };
             node.SpotFactories.Add(typeof(AdmissionSpot));
             node.UserSpotFactoryOptions[typeof(AdmissionSpot)] =
@@ -245,13 +256,15 @@ public sealed class CanonicalActorJoinWireAdmissionNegativeTests
                     new ZLinkObjectPlacementOptions(),
                     PolicyKind: 1,
                     AdapterType: null,
-                    AdapterInvoker: null);
+                    AdapterInvoker: null
+                );
             node.ActorRelocations[ActorType] = new ZLinkObjectRelocationRegistration(
                 typeof(TestActor),
                 new ZLinkObjectPlacementOptions(),
                 PolicyKind: 1,
                 AdapterType: null,
-                AdapterInvoker: null);
+                AdapterInvoker: null
+            );
             registration.SpotNodes[MeshName] = node;
             registration.ActorCatalog.Build(registration.SpotNodes.Values);
             var runtime = new ZLinkFrameworkRuntime(
@@ -261,32 +274,39 @@ public sealed class CanonicalActorJoinWireAdmissionNegativeTests
                 new ZLinkHandlerRegistry([]),
                 new ZLinkHandlerDispatcher(
                     services.GetRequiredService<IServiceScopeFactory>(),
-                    registration));
+                    registration
+                )
+            );
             await runtime.StartAsync(CancellationToken.None);
             try
             {
                 var targetNode = runtime.GetSpotNodeRuntime(MeshName).Node;
                 var targetRid = targetNode.RoutingId;
                 var targetNodeGeneration = targetNode.MeshStatus().LifecycleGeneration;
-                var descriptor = (await store.ListMeshNodesAsync(
-                        MeshName,
-                        default))
-                    .Items
-                    .Single(item => item.Rid == targetRid);
+                var descriptor = (await store.ListMeshNodesAsync(MeshName, default)).Items.Single(
+                    item => item.Rid == targetRid
+                );
                 Assert.Equal(
                     ZLinkLocationWriteStatus.Stored,
-                    (await store.UpdateMeshNodeAsync(
-                        descriptor with
-                        {
-                            State = ZLinkFrameworkRuntimeState.Serving,
-                            DescriptorRevision = checked(
-                                descriptor.DescriptorRevision + 1)
-                        },
-                        ZLinkLocationWriteIntent.Renew)).Status);
+                    (
+                        await store.UpdateMeshNodeAsync(
+                            descriptor with
+                            {
+                                State = ZLinkFrameworkRuntimeState.Serving,
+                                DescriptorRevision = checked(descriptor.DescriptorRevision + 1),
+                            },
+                            ZLinkLocationWriteIntent.Renew
+                        )
+                    ).Status
+                );
                 await runtime.GetOrCreateAsync<AdmissionSpot>(TargetSpotId);
-                var targetSpotAuthority = Assert.IsType<ZLinkAuthorityReadResult.Found>(
-                    await store.ReadAuthorityAsync(
-                        ZLinkUserSpotAuthorityPayloadCodec.AuthorityKey(TargetSpotId))).Snapshot;
+                var targetSpotAuthority = Assert
+                    .IsType<ZLinkAuthorityReadResult.Found>(
+                        await store.ReadAuthorityAsync(
+                            ZLinkUserSpotAuthorityPayloadCodec.AuthorityKey(TargetSpotId)
+                        )
+                    )
+                    .Snapshot;
 
                 var sourceOwner = $"source-owner-{Guid.NewGuid():N}";
                 await store.ClaimLiveOwnerAsync(sourceOwner, TimeSpan.FromMinutes(5));
@@ -296,26 +316,21 @@ public sealed class CanonicalActorJoinWireAdmissionNegativeTests
                     MeshName = MeshName,
                     ActorType = ActorType,
                     ActorRef = new ActorRef(ActorId, 1, MeshName, sourceRid),
-                    OwnerNodeRid = mismatch == ActorFenceMismatch.NodeRid
-                        ? RoutingId.From($"different-source-{Guid.NewGuid():N}")
-                        : sourceRid,
-                    OwnerNodeGeneration = mismatch == ActorFenceMismatch.NodeGeneration
-                        ? 2UL
-                        : 1UL
+                    OwnerNodeRid =
+                        mismatch == ActorFenceMismatch.NodeRid
+                            ? RoutingId.From($"different-source-{Guid.NewGuid():N}")
+                            : sourceRid,
+                    OwnerNodeGeneration = mismatch == ActorFenceMismatch.NodeGeneration ? 2UL : 1UL,
                 };
                 var actorAuthority = Assert.IsType<ZLinkAuthoritySnapshot>(
-                    await AuthorityLocationTestFixture.PublishActorAsync(
-                        store,
-                        actorRow));
+                    await AuthorityLocationTestFixture.PublishActorAsync(store, actorRow)
+                );
 
                 var sourceContext = Systems.Zlink.Zlink.CreateContext();
                 var source = sourceContext.CreateDealerSocket();
                 source.SetRoutingId(sourceRid);
                 source.Connect(endpoint);
-                await SendHelloAsync(
-                    source,
-                    MeshName,
-                    $"inproc://{sourceOwner}");
+                await SendHelloAsync(source, MeshName, $"inproc://{sourceOwner}");
                 await WaitUntilAsync(() => targetNode.MeshStatus().AdmittedPeerCount == 1);
                 using var admission = await ReceiveAsync(source);
                 return new WireAdmissionFixture(
@@ -327,7 +342,8 @@ public sealed class CanonicalActorJoinWireAdmissionNegativeTests
                     targetRid,
                     targetNodeGeneration,
                     actorAuthority,
-                    targetSpotAuthority);
+                    targetSpotAuthority
+                );
             }
             catch
             {
@@ -354,28 +370,33 @@ public sealed class CanonicalActorJoinWireAdmissionNegativeTests
                 _targetRid,
                 _targetNodeGeneration,
                 _targetSpotAuthority.AuthorityOwnerGeneration,
-                checked((ulong)_targetSpotAuthority.OwnerLeaseGeneration));
+                checked((ulong)_targetSpotAuthority.OwnerLeaseGeneration)
+            );
         }
 
         internal async Task<IReadOnlyList<Message>> SendAsync(
             ActorJoinRequest request,
-            byte[]? head = null)
+            byte[]? head = null
+        )
         {
             using var requestHead = Message.From(
-                head ?? ZLinkMeshRecordAdapters.EncodeCanonicalActorJoinHead(request));
+                head ?? ZLinkMeshRecordAdapters.EncodeCanonicalActorJoinHead(request)
+            );
             using var payload = Message.From(
                 ZLinkApplicationPayloadEnvelopeCodec.Encode(
                     "JoinRequest",
                     "application/json",
-                    "{}"u8));
-            var replyTask = _source.Request()
+                    "{}"u8
+                )
+            );
+            var replyTask = _source
+                .Request()
                 .Message(requestHead)
                 .Message(payload)
                 .Timeout(TimeSpan.FromSeconds(2))
-                .Async(CancellationToken.None).Reply;
-            Assert.Equal(
-                1,
-                _sourcePoller.Wait(_sourceEvents, TimeSpan.FromSeconds(2)));
+                .Async(CancellationToken.None)
+                .Reply;
+            Assert.Equal(1, _sourcePoller.Wait(_sourceEvents, TimeSpan.FromSeconds(2)));
             return await replyTask;
         }
 
@@ -391,7 +412,8 @@ public sealed class CanonicalActorJoinWireAdmissionNegativeTests
         internal static async Task SendHelloAsync(
             IDealerSocket source,
             string meshName,
-            string sourceEndpoint)
+            string sourceEndpoint
+        )
         {
             var deadlineTimeout = TimeSpan.FromSeconds(2);
             var deadlineStarted = Stopwatch.GetTimestamp();
@@ -407,11 +429,14 @@ public sealed class CanonicalActorJoinWireAdmissionNegativeTests
                             lifecycleGeneration: 1,
                             descriptorRevision: 1,
                             new Dictionary<string, uint>(StringComparer.Ordinal),
-                            objectRole: (byte)ZLinkMeshNodeObjectRole.Server));
+                            objectRole: (byte)ZLinkMeshNodeObjectRole.Server
+                        )
+                    );
                     await source.Send().Message(hello).Async(CancellationToken.None).Admitted;
                     return;
                 }
-                catch (ZlinkSubmitException) when (Stopwatch.GetElapsedTime(deadlineStarted) < deadlineTimeout)
+                catch (ZlinkSubmitException)
+                    when (Stopwatch.GetElapsedTime(deadlineStarted) < deadlineTimeout)
                 {
                     await Task.Delay(10);
                 }
@@ -461,15 +486,13 @@ public sealed class CanonicalActorJoinWireAdmissionNegativeTests
         public ValueTask<ZLinkSpotActorJoinResult> OnActorJoinAsync(
             string actorId,
             ZLinkMessage request,
-            CancellationToken cancellationToken) =>
-            ValueTask.FromResult(ZLinkSpotActorJoinResult.Accept());
+            CancellationToken cancellationToken
+        ) => ValueTask.FromResult(ZLinkSpotActorJoinResult.Accept());
 
-        public ValueTask OnJoinedActorAsync(
-            TestActor actor,
-            CancellationToken cancellationToken) => ValueTask.CompletedTask;
+        public ValueTask OnJoinedActorAsync(TestActor actor, CancellationToken cancellationToken) =>
+            ValueTask.CompletedTask;
 
-        public ValueTask OnLeaveActorAsync(
-            TestActor actor,
-            CancellationToken cancellationToken) => ValueTask.CompletedTask;
+        public ValueTask OnLeaveActorAsync(TestActor actor, CancellationToken cancellationToken) =>
+            ValueTask.CompletedTask;
     }
 }

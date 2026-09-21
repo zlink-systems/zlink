@@ -1,4 +1,7 @@
-import { ZLinkFrameworkInternalErrorKind, createInternalFrameworkException } from '../framework-errors-internal';
+import {
+  ZLinkFrameworkInternalErrorKind,
+  createInternalFrameworkException
+} from '../framework-errors-internal';
 import { Worker } from 'node:worker_threads';
 import type { ZLinkWorkerCall } from '../../contracts';
 import { ZLinkFrameworkException } from '../../contracts';
@@ -25,7 +28,9 @@ export interface ZLinkWorkerRuntimeOptions {
   readonly idleTimeoutMs: number;
 }
 
-export function resolveWorkerRuntimeOptions(options?: ZLinkWorkerOptions): ZLinkWorkerRuntimeOptions {
+export function resolveWorkerRuntimeOptions(
+  options?: ZLinkWorkerOptions
+): ZLinkWorkerRuntimeOptions {
   const resolved = {
     minThreads: options?.minThreads ?? DEFAULT_WORKER_MIN_THREADS,
     maxThreads: options?.maxThreads ?? defaultWorkerMaxThreads(),
@@ -35,7 +40,9 @@ export function resolveWorkerRuntimeOptions(options?: ZLinkWorkerOptions): ZLink
   requirePositiveInteger('Worker maxThreads', resolved.maxThreads);
   requireNonNegativeInteger('Worker idleTimeoutMs', resolved.idleTimeoutMs);
   if (resolved.maxThreads < resolved.minThreads) {
-    throw new ZLinkConfigurationException('Worker maxThreads must be greater than or equal to minThreads.');
+    throw new ZLinkConfigurationException(
+      'Worker maxThreads must be greater than or equal to minThreads.'
+    );
   }
   return resolved;
 }
@@ -87,9 +94,11 @@ class ZLinkCpuWorkerPool {
 
   schedule<T>(work: ZLinkCpuWorkerWork<T>, timeoutMs?: number, signal?: AbortSignal): Promise<T> {
     if (work.constructor.name === 'AsyncFunction') {
-      return Promise.reject(new ZLinkConfigurationException(
-        'runCpuWorker requires a synchronous function; use runIoWorker for async work.'
-      ));
+      return Promise.reject(
+        new ZLinkConfigurationException(
+          'runCpuWorker requires a synchronous function; use runIoWorker for async work.'
+        )
+      );
     }
     if (signal?.aborted === true) {
       return Promise.reject(createAbortError());
@@ -131,9 +140,9 @@ class ZLinkCpuWorkerPool {
     try {
       this.ensureMinimumSlots();
       while (this.queueCount > 0) {
-        const slot = this.findIdleSlot() ?? (
-          this.slots.size < this.options.maxThreads ? this.createSlot() : undefined
-        );
+        const slot =
+          this.findIdleSlot() ??
+          (this.slots.size < this.options.maxThreads ? this.createSlot() : undefined);
         if (slot === undefined) return;
         const job = this.takeQueuedJob();
         if (job === undefined) return;
@@ -247,7 +256,11 @@ class ZLinkCpuWorkerPool {
     this.pump();
   }
 
-  private cancelRunningJob(slot: ZLinkCpuWorkerSlot, job: ZLinkCpuJob<unknown>, error: unknown): void {
+  private cancelRunningJob(
+    slot: ZLinkCpuWorkerSlot,
+    job: ZLinkCpuJob<unknown>,
+    error: unknown
+  ): void {
     if (job.settled || slot.job !== job) return;
     if (job.abortState !== undefined) Atomics.store(job.abortState, 0, 1);
     this.terminateSlot(slot);
@@ -271,7 +284,8 @@ class ZLinkCpuWorkerPool {
     job.running = false;
     if (job.timeout !== undefined) clearTimeout(job.timeout);
     if (job.signal !== undefined) {
-      if (job.abortListener !== undefined) job.signal.removeEventListener('abort', job.abortListener);
+      if (job.abortListener !== undefined)
+        job.signal.removeEventListener('abort', job.abortListener);
       if (job.activeAbortListener !== undefined) {
         job.signal.removeEventListener('abort', job.activeAbortListener);
       }
@@ -290,11 +304,16 @@ class ZLinkCpuWorkerPool {
   }
 
   private scheduleIdleTermination(slot: ZLinkCpuWorkerSlot): void {
-    if (slot.terminating || slot.job !== undefined || this.slots.size <= this.options.minThreads) return;
+    if (slot.terminating || slot.job !== undefined || this.slots.size <= this.options.minThreads)
+      return;
     if (slot.idleTimer !== undefined) clearTimeout(slot.idleTimer);
     slot.idleTimer = setTimeout(() => {
       slot.idleTimer = undefined;
-      if (slot.job === undefined && !slot.terminating && this.slots.size > this.options.minThreads) {
+      if (
+        slot.job === undefined &&
+        !slot.terminating &&
+        this.slots.size > this.options.minThreads
+      ) {
         this.terminateSlot(slot);
       }
     }, this.options.idleTimeoutMs);
@@ -340,7 +359,6 @@ class ZLinkCpuWorkerPool {
       return;
     }
   }
-
 }
 interface CpuWorkerMessage {
   readonly ok: boolean;
@@ -414,10 +432,12 @@ class ZLinkIoWorkerRuntime {
         };
         signal.addEventListener('abort', abortListener, { once: true });
       }
-      Promise.resolve().then(() => work(controller.signal)).then(
-        (value) => settle(() => resolve(value)),
-        (error) => settle(() => reject(workerFailed(error)))
-      );
+      Promise.resolve()
+        .then(() => work(controller.signal))
+        .then(
+          (value) => settle(() => resolve(value)),
+          (error) => settle(() => reject(workerFailed(error)))
+        );
     });
   }
 }
@@ -438,7 +458,11 @@ export class ZLinkWorkerRuntime {
     return this.cpu.inFlightCount;
   }
 
-  scheduleCpu<T>(work: ZLinkCpuWorkerWork<T>, timeoutMs?: number, signal?: AbortSignal): Promise<T> {
+  scheduleCpu<T>(
+    work: ZLinkCpuWorkerWork<T>,
+    timeoutMs?: number,
+    signal?: AbortSignal
+  ): Promise<T> {
     return this.cpu.schedule(work, timeoutMs, signal);
   }
 
@@ -497,20 +521,27 @@ export function deliverOnSerial<T>(serial: ZLinkSpotSerialLike, pending: Promise
 class ZLinkSerialDeliveredPromise<T> implements Promise<T> {
   readonly [Symbol.toStringTag] = 'Promise';
 
-  constructor(private readonly serial: ZLinkSpotSerialLike, private readonly pending: Promise<T>) {}
+  constructor(
+    private readonly serial: ZLinkSpotSerialLike,
+    private readonly pending: Promise<T>
+  ) {}
 
   then<TResult1 = T, TResult2 = never>(
     onfulfilled?: ((value: T) => TResult1 | PromiseLike<TResult1>) | null,
     onrejected?: ((reason: unknown) => TResult2 | PromiseLike<TResult2>) | null
   ): Promise<TResult1 | TResult2> {
     return this.pending.then(
-      (value) => this.serial.execute(() => onfulfilled === undefined || onfulfilled === null
-        ? value as unknown as TResult1
-        : Promise.resolve(onfulfilled(value))),
-      (reason) => this.serial.execute(() => {
-        if (onrejected === undefined || onrejected === null) throw reason;
-        return Promise.resolve(onrejected(reason));
-      })
+      (value) =>
+        this.serial.execute(() =>
+          onfulfilled === undefined || onfulfilled === null
+            ? (value as unknown as TResult1)
+            : Promise.resolve(onfulfilled(value))
+        ),
+      (reason) =>
+        this.serial.execute(() => {
+          if (onrejected === undefined || onrejected === null) throw reason;
+          return Promise.resolve(onrejected(reason));
+        })
     );
   }
 
@@ -522,8 +553,16 @@ class ZLinkSerialDeliveredPromise<T> implements Promise<T> {
 
   finally(onfinally?: (() => void) | null): Promise<T> {
     return this.then(
-      (value) => this.serial.execute(() => { onfinally?.(); return value; }),
-      (reason) => this.serial.execute(() => { onfinally?.(); throw reason; })
+      (value) =>
+        this.serial.execute(() => {
+          onfinally?.();
+          return value;
+        }),
+      (reason) =>
+        this.serial.execute(() => {
+          onfinally?.();
+          throw reason;
+        })
     );
   }
 }

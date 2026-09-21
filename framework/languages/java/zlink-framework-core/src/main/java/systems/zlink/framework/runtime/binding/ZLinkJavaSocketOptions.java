@@ -1,19 +1,19 @@
 package systems.zlink.framework.runtime.binding;
 
-import java.time.Duration;
 import systems.zlink.contracts.sockets.RouterSocket;
 import systems.zlink.contracts.sockets.Socket;
 
+import java.time.Duration;
+
 final class ZLinkJavaSocketOptions {
     /**
-     * The default shutdown deadline is 30 seconds. Keep transport output
-     * alive for that bounded window so a reply accepted by a draining
-     * Framework socket is not discarded by a zero-linger close.
+     * The default shutdown deadline is 30 seconds. Keep transport output alive for that bounded
+     * window so a reply accepted by a draining Framework socket is not discarded by a zero-linger
+     * close.
      */
     private static final Duration FRAMEWORK_LINGER = Duration.ofSeconds(30);
 
-    private ZLinkJavaSocketOptions() {
-    }
+    private ZLinkJavaSocketOptions() {}
 
     static <T extends Socket> T configureFrameworkSocket(T socket) {
         socket.options().linger(FRAMEWORK_LINGER);

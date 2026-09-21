@@ -20,8 +20,7 @@ class route_mesh_runtime_options_t
     virtual ~route_mesh_runtime_options_t () = default;
     virtual int placement_weight () const = 0;
     virtual void placement_weight (int value) = 0;
-    virtual mesh_channel_runtime_options_t &
-    channel (std::string channel_name) = 0;
+    virtual mesh_channel_runtime_options_t &channel (std::string channel_name) = 0;
 };
 
 } // namespace zlink::framework

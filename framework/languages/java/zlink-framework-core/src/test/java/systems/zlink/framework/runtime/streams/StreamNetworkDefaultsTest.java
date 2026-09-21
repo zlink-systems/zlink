@@ -1,29 +1,29 @@
 package systems.zlink.framework.runtime.streams;
-import java.time.Duration;
-import systems.zlink.framework.configuration.ZLinkStreamNodeBuilder;
-import systems.zlink.framework.streams.ZLinkSession;
 
-import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
+import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 
 import org.junit.jupiter.api.Test;
+
+import systems.zlink.framework.configuration.ZLinkStreamNodeBuilder;
 import systems.zlink.framework.errors.ZLinkConfigurationException;
 import systems.zlink.framework.runtime.configuration.DefaultZLinkFrameworkOptions;
+import systems.zlink.framework.streams.ZLinkSession;
+
+import java.time.Duration;
 
 final class StreamNetworkDefaultsTest {
     @Test
     void streamListenerUsesRootHostsUntilOverridden() {
         StreamNodeRegistration registration = new StreamNodeRegistration("gateway");
 
-        StreamBuilders.streamNode(
-                registration, "0.0.0.0", "stream.example.test")
-            .bind(0);
+        StreamBuilders.streamNode(registration, "0.0.0.0", "stream.example.test").bind(0);
 
         assertEquals("tcp://0.0.0.0:0", registration.bindEndpoint());
         assertEquals(
-            "tcp://stream.example.test:43130",
-            registration.advertisedEndpoint("tcp://0.0.0.0:43130"));
+                "tcp://stream.example.test:43130",
+                registration.advertisedEndpoint("tcp://0.0.0.0:43130"));
     }
 
     @Test
@@ -33,9 +33,7 @@ final class StreamNetworkDefaultsTest {
         StreamBuilders.streamNode(registration, "::", null).bind(0);
 
         assertEquals("tcp://[::]:0", registration.bindEndpoint());
-        assertEquals(
-            "tcp://[::1]:43130",
-            registration.advertisedEndpoint("tcp://[::]:43130"));
+        assertEquals("tcp://[::1]:43130", registration.advertisedEndpoint("tcp://[::]:43130"));
     }
 
     @Test
@@ -43,18 +41,21 @@ final class StreamNetworkDefaultsTest {
         StreamNodeRegistration registration = new StreamNodeRegistration("gateway");
 
         assertEquals(64L * 1024L, registration.socketConfig().maxMessageSize());
-        assertThrows(ZLinkConfigurationException.class,
-            () -> registration.socketConfig().setMaxMessageSize(-1));
+        assertThrows(
+                ZLinkConfigurationException.class,
+                () -> registration.socketConfig().setMaxMessageSize(-1));
     }
 
     @Test
     void sessionRelocationSealTimeoutIsNotAStreamNetworkOption() {
-        assertThrows(NoSuchMethodException.class, () ->
-            ZLinkStreamNodeBuilder.class.getMethod(
-                "sessionRelocationSealTimeout", Duration.class));
-        assertThrows(NoSuchMethodException.class, () ->
-            StreamNodeRegistration.class.getMethod(
-                "sessionRelocationSealTimeout"));
+        assertThrows(
+                NoSuchMethodException.class,
+                () ->
+                        ZLinkStreamNodeBuilder.class.getMethod(
+                                "sessionRelocationSealTimeout", Duration.class));
+        assertThrows(
+                NoSuchMethodException.class,
+                () -> StreamNodeRegistration.class.getMethod("sessionRelocationSealTimeout"));
     }
 
     @Test
@@ -67,5 +68,4 @@ final class StreamNetworkDefaultsTest {
 
         assertDoesNotThrow(options::validate);
     }
-
 }

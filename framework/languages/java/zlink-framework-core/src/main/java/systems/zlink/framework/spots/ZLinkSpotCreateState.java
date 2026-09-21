@@ -7,7 +7,11 @@ public enum ZLinkSpotCreateState {
 
     private final int value;
 
-    ZLinkSpotCreateState(int value) { this.value = value; }
+    ZLinkSpotCreateState(int value) {
+        this.value = value;
+    }
 
-    public int value() { return value; }
+    public int value() {
+        return value;
+    }
 }

@@ -1,13 +1,7 @@
 import type { ZLinkSocketConfig } from '../../contracts';
-import type {
-  ZLinkSocketConfig as ZLinkRuntimeSocketConfig
-} from '../../contracts/Configuration';
-import {
-  ZLinkConfigurationException
-} from '../configuration';
-import type {
-  ZLinkBackendRouterSocket
-} from '../backend/contracts';
+import type { ZLinkSocketConfig as ZLinkRuntimeSocketConfig } from '../../contracts/Configuration';
+import { ZLinkConfigurationException } from '../configuration';
+import type { ZLinkBackendRouterSocket } from '../backend/contracts';
 import { requireValidSendTimeoutMs } from '../../contracts/Configuration/SendTimeoutValidation';
 
 interface ZLinkChannelSocketOptionsRuntime {
@@ -70,7 +64,6 @@ class ZLinkLiveSocketConfig implements ZLinkSocketConfig {
     validateSendTimeout(value);
     this.socket.sendTimeoutMs = value;
   }
-
 }
 
 class ZLinkServerRuntimeOptions {

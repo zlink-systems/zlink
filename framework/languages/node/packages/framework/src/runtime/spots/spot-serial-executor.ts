@@ -72,9 +72,8 @@ export class ZLinkSpotSerialExecutor {
   ): readonly Promise<void>[] {
     const serial = this.actorSerial(actorId);
     return this.actorExecutor(actorId).admitDurablePrefix(
-      records.map(record => ({
-        operation: executeChild =>
-          record.operation(child => executeChild(() => child(serial))),
+      records.map((record) => ({
+        operation: (executeChild) => record.operation((child) => executeChild(() => child(serial))),
         preparation: record.preparation,
         workOptions: record.workOptions
       }))
@@ -110,18 +109,15 @@ export class ZLinkSpotSerialExecutor {
   close(): Promise<void> {
     if (this.closePromise !== undefined) return this.closePromise;
     this.closing = true;
-    const childSerials = [
-      ...this.actorSerials.values(),
-      ...this.timerSerials.values()
-    ];
+    const childSerials = [...this.actorSerials.values(), ...this.timerSerials.values()];
     const actorExecutors = [...this.actorExecutors.values()];
     this.actorSerials.clear();
     this.timerSerials.clear();
     this.actorExecutors.clear();
     this.closePromise = Promise.all([
       this.spotSerial.close(),
-      ...childSerials.map(serial => serial.close()),
-      ...actorExecutors.map(executor => executor.close())
+      ...childSerials.map((serial) => serial.close()),
+      ...actorExecutors.map((executor) => executor.close())
     ]).then(() => undefined);
     return this.closePromise;
   }

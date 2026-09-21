@@ -38,10 +38,8 @@ template <typename T> struct task_value_type_t<task_t<T>>
     using type = T;
 };
 
-template <typename T> inline constexpr bool is_task_v = requires
-{
-    typename task_value_type_t<T>::type;
-};
+template <typename T>
+inline constexpr bool is_task_v = requires { typename task_value_type_t<T>::type; };
 
 template <typename TResult>
 task_t<zlink::message_t> serialize_handler_result (TResult &&result,

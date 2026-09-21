@@ -11,7 +11,7 @@ internal enum ZLinkMeshNodeState
     Drained = 3,
     ForceStopping = 4,
     Stopped = 5,
-    Faulted = 6
+    Faulted = 6,
 }
 
 internal sealed record ZLinkMeshPeerSnapshot(
@@ -23,24 +23,28 @@ internal sealed record ZLinkMeshPeerSnapshot(
     bool Ready,
     string DrainState,
     IReadOnlyList<string> ChannelNames,
-    string? LastFailure);
+    string? LastFailure
+);
 
 internal sealed record ZLinkMeshChannelSnapshot(
     string ChannelName,
     int LocalWeight,
     int ReadyMemberCount,
-    bool Selectable);
+    bool Selectable
+);
 
 internal sealed record ZLinkMeshClaimSnapshot(
     bool ApplicationActive,
     ulong PendingApplicationWork,
     bool InfrastructureActive,
-    ulong PendingInfrastructureWork);
+    ulong PendingInfrastructureWork
+);
 
 internal sealed record ZLinkLocationRuntimeSnapshot(
     string State,
     DateTimeOffset? LastSuccessAt,
-    DateTimeOffset? LastFailureAt);
+    DateTimeOffset? LastFailureAt
+);
 
 internal sealed record ZLinkInstanceSpotTypeSnapshot(
     string InstanceSpotType,
@@ -49,7 +53,8 @@ internal sealed record ZLinkInstanceSpotTypeSnapshot(
     ulong ClosingCount,
     ulong PendingMessageCount,
     ulong PendingByteCount,
-    string? LastActivationOutcome);
+    string? LastActivationOutcome
+);
 
 internal sealed record ZLinkMeshNodeSnapshot(
     string MeshName,
@@ -64,24 +69,25 @@ internal sealed record ZLinkMeshNodeSnapshot(
     IReadOnlyList<ZLinkMeshPeerSnapshot> Peers,
     IReadOnlyList<ZLinkMeshChannelSnapshot> Channels,
     ZLinkMeshClaimSnapshot Claims,
-    ZLinkLocationRuntimeSnapshot Location)
+    ZLinkLocationRuntimeSnapshot Location
+)
 {
     internal long ApplicationVersion { get; init; }
     internal ZLinkMeshNodeObjectRole ObjectRole { get; init; }
     internal int PlacementWeight { get; init; } = 100;
-    internal ZLinkPlacementCapacity PopulationCapacity { get; init; }
-        = new(
+    internal ZLinkPlacementCapacity PopulationCapacity { get; init; } =
+        new(
             new ZLinkPopulationCapacity(0, 0, 0),
             new ZLinkPopulationCapacity(0, 0, 0),
-            Array.Empty<ZLinkSpotTypeCapacity>());
-    internal ZLinkActivationConcurrency ActivationConcurrency { get; init; }
-        = new(0, 128);
+            Array.Empty<ZLinkSpotTypeCapacity>()
+        );
+    internal ZLinkActivationConcurrency ActivationConcurrency { get; init; } = new(0, 128);
     internal ulong PlacementReservationFailureCount { get; init; }
     internal string? LastPlacementReservationFailure { get; init; }
-    internal IReadOnlyList<ZLinkObjectCapability> ObjectCapabilities { get; init; }
-        = Array.Empty<ZLinkObjectCapability>();
-    internal IReadOnlyList<ZLinkInstanceSpotTypeSnapshot> InstanceSpots { get; init; }
-        = Array.Empty<ZLinkInstanceSpotTypeSnapshot>();
+    internal IReadOnlyList<ZLinkObjectCapability> ObjectCapabilities { get; init; } =
+        Array.Empty<ZLinkObjectCapability>();
+    internal IReadOnlyList<ZLinkInstanceSpotTypeSnapshot> InstanceSpots { get; init; } =
+        Array.Empty<ZLinkInstanceSpotTypeSnapshot>();
 }
 
 internal sealed record ZLinkMeshRuntimeEvent(
@@ -101,4 +107,5 @@ internal sealed record ZLinkMeshRuntimeEvent(
     ZLinkPlacementCapacity? PopulationCapacity,
     ZLinkActivationConcurrency? ActivationConcurrency,
     string? Reason,
-    ZLinkMeshNodeState? State);
+    ZLinkMeshNodeState? State
+);

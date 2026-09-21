@@ -1,10 +1,5 @@
 package systems.zlink.framework.runtime.configuration;
 
-import java.util.Objects;
-import java.util.OptionalLong;
-import java.util.concurrent.CompletionException;
-import java.util.concurrent.Executor;
-import java.util.function.Supplier;
 import systems.zlink.framework.configuration.ZLinkApplicationJobQueueProfile;
 import systems.zlink.framework.configuration.ZLinkCoreHwmProfile;
 import systems.zlink.framework.configuration.ZLinkInboundDispatchOptions;
@@ -12,15 +7,20 @@ import systems.zlink.framework.errors.ZLinkConfigurationException;
 import systems.zlink.framework.runtime.internal.dispatch.ZLinkApplicationJobQueue;
 import systems.zlink.framework.runtime.internal.execution.ZLinkStateLane;
 
+import java.util.Objects;
+import java.util.OptionalLong;
+import java.util.concurrent.CompletionException;
+import java.util.concurrent.Executor;
+import java.util.function.Supplier;
+
 /** Startup-only model for the host's single inbound-dispatch policy. */
-public final class ZLinkInboundDispatchRegistration
-    implements ZLinkInboundDispatchOptions {
+public final class ZLinkInboundDispatchRegistration implements ZLinkInboundDispatchOptions {
     private final ZLinkStateLane stateLane = new ZLinkStateLane();
     private Long coreHwmMemoryLimitBytes;
     private Long coreHwmBudgetBytes;
     private ZLinkCoreHwmProfile coreHwmProfile = ZLinkCoreHwmProfile.BALANCED;
     private ZLinkApplicationJobQueueProfile applicationJobQueueProfile =
-        ZLinkApplicationJobQueueProfile.BALANCED;
+            ZLinkApplicationJobQueueProfile.BALANCED;
     private Long maxQueuedApplicationJobs;
     private int applicationJobQueuePauseThresholdPercent = 80;
     private int applicationJobQueueResumeThresholdPercent = 60;
@@ -52,10 +52,11 @@ public final class ZLinkInboundDispatchRegistration
 
     @Override
     public void setCoreHwmMemoryLimitBytes(long value) {
-        inStateLane(() -> {
-            setCoreHwmMemoryLimitBytesCore(value);
-            return null;
-        });
+        inStateLane(
+                () -> {
+                    setCoreHwmMemoryLimitBytesCore(value);
+                    return null;
+                });
     }
 
     private void setCoreHwmMemoryLimitBytesCore(long value) {
@@ -74,10 +75,11 @@ public final class ZLinkInboundDispatchRegistration
 
     @Override
     public void setCoreHwmBudgetBytes(long value) {
-        inStateLane(() -> {
-            setCoreHwmBudgetBytesCore(value);
-            return null;
-        });
+        inStateLane(
+                () -> {
+                    setCoreHwmBudgetBytesCore(value);
+                    return null;
+                });
     }
 
     private void setCoreHwmBudgetBytesCore(long value) {
@@ -96,10 +98,11 @@ public final class ZLinkInboundDispatchRegistration
 
     @Override
     public void setCoreHwmProfile(ZLinkCoreHwmProfile value) {
-        inStateLane(() -> {
-            setCoreHwmProfileCore(value);
-            return null;
-        });
+        inStateLane(
+                () -> {
+                    setCoreHwmProfileCore(value);
+                    return null;
+                });
     }
 
     private void setCoreHwmProfileCore(ZLinkCoreHwmProfile value) {
@@ -108,8 +111,7 @@ public final class ZLinkInboundDispatchRegistration
     }
 
     @Override
-    public ZLinkApplicationJobQueueProfile
-        applicationJobQueueProfile() {
+    public ZLinkApplicationJobQueueProfile applicationJobQueueProfile() {
         return inStateLane(this::applicationJobQueueProfileCore);
     }
 
@@ -118,19 +120,17 @@ public final class ZLinkInboundDispatchRegistration
     }
 
     @Override
-    public void setApplicationJobQueueProfile(
-        ZLinkApplicationJobQueueProfile value) {
-        inStateLane(() -> {
-            setApplicationJobQueueProfileCore(value);
-            return null;
-        });
+    public void setApplicationJobQueueProfile(ZLinkApplicationJobQueueProfile value) {
+        inStateLane(
+                () -> {
+                    setApplicationJobQueueProfileCore(value);
+                    return null;
+                });
     }
 
-    private void setApplicationJobQueueProfileCore(
-        ZLinkApplicationJobQueueProfile value) {
+    private void setApplicationJobQueueProfileCore(ZLinkApplicationJobQueueProfile value) {
         requireMutable();
-        applicationJobQueueProfile = Objects.requireNonNull(
-            value, "applicationJobQueueProfile");
+        applicationJobQueueProfile = Objects.requireNonNull(value, "applicationJobQueueProfile");
     }
 
     @Override
@@ -144,17 +144,18 @@ public final class ZLinkInboundDispatchRegistration
 
     @Override
     public void setMaxQueuedApplicationJobs(long value) {
-        inStateLane(() -> {
-            setMaxQueuedApplicationJobsCore(value);
-            return null;
-        });
+        inStateLane(
+                () -> {
+                    setMaxQueuedApplicationJobsCore(value);
+                    return null;
+                });
     }
 
     private void setMaxQueuedApplicationJobsCore(long value) {
         requireMutable();
         if (value < 1 || value > Integer.MAX_VALUE) {
             throw new ZLinkConfigurationException(
-                "MaxQueuedApplicationJobs must be in 1..2147483647");
+                    "MaxQueuedApplicationJobs must be in 1..2147483647");
         }
         maxQueuedApplicationJobs = value;
     }
@@ -169,20 +170,19 @@ public final class ZLinkInboundDispatchRegistration
     }
 
     @Override
-    public void setApplicationJobQueuePauseThresholdPercent(
-        int value) {
-        inStateLane(() -> {
-            setApplicationJobQueuePauseThresholdPercentCore(value);
-            return null;
-        });
+    public void setApplicationJobQueuePauseThresholdPercent(int value) {
+        inStateLane(
+                () -> {
+                    setApplicationJobQueuePauseThresholdPercentCore(value);
+                    return null;
+                });
     }
 
-    private void setApplicationJobQueuePauseThresholdPercentCore(
-        int value) {
+    private void setApplicationJobQueuePauseThresholdPercentCore(int value) {
         requireMutable();
         if (value < 1 || value > 100) {
             throw new ZLinkConfigurationException(
-                "ApplicationJobQueuePauseThresholdPercent must be in 1..100");
+                    "ApplicationJobQueuePauseThresholdPercent must be in 1..100");
         }
         applicationJobQueuePauseThresholdPercent = value;
     }
@@ -197,52 +197,49 @@ public final class ZLinkInboundDispatchRegistration
     }
 
     @Override
-    public void setApplicationJobQueueResumeThresholdPercent(
-        int value) {
-        inStateLane(() -> {
-            setApplicationJobQueueResumeThresholdPercentCore(value);
-            return null;
-        });
+    public void setApplicationJobQueueResumeThresholdPercent(int value) {
+        inStateLane(
+                () -> {
+                    setApplicationJobQueueResumeThresholdPercentCore(value);
+                    return null;
+                });
     }
 
-    private void setApplicationJobQueueResumeThresholdPercentCore(
-        int value) {
+    private void setApplicationJobQueueResumeThresholdPercentCore(int value) {
         requireMutable();
         if (value < 0 || value > 99) {
             throw new ZLinkConfigurationException(
-                "ApplicationJobQueueResumeThresholdPercent must be in 0..99");
+                    "ApplicationJobQueueResumeThresholdPercent must be in 0..99");
         }
         applicationJobQueueResumeThresholdPercent = value;
     }
 
-    public ZLinkApplicationJobQueue applicationJobQueue(
-        Executor handlerExecutor) {
+    public ZLinkApplicationJobQueue applicationJobQueue(Executor handlerExecutor) {
         return inStateLane(() -> applicationJobQueueCore(handlerExecutor));
     }
 
-    private ZLinkApplicationJobQueue applicationJobQueueCore(
-        Executor handlerExecutor) {
+    private ZLinkApplicationJobQueue applicationJobQueueCore(Executor handlerExecutor) {
         if (applicationJobQueue == null) {
             if (applicationJobQueueResumeThresholdPercent
-                >= applicationJobQueuePauseThresholdPercent) {
+                    >= applicationJobQueuePauseThresholdPercent) {
                 throw new ZLinkConfigurationException(
-                    "ApplicationJobQueueResumeThresholdPercent must be less than ApplicationJobQueuePauseThresholdPercent");
+                        "ApplicationJobQueueResumeThresholdPercent must be less than"
+                                + " ApplicationJobQueuePauseThresholdPercent");
             }
-            applicationJobQueue = new ZLinkApplicationJobQueue(
-                applicationJobQueueProfile,
-                optional(maxQueuedApplicationJobs),
-                ZLinkApplicationJobQueue.productionProcessorCandidates(
-                    handlerExecutor),
-                applicationJobQueuePauseThresholdPercent,
-                applicationJobQueueResumeThresholdPercent);
+            applicationJobQueue =
+                    new ZLinkApplicationJobQueue(
+                            applicationJobQueueProfile,
+                            optional(maxQueuedApplicationJobs),
+                            ZLinkApplicationJobQueue.productionProcessorCandidates(handlerExecutor),
+                            applicationJobQueuePauseThresholdPercent,
+                            applicationJobQueueResumeThresholdPercent);
         }
         return applicationJobQueue;
     }
 
     private void requireMutable() {
         if (applicationJobQueue != null) {
-            throw new ZLinkConfigurationException(
-                "Inbound dispatch options are fixed at startup");
+            throw new ZLinkConfigurationException("Inbound dispatch options are fixed at startup");
         }
     }
 

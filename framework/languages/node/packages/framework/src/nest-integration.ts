@@ -74,8 +74,10 @@ export {
   type ZLinkHandlerFilterScopeRunner
 } from './runtime/channels/handler-filter-scope';
 
-export interface ZLinkNestIntegrationRuntimeHost
-  extends Pick<import('./contracts').ZLinkFrameworkRuntime, 'shutdown'> {
+export interface ZLinkNestIntegrationRuntimeHost extends Pick<
+  import('./contracts').ZLinkFrameworkRuntime,
+  'shutdown'
+> {
   readonly channelRuntimeOptions: unknown;
   readonly routeMeshRuntimeOptions: ZLinkRouteMeshRuntimeOptions;
   readonly boundSessionFactory: ZLinkBoundSessionFactory;
@@ -107,18 +109,17 @@ export function createIntegrationLocationOptionsBuilder(
   return new DefaultLocationOptionsBuilder(options);
 }
 
-export function createIntegrationStreamCompressionBuilder(
-  options: { disabled?: boolean; codec?: ZLinkStreamCompressionCodec }
-): ZLinkStreamCompressionBuilder {
+export function createIntegrationStreamCompressionBuilder(options: {
+  disabled?: boolean;
+  codec?: ZLinkStreamCompressionCodec;
+}): ZLinkStreamCompressionBuilder {
   return new DefaultStreamCompressionBuilder(options);
 }
 
-export function createIntegrationCodecRegistryBuilder(
-  options: {
-    serializers: ZLinkCodecSerializerRegistration[];
-    streamCodecs: ZLinkStreamCodecRegistration[];
-  }
-): ZLinkCodecRegistryBuilder & ZLinkCodecRegistrar {
+export function createIntegrationCodecRegistryBuilder(options: {
+  serializers: ZLinkCodecSerializerRegistration[];
+  streamCodecs: ZLinkStreamCodecRegistration[];
+}): ZLinkCodecRegistryBuilder & ZLinkCodecRegistrar {
   return new RegistrationCodecRegistryBuilder(options);
 }
 
@@ -159,10 +160,15 @@ export function createIntegrationSpotPublisherClient(
   registration: ZLinkFrameworkRegistration,
   runtime: ZLinkNestIntegrationRuntimeHost
 ): ZLinkSpotPublisherClient {
-  return new DefaultZLinkSpotPublisherClient(registration, runtimeHost(runtime).spotPublisherTransport);
+  return new DefaultZLinkSpotPublisherClient(
+    registration,
+    runtimeHost(runtime).spotPublisherTransport
+  );
 }
 
-export function createIntegrationActorClient(runtime: ZLinkNestIntegrationRuntimeHost): ZLinkActorClient {
+export function createIntegrationActorClient(
+  runtime: ZLinkNestIntegrationRuntimeHost
+): ZLinkActorClient {
   const host = runtimeHost(runtime);
   return new DefaultZLinkActorClient(host.createActorClientOptions());
 }
@@ -177,7 +183,9 @@ export function createIntegrationActorManager(
   const manager = new DefaultZLinkActorManager({
     actorFactories: registration.actorFactories,
     ...runtimeOptions,
-    boundSessionFactory: runtimeOptions.boundSessionFactory ?? host.boundSessionFactory.create.bind(host.boundSessionFactory),
+    boundSessionFactory:
+      runtimeOptions.boundSessionFactory ??
+      host.boundSessionFactory.create.bind(host.boundSessionFactory),
     providerResolver
   });
   host.setActorManager(manager);
@@ -205,16 +213,21 @@ export function createIntegrationSpotManager(
         spotNode.instanceSpotIdleTimeoutMs ?? 0
       ])
     ),
-    spotTimerHandlers: [...registration.spotNodes.values()]
-      .flatMap((spotNode) => [...(spotNode.spotTimerHandlers ?? [])]),
-    spotPacketHandlers: [...registration.spotNodes.values()]
-      .flatMap((spotNode) => [...(spotNode.spotPacketHandlers ?? [])]),
-    spotSubscriptionHandlers: [...registration.spotNodes.values()]
-      .flatMap((spotNode) => [...(spotNode.spotSubscriptionHandlers ?? [])]),
-    spotActorSendHandlers: [...registration.spotNodes.values()]
-      .flatMap((spotNode) => [...(spotNode.spotActorSendHandlers ?? [])]),
-    spotActorRequestHandlers: [...registration.spotNodes.values()]
-      .flatMap((spotNode) => [...(spotNode.spotActorRequestHandlers ?? [])]),
+    spotTimerHandlers: [...registration.spotNodes.values()].flatMap((spotNode) => [
+      ...(spotNode.spotTimerHandlers ?? [])
+    ]),
+    spotPacketHandlers: [...registration.spotNodes.values()].flatMap((spotNode) => [
+      ...(spotNode.spotPacketHandlers ?? [])
+    ]),
+    spotSubscriptionHandlers: [...registration.spotNodes.values()].flatMap((spotNode) => [
+      ...(spotNode.spotSubscriptionHandlers ?? [])
+    ]),
+    spotActorSendHandlers: [...registration.spotNodes.values()].flatMap((spotNode) => [
+      ...(spotNode.spotActorSendHandlers ?? [])
+    ]),
+    spotActorRequestHandlers: [...registration.spotNodes.values()].flatMap((spotNode) => [
+      ...(spotNode.spotActorRequestHandlers ?? [])
+    ]),
     ...runtimeOptions,
     spotRouteResolver: runtimeOptions.spotRouteResolver,
     routedTransport: host.routeTransport,
@@ -225,7 +238,9 @@ export function createIntegrationSpotManager(
   return host.createPublicSpotManager(manager);
 }
 
-export function createIntegrationSpotOutbound(runtime: ZLinkNestIntegrationRuntimeHost): ZLinkSpotOutbound {
+export function createIntegrationSpotOutbound(
+  runtime: ZLinkNestIntegrationRuntimeHost
+): ZLinkSpotOutbound {
   const host = runtimeHost(runtime);
   const runtimeOptions = host.createSpotManagerOptions();
   return new DefaultZLinkSpotOutbound({

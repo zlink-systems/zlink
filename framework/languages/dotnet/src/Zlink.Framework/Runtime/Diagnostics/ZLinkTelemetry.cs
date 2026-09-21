@@ -22,8 +22,10 @@ internal static class ZLinkTelemetry
 
         using var activity = ActivitySource.StartActivity(
             "zlink.message_flow",
-            ActivityKind.Internal);
-        if (activity is null) return;
+            ActivityKind.Internal
+        );
+        if (activity is null)
+            return;
 
         activity.SetTag("event_id", "zlink.message_flow");
         activity.SetTag("phase", ZLinkTraceFormat.OutcomeKey(flow.Outcome));
@@ -32,13 +34,18 @@ internal static class ZLinkTelemetry
         activity.SetTag("outcome", ZLinkTraceFormat.ResultKey(flow));
         activity.SetTag("packet_name", flow.PacketName);
         activity.SetTag("channel_name", flow.ChannelName);
-        activity.SetTag("channel_route_kind",
-            ZLinkTraceFormat.ChannelRouteKind(flow.Surface, flow.ChannelRouteKind));
+        activity.SetTag(
+            "channel_route_kind",
+            ZLinkTraceFormat.ChannelRouteKind(flow.Surface, flow.ChannelRouteKind)
+        );
         activity.SetTag("mesh_name", flow.MeshName);
         activity.SetTag("topic", flow.Topic);
         activity.SetTag("spot_id", flow.SpotId);
         activity.SetTag("instance_spot_type", flow.InstanceSpotType);
-        activity.SetTag("activation_state", ZLinkTraceFormat.ActivationStateKey(flow.ActivationState));
+        activity.SetTag(
+            "activation_state",
+            ZLinkTraceFormat.ActivationStateKey(flow.ActivationState)
+        );
         activity.SetTag("actor_id", flow.ActorId);
         activity.SetTag("source_rid", flow.SourceRid);
         activity.SetTag("target_rid", flow.TargetRid ?? flow.PeerRid);
@@ -55,15 +62,18 @@ internal static class ZLinkTelemetry
     public static void TraceDispatchError(
         ZLinkDispatchFailure error,
         string? flowId,
-        ZLinkFlowOrigin? flowOrigin)
+        ZLinkFlowOrigin? flowOrigin
+    )
     {
         if (!ActivitySource.HasListeners())
             return;
 
         using var activity = ActivitySource.StartActivity(
             "zlink.dispatch_error",
-            ActivityKind.Consumer);
-        if (activity is null) return;
+            ActivityKind.Consumer
+        );
+        if (activity is null)
+            return;
 
         activity.SetTag("event_id", "zlink.dispatch_error");
         activity.SetTag("outcome", "failed");
@@ -73,13 +83,18 @@ internal static class ZLinkTelemetry
         activity.SetTag("action", ZLinkTraceFormat.DispatchActionKey(error.Action));
         activity.SetTag("packet_name", error.PacketName);
         activity.SetTag("channel_name", error.ChannelName);
-        activity.SetTag("channel_route_kind",
-            ZLinkTraceFormat.ChannelRouteKind(error.Surface, error.ChannelRouteKind));
+        activity.SetTag(
+            "channel_route_kind",
+            ZLinkTraceFormat.ChannelRouteKind(error.Surface, error.ChannelRouteKind)
+        );
         activity.SetTag("mesh_name", error.MeshName);
         activity.SetTag("topic", error.Topic);
         activity.SetTag("spot_id", error.SpotId);
         activity.SetTag("instance_spot_type", error.InstanceSpotType);
-        activity.SetTag("activation_state", ZLinkTraceFormat.ActivationStateKey(error.ActivationState));
+        activity.SetTag(
+            "activation_state",
+            ZLinkTraceFormat.ActivationStateKey(error.ActivationState)
+        );
         activity.SetTag("actor_id", error.ActorId);
         activity.SetTag("source_rid", error.SourceRid);
         activity.SetTag("target_rid", error.TargetRid);
@@ -92,5 +107,4 @@ internal static class ZLinkTelemetry
         }
         activity.AddEvent(new ActivityEvent("zlink.dispatch_error"));
     }
-
 }

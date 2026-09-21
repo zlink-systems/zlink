@@ -30,24 +30,16 @@ class module_t
     virtual void configure_zlink (zlink_builder_t &zlink) { (void) zlink; }
 
     virtual void configure_handlers (handler_registry_t &handlers) { (void) handlers; }
-
 };
 
 template <typename TModule>
-concept framework_module_contract_t = requires (TModule & module,
+concept framework_module_contract_t = requires (TModule &module,
                                                 service_collection_t &services,
                                                 zlink_builder_t &zlink,
-                                                handler_registry_t &handlers)
-{
-    {
-        module.configure_services (services)
-    } -> std::same_as<void>;
-    {
-        module.configure_zlink (zlink)
-    } -> std::same_as<void>;
-    {
-        module.configure_handlers (handlers)
-    } -> std::same_as<void>;
+                                                handler_registry_t &handlers) {
+    { module.configure_services (services) } -> std::same_as<void>;
+    { module.configure_zlink (zlink) } -> std::same_as<void>;
+    { module.configure_handlers (handlers) } -> std::same_as<void>;
 };
 
 } // namespace zlink::framework

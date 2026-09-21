@@ -1,79 +1,64 @@
 package systems.zlink.framework.runtime.locations;
-import java.util.Locale;
 
-import java.util.HashMap;
-import java.util.List;
-import java.util.Map;
 import systems.zlink.contracts.core.RoutingId;
-import systems.zlink.framework.runtime.internal.locations.ZLinkAutoConnectType;
 import systems.zlink.framework.locations.ZLinkLocationRole;
 import systems.zlink.framework.locations.ZLinkMeshNodeObjectRole;
 import systems.zlink.framework.runtime.internal.locations.ZLinkAutoConnectPeer;
+import systems.zlink.framework.runtime.internal.locations.ZLinkAutoConnectType;
+
+import java.util.HashMap;
+import java.util.List;
+import java.util.Locale;
+import java.util.Map;
 
 final class ZLinkAutoConnectPlanner {
-    static final String SECURITY_IDENTITY_METADATA_KEY =
-        "zlink.security-identity";
+    static final String SECURITY_IDENTITY_METADATA_KEY = "zlink.security-identity";
 
-    private ZLinkAutoConnectPlanner() {
-    }
+    private ZLinkAutoConnectPlanner() {}
 
     record Local(
-        ZLinkAutoConnectType type,
-        String meshName,
-        ZLinkLocationRole role,
-        RoutingId nodeRid,
-        String endpoint,
-        ZLinkMeshNodeObjectRole objectRole,
-        boolean hasRouteMeshServerChannel) {
-
-        Local(
             ZLinkAutoConnectType type,
             String meshName,
             ZLinkLocationRole role,
             RoutingId nodeRid,
-            String endpoint) {
-            this(
-                type,
-                meshName,
-                role,
-                nodeRid,
-                endpoint,
-                ZLinkMeshNodeObjectRole.NONE,
-                false);
+            String endpoint,
+            ZLinkMeshNodeObjectRole objectRole,
+            boolean hasRouteMeshServerChannel) {
+
+        Local(
+                ZLinkAutoConnectType type,
+                String meshName,
+                ZLinkLocationRole role,
+                RoutingId nodeRid,
+                String endpoint) {
+            this(type, meshName, role, nodeRid, endpoint, ZLinkMeshNodeObjectRole.NONE, false);
         }
     }
 
     record Target(
-        String key,
-        RoutingId nodeRid,
-        ZLinkLocationRole role,
-        String endpoint,
-        Map<String, String> metadata,
-        String ownerId,
-        long lifecycleGeneration) {
-    }
+            String key,
+            RoutingId nodeRid,
+            ZLinkLocationRole role,
+            String endpoint,
+            Map<String, String> metadata,
+            String ownerId,
+            long lifecycleGeneration) {}
 
-    record PeerDecision(
-        ZLinkAutoConnectPeer peer,
-        Target target,
-        String skipReason) {
+    record PeerDecision(ZLinkAutoConnectPeer peer, Target target, String skipReason) {
 
         boolean shouldDial() {
             return target != null;
         }
     }
 
-    static boolean isRoleAllowed(
-        ZLinkAutoConnectType type,
-        ZLinkLocationRole role) {
+    static boolean isRoleAllowed(ZLinkAutoConnectType type, ZLinkLocationRole role) {
         return switch (type) {
             case ROUTE_MESH -> role == ZLinkLocationRole.ROUTER;
-            case CLIENT_SERVER -> role == ZLinkLocationRole.ROUTER
-                || role == ZLinkLocationRole.DEALER;
+            case CLIENT_SERVER ->
+                    role == ZLinkLocationRole.ROUTER || role == ZLinkLocationRole.DEALER;
             case DEALER_MESH -> role == ZLinkLocationRole.DEALER;
             case FANOUT -> role == ZLinkLocationRole.PUB || role == ZLinkLocationRole.SUB;
-            case SPOT_MESH -> role == ZLinkLocationRole.SPOT
-                || role == ZLinkLocationRole.ROUTER;
+            case SPOT_MESH -> role == ZLinkLocationRole.SPOT || role == ZLinkLocationRole.ROUTER;
             default -> false;
         };
     }
@@ -89,17 +74,14 @@ final class ZLinkAutoConnectPlanner {
         return desired;
     }
 
-    static Map<String, Target> computeNotRequired(
-        Local local,
-        List<ZLinkAutoConnectPeer> peers) {
+    static Map<String, Target> computeNotRequired(Local local, List<ZLinkAutoConnectPeer> peers) {
         Map<String, Target> notRequired = new HashMap<>();
         if (local.type() != ZLinkAutoConnectType.ROUTE_MESH) {
             return notRequired;
         }
         for (ZLinkAutoConnectPeer peer : peers) {
             PeerDecision validated = validate(local, peer);
-            if (validated.skipReason() == null
-                && isRouteMeshConnectionNotRequired(local, peer)) {
+            if (validated.skipReason() == null && isRouteMeshConnectionNotRequired(local, peer)) {
                 Target target = targetOf(peer);
                 notRequired.put(target.key(), target);
             }
@@ -148,13 +130,13 @@ final class ZLinkAutoConnectPlanner {
 
     private static Target targetOf(ZLinkAutoConnectPeer peer) {
         return new Target(
-            targetKeyOf(peer),
-            peer.nodeRid(),
-            peer.role(),
-            peer.endpoint(),
-            peer.metadata(),
-            peer.ownerId(),
-            lifecycleGenerationOf(peer));
+                targetKeyOf(peer),
+                peer.nodeRid(),
+                peer.role(),
+                peer.endpoint(),
+                peer.metadata(),
+                peer.ownerId(),
+                lifecycleGenerationOf(peer));
     }
 
     private static PeerDecision skip(ZLinkAutoConnectPeer peer, String reason) {
@@ -162,14 +144,12 @@ final class ZLinkAutoConnectPlanner {
     }
 
     private static String targetKeyOf(ZLinkAutoConnectPeer peer) {
-        String identity = hasRid(peer.nodeRid())
-            ? peer.nodeRid().toHex()
-            : peer.endpoint();
+        String identity = hasRid(peer.nodeRid()) ? peer.nodeRid().toHex() : peer.endpoint();
         return peer.role().name().toLowerCase(Locale.ROOT)
-            + "|"
-            + identity
-            + "|"
-            + lifecycleGenerationOf(peer);
+                + "|"
+                + identity
+                + "|"
+                + lifecycleGenerationOf(peer);
     }
 
     private static long lifecycleGenerationOf(ZLinkAutoConnectPeer peer) {
@@ -177,8 +157,9 @@ final class ZLinkAutoConnectPlanner {
     }
 
     private static boolean isSelf(Local local, ZLinkAutoConnectPeer peer) {
-        if (hasRid(local.nodeRid()) && hasRid(peer.nodeRid())
-            && local.nodeRid().equals(peer.nodeRid())) {
+        if (hasRid(local.nodeRid())
+                && hasRid(peer.nodeRid())
+                && local.nodeRid().equals(peer.nodeRid())) {
             return true;
         }
         return peer.endpoint().equals(local.endpoint());
@@ -186,30 +167,31 @@ final class ZLinkAutoConnectPlanner {
 
     private static boolean shouldDial(Local local, ZLinkAutoConnectPeer peer) {
         return switch (local.type()) {
-            case ROUTE_MESH -> local.role() == ZLinkLocationRole.ROUTER
-                && peer.role() == ZLinkLocationRole.ROUTER
-                && !isRouteMeshConnectionNotRequired(local, peer)
-                && localIsInitiator(local, peer);
-            case CLIENT_SERVER -> local.role() == ZLinkLocationRole.DEALER
-                && peer.role() == ZLinkLocationRole.ROUTER;
-            case DEALER_MESH -> local.role() == ZLinkLocationRole.DEALER
-                && peer.role() == ZLinkLocationRole.DEALER
-                && localIsInitiator(local, peer);
-            case FANOUT -> local.role() == ZLinkLocationRole.SUB
-                && peer.role() == ZLinkLocationRole.PUB;
-            case SPOT_MESH -> local.role() == ZLinkLocationRole.SPOT
-                && peer.role() == ZLinkLocationRole.SPOT;
+            case ROUTE_MESH ->
+                    local.role() == ZLinkLocationRole.ROUTER
+                            && peer.role() == ZLinkLocationRole.ROUTER
+                            && !isRouteMeshConnectionNotRequired(local, peer)
+                            && localIsInitiator(local, peer);
+            case CLIENT_SERVER ->
+                    local.role() == ZLinkLocationRole.DEALER
+                            && peer.role() == ZLinkLocationRole.ROUTER;
+            case DEALER_MESH ->
+                    local.role() == ZLinkLocationRole.DEALER
+                            && peer.role() == ZLinkLocationRole.DEALER
+                            && localIsInitiator(local, peer);
+            case FANOUT ->
+                    local.role() == ZLinkLocationRole.SUB && peer.role() == ZLinkLocationRole.PUB;
+            case SPOT_MESH ->
+                    local.role() == ZLinkLocationRole.SPOT && peer.role() == ZLinkLocationRole.SPOT;
             default -> false;
         };
     }
 
-    static boolean isRouteMeshConnectionNotRequired(
-        Local local,
-        ZLinkAutoConnectPeer peer) {
+    static boolean isRouteMeshConnectionNotRequired(Local local, ZLinkAutoConnectPeer peer) {
         return local.objectRole() == ZLinkMeshNodeObjectRole.CLIENT
-            && !local.hasRouteMeshServerChannel()
-            && peer.objectRole() == ZLinkMeshNodeObjectRole.CLIENT
-            && !peer.hasRouteMeshServerChannel();
+                && !local.hasRouteMeshServerChannel()
+                && peer.objectRole() == ZLinkMeshNodeObjectRole.CLIENT
+                && !peer.hasRouteMeshServerChannel();
     }
 
     private static boolean localIsInitiator(Local local, ZLinkAutoConnectPeer peer) {

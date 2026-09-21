@@ -18,7 +18,8 @@ internal sealed class ZLinkFrameworkComponentState : IAsyncDisposable
         IServiceProvider services,
         ZLinkRuntimeErrorSink errorSink,
         object executionOwner,
-        ZLinkApplicationJobQueueCapacity applicationJobQueueCapacity)
+        ZLinkApplicationJobQueueCapacity applicationJobQueueCapacity
+    )
     {
         Context = context;
         Registration = registration;
@@ -28,21 +29,25 @@ internal sealed class ZLinkFrameworkComponentState : IAsyncDisposable
             receiveFlowFailureReporter: exception =>
                 errorSink.ReportRuntimeTaskException(
                     "application-job-queue-receive-flow",
-                    exception));
+                    exception
+                )
+        );
         context.ConfigureApplicationJobQueue(ApplicationJobQueue);
         Capacity = new ZLinkHostCapacityProjection(
             context,
             registration.InboundDispatchOptions,
-            ApplicationJobQueue);
+            ApplicationJobQueue
+        );
         TimerScheduler = new ZLinkTimerScheduler();
         TaskRunner = new ZLinkRuntimeTaskRunner(
             ErrorSink,
             StopTokenSource.Token,
             executionOwner,
-            ownsSupervisor: true);
-        _pressureMetricRegistration =
-            ZLinkRuntimeMetrics.RegisterApplicationJobQueuePressure(
-                ApplicationJobQueue.GetPressureMetrics);
+            ownsSupervisor: true
+        );
+        _pressureMetricRegistration = ZLinkRuntimeMetrics.RegisterApplicationJobQueuePressure(
+            ApplicationJobQueue.GetPressureMetrics
+        );
     }
 
     public IZLinkBackendRuntimeContext Context { get; }
@@ -63,26 +68,33 @@ internal sealed class ZLinkFrameworkComponentState : IAsyncDisposable
 
     public ZLinkRuntimeErrorSink ErrorSink { get; }
 
-    public bool IsOperationFenced =>
-        Volatile.Read(ref _operationFenced) != 0;
+    public bool IsOperationFenced => Volatile.Read(ref _operationFenced) != 0;
 
-    public void FenceOperations() =>
-        Interlocked.Exchange(ref _operationFenced, 1);
+    public void FenceOperations() => Interlocked.Exchange(ref _operationFenced, 1);
 
     public Dictionary<ZLinkChannelName, ZLinkChannelRuntimeBundle> SubscriberBundles { get; } = [];
 
     public Dictionary<ZLinkChannelName, ZLinkChannelRuntimeBundle> PublisherBundles { get; } = [];
 
-    public Dictionary<ZLinkChannelName, ZLinkAutomaticFanoutSubscriberRuntime>
-        AutomaticFanoutSubscriberRuntimes { get; } =
-        [];
+    public Dictionary<
+        ZLinkChannelName,
+        ZLinkAutomaticFanoutSubscriberRuntime
+    > AutomaticFanoutSubscriberRuntimes { get; } = [];
 
-    public Dictionary<ZLinkChannelName, ZLinkChannelRuntimeBundle> ClientServerClientBundles { get; } = [];
+    public Dictionary<
+        ZLinkChannelName,
+        ZLinkChannelRuntimeBundle
+    > ClientServerClientBundles { get; } = [];
 
-    public Dictionary<ZLinkChannelName, ZLinkClientServerClientRuntime>
-        ClientServerClientRuntimes { get; } = [];
+    public Dictionary<
+        ZLinkChannelName,
+        ZLinkClientServerClientRuntime
+    > ClientServerClientRuntimes { get; } = [];
 
-    public Dictionary<ZLinkChannelName, ZLinkChannelRuntimeBundle> ClientServerServerBundles { get; } = [];
+    public Dictionary<
+        ZLinkChannelName,
+        ZLinkChannelRuntimeBundle
+    > ClientServerServerBundles { get; } = [];
 
     public Dictionary<ZLinkSpotNodeName, ZLinkSpotNodeRuntime> SpotNodes { get; } = [];
 
@@ -107,22 +119,19 @@ internal sealed class ZLinkFrameworkComponentState : IAsyncDisposable
 
             foreach (var membership in registration.ChannelMemberships)
             {
-                if (!RouteMeshNodesByChannel.TryGetValue(
-                        membership.ChannelName,
-                        out var existing))
+                if (!RouteMeshNodesByChannel.TryGetValue(membership.ChannelName, out var existing))
                 {
-                    RouteMeshNodesByChannel.Add(
-                        membership.ChannelName,
-                        nodeRuntime);
+                    RouteMeshNodesByChannel.Add(membership.ChannelName, nodeRuntime);
                     continue;
                 }
 
                 if (!ReferenceEquals(existing, nodeRuntime))
                     throw new ZLinkConfigurationException(
                         $"ChannelName '{membership.ChannelName}' is registered by "
-                        + $"more than one process-local RouteMesh "
-                        + $"('{existing.Registration.SpotNodeName}' and "
-                        + $"'{nodeRuntime.Registration.SpotNodeName}').");
+                            + $"more than one process-local RouteMesh "
+                            + $"('{existing.Registration.SpotNodeName}' and "
+                            + $"'{nodeRuntime.Registration.SpotNodeName}')."
+                    );
             }
         }
     }
@@ -138,25 +147,26 @@ internal sealed class ZLinkFrameworkComponentState : IAsyncDisposable
 
     public ZLinkSpotNodeRuntime? FindSpotNodeByRoutingId(RoutingId nodeRid)
     {
-        return RunStateAsync(() => SpotNodes.Values
-                .FirstOrDefault(candidate => candidate.Node.RoutingId == nodeRid))
-            .GetAwaiter().GetResult();
+        return RunStateAsync(() =>
+                SpotNodes.Values.FirstOrDefault(candidate => candidate.Node.RoutingId == nodeRid)
+            )
+            .GetAwaiter()
+            .GetResult();
     }
 
     public void CancelActiveSpotOperations()
     {
-        var nodes = RunStateAsync(() => SpotNodes.Values.ToArray())
-            .GetAwaiter().GetResult();
-        foreach (var node in nodes) node.CancelActiveOperations();
+        var nodes = RunStateAsync(() => SpotNodes.Values.ToArray()).GetAwaiter().GetResult();
+        foreach (var node in nodes)
+            node.CancelActiveOperations();
     }
 
-    public async ValueTask ForceStopStreamSessionsAsync(
-        CancellationToken cancellationToken)
+    public async ValueTask ForceStopStreamSessionsAsync(CancellationToken cancellationToken)
     {
-        var streams = RunStateAsync(() => StreamNodes.Values.ToArray())
-            .GetAwaiter().GetResult();
-        await Task.WhenAll(streams.Select(stream =>
-                stream.ForceStopSessionsAsync(cancellationToken).AsTask()))
+        var streams = RunStateAsync(() => StreamNodes.Values.ToArray()).GetAwaiter().GetResult();
+        await Task.WhenAll(
+                streams.Select(stream => stream.ForceStopSessionsAsync(cancellationToken).AsTask())
+            )
             .ConfigureAwait(false);
     }
 
@@ -174,43 +184,49 @@ internal sealed class ZLinkFrameworkComponentState : IAsyncDisposable
     {
         lock (_disposeGate)
         {
-            if (_disposeTask is not null) return new ValueTask(_disposeTask);
+            if (_disposeTask is not null)
+                return new ValueTask(_disposeTask);
 
             var resources = RunStateAsync(() =>
-                new RuntimeResources(
-                    SpotNodes.Values.ToArray(),
-                    StreamNodes.Values.ToArray(),
-                    ClientServerClientBundles.Values.ToArray(),
-                    ClientServerClientRuntimes.Values.ToArray(),
-                    ClientServerServerBundles.Values.ToArray(),
-                    PublisherBundles.Values.ToArray(),
-                    AutomaticFanoutSubscriberRuntimes.Values.ToArray(),
-                    SubscriberBundles.Values.ToArray(),
-                    ListenerTasks.ToArray())).GetAwaiter().GetResult();
+                    new RuntimeResources(
+                        SpotNodes.Values.ToArray(),
+                        StreamNodes.Values.ToArray(),
+                        ClientServerClientBundles.Values.ToArray(),
+                        ClientServerClientRuntimes.Values.ToArray(),
+                        ClientServerServerBundles.Values.ToArray(),
+                        PublisherBundles.Values.ToArray(),
+                        AutomaticFanoutSubscriberRuntimes.Values.ToArray(),
+                        SubscriberBundles.Values.ToArray(),
+                        ListenerTasks.ToArray()
+                    )
+                )
+                .GetAwaiter()
+                .GetResult();
 
-            return new ValueTask(
-                _disposeTask = DisposeCoreAsync(resources, forceStopToken));
+            return new ValueTask(_disposeTask = DisposeCoreAsync(resources, forceStopToken));
         }
     }
 
     private async Task DisposeCoreAsync(
         RuntimeResources resources,
-        CancellationToken forceStopToken)
+        CancellationToken forceStopToken
+    )
     {
         var failures = new List<Exception>();
         if (!forceStopToken.CanBeCanceled)
         {
             foreach (var node in resources.SpotNodes)
-                await CaptureAsync(node.CloseLifecycleAsync)
-                    .ConfigureAwait(false);
+                await CaptureAsync(node.CloseLifecycleAsync).ConfigureAwait(false);
         }
 
         if (forceStopToken.CanBeCanceled)
             Capture(ForceStopTokenSource.Cancel);
         Capture(StopTokenSource.Cancel);
         Capture(ApplicationJobQueue.Dispose);
-        foreach (var node in resources.SpotNodes) Capture(node.RequestStop);
-        foreach (var stream in resources.StreamNodes) Capture(stream.RequestStop);
+        foreach (var node in resources.SpotNodes)
+            Capture(node.RequestStop);
+        foreach (var stream in resources.StreamNodes)
+            Capture(stream.RequestStop);
 
         await CaptureAsync(TaskRunner.StopAsync).ConfigureAwait(false);
 
@@ -230,9 +246,7 @@ internal sealed class ZLinkFrameworkComponentState : IAsyncDisposable
         // MeshNode. Destroy the dependent session service and socket before
         // destroying the MeshNode that owns their routing plane.
         foreach (var node in resources.SpotNodes)
-            await CaptureAsync(() => DisposeSpotNodeSafelyAsync(
-                    node,
-                    forceStopToken))
+            await CaptureAsync(() => DisposeSpotNodeSafelyAsync(node, forceStopToken))
                 .ConfigureAwait(false);
 
         foreach (var bundle in resources.PublisherBundles)
@@ -244,7 +258,8 @@ internal sealed class ZLinkFrameworkComponentState : IAsyncDisposable
         foreach (var bundle in resources.SubscriberBundles)
             await CaptureAsync(() => DisposeSafelyAsync(bundle)).ConfigureAwait(false);
 
-        await CaptureAsync(() => WaitForListenerTasksAsync(resources.ListenerTasks)).ConfigureAwait(false);
+        await CaptureAsync(() => WaitForListenerTasksAsync(resources.ListenerTasks))
+            .ConfigureAwait(false);
 
         await CaptureAsync(TimerScheduler.DisposeAsync).ConfigureAwait(false);
         Capture(_pressureMetricRegistration.Dispose);
@@ -255,7 +270,8 @@ internal sealed class ZLinkFrameworkComponentState : IAsyncDisposable
 
         if (failures.Count == 1)
             System.Runtime.ExceptionServices.ExceptionDispatchInfo.Capture(failures[0]).Throw();
-        if (failures.Count > 1) throw new AggregateException(failures);
+        if (failures.Count > 1)
+            throw new AggregateException(failures);
         return;
 
         async ValueTask CaptureAsync(Func<ValueTask> cleanup)
@@ -285,21 +301,16 @@ internal sealed class ZLinkFrameworkComponentState : IAsyncDisposable
 
     private static async ValueTask WaitForListenerTasksAsync(Task[] listenerTasks)
     {
-        if (listenerTasks.Length == 0) return;
+        if (listenerTasks.Length == 0)
+            return;
 
         try
         {
             await Task.WhenAll(listenerTasks);
         }
-        catch (OperationCanceledException)
-        {
-        }
-        catch (ObjectDisposedException)
-        {
-        }
-        catch (ZlinkCloseException)
-        {
-        }
+        catch (OperationCanceledException) { }
+        catch (ObjectDisposedException) { }
+        catch (ZlinkCloseException) { }
     }
 
     private sealed record RuntimeResources(
@@ -311,7 +322,8 @@ internal sealed class ZLinkFrameworkComponentState : IAsyncDisposable
         ZLinkChannelRuntimeBundle[] PublisherBundles,
         ZLinkAutomaticFanoutSubscriberRuntime[] AutomaticFanoutSubscriberRuntimes,
         ZLinkChannelRuntimeBundle[] SubscriberBundles,
-        Task[] ListenerTasks);
+        Task[] ListenerTasks
+    );
 
     private static async ValueTask DisposeSafelyAsync(IAsyncDisposable disposable)
     {
@@ -319,17 +331,14 @@ internal sealed class ZLinkFrameworkComponentState : IAsyncDisposable
         {
             await disposable.DisposeAsync();
         }
-        catch (ObjectDisposedException)
-        {
-        }
-        catch (ZlinkCloseException)
-        {
-        }
+        catch (ObjectDisposedException) { }
+        catch (ZlinkCloseException) { }
     }
 
     private static async ValueTask DisposeSpotNodeSafelyAsync(
         ZLinkSpotNodeRuntime node,
-        CancellationToken forceStopToken)
+        CancellationToken forceStopToken
+    )
     {
         try
         {
@@ -338,11 +347,7 @@ internal sealed class ZLinkFrameworkComponentState : IAsyncDisposable
             else
                 await node.DisposeAsync().ConfigureAwait(false);
         }
-        catch (ObjectDisposedException)
-        {
-        }
-        catch (ZlinkCloseException)
-        {
-        }
+        catch (ObjectDisposedException) { }
+        catch (ZlinkCloseException) { }
     }
 }

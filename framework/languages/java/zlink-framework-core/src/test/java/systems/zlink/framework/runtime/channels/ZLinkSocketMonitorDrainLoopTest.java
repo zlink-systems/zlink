@@ -5,6 +5,11 @@ import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
+import org.junit.jupiter.api.Test;
+
+import systems.zlink.framework.runtime.internal.backend.ZLinkBackendSocketMonitor;
+import systems.zlink.framework.runtime.internal.backend.ZLinkBackendSocketMonitorEvent;
+
 import java.time.Duration;
 import java.util.List;
 import java.util.Optional;
@@ -14,19 +19,15 @@ import java.util.concurrent.Semaphore;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
-import org.junit.jupiter.api.Test;
-import systems.zlink.framework.runtime.internal.backend.ZLinkBackendSocketMonitor;
-import systems.zlink.framework.runtime.internal.backend.ZLinkBackendSocketMonitorEvent;
 
 final class ZLinkSocketMonitorDrainLoopTest {
     @Test
-    void waitsForReadinessAndDrainsEveryReadyEventWithoutExitingOnNoData()
-        throws Exception {
+    void waitsForReadinessAndDrainsEveryReadyEventWithoutExitingOnNoData() throws Exception {
         TestMonitor monitor = new TestMonitor();
         List<String> dispatched = new CopyOnWriteArrayList<>();
-        Thread loop = ZLinkSocketMonitorDrainLoop.start(
-            "monitor-drain-contract", monitor,
-            event -> dispatched.add(event.event()));
+        Thread loop =
+                ZLinkSocketMonitorDrainLoop.start(
+                        "monitor-drain-contract", monitor, event -> dispatched.add(event.event()));
 
         assertTrue(monitor.waitEntered.await(1, TimeUnit.SECONDS));
         assertEquals(0, monitor.recvCalls.get());
@@ -37,9 +38,7 @@ final class ZLinkSocketMonitorDrainLoopTest {
 
         monitor.emit("DISCONNECTED");
         awaitCondition(() -> dispatched.size() == 3);
-        assertEquals(List.of(
-            "CONNECT_DELAYED", "CONNECTION_READY", "DISCONNECTED"),
-            dispatched);
+        assertEquals(List.of("CONNECT_DELAYED", "CONNECTION_READY", "DISCONNECTED"), dispatched);
         assertTrue(loop.isAlive());
 
         monitor.close();
@@ -50,8 +49,9 @@ final class ZLinkSocketMonitorDrainLoopTest {
     @Test
     void interruptionCancelsTheLoop() throws Exception {
         TestMonitor monitor = new TestMonitor();
-        Thread loop = ZLinkSocketMonitorDrainLoop.start(
-            "monitor-drain-cancellation", monitor, event -> { });
+        Thread loop =
+                ZLinkSocketMonitorDrainLoop.start(
+                        "monitor-drain-cancellation", monitor, event -> {});
 
         assertTrue(monitor.waitEntered.await(1, TimeUnit.SECONDS));
         loop.interrupt();
@@ -68,13 +68,14 @@ final class ZLinkSocketMonitorDrainLoopTest {
         monitor.receiveFailure = failure;
         AtomicReference<Throwable> uncaught = new AtomicReference<>();
         CountDownLatch failed = new CountDownLatch(1);
-        Thread loop = ZLinkSocketMonitorDrainLoop.start(
-            "monitor-drain-failure", monitor, event -> { });
+        Thread loop =
+                ZLinkSocketMonitorDrainLoop.start("monitor-drain-failure", monitor, event -> {});
         assertTrue(monitor.waitEntered.await(1, TimeUnit.SECONDS));
-        loop.setUncaughtExceptionHandler((thread, thrown) -> {
-            uncaught.set(thrown);
-            failed.countDown();
-        });
+        loop.setUncaughtExceptionHandler(
+                (thread, thrown) -> {
+                    uncaught.set(thrown);
+                    failed.countDown();
+                });
 
         monitor.emit("CONNECTION_READY");
 
@@ -84,8 +85,8 @@ final class ZLinkSocketMonitorDrainLoopTest {
         assertFalse(loop.isAlive());
     }
 
-    private static void awaitCondition(
-        java.util.function.BooleanSupplier condition) throws Exception {
+    private static void awaitCondition(java.util.function.BooleanSupplier condition)
+            throws Exception {
         long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(1);
         while (!condition.getAsBoolean() && System.nanoTime() < deadline) {
             Thread.yield();
@@ -94,9 +95,8 @@ final class ZLinkSocketMonitorDrainLoopTest {
     }
 
     private static final class TestMonitor implements ZLinkBackendSocketMonitor {
-        private final java.util.concurrent.ConcurrentLinkedQueue<
-            ZLinkBackendSocketMonitorEvent> events =
-            new java.util.concurrent.ConcurrentLinkedQueue<>();
+        private final java.util.concurrent.ConcurrentLinkedQueue<ZLinkBackendSocketMonitorEvent>
+                events = new java.util.concurrent.ConcurrentLinkedQueue<>();
         private final Semaphore readable = new Semaphore(0);
         private final CountDownLatch waitEntered = new CountDownLatch(1);
         private final AtomicInteger recvCalls = new AtomicInteger();
@@ -105,8 +105,7 @@ final class ZLinkSocketMonitorDrainLoopTest {
 
         private void emit(String... names) {
             for (String name : names) {
-                events.add(new ZLinkBackendSocketMonitorEvent(
-                    name, Optional.empty(), "", ""));
+                events.add(new ZLinkBackendSocketMonitorEvent(name, Optional.empty(), "", ""));
             }
             readable.release();
         }
@@ -115,8 +114,7 @@ final class ZLinkSocketMonitorDrainLoopTest {
         public boolean waitForReadable(Duration timeout) {
             waitEntered.countDown();
             try {
-                return readable.tryAcquire(timeout.toMillis(), TimeUnit.MILLISECONDS)
-                    && !closed;
+                return readable.tryAcquire(timeout.toMillis(), TimeUnit.MILLISECONDS) && !closed;
             } catch (InterruptedException interrupted) {
                 Thread.currentThread().interrupt();
                 return false;

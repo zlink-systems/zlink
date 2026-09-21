@@ -2,12 +2,12 @@ using System.Reflection;
 using System.Runtime.ExceptionServices;
 using System.Text;
 using Google.Protobuf;
-using BytesValue = Google.Protobuf.WellKnownTypes.BytesValue;
 using Zlink.Framework.Codecs.Protobuf;
 using Zlink.Framework.Contracts.Messaging;
 using Zlink.Framework.Runtime.Backend.Contracts;
 using Zlink.Framework.Runtime.Codecs;
 using Zlink.Framework.Runtime.Service;
+using BytesValue = Google.Protobuf.WellKnownTypes.BytesValue;
 
 namespace Zlink.Framework.UnitTests.Runtime;
 
@@ -87,12 +87,14 @@ public sealed class MeshReplyPayloadOwnershipTests
     public void Envelope_failure_disposes_owned_native_frames(bool remoteError)
     {
         using var header = remoteError
-            ? ZLinkEnvelopeCodec.EncodeHeader(Header() with
-            {
-                Kind = ZLinkMessageKind.Error,
-                ErrorCode = "invalid_operation",
-                ErrorMessage = "remote failure"
-            })
+            ? ZLinkEnvelopeCodec.EncodeHeader(
+                Header() with
+                {
+                    Kind = ZLinkMessageKind.Error,
+                    ErrorCode = "invalid_operation",
+                    ErrorMessage = "remote failure",
+                }
+            )
             : Message.From("malformed envelope");
         using var body = Message.From("null");
         var wire = Wrap([header, body]);
@@ -124,9 +126,14 @@ public sealed class MeshReplyPayloadOwnershipTests
 
     private static ZLinkBackendRouteReceived Unpack(Message[] wire)
     {
-        var result = Invoke(typeof(ZLinkManagedMeshNode).GetMethod(
-            "DecodeDirectApplicationReply", BindingFlags.NonPublic | BindingFlags.Static)!,
-            7UL, wire);
+        var result = Invoke(
+            typeof(ZLinkManagedMeshNode).GetMethod(
+                "DecodeDirectApplicationReply",
+                BindingFlags.NonPublic | BindingFlags.Static
+            )!,
+            7UL,
+            wire
+        );
         try
         {
             // This also rejects an eager unpack that already closed its native
@@ -136,24 +143,35 @@ public sealed class MeshReplyPayloadOwnershipTests
         }
         catch
         {
-            if (result is IDisposable owner) owner.Dispose();
-            else if (result is IReadOnlyList<Message> parts) ZLinkMessageParts.DisposeAll(parts);
+            if (result is IDisposable owner)
+                owner.Dispose();
+            else if (result is IReadOnlyList<Message> parts)
+                ZLinkMessageParts.DisposeAll(parts);
             throw;
         }
     }
 
-    private static T Decode<T>(ZLinkBackendRouteReceived reply, ZLinkCodecRegistryBuilder? codecs = null)
+    private static T Decode<T>(
+        ZLinkBackendRouteReceived reply,
+        ZLinkCodecRegistryBuilder? codecs = null
+    )
     {
-        var method = typeof(ZLinkClientCallCodec).GetMethods(BindingFlags.Public | BindingFlags.Static)
-            .Single(method => method.Name == "DecodeEnvelopeReplyAndDispose"
-                && method.GetParameters()[0].ParameterType == typeof(ZLinkBackendRouteReceived));
-        return (T)Invoke(method.MakeGenericMethod(typeof(T)), reply,
-            "empty", "failed", codecs, true)!;
+        var method = typeof(ZLinkClientCallCodec)
+            .GetMethods(BindingFlags.Public | BindingFlags.Static)
+            .Single(method =>
+                method.Name == "DecodeEnvelopeReplyAndDispose"
+                && method.GetParameters()[0].ParameterType == typeof(ZLinkBackendRouteReceived)
+            );
+        return (T)
+            Invoke(method.MakeGenericMethod(typeof(T)), reply, "empty", "failed", codecs, true)!;
     }
 
     private static object? Invoke(MethodInfo method, params object?[] arguments)
     {
-        try { return method.Invoke(null, arguments); }
+        try
+        {
+            return method.Invoke(null, arguments);
+        }
         catch (TargetInvocationException error) when (error.InnerException is not null)
         {
             ExceptionDispatchInfo.Capture(error.InnerException).Throw();
@@ -164,26 +182,45 @@ public sealed class MeshReplyPayloadOwnershipTests
     private static Message[] Wire(object value, Type type, ZLinkCodecRegistryBuilder? codecs = null)
     {
         var parts = ZLinkEnvelopeCodec.EncodeParts(Header(), value, type, codecs);
-        try { return Wrap(parts); }
-        finally { ZLinkMessageParts.DisposeAll(parts); }
+        try
+        {
+            return Wrap(parts);
+        }
+        finally
+        {
+            ZLinkMessageParts.DisposeAll(parts);
+        }
     }
 
     private static Message[] Wrap(IReadOnlyList<Message> parts) =>
-        [Message.From(ZLinkServiceWireCodec.EncodeReply(7, (int)RequestResult.Ok, 0)),
-         ZLinkApplicationPayloadEnvelopeCodec.EncodeFrameworkMultipartMessage(parts)];
+        [
+            Message.From(ZLinkServiceWireCodec.EncodeReply(7, (int)RequestResult.Ok, 0)),
+            ZLinkApplicationPayloadEnvelopeCodec.EncodeFrameworkMultipartMessage(parts),
+        ];
 
     private static ZLinkEnvelopeHeader Header() =>
-        new(ZLinkMessageKind.Response, "owned", nameof(Probe), "application/json", "reply-7",
-            null, null, null, null);
+        new(
+            ZLinkMessageKind.Response,
+            "owned",
+            nameof(Probe),
+            "application/json",
+            "reply-7",
+            null,
+            null,
+            null,
+            null
+        );
 
     private static void AssertAlive(IEnumerable<Message> parts)
     {
-        foreach (var part in parts) Assert.True(part.Size > 0);
+        foreach (var part in parts)
+            Assert.True(part.Size > 0);
     }
 
     private static void AssertDisposed(IEnumerable<Message> parts)
     {
-        foreach (var part in parts) Assert.Throws<ObjectDisposedException>(() => part.Size);
+        foreach (var part in parts)
+            Assert.Throws<ObjectDisposedException>(() => part.Size);
     }
 
     public sealed record Probe(string Value);
@@ -191,11 +228,14 @@ public sealed class MeshReplyPayloadOwnershipTests
     private sealed class MemorySerializer(bool cancel = false) : IZLinkMessageSerializer
     {
         internal ReadOnlyMemory<byte> Received { get; private set; }
+
         public ZLinkEncodedPayload Serialize(object value, Type type) =>
             ZLinkEncodedPayload.From(Encoding.UTF8.GetBytes(((Probe)value).Value));
+
         public object Deserialize(ZLinkEncodedPayload payload, Type type)
         {
-            if (cancel) throw new OperationCanceledException();
+            if (cancel)
+                throw new OperationCanceledException();
             Received = payload.Bytes;
             return new Probe(Encoding.UTF8.GetString(payload.Bytes.Span));
         }

@@ -6,18 +6,8 @@ import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
-import java.lang.reflect.Proxy;
-import java.time.Duration;
-import java.util.List;
-import java.util.Optional;
-import java.util.concurrent.CompletableFuture;
-import java.util.concurrent.CompletionException;
-import java.util.concurrent.CompletionStage;
-import java.util.concurrent.CountDownLatch;
-import java.util.concurrent.Executors;
-import java.util.concurrent.TimeUnit;
-import java.util.concurrent.atomic.AtomicInteger;
 import org.junit.jupiter.api.Test;
+
 import systems.zlink.contracts.core.RoutingId;
 import systems.zlink.contracts.errors.ZlinkSubmitException;
 import systems.zlink.contracts.messaging.Message;
@@ -34,6 +24,18 @@ import systems.zlink.framework.runtime.internal.calls.ZLinkOneWayCalls;
 import systems.zlink.framework.runtime.internal.service.ZLinkServiceOperationRegistry;
 import systems.zlink.framework.runtime.messaging.ZLinkApplicationMetadata;
 
+import java.lang.reflect.Proxy;
+import java.time.Duration;
+import java.util.List;
+import java.util.Optional;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CompletionException;
+import java.util.concurrent.CompletionStage;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.Executors;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicInteger;
+
 final class ZLinkChannelSubmissionFailureTest {
     private static final Duration TIMEOUT = Duration.ofSeconds(10);
     private static final RoutingId TARGET = RoutingId.from("submission-failure-target");
@@ -42,17 +44,22 @@ final class ZLinkChannelSubmissionFailureTest {
     void fanoutPublishWaitsForLocalQueueCapacityAndThenSucceeds() throws Exception {
         CountDownLatch publishEntered = new CountDownLatch(1);
         CountDownLatch queueCapacity = new CountDownLatch(1);
-        ZLinkBackendPublisherSocket publisher = publisherThatWaitsForCapacity(
-            publishEntered, queueCapacity);
+        ZLinkBackendPublisherSocket publisher =
+                publisherThatWaitsForCapacity(publishEntered, queueCapacity);
 
         try (var scheduler = Executors.newSingleThreadScheduledExecutor();
-             var caller = Executors.newSingleThreadExecutor();
-             Message payload = Message.from("fanout-payload")) {
+                var caller = Executors.newSingleThreadExecutor();
+                Message payload = Message.from("fanout-payload")) {
             ZLinkChannelCallRuntime runtime = runtime(scheduler);
             try {
-                CompletableFuture<Void> completion = CompletableFuture.runAsync(() ->
-                    new PublishCall(runtime, publisher, "events", payload)
-                        .submit().toCompletableFuture().join(), caller);
+                CompletableFuture<Void> completion =
+                        CompletableFuture.runAsync(
+                                () ->
+                                        new PublishCall(runtime, publisher, "events", payload)
+                                                .submit()
+                                                .toCompletableFuture()
+                                                .join(),
+                                caller);
 
                 assertTrue(publishEntered.await(5, TimeUnit.SECONDS));
                 queueCapacity.countDown();
@@ -66,19 +73,24 @@ final class ZLinkChannelSubmissionFailureTest {
 
     @Test
     void fanoutPublishMapsLocalQueueDeadlineToDeadlineExceeded() {
-        ZLinkBackendPublisherSocket publisher = publisherThatThrows(
-            new ZlinkSubmitException(SubmitResult.BACKPRESSURED));
+        ZLinkBackendPublisherSocket publisher =
+                publisherThatThrows(new ZlinkSubmitException(SubmitResult.BACKPRESSURED));
 
         try (var scheduler = Executors.newSingleThreadScheduledExecutor();
-             Message payload = Message.from("fanout-timeout")) {
+                Message payload = Message.from("fanout-timeout")) {
             ZLinkChannelCallRuntime runtime = runtime(scheduler);
             try {
-                CompletionException failure = assertThrows(CompletionException.class, () ->
-                    new PublishCall(runtime, publisher, "events", payload)
-                        .submit().toCompletableFuture().join());
+                CompletionException failure =
+                        assertThrows(
+                                CompletionException.class,
+                                () ->
+                                        new PublishCall(runtime, publisher, "events", payload)
+                                                .submit()
+                                                .toCompletableFuture()
+                                                .join());
 
-                ZLinkFrameworkException mapped = assertInstanceOf(
-                    ZLinkFrameworkException.class, failure.getCause());
+                ZLinkFrameworkException mapped =
+                        assertInstanceOf(ZLinkFrameworkException.class, failure.getCause());
                 assertEquals(ZLinkFrameworkErrorKind.DEADLINE_EXCEEDED, mapped.kind());
             } finally {
                 close(runtime, List.of());
@@ -92,14 +104,28 @@ final class ZLinkChannelSubmissionFailureTest {
         ZLinkBackendRouterSocket router = routerThatThrows(rejection, new AtomicInteger());
 
         try (var scheduler = Executors.newSingleThreadScheduledExecutor();
-             Message payload = Message.from("route-payload")) {
+                Message payload = Message.from("route-payload")) {
             ZLinkChannelCallRuntime runtime = runtime(scheduler);
             try {
-                CompletionException failure = assertThrows(CompletionException.class,
-                    () -> new RouteRequestCall(runtime, "orders", sockets(router), TIMEOUT,
-                        TARGET, payload, Optional.of("request"), null,
-                        ZLinkChannelContentTypeFrame.DEFAULT_CONTENT_TYPE, null)
-                        .submit(String.class).toCompletableFuture().join());
+                CompletionException failure =
+                        assertThrows(
+                                CompletionException.class,
+                                () ->
+                                        new RouteRequestCall(
+                                                        runtime,
+                                                        "orders",
+                                                        sockets(router),
+                                                        TIMEOUT,
+                                                        TARGET,
+                                                        payload,
+                                                        Optional.of("request"),
+                                                        null,
+                                                        ZLinkChannelContentTypeFrame
+                                                                .DEFAULT_CONTENT_TYPE,
+                                                        null)
+                                                .submit(String.class)
+                                                .toCompletableFuture()
+                                                .join());
 
                 assertEquals(rejection, failure.getCause());
                 assertTrue(payload.empty(), "failed submit must release the caller payload");
@@ -112,21 +138,35 @@ final class ZLinkChannelSubmissionFailureTest {
     @Test
     void routeRequestStartsAfterMoreThanTheFormerRegistryCapacity() {
         AtomicInteger attempts = new AtomicInteger();
-        ZLinkBackendRouterSocket router = routerThatThrows(
-            new IllegalStateException("route rejected"), attempts);
+        ZLinkBackendRouterSocket router =
+                routerThatThrows(new IllegalStateException("route rejected"), attempts);
 
         try (var scheduler = Executors.newSingleThreadScheduledExecutor();
-             Message payload = Message.from("route-capacity-payload")) {
+                Message payload = Message.from("route-capacity-payload")) {
             ZLinkChannelCallRuntime runtime = runtime(scheduler);
             List<CompletableFuture<Void>> pending = List.of();
             try {
                 pending = exhaustCapacity(runtime);
 
-                CompletionException failure = assertThrows(CompletionException.class, () ->
-                    new RouteRequestCall(runtime, "orders", sockets(router), TIMEOUT,
-                        TARGET, payload, Optional.of("request"), null,
-                        ZLinkChannelContentTypeFrame.DEFAULT_CONTENT_TYPE, null)
-                        .submit(String.class).toCompletableFuture().join());
+                CompletionException failure =
+                        assertThrows(
+                                CompletionException.class,
+                                () ->
+                                        new RouteRequestCall(
+                                                        runtime,
+                                                        "orders",
+                                                        sockets(router),
+                                                        TIMEOUT,
+                                                        TARGET,
+                                                        payload,
+                                                        Optional.of("request"),
+                                                        null,
+                                                        ZLinkChannelContentTypeFrame
+                                                                .DEFAULT_CONTENT_TYPE,
+                                                        null)
+                                                .submit(String.class)
+                                                .toCompletableFuture()
+                                                .join());
 
                 assertEquals("route rejected", failure.getCause().getMessage());
                 assertEquals(1, attempts.get());
@@ -143,13 +183,24 @@ final class ZLinkChannelSubmissionFailureTest {
         ZLinkInternalSpotNode node = channelNodeThatThrows(rejection, new AtomicInteger());
 
         try (var scheduler = Executors.newSingleThreadScheduledExecutor();
-             Message payload = Message.from("channel-payload")) {
+                Message payload = Message.from("channel-payload")) {
             ZLinkChannelCallRuntime runtime = runtime(scheduler);
             try {
-                CompletionException failure = assertThrows(CompletionException.class,
-                    () -> new ChannelRequestCall(runtime, "orders", sockets(node), TIMEOUT, payload,
-                        Optional.of("request"), TIMEOUT)
-                        .submit(String.class).toCompletableFuture().join());
+                CompletionException failure =
+                        assertThrows(
+                                CompletionException.class,
+                                () ->
+                                        new ChannelRequestCall(
+                                                        runtime,
+                                                        "orders",
+                                                        sockets(node),
+                                                        TIMEOUT,
+                                                        payload,
+                                                        Optional.of("request"),
+                                                        TIMEOUT)
+                                                .submit(String.class)
+                                                .toCompletableFuture()
+                                                .join());
 
                 assertEquals(rejection, failure.getCause());
                 assertTrue(payload.empty(), "failed submit must release the caller payload");
@@ -165,16 +216,27 @@ final class ZLinkChannelSubmissionFailureTest {
         ZLinkInternalSpotNode node = channelNodeThatUsesCallerRegistry(attempts);
 
         try (var scheduler = Executors.newSingleThreadScheduledExecutor();
-             Message payload = Message.from("channel-capacity-payload")) {
+                Message payload = Message.from("channel-capacity-payload")) {
             ZLinkChannelCallRuntime runtime = runtime(scheduler);
             List<CompletableFuture<Void>> pending = List.of();
             try {
                 pending = exhaustCapacity(runtime);
 
-                CompletionException failure = assertThrows(CompletionException.class, () ->
-                    new ChannelRequestCall(runtime, "orders", sockets(node), TIMEOUT, payload,
-                        Optional.of("request"), TIMEOUT).submit(String.class)
-                        .toCompletableFuture().join());
+                CompletionException failure =
+                        assertThrows(
+                                CompletionException.class,
+                                () ->
+                                        new ChannelRequestCall(
+                                                        runtime,
+                                                        "orders",
+                                                        sockets(node),
+                                                        TIMEOUT,
+                                                        payload,
+                                                        Optional.of("request"),
+                                                        TIMEOUT)
+                                                .submit(String.class)
+                                                .toCompletableFuture()
+                                                .join());
 
                 assertEquals(1, attempts.get());
                 assertTrue(payload.empty(), "failed submit must release the caller payload");
@@ -186,31 +248,34 @@ final class ZLinkChannelSubmissionFailureTest {
 
     @Test
     void meshNodeSendClosesPayloadWhenBackendRejectsSynchronously() {
-        IllegalStateException rejection = new IllegalStateException(
-            "node send rejected");
+        IllegalStateException rejection = new IllegalStateException("node send rejected");
         AtomicInteger attempts = new AtomicInteger();
         ZLinkInternalSpotNode node = nodeSendThatThrows(rejection, attempts);
 
         try (var scheduler = Executors.newSingleThreadScheduledExecutor();
-             Message payload = Message.from("node-send-payload")) {
+                Message payload = Message.from("node-send-payload")) {
             ZLinkChannelCallRuntime runtime = runtime(scheduler);
             try {
-                IllegalStateException failure = assertThrows(
-                    IllegalStateException.class,
-                    () -> new RouteSendCall(
-                        runtime,
-                        "orders",
-                        sockets(node),
-                        TARGET,
-                        payload,
-                        Optional.of("command"),
-                        ZLinkChannelContentTypeFrame.DEFAULT_CONTENT_TYPE,
-                        ZLinkApplicationMetadata.empty()).submit());
+                IllegalStateException failure =
+                        assertThrows(
+                                IllegalStateException.class,
+                                () ->
+                                        new RouteSendCall(
+                                                        runtime,
+                                                        "orders",
+                                                        sockets(node),
+                                                        TARGET,
+                                                        payload,
+                                                        Optional.of("command"),
+                                                        ZLinkChannelContentTypeFrame
+                                                                .DEFAULT_CONTENT_TYPE,
+                                                        ZLinkApplicationMetadata.empty())
+                                                .submit());
 
                 assertEquals(rejection, failure);
                 assertEquals(1, attempts.get());
-                assertTrue(payload.empty(),
-                    "synchronous node rejection must release encoded parts");
+                assertTrue(
+                        payload.empty(), "synchronous node rejection must release encoded parts");
             } finally {
                 close(runtime, List.of());
             }
@@ -223,22 +288,25 @@ final class ZLinkChannelSubmissionFailureTest {
         ZLinkInternalSpotNode node = nodeSendThatAdmitsImmediately(admitted);
 
         try (var scheduler = Executors.newSingleThreadScheduledExecutor();
-             Message payload = Message.from("node-send-immediate")) {
+                Message payload = Message.from("node-send-immediate")) {
             ZLinkChannelCallRuntime runtime = runtime(scheduler);
             try {
-                CompletionStage<Void> completion = new RouteSendCall(
-                    runtime,
-                    "orders",
-                    sockets(node),
-                    TARGET,
-                    payload,
-                    Optional.of("command"),
-                    ZLinkChannelContentTypeFrame.DEFAULT_CONTENT_TYPE,
-                    ZLinkApplicationMetadata.empty()).submit();
+                CompletionStage<Void> completion =
+                        new RouteSendCall(
+                                        runtime,
+                                        "orders",
+                                        sockets(node),
+                                        TARGET,
+                                        payload,
+                                        Optional.of("command"),
+                                        ZLinkChannelContentTypeFrame.DEFAULT_CONTENT_TYPE,
+                                        ZLinkApplicationMetadata.empty())
+                                .submit();
 
                 assertSame(admitted, completion);
-                assertTrue(payload.empty(),
-                    "immediate admission must release the encoded parts before returning");
+                assertTrue(
+                        payload.empty(),
+                        "immediate admission must release the encoded parts before returning");
             } finally {
                 close(runtime, List.of());
             }
@@ -247,30 +315,32 @@ final class ZLinkChannelSubmissionFailureTest {
 
     @Test
     void meshChannelSendClosesPayloadWhenBackendRejectsSynchronously() {
-        IllegalStateException rejection = new IllegalStateException(
-            "channel send rejected");
+        IllegalStateException rejection = new IllegalStateException("channel send rejected");
         AtomicInteger attempts = new AtomicInteger();
-        ZLinkInternalSpotNode node = channelSendThatThrows(
-            rejection, attempts);
+        ZLinkInternalSpotNode node = channelSendThatThrows(rejection, attempts);
 
         try (var scheduler = Executors.newSingleThreadScheduledExecutor();
-             Message payload = Message.from("channel-send-payload")) {
+                Message payload = Message.from("channel-send-payload")) {
             ZLinkChannelCallRuntime runtime = runtime(scheduler);
             try {
-                IllegalStateException failure = assertThrows(
-                    IllegalStateException.class,
-                    () -> new ChannelSendCall(
-                        runtime,
-                        "orders",
-                        sockets(node),
-                        TIMEOUT,
-                        payload,
-                        Optional.of("command")).submit());
+                IllegalStateException failure =
+                        assertThrows(
+                                IllegalStateException.class,
+                                () ->
+                                        new ChannelSendCall(
+                                                        runtime,
+                                                        "orders",
+                                                        sockets(node),
+                                                        TIMEOUT,
+                                                        payload,
+                                                        Optional.of("command"))
+                                                .submit());
 
                 assertEquals(rejection, failure);
                 assertEquals(1, attempts.get());
-                assertTrue(payload.empty(),
-                    "synchronous channel rejection must release encoded parts");
+                assertTrue(
+                        payload.empty(),
+                        "synchronous channel rejection must release encoded parts");
             } finally {
                 close(runtime, List.of());
             }
@@ -290,25 +360,24 @@ final class ZLinkChannelSubmissionFailureTest {
     }
 
     private static ZLinkChannelCallRuntime runtime(
-        java.util.concurrent.ScheduledExecutorService scheduler) {
+            java.util.concurrent.ScheduledExecutorService scheduler) {
         DefaultZLinkFrameworkOptions options = new DefaultZLinkFrameworkOptions();
-        ZLinkMessageFlowTracer flow = new ZLinkMessageFlowTracer(
-            options.registration().dispatchOptions(), null, Runnable::run);
+        ZLinkMessageFlowTracer flow =
+                new ZLinkMessageFlowTracer(
+                        options.registration().dispatchOptions(), null, Runnable::run);
         return new ZLinkChannelCallRuntime(flow, scheduler, null, null, null);
     }
 
-    private static List<CompletableFuture<Void>> exhaustCapacity(
-        ZLinkChannelCallRuntime runtime) {
+    private static List<CompletableFuture<Void>> exhaustCapacity(ZLinkChannelCallRuntime runtime) {
         List<CompletableFuture<Void>> pending = new java.util.ArrayList<>(4_097);
         for (int index = 0; index <= 4_096; index++) {
-            pending.add(runtime.submit(TIMEOUT, CompletableFuture<Void>::new, ignored -> { }));
+            pending.add(runtime.submit(TIMEOUT, CompletableFuture<Void>::new, ignored -> {}));
         }
         return pending;
     }
 
     private static void close(
-        ZLinkChannelCallRuntime runtime,
-        List<? extends CompletableFuture<?>> pending) {
+            ZLinkChannelCallRuntime runtime, List<? extends CompletableFuture<?>> pending) {
         runtime.beginClose();
         for (CompletableFuture<?> operation : pending) {
             try {
@@ -320,133 +389,141 @@ final class ZLinkChannelSubmissionFailureTest {
     }
 
     private static ZLinkBackendRouterSocket routerThatThrows(
-        Throwable failure,
-        AtomicInteger attempts) {
-        return (ZLinkBackendRouterSocket) Proxy.newProxyInstance(
-            ZLinkChannelSubmissionFailureTest.class.getClassLoader(),
-            new Class<?>[] {ZLinkBackendRouterSocket.class},
-            (proxy, method, arguments) -> {
-                if (method.getName().equals("request")) {
-                    attempts.incrementAndGet();
-                    throw failure;
-                }
-                return defaultValue(method.getReturnType());
-            });
+            Throwable failure, AtomicInteger attempts) {
+        return (ZLinkBackendRouterSocket)
+                Proxy.newProxyInstance(
+                        ZLinkChannelSubmissionFailureTest.class.getClassLoader(),
+                        new Class<?>[] {ZLinkBackendRouterSocket.class},
+                        (proxy, method, arguments) -> {
+                            if (method.getName().equals("request")) {
+                                attempts.incrementAndGet();
+                                throw failure;
+                            }
+                            return defaultValue(method.getReturnType());
+                        });
     }
 
     private static ZLinkBackendPublisherSocket publisherThatWaitsForCapacity(
-        CountDownLatch publishEntered,
-        CountDownLatch queueCapacity) {
-        return (ZLinkBackendPublisherSocket) Proxy.newProxyInstance(
-            ZLinkChannelSubmissionFailureTest.class.getClassLoader(),
-            new Class<?>[] {ZLinkBackendPublisherSocket.class},
-            (proxy, method, arguments) -> {
-                if (method.getName().equals("publish")) {
-                    publishEntered.countDown();
-                    if (arguments[2] == SendFlags.DONT_WAIT) {
-                        return false;
-                    }
-                    if (!queueCapacity.await(5, TimeUnit.SECONDS)) {
-                        throw new AssertionError("queue capacity was not released");
-                    }
-                    return true;
-                }
-                return defaultValue(method.getReturnType());
-            });
+            CountDownLatch publishEntered, CountDownLatch queueCapacity) {
+        return (ZLinkBackendPublisherSocket)
+                Proxy.newProxyInstance(
+                        ZLinkChannelSubmissionFailureTest.class.getClassLoader(),
+                        new Class<?>[] {ZLinkBackendPublisherSocket.class},
+                        (proxy, method, arguments) -> {
+                            if (method.getName().equals("publish")) {
+                                publishEntered.countDown();
+                                if (arguments[2] == SendFlags.DONT_WAIT) {
+                                    return false;
+                                }
+                                if (!queueCapacity.await(5, TimeUnit.SECONDS)) {
+                                    throw new AssertionError("queue capacity was not released");
+                                }
+                                return true;
+                            }
+                            return defaultValue(method.getReturnType());
+                        });
     }
 
     private static ZLinkBackendPublisherSocket publisherThatThrows(Throwable failure) {
-        return (ZLinkBackendPublisherSocket) Proxy.newProxyInstance(
-            ZLinkChannelSubmissionFailureTest.class.getClassLoader(),
-            new Class<?>[] {ZLinkBackendPublisherSocket.class},
-            (proxy, method, arguments) -> {
-                if (method.getName().equals("publish")) {
-                    throw failure;
-                }
-                return defaultValue(method.getReturnType());
-            });
+        return (ZLinkBackendPublisherSocket)
+                Proxy.newProxyInstance(
+                        ZLinkChannelSubmissionFailureTest.class.getClassLoader(),
+                        new Class<?>[] {ZLinkBackendPublisherSocket.class},
+                        (proxy, method, arguments) -> {
+                            if (method.getName().equals("publish")) {
+                                throw failure;
+                            }
+                            return defaultValue(method.getReturnType());
+                        });
     }
 
     private static ZLinkInternalSpotNode channelNodeThatThrows(
-        Throwable failure,
-        AtomicInteger attempts) {
-        return (ZLinkInternalSpotNode) Proxy.newProxyInstance(
-            ZLinkChannelSubmissionFailureTest.class.getClassLoader(),
-            new Class<?>[] {ZLinkInternalSpotNode.class},
-            (proxy, method, arguments) -> {
-                if (method.getName().equals("requestToChannel")) {
-                    attempts.incrementAndGet();
-                    throw failure;
-                }
-                return defaultValue(method.getReturnType());
-            });
+            Throwable failure, AtomicInteger attempts) {
+        return (ZLinkInternalSpotNode)
+                Proxy.newProxyInstance(
+                        ZLinkChannelSubmissionFailureTest.class.getClassLoader(),
+                        new Class<?>[] {ZLinkInternalSpotNode.class},
+                        (proxy, method, arguments) -> {
+                            if (method.getName().equals("requestToChannel")) {
+                                attempts.incrementAndGet();
+                                throw failure;
+                            }
+                            return defaultValue(method.getReturnType());
+                        });
     }
 
-    private static ZLinkInternalSpotNode channelNodeThatUsesCallerRegistry(
-        AtomicInteger attempts) {
-        return (ZLinkInternalSpotNode) Proxy.newProxyInstance(
-            ZLinkChannelSubmissionFailureTest.class.getClassLoader(),
-            new Class<?>[] {ZLinkInternalSpotNode.class},
-            (proxy, method, arguments) -> {
-                if (method.getName().equals("requestToChannel")) {
-                    @SuppressWarnings("unchecked")
-                    ZLinkServiceOperationRegistry operations =
-                        (ZLinkServiceOperationRegistry) arguments[4];
-                    java.util.UUID operationId = (java.util.UUID) arguments[5];
-                    return operations.submit(operationId, (Duration) arguments[3], () -> {
-                        attempts.incrementAndGet();
-                        return new CompletableFuture<>();
-                    }, ignored -> { });
-                }
-                return defaultValue(method.getReturnType());
-            });
+    private static ZLinkInternalSpotNode channelNodeThatUsesCallerRegistry(AtomicInteger attempts) {
+        return (ZLinkInternalSpotNode)
+                Proxy.newProxyInstance(
+                        ZLinkChannelSubmissionFailureTest.class.getClassLoader(),
+                        new Class<?>[] {ZLinkInternalSpotNode.class},
+                        (proxy, method, arguments) -> {
+                            if (method.getName().equals("requestToChannel")) {
+                                @SuppressWarnings("unchecked")
+                                ZLinkServiceOperationRegistry operations =
+                                        (ZLinkServiceOperationRegistry) arguments[4];
+                                java.util.UUID operationId = (java.util.UUID) arguments[5];
+                                return operations.submit(
+                                        operationId,
+                                        (Duration) arguments[3],
+                                        () -> {
+                                            attempts.incrementAndGet();
+                                            return new CompletableFuture<>();
+                                        },
+                                        ignored -> {});
+                            }
+                            return defaultValue(method.getReturnType());
+                        });
     }
 
     private static ZLinkInternalSpotNode nodeSendThatThrows(
-        Throwable failure,
-        AtomicInteger attempts) {
+            Throwable failure, AtomicInteger attempts) {
         RoutingId source = RoutingId.from("submission-failure-source");
-        return (ZLinkInternalSpotNode) Proxy.newProxyInstance(
-            ZLinkChannelSubmissionFailureTest.class.getClassLoader(),
-            new Class<?>[] {ZLinkInternalSpotNode.class},
-            (proxy, method, arguments) -> switch (method.getName()) {
-                case "routingId" -> source;
-                case "classifyNodeSendTarget" -> Optional.empty();
-                case "sendToNode" -> {
-                    attempts.incrementAndGet();
-                    throw failure;
-                }
-                default -> defaultValue(method.getReturnType());
-            });
+        return (ZLinkInternalSpotNode)
+                Proxy.newProxyInstance(
+                        ZLinkChannelSubmissionFailureTest.class.getClassLoader(),
+                        new Class<?>[] {ZLinkInternalSpotNode.class},
+                        (proxy, method, arguments) ->
+                                switch (method.getName()) {
+                                    case "routingId" -> source;
+                                    case "classifyNodeSendTarget" -> Optional.empty();
+                                    case "sendToNode" -> {
+                                        attempts.incrementAndGet();
+                                        throw failure;
+                                    }
+                                    default -> defaultValue(method.getReturnType());
+                                });
     }
 
     private static ZLinkInternalSpotNode nodeSendThatAdmitsImmediately(
-        CompletionStage<Void> admitted) {
+            CompletionStage<Void> admitted) {
         RoutingId source = RoutingId.from("submission-immediate-source");
-        return (ZLinkInternalSpotNode) Proxy.newProxyInstance(
-            ZLinkChannelSubmissionFailureTest.class.getClassLoader(),
-            new Class<?>[] {ZLinkInternalSpotNode.class},
-            (proxy, method, arguments) -> switch (method.getName()) {
-                case "routingId" -> source;
-                case "classifyNodeSendTarget" -> Optional.empty();
-                case "sendToNode" -> admitted;
-                default -> defaultValue(method.getReturnType());
-            });
+        return (ZLinkInternalSpotNode)
+                Proxy.newProxyInstance(
+                        ZLinkChannelSubmissionFailureTest.class.getClassLoader(),
+                        new Class<?>[] {ZLinkInternalSpotNode.class},
+                        (proxy, method, arguments) ->
+                                switch (method.getName()) {
+                                    case "routingId" -> source;
+                                    case "classifyNodeSendTarget" -> Optional.empty();
+                                    case "sendToNode" -> admitted;
+                                    default -> defaultValue(method.getReturnType());
+                                });
     }
 
     private static ZLinkInternalSpotNode channelSendThatThrows(
-        Throwable failure,
-        AtomicInteger attempts) {
-        return (ZLinkInternalSpotNode) Proxy.newProxyInstance(
-            ZLinkChannelSubmissionFailureTest.class.getClassLoader(),
-            new Class<?>[] {ZLinkInternalSpotNode.class},
-            (proxy, method, arguments) -> {
-                if (method.getName().equals("sendToChannel")) {
-                    attempts.incrementAndGet();
-                    throw failure;
-                }
-                return defaultValue(method.getReturnType());
-            });
+            Throwable failure, AtomicInteger attempts) {
+        return (ZLinkInternalSpotNode)
+                Proxy.newProxyInstance(
+                        ZLinkChannelSubmissionFailureTest.class.getClassLoader(),
+                        new Class<?>[] {ZLinkInternalSpotNode.class},
+                        (proxy, method, arguments) -> {
+                            if (method.getName().equals("sendToChannel")) {
+                                attempts.incrementAndGet();
+                                throw failure;
+                            }
+                            return defaultValue(method.getReturnType());
+                        });
     }
 
     private static Object defaultValue(Class<?> type) {

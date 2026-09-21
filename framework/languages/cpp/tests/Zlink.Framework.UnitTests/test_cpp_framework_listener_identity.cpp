@@ -181,7 +181,8 @@ TEST (ListenerIdentity, WildcardIpv6MeshPublishesIpv6Loopback)
     mesh::raw_mesh_node_owner_t node (mesh_options ("ipv6-target", "tcp://[::]:0"));
     try {
         node.start ();
-    } catch (const std::exception &error) {
+    }
+    catch (const std::exception &error) {
         // Core reports ENODEV when the host has no usable IPv6 listener; the
         // loopback mapping itself is covered by the helper-level test above.
         if (std::string (error.what ()).find ("errno=19") != std::string::npos)
@@ -234,8 +235,8 @@ TEST (ListenerIdentity, WildcardMeshAdvertisesLoopbackAndSupportsExpectedRidRout
     // channel message belong to different owners, so claim until both arrived.
     std::size_t claimed_records = 0;
     for (int attempt = 0; attempt != 8 && claimed_records < 2; ++attempt) {
-        const auto claimed = target.mailbox ().try_claim (
-          mesh::service_mailbox_domain_t::application, 2, 4096);
+        const auto claimed =
+          target.mailbox ().try_claim (mesh::service_mailbox_domain_t::application, 2, 4096);
         if (!claimed)
             break;
         claimed_records += claimed->records.size ();
@@ -297,8 +298,8 @@ TEST (ListenerIdentity, ExpectedRouteMismatchWritesAdmissionWarning)
     }
 
     const auto records = logging.captured_records ();
-    const auto found = std::find_if (
-      records.begin (), records.end (), [&] (const framework::log_record_t &record) {
+    const auto found =
+      std::find_if (records.begin (), records.end (), [&] (const framework::log_record_t &record) {
           if (record.level != framework::log_level_t::warn
               || record.message != "RouteMesh peer admission rejected")
               return false;

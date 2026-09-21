@@ -16,17 +16,15 @@ public final class ZLinkScannedHandlerCatalog {
     }
 
     public List<ZLinkScannedHandler> matching(
-        Set<String> groups,
-        ZLinkScannedHandlerSurface surface,
-        ZLinkScannedHandlerKind kind) {
+            Set<String> groups, ZLinkScannedHandlerSurface surface, ZLinkScannedHandlerKind kind) {
         if (groups.isEmpty() || handlers.isEmpty()) {
             return List.of();
         }
         List<ZLinkScannedHandler> matched = new ArrayList<>();
         for (ZLinkScannedHandler handler : handlers) {
             if (handler.surface() == surface
-                && handler.kind() == kind
-                && handler.groups().stream().anyMatch(groups::contains)) {
+                    && handler.kind() == kind
+                    && handler.groups().stream().anyMatch(groups::contains)) {
                 matched.add(handler);
             }
         }
@@ -38,9 +36,9 @@ public final class ZLinkScannedHandlerCatalog {
     }
 
     public boolean groupHasOnly(
-        String group,
-        ZLinkScannedHandlerSurface surface,
-        Set<ZLinkScannedHandlerKind> allowedKinds) {
+            String group,
+            ZLinkScannedHandlerSurface surface,
+            Set<ZLinkScannedHandlerKind> allowedKinds) {
         boolean found = false;
         for (ZLinkScannedHandler handler : handlers) {
             if (!handler.groups().contains(group)) {

@@ -11,35 +11,44 @@ public sealed class WorkerPoolTests
         await using var queue = CreateQueue();
         using var releaseWork = new ManualResetEventSlim(false);
         var workerStarted = new TaskCompletionSource(
-            TaskCreationOptions.RunContinuationsAsynchronously);
+            TaskCreationOptions.RunContinuationsAsynchronously
+        );
         var secondRan = new TaskCompletionSource(
-            TaskCreationOptions.RunContinuationsAsynchronously);
+            TaskCreationOptions.RunContinuationsAsynchronously
+        );
 
-        var first = queue.RunAsync(
-            async cancellationToken =>
-            {
-                _ = cancellationToken;
-                var call = CreateCall(
-                    pool,
-                    _ =>
-                    {
-                        workerStarted.TrySetResult();
-                        releaseWork.Wait();
-                        return 1;
-                    },
-                    queue);
-                _ = await call.Async();
-            },
-            CancellationToken.None).AsTask();
+        var first = queue
+            .RunAsync(
+                async cancellationToken =>
+                {
+                    _ = cancellationToken;
+                    var call = CreateCall(
+                        pool,
+                        _ =>
+                        {
+                            workerStarted.TrySetResult();
+                            releaseWork.Wait();
+                            return 1;
+                        },
+                        queue
+                    );
+                    _ = await call.Async();
+                },
+                CancellationToken.None
+            )
+            .AsTask();
 
         await workerStarted.Task.WaitAsync(TimeSpan.FromSeconds(5));
-        var second = queue.RunAsync(
-            _ =>
-            {
-                secondRan.TrySetResult();
-                return ValueTask.CompletedTask;
-            },
-            CancellationToken.None).AsTask();
+        var second = queue
+            .RunAsync(
+                _ =>
+                {
+                    secondRan.TrySetResult();
+                    return ValueTask.CompletedTask;
+                },
+                CancellationToken.None
+            )
+            .AsTask();
 
         try
         {
@@ -61,44 +70,56 @@ public sealed class WorkerPoolTests
         await using var queue = CreateQueue();
         using var releaseWork = new ManualResetEventSlim(false);
         var workerStarted = new TaskCompletionSource(
-            TaskCreationOptions.RunContinuationsAsynchronously);
+            TaskCreationOptions.RunContinuationsAsynchronously
+        );
         var secondRan = new TaskCompletionSource(
-            TaskCreationOptions.RunContinuationsAsynchronously);
+            TaskCreationOptions.RunContinuationsAsynchronously
+        );
         var firstResumed = new TaskCompletionSource(
-            TaskCreationOptions.RunContinuationsAsynchronously);
+            TaskCreationOptions.RunContinuationsAsynchronously
+        );
 
-        var first = queue.RunAsync(
-            async cancellationToken =>
-            {
-                _ = cancellationToken;
-                using var execution = ZLinkApplicationExecutionContext.Push(
-                    new ZLinkApplicationExecutionScope(
-                        "worker-test-spot",
-                        ZLinkUserSpotExecutionMode.SpotWide,
-                        ActorId: null,
-                        YieldAllowed: true));
-                var call = CreateCall(
-                    pool,
-                    _ =>
-                    {
-                        workerStarted.TrySetResult();
-                        releaseWork.Wait();
-                        return 1;
-                    },
-                    queue);
-                _ = await call.Yield();
-                firstResumed.TrySetResult();
-            },
-            CancellationToken.None).AsTask();
+        var first = queue
+            .RunAsync(
+                async cancellationToken =>
+                {
+                    _ = cancellationToken;
+                    using var execution = ZLinkApplicationExecutionContext.Push(
+                        new ZLinkApplicationExecutionScope(
+                            "worker-test-spot",
+                            ZLinkUserSpotExecutionMode.SpotWide,
+                            ActorId: null,
+                            YieldAllowed: true
+                        )
+                    );
+                    var call = CreateCall(
+                        pool,
+                        _ =>
+                        {
+                            workerStarted.TrySetResult();
+                            releaseWork.Wait();
+                            return 1;
+                        },
+                        queue
+                    );
+                    _ = await call.Yield();
+                    firstResumed.TrySetResult();
+                },
+                CancellationToken.None
+            )
+            .AsTask();
 
         await workerStarted.Task.WaitAsync(TimeSpan.FromSeconds(5));
-        var second = queue.RunAsync(
-            _ =>
-            {
-                secondRan.TrySetResult();
-                return ValueTask.CompletedTask;
-            },
-            CancellationToken.None).AsTask();
+        var second = queue
+            .RunAsync(
+                _ =>
+                {
+                    secondRan.TrySetResult();
+                    return ValueTask.CompletedTask;
+                },
+                CancellationToken.None
+            )
+            .AsTask();
 
         try
         {
@@ -142,7 +163,8 @@ public sealed class WorkerPoolTests
                     Interlocked.Increment(ref sideEffects);
                     return 1;
                 },
-                queue)
+                queue
+            )
             .Async(cancellation.Token)
             .AsTask();
 
@@ -162,21 +184,24 @@ public sealed class WorkerPoolTests
         await using var queue = CreateQueue();
         using var blockPool = new ManualResetEventSlim(false);
         var workerStarted = new TaskCompletionSource(
-            TaskCreationOptions.RunContinuationsAsynchronously);
+            TaskCreationOptions.RunContinuationsAsynchronously
+        );
 
         try
         {
             // Occupy the single pool thread, then queue more work than the
             // former worker-queue bound allowed.
             _ = CreateCall(
-                pool,
-                _ =>
-                {
-                    workerStarted.TrySetResult();
-                    blockPool.Wait();
-                    return 0;
-                },
-                queue).Async();
+                    pool,
+                    _ =>
+                    {
+                        workerStarted.TrySetResult();
+                        blockPool.Wait();
+                        return 0;
+                    },
+                    queue
+                )
+                .Async();
             await workerStarted.Task.WaitAsync(TimeSpan.FromSeconds(5));
             _ = CreateCall(pool, _ => 0, queue).Async();
             await WaitForAsync(() => pool.QueueLength == 1);
@@ -205,14 +230,14 @@ public sealed class WorkerPoolTests
                 releaseWork.Wait();
                 return 7;
             },
-            queue);
+            queue
+        );
         call.Timeout(TimeSpan.FromMilliseconds(100));
         var pending = call.Async().AsTask();
         var observed = await Assert.ThrowsAsync<ZLinkFrameworkException>(() =>
-            pending.WaitAsync(TimeSpan.FromSeconds(5)));
-        Assert.Equal(
-            ZLinkFrameworkErrorKind.DeadlineExceeded,
-            observed.Kind);
+            pending.WaitAsync(TimeSpan.FromSeconds(5))
+        );
+        Assert.Equal(ZLinkFrameworkErrorKind.DeadlineExceeded, observed.Kind);
 
         // Let the abandoned work finish; its late completion must not change
         // the already completed timeout result.
@@ -224,10 +249,7 @@ public sealed class WorkerPoolTests
     [Fact]
     public async Task RunCpuWorker_Idle_Threads_Shrink_After_Idle_Timeout()
     {
-        using var pool = new ZLinkWorkerPool(
-            0,
-            2,
-            TimeSpan.FromMilliseconds(150));
+        using var pool = new ZLinkWorkerPool(0, 2, TimeSpan.FromMilliseconds(150));
         await using var queue = CreateQueue();
 
         await CreateCall(pool, _ => 1, queue).Async().AsTask().WaitAsync(TimeSpan.FromSeconds(5));
@@ -243,12 +265,10 @@ public sealed class WorkerPoolTests
         using var pool = CreatePool(2);
         await using var queue = CreateQueue();
 
-        var call = CreateCall<int>(
-            pool,
-            _ => throw new InvalidOperationException("boom"),
-            queue);
+        var call = CreateCall<int>(pool, _ => throw new InvalidOperationException("boom"), queue);
         var error = await Assert.ThrowsAsync<ZLinkFrameworkException>(async () =>
-            await call.Async().AsTask().WaitAsync(TimeSpan.FromSeconds(5)));
+            await call.Async().AsTask().WaitAsync(TimeSpan.FromSeconds(5))
+        );
 
         Assert.Equal(ZLinkFrameworkErrorKind.InternalFailure, error.Kind);
         Assert.False(error.RetryAdvice != ZLinkRetryAdvice.DoNotRetry);
@@ -273,11 +293,14 @@ public sealed class WorkerPoolTests
         using var release = new ManualResetEventSlim(false);
         var started = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
 
-        Assert.Equal(ZLinkWorkerSubmitResult.Accepted, pool.TrySubmit(_ =>
-        {
-            started.TrySetResult();
-            release.Wait();
-        }));
+        Assert.Equal(
+            ZLinkWorkerSubmitResult.Accepted,
+            pool.TrySubmit(_ =>
+            {
+                started.TrySetResult();
+                release.Wait();
+            })
+        );
         await started.Task.WaitAsync(TimeSpan.FromSeconds(5));
 
         var dispose = pool.DisposeAsync().AsTask();
@@ -297,11 +320,14 @@ public sealed class WorkerPoolTests
         using var release = new ManualResetEventSlim(false);
         var started = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
 
-        Assert.Equal(ZLinkWorkerSubmitResult.Accepted, pool.TrySubmit(_ =>
-        {
-            started.TrySetResult();
-            release.Wait();
-        }));
+        Assert.Equal(
+            ZLinkWorkerSubmitResult.Accepted,
+            pool.TrySubmit(_ =>
+            {
+                started.TrySetResult();
+                release.Wait();
+            })
+        );
         await started.Task.WaitAsync(TimeSpan.FromSeconds(5));
         var queued = CreateCall(pool, _ => 42, queue).Async().AsTask();
         await WaitForAsync(() => pool.QueueLength == 1);
@@ -313,19 +339,16 @@ public sealed class WorkerPoolTests
         await pool.DisposeAsync();
     }
 
-    private static ZLinkWorkerPool CreatePool(
-        int maxThreads)
+    private static ZLinkWorkerPool CreatePool(int maxThreads)
     {
-        return new ZLinkWorkerPool(
-            0,
-            maxThreads,
-            TimeSpan.FromSeconds(30));
+        return new ZLinkWorkerPool(0, maxThreads, TimeSpan.FromSeconds(30));
     }
 
     private static ZLinkWorkerCall<TResult> CreateCall<TResult>(
         ZLinkWorkerPool pool,
         Func<CancellationToken, TResult> work,
-        ZLinkSerialExecutionQueue dispatcherQueue)
+        ZLinkSerialExecutionQueue dispatcherQueue
+    )
     {
         _ = dispatcherQueue;
         return new ZLinkWorkerCall<TResult>(pool, work, new ZLinkRuntimeErrorSink());
@@ -337,7 +360,8 @@ public sealed class WorkerPoolTests
         return new ZLinkSerialExecutionQueue(
             new ZLinkRuntimeTaskRunner(errorSink, CancellationToken.None),
             errorSink,
-            CancellationToken.None);
+            CancellationToken.None
+        );
     }
 
     private static async Task WaitForAsync(Func<bool> predicate, int timeoutMs = 5_000)
@@ -345,7 +369,8 @@ public sealed class WorkerPoolTests
         var deadline = Environment.TickCount64 + timeoutMs;
         while (!predicate())
         {
-            if (Environment.TickCount64 > deadline) throw new TimeoutException("Condition was not reached in time.");
+            if (Environment.TickCount64 > deadline)
+                throw new TimeoutException("Condition was not reached in time.");
 
             await Task.Delay(10);
         }

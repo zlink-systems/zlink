@@ -12,11 +12,12 @@ export * from './runtime/configuration';
 export * from './runtime/locations';
 export * from './runtime/locations/key-codec';
 export * from './runtime/locations/canonical-codec';
-export { ZLinkLocationAutoConnectType, ZLinkLocationKind, ZLinkRouteKind } from './contracts/Locations/Values';
 export {
-  ZLinkLocationWriteIntent,
-  ZLinkLocationWriteStatus
-} from './contracts/Locations/Writes';
+  ZLinkLocationAutoConnectType,
+  ZLinkLocationKind,
+  ZLinkRouteKind
+} from './contracts/Locations/Values';
+export { ZLinkLocationWriteIntent, ZLinkLocationWriteStatus } from './contracts/Locations/Writes';
 export * from './runtime/channels';
 export * from './runtime/backend';
 export * from './runtime/codecs';

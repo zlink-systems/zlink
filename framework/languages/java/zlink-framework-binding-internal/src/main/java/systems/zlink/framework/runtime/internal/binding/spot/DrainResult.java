@@ -8,5 +8,4 @@ package systems.zlink.framework.runtime.internal.binding.spot;
  * @param resultCode the underlying recv result code (0 == OK)
  * @param hasResidue whether more ready owners remain undrained
  */
-public record DrainResult(int resultCode, boolean hasResidue) {
-}
+public record DrainResult(int resultCode, boolean hasResidue) {}

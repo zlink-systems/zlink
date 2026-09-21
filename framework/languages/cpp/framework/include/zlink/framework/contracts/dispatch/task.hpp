@@ -39,11 +39,9 @@ struct serial_resume_failure_t
     std::string message;
 };
 
-inline thread_local std::optional<serial_resume_failure_t>
-  serial_resume_failure;
+inline thread_local std::optional<serial_resume_failure_t> serial_resume_failure;
 
-inline void set_serial_resume_failure (framework_error_kind_t kind,
-                                       std::string message)
+inline void set_serial_resume_failure (framework_error_kind_t kind, std::string message)
 {
     serial_resume_failure = serial_resume_failure_t{kind, std::move (message)};
 }
@@ -69,8 +67,7 @@ class deferred_barrier_t
     virtual void cancel () noexcept = 0;
 };
 
-using deferred_barrier_reserver_t =
-  std::function<result_t<std::shared_ptr<deferred_barrier_t>> ()>;
+using deferred_barrier_reserver_t = std::function<result_t<std::shared_ptr<deferred_barrier_t>> ()>;
 
 class serial_turn_t
 {
@@ -115,8 +112,7 @@ class serial_turn_scope_t
     std::shared_ptr<serial_turn_t> _previous;
 };
 
-inline task_scheduler_t held_serial_turn_scheduler (
-  std::shared_ptr<serial_turn_t> turn)
+inline task_scheduler_t held_serial_turn_scheduler (std::shared_ptr<serial_turn_t> turn)
 {
     return [turn = std::move (turn)] (std::function<void ()> work) mutable {
         serial_turn_scope_t scope (turn);
@@ -133,8 +129,7 @@ struct serial_turn_await_plan_t
     bool holds_turn = false;
 };
 
-inline std::optional<serial_turn_await_plan_t>
-prepare_serial_turn_await (bool release_turn)
+inline std::optional<serial_turn_await_plan_t> prepare_serial_turn_await (bool release_turn)
 {
     auto turn = capture_current_serial_turn ();
     if (!turn || turn->released ()) {
@@ -155,15 +150,13 @@ inline bool current_serial_turn_allows_yield ()
     return turn && !turn->released () && turn->allows_yield ();
 }
 
-inline result_t<void> defer_current_serial_turn (
-  std::function<void ()> work,
-  std::function<void ()> cancel = {})
+inline result_t<void> defer_current_serial_turn (std::function<void ()> work,
+                                                 std::function<void ()> cancel = {})
 {
     auto turn = capture_current_serial_turn ();
     if (!turn || turn->released ()) {
-        return result_t<void>::failure (
-          framework_error_kind_t::not_configured,
-          "Actor join defer requires an open Framework handler turn");
+        return result_t<void>::failure (framework_error_kind_t::not_configured,
+                                        "Actor join defer requires an open Framework handler turn");
     }
     return turn->defer (std::move (work), std::move (cancel));
 }
@@ -209,10 +202,7 @@ class ambient_context_scope_t
           application_job != nullptr ? application_job : _previous_application_job);
     }
 
-    ~ambient_context_scope_t ()
-    {
-        application_job_context_t::exchange (_previous_application_job);
-    }
+    ~ambient_context_scope_t () { application_job_context_t::exchange (_previous_application_job); }
 
     ambient_context_scope_t (const ambient_context_scope_t &) = delete;
     ambient_context_scope_t &operator= (const ambient_context_scope_t &) = delete;
@@ -225,8 +215,7 @@ class ambient_context_scope_t
 inline ambient_context_snapshot_t capture_ambient_context ()
 {
     const auto *hooks = ambient_context_hooks.load (std::memory_order_acquire);
-    return {hooks != nullptr ? hooks->capture () : nullptr,
-            application_job_context_t::current ()};
+    return {hooks != nullptr ? hooks->capture () : nullptr, application_job_context_t::current ()};
 }
 
 inline ambient_context_scope_t enter_ambient_context (const ambient_context_snapshot_t &snapshot)
@@ -244,8 +233,7 @@ inline task_scheduler_t capture_native_continuation_scheduler ()
     auto turn_plan = prepare_serial_turn_await (false);
     task_scheduler_t turn_scheduler =
       turn_plan ? std::move (turn_plan->scheduler) : task_scheduler_t{};
-    task_scheduler_t runtime_scheduler =
-      capture_runtime_native_continuation_scheduler ();
+    task_scheduler_t runtime_scheduler = capture_runtime_native_continuation_scheduler ();
     auto ambient = capture_ambient_context ();
     return [turn_scheduler = std::move (turn_scheduler),
             runtime_scheduler = std::move (runtime_scheduler),
@@ -282,9 +270,11 @@ class task_shared_state_t : public std::enable_shared_from_this<task_shared_stat
     void complete (result_t<T> result)
     {
         std::vector<std::pair<std::coroutine_handle<>, ambient_context_snapshot_t>> continuations;
-        std::vector<std::pair<std::function<void (const result_t<T> &)>, ambient_context_snapshot_t>>
+        std::vector<
+          std::pair<std::function<void (const result_t<T> &)>, ambient_context_snapshot_t>>
           callbacks;
-        std::vector<std::pair<std::function<void (const result_t<T> &)>, ambient_context_snapshot_t>>
+        std::vector<
+          std::pair<std::function<void (const result_t<T> &)>, ambient_context_snapshot_t>>
           terminal_callbacks;
         auto self = this->shared_from_this ();
         {
@@ -359,9 +349,8 @@ class task_shared_state_t : public std::enable_shared_from_this<task_shared_stat
     {
         std::stop_callback wake_waiter (cancellation, [this] { _ready.notify_all (); });
         std::unique_lock lock (_mutex);
-        if (!_ready.wait_for (lock, timeout, [&] {
-                return _result.has_value () || cancellation.stop_requested ();
-            })
+        if (!_ready.wait_for (
+              lock, timeout, [&] { return _result.has_value () || cancellation.stop_requested (); })
             || !_result) {
             return std::nullopt;
         }
@@ -385,11 +374,11 @@ class task_shared_state_t : public std::enable_shared_from_this<task_shared_stat
             /* The already-completed path may still defer through a scheduler,
              * so the registration-time context travels with the callback the
              * same way the pending path stores it. */
-            schedule ([self, callback = std::move (callback),
-                       snapshot = capture_ambient_context ()] {
-                const auto ambient_guard = enter_ambient_context (snapshot);
-                callback (*self->_result);
-            });
+            schedule (
+              [self, callback = std::move (callback), snapshot = capture_ambient_context ()] {
+                  const auto ambient_guard = enter_ambient_context (snapshot);
+                  callback (*self->_result);
+              });
         }
     }
 
@@ -399,8 +388,7 @@ class task_shared_state_t : public std::enable_shared_from_this<task_shared_stat
         {
             std::lock_guard lock (_mutex);
             if (!_result) {
-                _terminal_callbacks.emplace_back (
-                  std::move (callback), std::move (snapshot));
+                _terminal_callbacks.emplace_back (std::move (callback), std::move (snapshot));
                 return;
             }
         }
@@ -483,8 +471,7 @@ template <typename T> class task_t
                 throw;
             }
             catch (const framework_exception_t &error) {
-                completion.complete (
-                  detail::result_access_t::failure<T> (error));
+                completion.complete (detail::result_access_t::failure<T> (error));
             }
             catch (const std::exception &error) {
                 completion.complete (
@@ -499,8 +486,8 @@ template <typename T> class task_t
         void return_value (result_t<T> result) { completion.complete (std::move (result)); }
 
         template <typename U>
-        requires (!std::is_same_v<std::remove_cvref_t<U>, result_t<T>>) void return_value (
-          U &&value)
+            requires (!std::is_same_v<std::remove_cvref_t<U>, result_t<T>>)
+        void return_value (U &&value)
         {
             completion.complete (result_t<T>::success (T (std::forward<U> (value))));
         }
@@ -579,12 +566,11 @@ template <> class task_t<void>
                 throw;
             }
             catch (const framework_exception_t &error) {
-                completion.complete (
-                  detail::result_access_t::failure<void> (error));
+                completion.complete (detail::result_access_t::failure<void> (error));
             }
             catch (const std::exception &error) {
-                completion.complete (
-                  result_t<void>::failure (framework_error_kind_t::internal_failure, error.what ()));
+                completion.complete (result_t<void>::failure (
+                  framework_error_kind_t::internal_failure, error.what ()));
             }
             catch (...) {
                 completion.complete (result_t<void>::failure (

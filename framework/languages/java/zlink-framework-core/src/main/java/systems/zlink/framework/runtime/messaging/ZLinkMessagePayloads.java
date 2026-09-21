@@ -6,8 +6,7 @@ import systems.zlink.framework.ZLinkMessageSerializer;
 import systems.zlink.framework.messaging.ZLinkMessage;
 
 public final class ZLinkMessagePayloads {
-    private ZLinkMessagePayloads() {
-    }
+    private ZLinkMessagePayloads() {}
 
     public static ZLinkEncodedPayload encoded(Message message) {
         return ZLinkEncodedPayload.from(message.toByteArray());
@@ -22,9 +21,7 @@ public final class ZLinkMessagePayloads {
     }
 
     public static <T> T deserialize(
-        ZLinkMessageSerializer serializer,
-        Message message,
-        Class<T> type) {
+            ZLinkMessageSerializer serializer, Message message, Class<T> type) {
         return serializer.deserialize(encoded(message), type);
     }
 }

@@ -17,9 +17,7 @@ internal static class ZLinkFanoutLivenessProtocol
     internal static bool IsReservedApplicationTopic(string topic) =>
         topic.StartsWith(Topic, StringComparison.Ordinal);
 
-    internal static void ValidateApplicationTopic(
-        string topic,
-        string parameterName)
+    internal static void ValidateApplicationTopic(string topic, string parameterName)
     {
         ArgumentNullException.ThrowIfNull(topic, parameterName);
         try
@@ -31,26 +29,24 @@ internal static class ZLinkFanoutLivenessProtocol
             throw new ArgumentException(
                 "Fanout topics must contain valid Unicode scalar values.",
                 parameterName,
-                error);
+                error
+            );
         }
 
         if (IsReservedApplicationTopic(topic))
             throw new ArgumentException(
                 "The fanout liveness topic prefix is reserved by the Framework.",
-                parameterName);
+                parameterName
+            );
     }
 
     internal static bool IsValidBeacon(TopicMessage message) =>
         IsValidBeacon(message.Topic, message.Parts);
 
-    internal static bool IsValidBeacon(
-        string topic,
-        IReadOnlyList<Message> parts) =>
+    internal static bool IsValidBeacon(string topic, IReadOnlyList<Message> parts) =>
         IsReservedTopic(topic)
         && parts.Count == 1
         && parts[0].AsReadOnlySpan().SequenceEqual(Payload);
 
-    internal static bool IsInboundTimedOut(
-        TimeSpan elapsed) =>
-        elapsed >= InboundTimeout;
+    internal static bool IsInboundTimedOut(TimeSpan elapsed) => elapsed >= InboundTimeout;
 }

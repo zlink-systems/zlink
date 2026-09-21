@@ -1,4 +1,7 @@
-import { ZLinkFrameworkInternalErrorKind, createInternalFrameworkException  } from '../framework-errors-internal';
+import {
+  ZLinkFrameworkInternalErrorKind,
+  createInternalFrameworkException
+} from '../framework-errors-internal';
 import type {
   Type,
   ZLinkActor,
@@ -10,10 +13,7 @@ import type {
   ZLinkSpotActorSendHandler
 } from '../../contracts';
 import type { ZLinkProviderResolver } from '../../contracts/Common/ZLinkProviderResolver';
-import {
-  ZLinkFrameworkException,
-  ZLinkMessageMetadataEmpty
-} from '../../contracts';
+import { ZLinkFrameworkException, ZLinkMessageMetadataEmpty } from '../../contracts';
 import type { Message } from '../../contracts/Common/Message';
 import { ZLinkConfigurationException } from '../configuration';
 import { readZLinkDecoratorMetadata } from '../../contracts/Handlers/Attributes';
@@ -40,8 +40,9 @@ export class ZLinkSpotActorHandlerRegistryRuntime implements ZLinkActorHandlerRe
   private readonly packets = new Map<string, ZLinkActorPacketDescriptor>();
 
   addHandler<THandler>(handlerType: Type<THandler>, packetName?: string): this {
-    const metadata = readZLinkDecoratorMetadata(handlerType).find((entry) =>
-      entry.kind === 'spotActorSend' || entry.kind === 'spotActorRequest');
+    const metadata = readZLinkDecoratorMetadata(handlerType).find(
+      (entry) => entry.kind === 'spotActorSend' || entry.kind === 'spotActorRequest'
+    );
     const resolvedPacketName = packetName ?? metadata?.packetName;
     if (metadata === undefined || resolvedPacketName === undefined) {
       throw new ZLinkConfigurationException(
@@ -49,9 +50,10 @@ export class ZLinkSpotActorHandlerRegistryRuntime implements ZLinkActorHandlerRe
       );
     }
     return this.addPacket({
-      kind: metadata.kind === 'spotActorSend'
-        ? ZLinkActorPacketKind.Send
-        : ZLinkActorPacketKind.Request,
+      kind:
+        metadata.kind === 'spotActorSend'
+          ? ZLinkActorPacketKind.Send
+          : ZLinkActorPacketKind.Request,
       packetName: resolvedPacketName,
       actorType: Object as unknown as Type<ZLinkActor>,
       handlerType
@@ -79,23 +81,24 @@ export class ZLinkSpotActorHandlerRegistryRuntime implements ZLinkActorHandlerRe
     if (exact !== undefined) {
       return exact;
     }
-    const wildcard = this.packets.get(packetKey(kind, Object as unknown as Type<ZLinkActor>, packetName));
+    const wildcard = this.packets.get(
+      packetKey(kind, Object as unknown as Type<ZLinkActor>, packetName)
+    );
     if (wildcard !== undefined) {
       return wildcard;
     }
 
     for (const descriptor of this.packets.values()) {
       if (
-        descriptor.kind === kind
-        && descriptor.packetName === packetName
-        && actor instanceof descriptor.actorType
+        descriptor.kind === kind &&
+        descriptor.packetName === packetName &&
+        actor instanceof descriptor.actorType
       ) {
         return descriptor;
       }
     }
     return undefined;
   }
-
 }
 
 export interface ZLinkSpotActorDispatcherOptions {
@@ -138,17 +141,19 @@ export class ZLinkSpotActorDispatcher {
       const descriptor = this.requirePacket(ZLinkActorPacketKind.Send, actor, packetName);
       const message = decode();
       this.options.onHandlerStart?.();
-      await this.invokeHandler<
-        ZLinkSpotActorSendHandler<ZLinkSpot, ZLinkActor, TMessage>,
-        void
-      >(actor, descriptor, (handler) =>
-        runActorHandlerWithDeferredJoins(() =>
-          handler.handle(
-            this.options.spot,
-            actor,
-            this.createContext(packetName, context),
-            message
-          )));
+      await this.invokeHandler<ZLinkSpotActorSendHandler<ZLinkSpot, ZLinkActor, TMessage>, void>(
+        actor,
+        descriptor,
+        (handler) =>
+          runActorHandlerWithDeferredJoins(() =>
+            handler.handle(
+              this.options.spot,
+              actor,
+              this.createContext(packetName, context),
+              message
+            )
+          )
+      );
     });
   }
 
@@ -187,8 +192,14 @@ export class ZLinkSpotActorDispatcher {
     packetName: string,
     request: TRequest,
     context: Partial<ZLinkMessageContext> = {},
-    afterReply: (reply: TReply, options: ZLinkSpotActorReplyOptionsSnapshot) => Promise<TResult> | TResult,
-    beforeReply?: (reply: TReply, options: ZLinkSpotActorReplyOptionsSnapshot) => Promise<void> | void
+    afterReply: (
+      reply: TReply,
+      options: ZLinkSpotActorReplyOptionsSnapshot
+    ) => Promise<TResult> | TResult,
+    beforeReply?: (
+      reply: TReply,
+      options: ZLinkSpotActorReplyOptionsSnapshot
+    ) => Promise<void> | void
   ): Promise<TResult> {
     return this.dispatchRequestThenDecoded(
       actor,
@@ -205,8 +216,14 @@ export class ZLinkSpotActorDispatcher {
     packetName: string,
     decode: () => TRequest,
     context: Partial<ZLinkMessageContext> = {},
-    afterReply: (reply: TReply, options: ZLinkSpotActorReplyOptionsSnapshot) => Promise<TResult> | TResult,
-    beforeReply?: (reply: TReply, options: ZLinkSpotActorReplyOptionsSnapshot) => Promise<void> | void
+    afterReply: (
+      reply: TReply,
+      options: ZLinkSpotActorReplyOptionsSnapshot
+    ) => Promise<TResult> | TResult,
+    beforeReply?: (
+      reply: TReply,
+      options: ZLinkSpotActorReplyOptionsSnapshot
+    ) => Promise<void> | void
   ): Promise<TResult> {
     return this.execute(async () => {
       const descriptor = this.requirePacket(ZLinkActorPacketKind.Request, actor, packetName);
@@ -217,23 +234,27 @@ export class ZLinkSpotActorDispatcher {
         TResult
       >(actor, descriptor, (handler) =>
         runActorHandlerWithDeferredJoins(
-          () => handler.handle(
-            this.options.spot,
-            actor,
-            this.createContext(packetName, context),
-            request
-          ),
-          (reply) => afterReply(reply, {
-            metadata: new Map<string, string>(),
-            compressPayload: false
-          }),
+          () =>
+            handler.handle(
+              this.options.spot,
+              actor,
+              this.createContext(packetName, context),
+              request
+            ),
+          (reply) =>
+            afterReply(reply, {
+              metadata: new Map<string, string>(),
+              compressPayload: false
+            }),
           beforeReply === undefined
             ? undefined
-            : (reply) => beforeReply(reply, {
-                metadata: new Map<string, string>(),
-                compressPayload: false
-              })
-        ));
+            : (reply) =>
+                beforeReply(reply, {
+                  metadata: new Map<string, string>(),
+                  compressPayload: false
+                })
+        )
+      );
     });
   }
 
@@ -268,10 +289,7 @@ export class ZLinkSpotActorDispatcher {
     });
   }
 
-  commitActorJoin(
-    actor: ZLinkActor,
-    commit: () => Promise<void> | void
-  ): Promise<void> {
+  commitActorJoin(actor: ZLinkActor, commit: () => Promise<void> | void): Promise<void> {
     return this.execute(async () => {
       await commit();
       await this.options.spot.onJoinedActor(actor);
@@ -297,7 +315,9 @@ export class ZLinkSpotActorDispatcher {
   ): ZLinkActorPacketDescriptor {
     const descriptor = this.options.registry.resolvePacket(kind, actor, packetName);
     if (descriptor === undefined) {
-      throw actorDispatchHandlerNotFound(`No Spot actor ${kind} handler is registered for '${packetName}'.`);
+      throw actorDispatchHandlerNotFound(
+        `No Spot actor ${kind} handler is registered for '${packetName}'.`
+      );
     }
     this.ensureActorType(descriptor, actor);
     return descriptor;
@@ -329,8 +349,9 @@ export class ZLinkSpotActorDispatcher {
   }
 
   private execute<T>(operation: () => Promise<T> | T): Promise<T> {
-    const pending = this.options.serial?.execute(operation, this.options.serialWorkOptions)
-      ?? Promise.resolve().then(operation);
+    const pending =
+      this.options.serial?.execute(operation, this.options.serialWorkOptions) ??
+      Promise.resolve().then(operation);
     this.options.onAdmitted?.();
     return pending;
   }
@@ -350,7 +371,11 @@ export class ZLinkSpotActorDispatcher {
   }
 }
 
-function packetKey(kind: ZLinkActorPacketKind, actorType: Type<ZLinkActor>, packetName: string): string {
+function packetKey(
+  kind: ZLinkActorPacketKind,
+  actorType: Type<ZLinkActor>,
+  packetName: string
+): string {
   return `${kind}:${actorType.name}:${packetName}`;
 }
 

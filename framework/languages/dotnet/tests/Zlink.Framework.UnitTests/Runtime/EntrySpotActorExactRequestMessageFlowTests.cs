@@ -17,56 +17,75 @@ public sealed partial class EntrySpotActorDispatchTests
         try
         {
             var client = new ZLinkActorClient(runtime);
-            ValueTask<ProbeReply> Request() => client
-                .RequestToActor(actor.ActorId, new ProbeRouteMessage("request"))
-                .Async<ProbeReply>();
+            ValueTask<ProbeReply> Request() =>
+                client
+                    .RequestToActor(actor.ActorId, new ProbeRouteMessage("request"))
+                    .Async<ProbeReply>();
 
             node.ActorRequestHandler = _ => throw new OperationCanceledException();
             await Assert.ThrowsAnyAsync<OperationCanceledException>(() => Request().AsTask());
 
-            node.ActorRequestHandler = _ => throw new ZLinkFrameworkException(
-                ZLinkFrameworkErrorKind.ShuttingDown,
-                "stopping");
-            var shutdown = await Assert.ThrowsAsync<ZLinkFrameworkException>(() => Request().AsTask());
+            node.ActorRequestHandler = _ =>
+                throw new ZLinkFrameworkException(ZLinkFrameworkErrorKind.ShuttingDown, "stopping");
+            var shutdown = await Assert.ThrowsAsync<ZLinkFrameworkException>(() =>
+                Request().AsTask()
+            );
             Assert.Equal(ZLinkFrameworkErrorKind.ShuttingDown, shutdown.Kind);
 
-            node.ActorRequestHandler = _ => throw new ZLinkFrameworkException(
-                ZLinkFrameworkErrorKind.DeadlineExceeded,
-                "backpressured");
-            var backpressured = await Assert.ThrowsAsync<ZLinkFrameworkException>(() => Request().AsTask());
+            node.ActorRequestHandler = _ =>
+                throw new ZLinkFrameworkException(
+                    ZLinkFrameworkErrorKind.DeadlineExceeded,
+                    "backpressured"
+                );
+            var backpressured = await Assert.ThrowsAsync<ZLinkFrameworkException>(() =>
+                Request().AsTask()
+            );
             Assert.Equal(ZLinkFrameworkErrorKind.DeadlineExceeded, backpressured.Kind);
 
             node.ActorRequestHandler = parts =>
             {
                 var requestHeader = ZLinkStreamProtocolDefaults.DecodeHeader(
-                    parts[0].AsReadOnlyMemory());
+                    parts[0].AsReadOnlyMemory()
+                );
                 return
                 [
-                    Message.From(ZLinkStreamProtocolDefaults.EncodeHeader(requestHeader with
-                    {
-                        Kind = ZlinkStreamMessageKind.Response,
-                        Name = string.Empty
-                    }).Span),
-                    Message.From("{")
+                    Message.From(
+                        ZLinkStreamProtocolDefaults
+                            .EncodeHeader(
+                                requestHeader with
+                                {
+                                    Kind = ZlinkStreamMessageKind.Response,
+                                    Name = string.Empty,
+                                }
+                            )
+                            .Span
+                    ),
+                    Message.From("{"),
                 ];
             };
             await Assert.ThrowsAnyAsync<Exception>(() => Request().AsTask());
 
-            for (var attempt = 0; attempt < 100
-                                      && observer.Events.Count(flow =>
-                                          flow.ActorId == actor.ActorId
-                                          && flow.Phase == "reply_received") < 4;
-                 attempt++)
+            for (
+                var attempt = 0;
+                attempt < 100
+                    && observer.Events.Count(flow =>
+                        flow.ActorId == actor.ActorId && flow.Phase == "reply_received"
+                    ) < 4;
+                attempt++
+            )
                 await Task.Delay(5);
-            var terminals = observer.Events.Where(flow =>
-                    flow.ActorId == actor.ActorId && flow.Phase == "reply_received")
+            var terminals = observer
+                .Events.Where(flow =>
+                    flow.ActorId == actor.ActorId && flow.Phase == "reply_received"
+                )
                 .ToArray();
             Assert.Equal(4, terminals.Length);
             // The former capacity branch no longer exists; that attempt now ends as a
             // plain failure like the last one.
             Assert.Equal(
                 ["cancelled", "shutdown", "failed", "failed"],
-                terminals.Select(flow => flow.Outcome));
+                terminals.Select(flow => flow.Outcome)
+            );
         }
         finally
         {
@@ -85,15 +104,21 @@ public sealed partial class EntrySpotActorDispatchTests
                 new ZLinkActorClient(runtime)
                     .RequestToActor("missing-actor", new ProbeRouteMessage("request"))
                     .Async<ProbeReply>()
-                    .AsTask());
+                    .AsTask()
+            );
             Assert.Equal(ZLinkFrameworkErrorKind.NotFound, error.Kind);
 
-            for (var attempt = 0; attempt < 100
-                                      && !observer.Events.Any(flow => flow.ActorId == "missing-actor");
-                 attempt++)
+            for (
+                var attempt = 0;
+                attempt < 100 && !observer.Events.Any(flow => flow.ActorId == "missing-actor");
+                attempt++
+            )
                 await Task.Delay(5);
-            var terminal = Assert.Single(observer.Events.Where(flow =>
-                flow.ActorId == "missing-actor" && flow.Phase == "reply_received"));
+            var terminal = Assert.Single(
+                observer.Events.Where(flow =>
+                    flow.ActorId == "missing-actor" && flow.Phase == "reply_received"
+                )
+            );
             Assert.Equal("failed", terminal.Outcome);
             Assert.Equal("actor", terminal.Surface);
             Assert.Equal("request", terminal.MessageKind);
@@ -112,12 +137,14 @@ public sealed partial class EntrySpotActorDispatchTests
             ActorLookupResult = new ZLinkBackendActorRef(
                 RoutingId.From("entry-node"),
                 "flow-actor",
-                1)
+                1
+            ),
         };
         var (runtime, actorRef) = await CreateStartedRuntimeAsync(
             node,
             messageFlowMode: ZLinkDiagnosticsLevel.Normal,
-            includeJoinTarget: true);
+            includeJoinTarget: true
+        );
         try
         {
             var actor = RegisterProbeActor(runtime, actorRef);
@@ -133,8 +160,10 @@ public sealed partial class EntrySpotActorDispatchTests
                     "flow-join",
                     "join-request",
                     requestId: 91,
-                    flags: 1),
-                CancellationToken.None);
+                    flags: 1
+                ),
+                CancellationToken.None
+            );
 
             Assert.Null(ZLinkFlowContext.Current);
             Assert.Equal("flow-actor", actor.ActorId);
@@ -142,7 +171,10 @@ public sealed partial class EntrySpotActorDispatchTests
             // C++·Node·.NET 모두 dispatch 완료와 결합하지 않으므로 관찰 전에 기다린다.
             var joinDeadlineTimeout = TimeSpan.FromSeconds(5);
             var joinDeadlineStarted = Stopwatch.GetTimestamp();
-            while (probe.JoinFlow is null && Stopwatch.GetElapsedTime(joinDeadlineStarted) < joinDeadlineTimeout)
+            while (
+                probe.JoinFlow is null
+                && Stopwatch.GetElapsedTime(joinDeadlineStarted) < joinDeadlineTimeout
+            )
                 await Task.Delay(5);
             var joinFlow = Assert.IsType<ZLinkFlowValue>(probe.JoinFlow);
             Assert.True(ZlinkStreamFlowId.IsValid(joinFlow.FlowId));
@@ -169,35 +201,42 @@ public sealed partial class EntrySpotActorDispatchTests
         var (runtime, actorRef) = await CreateStartedRuntimeAsync(
             node,
             observer,
-            messageFlowMode: ZLinkDiagnosticsLevel.Normal);
+            messageFlowMode: ZLinkDiagnosticsLevel.Normal
+        );
         try
         {
             var actor = RegisterProbeActor(runtime, actorRef);
             await DispatchEntryActorPartsAsync(
                 runtime,
                 CreateExactActorRequestParts(actorRef),
-                CancellationToken.None);
+                CancellationToken.None
+            );
 
-            for (var attempt = 0;
-                 attempt < 100 && CountExactActorRequestEvents(observer, actor.ActorId) < 2;
-                 attempt++)
+            for (
+                var attempt = 0;
+                attempt < 100 && CountExactActorRequestEvents(observer, actor.ActorId) < 2;
+                attempt++
+            )
                 await Task.Delay(5);
 
-            var events = observer.Events
-                .Where(flow => flow.Surface == "actor"
-                               && flow.MessageKind == "request"
-                               && flow.ActorId == actor.ActorId)
+            var events = observer
+                .Events.Where(flow =>
+                    flow.Surface == "actor"
+                    && flow.MessageKind == "request"
+                    && flow.ActorId == actor.ActorId
+                )
                 .ToArray();
             Assert.Equal(2, events.Length);
-            Assert.Equal(
-                ["received", "replied"],
-                events.Select(flow => flow.Phase));
-            Assert.All(events, flow =>
-            {
-                Assert.Equal(ExactActorFlowId, flow.FlowId);
-                Assert.Equal("application", flow.FlowOrigin);
-                Assert.Equal("corr-1", flow.CorrelationId);
-            });
+            Assert.Equal(["received", "replied"], events.Select(flow => flow.Phase));
+            Assert.All(
+                events,
+                flow =>
+                {
+                    Assert.Equal(ExactActorFlowId, flow.FlowId);
+                    Assert.Equal("application", flow.FlowOrigin);
+                    Assert.Equal("corr-1", flow.CorrelationId);
+                }
+            );
         }
         finally
         {
@@ -207,29 +246,31 @@ public sealed partial class EntrySpotActorDispatchTests
 
     private static int CountExactActorRequestEvents(
         CapturingMessageFlowObserver observer,
-        string actorId)
+        string actorId
+    )
     {
         return observer.Events.Count(flow =>
-            flow.Surface == "actor"
-            && flow.MessageKind == "request"
-            && flow.ActorId == actorId);
+            flow.Surface == "actor" && flow.MessageKind == "request" && flow.ActorId == actorId
+        );
     }
 
     private static IReadOnlyList<ZLinkBackendActorPart> CreateExactActorRequestParts(
-        ZLinkBackendActorRef actorRef)
+        ZLinkBackendActorRef actorRef
+    )
     {
         var header = new ZlinkStreamHeader(
             ZlinkStreamMessageKind.Request,
             ZlinkStreamCodec.Json,
             ZlinkStreamHeaderFlags.HasRequestSeq
-            | ZlinkStreamHeaderFlags.HasCorrelationId
-            | ZlinkStreamHeaderFlags.HasFlowId,
+                | ZlinkStreamHeaderFlags.HasCorrelationId
+                | ZlinkStreamHeaderFlags.HasFlowId,
             new ZlinkStreamRequestSeq(7),
             "request",
             ZlinkStreamMetadata.Empty,
             "corr-1",
             ExactActorFlowId,
-            ZlinkStreamFlowOrigin.Application);
+            ZlinkStreamFlowOrigin.Application
+        );
         var replyRoute = new ZLinkBackendActorRouteContext(
             default,
             0,
@@ -238,7 +279,8 @@ public sealed partial class EntrySpotActorDispatchTests
             1,
             77,
             1,
-            "exact-flow-reply-capability");
+            "exact-flow-reply-capability"
+        );
         return
         [
             new ZLinkBackendActorPart(
@@ -249,7 +291,8 @@ public sealed partial class EntrySpotActorDispatchTests
                 1,
                 Message.From(ZLinkStreamProtocolDefaults.EncodeHeader(header).Span),
                 true,
-                RouteContext: replyRoute),
+                RouteContext: replyRoute
+            ),
             new ZLinkBackendActorPart(
                 actorRef,
                 RoutingId.From("source-node"),
@@ -258,7 +301,8 @@ public sealed partial class EntrySpotActorDispatchTests
                 1,
                 Message.From(ZLinkEnvelopeCodec.EncodeJsonBytes("exact", typeof(string))),
                 false,
-                RouteContext: replyRoute)
+                RouteContext: replyRoute
+            ),
         ];
     }
 

@@ -71,7 +71,7 @@ result_t<void> listener_failure (std::exception_ptr failure)
                    + std::to_string (code.value ()) + "]";
     }
     return result_t<void>::failure (code ? framework_error_kind_t::unavailable
-                                        : framework_error_kind_t::internal_failure,
+                                         : framework_error_kind_t::internal_failure,
                                     std::move (message));
 }
 } // namespace
@@ -92,18 +92,17 @@ class http_host_service_t::listener_t
         _stop (&stop),
         _active_connections (0),
         _active_requests (0),
-        _handler_executor (
-          0,
-          std::max<std::size_t> (
-            1, handler_worker_count == 0 ? std::thread::hardware_concurrency ()
-                                         : handler_worker_count),
-          std::chrono::seconds (30),
-          "zlink-http-hdl"),
-        _connection_workers (
-          0,
-          std::max<std::size_t> (2, std::thread::hardware_concurrency ()),
-          std::chrono::seconds (30),
-          "zlink-http-conn"),
+        _handler_executor (0,
+                           std::max<std::size_t> (1,
+                                                  handler_worker_count == 0
+                                                    ? std::thread::hardware_concurrency ()
+                                                    : handler_worker_count),
+                           std::chrono::seconds (30),
+                           "zlink-http-hdl"),
+        _connection_workers (0,
+                             std::max<std::size_t> (2, std::thread::hardware_concurrency ()),
+                             std::chrono::seconds (30),
+                             "zlink-http-conn"),
         _acceptor (_io),
         _accept_retry_timer (_io)
     {
@@ -157,12 +156,12 @@ class http_host_service_t::listener_t
         beast::error_code error;
         const auto wildcard = _parsed.host == "*";
         const auto resolve_host = wildcard ? std::string () : _parsed.host;
-        const auto resolve_flags = wildcard ? tcp::resolver::flags::passive
-                                            : tcp::resolver::flags ();
+        const auto resolve_flags =
+          wildcard ? tcp::resolver::flags::passive : tcp::resolver::flags ();
         const auto endpoints = resolver.resolve (resolve_host, _parsed.port, resolve_flags, error);
         if (error) {
-            throw boost::system::system_error (
-              error, "HTTP endpoint address resolution failed: " + _endpoint->uri);
+            throw boost::system::system_error (error, "HTTP endpoint address resolution failed: "
+                                                        + _endpoint->uri);
         }
         if (endpoints.begin () == endpoints.end ()) {
             throw std::runtime_error ("HTTP endpoint address resolution returned no addresses: "
@@ -185,8 +184,8 @@ class http_host_service_t::listener_t
             beast::error_code ignored;
             _acceptor.close (ignored);
         }
-        throw boost::system::system_error (
-          error, "HTTP listener bind/listen failed: " + _endpoint->uri);
+        throw boost::system::system_error (error,
+                                           "HTTP listener bind/listen failed: " + _endpoint->uri);
     }
 
     struct connection_t
@@ -203,8 +202,7 @@ class http_host_service_t::listener_t
             return;
         }
         auto connection = std::make_shared<connection_t> ();
-        _acceptor.async_accept (connection->socket,
-                                [this, connection] (beast::error_code error) {
+        _acceptor.async_accept (connection->socket, [this, connection] (beast::error_code error) {
             if (!error && !_stop->load (std::memory_order_acquire)) {
                 if (_active_connections.load (std::memory_order_acquire)
                     >= _options->server.max_connections) {
@@ -213,10 +211,10 @@ class http_host_service_t::listener_t
                     _active_connections.fetch_add (1, std::memory_order_acq_rel);
                     try {
                         _connection_workers.submit ([this, connection] () mutable {
-                            auto guard = std::unique_ptr<void, void (*) (void *)> (
-                              this, [] (void *listener) {
-                                  static_cast<listener_t *> (listener)->_active_connections.fetch_sub (
-                                    1, std::memory_order_acq_rel);
+                            auto guard =
+                              std::unique_ptr<void, void (*) (void *)> (this, [] (void *listener) {
+                                  static_cast<listener_t *> (listener)
+                                    ->_active_connections.fetch_sub (1, std::memory_order_acq_rel);
                               });
                             if (_parsed.scheme == "https") {
                                 handle_https (std::move (connection));
@@ -413,16 +411,15 @@ class http_host_service_t::listener_t
             set_request_timeout (stream, served == 0 ? _options->server.request_headers_timeout
                                                      : _options->server.keep_alive_timeout);
             (void) co_await http::async_read_header (
-              stream, buffer, parser,
-              asio::redirect_error (asio::use_awaitable, ec));
+              stream, buffer, parser, asio::redirect_error (asio::use_awaitable, ec));
             if (ec == http::error::end_of_stream || ec == asio::error::eof) {
                 co_return true;
             }
             if (ec) {
                 auto response = make_http_parser_error_response (ec, 11);
                 set_request_timeout (stream, _options->server.write_timeout);
-                (void) co_await http::async_write (
-                  stream, response, asio::redirect_error (asio::use_awaitable, ec));
+                (void) co_await http::async_write (stream, response,
+                                                   asio::redirect_error (asio::use_awaitable, ec));
                 co_return false;
             }
             if (parser.content_length ()
@@ -431,18 +428,18 @@ class http_host_service_t::listener_t
                   make_http_status_response (http::status::payload_too_large, 11,
                                              R"({"error":"request body too large"})", false);
                 set_request_timeout (stream, _options->server.write_timeout);
-                (void) co_await http::async_write (
-                  stream, response, asio::redirect_error (asio::use_awaitable, ec));
+                (void) co_await http::async_write (stream, response,
+                                                   asio::redirect_error (asio::use_awaitable, ec));
                 co_return false;
             }
             set_request_timeout (stream, _options->server.request_body_timeout);
-            (void) co_await http::async_read (
-              stream, buffer, parser, asio::redirect_error (asio::use_awaitable, ec));
+            (void) co_await http::async_read (stream, buffer, parser,
+                                              asio::redirect_error (asio::use_awaitable, ec));
             if (ec) {
                 auto response = make_http_parser_error_response (ec, 11);
                 set_request_timeout (stream, _options->server.write_timeout);
-                (void) co_await http::async_write (
-                  stream, response, asio::redirect_error (asio::use_awaitable, ec));
+                (void) co_await http::async_write (stream, response,
+                                                   asio::redirect_error (asio::use_awaitable, ec));
                 co_return false;
             }
             auto request = parser.release ();
@@ -459,8 +456,8 @@ class http_host_service_t::listener_t
                                  && served + 1 < _options->server.max_keep_alive_requests
                                  && !_stop->load (std::memory_order_acquire));
             set_request_timeout (stream, _options->server.write_timeout);
-            (void) co_await http::async_write (
-              stream, response, asio::redirect_error (asio::use_awaitable, ec));
+            (void) co_await http::async_write (stream, response,
+                                               asio::redirect_error (asio::use_awaitable, ec));
             if (ec || !response.keep_alive ()) {
                 co_return false;
             }
@@ -498,18 +495,16 @@ class http_host_service_t::listener_t
           [this, connection] () -> asio::awaitable<void> {
               auto stream = std::make_shared<beast::ssl_stream<beast::tcp_stream>> (
                 std::move (connection->socket), *_tls_context);
-              connection_registration_t registration (*this, connection,
-                                                       stream->next_layer (), stream);
+              connection_registration_t registration (*this, connection, stream->next_layer (),
+                                                      stream);
               beast::error_code ec;
               set_request_timeout (*stream, _options->server.request_headers_timeout);
-              co_await stream->async_handshake (
-                asio::ssl::stream_base::server,
-                asio::redirect_error (asio::use_awaitable, ec));
+              co_await stream->async_handshake (asio::ssl::stream_base::server,
+                                                asio::redirect_error (asio::use_awaitable, ec));
               if (!ec) {
                   (void) co_await serve_requests_async (*stream);
               }
-              co_await stream->async_shutdown (
-                asio::redirect_error (asio::use_awaitable, ec));
+              co_await stream->async_shutdown (asio::redirect_error (asio::use_awaitable, ec));
               co_return;
           },
           asio::detached);
@@ -545,13 +540,14 @@ class http_host_service_t::listener_t
 http_host_service_t::http_host_service_t (http_options_snapshot_t options,
                                           health_builder_t &health,
                                           std::size_t handler_worker_count) :
-    _options (std::move (options)),
-    _health (&health),
-    _handler_worker_count (handler_worker_count)
+    _options (std::move (options)), _health (&health), _handler_worker_count (handler_worker_count)
 {
 }
 
-http_host_service_t::~http_host_service_t () { stop (); }
+http_host_service_t::~http_host_service_t ()
+{
+    stop ();
+}
 
 task_t<void> http_host_service_t::start (service_provider_t &services)
 {
@@ -561,9 +557,8 @@ task_t<void> http_host_service_t::start (service_provider_t &services)
           .set_status ("http.host", health_status_t::unhealthy, "HTTP listeners are starting");
         _listeners.reserve (_options.endpoints.size ());
         for (const auto &endpoint : _options.endpoints) {
-            auto listener =
-              std::make_unique<listener_t> (endpoint, _options, *_health, services,
-                                            _handler_worker_count, _stop);
+            auto listener = std::make_unique<listener_t> (endpoint, _options, *_health, services,
+                                                          _handler_worker_count, _stop);
             _listeners.push_back (std::move (listener));
             _listeners.back ()->open ();
         }

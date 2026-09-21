@@ -25,7 +25,8 @@ public sealed class AutoConnectLifecycleCoordinatorTests
 
     private static ZLinkAutoConnectLifecycleCoordinator CreateCoordinator(
         Action started,
-        Action stopped)
+        Action stopped
+    )
     {
         return new ZLinkAutoConnectLifecycleCoordinator(
             (_, _) =>
@@ -37,10 +38,11 @@ public sealed class AutoConnectLifecycleCoordinatorTests
             {
                 stopped();
                 return ValueTask.CompletedTask;
-            });
+            }
+        );
     }
 
     private static ZLinkFrameworkComponentState UninitializedState() =>
-        (ZLinkFrameworkComponentState)RuntimeHelpers.GetUninitializedObject(
-            typeof(ZLinkFrameworkComponentState));
+        (ZLinkFrameworkComponentState)
+            RuntimeHelpers.GetUninitializedObject(typeof(ZLinkFrameworkComponentState));
 }

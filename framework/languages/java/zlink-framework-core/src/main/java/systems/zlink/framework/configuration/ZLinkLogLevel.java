@@ -9,7 +9,11 @@ public enum ZLinkLogLevel {
 
     private final int value;
 
-    ZLinkLogLevel(int value) { this.value = value; }
+    ZLinkLogLevel(int value) {
+        this.value = value;
+    }
 
-    public int value() { return value; }
+    public int value() {
+        return value;
+    }
 }

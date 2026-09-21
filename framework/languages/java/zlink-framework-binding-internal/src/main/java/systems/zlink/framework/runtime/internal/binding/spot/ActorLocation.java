@@ -2,8 +2,6 @@
 
 package systems.zlink.framework.runtime.internal.binding.spot;
 
-import systems.zlink.contracts.core.RoutingId;
-
 /**
  * The current membership location of an actor.
  *
@@ -12,6 +10,5 @@ import systems.zlink.contracts.core.RoutingId;
  * @param spotGeneration the joined spot's lifecycle generation
  * @param membershipEpoch the actor's membership epoch within the spot
  */
-public record ActorLocation(ActorRef actor, String spotId, long spotGeneration,
-                            long membershipEpoch) {
-}
+public record ActorLocation(
+        ActorRef actor, String spotId, long spotGeneration, long membershipEpoch) {}

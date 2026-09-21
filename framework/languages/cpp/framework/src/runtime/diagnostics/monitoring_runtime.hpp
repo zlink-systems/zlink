@@ -133,8 +133,7 @@ class monitoring_runtime_t
   public:
     explicit monitoring_runtime_t (std::shared_ptr<monitoring_runtime_state_t> state);
 
-    static monitoring_runtime_t from (
-      const monitoring_builder_t &builder);
+    static monitoring_runtime_t from (const monitoring_builder_t &builder);
 
     const std::shared_ptr<monitoring_runtime_state_t> &state () const noexcept { return _state; }
 
@@ -143,12 +142,12 @@ class monitoring_runtime_t
                                     location_runtime_status_t status,
                                     std::vector<location_topology_entry_t> topology,
                                     std::vector<location_service_summary_t> summary) const;
-    void publish_location_changes (
-      std::string source_name,
-      location_runtime_status_t status,
-      bool status_changed,
-      std::optional<std::vector<location_topology_entry_t>> topology,
-      std::optional<std::vector<location_service_summary_t>> summary) const;
+    void
+    publish_location_changes (std::string source_name,
+                              location_runtime_status_t status,
+                              bool status_changed,
+                              std::optional<std::vector<location_topology_entry_t>> topology,
+                              std::optional<std::vector<location_service_summary_t>> summary) const;
     void publish_stream (stream_event_payload_t event) const;
     void publish_actor (actor_event_payload_t event) const;
     void publish_application_job_queue_failure () const;
@@ -159,9 +158,8 @@ class monitoring_runtime_t
     void publish_drain (drain_event_t event) const;
 
   private:
-    void log (log_level_t level,
-              std::string identifier,
-              std::vector<log_field_t> fields) const noexcept;
+    void
+    log (log_level_t level, std::string identifier, std::vector<log_field_t> fields) const noexcept;
 
     std::shared_ptr<monitoring_runtime_state_t> _state;
 };

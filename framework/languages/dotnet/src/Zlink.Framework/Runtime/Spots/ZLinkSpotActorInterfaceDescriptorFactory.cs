@@ -6,9 +6,14 @@ internal static class ZLinkSpotActorInterfaceDescriptorFactory
         ZLinkSpotActorHandlerSurface surface,
         Type? expectedSpotType,
         Type handlerType,
-        string? packetName)
+        string? packetName
+    )
     {
-        foreach (var (definition, arguments) in ZLinkHandlerContractInspector.EnumerateGenericInterfaces(handlerType))
+        foreach (
+            var (definition, arguments) in ZLinkHandlerContractInspector.EnumerateGenericInterfaces(
+                handlerType
+            )
+        )
         {
             var packet = TryCreatePacket(
                 surface,
@@ -17,8 +22,10 @@ internal static class ZLinkSpotActorInterfaceDescriptorFactory
                 null,
                 definition,
                 arguments,
-                packetName);
-            if (packet is not null) yield return new ZLinkSpotActorInferredHandlerDescriptor { Packet = packet };
+                packetName
+            );
+            if (packet is not null)
+                yield return new ZLinkSpotActorInferredHandlerDescriptor { Packet = packet };
         }
     }
 
@@ -29,36 +36,71 @@ internal static class ZLinkSpotActorInterfaceDescriptorFactory
         Type? expectedActorType,
         Type definition,
         Type[] arguments,
-        string? packetName)
+        string? packetName
+    )
     {
         if (definition == typeof(IZLinkEntrySpotActorSendHandler<,,>))
         {
-            if (surface != ZLinkSpotActorHandlerSurface.EntrySpot) return null;
+            if (surface != ZLinkSpotActorHandlerSurface.EntrySpot)
+                return null;
 
-            return CreatePacket(surface, expectedSpotType, handlerType, expectedActorType, arguments, null, packetName);
+            return CreatePacket(
+                surface,
+                expectedSpotType,
+                handlerType,
+                expectedActorType,
+                arguments,
+                null,
+                packetName
+            );
         }
 
         if (definition == typeof(IZLinkEntrySpotActorRequestHandler<,,,>))
         {
-            if (surface != ZLinkSpotActorHandlerSurface.EntrySpot) return null;
+            if (surface != ZLinkSpotActorHandlerSurface.EntrySpot)
+                return null;
 
-            return CreatePacket(surface, expectedSpotType, handlerType, expectedActorType, arguments, arguments[3],
-                packetName);
+            return CreatePacket(
+                surface,
+                expectedSpotType,
+                handlerType,
+                expectedActorType,
+                arguments,
+                arguments[3],
+                packetName
+            );
         }
 
         if (definition == typeof(IZLinkSpotActorSendHandler<,,>))
         {
-            if (surface != ZLinkSpotActorHandlerSurface.UserSpot) return null;
+            if (surface != ZLinkSpotActorHandlerSurface.UserSpot)
+                return null;
 
-            return CreatePacket(surface, expectedSpotType, handlerType, expectedActorType, arguments, null, packetName);
+            return CreatePacket(
+                surface,
+                expectedSpotType,
+                handlerType,
+                expectedActorType,
+                arguments,
+                null,
+                packetName
+            );
         }
 
         if (definition == typeof(IZLinkSpotActorRequestHandler<,,,>))
         {
-            if (surface != ZLinkSpotActorHandlerSurface.UserSpot) return null;
+            if (surface != ZLinkSpotActorHandlerSurface.UserSpot)
+                return null;
 
-            return CreatePacket(surface, expectedSpotType, handlerType, expectedActorType, arguments, arguments[3],
-                packetName);
+            return CreatePacket(
+                surface,
+                expectedSpotType,
+                handlerType,
+                expectedActorType,
+                arguments,
+                arguments[3],
+                packetName
+            );
         }
 
         return null;
@@ -71,10 +113,19 @@ internal static class ZLinkSpotActorInterfaceDescriptorFactory
         Type? expectedActorType,
         Type[] arguments,
         Type? replyType,
-        string? packetName)
+        string? packetName
+    )
     {
-        ZLinkSpotActorDescriptorBuilder.ValidateSpotType(handlerType, expectedSpotType, arguments[0]);
-        ZLinkSpotActorDescriptorBuilder.ValidateActorType(handlerType, expectedActorType, arguments[1]);
+        ZLinkSpotActorDescriptorBuilder.ValidateSpotType(
+            handlerType,
+            expectedSpotType,
+            arguments[0]
+        );
+        ZLinkSpotActorDescriptorBuilder.ValidateActorType(
+            handlerType,
+            expectedActorType,
+            arguments[1]
+        );
         return ZLinkSpotActorDescriptorBuilder.CreatePacket(
             surface,
             handlerType,
@@ -82,6 +133,7 @@ internal static class ZLinkSpotActorInterfaceDescriptorFactory
             arguments[1],
             arguments[2],
             replyType,
-            packetName);
+            packetName
+        );
     }
 }

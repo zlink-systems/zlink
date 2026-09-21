@@ -1,33 +1,27 @@
 package systems.zlink.framework.runtime.channels;
 
-import java.util.Map;
-import java.util.Objects;
 import systems.zlink.framework.channels.ZLinkMeshChannelRuntimeOptions;
 import systems.zlink.framework.channels.ZLinkMeshPlacementRuntimeOptions;
 import systems.zlink.framework.channels.ZLinkRouteMeshRuntimeOptions;
 import systems.zlink.framework.errors.ZLinkConfigurationException;
 import systems.zlink.framework.runtime.internal.backend.ZLinkInternalMeshNode;
 
-/**
- * Applies live RouteMesh options to the Framework-owned MeshNode runtime.
- */
-public final class ZLinkRouteMeshRuntimeOptionsRuntime
-    implements ZLinkRouteMeshRuntimeOptions {
+import java.util.Map;
+import java.util.Objects;
+
+/** Applies live RouteMesh options to the Framework-owned MeshNode runtime. */
+public final class ZLinkRouteMeshRuntimeOptionsRuntime implements ZLinkRouteMeshRuntimeOptions {
     private final Map<String, ZLinkInternalMeshNode> nodes;
     private final Runnable descriptorChanged;
 
     public ZLinkRouteMeshRuntimeOptionsRuntime(
-        Map<String, ZLinkInternalMeshNode> nodes,
-        Runnable descriptorChanged) {
+            Map<String, ZLinkInternalMeshNode> nodes, Runnable descriptorChanged) {
         this.nodes = Map.copyOf(Objects.requireNonNull(nodes, "nodes"));
-        this.descriptorChanged =
-            Objects.requireNonNull(descriptorChanged, "descriptorChanged");
+        this.descriptorChanged = Objects.requireNonNull(descriptorChanged, "descriptorChanged");
     }
 
     @Override
-    public ZLinkMeshChannelRuntimeOptions channel(
-        String meshName,
-        String channelName) {
+    public ZLinkMeshChannelRuntimeOptions channel(String meshName, String channelName) {
         return channel(requireNode(meshName), channelName);
     }
 
@@ -62,27 +56,27 @@ public final class ZLinkRouteMeshRuntimeOptionsRuntime
             }
             if (found != null) {
                 throw new ZLinkConfigurationException(
-                    "ChannelName is registered by more than one RouteMesh: "
-                        + channelName);
+                        "ChannelName is registered by more than one RouteMesh: " + channelName);
             }
             found = node;
         }
         if (found == null) {
             throw new ZLinkConfigurationException(
-                "RouteMesh channel is not registered: " + channelName);
+                    "RouteMesh channel is not registered: " + channelName);
         }
         return channel(found, channelName);
     }
 
-    private ZLinkMeshChannelRuntimeOptions channel(
-        ZLinkInternalMeshNode node,
-        String channelName) {
+    private ZLinkMeshChannelRuntimeOptions channel(ZLinkInternalMeshNode node, String channelName) {
         requireText(channelName, "channelName");
         if (!node.channelWeights().containsKey(channelName)) {
             throw new ZLinkConfigurationException(
-                "RouteMesh channel is not registered"
-                    + " [mesh=" + node.name()
-                    + ", channel=" + channelName + "]");
+                    "RouteMesh channel is not registered"
+                            + " [mesh="
+                            + node.name()
+                            + ", channel="
+                            + channelName
+                            + "]");
         }
         return new ZLinkMeshChannelRuntimeOptions() {
             @Override
@@ -106,16 +100,14 @@ public final class ZLinkRouteMeshRuntimeOptionsRuntime
         requireText(meshName, "meshName");
         ZLinkInternalMeshNode node = nodes.get(meshName);
         if (node == null) {
-            throw new ZLinkConfigurationException(
-                "RouteMesh is not registered: " + meshName);
+            throw new ZLinkConfigurationException("RouteMesh is not registered: " + meshName);
         }
         return node;
     }
 
     private static void validateWeight(int value) {
         if (value < 0 || value > 10_000) {
-            throw new ZLinkConfigurationException(
-                "weight must be in range 0..10000");
+            throw new ZLinkConfigurationException("weight must be in range 0..10000");
         }
     }
 

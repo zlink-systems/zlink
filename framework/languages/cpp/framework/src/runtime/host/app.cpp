@@ -885,9 +885,8 @@ await_mesh_request_completion (zlink::framework::detail::mesh_node_runtime_t &me
           zlink::framework::runtime::messaging::message_parts_t (std::move (completion.parts)));
     }
     catch (const framework_exception_t &error) {
-        co_return
-          detail::result_access_t::failure<zlink::framework::runtime::messaging::message_parts_t> (
-            error);
+        co_return detail::result_access_t::failure<
+          zlink::framework::runtime::messaging::message_parts_t> (error);
     }
 }
 
@@ -1111,12 +1110,9 @@ void app_t::_apply_zlink_framework ()
                                                               std::move (core_context));
     const auto monitoring = _state->monitoring;
     _state->application_job_queue =
-      std::make_shared<runtime::application_job_queue_t> (
-        job_queue_configuration,
-        [monitoring] {
-            detail::monitoring_runtime_t (monitoring)
-              .publish_application_job_queue_failure ();
-        });
+      std::make_shared<runtime::application_job_queue_t> (job_queue_configuration, [monitoring] {
+          detail::monitoring_runtime_t (monitoring).publish_application_job_queue_failure ();
+      });
     _state->host_capacity = std::make_shared<runtime::host_capacity_runtime_t> (
       detail::zlink_builder_access_t::shared_core_context (_state->zlink),
       _state->application_job_queue,
@@ -1301,10 +1297,12 @@ void app_t::_apply_zlink_framework ()
     const auto shared_core_context =
       detail::zlink_builder_access_t::shared_core_context (_state->zlink);
     for (const auto &registration : mesh_node_registrations) {
-        registration->lane.run ([&] {
-            registration->core_context = shared_core_context;
-            registration->application_jobs = _state->application_job_queue;
-        }).get ();
+        registration->lane
+          .run ([&] {
+              registration->core_context = shared_core_context;
+              registration->application_jobs = _state->application_job_queue;
+          })
+          .get ();
     }
     _state->has_manual_service_topology = [options, mesh_node_registrations,
                                            channel_runtime_manager] () mutable {
@@ -1313,9 +1311,8 @@ void app_t::_apply_zlink_framework ()
             return true;
         }
         for (const auto &registration : mesh_node_registrations) {
-            if (registration->lane.run ([&] {
-                    return !registration->peer_connections.empty ();
-                }).get ())
+            if (registration->lane.run ([&] { return !registration->peer_connections.empty (); })
+                  .get ())
                 return true;
         }
         for (const auto &route_id : channel_runtime_manager.route_channel_ids ()) {
@@ -1621,8 +1618,7 @@ void app_t::_apply_zlink_framework ()
     if (!mesh_nodes.empty ()) {
         auto provider = _state->services.build_provider ();
         auto &location_store = provider.get_required<location_repository_t> ();
-        auto &location_resolvers =
-          provider.get_required<runtime::store_location_resolvers_t> ();
+        auto &location_resolvers = provider.get_required<runtime::store_location_resolvers_t> ();
         auto operation_sequence = std::make_shared<std::atomic<std::uint64_t>> (1);
         struct selected_instance_target_t
         {
@@ -1630,10 +1626,9 @@ void app_t::_apply_zlink_framework ()
             mesh_node_descriptor_t target;
             std::string stable_type;
         };
-        auto select_instance_target =
-          [mesh_nodes, &location_store, &location_resolvers] (
-            const spot_id_t &spot_id,
-            const detail::spot_activation_intent_t &intent)
+        auto select_instance_target = [mesh_nodes, &location_store, &location_resolvers] (
+                                        const spot_id_t &spot_id,
+                                        const detail::spot_activation_intent_t &intent)
           -> result_t<selected_instance_target_t> {
             std::vector<std::shared_ptr<detail::mesh_node_runtime_t>> sources;
             for (const auto &mesh : mesh_nodes) {
@@ -1652,9 +1647,7 @@ void app_t::_apply_zlink_framework ()
             const auto source = sources.front ();
             std::vector<mesh_node_descriptor_t> candidates;
             std::vector<mesh_node_descriptor_t> visible_targets;
-            auto listed = location_resolvers
-                            .list_live_mesh_nodes (source->mesh_name ())
-                            .result ();
+            auto listed = location_resolvers.list_live_mesh_nodes (source->mesh_name ()).result ();
             if (!listed.has_value ())
                 return detail::propagate_failure<selected_instance_target_t> (
                   listed, "Instance Spot target lookup failed");
@@ -1665,16 +1658,16 @@ void app_t::_apply_zlink_framework ()
                     continue;
                 visible_targets.push_back (descriptor);
                 const auto capable = std::any_of (
-                  descriptor.object_capabilities.begin (),
-                  descriptor.object_capabilities.end (), [&] (const auto &capability) {
+                  descriptor.object_capabilities.begin (), descriptor.object_capabilities.end (),
+                  [&] (const auto &capability) {
                       return capability.object_kind == placement_object_kind_t::instance_spot
                              && (!intent.stable_type
                                  || capability.stable_type == *intent.stable_type);
                   });
                 const auto spot_capacity = descriptor.capacity.spots;
                 const auto typed_capacity = std::find_if (
-                  descriptor.capacity.spot_types.begin (),
-                  descriptor.capacity.spot_types.end (), [&] (const auto &typed) {
+                  descriptor.capacity.spot_types.begin (), descriptor.capacity.spot_types.end (),
+                  [&] (const auto &typed) {
                       return typed.object_kind == placement_object_kind_t::instance_spot
                              && intent.stable_type && typed.stable_type == *intent.stable_type;
                   });
@@ -1712,8 +1705,7 @@ void app_t::_apply_zlink_framework ()
                       {source, *current, snapshot->allocation.stable_type});
                 }
                 return result_t<selected_instance_target_t>::failure (
-                  framework_error_kind_t::unavailable,
-                  "Ready Instance Spot owner is unavailable");
+                  framework_error_kind_t::unavailable, "Ready Instance Spot owner is unavailable");
             }
             if (candidates.empty ())
                 return result_t<selected_instance_target_t>::failure (
@@ -2524,21 +2516,20 @@ void app_t::_apply_zlink_framework ()
             }});
         application_mesh->configure_late_session_route_update (
           [dispatch = options.dispatch_options ()] (
-              const runtime::protocol::session_relocation_route_t &route) mutable {
-                const framework_exception_t warning (
-                  framework_error_kind_t::invalid_operation,
-                  "late_session_route_update");
-                detail::dispatch_error_reporter_t (dispatch).report_lazy ([&] {
-                    return message_dispatch_error_event_t{
-                      .surface = dispatch_error_surface_t::stream_session,
-                      .message_kind = dispatch_message_kind_t::actor_send,
-                      .reason = dispatch_error_reason_t::invalid_frame,
-                      .action = dispatch_error_action_t::drop,
-                      .packet_name = "sessionRelocationRoute",
-                      .actor_id = route.actor.actor_id,
-                      .exception = std::make_exception_ptr (warning)};
-                });
-            });
+            const runtime::protocol::session_relocation_route_t &route) mutable {
+              const framework_exception_t warning (framework_error_kind_t::invalid_operation,
+                                                   "late_session_route_update");
+              detail::dispatch_error_reporter_t (dispatch).report_lazy ([&] {
+                  return message_dispatch_error_event_t{
+                    .surface = dispatch_error_surface_t::stream_session,
+                    .message_kind = dispatch_message_kind_t::actor_send,
+                    .reason = dispatch_error_reason_t::invalid_frame,
+                    .action = dispatch_error_action_t::drop,
+                    .packet_name = "sessionRelocationRoute",
+                    .actor_id = route.actor.actor_id,
+                    .exception = std::make_exception_ptr (warning)};
+              });
+          });
     }
     if (!_state->services.contains (std::type_index (typeid (actor_client_t)))) {
         _state->services.add_factory<actor_client_t> (
@@ -2679,8 +2670,8 @@ app_t &app_t::add_hosted_service (std::unique_ptr<hosted_service_t> service)
     return *this;
 }
 
-int app_t::run (int argc, char **argv) try
-{
+int app_t::run (int argc, char **argv)
+try {
     _apply_zlink_framework ();
     _state->config.load_cli (argc, argv);
     detail::serializer_registry_access_t::freeze (_state->serializers);
@@ -2701,9 +2692,7 @@ int app_t::run (int argc, char **argv) try
     std::vector<hosted_service_t *> started;
     try {
         runtime::configure_handler_coroutine_executor (
-          _state->framework_options
-            ? _state->framework_options->handler_coroutine_workers ()
-            : 0);
+          _state->framework_options ? _state->framework_options->handler_coroutine_workers () : 0);
         _state->start_hosted_services (provider, started);
         auto expected = framework_runtime_state_t::preparing;
         (void) _state->runtime_state.compare_exchange_strong (
@@ -2789,32 +2778,26 @@ int app_t::run (int argc, char **argv) try
     return _state->stop_requested.load (std::memory_order_acquire) ? 0 : _state->exit_code;
 }
 catch (const std::exception &error) {
-    _state->runtime_state.store (framework_runtime_state_t::error,
-                                 std::memory_order_release);
+    _state->runtime_state.store (framework_runtime_state_t::error, std::memory_order_release);
     const auto message = std::string ("zlink application failed: ") + error.what ();
     std::cerr << message << '\n';
     try {
         _state->logging.create_logger ("zlink.framework.host").critical (message);
     }
     catch (const std::exception &logging_error) {
-        std::cerr << "zlink application failure logging failed: "
-                  << logging_error.what () << '\n';
+        std::cerr << "zlink application failure logging failed: " << logging_error.what () << '\n';
     }
     return 1;
 }
 catch (...) {
-    _state->runtime_state.store (framework_runtime_state_t::error,
-                                 std::memory_order_release);
-    constexpr std::string_view message =
-      "zlink application failed with an unknown exception";
+    _state->runtime_state.store (framework_runtime_state_t::error, std::memory_order_release);
+    constexpr std::string_view message = "zlink application failed with an unknown exception";
     std::cerr << message << '\n';
     try {
-        _state->logging.create_logger ("zlink.framework.host")
-          .critical (std::string (message));
+        _state->logging.create_logger ("zlink.framework.host").critical (std::string (message));
     }
     catch (const std::exception &logging_error) {
-        std::cerr << "zlink application failure logging failed: "
-                  << logging_error.what () << '\n';
+        std::cerr << "zlink application failure logging failed: " << logging_error.what () << '\n';
     }
     return 1;
 }

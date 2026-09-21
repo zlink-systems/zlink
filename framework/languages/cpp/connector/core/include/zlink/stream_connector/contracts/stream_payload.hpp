@@ -30,18 +30,14 @@ namespace zlink::stream_connector::detail
  * take: `const char *`, `std::string_view` and `std::string` all convert to
  * it, so a type that spells the member as a string_view is not silently
  * pushed onto the fallback path. */
-template <typename T> concept static_packet_name = requires
-{
-    {
-        T::packet_name
-    } -> std::convertible_to<std::string_view>;
+template <typename T>
+concept static_packet_name = requires {
+    { T::packet_name } -> std::convertible_to<std::string_view>;
 };
 
-template <typename T> concept protobuf_descriptor_name = requires
-{
-    {
-        std::string (T::descriptor ()->name ())
-    } -> std::same_as<std::string>;
+template <typename T>
+concept protobuf_descriptor_name = requires {
+    { std::string (T::descriptor ()->name ()) } -> std::same_as<std::string>;
 };
 
 /* Compiler-supplied spelling of T, used only as the input to the simple-name
@@ -88,8 +84,9 @@ template <typename T> std::string simple_type_name ()
     }
 #endif
 
-    for (const std::string_view keyword : {std::string_view ("struct "), std::string_view ("class "),
-                                           std::string_view ("enum "), std::string_view ("union ")}) {
+    for (const std::string_view keyword :
+         {std::string_view ("struct "), std::string_view ("class "), std::string_view ("enum "),
+          std::string_view ("union ")}) {
         while (name.substr (0, keyword.size ()) == keyword) {
             name.remove_prefix (keyword.size ());
         }
@@ -151,12 +148,10 @@ auto to_packet_payload (const TMessage &message, int) -> decltype (to_stream_pay
     }
 }
 
-template <typename TMessage> requires requires (const TMessage &message, std::string *bytes)
-{
-    {
-        message.SerializeToString (bytes)
-    } -> std::same_as<bool>;
-}
+template <typename TMessage>
+    requires requires (const TMessage &message, std::string *bytes) {
+        { message.SerializeToString (bytes) } -> std::same_as<bool>;
+    }
 zlink::message_t to_packet_payload (const TMessage &message, long)
 {
     std::string bytes;
@@ -182,12 +177,10 @@ auto apply_packet_payload (TMessage &message,
 
 template <typename TMessage> void apply_packet_payload (TMessage &, const zlink::message_t &, ...);
 
-template <typename TMessage> requires requires (TMessage &message, const std::string &bytes)
-{
-    {
-        message.ParseFromString (bytes)
-    } -> std::same_as<bool>;
-}
+template <typename TMessage>
+    requires requires (TMessage &message, const std::string &bytes) {
+        { message.ParseFromString (bytes) } -> std::same_as<bool>;
+    }
 void apply_packet_payload (TMessage &message, const zlink::message_t &payload, long)
 {
     if (!message.ParseFromString (payload.to_string ())) {

@@ -29,13 +29,12 @@ internal static class FixtureSamples
             options.AddHandlersFromAssemblyOf<FixtureSendHandler>();
 
             {
-                var mesh = options.AddRouteMesh("orders")
+                var mesh = options
+                    .AddRouteMesh("orders")
                     .Listen("tcp://127.0.0.1:7201")
                     .SetRoutingId(RoutingId.From("doc-orders"));
                 mesh.Channel("orders").Client(); // 논리 channel의 handler namespace를 MeshNode에 등록한다.
-                mesh.PeerConnections.Connect(
-                    RoutingId.From("doc-orders"),
-                    "tcp://127.0.0.1:7201"); // manual peer도 같은 MeshNode admission을 사용한다.
+                mesh.PeerConnections.Connect(RoutingId.From("doc-orders"), "tcp://127.0.0.1:7201"); // manual peer도 같은 MeshNode admission을 사용한다.
             }
 
             {
@@ -58,8 +57,12 @@ internal static class FixtureSamples
                 var mesh = options.AddRouteMesh("game.stage");
                 mesh.Channel("game.stage").Client();
                 mesh.Listen("tcp://127.0.0.1:7302");
-                mesh.Objects().Server().AddSpotFactory<FixtureStageSpot>(
-                    "fixture-stage", factory => factory.RecreateOnRelocation());
+                mesh.Objects()
+                    .Server()
+                    .AddSpotFactory<FixtureStageSpot>(
+                        "fixture-stage",
+                        factory => factory.RecreateOnRelocation()
+                    );
             }
         });
         return builder;
@@ -90,9 +93,9 @@ internal static class FixtureSamples
         var builder = Host.CreateApplicationBuilder();
         builder.Services.AddZLinkFramework(options =>
         {
-
             {
-                var mesh = options.AddRouteMesh("orders")
+                var mesh = options
+                    .AddRouteMesh("orders")
                     .Listen("tcp://127.0.0.1:7603")
                     .SetRoutingId(RoutingId.From("doc-orders"));
                 mesh.Channel("orders").Client();
@@ -102,8 +105,12 @@ internal static class FixtureSamples
                 var mesh = options.AddRouteMesh("game.stage");
                 mesh.Channel("game.stage").Client();
                 mesh.Listen("tcp://127.0.0.1:7605");
-                mesh.Objects().Server().AddSpotFactory<FixtureStageSpot>(
-                    "fixture-stage", factory => factory.RecreateOnRelocation());
+                mesh.Objects()
+                    .Server()
+                    .AddSpotFactory<FixtureStageSpot>(
+                        "fixture-stage",
+                        factory => factory.RecreateOnRelocation()
+                    );
             }
         });
         return builder;
@@ -125,11 +132,16 @@ internal static class FixtureSamples
                 var mesh = options.AddRouteMesh("game.stage");
                 mesh.Channel("game.stage").Client();
                 mesh.Listen("tcp://127.0.0.1:7702");
-                mesh.Objects().Server()
+                mesh.Objects()
+                    .Server()
                     .AddSpotFactory<FixtureActorSpot>(
-                        "fixture-actor-spot", factory => factory.RecreateOnRelocation())
+                        "fixture-actor-spot",
+                        factory => factory.RecreateOnRelocation()
+                    )
                     .AddActorFactory<FixtureActor, FixtureActorFactory>(
-                        "hero", factory => factory.RecreateOnRelocation());
+                        "hero",
+                        factory => factory.RecreateOnRelocation()
+                    );
             }
         });
         return builder;
@@ -142,9 +154,7 @@ internal sealed class FixtureStageSpot(IZLinkSpotContext context) : IZLinkSpot
 
     public void Configure()
     {
-        Context.Handlers.AddSubscribe<FixtureSpotSubscriptionHandler>(
-            "game.stage",
-            "stage.event");
+        Context.Handlers.AddSubscribe<FixtureSpotSubscriptionHandler>("game.stage", "stage.event");
     }
 
     public async ValueTask OnInitializeAsync(CancellationToken cancellationToken)
@@ -152,21 +162,26 @@ internal sealed class FixtureStageSpot(IZLinkSpotContext context) : IZLinkSpot
         _ = await Context.AddTimer<FixtureSpotTimerHandler>(
             "heartbeat",
             TimeSpan.FromSeconds(1),
-            cancellationToken: cancellationToken);
+            cancellationToken: cancellationToken
+        );
     }
 }
 
-internal sealed class FixtureSpotTimerHandler
-    : IZLinkSpotTimerHandler<FixtureStageSpot>
+internal sealed class FixtureSpotTimerHandler : IZLinkSpotTimerHandler<FixtureStageSpot>
 {
     public async ValueTask HandleAsync(
         FixtureStageSpot spot,
         ZLinkTimerTick tick,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken
+    )
     {
         _ = tick;
-        await spot.Context.Outbound
-            .Publish("game.stage", "stage.event", new FixtureSpotEvent(spot.Context.SpotId))
+        await spot
+            .Context.Outbound.Publish(
+                "game.stage",
+                "stage.event",
+                new FixtureSpotEvent(spot.Context.SpotId)
+            )
             .Async(cancellationToken);
     }
 }
@@ -178,7 +193,8 @@ internal sealed class FixtureSpotSubscriptionHandler
         FixtureStageSpot spot,
         FixtureSpotEvent message,
         ZLinkPublishMessageContext context,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken
+    )
     {
         _ = spot;
         _ = message;
@@ -196,7 +212,8 @@ internal sealed class FixtureSendHandler
     public ValueTask HandleAsync(
         FixtureSendCommand command,
         IZLinkMessageContext context,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken
+    )
     {
         _ = command;
         _ = context;
@@ -224,9 +241,7 @@ internal sealed class FixtureRawStreamSession(IZLinkSessionContext context) : IZ
         return ValueTask.CompletedTask;
     }
 
-    public ValueTask OnErrorAsync(
-        ZLinkStreamError error,
-        CancellationToken cancellationToken)
+    public ValueTask OnErrorAsync(ZLinkStreamError error, CancellationToken cancellationToken)
     {
         _ = error;
         _ = cancellationToken;
@@ -236,7 +251,8 @@ internal sealed class FixtureRawStreamSession(IZLinkSessionContext context) : IZ
     public ValueTask OnDispatchAsync(
         ZLinkSessionDispatchContext dispatch,
         ZLinkMessage payload,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken
+    )
     {
         _ = dispatch;
         _ = payload;
@@ -249,14 +265,13 @@ internal sealed class FixtureActorSpot(IZLinkSpotContext context) : IZLinkSpot<F
 {
     public IZLinkSpotContext Context { get; } = context;
 
-    public void Configure()
-    {
-    }
+    public void Configure() { }
 
     public async ValueTask<ZLinkSpotActorJoinResult> OnActorJoinAsync(
         string actorId,
         ZLinkMessage request,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken
+    )
     {
         var decoded = request.Decode<FixtureActorJoinRequest>();
         _ = actorId;
@@ -279,16 +294,15 @@ internal sealed class FixtureActorFactory : IZLinkActorFactory<FixtureActor>
 {
     public ValueTask<FixtureActor> CreateAsync(
         IZLinkActorContext context,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default
+    )
     {
         cancellationToken.ThrowIfCancellationRequested();
         return ValueTask.FromResult(new FixtureActor(context.ActorId, context));
     }
 }
 
-internal sealed class FixtureActor(
-    string actorId,
-    IZLinkActorContext context) : IZLinkActor
+internal sealed class FixtureActor(string actorId, IZLinkActorContext context) : IZLinkActor
 {
     public FixtureActorSpot? Spot { get; private set; }
     public string ActorId { get; } = actorId;
@@ -302,7 +316,8 @@ internal sealed class FixtureActor(
 
     public void DetachSpot(FixtureActorSpot spot)
     {
-        if (ReferenceEquals(Spot, spot)) Spot = null;
+        if (ReferenceEquals(Spot, spot))
+            Spot = null;
     }
 
     public ValueTask OnAttachedAsync(CancellationToken cancellationToken)
@@ -320,7 +335,8 @@ internal sealed class FixtureActor(
 
 internal sealed class FixtureActorPacketSession(
     IZLinkSessionContext context,
-    IZLinkActorManager actors) : IZLinkSession
+    IZLinkActorManager actors
+) : IZLinkSession
 {
     private IZLinkSessionActor? _actor;
 
@@ -328,17 +344,19 @@ internal sealed class FixtureActorPacketSession(
 
     public async ValueTask OnConnectedAsync(CancellationToken cancellationToken)
     {
-        var actor = (await actors.GetOrCreate("fixture", "hero")
-                .Async(cancellationToken).ConfigureAwait(false)) switch
+        var actor = (
+            await actors
+                .GetOrCreate("fixture", "hero")
+                .Async(cancellationToken)
+                .ConfigureAwait(false)
+        ) switch
         {
             ZLinkActorCreateResult.Existing value => value.Actor,
             ZLinkActorCreateResult.Created value => value.Actor,
-            _ => throw new InvalidOperationException("Actor creation was rejected.")
+            _ => throw new InvalidOperationException("Actor creation was rejected."),
         };
 
-        _actor = await Context.Actors.BindAsync(
-            actor,
-            cancellationToken);
+        _actor = await Context.Actors.BindAsync(actor, cancellationToken);
     }
 
     public ValueTask OnDisconnectedAsync(CancellationToken cancellationToken)
@@ -348,9 +366,7 @@ internal sealed class FixtureActorPacketSession(
         return ValueTask.CompletedTask;
     }
 
-    public ValueTask OnErrorAsync(
-        ZLinkStreamError error,
-        CancellationToken cancellationToken)
+    public ValueTask OnErrorAsync(ZLinkStreamError error, CancellationToken cancellationToken)
     {
         _ = error;
         _ = cancellationToken;
@@ -360,7 +376,8 @@ internal sealed class FixtureActorPacketSession(
     public async ValueTask OnDispatchAsync(
         ZLinkSessionDispatchContext dispatch,
         ZLinkMessage payload,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken
+    )
     {
         _ = dispatch;
         var actor = _actor ?? throw new InvalidOperationException("Actor is not bound.");

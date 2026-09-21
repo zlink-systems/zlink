@@ -1,5 +1,4 @@
 package systems.zlink.framework.runtime.internal.service;
-import java.util.Arrays;
 
 import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertEquals;
@@ -7,10 +6,13 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+
+import org.junit.jupiter.api.Test;
+
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.Arrays;
 import java.util.HexFormat;
-import org.junit.jupiter.api.Test;
 
 final class ZLinkCanonicalRelocationControlCodecTest {
     @Test
@@ -24,8 +26,8 @@ final class ZLinkCanonicalRelocationControlCodecTest {
             try {
                 decoded = codec.decode(bytes);
             } catch (IllegalArgumentException failure) {
-                throw new AssertionError(entry.path("name").asText()
-                    + ": " + failure.getMessage(), failure);
+                throw new AssertionError(
+                        entry.path("name").asText() + ": " + failure.getMessage(), failure);
             }
             assertEquals(entry.path("command").asInt(), decoded.command());
             assertArrayEquals(bytes, codec.encode(decoded));
@@ -42,11 +44,12 @@ final class ZLinkCanonicalRelocationControlCodecTest {
         assertEquals(3, fixture.path("malformed").size());
         for (JsonNode entry : fixture.path("malformed")) {
             byte[] bytes = HexFormat.of().parseHex(entry.path("hex").asText());
-            IllegalArgumentException failure = assertThrows(
-                IllegalArgumentException.class, () -> codec.decode(bytes),
-                entry.path("name").asText());
-            assertEquals(true, failure.getMessage() != null
-                && !failure.getMessage().isEmpty());
+            IllegalArgumentException failure =
+                    assertThrows(
+                            IllegalArgumentException.class,
+                            () -> codec.decode(bytes),
+                            entry.path("name").asText());
+            assertEquals(true, failure.getMessage() != null && !failure.getMessage().isEmpty());
         }
     }
 
@@ -54,22 +57,21 @@ final class ZLinkCanonicalRelocationControlCodecTest {
     void reservedCommandsAndWrongSenderRoleAreRejected() throws Exception {
         var fixture = new ObjectMapper().readTree(Files.readString(fixture()));
         var codec = new ZLinkCanonicalRelocationControlCodec();
-        byte[] unknown = HexFormat.of().parseHex(
-            byName(fixture, "relocationCutover").path("hex").asText());
+        byte[] unknown =
+                HexFormat.of().parseHex(byName(fixture, "relocationCutover").path("hex").asText());
         unknown[3] = 39;
         assertThrows(IllegalArgumentException.class, () -> codec.decode(unknown));
 
-        byte[] cutover = HexFormat.of().parseHex(
-            byName(fixture, "relocationCutover").path("hex").asText());
-        for (int reserved : new int[]{32, 35, 41}) {
+        byte[] cutover =
+                HexFormat.of().parseHex(byName(fixture, "relocationCutover").path("hex").asText());
+        for (int reserved : new int[] {32, 35, 41}) {
             byte[] frame = cutover.clone();
             frame[3] = (byte) reserved;
-            assertThrows(IllegalArgumentException.class,
-                () -> codec.decode(frame));
+            assertThrows(IllegalArgumentException.class, () -> codec.decode(frame));
         }
 
-        byte[] ready = HexFormat.of().parseHex(
-            fixture.path("canonical").get(0).path("hex").asText());
+        byte[] ready =
+                HexFormat.of().parseHex(fixture.path("canonical").get(0).path("hex").asText());
         ready[ready.length - 1] = 1;
         assertThrows(IllegalArgumentException.class, () -> codec.decode(ready));
     }
@@ -84,8 +86,7 @@ final class ZLinkCanonicalRelocationControlCodecTest {
     private static Path fixture() {
         Path current = Path.of(System.getProperty("user.dir")).toAbsolutePath();
         while (current != null) {
-            Path candidate = current.resolve(
-                "runtime/protocol/golden/relocation-control-v1.json");
+            Path candidate = current.resolve("runtime/protocol/golden/relocation-control-v1.json");
             if (Files.isRegularFile(candidate)) return candidate;
             current = current.getParent();
         }

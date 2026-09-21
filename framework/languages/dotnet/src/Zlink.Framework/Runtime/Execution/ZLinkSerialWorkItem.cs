@@ -9,8 +9,9 @@ internal sealed class ZLinkSerialWorkItem
     private bool _acceptedPayloadCreated;
     private ReadOnlyMemory<byte> _acceptedPayload;
 
-    private readonly TaskCompletionSource _completion =
-        new(TaskCreationOptions.RunContinuationsAsynchronously);
+    private readonly TaskCompletionSource _completion = new(
+        TaskCreationOptions.RunContinuationsAsynchronously
+    );
     private Action? _terminalRelease;
     private int _terminalReleased;
 
@@ -22,7 +23,8 @@ internal sealed class ZLinkSerialWorkItem
         ulong acceptedSequence = 0,
         ReadOnlyMemory<byte> acceptedPayload = default,
         Func<ReadOnlyMemory<byte>>? acceptedPayloadFactory = null,
-        bool reservationHeld = true)
+        bool reservationHeld = true
+    )
     {
         _callback = callback;
         _relocationRelease = relocationRelease;
@@ -68,14 +70,16 @@ internal sealed class ZLinkSerialWorkItem
         ArgumentNullException.ThrowIfNull(release);
         if (Interlocked.CompareExchange(ref _terminalRelease, release, null) is not null)
             throw new InvalidOperationException(
-                "ZLink serial work already has a terminal release callback.");
+                "ZLink serial work already has a terminal release callback."
+            );
     }
 
     public ZLinkAcceptedWorkRecord CreateAcceptedRecord()
     {
         if (!IsAccepted)
             throw new InvalidOperationException(
-                "Only accepted work can create a relocation record.");
+                "Only accepted work can create a relocation record."
+            );
         return new ZLinkAcceptedWorkRecord(AcceptedSequence, AcceptedPayload);
     }
 
@@ -99,7 +103,8 @@ internal sealed class ZLinkSerialWorkItem
     public async ValueTask<ZLinkSerialWorkItemResult> InvokeAsync(
         Action<Exception> onUnhandledException,
         CancellationToken cancellationToken,
-        ZLinkSerialTurn turn)
+        ZLinkSerialTurn turn
+    )
     {
         Task? callbackTask = null;
         try
@@ -119,10 +124,7 @@ internal sealed class ZLinkSerialWorkItem
             var completed = await Task.WhenAny(bounded, turn.Suspended).ConfigureAwait(false);
             if (ReferenceEquals(completed, turn.Suspended))
             {
-                _ = CompleteAfterSuspensionAsync(
-                    bounded,
-                    callbackTask,
-                    onUnhandledException);
+                _ = CompleteAfterSuspensionAsync(bounded, callbackTask, onUnhandledException);
                 return ZLinkSerialWorkItemResult.Suspended;
             }
 
@@ -137,7 +139,8 @@ internal sealed class ZLinkSerialWorkItem
                 await CompleteAfterCancellationAsync(
                         callbackTask,
                         cancellationToken,
-                        onUnhandledException)
+                        onUnhandledException
+                    )
                     .ConfigureAwait(false);
             else
             {
@@ -159,15 +162,14 @@ internal sealed class ZLinkSerialWorkItem
     private async Task CompleteAfterCancellationAsync(
         Task callbackTask,
         CancellationToken cancellationToken,
-        Action<Exception> onUnhandledException)
+        Action<Exception> onUnhandledException
+    )
     {
         try
         {
             await callbackTask.ConfigureAwait(false);
         }
-        catch (OperationCanceledException)
-        {
-        }
+        catch (OperationCanceledException) { }
         catch (Exception exception)
         {
             onUnhandledException(exception);
@@ -182,7 +184,8 @@ internal sealed class ZLinkSerialWorkItem
     private async Task CompleteAfterSuspensionAsync(
         Task boundedTask,
         Task callbackTask,
-        Action<Exception> onUnhandledException)
+        Action<Exception> onUnhandledException
+    )
     {
         try
         {
@@ -195,7 +198,8 @@ internal sealed class ZLinkSerialWorkItem
             await CompleteAfterCancellationAsync(
                     callbackTask,
                     cancellation.CancellationToken,
-                    onUnhandledException)
+                    onUnhandledException
+                )
                 .ConfigureAwait(false);
         }
         catch (Exception ex)
@@ -203,7 +207,8 @@ internal sealed class ZLinkSerialWorkItem
             ReleaseTerminal();
             _completion.TrySetException(ex);
             _ = _completion.Task.Exception;
-            if (ex is not OperationCanceledException) onUnhandledException(ex);
+            if (ex is not OperationCanceledException)
+                onUnhandledException(ex);
         }
     }
 
@@ -211,32 +216,31 @@ internal sealed class ZLinkSerialWorkItem
     {
         if (Interlocked.Exchange(ref _terminalReleased, 1) != 0)
             return;
-        (Volatile.Read(ref _terminalRelease)
-         ?? throw new InvalidOperationException(
-             "ZLink serial work has no terminal release callback."))();
+        (
+            Volatile.Read(ref _terminalRelease)
+            ?? throw new InvalidOperationException(
+                "ZLink serial work has no terminal release callback."
+            )
+        )();
     }
 }
 
 internal enum ZLinkSerialWorkLane
 {
     Application = 0,
-    Lifecycle = 1
+    Lifecycle = 1,
 }
 
 internal enum ZLinkSerialWorkItemResult
 {
     Completed,
-    Suspended
+    Suspended,
 }
 
-internal sealed record ZLinkAcceptedWorkRecord(
-    ulong AcceptedSequence,
-    ReadOnlyMemory<byte> Payload)
+internal sealed record ZLinkAcceptedWorkRecord(ulong AcceptedSequence, ReadOnlyMemory<byte> Payload)
 {
     public ZLinkAcceptedWorkRecord Snapshot()
     {
-        return new ZLinkAcceptedWorkRecord(
-            AcceptedSequence,
-            Payload.ToArray());
+        return new ZLinkAcceptedWorkRecord(AcceptedSequence, Payload.ToArray());
     }
 }

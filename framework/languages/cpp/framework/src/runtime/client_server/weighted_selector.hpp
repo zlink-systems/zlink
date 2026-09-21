@@ -24,8 +24,7 @@ struct weighted_candidate_t
     // key remains the connection lookup key and may include a generation.
     std::string tie_break_key;
 
-    friend bool operator== (const weighted_candidate_t &,
-                            const weighted_candidate_t &) = default;
+    friend bool operator== (const weighted_candidate_t &, const weighted_candidate_t &) = default;
 };
 
 class smooth_weighted_selector_t
@@ -51,11 +50,8 @@ class smooth_weighted_selector_t
 
         std::int64_t total = 0;
         for (const auto &candidate : next) {
-            if (total
-                > std::numeric_limits<std::int64_t>::max ()
-                    - candidate.weight) {
-                throw std::overflow_error (
-                  "ClientServer selection weight total exceeds int64");
+            if (total > std::numeric_limits<std::int64_t>::max () - candidate.weight) {
+                throw std::overflow_error ("ClientServer selection weight total exceeds int64");
             }
             total += candidate.weight;
         }
@@ -64,9 +60,9 @@ class smooth_weighted_selector_t
         _candidates = std::move (next);
         _total = total;
         for (auto it = _credits.begin (); it != _credits.end ();) {
-            const auto active = std::find_if (
-              _candidates.begin (), _candidates.end (),
-              [&] (const auto &candidate) { return candidate.key == it->first; });
+            const auto active =
+              std::find_if (_candidates.begin (), _candidates.end (),
+                            [&] (const auto &candidate) { return candidate.key == it->first; });
             if (active == _candidates.end ())
                 it = _credits.erase (it);
             else
@@ -83,8 +79,7 @@ class smooth_weighted_selector_t
             return std::nullopt;
 
         if (_precomputed) {
-            const auto selected_index =
-              _precomputed_schedule[_precomputed_cursor++];
+            const auto selected_index = _precomputed_schedule[_precomputed_cursor++];
             ++_precomputed_selected_counts[selected_index];
             ++_precomputed_total_selections;
             const auto result = _candidates[selected_index].key;
@@ -92,8 +87,7 @@ class smooth_weighted_selector_t
                 // The state at the end of the stored cycle is exactly the
                 // state at its beginning. Reset the lazy accounting so the
                 // hot path remains a cursor advance plus one counter update.
-                _precomputed_initial_credits =
-                  _precomputed_cycle_start_credits;
+                _precomputed_initial_credits = _precomputed_cycle_start_credits;
                 std::fill (_precomputed_selected_counts.begin (),
                            _precomputed_selected_counts.end (), 0);
                 _precomputed_total_selections = 0;
@@ -105,15 +99,12 @@ class smooth_weighted_selector_t
         const weighted_candidate_t *selected = nullptr;
         for (const auto &candidate : _candidates) {
             auto &credit = _credits[candidate.key];
-            if (credit
-                > std::numeric_limits<std::int64_t>::max ()
-                    - static_cast<std::int64_t> (candidate.weight)) {
-                throw std::overflow_error (
-                  "ClientServer selection cumulative value is exhausted");
+            if (credit > std::numeric_limits<std::int64_t>::max ()
+                           - static_cast<std::int64_t> (candidate.weight)) {
+                throw std::overflow_error ("ClientServer selection cumulative value is exhausted");
             }
             credit += static_cast<std::int64_t> (candidate.weight);
-            if (selected == nullptr
-                || credit > _credits[selected->key]
+            if (selected == nullptr || credit > _credits[selected->key]
                 || (credit == _credits[selected->key]
                     && candidate.tie_break_key < selected->tie_break_key))
                 selected = &candidate;
@@ -123,8 +114,7 @@ class smooth_weighted_selector_t
         return selected->key;
     }
 
-    std::optional<std::string> select (
-      std::span<const weighted_candidate_t> candidates)
+    std::optional<std::string> select (std::span<const weighted_candidate_t> candidates)
     {
         set_candidates (candidates);
         return select ();
@@ -142,8 +132,7 @@ class smooth_weighted_selector_t
             }
         } else {
             for (const auto &[_, credit] : _credits)
-                maximum = std::max (
-                  maximum, credit < 0 ? -credit : credit);
+                maximum = std::max (maximum, credit < 0 ? -credit : credit);
         }
         return maximum;
     }
@@ -154,52 +143,40 @@ class smooth_weighted_selector_t
     static constexpr std::size_t max_precomputed_steps = 4096;
     static constexpr auto max_precompute_time = std::chrono::milliseconds (5);
 
-    std::optional<std::size_t> select_index (
-      const credit_vector_t &credits) const noexcept
+    std::optional<std::size_t> select_index (const credit_vector_t &credits) const noexcept
     {
         if (_candidates.empty () || _total == 0)
             return std::nullopt;
         std::optional<std::size_t> selected;
         for (std::size_t index = 0; index < _candidates.size (); ++index) {
             const auto candidate_credit =
-              credits[index] + static_cast<std::int64_t> (
-                _candidates[index].weight);
+              credits[index] + static_cast<std::int64_t> (_candidates[index].weight);
             if (!selected
-                || candidate_credit >
-                     credits[*selected]
-                       + static_cast<std::int64_t> (
-                           _candidates[*selected].weight)
-                || (candidate_credit ==
-                      credits[*selected]
-                        + static_cast<std::int64_t> (
-                            _candidates[*selected].weight)
-                    && _candidates[index].tie_break_key
-                         < _candidates[*selected].tie_break_key)) {
+                || candidate_credit > credits[*selected]
+                                        + static_cast<std::int64_t> (_candidates[*selected].weight)
+                || (candidate_credit
+                      == credits[*selected]
+                           + static_cast<std::int64_t> (_candidates[*selected].weight)
+                    && _candidates[index].tie_break_key < _candidates[*selected].tie_break_key)) {
                 selected = index;
             }
         }
         return selected;
     }
 
-    void apply_selection (credit_vector_t &credits,
-                          std::size_t selected) const noexcept
+    void apply_selection (credit_vector_t &credits, std::size_t selected) const noexcept
     {
         for (std::size_t index = 0; index < _candidates.size (); ++index)
-            credits[index] += static_cast<std::int64_t> (
-              _candidates[index].weight);
+            credits[index] += static_cast<std::int64_t> (_candidates[index].weight);
         credits[selected] -= _total;
     }
 
     std::int64_t current_precomputed_credit (std::size_t index) const noexcept
     {
-        const auto total_selections = static_cast<std::int64_t> (
-          _precomputed_total_selections);
+        const auto total_selections = static_cast<std::int64_t> (_precomputed_total_selections);
         return _precomputed_initial_credits[index]
-               + total_selections
-                   * static_cast<std::int64_t> (_candidates[index].weight)
-               - static_cast<std::int64_t> (
-                   _precomputed_selected_counts[index])
-                   * _total;
+               + total_selections * static_cast<std::int64_t> (_candidates[index].weight)
+               - static_cast<std::int64_t> (_precomputed_selected_counts[index]) * _total;
     }
 
     void materialize_precomputed_state ()
@@ -207,8 +184,7 @@ class smooth_weighted_selector_t
         if (!_precomputed)
             return;
         for (std::size_t index = 0; index < _candidates.size (); ++index)
-            _credits[_candidates[index].key] =
-              current_precomputed_credit (index);
+            _credits[_candidates[index].key] = current_precomputed_credit (index);
         _precomputed = false;
         _precomputed_schedule.clear ();
         _precomputed_selected_counts.clear ();
@@ -244,8 +220,7 @@ class smooth_weighted_selector_t
         schedule.reserve (max_precomputed_steps);
         const auto started = std::chrono::steady_clock::now ();
         for (std::size_t step = 0; step < max_precomputed_steps; ++step) {
-            if (std::chrono::steady_clock::now () - started
-                >= max_precompute_time)
+            if (std::chrono::steady_clock::now () - started >= max_precompute_time)
                 return;
             const auto [found, inserted] = seen.emplace (simulated, step);
             if (!inserted) {

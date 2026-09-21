@@ -12,17 +12,15 @@ internal sealed partial class ZLinkFrameworkRuntime
         return _channels.GetClientServerClientBundle(GetOrStartState(), channelName);
     }
 
-    internal ZLinkClientServerClientRuntime GetClientServerClientRuntime(
-        string channelName) =>
-        _channels.GetClientServerClientRuntime(
-            GetOrStartState(),
-            channelName);
+    internal ZLinkClientServerClientRuntime GetClientServerClientRuntime(string channelName) =>
+        _channels.GetClientServerClientRuntime(GetOrStartState(), channelName);
 
     internal async ValueTask<ZLinkOneWaySubmitResult> SendToChannelAsync(
         string channelName,
         IReadOnlyList<Message> parts,
         CancellationToken cancellationToken,
-        ReadOnlyMemory<byte> metadata = default)
+        ReadOnlyMemory<byte> metadata = default
+    )
     {
         bool usesClientServerClientPath;
         try
@@ -52,9 +50,7 @@ internal sealed partial class ZLinkFrameworkRuntime
                 ZLinkMessageParts.DisposeAll(parts);
                 throw;
             }
-            return await clientRuntime
-                .SendAsync(parts, cancellationToken)
-                .ConfigureAwait(false);
+            return await clientRuntime.SendAsync(parts, cancellationToken).ConfigureAwait(false);
         }
 
         ZLinkSpotNodeRuntime nodeRuntime;
@@ -72,18 +68,23 @@ internal sealed partial class ZLinkFrameworkRuntime
         var sentPacketName = Flow.Enabled(ZLinkMessageFlowOutcome.Sent)
             ? TryReadEnvelopePacketName(parts)
             : null;
-        var result = await nodeRuntime.EntryOutbound
-            .SendToChannelAsync(channelName, parts, cancellationToken, metadata)
+        var result = await nodeRuntime
+            .EntryOutbound.SendToChannelAsync(channelName, parts, cancellationToken, metadata)
             .ConfigureAwait(false);
-        if (result.Status == ZLinkOneWaySubmitStatus.Submitted
+        if (
+            result.Status == ZLinkOneWaySubmitStatus.Submitted
             && sentPacketName is not null
-            && Flow.Enabled(ZLinkMessageFlowOutcome.Sent))
-            Flow.Trace(new ZLinkMessageFlowEvent(
-                ZLinkMessageFlowOutcome.Sent,
-                ZLinkDispatchErrorSurface.RouteMeshChannel,
-                ZLinkDispatchMessageKind.Send,
-                sentPacketName,
-                channelName));
+            && Flow.Enabled(ZLinkMessageFlowOutcome.Sent)
+        )
+            Flow.Trace(
+                new ZLinkMessageFlowEvent(
+                    ZLinkMessageFlowOutcome.Sent,
+                    ZLinkDispatchErrorSurface.RouteMeshChannel,
+                    ZLinkDispatchMessageKind.Send,
+                    sentPacketName,
+                    channelName
+                )
+            );
         return result;
     }
 
@@ -107,7 +108,8 @@ internal sealed partial class ZLinkFrameworkRuntime
         IReadOnlyList<Message> parts,
         TimeSpan timeout,
         CancellationToken cancellationToken,
-        ReadOnlyMemory<byte> metadata = default)
+        ReadOnlyMemory<byte> metadata = default
+    )
     {
         bool usesClientServerClientPath;
         try
@@ -138,10 +140,7 @@ internal sealed partial class ZLinkFrameworkRuntime
                 throw;
             }
             var reply = await clientRuntime
-                .RequestAsync(
-                    parts,
-                    timeout,
-                    cancellationToken)
+                .RequestAsync(parts, timeout, cancellationToken)
                 .ConfigureAwait(false);
             return new ZLinkBackendRouteReceived(reply, null, null, null, null);
         }
@@ -160,21 +159,29 @@ internal sealed partial class ZLinkFrameworkRuntime
         {
             var header = TryReadEnvelopeHeaderForTrace(parts);
             if (header is not null)
-                Flow.Trace(new ZLinkMessageFlowEvent(
-                    ZLinkMessageFlowOutcome.Sent,
-                    ZLinkDispatchErrorSurface.RouteMeshChannel,
-                    ZLinkDispatchMessageKind.Request,
-                    header.MessageName,
-                    channelName,
-                    CorrelationId: header.CorrelationId));
+                Flow.Trace(
+                    new ZLinkMessageFlowEvent(
+                        ZLinkMessageFlowOutcome.Sent,
+                        ZLinkDispatchErrorSurface.RouteMeshChannel,
+                        ZLinkDispatchMessageKind.Request,
+                        header.MessageName,
+                        channelName,
+                        CorrelationId: header.CorrelationId
+                    )
+                );
         }
-        return await nodeRuntime.EntryOutbound
-            .RequestToChannelAsync(channelName, parts, timeout, cancellationToken, metadata)
+        return await nodeRuntime
+            .EntryOutbound.RequestToChannelAsync(
+                channelName,
+                parts,
+                timeout,
+                cancellationToken,
+                metadata
+            )
             .ConfigureAwait(false);
     }
 
-    internal static ZLinkEnvelopeHeader? TryReadEnvelopeHeaderForTrace(
-        IReadOnlyList<Message> parts)
+    internal static ZLinkEnvelopeHeader? TryReadEnvelopeHeaderForTrace(IReadOnlyList<Message> parts)
     {
         try
         {
@@ -197,28 +204,32 @@ internal sealed partial class ZLinkFrameworkRuntime
 
     private bool UsesClientServerClientPath(string channelName)
     {
-        if (!Registration.Channels.TryGetValue(channelName, out var channel)
-            || channel.AutoConnectType != ZLinkLocationAutoConnectType.ClientServer)
+        if (
+            !Registration.Channels.TryGetValue(channelName, out var channel)
+            || channel.AutoConnectType != ZLinkLocationAutoConnectType.ClientServer
+        )
             return false;
-        if (channel.HasClientServerClient) return true;
+        if (channel.HasClientServerClient)
+            return true;
 
         throw new ZLinkFrameworkException(
             ZLinkFrameworkErrorKind.NotConfigured,
-            $"ClientServer channel '{channelName}' has no local Client role.");
+            $"ClientServer channel '{channelName}' has no local Client role."
+        );
     }
 
     private ZLinkRouteMeshTargetClassification ClassifyAutomaticRouteMeshTarget(
         ZLinkSpotNodeRuntime nodeRuntime,
         string meshName,
-        RoutingId targetNodeRid)
+        RoutingId targetNodeRid
+    )
     {
         var livePeer = nodeRuntime.ClassifyLiveRouterTarget(targetNodeRid);
         if (livePeer != ZLinkRouteMeshTargetClassification.Unknown)
             return livePeer;
 
-        var classification = _topologyQuery?.ClassifyRouteMeshTarget(
-                meshName,
-                targetNodeRid)
+        var classification =
+            _topologyQuery?.ClassifyRouteMeshTarget(meshName, targetNodeRid)
             ?? ZLinkRouteMeshTargetClassification.Unknown;
 
         // A location row can become visible before the local reconciler has
@@ -226,36 +237,38 @@ internal sealed partial class ZLinkFrameworkRuntime
         // known to the placement layer but not yet classifiable on this send
         // path. Keep that convergence window distinct from a RID that is
         // absent from a completed snapshot.
-        if (classification == ZLinkRouteMeshTargetClassification.Unknown
+        if (
+            classification == ZLinkRouteMeshTargetClassification.Unknown
             && _topologyQuery is not null
-            && _topologyQuery.GetCompleteRouteMeshPeers(meshName) is null)
+            && _topologyQuery.GetCompleteRouteMeshPeers(meshName) is null
+        )
             classification = ZLinkRouteMeshTargetClassification.RequiredNotConnected;
 
-        if (classification
-            != ZLinkRouteMeshTargetClassification.RequiredNotConnected)
+        if (classification != ZLinkRouteMeshTargetClassification.RequiredNotConnected)
             return classification;
 
-        return nodeRuntime.Node.MeshPeers().Any(peer =>
-            peer.RoutingId == targetNodeRid
-            && peer.State == MeshPeerState.Admitted)
-                ? ZLinkRouteMeshTargetClassification.ReadyEligible
-                : classification;
+        return nodeRuntime
+            .Node.MeshPeers()
+            .Any(peer => peer.RoutingId == targetNodeRid && peer.State == MeshPeerState.Admitted)
+            ? ZLinkRouteMeshTargetClassification.ReadyEligible
+            : classification;
     }
 
     internal void EnsureKnownRouteMeshPeer(
         string routerChannelId,
         RoutingId targetNodeRid,
-        string targetDescription)
+        string targetDescription
+    )
     {
         var nodeRuntime = GetMeshNodeRuntime(routerChannelId);
         if (nodeRuntime.Node.RoutingId == targetNodeRid)
         {
-            if (nodeRuntime.Registration.ObjectRole
-                == ZLinkMeshNodeObjectRole.Client)
+            if (nodeRuntime.Registration.ObjectRole == ZLinkMeshNodeObjectRole.Client)
                 throw CreateUnknownRouteTargetException(
                     routerChannelId,
                     targetNodeRid,
-                    targetDescription);
+                    targetDescription
+                );
             return;
         }
 
@@ -267,25 +280,23 @@ internal sealed partial class ZLinkFrameworkRuntime
                     return;
                 case ZLinkRouteMeshTargetClassification.RequiredNotConnected:
                     throw new ZLinkFrameworkException(
-                    ZLinkFrameworkErrorKind.Unavailable,
-                    $"Route channel '{routerChannelId}' is not connected to node '{targetNodeRid}' for {targetDescription}.",
-                    retryAdvice: ZLinkRetryAdvice.RetryAfterBackoff);
+                        ZLinkFrameworkErrorKind.Unavailable,
+                        $"Route channel '{routerChannelId}' is not connected to node '{targetNodeRid}' for {targetDescription}.",
+                        retryAdvice: ZLinkRetryAdvice.RetryAfterBackoff
+                    );
                 case ZLinkRouteMeshTargetClassification.ObjectClientTarget:
                 case ZLinkRouteMeshTargetClassification.Unknown:
                     throw CreateUnknownRouteTargetException(
                         routerChannelId,
                         targetNodeRid,
-                        targetDescription);
+                        targetDescription
+                    );
                 default:
-                    throw new InvalidOperationException(
-                        "Unknown RouteMesh target classification.");
+                    throw new InvalidOperationException("Unknown RouteMesh target classification.");
             }
         }
 
-        switch (ClassifyAutomaticRouteMeshTarget(
-                    nodeRuntime,
-                    routerChannelId,
-                    targetNodeRid))
+        switch (ClassifyAutomaticRouteMeshTarget(nodeRuntime, routerChannelId, targetNodeRid))
         {
             case ZLinkRouteMeshTargetClassification.ReadyEligible:
                 return;
@@ -293,16 +304,17 @@ internal sealed partial class ZLinkFrameworkRuntime
                 throw new ZLinkFrameworkException(
                     ZLinkFrameworkErrorKind.Unavailable,
                     $"Route channel '{routerChannelId}' is not connected to node '{targetNodeRid}' for {targetDescription}.",
-                    retryAdvice: ZLinkRetryAdvice.RetryAfterBackoff);
+                    retryAdvice: ZLinkRetryAdvice.RetryAfterBackoff
+                );
             case ZLinkRouteMeshTargetClassification.ObjectClientTarget:
             case ZLinkRouteMeshTargetClassification.Unknown:
                 throw CreateUnknownRouteTargetException(
                     routerChannelId,
                     targetNodeRid,
-                    targetDescription);
+                    targetDescription
+                );
             default:
-                throw new InvalidOperationException(
-                    "Unknown RouteMesh target classification.");
+                throw new InvalidOperationException("Unknown RouteMesh target classification.");
         }
     }
 
@@ -316,7 +328,8 @@ internal sealed partial class ZLinkFrameworkRuntime
         ulong ownerLeaseGeneration,
         IReadOnlyList<Message> parts,
         CancellationToken cancellationToken,
-        ReadOnlyMemory<byte> metadata = default)
+        ReadOnlyMemory<byte> metadata = default
+    )
     {
         using var operation = EnterOperation();
         var handedOff = false;
@@ -334,13 +347,15 @@ internal sealed partial class ZLinkFrameworkRuntime
                 ownerLeaseGeneration,
                 parts,
                 cancellationToken,
-                metadata);
+                metadata
+            );
             handedOff = true;
             return await accepted.ConfigureAwait(false);
         }
         catch
         {
-            if (!handedOff) ZLinkMessageParts.DisposeAll(parts);
+            if (!handedOff)
+                ZLinkMessageParts.DisposeAll(parts);
             throw;
         }
     }
@@ -361,7 +376,8 @@ internal sealed partial class ZLinkFrameworkRuntime
         ulong authorityOwnerGeneration,
         ulong ownerLeaseGeneration,
         IReadOnlyList<Message> parts,
-        ReadOnlyMemory<byte> metadata = default)
+        ReadOnlyMemory<byte> metadata = default
+    )
     {
         using var operation = EnterOperation();
         EnsureKnownRouteMeshPeer(routerChannelId, targetNodeRid, $"SPOT '{targetSpotId}'");
@@ -374,7 +390,8 @@ internal sealed partial class ZLinkFrameworkRuntime
             authorityOwnerGeneration,
             ownerLeaseGeneration,
             parts,
-            metadata);
+            metadata
+        );
     }
 
     internal async ValueTask<ZLinkBackendRouteReceived> RequestToSpotViaRouterChannelAsync(
@@ -388,7 +405,8 @@ internal sealed partial class ZLinkFrameworkRuntime
         IReadOnlyList<Message> parts,
         TimeSpan timeout,
         CancellationToken cancellationToken,
-        ReadOnlyMemory<byte> metadata = default)
+        ReadOnlyMemory<byte> metadata = default
+    )
     {
         try
         {
@@ -399,7 +417,8 @@ internal sealed partial class ZLinkFrameworkRuntime
             {
                 EnsureKnownRouteMeshPeer(routerChannelId, targetNodeRid, $"SPOT '{targetSpotId}'");
 
-                return await _spotRouteRouter.RequestAsync(
+                return await _spotRouteRouter
+                    .RequestAsync(
                         routerChannelId,
                         targetNodeRid,
                         targetSpotId,
@@ -410,7 +429,8 @@ internal sealed partial class ZLinkFrameworkRuntime
                         parts,
                         timeout,
                         cancellationToken,
-                        metadata)
+                        metadata
+                    )
                     .ConfigureAwait(false);
             }
             catch (TimeoutException)
@@ -443,12 +463,14 @@ internal sealed partial class ZLinkFrameworkRuntime
         string routerChannelId,
         RoutingId targetNodeRid,
         string targetDescription,
-        Exception? innerException = null)
+        Exception? innerException = null
+    )
     {
         return new ZLinkFrameworkException(
             ZLinkFrameworkErrorKind.NotFound,
             $"Route channel '{routerChannelId}' does not know node '{targetNodeRid}' for {targetDescription}.",
-            innerException: innerException);
+            innerException: innerException
+        );
     }
 
     internal IAsyncDisposable GetMonitoringSocket(string sourceName)

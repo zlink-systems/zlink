@@ -5,7 +5,8 @@ internal sealed class ZLinkActorReply(
     ZlinkStreamCodec codec,
     byte[] payload,
     ZlinkStreamHeaderFlags flags,
-    ZlinkStreamMetadata metadata)
+    ZlinkStreamMetadata metadata
+)
 {
     public ZlinkStreamMessageKind Kind { get; } = kind;
 
@@ -21,7 +22,8 @@ internal sealed class ZLinkActorReply(
         ZlinkStreamCodec codec,
         byte[] payload,
         ZLinkSpotActorReplyOptionsSnapshot options,
-        IZlinkStreamCompressionCodec? compressionCodec)
+        IZlinkStreamCompressionCodec? compressionCodec
+    )
     {
         var flags = ZlinkStreamHeaderFlags.None;
         if (options.CompressPayload)
@@ -31,9 +33,16 @@ internal sealed class ZLinkActorReply(
         }
 
         var metadata = ZlinkStreamMetadata.Empty;
-        foreach (var (key, value) in options.Metadata) metadata = metadata.With(key, value);
+        foreach (var (key, value) in options.Metadata)
+            metadata = metadata.With(key, value);
 
-        return new ZLinkActorReply(ZlinkStreamMessageKind.Response, codec, payload, flags, metadata);
+        return new ZLinkActorReply(
+            ZlinkStreamMessageKind.Response,
+            codec,
+            payload,
+            flags,
+            metadata
+        );
     }
 
     public static ZLinkActorReply FromError(Exception exception)
@@ -42,9 +51,11 @@ internal sealed class ZLinkActorReply(
             ZlinkStreamMessageKind.Error,
             ZlinkStreamCodec.Json,
             ZLinkEnvelopeCodec.EncodeProtocolJsonBytes(
-                ZLinkStreamWireError.FromException(exception)),
+                ZLinkStreamWireError.FromException(exception)
+            ),
             ZlinkStreamHeaderFlags.None,
-            ZlinkStreamMetadata.Empty);
+            ZlinkStreamMetadata.Empty
+        );
     }
 
     public ZlinkStreamHeader CreateResponseHeader(ZlinkStreamHeader requestHeader)
@@ -58,7 +69,8 @@ internal sealed class ZLinkActorReply(
             Codec,
             Flags,
             requestSeq,
-            Metadata);
+            Metadata
+        );
     }
 
     public byte[] ToFrame(ZlinkStreamHeader requestHeader)
@@ -70,6 +82,7 @@ internal sealed class ZLinkActorReply(
     {
         return ZLinkStreamFrameCodec.Encode(
             ZLinkStreamProtocolDefaults.EncodeHeader(responseHeader).Span,
-            Payload);
+            Payload
+        );
     }
 }

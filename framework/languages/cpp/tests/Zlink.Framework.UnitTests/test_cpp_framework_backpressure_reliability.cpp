@@ -52,7 +52,8 @@ int main ()
     auto after_shutdown = shutdown_runtime.reserve_outbound_request ("profile");
     if (after_shutdown
         || (after_shutdown.error () != nullptr
-         && zlink::framework::detail::boundary_state (*after_shutdown.error ()) != zlink::framework::detail::boundary_error_t::shutdown)) {
+            && zlink::framework::detail::boundary_state (*after_shutdown.error ())
+                 != zlink::framework::detail::boundary_error_t::shutdown)) {
         return 9;
     }
 
@@ -64,7 +65,8 @@ int main ()
     auto after_close = close_runtime.reserve_outbound_request ("profile");
     if (after_close
         || (after_close.error () != nullptr
-         && zlink::framework::detail::boundary_state (*after_close.error ()) != zlink::framework::detail::boundary_error_t::closed)) {
+            && zlink::framework::detail::boundary_state (*after_close.error ())
+                 != zlink::framework::detail::boundary_error_t::closed)) {
         return 10;
     }
 

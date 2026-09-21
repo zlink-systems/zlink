@@ -42,14 +42,16 @@ internal sealed class ZlinkStreamCallBuilderState(string? name)
         if (Interlocked.Exchange(ref _executed, 1) != 0)
             throw ZlinkStreamConnector.Error(
                 ZlinkStreamErrorCode.ValidationFailed,
-                "Builder instances can be executed only once.");
+                "Builder instances can be executed only once."
+            );
     }
 
     public string ResolveMessageName()
     {
         return Name
-               ?? throw ZlinkStreamConnector.Error(
-                   ZlinkStreamErrorCode.ValidationFailed,
-                   "Message name is required when the encoded stream payload has no message type.");
+            ?? throw ZlinkStreamConnector.Error(
+                ZlinkStreamErrorCode.ValidationFailed,
+                "Message name is required when the encoded stream payload has no message type."
+            );
     }
 }

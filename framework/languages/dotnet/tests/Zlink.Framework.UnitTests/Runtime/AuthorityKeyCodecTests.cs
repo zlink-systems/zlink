@@ -15,13 +15,15 @@ public sealed class AuthorityKeyCodecTests
     {
         var fixturePath = Path.Combine(
             Common.FrameworkTestEnvironment.GetRepoRoot(),
-            "framework/runtime/protocol/golden/authority-key-v1.json");
+            "framework/runtime/protocol/golden/authority-key-v1.json"
+        );
         using var fixture = JsonDocument.Parse(File.ReadAllText(fixturePath));
 
         foreach (var item in fixture.RootElement.GetProperty("cases").EnumerateArray())
         {
             var identity = StrictUtf8.GetString(
-                Convert.FromHexString(item.GetProperty("identityHex").GetString()!));
+                Convert.FromHexString(item.GetProperty("identityHex").GetString()!)
+            );
             var expected = item.GetProperty("encoded").GetString()!;
             var kind = item.GetProperty("objectKind").GetString();
 
@@ -52,15 +54,13 @@ public sealed class AuthorityKeyCodecTests
     [InlineData("zla1:a:2:%C3%28")]
     [InlineData("zla1:a:8:user%3A42")]
     [InlineData("zla1:a:0:")]
-    public void AuthorityKeyCodec_rejects_noncanonical_or_corrupt_actor_keys(
-        string encoded)
+    public void AuthorityKeyCodec_rejects_noncanonical_or_corrupt_actor_keys(string encoded)
     {
         var key = new ZLinkAuthorityKey(encoded);
 
         Assert.False(ZLinkActorAuthorityPayloadCodec.TryGetActorId(key, out var actorId));
         Assert.Equal(string.Empty, actorId);
-        Assert.Throws<InvalidDataException>(() =>
-            ZLinkAuthorityKeyCodec.DecodeActor(key));
+        Assert.Throws<InvalidDataException>(() => ZLinkAuthorityKeyCodec.DecodeActor(key));
     }
 
     [Fact]
@@ -72,17 +72,22 @@ public sealed class AuthorityKeyCodecTests
         Assert.Equal($"zla1:a:{byte.MaxValue}:{maximum}", key.Value);
         Assert.Equal(maximum, ZLinkAuthorityKeyCodec.DecodeActor(key));
         Assert.Throws<ArgumentOutOfRangeException>(() =>
-            ZLinkActorAuthorityPayloadCodec.AuthorityKey(maximum + "x"));
+            ZLinkActorAuthorityPayloadCodec.AuthorityKey(maximum + "x")
+        );
     }
 
     [Fact]
     public void AuthorityKeyCodec_rejects_invalid_utf8_input_and_nul_spot_ids()
     {
         Assert.Throws<ArgumentException>(() =>
-            ZLinkActorAuthorityPayloadCodec.AuthorityKey("\uD800"));
-        Assert.False(ZLinkUserSpotAuthorityPayloadCodec.TryGetSpotId(
-            new ZLinkAuthorityKey("zla1:s:1:%00"),
-            out var spotId));
+            ZLinkActorAuthorityPayloadCodec.AuthorityKey("\uD800")
+        );
+        Assert.False(
+            ZLinkUserSpotAuthorityPayloadCodec.TryGetSpotId(
+                new ZLinkAuthorityKey("zla1:s:1:%00"),
+                out var spotId
+            )
+        );
         Assert.Equal(string.Empty, spotId);
     }
 }

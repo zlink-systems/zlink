@@ -6,10 +6,7 @@ export interface ServiceRelocationStaging {
 }
 
 export interface ServiceRelocationRestoreOwner<TStaging extends ServiceRelocationStaging> {
-  prepare(
-    envelope: ServiceRelocationEnvelope,
-    signal?: AbortSignal
-  ): Promise<TStaging>;
+  prepare(envelope: ServiceRelocationEnvelope, signal?: AbortSignal): Promise<TStaging>;
   publish(
     staging: TStaging,
     authority: ZLinkAuthoritySnapshot,

@@ -44,8 +44,7 @@ struct spot_event_t
     spot_event_kind_t event = spot_event_kind_t::timer_handler_failed;
     spot_timer_diagnostic_t diagnostic;
 
-    friend bool operator== (const spot_event_t &,
-                            const spot_event_t &) = default;
+    friend bool operator== (const spot_event_t &, const spot_event_t &) = default;
 };
 
 using spot_event_handler_t = std::function<void (const spot_event_t &)>;
@@ -68,8 +67,7 @@ class monitoring_builder_t
     friend class app_t;
     friend class detail::app_state_t;
     friend class detail::monitoring_runtime_t;
-    explicit monitoring_builder_t (
-      std::shared_ptr<detail::monitoring_runtime_state_t> state);
+    explicit monitoring_builder_t (std::shared_ptr<detail::monitoring_runtime_state_t> state);
 
     std::shared_ptr<detail::monitoring_runtime_state_t> _state;
 };

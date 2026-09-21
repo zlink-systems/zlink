@@ -89,10 +89,8 @@ inline std::error_code boundary_error_code (boundary_error_t state) noexcept
 class framework_exception_t : public std::exception
 {
   public:
-    framework_exception_t (framework_error_kind_t kind,
-                           std::string message) :
-        _kind (kind),
-        _message (std::move (message))
+    framework_exception_t (framework_error_kind_t kind, std::string message) :
+        _kind (kind), _message (std::move (message))
     {
     }
 
@@ -110,16 +108,14 @@ class framework_exception_t : public std::exception
                                                                  std::string message);
     friend detail::boundary_error_t
     detail_boundary_state (const framework_exception_t &error) noexcept;
-    friend framework_exception_t detail_make_origin_exception (
-      framework_error_kind_t kind,
-      detail::failure_origin_t origin,
-      std::string message);
+    friend framework_exception_t detail_make_origin_exception (framework_error_kind_t kind,
+                                                               detail::failure_origin_t origin,
+                                                               std::string message);
     friend detail::failure_origin_t
     detail_failure_origin (const framework_exception_t &error) noexcept;
-    friend framework_exception_t detail_with_error_origin (
-      framework_exception_t error, detail::error_origin_t origin) noexcept;
-    friend detail::error_origin_t
-    detail_error_origin (const framework_exception_t &error) noexcept;
+    friend framework_exception_t detail_with_error_origin (framework_exception_t error,
+                                                           detail::error_origin_t origin) noexcept;
+    friend detail::error_origin_t detail_error_origin (const framework_exception_t &error) noexcept;
 
     framework_error_kind_t _kind;
     std::string _message;
@@ -131,40 +127,34 @@ class framework_exception_t : public std::exception
 inline framework_exception_t detail_make_boundary_exception (detail::boundary_error_t state,
                                                              std::string message)
 {
-    const auto kind = state == detail::boundary_error_t::timed_out
-                        ? framework_error_kind_t::deadline_exceeded
-                      : state == detail::boundary_error_t::shutdown
-                        ? framework_error_kind_t::shutting_down
-                      : state == detail::boundary_error_t::disconnected
-                          || state == detail::boundary_error_t::closed
-                          || state == detail::boundary_error_t::stale_generation
-                        ? framework_error_kind_t::unavailable
-                      : state == detail::boundary_error_t::cancelled
-                        ? framework_error_kind_t::invalid_operation
-                        : framework_error_kind_t::internal_failure;
+    const auto kind =
+      state == detail::boundary_error_t::timed_out  ? framework_error_kind_t::deadline_exceeded
+      : state == detail::boundary_error_t::shutdown ? framework_error_kind_t::shutting_down
+      : state == detail::boundary_error_t::disconnected || state == detail::boundary_error_t::closed
+          || state == detail::boundary_error_t::stale_generation
+        ? framework_error_kind_t::unavailable
+      : state == detail::boundary_error_t::cancelled ? framework_error_kind_t::invalid_operation
+                                                     : framework_error_kind_t::internal_failure;
     framework_exception_t error (kind, std::move (message));
     error._boundary = state;
     return error;
 }
 
-inline detail::boundary_error_t
-detail_boundary_state (const framework_exception_t &error) noexcept
+inline detail::boundary_error_t detail_boundary_state (const framework_exception_t &error) noexcept
 {
     return error._boundary;
 }
 
-inline framework_exception_t detail_make_origin_exception (
-  framework_error_kind_t kind,
-  detail::failure_origin_t origin,
-  std::string message)
+inline framework_exception_t detail_make_origin_exception (framework_error_kind_t kind,
+                                                           detail::failure_origin_t origin,
+                                                           std::string message)
 {
     framework_exception_t error (kind, std::move (message));
     error._origin = origin;
     return error;
 }
 
-inline detail::failure_origin_t
-detail_failure_origin (const framework_exception_t &error) noexcept
+inline detail::failure_origin_t detail_failure_origin (const framework_exception_t &error) noexcept
 {
     return error._origin;
 }
@@ -176,8 +166,7 @@ inline framework_exception_t detail_with_error_origin (framework_exception_t err
     return error;
 }
 
-inline detail::error_origin_t
-detail_error_origin (const framework_exception_t &error) noexcept
+inline detail::error_origin_t detail_error_origin (const framework_exception_t &error) noexcept
 {
     return error._error_origin;
 }
@@ -185,22 +174,21 @@ detail_error_origin (const framework_exception_t &error) noexcept
 namespace detail
 {
 
-inline framework_exception_t
-make_boundary_exception (boundary_error_t state, std::string message)
+inline framework_exception_t make_boundary_exception (boundary_error_t state, std::string message)
 {
     return detail_make_boundary_exception (state, std::move (message));
 }
 
-inline framework_exception_t
-with_error_origin (framework_exception_t error, error_origin_t origin) noexcept
+inline framework_exception_t with_error_origin (framework_exception_t error,
+                                                error_origin_t origin) noexcept
 {
     return detail_with_error_origin (std::move (error), origin);
 }
 
 /* Framework-generated failure (route resolution, sealed admission, dispatch
  * rejection): its error reply carries the `zlink.origin=framework` marker. */
-inline framework_exception_t
-make_framework_origin_exception (framework_error_kind_t kind, std::string message)
+inline framework_exception_t make_framework_origin_exception (framework_error_kind_t kind,
+                                                              std::string message)
 {
     return detail_with_error_origin (framework_exception_t (kind, std::move (message)),
                                      error_origin_t::framework);
@@ -223,9 +211,7 @@ inline boundary_error_t boundary_state (const framework_exception_t &error) noex
 }
 
 inline framework_exception_t
-make_origin_exception (framework_error_kind_t kind,
-                       failure_origin_t origin,
-                       std::string message)
+make_origin_exception (framework_error_kind_t kind, failure_origin_t origin, std::string message)
 {
     return detail_make_origin_exception (kind, origin, std::move (message));
 }

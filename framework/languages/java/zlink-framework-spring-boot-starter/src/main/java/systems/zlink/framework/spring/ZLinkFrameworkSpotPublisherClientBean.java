@@ -1,9 +1,8 @@
 package systems.zlink.framework.spring;
 
-import systems.zlink.framework.spring.internal.runtime.ZLinkFrameworkLifecycle;
-
 import systems.zlink.framework.channels.ZLinkPublishCall;
 import systems.zlink.framework.spots.ZLinkSpotPublisherClient;
+import systems.zlink.framework.spring.internal.runtime.ZLinkFrameworkLifecycle;
 
 final class ZLinkFrameworkSpotPublisherClientBean implements ZLinkSpotPublisherClient {
     private final ZLinkFrameworkLifecycle lifecycle;
@@ -14,19 +13,12 @@ final class ZLinkFrameworkSpotPublisherClientBean implements ZLinkSpotPublisherC
 
     @Override
     public ZLinkPublishCall publish(
-        String meshName,
-        String channelName,
-        String topic,
-        Object message) {
-        return lifecycle.spotPublisherClient().publish(
-            meshName, channelName, topic, message);
+            String meshName, String channelName, String topic, Object message) {
+        return lifecycle.spotPublisherClient().publish(meshName, channelName, topic, message);
     }
 
     @Override
-    public ZLinkPublishCall publish(
-        String channelName,
-        String topic,
-        Object message) {
+    public ZLinkPublishCall publish(String channelName, String topic, Object message) {
         return lifecycle.spotPublisherClient().publish(channelName, topic, message);
     }
 }

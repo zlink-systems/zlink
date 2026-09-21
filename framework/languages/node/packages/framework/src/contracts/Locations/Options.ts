@@ -16,8 +16,9 @@ export interface ZLinkLocationOptions {
   relocationNodeInFlightPayloadBudgetBytes(value: number): this;
 }
 
-export type ZLinkLocationOptionOverrides =
-  Partial<ZLinkLocationOptionValues> & { readonly listPageSize?: number };
+export type ZLinkLocationOptionOverrides = Partial<ZLinkLocationOptionValues> & {
+  readonly listPageSize?: number;
+};
 
 export const zlinkRuntimeDefaultLocationOptions: Readonly<
   ZLinkLocationOptionValues & { readonly listPageSize: number }

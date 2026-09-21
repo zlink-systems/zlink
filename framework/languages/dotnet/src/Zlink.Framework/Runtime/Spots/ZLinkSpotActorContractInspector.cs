@@ -18,11 +18,13 @@ internal static class ZLinkSpotActorContractInspector
 
     public static ZLinkSpotActorContract? GetSurfaceContract(
         ZLinkSpotActorHandlerSurface surface,
-        Type spotType)
+        Type spotType
+    )
     {
-        var expectedDefinition = surface == ZLinkSpotActorHandlerSurface.EntrySpot
-            ? typeof(IZLinkEntrySpot<>)
-            : typeof(IZLinkSpot<>);
+        var expectedDefinition =
+            surface == ZLinkSpotActorHandlerSurface.EntrySpot
+                ? typeof(IZLinkEntrySpot<>)
+                : typeof(IZLinkSpot<>);
         return GetContract(spotType, expectedDefinition);
     }
 
@@ -39,13 +41,16 @@ internal static class ZLinkSpotActorContractInspector
     private static ZLinkSpotActorContract? GetContract(
         Type spotType,
         Type expectedDefinition,
-        Type? alternateDefinition = null)
+        Type? alternateDefinition = null
+    )
     {
         foreach (var contract in spotType.GetInterfaces())
         {
             var definition = GetGenericDefinition(contract);
-            if (definition == expectedDefinition
-                || alternateDefinition is not null && definition == alternateDefinition)
+            if (
+                definition == expectedDefinition
+                || alternateDefinition is not null && definition == alternateDefinition
+            )
                 return CreateContract(contract);
         }
 

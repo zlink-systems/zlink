@@ -1,16 +1,27 @@
 package systems.zlink.framework.runtime.spots;
-import java.time.Duration;
-import java.util.Map;
-import systems.zlink.framework.runtime.internal.metrics.ZLinkRuntimeMetrics;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
+import org.junit.jupiter.api.Test;
+
+import systems.zlink.contracts.errors.ZlinkSubmitException;
+import systems.zlink.contracts.messaging.Message;
+import systems.zlink.contracts.sockets.SubmitResult;
+import systems.zlink.framework.execution.ZLinkExecutionLanePolicy;
+import systems.zlink.framework.execution.ZLinkSerialExecutionQueue;
+import systems.zlink.framework.runtime.internal.backend.ZLinkInternalSpotNode;
+import systems.zlink.framework.runtime.internal.metrics.ZLinkRuntimeMetrics;
+import systems.zlink.framework.runtime.messaging.ZLinkApplicationMetadata;
+import systems.zlink.framework.runtime.messaging.ZLinkStringMessageSerializer;
+
 import java.lang.reflect.Proxy;
 import java.nio.charset.StandardCharsets;
+import java.time.Duration;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionStage;
@@ -18,16 +29,6 @@ import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
-import org.junit.jupiter.api.Test;
-import systems.zlink.contracts.messaging.Message;
-import systems.zlink.contracts.errors.ZlinkSubmitException;
-import systems.zlink.contracts.sockets.SubmitResult;
-
-import systems.zlink.framework.execution.ZLinkExecutionLanePolicy;
-import systems.zlink.framework.execution.ZLinkSerialExecutionQueue;
-import systems.zlink.framework.runtime.internal.backend.ZLinkInternalSpotNode;
-import systems.zlink.framework.runtime.messaging.ZLinkApplicationMetadata;
-import systems.zlink.framework.runtime.messaging.ZLinkStringMessageSerializer;
 
 final class ZLinkSpotPublisherRuntimeTest {
     @Test
@@ -38,28 +39,33 @@ final class ZLinkSpotPublisherRuntimeTest {
         AtomicInteger coreCalls = new AtomicInteger();
         AtomicBoolean secondWasPending = new AtomicBoolean();
         AtomicBoolean continuationIsCurrent = new AtomicBoolean();
-        ZLinkSpotPublisherRuntime runtime = runtime(() -> {
-            if (coreCalls.incrementAndGet() == 1) {
-                firstCoreStarted.countDown();
-                await(releaseFirstCore);
-            }
-        }, 1, Duration.ofSeconds(3));
-        ZLinkSerialExecutionQueue queue = new ZLinkSerialExecutionQueue(
-            Runnable::run, ZLinkExecutionLanePolicy.spot());
+        ZLinkSpotPublisherRuntime runtime =
+                runtime(
+                        () -> {
+                            if (coreCalls.incrementAndGet() == 1) {
+                                firstCoreStarted.countDown();
+                                await(releaseFirstCore);
+                            }
+                        },
+                        1,
+                        Duration.ofSeconds(3));
+        ZLinkSerialExecutionQueue queue =
+                new ZLinkSerialExecutionQueue(Runnable::run, ZLinkExecutionLanePolicy.spot());
         try (runtime) {
-            runtime.publish("mesh", "channel", "topic", "occupied")
-                .submit();
+            runtime.publish("mesh", "channel", "topic", "occupied").submit();
             assertTrue(firstCoreStarted.await(1, TimeUnit.SECONDS));
 
-            CompletionStage<Void> dispatch = queue.enqueue(() ->
-                {
-                    CompletionStage<Void> publish = runtime.publish(
-                        "mesh", "channel", "topic", "payload").submit();
-                    secondWasPending.set(!publish.toCompletableFuture().isDone());
-                    secondSubmitted.countDown();
-                    return publish.thenRun(() ->
-                        continuationIsCurrent.set(queue.isCurrent()));
-                });
+            CompletionStage<Void> dispatch =
+                    queue.enqueue(
+                            () -> {
+                                CompletionStage<Void> publish =
+                                        runtime.publish("mesh", "channel", "topic", "payload")
+                                                .submit();
+                                secondWasPending.set(!publish.toCompletableFuture().isDone());
+                                secondSubmitted.countDown();
+                                return publish.thenRun(
+                                        () -> continuationIsCurrent.set(queue.isCurrent()));
+                            });
 
             assertTrue(secondSubmitted.await(1, TimeUnit.SECONDS));
             assertTrue(secondWasPending.get());
@@ -75,29 +81,24 @@ final class ZLinkSpotPublisherRuntimeTest {
     }
 
     @Test
-    void committedPublishCompletesNormallyWithoutPublishMonitoring()
-        throws Exception {
+    void committedPublishCompletesNormallyWithoutPublishMonitoring() throws Exception {
         AtomicInteger coreCalls = new AtomicInteger();
         AtomicInteger publishMetrics = new AtomicInteger();
         ZLinkSpotPublisherRuntime runtime = runtime(coreCalls::incrementAndGet);
-        try (
-            runtime;
-            AutoCloseable ignored =
-                ZLinkRuntimeMetrics
-                    .install(new systems.zlink.framework.runtime.internal.metrics
-                        .ZLinkRuntimeMetrics.Sink() {
-                        @Override
-                        public void add(
-                            String name,
-                            long delta,
-                            Map<String, String> tags) {
-                            if (name.contains("multicast")
-                                || name.equals("zlink.fanout.published")) {
-                                publishMetrics.incrementAndGet();
-                            }
-                        }
-                    })
-        ) {
+        try (runtime;
+                AutoCloseable ignored =
+                        ZLinkRuntimeMetrics.install(
+                                new systems.zlink.framework.runtime.internal.metrics
+                                        .ZLinkRuntimeMetrics.Sink() {
+                                    @Override
+                                    public void add(
+                                            String name, long delta, Map<String, String> tags) {
+                                        if (name.contains("multicast")
+                                                || name.equals("zlink.fanout.published")) {
+                                            publishMetrics.incrementAndGet();
+                                        }
+                                    }
+                                })) {
             ZLinkOneWayPublishAdmission result = submit(runtime, "partial").join();
 
             assertEquals(0, result.status());
@@ -109,9 +110,11 @@ final class ZLinkSpotPublisherRuntimeTest {
 
     @Test
     void targetSubmissionFailureAfterStartRemainsSuccessful() {
-        ZLinkSpotPublisherRuntime runtime = runtime(() -> {
-            throw new ZlinkSubmitException(SubmitResult.NOT_CONNECTED);
-        });
+        ZLinkSpotPublisherRuntime runtime =
+                runtime(
+                        () -> {
+                            throw new ZlinkSubmitException(SubmitResult.NOT_CONNECTED);
+                        });
         try (runtime) {
             ZLinkOneWayPublishAdmission result = submit(runtime, "unreachable").join();
 
@@ -122,10 +125,12 @@ final class ZLinkSpotPublisherRuntimeTest {
     @Test
     void noSubscriberAfterStartCompletesNormally() throws Exception {
         AtomicInteger coreCalls = new AtomicInteger();
-        ZLinkSpotPublisherRuntime runtime = runtime(() -> {
-            coreCalls.incrementAndGet();
-            throw new ZlinkSubmitException(SubmitResult.NOT_FOUND);
-        });
+        ZLinkSpotPublisherRuntime runtime =
+                runtime(
+                        () -> {
+                            coreCalls.incrementAndGet();
+                            throw new ZlinkSubmitException(SubmitResult.NOT_FOUND);
+                        });
         try (runtime) {
             ZLinkOneWayPublishAdmission result = submit(runtime, "missing").join();
 
@@ -140,11 +145,13 @@ final class ZLinkSpotPublisherRuntimeTest {
         CountDownLatch committed = new CountDownLatch(1);
         CountDownLatch release = new CountDownLatch(1);
         AtomicInteger coreCalls = new AtomicInteger();
-        ZLinkSpotPublisherRuntime runtime = runtime(() -> {
-            coreCalls.incrementAndGet();
-            committed.countDown();
-            await(release);
-        });
+        ZLinkSpotPublisherRuntime runtime =
+                runtime(
+                        () -> {
+                            coreCalls.incrementAndGet();
+                            committed.countDown();
+                            await(release);
+                        });
         try (runtime) {
             CompletableFuture<ZLinkOneWayPublishAdmission> result = submit(runtime, "committed");
             assertTrue(committed.await(1, TimeUnit.SECONDS));
@@ -165,11 +172,13 @@ final class ZLinkSpotPublisherRuntimeTest {
         CountDownLatch committed = new CountDownLatch(1);
         CountDownLatch release = new CountDownLatch(1);
         AtomicInteger coreCalls = new AtomicInteger();
-        ZLinkSpotPublisherRuntime runtime = runtime(() -> {
-            coreCalls.incrementAndGet();
-            committed.countDown();
-            awaitUninterruptibly(release);
-        });
+        ZLinkSpotPublisherRuntime runtime =
+                runtime(
+                        () -> {
+                            coreCalls.incrementAndGet();
+                            committed.countDown();
+                            awaitUninterruptibly(release);
+                        });
         try {
             CompletableFuture<ZLinkOneWayPublishAdmission> result = submit(runtime, "committed");
             assertTrue(committed.await(1, TimeUnit.SECONDS));
@@ -192,11 +201,13 @@ final class ZLinkSpotPublisherRuntimeTest {
         CountDownLatch started = new CountDownLatch(workerCount);
         CountDownLatch release = new CountDownLatch(1);
         AtomicInteger coreCalls = new AtomicInteger();
-        ZLinkSpotPublisherRuntime runtime = runtime(() -> {
-            coreCalls.incrementAndGet();
-            started.countDown();
-            await(release);
-        });
+        ZLinkSpotPublisherRuntime runtime =
+                runtime(
+                        () -> {
+                            coreCalls.incrementAndGet();
+                            started.countDown();
+                            await(release);
+                        });
         List<CompletableFuture<ZLinkOneWayPublishAdmission>> committed = new ArrayList<>();
         try (runtime) {
             for (int index = 0; index < workerCount; index++) {
@@ -204,8 +215,7 @@ final class ZLinkSpotPublisherRuntimeTest {
             }
             assertTrue(started.await(2, TimeUnit.SECONDS));
 
-            CompletableFuture<ZLinkOneWayPublishAdmission> queued =
-                submit(runtime, "queued");
+            CompletableFuture<ZLinkOneWayPublishAdmission> queued = submit(runtime, "queued");
             assertFalse(queued.isDone());
             assertEquals(workerCount, coreCalls.get());
             release.countDown();
@@ -221,35 +231,28 @@ final class ZLinkSpotPublisherRuntimeTest {
     void saturatedHandoffIsBoundedTimesOutAndRecovers() throws Exception {
         CountDownLatch started = new CountDownLatch(1);
         CountDownLatch release = new CountDownLatch(1);
-        ZLinkSpotPublisherRuntime runtime = runtime(
-            () -> {
-                started.countDown();
-                await(release);
-            },
-            1);
-        List<CompletableFuture<ZLinkOneWayPublishAdmission>> pending =
-            new ArrayList<>();
+        ZLinkSpotPublisherRuntime runtime =
+                runtime(
+                        () -> {
+                            started.countDown();
+                            await(release);
+                        },
+                        1);
+        List<CompletableFuture<ZLinkOneWayPublishAdmission>> pending = new ArrayList<>();
         try (runtime) {
             pending.add(submit(runtime, "worker"));
             assertTrue(started.await(1, TimeUnit.SECONDS));
             pending.add(submit(runtime, "handoff-worker"));
 
-            ZLinkOneWayPublishAdmission overflow =
-                submit(runtime, "bounded-overflow").join();
-            assertEquals(
-                2,
-                overflow.status());
-            assertEquals(
-                2,
-                pending.get(1).get(2, TimeUnit.SECONDS).status());
+            ZLinkOneWayPublishAdmission overflow = submit(runtime, "bounded-overflow").join();
+            assertEquals(2, overflow.status());
+            assertEquals(2, pending.get(1).get(2, TimeUnit.SECONDS).status());
 
             release.countDown();
             for (CompletableFuture<ZLinkOneWayPublishAdmission> result : pending) {
                 result.get(2, TimeUnit.SECONDS);
             }
-            assertEquals(
-                0,
-                submit(runtime, "recovered").get(2, TimeUnit.SECONDS).status());
+            assertEquals(0, submit(runtime, "recovered").get(2, TimeUnit.SECONDS).status());
         } finally {
             release.countDown();
         }
@@ -258,9 +261,11 @@ final class ZLinkSpotPublisherRuntimeTest {
     @Test
     void closedRuntimeRejectsNewPublishAsShutdownWithoutCoreCall() {
         AtomicInteger coreCalls = new AtomicInteger();
-        ZLinkSpotPublisherRuntime runtime = runtime(() -> {
-            coreCalls.incrementAndGet();
-        });
+        ZLinkSpotPublisherRuntime runtime =
+                runtime(
+                        () -> {
+                            coreCalls.incrementAndGet();
+                        });
         runtime.close();
 
         ZLinkOneWayPublishAdmission result = submit(runtime, "after-close").join();
@@ -270,56 +275,53 @@ final class ZLinkSpotPublisherRuntimeTest {
     }
 
     private static CompletableFuture<ZLinkOneWayPublishAdmission> submit(
-        ZLinkSpotPublisherRuntime runtime,
-        String payload) {
+            ZLinkSpotPublisherRuntime runtime, String payload) {
         return runtime.submitAsync(
-                "mesh",
-                "channel",
-                "topic",
-                Message.from(payload.getBytes(StandardCharsets.UTF_8)),
-                Optional.empty(),
-                ZLinkApplicationMetadata.empty())
-            .toCompletableFuture();
+                        "mesh",
+                        "channel",
+                        "topic",
+                        Message.from(payload.getBytes(StandardCharsets.UTF_8)),
+                        Optional.empty(),
+                        ZLinkApplicationMetadata.empty())
+                .toCompletableFuture();
     }
 
     private static ZLinkSpotPublisherRuntime runtime(Runnable publish) {
-        return runtime(
-            publish,
-            Math.max(2, Runtime.getRuntime().availableProcessors()));
+        return runtime(publish, Math.max(2, Runtime.getRuntime().availableProcessors()));
     }
 
-    private static ZLinkSpotPublisherRuntime runtime(
-        Runnable publish,
-        int parallelism) {
+    private static ZLinkSpotPublisherRuntime runtime(Runnable publish, int parallelism) {
         return runtime(publish, parallelism, Duration.ofMillis(100));
     }
 
     private static ZLinkSpotPublisherRuntime runtime(
-        Runnable publish,
-        int parallelism,
-        Duration admissionTimeout) {
+            Runnable publish, int parallelism, Duration admissionTimeout) {
         ZLinkStringMessageSerializer serializer = new ZLinkStringMessageSerializer();
-        ZLinkSpotPublisherRuntime runtime = new ZLinkSpotPublisherRuntime(
-            serializer,
-            new ZLinkSpotRouteMessages(serializer),
-            parallelism,
-            ignored -> admissionTimeout);
+        ZLinkSpotPublisherRuntime runtime =
+                new ZLinkSpotPublisherRuntime(
+                        serializer,
+                        new ZLinkSpotRouteMessages(serializer),
+                        parallelism,
+                        ignored -> admissionTimeout);
         AtomicInteger proxyClose = new AtomicInteger();
-        ZLinkInternalSpotNode node = (ZLinkInternalSpotNode) Proxy.newProxyInstance(
-            ZLinkInternalSpotNode.class.getClassLoader(),
-            new Class<?>[] {ZLinkInternalSpotNode.class},
-            (ignored, method, arguments) -> switch (method.getName()) {
-                case "publish" -> {
-                    publish.run();
-                    yield null;
-                }
-                case "name" -> "publisher-node";
-                case "close" -> {
-                    proxyClose.incrementAndGet();
-                    yield null;
-                }
-                default -> defaultValue(method.getReturnType());
-            });
+        ZLinkInternalSpotNode node =
+                (ZLinkInternalSpotNode)
+                        Proxy.newProxyInstance(
+                                ZLinkInternalSpotNode.class.getClassLoader(),
+                                new Class<?>[] {ZLinkInternalSpotNode.class},
+                                (ignored, method, arguments) ->
+                                        switch (method.getName()) {
+                                            case "publish" -> {
+                                                publish.run();
+                                                yield null;
+                                            }
+                                            case "name" -> "publisher-node";
+                                            case "close" -> {
+                                                proxyClose.incrementAndGet();
+                                                yield null;
+                                            }
+                                            default -> defaultValue(method.getReturnType());
+                                        });
         runtime.register("mesh", node);
         return runtime;
     }
@@ -362,7 +364,7 @@ final class ZLinkSpotPublisherRuntimeTest {
     }
 
     private static boolean awaitCount(AtomicInteger value, int expected)
-        throws InterruptedException {
+            throws InterruptedException {
         long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(2);
         while (value.get() != expected && System.nanoTime() < deadline) {
             Thread.sleep(1);

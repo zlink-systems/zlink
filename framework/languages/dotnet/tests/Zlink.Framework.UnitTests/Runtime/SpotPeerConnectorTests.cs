@@ -1,7 +1,7 @@
 using System.Reflection;
 using Systems.Zlink;
-using Zlink.Framework.Runtime.Service;
 using Zlink.Framework.Runtime.Backend.Contracts;
+using Zlink.Framework.Runtime.Service;
 using Zlink.Framework.Runtime.Spots;
 
 namespace Zlink.Framework.UnitTests.Runtime;
@@ -15,14 +15,8 @@ public sealed class SpotPeerConnectorTests
         var proxy = (BusyOnceSpotNode)(object)node;
         var connector = new ZLinkSpotPeerConnector(node, new ZLinkSpotPeerConnectionSet());
 
-        Assert.False(connector.ConnectPeerAuto(
-            RoutingId.From("peer"),
-            "tcp://peer:1",
-            "none"));
-        Assert.True(connector.ConnectPeerAuto(
-            RoutingId.From("peer"),
-            "tcp://peer:1",
-            "none"));
+        Assert.False(connector.ConnectPeerAuto(RoutingId.From("peer"), "tcp://peer:1", "none"));
+        Assert.True(connector.ConnectPeerAuto(RoutingId.From("peer"), "tcp://peer:1", "none"));
         Assert.Equal(2, proxy.ConnectAttempts);
     }
 
@@ -31,9 +25,7 @@ public sealed class SpotPeerConnectorTests
     {
         var node = DispatchProxy.Create<IZLinkBackendSpotNode, ReplacementSpotNode>();
         var proxy = (ReplacementSpotNode)(object)node;
-        var connector = new ZLinkSpotPeerConnector(
-            node,
-            new ZLinkSpotPeerConnectionSet());
+        var connector = new ZLinkSpotPeerConnector(node, new ZLinkSpotPeerConnectionSet());
         var oldRid = RoutingId.From("old-peer");
         var newRid = RoutingId.From("new-peer");
 
@@ -47,15 +39,11 @@ public sealed class SpotPeerConnectorTests
         // connection that now owns this endpoint.
         Assert.True(connector.DisconnectPeerAuto(oldRid, "tcp://peer:1"));
         Assert.Single(proxy.DisconnectedEndpoints);
-        Assert.Equal(
-            (oldRid, "tcp://peer:1", 1UL),
-            proxy.AdmissionCleanup);
+        Assert.Equal((oldRid, "tcp://peer:1", 1UL), proxy.AdmissionCleanup);
 
         Assert.True(connector.DisconnectPeerAuto(newRid, "tcp://peer:1"));
         Assert.Single(proxy.DisconnectedEndpoints);
-        Assert.Equal(
-            (newRid, "tcp://peer:1", 1UL),
-            proxy.AdmissionCleanup);
+        Assert.Equal((newRid, "tcp://peer:1", 1UL), proxy.AdmissionCleanup);
     }
 
     [Fact]
@@ -63,18 +51,13 @@ public sealed class SpotPeerConnectorTests
     {
         var node = DispatchProxy.Create<IZLinkBackendSpotNode, CleanupSpotNode>();
         var proxy = (CleanupSpotNode)(object)node;
-        var connector = new ZLinkSpotPeerConnector(
-            node,
-            new ZLinkSpotPeerConnectionSet());
+        var connector = new ZLinkSpotPeerConnector(node, new ZLinkSpotPeerConnectionSet());
         var peerRid = RoutingId.From("peer");
 
-        Assert.True(connector.DisconnectPeerBeforeAdmission(
-            peerRid,
-            "tcp://peer:1",
-            lifecycleGeneration: 7));
-        Assert.Equal(
-            (peerRid, "tcp://peer:1", 7UL),
-            proxy.Cleanup);
+        Assert.True(
+            connector.DisconnectPeerBeforeAdmission(peerRid, "tcp://peer:1", lifecycleGeneration: 7)
+        );
+        Assert.Equal((peerRid, "tcp://peer:1", 7UL), proxy.Cleanup);
     }
 
     private class BusyOnceSpotNode : DispatchProxy
@@ -97,22 +80,15 @@ public sealed class SpotPeerConnectorTests
 
     private class CleanupSpotNode : DispatchProxy
     {
-        internal (RoutingId Rid, string Endpoint, ulong Generation)? Cleanup {
-            get;
-            private set;
-        }
+        internal (RoutingId Rid, string Endpoint, ulong Generation)? Cleanup { get; private set; }
 
         protected override object? Invoke(MethodInfo? targetMethod, object?[]? args)
         {
             ArgumentNullException.ThrowIfNull(targetMethod);
-            if (targetMethod.Name
-                != nameof(IZLinkBackendSpotNode.DisconnectPeerBeforeAdmission))
+            if (targetMethod.Name != nameof(IZLinkBackendSpotNode.DisconnectPeerBeforeAdmission))
                 throw new NotSupportedException(targetMethod.Name);
 
-            Cleanup = (
-                (RoutingId)args![0]!,
-                (string)args[1]!,
-                (ulong)args[2]!);
+            Cleanup = ((RoutingId)args![0]!, (string)args[1]!, (ulong)args[2]!);
             return true;
         }
     }
@@ -123,7 +99,8 @@ public sealed class SpotPeerConnectorTests
 
         internal List<string> DisconnectedEndpoints { get; } = [];
 
-        internal (RoutingId Rid, string Endpoint, ulong Generation)? AdmissionCleanup {
+        internal (RoutingId Rid, string Endpoint, ulong Generation)? AdmissionCleanup
+        {
             get;
             private set;
         }
@@ -133,8 +110,7 @@ public sealed class SpotPeerConnectorTests
             ArgumentNullException.ThrowIfNull(targetMethod);
             switch (targetMethod.Name)
             {
-                case nameof(IZLinkBackendSpotNode.ConnectPeer)
-                    when args is { Length: 3 }:
+                case nameof(IZLinkBackendSpotNode.ConnectPeer) when args is { Length: 3 }:
                     ConnectedRids.Add((RoutingId)args[0]!);
                     return null;
                 case nameof(IZLinkBackendSpotNode.DisconnectPeer):
@@ -142,23 +118,24 @@ public sealed class SpotPeerConnectorTests
                     return null;
                 case nameof(IZLinkBackendSpotNode.MeshPeers):
                     return ConnectedRids
-                        .Select((rid, index) => new MeshNodePeer(
-                            ConnectionIntentId: (ulong)index + 1,
-                            Source: MeshPeerSource.Discovery,
-                            State: MeshPeerState.Connecting,
-                            RoutingId: rid,
-                            LifecycleGeneration: 1,
-                            DescriptorRevision: 1,
-                            Endpoint: "tcp://peer:1",
-                            ChannelCount: 0,
-                            LastError: 0,
-                            LastChangedMs: 0))
+                        .Select(
+                            (rid, index) =>
+                                new MeshNodePeer(
+                                    ConnectionIntentId: (ulong)index + 1,
+                                    Source: MeshPeerSource.Discovery,
+                                    State: MeshPeerState.Connecting,
+                                    RoutingId: rid,
+                                    LifecycleGeneration: 1,
+                                    DescriptorRevision: 1,
+                                    Endpoint: "tcp://peer:1",
+                                    ChannelCount: 0,
+                                    LastError: 0,
+                                    LastChangedMs: 0
+                                )
+                        )
                         .ToArray();
                 case nameof(IZLinkBackendSpotNode.DisconnectPeerBeforeAdmission):
-                    AdmissionCleanup = (
-                        (RoutingId)args![0]!,
-                        (string)args[1]!,
-                        (ulong)args[2]!);
+                    AdmissionCleanup = ((RoutingId)args![0]!, (string)args[1]!, (ulong)args[2]!);
                     return true;
                 default:
                     throw new NotSupportedException(targetMethod.Name);

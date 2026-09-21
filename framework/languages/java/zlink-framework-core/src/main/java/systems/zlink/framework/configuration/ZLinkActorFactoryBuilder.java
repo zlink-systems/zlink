@@ -13,6 +13,5 @@ public interface ZLinkActorFactoryBuilder<TActor extends ZLinkActor> {
 
     void recreateOnRelocation();
 
-    void preserveStateWith(
-        Class<? extends ZLinkActorRelocationAdapter<TActor>> adapterClass);
+    void preserveStateWith(Class<? extends ZLinkActorRelocationAdapter<TActor>> adapterClass);
 }

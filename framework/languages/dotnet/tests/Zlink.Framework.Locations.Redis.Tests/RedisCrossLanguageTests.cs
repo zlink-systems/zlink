@@ -17,41 +17,48 @@ public sealed class RedisProviderSmokeTests(RedisTestFixture fixture)
         var betaKey = new ZLinkStoreKey("golden/dotnet/beta");
 
         Assert.IsType<ZLinkStoreWriteResult.Applied>(
-            await store.WriteAsync(new ZLinkStoreWriteRequest(
-                [
-                    new ZLinkStoreCondition.Missing(alphaKey),
-                    new ZLinkStoreCondition.Missing(betaKey)
-                ],
-                [
-                    new ZLinkStoreMutation.Put(
-                        alphaKey,
-                        new byte[] { 0, 1, 255 },
-                        null),
-                    new ZLinkStoreMutation.Put(
-                        betaKey,
-                        System.Text.Encoding.UTF8.GetBytes("dotnet-opaque-value"),
-                        null)
-                ])));
+            await store.WriteAsync(
+                new ZLinkStoreWriteRequest(
+                    [
+                        new ZLinkStoreCondition.Missing(alphaKey),
+                        new ZLinkStoreCondition.Missing(betaKey),
+                    ],
+                    [
+                        new ZLinkStoreMutation.Put(alphaKey, new byte[] { 0, 1, 255 }, null),
+                        new ZLinkStoreMutation.Put(
+                            betaKey,
+                            System.Text.Encoding.UTF8.GetBytes("dotnet-opaque-value"),
+                            null
+                        ),
+                    ]
+                )
+            )
+        );
 
-        var alpha = Assert.IsType<ZLinkStoreReadResult.Found>(
-            await store.ReadAsync(alphaKey));
+        var alpha = Assert.IsType<ZLinkStoreReadResult.Found>(await store.ReadAsync(alphaKey));
         Assert.Equal(new byte[] { 0, 1, 255 }, alpha.Value.Bytes.ToArray());
-        var beta = Assert.IsType<ZLinkStoreReadResult.Found>(
-            await store.ReadAsync(betaKey));
+        var beta = Assert.IsType<ZLinkStoreReadResult.Found>(await store.ReadAsync(betaKey));
         Assert.Equal(
             "dotnet-opaque-value",
-            System.Text.Encoding.UTF8.GetString(beta.Value.Bytes.Span));
+            System.Text.Encoding.UTF8.GetString(beta.Value.Bytes.Span)
+        );
 
         var conflict = Assert.IsType<ZLinkStoreWriteResult.Conflict>(
-            await store.WriteAsync(new ZLinkStoreWriteRequest(
-                [new ZLinkStoreCondition.Missing(alphaKey)],
-                [new ZLinkStoreMutation.Put(
-                    alphaKey,
-                    System.Text.Encoding.UTF8.GetBytes("must-not-commit"),
-                    null)])));
+            await store.WriteAsync(
+                new ZLinkStoreWriteRequest(
+                    [new ZLinkStoreCondition.Missing(alphaKey)],
+                    [
+                        new ZLinkStoreMutation.Put(
+                            alphaKey,
+                            System.Text.Encoding.UTF8.GetBytes("must-not-commit"),
+                            null
+                        ),
+                    ]
+                )
+            )
+        );
         Assert.NotNull(conflict);
-        var unchanged = Assert.IsType<ZLinkStoreReadResult.Found>(
-            await store.ReadAsync(alphaKey));
+        var unchanged = Assert.IsType<ZLinkStoreReadResult.Found>(await store.ReadAsync(alphaKey));
         Assert.Equal(new byte[] { 0, 1, 255 }, unchanged.Value.Bytes.ToArray());
     }
 }

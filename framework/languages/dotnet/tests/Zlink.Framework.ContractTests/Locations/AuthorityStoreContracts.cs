@@ -11,20 +11,21 @@ namespace Zlink.Framework.ContractTests.Locations;
 /// </summary>
 public sealed class AuthorityStoreContracts
 {
-    private static readonly DateTimeOffset StoreNow =
-        new(2026, 7, 25, 9, 30, 0, TimeSpan.Zero);
+    private static readonly DateTimeOffset StoreNow = new(2026, 7, 25, 9, 30, 0, TimeSpan.Zero);
 
-    private static readonly ZLinkMeshNodeDescriptorKey MatchNodeB =
-        new("play", RoutingId.From("play-node-b"));
+    private static readonly ZLinkMeshNodeDescriptorKey MatchNodeB = new(
+        "play",
+        RoutingId.From("play-node-b")
+    );
 
-    private static readonly ZLinkMeshNodeDescriptorKey MatchNodeC =
-        new("play", RoutingId.From("play-node-c"));
+    private static readonly ZLinkMeshNodeDescriptorKey MatchNodeC = new(
+        "play",
+        RoutingId.From("play-node-c")
+    );
 
-    private static readonly ZLinkLocationOwnerToken OwnerB =
-        new("play-node-b#0f2c", 41L);
+    private static readonly ZLinkLocationOwnerToken OwnerB = new("play-node-b#0f2c", 41L);
 
-    private static readonly ZLinkLocationOwnerToken OwnerC =
-        new("play-node-c#7ab1", 42L);
+    private static readonly ZLinkLocationOwnerToken OwnerC = new("play-node-c#7ab1", 42L);
 
     [Fact]
     public async Task Authority_store_reserves_commits_and_hands_an_object_to_a_new_owner()
@@ -36,7 +37,8 @@ public sealed class AuthorityStoreContracts
         //    store, not the caller, issues ObjectGeneration,
         //    AuthorityOwnerGeneration and StoreVersion.
         var reserved = Assert.IsType<ZLinkObjectReserveResult.Reserved>(
-            await store.ReserveAsync(ActorReservation(actorKey, OwnerB, MatchNodeB)));
+            await store.ReserveAsync(ActorReservation(actorKey, OwnerB, MatchNodeB))
+        );
         var reservation = reserved.Reservation;
         Assert.Equal(1UL, reservation.ObjectGeneration);
         Assert.Equal(1UL, reservation.AuthorityOwnerGeneration);
@@ -44,7 +46,8 @@ public sealed class AuthorityStoreContracts
         // A second reservation over the same Creating row loses; the winner is
         // the only node that runs the factory.
         Assert.IsType<ZLinkObjectReserveResult.Conflict>(
-            await store.ReserveAsync(ActorReservation(actorKey, OwnerC, MatchNodeC)));
+            await store.ReserveAsync(ActorReservation(actorKey, OwnerC, MatchNodeC))
+        );
 
         // 2. The reserving node runs the factory and publishes the terminal
         //    outcome with the ready payload in one call, so a retried creation
@@ -54,11 +57,14 @@ public sealed class AuthorityStoreContracts
             RoutingId.From("play-node-b"),
             SourceNodeGeneration: 9,
             OperationIdHigh: 0x0193_5C71_A4E0_0000,
-            OperationIdLow: 0x0000_0000_0000_0001);
+            OperationIdLow: 0x0000_0000_0000_0001
+        );
         var readyPayload = Encoding.UTF8.GetBytes(
-            """{"actorType":"player","spotId":"battle-1042","rating":1873}""");
+            """{"actorType":"player","spotId":"battle-1042","rating":1873}"""
+        );
         var terminalEnvelope = Encoding.UTF8.GetBytes(
-            """{"terminalResult":"created","actorId":"player-8821"}""");
+            """{"terminalResult":"created","actorId":"player-8821"}"""
+        );
         var created = Assert.IsType<ZLinkObjectCreationCompleteResult.Created>(
             await store.CompleteCreationAsync(
                 reservation,
@@ -67,39 +73,45 @@ public sealed class AuthorityStoreContracts
                     new ZLinkCreationTerminalPublication(
                         operation,
                         terminalEnvelope,
-                        StoreNow.AddHours(1)))));
+                        StoreNow.AddHours(1)
+                    )
+                )
+            )
+        );
         Assert.Equal(ZLinkPlacementAllocationState.Active, created.Snapshot.Allocation.State);
         Assert.Equal(OwnerB.OwnerId, created.Snapshot.OwnerId);
         Assert.Null(created.Snapshot.ReservedCreation);
 
         var replayed = Assert.IsType<ZLinkCreationTerminalReadResult.Found>(
-            await store.ReadCreationTerminalAsync(operation));
-        using var replayedEnvelope =
-            JsonDocument.Parse(replayed.Record.TerminalEnvelope);
+            await store.ReadCreationTerminalAsync(operation)
+        );
+        using var replayedEnvelope = JsonDocument.Parse(replayed.Record.TerminalEnvelope);
         Assert.Equal(
             "created",
-            replayedEnvelope.RootElement
-                .GetProperty("terminalResult")
-                .GetString());
+            replayedEnvelope.RootElement.GetProperty("terminalResult").GetString()
+        );
 
         // 3. Preserve keeps both generations and refreshes only the payload.
         //    It carries neither a target owner nor a target allocation.
-        var active = Assert.IsType<ZLinkAuthorityReadResult.Found>(
-            await store.ReadAuthorityAsync(actorKey)).Snapshot;
+        var active = Assert
+            .IsType<ZLinkAuthorityReadResult.Found>(await store.ReadAuthorityAsync(actorKey))
+            .Snapshot;
         var preserved = Assert.IsType<ZLinkAuthorityCompareExchangeResult.Stored>(
             await store.CompareExchangeAuthorityAsync(
                 actorKey,
                 active.StoreVersion,
                 new ZLinkAuthorityMutation.Put(
                     Encoding.UTF8.GetBytes(
-                        """{"actorType":"player","spotId":"battle-1042","rating":1901}"""),
+                        """{"actorType":"player","spotId":"battle-1042","rating":1901}"""
+                    ),
                     ZLinkAuthorityGenerationTransition.Preserve,
                     TargetOwner: null,
-                    TargetAllocation: null)));
+                    TargetAllocation: null
+                )
+            )
+        );
         Assert.Equal(active.ObjectGeneration, preserved.Snapshot.ObjectGeneration);
-        Assert.Equal(
-            active.AuthorityOwnerGeneration,
-            preserved.Snapshot.AuthorityOwnerGeneration);
+        Assert.Equal(active.AuthorityOwnerGeneration, preserved.Snapshot.AuthorityOwnerGeneration);
 
         // A stale StoreVersion loses and mutates nothing; the loser reconciles
         // from the current read carried by Conflict.
@@ -107,7 +119,9 @@ public sealed class AuthorityStoreContracts
             await store.CompareExchangeAuthorityAsync(
                 actorKey,
                 active.StoreVersion,
-                new ZLinkAuthorityMutation.Delete()));
+                new ZLinkAuthorityMutation.Delete()
+            )
+        );
         Assert.IsType<ZLinkAuthorityReadResult.Found>(conflict.Current);
 
         // 4. The prepared target performs the single owner/allocation CAS.
@@ -116,7 +130,7 @@ public sealed class AuthorityStoreContracts
         {
             State = ZLinkPlacementAllocationState.Active,
             Descriptor = MatchNodeC,
-            DescriptorLifecycleGeneration = 4
+            DescriptorLifecycleGeneration = 4,
         };
 
         var handedOver = Assert.IsType<ZLinkAuthorityCompareExchangeResult.Stored>(
@@ -128,19 +142,19 @@ public sealed class AuthorityStoreContracts
                     ZLinkAuthorityGenerationTransition.NewOwner,
                     OwnerC,
                     targetAllocation,
-                    targetGeneration)));
-        Assert.Equal(
-            preserved.Snapshot.ObjectGeneration,
-            handedOver.Snapshot.ObjectGeneration);
-        Assert.Equal(
-            targetGeneration,
-            handedOver.Snapshot.AuthorityOwnerGeneration);
+                    targetGeneration
+                )
+            )
+        );
+        Assert.Equal(preserved.Snapshot.ObjectGeneration, handedOver.Snapshot.ObjectGeneration);
+        Assert.Equal(targetGeneration, handedOver.Snapshot.AuthorityOwnerGeneration);
         Assert.Equal(OwnerC.OwnerId, handedOver.Snapshot.OwnerId);
         Assert.Equal(MatchNodeC, handedOver.Snapshot.Allocation.Descriptor);
 
         // 5. Host recovery scans the prefix rather than resolving one key.
         var page = Assert.IsType<ZLinkAuthorityScanResult.Page>(
-            await store.ListAuthoritiesAsync("play/actor/", cursor: null, limit: 200));
+            await store.ListAuthoritiesAsync("play/actor/", cursor: null, limit: 200)
+        );
         var entry = Assert.Single(page.Value.Items);
         Assert.Equal(actorKey, entry.Key);
         Assert.Null(page.Value.NextCursor);
@@ -150,9 +164,10 @@ public sealed class AuthorityStoreContracts
             await store.CompareExchangeAuthorityAsync(
                 actorKey,
                 handedOver.Snapshot.StoreVersion,
-                new ZLinkAuthorityMutation.Delete()));
-        Assert.IsType<ZLinkAuthorityReadResult.Missing>(
-            await store.ReadAuthorityAsync(actorKey));
+                new ZLinkAuthorityMutation.Delete()
+            )
+        );
+        Assert.IsType<ZLinkAuthorityReadResult.Missing>(await store.ReadAuthorityAsync(actorKey));
     }
 
     [Fact]
@@ -164,84 +179,106 @@ public sealed class AuthorityStoreContracts
 
         // A factory that throws before Ready aborts its own reservation. The
         // authority returns to Missing so the next explicit call can claim it.
-        var abandoned = Assert.IsType<ZLinkObjectReserveResult.Reserved>(
-            await store.ReserveAsync(
-                SpotReservation(spotKey, OwnerB, MatchNodeB))).Reservation;
+        var abandoned = Assert
+            .IsType<ZLinkObjectReserveResult.Reserved>(
+                await store.ReserveAsync(SpotReservation(spotKey, OwnerB, MatchNodeB))
+            )
+            .Reservation;
         Assert.IsType<ZLinkObjectAbortResult.Aborted>(await store.AbortAsync(abandoned));
         Assert.IsType<ZLinkObjectAbortResult.AlreadyAborted>(await store.AbortAsync(abandoned));
-        Assert.IsType<ZLinkAuthorityReadResult.Missing>(
-            await store.ReadAuthorityAsync(spotKey));
+        Assert.IsType<ZLinkAuthorityReadResult.Missing>(await store.ReadAuthorityAsync(spotKey));
 
         // The retry succeeds and reaches Active through Reserve + Commit.
-        var reservation = Assert.IsType<ZLinkObjectReserveResult.Reserved>(
-            await store.ReserveAsync(
-                SpotReservation(spotKey, OwnerB, MatchNodeB))).Reservation;
-        var spotSnapshot = Assert.IsType<ZLinkObjectCommitResult.Committed>(
-            await store.CommitAsync(
-                reservation,
-                Encoding.UTF8.GetBytes(
-                    """{"spotType":"battle-room","members":["player-8821"]}"""))).Snapshot;
+        var reservation = Assert
+            .IsType<ZLinkObjectReserveResult.Reserved>(
+                await store.ReserveAsync(SpotReservation(spotKey, OwnerB, MatchNodeB))
+            )
+            .Reservation;
+        var spotSnapshot = Assert
+            .IsType<ZLinkObjectCommitResult.Committed>(
+                await store.CommitAsync(
+                    reservation,
+                    Encoding.UTF8.GetBytes(
+                        """{"spotType":"battle-room","members":["player-8821"]}"""
+                    )
+                )
+            )
+            .Snapshot;
 
         // Once a spot exists, a create for the same key reports AlreadyExists
         // instead of starting a second incarnation.
         Assert.IsType<ZLinkObjectReserveResult.AlreadyExists>(
-            await store.ReserveAsync(SpotReservation(spotKey, OwnerC, MatchNodeC)));
+            await store.ReserveAsync(SpotReservation(spotKey, OwnerC, MatchNodeC))
+        );
 
-        var memberReservation = Assert.IsType<ZLinkObjectReserveResult.Reserved>(
-            await store.ReserveAsync(
-                ActorReservation(memberKey, OwnerB, MatchNodeB))).Reservation;
-        var memberSnapshot = Assert.IsType<ZLinkObjectCommitResult.Committed>(
-            await store.CommitAsync(
-                memberReservation,
-                Encoding.UTF8.GetBytes("""{"actorType":"player"}"""))).Snapshot;
+        var memberReservation = Assert
+            .IsType<ZLinkObjectReserveResult.Reserved>(
+                await store.ReserveAsync(ActorReservation(memberKey, OwnerB, MatchNodeB))
+            )
+            .Reservation;
+        var memberSnapshot = Assert
+            .IsType<ZLinkObjectCommitResult.Committed>(
+                await store.CommitAsync(
+                    memberReservation,
+                    Encoding.UTF8.GetBytes("""{"actorType":"player"}""")
+                )
+            )
+            .Snapshot;
 
         // Retiring play-node-b moves the whole User Spot together with the
         // actors that were members at seal time: one prepare, one commit, and
         // every participant changes owner in the same transaction.
-        var prepared = Assert.IsType<ZLinkAggregatePrepareResult.Prepared>(
-            await store.PrepareAggregateAsync(
-                new ZLinkAggregatePrepareRequest(
-                    Guid.Parse("b4d4e6c0-9a1e-4a5f-8f21-6b4c0f2c7d33"),
-                    AggregateGeneration: 1,
-                    [
-                        new ZLinkAggregateParticipant(
-                            spotKey,
-                            spotSnapshot.StoreVersion,
-                            ZLinkAuthorityGenerationTransition.NewOwner,
-                            spotSnapshot.Payload,
-                            Encoding.UTF8.GetBytes("""{"members":["player-8821"]}""")),
-                        new ZLinkAggregateParticipant(
-                            memberKey,
-                            memberSnapshot.StoreVersion,
-                            ZLinkAuthorityGenerationTransition.NewOwner,
-                            memberSnapshot.Payload,
-                            Encoding.UTF8.GetBytes("""{"spotId":"battle-1042"}"""))
-                    ],
-                    SHA256.HashData(Encoding.UTF8.GetBytes("battle-1042/player-8821")),
-                    MatchNodeC,
-                    TargetDescriptorLifecycleGeneration: 4,
-                    SpotAggregateCapacity(),
-                    OwnerC))).Fence;
+        var prepared = Assert
+            .IsType<ZLinkAggregatePrepareResult.Prepared>(
+                await store.PrepareAggregateAsync(
+                    new ZLinkAggregatePrepareRequest(
+                        Guid.Parse("b4d4e6c0-9a1e-4a5f-8f21-6b4c0f2c7d33"),
+                        AggregateGeneration: 1,
+                        [
+                            new ZLinkAggregateParticipant(
+                                spotKey,
+                                spotSnapshot.StoreVersion,
+                                ZLinkAuthorityGenerationTransition.NewOwner,
+                                spotSnapshot.Payload,
+                                Encoding.UTF8.GetBytes("""{"members":["player-8821"]}""")
+                            ),
+                            new ZLinkAggregateParticipant(
+                                memberKey,
+                                memberSnapshot.StoreVersion,
+                                ZLinkAuthorityGenerationTransition.NewOwner,
+                                memberSnapshot.Payload,
+                                Encoding.UTF8.GetBytes("""{"spotId":"battle-1042"}""")
+                            ),
+                        ],
+                        SHA256.HashData(Encoding.UTF8.GetBytes("battle-1042/player-8821")),
+                        MatchNodeC,
+                        TargetDescriptorLifecycleGeneration: 4,
+                        SpotAggregateCapacity(),
+                        OwnerC
+                    )
+                )
+            )
+            .Fence;
 
         Assert.Equal(
             ZLinkAggregateCommitResult.Committed,
-            await store.CommitAggregateAsync(prepared));
+            await store.CommitAggregateAsync(prepared)
+        );
         Assert.Equal(
             ZLinkAggregateCommitResult.AlreadyCommitted,
-            await store.CommitAggregateAsync(prepared));
-        Assert.Equal(
-            ZLinkAggregateAbortResult.Stale,
-            await store.AbortAggregateAsync(prepared));
+            await store.CommitAggregateAsync(prepared)
+        );
+        Assert.Equal(ZLinkAggregateAbortResult.Stale, await store.AbortAggregateAsync(prepared));
 
         // Every participant changed owner, took a fresh authority owner
         // generation and kept the object generation it was created with.
-        foreach (var (key, before) in new[]
-                 {
-                     (spotKey, spotSnapshot), (memberKey, memberSnapshot)
-                 })
+        foreach (
+            var (key, before) in new[] { (spotKey, spotSnapshot), (memberKey, memberSnapshot) }
+        )
         {
-            var moved = Assert.IsType<ZLinkAuthorityReadResult.Found>(
-                await store.ReadAuthorityAsync(key)).Snapshot;
+            var moved = Assert
+                .IsType<ZLinkAuthorityReadResult.Found>(await store.ReadAuthorityAsync(key))
+                .Snapshot;
             Assert.Equal(OwnerC.OwnerId, moved.OwnerId);
             Assert.Equal(MatchNodeC, moved.Allocation.Descriptor);
             Assert.Equal(4UL, moved.Allocation.DescriptorLifecycleGeneration);
@@ -258,7 +295,8 @@ public sealed class AuthorityStoreContracts
         var retention = TimeSpan.FromHours(24);
         var store = new ExampleRelocationStore();
         var capture = Encoding.UTF8.GetBytes(
-            """{"actorId":"player-8821","rating":1901,"inventory":["potion","torch"]}""");
+            """{"actorId":"player-8821","rating":1901,"inventory":["potion","torch"]}"""
+        );
 
         var stored = await store.PutRelocationAsync(capture, retention);
         Assert.Equal(StoreNow.Add(retention), stored.ExpiresAt);
@@ -269,26 +307,32 @@ public sealed class AuthorityStoreContracts
         Assert.Equal(Crc32C(capture), stored.ChecksumCrc32c);
 
         var found = Assert.IsType<ZLinkRelocationReadResult.Found>(
-            await store.GetRelocationAsync(stored.Reference));
+            await store.GetRelocationAsync(stored.Reference)
+        );
         Assert.Equal(capture, found.Payload.ToArray());
 
         // A recovery coordinator that still sees the reference in the
         // authority extends the retention; the store owns the new expiry.
         var renewed = Assert.IsType<ZLinkRelocationRenewResult.Renewed>(
-            await store.RenewRelocationAsync(stored.Reference, retention));
+            await store.RenewRelocationAsync(stored.Reference, retention)
+        );
         Assert.Equal(StoreNow.Add(retention), renewed.ExpiresAt);
         Assert.IsType<ZLinkRelocationRenewResult.Missing>(
-            await store.RenewRelocationAsync("relocation/abandoned-move", retention));
+            await store.RenewRelocationAsync("relocation/abandoned-move", retention)
+        );
 
         // Delete is idempotent cleanup: the second call is still a success.
         Assert.Equal(
             ZLinkRelocationDeleteResult.Deleted,
-            await store.DeleteRelocationAsync(stored.Reference));
+            await store.DeleteRelocationAsync(stored.Reference)
+        );
         Assert.Equal(
             ZLinkRelocationDeleteResult.Missing,
-            await store.DeleteRelocationAsync(stored.Reference));
+            await store.DeleteRelocationAsync(stored.Reference)
+        );
         Assert.IsType<ZLinkRelocationReadResult.Missing>(
-            await store.GetRelocationAsync(stored.Reference));
+            await store.GetRelocationAsync(stored.Reference)
+        );
     }
 
     [Fact]
@@ -301,20 +345,25 @@ public sealed class AuthorityStoreContracts
 
         var registered = await store.UpdateClientServerAsync(
             Descriptor(RoutingId.From("inventory-1"), weight: 100),
-            ZLinkLocationWriteIntent.NewClaim);
+            ZLinkLocationWriteIntent.NewClaim
+        );
         Assert.Equal(ZLinkLocationWriteStatus.Stored, registered.Status);
         await store.UpdateClientServerAsync(
             Descriptor(RoutingId.From("inventory-2"), weight: 50),
-            ZLinkLocationWriteIntent.NewClaim);
+            ZLinkLocationWriteIntent.NewClaim
+        );
 
         var firstPage = await store.ListClientServersAsync(
-            "inventory", new ZLinkPageRequest(PageSize: 1));
+            "inventory",
+            new ZLinkPageRequest(PageSize: 1)
+        );
         Assert.Single(firstPage.Items);
         Assert.NotNull(firstPage.ContinuationToken);
 
         var secondPage = await store.ListClientServersAsync(
             "inventory",
-            new ZLinkPageRequest(PageSize: 1, ContinuationToken: firstPage.ContinuationToken));
+            new ZLinkPageRequest(PageSize: 1, ContinuationToken: firstPage.ContinuationToken)
+        );
         Assert.Single(secondPage.Items);
         Assert.Null(secondPage.ContinuationToken);
         Assert.Equal("inventory", secondPage.Items[0].ChannelName);
@@ -322,13 +371,18 @@ public sealed class AuthorityStoreContracts
         // A descriptor revision that is not strictly increasing is rejected
         // whole; the store never applies part of the row.
         var stale = await store.UpdateClientServerAsync(
-            Descriptor(RoutingId.From("inventory-1"), weight: 10) with { DescriptorRevision = 1 },
-            ZLinkLocationWriteIntent.Renew);
+            Descriptor(RoutingId.From("inventory-1"), weight: 10) with
+            {
+                DescriptorRevision = 1,
+            },
+            ZLinkLocationWriteIntent.Renew
+        );
         Assert.Equal(ZLinkLocationWriteStatus.IgnoredStale, stale.Status);
 
         var removed = await store.RemoveClientServerAsync(
             new ZLinkClientServerServerDescriptorKey("inventory", RoutingId.From("inventory-2")),
-            OwnerB);
+            OwnerB
+        );
         Assert.Equal(ZLinkLocationWriteStatus.Stored, removed);
 
         var remaining = await store.ListClientServersAsync("inventory", default);
@@ -348,10 +402,10 @@ public sealed class AuthorityStoreContracts
             SecurityIdentity: "cluster-a",
             OwnerB.OwnerId,
             OwnerB.LeaseGeneration,
-            StoreNow);
+            StoreNow
+        );
 
-    private static ZLinkCapacityVector ActorCapacity() =>
-        new(Actors: 1, Spots: 0, SpotType: null);
+    private static ZLinkCapacityVector ActorCapacity() => new(Actors: 1, Spots: 0, SpotType: null);
 
     private static ZLinkCapacityVector SpotAggregateCapacity() =>
         new(
@@ -360,12 +414,15 @@ public sealed class AuthorityStoreContracts
             new ZLinkSpotTypeCapacityDelta(
                 ZLinkPlacementObjectKind.UserSpot,
                 "battle-room",
-                Count: 1));
+                Count: 1
+            )
+        );
 
     private static ZLinkObjectReservationRequest ActorReservation(
         ZLinkAuthorityKey key,
         ZLinkLocationOwnerToken owner,
-        ZLinkMeshNodeDescriptorKey target)
+        ZLinkMeshNodeDescriptorKey target
+    )
     {
         var intent = Encoding.UTF8.GetBytes("""{"actorType":"player","actorId":"player-8821"}""");
         return new ZLinkObjectReservationRequest(
@@ -379,13 +436,15 @@ public sealed class AuthorityStoreContracts
             TargetNodeLifecycleGeneration: target == MatchNodeB ? 9UL : 4UL,
             owner,
             Encoding.UTF8.GetBytes("""{"state":"creating"}"""),
-            ActorCapacity());
+            ActorCapacity()
+        );
     }
 
     private static ZLinkObjectReservationRequest SpotReservation(
         ZLinkAuthorityKey key,
         ZLinkLocationOwnerToken owner,
-        ZLinkMeshNodeDescriptorKey target)
+        ZLinkMeshNodeDescriptorKey target
+    )
     {
         var intent = Encoding.UTF8.GetBytes("""{"spotType":"battle-room","mode":"ranked-3v3"}""");
         return new ZLinkObjectReservationRequest(
@@ -405,7 +464,10 @@ public sealed class AuthorityStoreContracts
                 new ZLinkSpotTypeCapacityDelta(
                     ZLinkPlacementObjectKind.UserSpot,
                     "battle-room",
-                    Count: 1)));
+                    Count: 1
+                )
+            )
+        );
     }
 
     private static uint Crc32C(ReadOnlySpan<byte> payload)
@@ -426,13 +488,18 @@ public sealed class AuthorityStoreContracts
     {
         private readonly Dictionary<string, Row> _rows = new(StringComparer.Ordinal);
 
-        private readonly Dictionary<ZLinkCreationOperationId, ZLinkCreationTerminalRecord>
-            _terminals = [];
+        private readonly Dictionary<
+            ZLinkCreationOperationId,
+            ZLinkCreationTerminalRecord
+        > _terminals = [];
 
-        private readonly Dictionary<ZLinkAggregateFence,
-            (ZLinkAggregatePrepareRequest Request,
-                IReadOnlyDictionary<ZLinkAuthorityKey, ulong> Generations)>
-            _aggregates = [];
+        private readonly Dictionary<
+            ZLinkAggregateFence,
+            (
+                ZLinkAggregatePrepareRequest Request,
+                IReadOnlyDictionary<ZLinkAuthorityKey, ulong> Generations
+            )
+        > _aggregates = [];
         private readonly HashSet<ZLinkAggregateFence> _committedAggregates = [];
 
         private ulong _storeRevision;
@@ -441,60 +508,70 @@ public sealed class AuthorityStoreContracts
 
         public override ValueTask<ZLinkAuthorityReadResult> ReadAuthorityAsync(
             ZLinkAuthorityKey key,
-            CancellationToken cancellationToken = default) =>
-            ValueTask.FromResult(Read(key));
+            CancellationToken cancellationToken = default
+        ) => ValueTask.FromResult(Read(key));
 
         public override ValueTask<ZLinkAuthorityCompareExchangeResult> CompareExchangeAuthorityAsync(
             ZLinkAuthorityKey key,
             string expectedStoreVersion,
             ZLinkAuthorityMutation mutation,
-            CancellationToken cancellationToken = default)
+            CancellationToken cancellationToken = default
+        )
         {
             if (mutation is ZLinkAuthorityMutation.Put put)
             {
                 // Invalid owner/allocation combinations never reach the backend.
-                if (put.GenerationTransition == ZLinkAuthorityGenerationTransition.Preserve
-                    && (put.TargetOwner is not null || put.TargetAllocation is not null))
+                if (
+                    put.GenerationTransition == ZLinkAuthorityGenerationTransition.Preserve
+                    && (put.TargetOwner is not null || put.TargetAllocation is not null)
+                )
                 {
                     throw new ArgumentException(
                         "Preserve carries neither a target owner nor a target allocation.",
-                        nameof(mutation));
+                        nameof(mutation)
+                    );
                 }
 
-                if (put.GenerationTransition == ZLinkAuthorityGenerationTransition.NewOwner
-                    && (put.TargetOwner is null || put.TargetAllocation is null))
+                if (
+                    put.GenerationTransition == ZLinkAuthorityGenerationTransition.NewOwner
+                    && (put.TargetOwner is null || put.TargetAllocation is null)
+                )
                 {
                     throw new ArgumentException(
                         "NewOwner requires both a target owner and a target allocation.",
-                        nameof(mutation));
+                        nameof(mutation)
+                    );
                 }
             }
 
-            if (!_rows.TryGetValue(key.Value, out var row)
+            if (
+                !_rows.TryGetValue(key.Value, out var row)
                 || row.Allocation.State != ZLinkPlacementAllocationState.Active
-                || !string.Equals(row.StoreVersion, expectedStoreVersion, StringComparison.Ordinal))
+                || !string.Equals(row.StoreVersion, expectedStoreVersion, StringComparison.Ordinal)
+            )
             {
                 return ValueTask.FromResult<ZLinkAuthorityCompareExchangeResult>(
-                    new ZLinkAuthorityCompareExchangeResult.Conflict(Read(key)));
+                    new ZLinkAuthorityCompareExchangeResult.Conflict(Read(key))
+                );
             }
 
             if (mutation is ZLinkAuthorityMutation.Delete)
             {
                 _rows.Remove(key.Value);
                 return ValueTask.FromResult<ZLinkAuthorityCompareExchangeResult>(
-                    new ZLinkAuthorityCompareExchangeResult.Deleted(NextStoreVersion(), StoreNow));
+                    new ZLinkAuthorityCompareExchangeResult.Deleted(NextStoreVersion(), StoreNow)
+                );
             }
 
             var write = (ZLinkAuthorityMutation.Put)mutation;
             var targetGeneration = row.AuthorityOwnerGeneration;
             if (write.GenerationTransition == ZLinkAuthorityGenerationTransition.NewOwner)
             {
-                targetGeneration = write.TargetAuthorityOwnerGeneration == 0
-                    ? ++_authorityOwnerGeneration
-                    : write.TargetAuthorityOwnerGeneration;
-                _authorityOwnerGeneration = Math.Max(
-                    _authorityOwnerGeneration,
-                    targetGeneration);
+                targetGeneration =
+                    write.TargetAuthorityOwnerGeneration == 0
+                        ? ++_authorityOwnerGeneration
+                        : write.TargetAuthorityOwnerGeneration;
+                _authorityOwnerGeneration = Math.Max(_authorityOwnerGeneration, targetGeneration);
             }
             var updated = write.GenerationTransition switch
             {
@@ -505,25 +582,23 @@ public sealed class AuthorityStoreContracts
                     AuthorityOwnerGeneration = targetGeneration,
                     OwnerId = write.TargetOwner!.Value.OwnerId,
                     OwnerLeaseGeneration = write.TargetOwner!.Value.LeaseGeneration,
-                    Allocation = write.TargetAllocation!
+                    Allocation = write.TargetAllocation!,
                 },
-                _ => row with
-                {
-                    StoreVersion = NextStoreVersion(),
-                    Payload = write.Payload
-                }
+                _ => row with { StoreVersion = NextStoreVersion(), Payload = write.Payload },
             };
 
             _rows[key.Value] = updated;
             return ValueTask.FromResult<ZLinkAuthorityCompareExchangeResult>(
-                new ZLinkAuthorityCompareExchangeResult.Stored(updated.ToSnapshot()));
+                new ZLinkAuthorityCompareExchangeResult.Stored(updated.ToSnapshot())
+            );
         }
 
         public override ValueTask<ZLinkAuthorityScanResult> ListAuthoritiesAsync(
             string prefix,
             ZLinkAuthorityScanCursor? cursor,
             int limit,
-            CancellationToken cancellationToken = default)
+            CancellationToken cancellationToken = default
+        )
         {
             ArgumentOutOfRangeException.ThrowIfLessThan(limit, 1);
             ArgumentOutOfRangeException.ThrowIfGreaterThan(limit, 1000);
@@ -535,16 +610,19 @@ public sealed class AuthorityStoreContracts
                 .Take(limit)
                 .Select(pair => new ZLinkAuthorityEntry(
                     new ZLinkAuthorityKey(pair.Key),
-                    pair.Value.ToSnapshot()))
+                    pair.Value.ToSnapshot()
+                ))
                 .ToArray();
 
             return ValueTask.FromResult<ZLinkAuthorityScanResult>(
-                new ZLinkAuthorityScanResult.Page(new ZLinkAuthorityPage(items, NextCursor: null)));
+                new ZLinkAuthorityScanResult.Page(new ZLinkAuthorityPage(items, NextCursor: null))
+            );
         }
 
         public override ValueTask<ZLinkObjectReserveResult> ReserveAsync(
             ZLinkObjectReservationRequest request,
-            CancellationToken cancellationToken = default)
+            CancellationToken cancellationToken = default
+        )
         {
             if (_rows.TryGetValue(request.Key.Value, out var existing))
             {
@@ -555,12 +633,13 @@ public sealed class AuthorityStoreContracts
                         ZLinkPlacementAllocationState.Reserved =>
                             new ZLinkObjectReserveResult.Conflict(Read(request.Key)),
                         _ when !string.Equals(
-                            existing.Allocation.StableType,
-                            request.StableType,
-                            StringComparison.Ordinal) =>
-                            new ZLinkObjectReserveResult.TypeMismatch(snapshot),
-                        _ => new ZLinkObjectReserveResult.AlreadyExists(snapshot)
-                    });
+                                existing.Allocation.StableType,
+                                request.StableType,
+                                StringComparison.Ordinal
+                            ) => new ZLinkObjectReserveResult.TypeMismatch(snapshot),
+                        _ => new ZLinkObjectReserveResult.AlreadyExists(snapshot),
+                    }
+                );
             }
 
             var reservationId = $"reservation/{request.Key.Value}/{++_storeRevision}";
@@ -577,12 +656,15 @@ public sealed class AuthorityStoreContracts
                     request.StableType,
                     request.TargetDescriptor,
                     request.TargetNodeLifecycleGeneration,
-                    request.Capacity),
+                    request.Capacity
+                ),
                 new ZLinkReservedObjectCreation(
                     reservationId,
                     request.CreationIntentReference,
                     request.CreationIntentHash,
-                    request.CreationIntentEncodedSize));
+                    request.CreationIntentEncodedSize
+                )
+            );
             _rows[request.Key.Value] = row;
 
             return ValueTask.FromResult<ZLinkObjectReserveResult>(
@@ -595,13 +677,17 @@ public sealed class AuthorityStoreContracts
                         reservationId,
                         request.TargetDescriptor,
                         request.TargetNodeLifecycleGeneration,
-                        request.TargetOwner)));
+                        request.TargetOwner
+                    )
+                )
+            );
         }
 
         public override ValueTask<ZLinkObjectCommitResult> CommitAsync(
             ZLinkObjectReservation reservation,
             ReadOnlyMemory<byte> readyPayload,
-            CancellationToken cancellationToken = default)
+            CancellationToken cancellationToken = default
+        )
         {
             if (!TryTakeReservation(reservation, out var row))
             {
@@ -611,47 +697,55 @@ public sealed class AuthorityStoreContracts
                     && string.Equals(
                         current.PendingReservationId,
                         reservation.ReservationVersion,
-                        StringComparison.Ordinal)
+                        StringComparison.Ordinal
+                    )
                         ? new ZLinkObjectCommitResult.AlreadyCommitted(current.ToSnapshot())
-                        : new ZLinkObjectCommitResult.Stale());
+                        : new ZLinkObjectCommitResult.Stale()
+                );
             }
 
             var committed = Activate(reservation.Key, row, readyPayload);
             return ValueTask.FromResult<ZLinkObjectCommitResult>(
-                new ZLinkObjectCommitResult.Committed(committed));
+                new ZLinkObjectCommitResult.Committed(committed)
+            );
         }
 
         public override ValueTask<ZLinkObjectCreationCompleteResult> CompleteCreationAsync(
             ZLinkObjectReservation reservation,
             ZLinkObjectCreationCompletion completion,
-            CancellationToken cancellationToken = default)
+            CancellationToken cancellationToken = default
+        )
         {
             var publication = completion switch
             {
                 ZLinkObjectCreationCompletion.Created value => value.Terminal,
                 ZLinkObjectCreationCompletion.Rejected value => value.Terminal,
-                ZLinkObjectCreationCompletion.Failed value => ((ZLinkObjectCreationCompletion.Failed)
-                    completion).Terminal,
-                _ => throw new ArgumentOutOfRangeException(nameof(completion))
+                ZLinkObjectCreationCompletion.Failed value => (
+                    (ZLinkObjectCreationCompletion.Failed)completion
+                ).Terminal,
+                _ => throw new ArgumentOutOfRangeException(nameof(completion)),
             };
 
             if (_terminals.TryGetValue(publication.Operation, out var replay))
             {
                 return ValueTask.FromResult<ZLinkObjectCreationCompleteResult>(
-                    new ZLinkObjectCreationCompleteResult.AlreadyCompleted(replay));
+                    new ZLinkObjectCreationCompleteResult.AlreadyCompleted(replay)
+                );
             }
 
             if (!TryTakeReservation(reservation, out var row))
             {
                 return ValueTask.FromResult<ZLinkObjectCreationCompleteResult>(
-                    new ZLinkObjectCreationCompleteResult.Stale());
+                    new ZLinkObjectCreationCompleteResult.Stale()
+                );
             }
 
             var record = new ZLinkCreationTerminalRecord(
                 publication.Operation,
                 publication.TerminalEnvelope,
                 publication.ExpiresAt,
-                StoreNow);
+                StoreNow
+            );
             _terminals[publication.Operation] = record;
 
             if (completion is not ZLinkObjectCreationCompletion.Created created)
@@ -660,42 +754,50 @@ public sealed class AuthorityStoreContracts
                 return ValueTask.FromResult<ZLinkObjectCreationCompleteResult>(
                     completion is ZLinkObjectCreationCompletion.Rejected
                         ? new ZLinkObjectCreationCompleteResult.Rejected(record)
-                        : new ZLinkObjectCreationCompleteResult.Failed(record));
+                        : new ZLinkObjectCreationCompleteResult.Failed(record)
+                );
             }
 
             var snapshot = Activate(reservation.Key, row, created.ReadyPayload);
             return ValueTask.FromResult<ZLinkObjectCreationCompleteResult>(
-                new ZLinkObjectCreationCompleteResult.Created(snapshot, record));
+                new ZLinkObjectCreationCompleteResult.Created(snapshot, record)
+            );
         }
 
         public override ValueTask<ZLinkCreationTerminalReadResult> ReadCreationTerminalAsync(
             ZLinkCreationOperationId operation,
-            CancellationToken cancellationToken = default) =>
+            CancellationToken cancellationToken = default
+        ) =>
             ValueTask.FromResult<ZLinkCreationTerminalReadResult>(
                 _terminals.TryGetValue(operation, out var record)
                     ? new ZLinkCreationTerminalReadResult.Found(record)
-                    : new ZLinkCreationTerminalReadResult.Missing(StoreNow));
+                    : new ZLinkCreationTerminalReadResult.Missing(StoreNow)
+            );
 
         public override ValueTask<ZLinkObjectAbortResult> AbortAsync(
             ZLinkObjectReservation reservation,
-            CancellationToken cancellationToken = default)
+            CancellationToken cancellationToken = default
+        )
         {
             if (TryTakeReservation(reservation, out _))
             {
                 _rows.Remove(reservation.Key.Value);
                 return ValueTask.FromResult<ZLinkObjectAbortResult>(
-                    new ZLinkObjectAbortResult.Aborted());
+                    new ZLinkObjectAbortResult.Aborted()
+                );
             }
 
             return ValueTask.FromResult<ZLinkObjectAbortResult>(
                 _rows.ContainsKey(reservation.Key.Value)
                     ? new ZLinkObjectAbortResult.Stale()
-                    : new ZLinkObjectAbortResult.AlreadyAborted());
+                    : new ZLinkObjectAbortResult.AlreadyAborted()
+            );
         }
 
         public override ValueTask<ZLinkAggregatePrepareResult> PrepareAggregateAsync(
             ZLinkAggregatePrepareRequest request,
-            CancellationToken cancellationToken = default)
+            CancellationToken cancellationToken = default
+        )
         {
             var fence = new ZLinkAggregateFence(request.AggregateId, request.AggregateGeneration);
             if (_aggregates.ContainsKey(fence))
@@ -704,39 +806,46 @@ public sealed class AuthorityStoreContracts
                 return ValueTask.FromResult<ZLinkAggregatePrepareResult>(
                     new ZLinkAggregatePrepareResult.AlreadyPrepared(fence)
                     {
-                        TargetAuthorityOwnerGenerations =
-                            existing.Generations
-                    });
+                        TargetAuthorityOwnerGenerations = existing.Generations,
+                    }
+                );
             }
 
             foreach (var participant in request.Participants)
             {
-                if (!_rows.TryGetValue(participant.Key.Value, out var row)
+                if (
+                    !_rows.TryGetValue(participant.Key.Value, out var row)
                     || row.Allocation.State != ZLinkPlacementAllocationState.Active
                     || !string.Equals(
                         row.StoreVersion,
                         participant.ExpectedStoreVersion,
-                        StringComparison.Ordinal))
+                        StringComparison.Ordinal
+                    )
+                )
                 {
                     return ValueTask.FromResult<ZLinkAggregatePrepareResult>(
-                        new ZLinkAggregatePrepareResult.Conflict());
+                        new ZLinkAggregatePrepareResult.Conflict()
+                    );
                 }
             }
 
             var generations = request.Participants.ToDictionary(
                 static participant => participant.Key,
-                _ => ++_authorityOwnerGeneration);
+                _ => ++_authorityOwnerGeneration
+            );
             _aggregates[fence] = (request, generations);
             return ValueTask.FromResult<ZLinkAggregatePrepareResult>(
                 new ZLinkAggregatePrepareResult.Prepared(fence)
                 {
-                    TargetAuthorityOwnerGenerations = generations
-                });
+                    TargetAuthorityOwnerGenerations = generations,
+                }
+            );
         }
 
         public override ValueTask<ZLinkAggregateCommitResult> CommitAggregateAsync(
             ZLinkAggregateFence fence,
-            CancellationToken cancellationToken = default)
+            CancellationToken cancellationToken = default
+        )
         {
             if (_committedAggregates.Contains(fence))
                 return ValueTask.FromResult(ZLinkAggregateCommitResult.AlreadyCommitted);
@@ -750,18 +859,16 @@ public sealed class AuthorityStoreContracts
                 {
                     StoreVersion = NextStoreVersion(),
                     Payload = participant.AuthorityPayload,
-                    AuthorityOwnerGeneration =
-                        aggregate.Generations[participant.Key],
+                    AuthorityOwnerGeneration = aggregate.Generations[participant.Key],
                     OwnerId = aggregate.Request.TargetOwner.OwnerId,
-                    OwnerLeaseGeneration =
-                        aggregate.Request.TargetOwner.LeaseGeneration,
+                    OwnerLeaseGeneration = aggregate.Request.TargetOwner.LeaseGeneration,
                     Allocation = row.Allocation with
                     {
                         Descriptor = aggregate.Request.TargetDescriptor,
-                        DescriptorLifecycleGeneration =
-                            aggregate.Request
-                                .TargetDescriptorLifecycleGeneration
-                    }
+                        DescriptorLifecycleGeneration = aggregate
+                            .Request
+                            .TargetDescriptorLifecycleGeneration,
+                    },
                 };
             }
 
@@ -771,7 +878,8 @@ public sealed class AuthorityStoreContracts
 
         public override ValueTask<ZLinkAggregateAbortResult> AbortAggregateAsync(
             ZLinkAggregateFence fence,
-            CancellationToken cancellationToken = default)
+            CancellationToken cancellationToken = default
+        )
         {
             if (_committedAggregates.Contains(fence))
                 return ValueTask.FromResult(ZLinkAggregateAbortResult.Stale);
@@ -779,7 +887,8 @@ public sealed class AuthorityStoreContracts
             return ValueTask.FromResult(
                 _aggregates.Remove(fence)
                     ? ZLinkAggregateAbortResult.Aborted
-                    : ZLinkAggregateAbortResult.AlreadyAborted);
+                    : ZLinkAggregateAbortResult.AlreadyAborted
+            );
         }
 
         private ZLinkAuthorityReadResult Read(ZLinkAuthorityKey key) =>
@@ -789,16 +898,20 @@ public sealed class AuthorityStoreContracts
 
         private bool TryTakeReservation(ZLinkObjectReservation reservation, out Row row)
         {
-            if (_rows.TryGetValue(reservation.Key.Value, out var current)
+            if (
+                _rows.TryGetValue(reservation.Key.Value, out var current)
                 && current.Allocation.State == ZLinkPlacementAllocationState.Reserved
                 && string.Equals(
                     current.StoreVersion,
                     reservation.StoreVersion,
-                    StringComparison.Ordinal)
+                    StringComparison.Ordinal
+                )
                 && string.Equals(
                     current.PendingReservationId,
                     reservation.ReservationVersion,
-                    StringComparison.Ordinal))
+                    StringComparison.Ordinal
+                )
+            )
             {
                 row = current;
                 return true;
@@ -811,17 +924,15 @@ public sealed class AuthorityStoreContracts
         private ZLinkAuthoritySnapshot Activate(
             ZLinkAuthorityKey key,
             Row row,
-            ReadOnlyMemory<byte> readyPayload)
+            ReadOnlyMemory<byte> readyPayload
+        )
         {
             var active = row with
             {
                 StoreVersion = NextStoreVersion(),
                 Payload = readyPayload,
-                Allocation = row.Allocation with
-                {
-                    State = ZLinkPlacementAllocationState.Active
-                },
-                ReservedCreation = null
+                Allocation = row.Allocation with { State = ZLinkPlacementAllocationState.Active },
+                ReservedCreation = null,
             };
             _rows[key.Value] = active;
             return active.ToSnapshot();
@@ -838,21 +949,23 @@ public sealed class AuthorityStoreContracts
             string OwnerId,
             long OwnerLeaseGeneration,
             ZLinkPlacementAllocation Allocation,
-            ZLinkReservedObjectCreation? ReservedCreation)
+            ZLinkReservedObjectCreation? ReservedCreation
+        )
         {
-            public string? PendingReservationId =>
-                ReservedCreation?.ReservationId;
+            public string? PendingReservationId => ReservedCreation?.ReservationId;
 
-            public ZLinkAuthoritySnapshot ToSnapshot() => new(
-                StoreVersion,
-                Payload,
-                ObjectGeneration,
-                AuthorityOwnerGeneration,
-                OwnerId,
-                OwnerLeaseGeneration,
-                Allocation,
-                ReservedCreation,
-                StoreNow);
+            public ZLinkAuthoritySnapshot ToSnapshot() =>
+                new(
+                    StoreVersion,
+                    Payload,
+                    ObjectGeneration,
+                    AuthorityOwnerGeneration,
+                    OwnerId,
+                    OwnerLeaseGeneration,
+                    Allocation,
+                    ReservedCreation,
+                    StoreNow
+                );
         }
     }
 
@@ -864,96 +977,122 @@ public sealed class AuthorityStoreContracts
         public ValueTask<ZLinkRelocationStored> PutRelocationAsync(
             ReadOnlyMemory<byte> payload,
             TimeSpan retention,
-            CancellationToken cancellationToken = default)
+            CancellationToken cancellationToken = default
+        )
         {
             // The provider copies at the boundary: the framework may reuse the
             // buffer as soon as the operation completes.
             var stored = payload.ToArray();
             var reference = $"relocation/play/{++_sequence:D4}";
             _payloads[reference] = stored;
-            return ValueTask.FromResult(new ZLinkRelocationStored(
-                reference,
-                Crc32C(stored),
-                StoreNow.Add(retention),
-                StoreNow));
+            return ValueTask.FromResult(
+                new ZLinkRelocationStored(
+                    reference,
+                    Crc32C(stored),
+                    StoreNow.Add(retention),
+                    StoreNow
+                )
+            );
         }
 
         public ValueTask<ZLinkRelocationStored> PutRelocationAtAsync(
             string reference,
             ReadOnlyMemory<byte> payload,
             TimeSpan retention,
-            CancellationToken cancellationToken = default)
+            CancellationToken cancellationToken = default
+        )
         {
             var stored = payload.ToArray();
-            if (_payloads.TryGetValue(reference, out var current)
-                && !current.AsSpan().SequenceEqual(stored))
+            if (
+                _payloads.TryGetValue(reference, out var current)
+                && !current.AsSpan().SequenceEqual(stored)
+            )
                 throw new InvalidDataException("Relocation reference collision.");
             _payloads[reference] = stored;
-            return ValueTask.FromResult(new ZLinkRelocationStored(
-                reference,
-                Crc32C(stored),
-                StoreNow.Add(retention),
-                StoreNow));
+            return ValueTask.FromResult(
+                new ZLinkRelocationStored(
+                    reference,
+                    Crc32C(stored),
+                    StoreNow.Add(retention),
+                    StoreNow
+                )
+            );
         }
 
         public ValueTask<ZLinkRelocationReadResult> GetRelocationAsync(
             string reference,
-            CancellationToken cancellationToken = default) =>
+            CancellationToken cancellationToken = default
+        ) =>
             ValueTask.FromResult<ZLinkRelocationReadResult>(
                 _payloads.TryGetValue(reference, out var payload)
                     ? new ZLinkRelocationReadResult.Found(payload)
-                    : new ZLinkRelocationReadResult.Missing());
+                    : new ZLinkRelocationReadResult.Missing()
+            );
 
         public ValueTask<ZLinkRelocationRenewResult> RenewRelocationAsync(
             string reference,
             TimeSpan retention,
-            CancellationToken cancellationToken = default) =>
+            CancellationToken cancellationToken = default
+        ) =>
             ValueTask.FromResult<ZLinkRelocationRenewResult>(
                 _payloads.ContainsKey(reference)
                     ? new ZLinkRelocationRenewResult.Renewed(StoreNow.Add(retention), StoreNow)
-                    : new ZLinkRelocationRenewResult.Missing());
+                    : new ZLinkRelocationRenewResult.Missing()
+            );
 
         public ValueTask<ZLinkRelocationDeleteResult> DeleteRelocationAsync(
             string reference,
-            CancellationToken cancellationToken = default) =>
+            CancellationToken cancellationToken = default
+        ) =>
             ValueTask.FromResult(
                 _payloads.Remove(reference)
                     ? ZLinkRelocationDeleteResult.Deleted
-                    : ZLinkRelocationDeleteResult.Missing);
+                    : ZLinkRelocationDeleteResult.Missing
+            );
     }
 
     private sealed class ExampleClientServerLocationStore : LocationStoreContractExample
     {
-        private readonly Dictionary<ZLinkClientServerServerDescriptorKey,
-            ZLinkClientServerServerDescriptor> _rows = [];
+        private readonly Dictionary<
+            ZLinkClientServerServerDescriptorKey,
+            ZLinkClientServerServerDescriptor
+        > _rows = [];
 
         public override ValueTask<ZLinkLocationWriteResult> UpdateClientServerAsync(
             ZLinkClientServerServerDescriptor descriptor,
             ZLinkLocationWriteIntent intent,
-            CancellationToken cancellationToken = default)
+            CancellationToken cancellationToken = default
+        )
         {
             var key = new ZLinkClientServerServerDescriptorKey(
                 descriptor.ChannelName,
-                descriptor.ServerRid);
-            if (_rows.TryGetValue(key, out var current)
-                && descriptor.DescriptorRevision <= current.DescriptorRevision)
+                descriptor.ServerRid
+            );
+            if (
+                _rows.TryGetValue(key, out var current)
+                && descriptor.DescriptorRevision <= current.DescriptorRevision
+            )
             {
                 return ValueTask.FromResult(ZLinkLocationWriteResult.IgnoredStale);
             }
 
             _rows[key] = descriptor;
             return ValueTask.FromResult(
-                ZLinkLocationWriteResult.Stored(descriptor.LifecycleGeneration, StoreNow));
+                ZLinkLocationWriteResult.Stored(descriptor.LifecycleGeneration, StoreNow)
+            );
         }
 
         public override ValueTask<ZLinkLocationWriteStatus> RemoveClientServerAsync(
             ZLinkClientServerServerDescriptorKey key,
             ZLinkLocationOwnerToken owner,
-            CancellationToken cancellationToken = default)
+            CancellationToken cancellationToken = default
+        )
         {
-            if (!_rows.TryGetValue(key, out var current)
+            if (
+                !_rows.TryGetValue(key, out var current)
                 || !string.Equals(current.OwnerId, owner.OwnerId, StringComparison.Ordinal)
-                || current.LeaseGeneration != owner.LeaseGeneration)
+                || current.LeaseGeneration != owner.LeaseGeneration
+            )
             {
                 return ValueTask.FromResult(ZLinkLocationWriteStatus.IgnoredStale);
             }
@@ -962,28 +1101,37 @@ public sealed class AuthorityStoreContracts
             return ValueTask.FromResult(ZLinkLocationWriteStatus.Stored);
         }
 
-        public override ValueTask<ZLinkLocationPage<ZLinkClientServerServerDescriptor>> ListClientServersAsync(
+        public override ValueTask<
+            ZLinkLocationPage<ZLinkClientServerServerDescriptor>
+        > ListClientServersAsync(
             string channelName,
             ZLinkPageRequest page,
-            CancellationToken cancellationToken = default)
+            CancellationToken cancellationToken = default
+        )
         {
             var pageSize = page.PageSize == 0 ? 100 : page.PageSize;
             var offset = page.ContinuationToken is null
                 ? 0
-                : int.Parse(page.ContinuationToken, System.Globalization.CultureInfo.InvariantCulture);
-            var ordered = _rows.Values
-                .Where(descriptor => string.Equals(
-                    descriptor.ChannelName,
-                    channelName,
-                    StringComparison.Ordinal))
+                : int.Parse(
+                    page.ContinuationToken,
+                    System.Globalization.CultureInfo.InvariantCulture
+                );
+            var ordered = _rows
+                .Values.Where(descriptor =>
+                    string.Equals(descriptor.ChannelName, channelName, StringComparison.Ordinal)
+                )
                 .OrderByDescending(descriptor => descriptor.Weight)
                 .ToArray();
             var items = ordered.Skip(offset).Take(pageSize).ToArray();
-            var next = offset + items.Length < ordered.Length
-                ? (offset + items.Length).ToString(System.Globalization.CultureInfo.InvariantCulture)
-                : null;
+            var next =
+                offset + items.Length < ordered.Length
+                    ? (offset + items.Length).ToString(
+                        System.Globalization.CultureInfo.InvariantCulture
+                    )
+                    : null;
             return ValueTask.FromResult(
-                new ZLinkLocationPage<ZLinkClientServerServerDescriptor>(items, next));
+                new ZLinkLocationPage<ZLinkClientServerServerDescriptor>(items, next)
+            );
         }
     }
 }

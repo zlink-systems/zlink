@@ -2,7 +2,8 @@ namespace Zlink.Framework.Runtime.Spots;
 
 internal sealed class ZLinkSpotActorDispatchSubmitter(
     ZLinkSpotSerialExecutor serial,
-    ZLinkSpotActorPacketDispatcher dispatcher)
+    ZLinkSpotActorPacketDispatcher dispatcher
+)
 {
     public async ValueTask Async(
         IZLinkActor actor,
@@ -11,7 +12,8 @@ internal sealed class ZLinkSpotActorDispatchSubmitter(
         Message payload,
         ZLinkSpotExecutionRelocationSeal? relocationSeal,
         ZLinkSpotRelocationActorQueueReservation? queueReservation,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken
+    )
     {
         var ownedPayload = payload.Copy();
 
@@ -22,27 +24,29 @@ internal sealed class ZLinkSpotActorDispatchSubmitter(
                 actor,
                 runtimeState,
                 header,
-                ownedPayload);
-            var execution = queueReservation is not null
-                ? queueReservation.ExecuteAsync(
-                    runtimeState.ActorId,
-                    ct => DispatchAsync(
-                        null!,
-                        state,
-                        ct),
-                    cancellationToken)
+                ownedPayload
+            );
+            var execution =
+                queueReservation is not null
+                    ? queueReservation.ExecuteAsync(
+                        runtimeState.ActorId,
+                        ct => DispatchAsync(null!, state, ct),
+                        cancellationToken
+                    )
                 : relocationSeal is not null
-                ? serial.ExecuteRelocationActorAsync(
-                    relocationSeal,
-                    runtimeState.ActorId,
-                    DispatchAsync,
-                    state,
-                    cancellationToken)
+                    ? serial.ExecuteRelocationActorAsync(
+                        relocationSeal,
+                        runtimeState.ActorId,
+                        DispatchAsync,
+                        state,
+                        cancellationToken
+                    )
                 : serial.ExecuteActorAsync(
                     runtimeState.ActorId,
                     DispatchAsync,
                     state,
-                    cancellationToken);
+                    cancellationToken
+                );
             await execution.ConfigureAwait(false);
         }
         catch
@@ -59,7 +63,8 @@ internal sealed class ZLinkSpotActorDispatchSubmitter(
         Message payload,
         ZLinkSpotExecutionRelocationSeal? relocationSeal,
         ZLinkSpotRelocationActorQueueReservation? queueReservation,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken
+    )
     {
         var ownedPayload = payload.Copy();
 
@@ -67,36 +72,47 @@ internal sealed class ZLinkSpotActorDispatchSubmitter(
         {
             ZLinkFrameworkDebugLog.SpotDiscovery(
                 $"actor_serial_submit_begin actor={runtimeState.ActorId} "
-                + $"correlation_id={header.CorrelationId}");
-            var state = new ActorReplyDispatchState(dispatcher, actor, runtimeState, header, ownedPayload);
-            var execution = queueReservation is not null
-                ? queueReservation.ExecuteAsync(
-                    runtimeState.ActorId,
-                    ct => DispatchForReplyAsync(
-                        null!,
-                        state,
-                        ct),
-                    cancellationToken)
+                    + $"correlation_id={header.CorrelationId}"
+            );
+            var state = new ActorReplyDispatchState(
+                dispatcher,
+                actor,
+                runtimeState,
+                header,
+                ownedPayload
+            );
+            var execution =
+                queueReservation is not null
+                    ? queueReservation.ExecuteAsync(
+                        runtimeState.ActorId,
+                        ct => DispatchForReplyAsync(null!, state, ct),
+                        cancellationToken
+                    )
                 : relocationSeal is not null
-                ? serial.ExecuteRelocationActorAsync(
-                    relocationSeal,
-                    runtimeState.ActorId,
-                    DispatchForReplyAsync,
-                    state,
-                    cancellationToken)
+                    ? serial.ExecuteRelocationActorAsync(
+                        relocationSeal,
+                        runtimeState.ActorId,
+                        DispatchForReplyAsync,
+                        state,
+                        cancellationToken
+                    )
                 : serial.ExecuteActorAsync(
                     runtimeState.ActorId,
                     DispatchForReplyAsync,
                     state,
-                    cancellationToken);
+                    cancellationToken
+                );
             await execution.ConfigureAwait(false);
 
-            var reply = state.Reply
-                         ?? throw new InvalidOperationException(
-                       $"SPOT actor packet reply for '{header.Name}' was null.");
+            var reply =
+                state.Reply
+                ?? throw new InvalidOperationException(
+                    $"SPOT actor packet reply for '{header.Name}' was null."
+                );
             ZLinkFrameworkDebugLog.SpotDiscovery(
                 $"actor_serial_submit_completed actor={runtimeState.ActorId} "
-                + $"correlation_id={header.CorrelationId}");
+                    + $"correlation_id={header.CorrelationId}"
+            );
             return reply;
         }
         catch
@@ -109,7 +125,8 @@ internal sealed class ZLinkSpotActorDispatchSubmitter(
     private static async ValueTask DispatchAsync(
         ZLinkSpotActivation _,
         ActorDispatchState state,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken
+    )
     {
         using var currentPayload = state.Payload;
         // The Actor mailbox owns the outer turn, but the Spot serial executor
@@ -118,28 +135,33 @@ internal sealed class ZLinkSpotActorDispatchSubmitter(
         // so lifecycle calls such as DestroyActorAsync can defer native
         // terminal work until the outer delivery returns.
         using var dispatch = state.RuntimeState.EnterForwardedDispatchExecution();
-        await state.Dispatcher.DispatchAsync(
+        await state
+            .Dispatcher.DispatchAsync(
                 state.Actor,
                 state.RuntimeState,
                 state.Header,
                 currentPayload,
-                cancellationToken)
+                cancellationToken
+            )
             .ConfigureAwait(false);
     }
 
     private static async ValueTask DispatchForReplyAsync(
         ZLinkSpotActivation _,
         ActorReplyDispatchState state,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken
+    )
     {
         using var currentPayload = state.Payload;
         using var dispatch = state.RuntimeState.EnterForwardedDispatchExecution();
-        state.Reply = await state.Dispatcher.DispatchForReplyAsync(
+        state.Reply = await state
+            .Dispatcher.DispatchForReplyAsync(
                 state.Actor,
                 state.RuntimeState,
                 state.Header,
                 currentPayload,
-                cancellationToken)
+                cancellationToken
+            )
             .ConfigureAwait(false);
     }
 
@@ -148,7 +170,8 @@ internal sealed class ZLinkSpotActorDispatchSubmitter(
         IZLinkActor actor,
         ZLinkActorRuntimeState runtimeState,
         ZlinkStreamHeader header,
-        Message payload)
+        Message payload
+    )
     {
         public ZLinkSpotActorPacketDispatcher Dispatcher { get; } = dispatcher;
 
@@ -166,7 +189,8 @@ internal sealed class ZLinkSpotActorDispatchSubmitter(
         IZLinkActor actor,
         ZLinkActorRuntimeState runtimeState,
         ZlinkStreamHeader header,
-        Message payload)
+        Message payload
+    )
     {
         public ZLinkSpotActorPacketDispatcher Dispatcher { get; } = dispatcher;
 

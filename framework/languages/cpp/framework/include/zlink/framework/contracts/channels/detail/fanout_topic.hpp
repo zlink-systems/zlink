@@ -18,9 +18,8 @@ inline bool is_reserved_fanout_topic (std::string_view topic) noexcept
 inline void require_public_fanout_topic (std::string_view topic)
 {
     if (is_reserved_fanout_topic (topic)) {
-        throw framework_exception_t (
-          framework_error_kind_t::protocol_error,
-          "fanout topic is reserved for framework liveness");
+        throw framework_exception_t (framework_error_kind_t::protocol_error,
+                                     "fanout topic is reserved for framework liveness");
     }
 }
 

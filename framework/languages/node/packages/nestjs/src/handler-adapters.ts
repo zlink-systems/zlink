@@ -12,22 +12,26 @@ import type { ZLinkNestManualHandlerOptions } from './contracts';
 import type { ZLinkNestHandlerMetadata } from './handler-metadata';
 import type { DiscoveredNestProvider } from './provider-discovery';
 import { currentNestDispatchContext } from './dispatch-scope';
-import {
-  createNestHandlerInstance,
-  disposeNestOwnedHandler
-} from './providers';
+import { createNestHandlerInstance, disposeNestOwnedHandler } from './providers';
 
 export function createDiscoveredRequestHandlers(
   providerRefs: readonly DiscoveredNestProvider[],
   handlerGroups: readonly string[] | undefined,
   moduleRef: ModuleRef
 ): NonNullable<ZLinkChannelOptions['requestHandlers']> {
-  return createDiscoveredHandlerRegistrations(providerRefs, handlerGroups, 'request', (ref, metadata) => ({
-    async handle(payload: Buffer, context: ZLinkMessageContext) {
-      const result = await invokeDiscoveredHandler(moduleRef, ref, metadata, payload, context);
-      return metadata.encodeResult === undefined ? result : metadata.encodeResult(result, context);
-    }
-  }));
+  return createDiscoveredHandlerRegistrations(
+    providerRefs,
+    handlerGroups,
+    'request',
+    (ref, metadata) => ({
+      async handle(payload: Buffer, context: ZLinkMessageContext) {
+        const result = await invokeDiscoveredHandler(moduleRef, ref, metadata, payload, context);
+        return metadata.encodeResult === undefined
+          ? result
+          : metadata.encodeResult(result, context);
+      }
+    })
+  );
 }
 
 export function createDiscoveredSendHandlers(
@@ -35,11 +39,16 @@ export function createDiscoveredSendHandlers(
   handlerGroups: readonly string[] | undefined,
   moduleRef: ModuleRef
 ): NonNullable<NonNullable<ZLinkChannelOptions['routeMesh']>['sendHandlers']> {
-  return createDiscoveredHandlerRegistrations(providerRefs, handlerGroups, 'send', (ref, metadata) => ({
-    async handle(payload: Buffer, context: ZLinkRouteMessageContext) {
-      await invokeDiscoveredHandler(moduleRef, ref, metadata, payload, context);
-    }
-  }));
+  return createDiscoveredHandlerRegistrations(
+    providerRefs,
+    handlerGroups,
+    'send',
+    (ref, metadata) => ({
+      async handle(payload: Buffer, context: ZLinkRouteMessageContext) {
+        await invokeDiscoveredHandler(moduleRef, ref, metadata, payload, context);
+      }
+    })
+  );
 }
 
 export function createDiscoveredChannelSendHandlers(
@@ -47,11 +56,16 @@ export function createDiscoveredChannelSendHandlers(
   handlerGroups: readonly string[] | undefined,
   moduleRef: ModuleRef
 ): NonNullable<ZLinkChannelOptions['sendHandlers']> {
-  return createDiscoveredHandlerRegistrations(providerRefs, handlerGroups, 'send', (ref, metadata) => ({
-    async handle(payload: Buffer, context: ZLinkMessageContext) {
-      await invokeDiscoveredHandler(moduleRef, ref, metadata, payload, context);
-    }
-  }));
+  return createDiscoveredHandlerRegistrations(
+    providerRefs,
+    handlerGroups,
+    'send',
+    (ref, metadata) => ({
+      async handle(payload: Buffer, context: ZLinkMessageContext) {
+        await invokeDiscoveredHandler(moduleRef, ref, metadata, payload, context);
+      }
+    })
+  );
 }
 
 export function createDiscoveredPublishHandlers(
@@ -59,52 +73,75 @@ export function createDiscoveredPublishHandlers(
   handlerGroups: readonly string[] | undefined,
   moduleRef: ModuleRef
 ): NonNullable<ZLinkChannelOptions['publishHandlers']> {
-  return createDiscoveredHandlerRegistrations(providerRefs, handlerGroups, 'publish', (ref, metadata) => ({
-    async handle(payload: Buffer, context: ZLinkPublishMessageContext) {
-      await invokeDiscoveredHandler(moduleRef, ref, metadata, payload, context);
-    }
-  }));
+  return createDiscoveredHandlerRegistrations(
+    providerRefs,
+    handlerGroups,
+    'publish',
+    (ref, metadata) => ({
+      async handle(payload: Buffer, context: ZLinkPublishMessageContext) {
+        await invokeDiscoveredHandler(moduleRef, ref, metadata, payload, context);
+      }
+    })
+  );
 }
 
 export function createManualRequestHandlers(
   handlerTypes: readonly ZLinkNestManualHandlerOptions[] | undefined,
   moduleRef: ModuleRef
 ): NonNullable<ZLinkChannelOptions['requestHandlers']> {
-  return createManualHandlerRegistrations<ZLinkMessageContext, unknown>(handlerTypes, moduleRef, (result) => result);
+  return createManualHandlerRegistrations<ZLinkMessageContext, unknown>(
+    handlerTypes,
+    moduleRef,
+    (result) => result
+  );
 }
 
 export function createManualPublishHandlers(
   handlerTypes: readonly ZLinkNestManualHandlerOptions[] | undefined,
   moduleRef: ModuleRef
 ): NonNullable<ZLinkChannelOptions['publishHandlers']> {
-  return createManualHandlerRegistrations<ZLinkPublishMessageContext, void>(handlerTypes, moduleRef, () => undefined);
+  return createManualHandlerRegistrations<ZLinkPublishMessageContext, void>(
+    handlerTypes,
+    moduleRef,
+    () => undefined
+  );
 }
 
 export function createManualSendHandlers(
   handlerTypes: readonly ZLinkNestManualHandlerOptions[] | undefined,
   moduleRef: ModuleRef
 ): NonNullable<ZLinkChannelOptions['sendHandlers']> {
-  return createManualHandlerRegistrations<ZLinkMessageContext, void>(handlerTypes, moduleRef, () => undefined);
+  return createManualHandlerRegistrations<ZLinkMessageContext, void>(
+    handlerTypes,
+    moduleRef,
+    () => undefined
+  );
 }
 
 export function createManualRouteSendHandlers(
   handlerTypes: readonly ZLinkNestManualHandlerOptions[] | undefined,
   moduleRef: ModuleRef
 ): NonNullable<NonNullable<ZLinkChannelOptions['routeMesh']>['sendHandlers']> {
-  return createManualHandlerRegistrations<ZLinkRouteMessageContext, void>(handlerTypes, moduleRef, () => undefined);
+  return createManualHandlerRegistrations<ZLinkRouteMessageContext, void>(
+    handlerTypes,
+    moduleRef,
+    () => undefined
+  );
 }
 
 export function createManualRouteRequestHandlers(
   handlerTypes: readonly ZLinkNestManualHandlerOptions[] | undefined,
   moduleRef: ModuleRef
 ): NonNullable<NonNullable<ZLinkChannelOptions['routeMesh']>['requestHandlers']> {
-  return createManualHandlerRegistrations<ZLinkRouteMessageContext, unknown>(handlerTypes, moduleRef, (result) => result);
+  return createManualHandlerRegistrations<ZLinkRouteMessageContext, unknown>(
+    handlerTypes,
+    moduleRef,
+    (result) => result
+  );
 }
 
 type ManualHandlerContext =
-  | ZLinkMessageContext
-  | ZLinkRouteMessageContext
-  | ZLinkPublishMessageContext;
+  ZLinkMessageContext | ZLinkRouteMessageContext | ZLinkPublishMessageContext;
 
 function createManualHandlerRegistrations<TContext extends ManualHandlerContext, TResult>(
   handlerTypes: readonly ZLinkNestManualHandlerOptions[] | undefined,
@@ -120,7 +157,9 @@ function createManualHandlerRegistrations<TContext extends ManualHandlerContext,
     packetName: registration.packetName,
     handler: {
       async handle(payload: Buffer, context: TContext): Promise<TResult> {
-        return result(await invokeManualHandler(moduleRef, registration.handlerType, payload, context));
+        return result(
+          await invokeManualHandler(moduleRef, registration.handlerType, payload, context)
+        );
       }
     }
   }));
@@ -149,7 +188,10 @@ function createDiscoveredHandlerDescriptors(
   }
   const groups = new Set(handlerGroups);
   const seen = new Map<string, InjectionToken>();
-  const selected: Array<{ readonly ref: DiscoveredNestProvider; readonly metadata: ZLinkNestHandlerMetadata }> = [];
+  const selected: Array<{
+    readonly ref: DiscoveredNestProvider;
+    readonly metadata: ZLinkNestHandlerMetadata;
+  }> = [];
   for (const ref of providerRefs) {
     const metadata = ref.metadata;
     if (metadata.kind !== kind || !groups.has(metadata.groupName)) {
@@ -222,12 +264,10 @@ async function resolveHandlerInstance(
   if (currentContextId === undefined) {
     moduleRef.registerRequestByContextId({ zlinkContext: context }, contextId);
   }
-  return await createNestHandlerInstance(
-    moduleRef,
-    contextId,
-    new Map(),
-    handlerType
-  ) as Record<string, unknown>;
+  return (await createNestHandlerInstance(moduleRef, contextId, new Map(), handlerType)) as Record<
+    string,
+    unknown
+  >;
 }
 
 function decodePayload(
@@ -250,7 +290,9 @@ function decodePayload(
 function parseWireJson(payload: string): unknown {
   return JSON.parse(payload, (key, value) => {
     if (key === '__proto__' || key === 'constructor' || key === 'prototype') {
-      throw new framework.ZLinkConfigurationException(`NestJS handler JSON key '${key}' is not allowed.`);
+      throw new framework.ZLinkConfigurationException(
+        `NestJS handler JSON key '${key}' is not allowed.`
+      );
     }
     return value;
   });

@@ -1,16 +1,16 @@
 package systems.zlink.framework.messaging;
 
-import java.util.Objects;
-import java.util.concurrent.CompletableFuture;
-import java.util.concurrent.atomic.AtomicReference;
 import systems.zlink.framework.ZLinkEncodedPayload;
 import systems.zlink.framework.ZLinkMessageSerializer;
 import systems.zlink.framework.errors.ZLinkFrameworkErrorKind;
 import systems.zlink.framework.errors.ZLinkFrameworkException;
 
+import java.util.Objects;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.atomic.AtomicReference;
+
 public final class ZLinkMessage {
-    private static final ZLinkEncodedPayload EMPTY_PAYLOAD =
-        ZLinkEncodedPayload.from(new byte[0]);
+    private static final ZLinkEncodedPayload EMPTY_PAYLOAD = ZLinkEncodedPayload.from(new byte[0]);
 
     private final Object value;
     private final ZLinkEncodedPayload encodedPayload;
@@ -18,14 +18,14 @@ public final class ZLinkMessage {
     private final Class<?> declaredType;
     private final boolean empty;
     private final AtomicReference<CompletableFuture<DecodeOutcome>> decoded =
-        new AtomicReference<>();
+            new AtomicReference<>();
 
     private ZLinkMessage(
-        Object value,
-        ZLinkEncodedPayload encodedPayload,
-        ZLinkMessageSerializer serializer,
-        Class<?> declaredType,
-        boolean empty) {
+            Object value,
+            ZLinkEncodedPayload encodedPayload,
+            ZLinkMessageSerializer serializer,
+            Class<?> declaredType,
+            boolean empty) {
         this.value = value;
         this.encodedPayload = encodedPayload;
         this.serializer = serializer;
@@ -42,40 +42,34 @@ public final class ZLinkMessage {
             return message;
         }
         return new ZLinkMessage(
-            Objects.requireNonNull(value, "value"),
-            null,
-            null,
-            value.getClass(),
-            false);
+                Objects.requireNonNull(value, "value"), null, null, value.getClass(), false);
     }
 
     /**
      * Wraps a value and preserves the type declared by the caller for outbound codec selection.
      *
-     * @throws IllegalArgumentException when {@code value} is not an instance of
-     *     {@code declaredType}
+     * @throws IllegalArgumentException when {@code value} is not an instance of {@code
+     *     declaredType}
      */
     public static ZLinkMessage of(Object value, Class<?> declaredType) {
         Objects.requireNonNull(value, "value");
         Objects.requireNonNull(declaredType, "declaredType");
         if (!declaredType.isInstance(value)) {
             throw new IllegalArgumentException(
-                "value of type " + value.getClass().getName()
-                    + " is not an instance of declared type "
-                    + declaredType.getName());
+                    "value of type "
+                            + value.getClass().getName()
+                            + " is not an instance of declared type "
+                            + declaredType.getName());
         }
         return new ZLinkMessage(value, null, null, declaredType, false);
     }
 
-    public static ZLinkMessage fromEncoded(ZLinkEncodedPayload payload, ZLinkMessageSerializer serializer) {
+    public static ZLinkMessage fromEncoded(
+            ZLinkEncodedPayload payload, ZLinkMessageSerializer serializer) {
         Objects.requireNonNull(payload, "payload");
         Objects.requireNonNull(serializer, "serializer");
         return new ZLinkMessage(
-            null,
-            payload,
-            serializer,
-            ZLinkMessage.class,
-            payload.bytes().length == 0);
+                null, payload, serializer, ZLinkMessage.class, payload.bytes().length == 0);
     }
 
     public boolean isEmpty() {
@@ -99,12 +93,12 @@ public final class ZLinkMessage {
             CompletableFuture<DecodeOutcome> candidate = new CompletableFuture<>();
             if (decoded.compareAndSet(null, candidate)) {
                 try {
-                    ZLinkEncodedPayload encoded = value == null
-                        ? encodedPayload
-                        : serializerForEncode().serialize(value, declaredType);
-                    candidate.complete(new Decoded(
-                        type,
-                        serializerForDecode().deserialize(encoded, type)));
+                    ZLinkEncodedPayload encoded =
+                            value == null
+                                    ? encodedPayload
+                                    : serializerForEncode().serialize(value, declaredType);
+                    candidate.complete(
+                            new Decoded(type, serializerForDecode().deserialize(encoded, type)));
                 } catch (Throwable failure) {
                     candidate.complete(new DecodeFailed(failure));
                 }
@@ -120,9 +114,11 @@ public final class ZLinkMessage {
         Decoded materialized = (Decoded) outcome;
         if (materialized.type() != type) {
             throw new ZLinkFrameworkException(
-                ZLinkFrameworkErrorKind.TYPE_MISMATCH,
-                "Message was decoded as " + materialized.type().getName()
-                    + " and cannot be decoded again as " + type.getName());
+                    ZLinkFrameworkErrorKind.TYPE_MISMATCH,
+                    "Message was decoded as "
+                            + materialized.type().getName()
+                            + " and cannot be decoded again as "
+                            + type.getName());
         }
         return type.cast(materialized.value());
     }
@@ -157,17 +153,12 @@ public final class ZLinkMessage {
             throw error;
         }
         return new ZLinkFrameworkException(
-            ZLinkFrameworkErrorKind.PROTOCOL_ERROR,
-            "message decode failed",
-            failure);
+                ZLinkFrameworkErrorKind.PROTOCOL_ERROR, "message decode failed", failure);
     }
 
-    private sealed interface DecodeOutcome permits Decoded, DecodeFailed {
-    }
+    private sealed interface DecodeOutcome permits Decoded, DecodeFailed {}
 
-    private record Decoded(Class<?> type, Object value) implements DecodeOutcome {
-    }
+    private record Decoded(Class<?> type, Object value) implements DecodeOutcome {}
 
-    private record DecodeFailed(Throwable failure) implements DecodeOutcome {
-    }
+    private record DecodeFailed(Throwable failure) implements DecodeOutcome {}
 }

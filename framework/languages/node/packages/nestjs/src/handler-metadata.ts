@@ -31,10 +31,7 @@ export interface ZLinkNestHandlerMetadata {
 }
 
 export type ZLinkNestSpotActorHandlerKind =
-  | 'spotActorSend'
-  | 'spotActorRequest'
-  | 'entrySpotActorSend'
-  | 'entrySpotActorRequest';
+  'spotActorSend' | 'spotActorRequest' | 'entrySpotActorSend' | 'entrySpotActorRequest';
 
 export interface ZLinkNestSpotActorHandlerMetadata {
   readonly kind: ZLinkNestSpotActorHandlerKind;
@@ -47,10 +44,7 @@ export interface ZLinkNestSpotActorHandlerMetadata {
 }
 
 export type ZLinkNestSpotHandlerKind =
-  | 'spotPacket'
-  | 'spotSubscription'
-  | 'entrySpotPacket'
-  | 'entrySpotSubscription';
+  'spotPacket' | 'spotSubscription' | 'entrySpotPacket' | 'entrySpotSubscription';
 
 export interface ZLinkNestSpotHandlerMetadata {
   readonly kind: ZLinkNestSpotHandlerKind;
@@ -72,9 +66,15 @@ export interface ZLinkNestSpotTimerHandlerMetadata {
 }
 
 const handlerMetadata = new Map<InjectionToken, readonly ZLinkNestHandlerMetadata[]>();
-const spotActorHandlerMetadata = new Map<InjectionToken, readonly ZLinkNestSpotActorHandlerMetadata[]>();
+const spotActorHandlerMetadata = new Map<
+  InjectionToken,
+  readonly ZLinkNestSpotActorHandlerMetadata[]
+>();
 const spotHandlerMetadata = new Map<InjectionToken, readonly ZLinkNestSpotHandlerMetadata[]>();
-const spotTimerHandlerMetadata = new Map<InjectionToken, readonly ZLinkNestSpotTimerHandlerMetadata[]>();
+const spotTimerHandlerMetadata = new Map<
+  InjectionToken,
+  readonly ZLinkNestSpotTimerHandlerMetadata[]
+>();
 const spotTimerHandlerTokens = new Set<unknown>();
 
 export function appendNestHandlerMetadata(
@@ -101,7 +101,10 @@ export function readNestHandlerMetadata(
   }
   let reflected: readonly ZLinkNestHandlerMetadata[] | undefined;
   if (typeof handlerToken === 'function') {
-    const metadataBySymbol = handlerToken as unknown as Record<symbol, readonly ZLinkNestHandlerMetadata[]>;
+    const metadataBySymbol = handlerToken as unknown as Record<
+      symbol,
+      readonly ZLinkNestHandlerMetadata[]
+    >;
     reflected = metadataBySymbol[ZLINK_NEST_HANDLER_GROUP];
   }
   return handlerMetadata.get(handlerToken) ?? reflected ?? [];
@@ -118,7 +121,7 @@ export function appendNestSpotActorHandlerMetadata(
 export function readNestSpotActorHandlerMetadata(
   handlerToken: InjectionToken | undefined
 ): readonly ZLinkNestSpotActorHandlerMetadata[] {
-  return handlerToken === undefined ? [] : spotActorHandlerMetadata.get(handlerToken) ?? [];
+  return handlerToken === undefined ? [] : (spotActorHandlerMetadata.get(handlerToken) ?? []);
 }
 
 export function appendNestSpotHandlerMetadata(
@@ -132,7 +135,7 @@ export function appendNestSpotHandlerMetadata(
 export function readNestSpotHandlerMetadata(
   handlerToken: InjectionToken | undefined
 ): readonly ZLinkNestSpotHandlerMetadata[] {
-  return handlerToken === undefined ? [] : spotHandlerMetadata.get(handlerToken) ?? [];
+  return handlerToken === undefined ? [] : (spotHandlerMetadata.get(handlerToken) ?? []);
 }
 
 export function markNestSpotTimerHandler(handlerToken: InjectionToken): void {
@@ -150,7 +153,7 @@ export function appendNestSpotTimerHandlerMetadata(
 export function readNestSpotTimerHandlerMetadata(
   handlerToken: InjectionToken | undefined
 ): readonly ZLinkNestSpotTimerHandlerMetadata[] {
-  return handlerToken === undefined ? [] : spotTimerHandlerMetadata.get(handlerToken) ?? [];
+  return handlerToken === undefined ? [] : (spotTimerHandlerMetadata.get(handlerToken) ?? []);
 }
 
 export function hasNestSpotTimerHandlerMetadata(handlerToken: InjectionToken | undefined): boolean {

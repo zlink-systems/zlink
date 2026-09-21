@@ -2,11 +2,11 @@ namespace Zlink.Framework.Runtime.Locations;
 
 internal static class ZLinkLocationStorePages
 {
-    internal static async ValueTask<IReadOnlyList<ZLinkMeshNodeDescriptor>>
-        ListAllMeshNodesAsync(
-            this IZLinkLocationRepository store,
-            string meshName,
-            CancellationToken cancellationToken = default)
+    internal static async ValueTask<IReadOnlyList<ZLinkMeshNodeDescriptor>> ListAllMeshNodesAsync(
+        this IZLinkLocationRepository store,
+        string meshName,
+        CancellationToken cancellationToken = default
+    )
     {
         for (var attempt = 0; attempt < 4; attempt++)
         {
@@ -16,10 +16,12 @@ internal static class ZLinkLocationStorePages
             {
                 do
                 {
-                    var page = await store.ListMeshNodesAsync(
+                    var page = await store
+                        .ListMeshNodesAsync(
                             meshName,
                             new ZLinkPageRequest(1000, continuationToken),
-                            cancellationToken)
+                            cancellationToken
+                        )
                         .ConfigureAwait(false);
                     rows.AddRange(page.Items);
                     continuationToken = page.ContinuationToken;
@@ -27,8 +29,7 @@ internal static class ZLinkLocationStorePages
 
                 return rows;
             }
-            catch (ZLinkLocationSnapshotExpiredException)
-                when (attempt < 3)
+            catch (ZLinkLocationSnapshotExpiredException) when (attempt < 3)
             {
                 // The discarded rows belong to an expired snapshot. The
                 // retry starts from a new provider snapshot.

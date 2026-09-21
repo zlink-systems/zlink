@@ -38,18 +38,15 @@ class location_runtime_t;
 class application_dispatch_terminal_owner_t final
 {
   public:
-    application_dispatch_terminal_owner_t (
-      std::shared_ptr<detail::mesh_node_runtime_t> node,
-      std::function<void ()> complete_stateful_dispatch,
-      std::function<void ()> release_mailbox_reservation);
+    application_dispatch_terminal_owner_t (std::shared_ptr<detail::mesh_node_runtime_t> node,
+                                           std::function<void ()> complete_stateful_dispatch,
+                                           std::function<void ()> release_mailbox_reservation);
     ~application_dispatch_terminal_owner_t () noexcept;
-    application_dispatch_terminal_owner_t (
-      application_dispatch_terminal_owner_t &&other) noexcept;
+    application_dispatch_terminal_owner_t (application_dispatch_terminal_owner_t &&other) noexcept;
 
-    application_dispatch_terminal_owner_t (
-      const application_dispatch_terminal_owner_t &) = delete;
-    application_dispatch_terminal_owner_t &operator= (
-      const application_dispatch_terminal_owner_t &) = delete;
+    application_dispatch_terminal_owner_t (const application_dispatch_terminal_owner_t &) = delete;
+    application_dispatch_terminal_owner_t &
+    operator= (const application_dispatch_terminal_owner_t &) = delete;
 
     void settle () noexcept;
 
@@ -62,8 +59,7 @@ class application_dispatch_terminal_owner_t final
     std::function<void ()> _release_mailbox_reservation;
 };
 
-class mesh_node_host_service_t final : public hosted_service_t,
-                                       public hosted_service_lifecycle_t
+class mesh_node_host_service_t final : public hosted_service_t, public hosted_service_lifecycle_t
 {
   public:
     mesh_node_host_service_t (
@@ -86,74 +82,74 @@ class mesh_node_host_service_t final : public hosted_service_t,
     void stop () noexcept override;
     std::vector<std::shared_ptr<detail::mesh_node_runtime_t>> nodes () const;
     actor_manager_t actor_manager ();
-    zlink::submit_result_t submit_local_node_send (
-      const std::shared_ptr<detail::mesh_node_runtime_t> &node,
-      std::vector<zlink::message_t> parts);
+    zlink::submit_result_t
+    submit_local_node_send (const std::shared_ptr<detail::mesh_node_runtime_t> &node,
+                            std::vector<zlink::message_t> parts);
     void seal_application_dispatch () noexcept override;
     bool wait_for_accepted_callbacks_until (
       std::chrono::steady_clock::time_point deadline) noexcept override;
-    bool publish_descriptor_state (
-      framework_runtime_state_t state) noexcept override;
+    bool publish_descriptor_state (framework_runtime_state_t state) noexcept override;
     void visit_relocation_nodes (
-      const std::function<void (
-        const std::shared_ptr<detail::mesh_node_runtime_t> &)> &visitor)
+      const std::function<void (const std::shared_ptr<detail::mesh_node_runtime_t> &)> &visitor)
       const override;
     bool republish_after_store_recovery ();
 
   private:
     struct actor_destroy_callback_gate_t;
 
-    task_t<spot_create_result_t> create_user_spot (
-      const std::shared_ptr<detail::mesh_node_runtime_t> &source,
-      bool exclusive,
-      std::optional<spot_id_t> spot_id,
-      std::string stable_type,
-      std::optional<std::string> mesh_name,
-      std::optional<message_t> request,
-      std::chrono::milliseconds timeout);
-    task_t<std::optional<spot_ref_t>> find_user_spot (
-      spot_id_t spot_id);
-    task_t<bool> close_user_spot (
-      const std::shared_ptr<detail::mesh_node_runtime_t> &source,
-      spot_ref_t spot);
-    task_t<actor_create_result_t> create_actor (
-      bool exclusive,
-      actor_id_t actor_id,
-      std::string stable_type,
-      std::optional<std::string> mesh_name,
-      std::optional<message_t> request,
-      std::chrono::milliseconds timeout,
-      creation_operation_identity_t operation);
-    task_t<actor_create_result_t> complete_remote_actor_creation (
-      std::shared_ptr<detail::mesh_node_runtime_t> source,
-      mesh_node_descriptor_t target,
-      protocol::actor_create_header_t command,
-      std::chrono::milliseconds timeout,
-      actor_id_t actor_id,
-      std::string stable_type,
-      object_creation_key_t reserve_key,
-      object_reservation_fence_t fence,
-      creation_operation_identity_t operation);
-    task_t<std::optional<actor_ref_t>> find_actor (
-      actor_id_t actor_id);
-    task_t<std::optional<spot_ref_t>> find_actor_spot (
-      actor_id_t actor_id);
+    task_t<spot_create_result_t>
+    create_user_spot (const std::shared_ptr<detail::mesh_node_runtime_t> &source,
+                      bool exclusive,
+                      std::optional<spot_id_t> spot_id,
+                      std::string stable_type,
+                      std::optional<std::string> mesh_name,
+                      std::optional<message_t> request,
+                      std::chrono::milliseconds timeout);
+    task_t<std::optional<spot_ref_t>> find_user_spot (spot_id_t spot_id);
+    task_t<bool> close_user_spot (const std::shared_ptr<detail::mesh_node_runtime_t> &source,
+                                  spot_ref_t spot);
+    task_t<actor_create_result_t> create_actor (bool exclusive,
+                                                actor_id_t actor_id,
+                                                std::string stable_type,
+                                                std::optional<std::string> mesh_name,
+                                                std::optional<message_t> request,
+                                                std::chrono::milliseconds timeout,
+                                                creation_operation_identity_t operation);
+    task_t<actor_create_result_t>
+    complete_remote_actor_creation (std::shared_ptr<detail::mesh_node_runtime_t> source,
+                                    mesh_node_descriptor_t target,
+                                    protocol::actor_create_header_t command,
+                                    std::chrono::milliseconds timeout,
+                                    actor_id_t actor_id,
+                                    std::string stable_type,
+                                    object_creation_key_t reserve_key,
+                                    object_reservation_fence_t fence,
+                                    creation_operation_identity_t operation);
+    task_t<std::optional<actor_ref_t>> find_actor (actor_id_t actor_id);
+    task_t<std::optional<spot_ref_t>> find_actor_spot (actor_id_t actor_id);
     result_t<void> finalize_local_actor_destroy (const actor_ref_t &actor);
     task_t<bool> destroy_actor (actor_ref_t actor);
 
-    static void dispatch_application (
-      const std::shared_ptr<detail::mesh_node_runtime_t> &node,
-      const std::shared_ptr<detail::mesh_node_builder_state_t> &registration,
-      const host::ready_record_t &owner, const host::receive_record_t &record,
-      std::vector<zlink::message_t> parts, bool reject_only,
-      service_provider_t *services, serializer_registry_t *serializers,
-      const handler_registry_t *filters, const dispatch_options_t &dispatch_options);
-    static void drain_application_owner (
-      const std::shared_ptr<detail::mesh_node_runtime_t> &node,
-      const std::shared_ptr<detail::mesh_node_builder_state_t> &registration,
-      const std::string &owner, bool reject_only,
-      service_provider_t *services, serializer_registry_t *serializers,
-      const handler_registry_t *filters, const dispatch_options_t &dispatch_options);
+    static void
+    dispatch_application (const std::shared_ptr<detail::mesh_node_runtime_t> &node,
+                          const std::shared_ptr<detail::mesh_node_builder_state_t> &registration,
+                          const host::ready_record_t &owner,
+                          const host::receive_record_t &record,
+                          std::vector<zlink::message_t> parts,
+                          bool reject_only,
+                          service_provider_t *services,
+                          serializer_registry_t *serializers,
+                          const handler_registry_t *filters,
+                          const dispatch_options_t &dispatch_options);
+    static void
+    drain_application_owner (const std::shared_ptr<detail::mesh_node_runtime_t> &node,
+                             const std::shared_ptr<detail::mesh_node_builder_state_t> &registration,
+                             const std::string &owner,
+                             bool reject_only,
+                             service_provider_t *services,
+                             serializer_registry_t *serializers,
+                             const handler_registry_t *filters,
+                             const dispatch_options_t &dispatch_options);
 
     std::vector<std::shared_ptr<detail::mesh_node_builder_state_t>> _registrations;
     serializer_registry_t *_serializers;

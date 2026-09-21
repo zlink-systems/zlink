@@ -3,7 +3,7 @@ namespace Zlink.Framework.Runtime.Spots;
 internal enum ZLinkSpotActorHandlerSurface
 {
     EntrySpot,
-    UserSpot
+    UserSpot,
 }
 
 internal sealed class ZLinkSpotActorPacketDescriptor
@@ -65,24 +65,24 @@ internal sealed class ZLinkSpotActorHandlerRegistry
     private readonly Dictionary<Type, ZLinkSpotActorLifecycleDescriptor> _joined = [];
     private readonly Dictionary<Type, ZLinkSpotActorLifecycleDescriptor> _left = [];
 
-    private readonly Dictionary<(ZLinkMessageKind Kind, Type ActorType, string Name), ZLinkSpotActorPacketDescriptor>
-        _packets = [];
+    private readonly Dictionary<
+        (ZLinkMessageKind Kind, Type ActorType, string Name),
+        ZLinkSpotActorPacketDescriptor
+    > _packets = [];
 
     private readonly ZLinkSpotActorHandlerSurface _surface;
     private bool _bound;
 
     public ZLinkSpotActorHandlerRegistry(
         ZLinkSpotActorHandlerSurface surface,
-        Type? expectedSpotType = null)
+        Type? expectedSpotType = null
+    )
     {
         _surface = surface;
         _expectedSpotType = expectedSpotType;
     }
 
-    public void AddPacket(
-        Type handlerType,
-        Type actorType,
-        string? packetName)
+    public void AddPacket(Type handlerType, Type actorType, string? packetName)
     {
         EnsureNotBound();
         var descriptor = ZLinkSpotActorHandlerDescriptorFactory.CreatePacket(
@@ -90,7 +90,8 @@ internal sealed class ZLinkSpotActorHandlerRegistry
             _expectedSpotType,
             handlerType,
             actorType,
-            packetName);
+            packetName
+        );
 
         AddPacketDescriptor(descriptor);
     }
@@ -102,22 +103,27 @@ internal sealed class ZLinkSpotActorHandlerRegistry
             _surface,
             _expectedSpotType,
             handlerType,
-            packetName);
+            packetName
+        );
 
-        if (descriptor.Packet is { } packet) AddPacketDescriptor(packet);
+        if (descriptor.Packet is { } packet)
+            AddPacketDescriptor(packet);
     }
 
     private void AddPacketDescriptor(ZLinkSpotActorPacketDescriptor descriptor)
     {
         var key = (descriptor.Kind, descriptor.ActorType, descriptor.MessageName);
-        if (_packets.TryGetValue(key, out var existing)
+        if (
+            _packets.TryGetValue(key, out var existing)
             && existing.HandlerType == descriptor.HandlerType
-            && existing.MessageType == descriptor.MessageType)
+            && existing.MessageType == descriptor.MessageType
+        )
             return;
 
         if (existing is not null)
             throw new ZLinkConfigurationException(
-                $"Actor packet '{descriptor.MessageName}' for '{descriptor.ActorType}' is already registered.");
+                $"Actor packet '{descriptor.MessageName}' for '{descriptor.ActorType}' is already registered."
+            );
 
         _packets.Add(key, descriptor);
     }
@@ -125,17 +131,24 @@ internal sealed class ZLinkSpotActorHandlerRegistry
     public void Bind()
     {
         if (_expectedSpotType is not null)
-            foreach (var descriptor in ZLinkSpotActorAttributedDescriptorFactory.CreateSpotLifecycleDescriptors(
-                         _surface,
-                         _expectedSpotType))
+            foreach (
+                var descriptor in ZLinkSpotActorAttributedDescriptorFactory.CreateSpotLifecycleDescriptors(
+                    _surface,
+                    _expectedSpotType
+                )
+            )
             {
-                if (descriptor.Created is { } created) AddLifecycleDescriptor(_created, created);
+                if (descriptor.Created is { } created)
+                    AddLifecycleDescriptor(_created, created);
 
-                if (descriptor.Joined is { } joined) AddLifecycleDescriptor(_joined, joined);
+                if (descriptor.Joined is { } joined)
+                    AddLifecycleDescriptor(_joined, joined);
 
-                if (descriptor.Left is { } left) AddLifecycleDescriptor(_left, left);
+                if (descriptor.Left is { } left)
+                    AddLifecycleDescriptor(_left, left);
 
-                if (descriptor.Disconnected is { } disconnected) AddLifecycleDescriptor(_disconnected, disconnected);
+                if (descriptor.Disconnected is { } disconnected)
+                    AddLifecycleDescriptor(_disconnected, disconnected);
             }
 
         _bound = true;
@@ -144,7 +157,8 @@ internal sealed class ZLinkSpotActorHandlerRegistry
     public bool TryResolve(
         Type actorType,
         ZlinkStreamHeader header,
-        out ZLinkSpotActorPacketDescriptor? descriptor)
+        out ZLinkSpotActorPacketDescriptor? descriptor
+    )
     {
         if (!ZLinkStreamActorPacketKind.TryMap(header.Kind, out var kind))
         {
@@ -152,12 +166,15 @@ internal sealed class ZLinkSpotActorHandlerRegistry
             return false;
         }
 
-        if (_packets.TryGetValue((kind, actorType, header.Name), out descriptor)) return true;
+        if (_packets.TryGetValue((kind, actorType, header.Name), out descriptor))
+            return true;
 
         foreach (var candidate in _packets)
-            if (candidate.Key.Kind == kind
+            if (
+                candidate.Key.Kind == kind
                 && candidate.Key.Name == header.Name
-                && candidate.Key.ActorType.IsAssignableFrom(actorType))
+                && candidate.Key.ActorType.IsAssignableFrom(actorType)
+            )
             {
                 descriptor = candidate.Value;
                 return true;
@@ -182,22 +199,29 @@ internal sealed class ZLinkSpotActorHandlerRegistry
         return TryResolveLifecycle(_left, actorType, out descriptor);
     }
 
-    public bool TryResolveDisconnected(Type actorType, out ZLinkSpotActorLifecycleDescriptor? descriptor)
+    public bool TryResolveDisconnected(
+        Type actorType,
+        out ZLinkSpotActorLifecycleDescriptor? descriptor
+    )
     {
         return TryResolveLifecycle(_disconnected, actorType, out descriptor);
     }
 
     private static void AddLifecycleDescriptor(
         Dictionary<Type, ZLinkSpotActorLifecycleDescriptor> target,
-        ZLinkSpotActorLifecycleDescriptor descriptor)
+        ZLinkSpotActorLifecycleDescriptor descriptor
+    )
     {
-        if (target.TryGetValue(descriptor.ActorType, out var existing)
-            && existing.HandlerType == descriptor.HandlerType)
+        if (
+            target.TryGetValue(descriptor.ActorType, out var existing)
+            && existing.HandlerType == descriptor.HandlerType
+        )
             return;
 
         if (existing is not null)
             throw new ZLinkConfigurationException(
-                $"Actor lifecycle callback for '{descriptor.ActorType}' is already declared.");
+                $"Actor lifecycle callback for '{descriptor.ActorType}' is already declared."
+            );
 
         target.Add(descriptor.ActorType, descriptor);
     }
@@ -205,9 +229,11 @@ internal sealed class ZLinkSpotActorHandlerRegistry
     private static bool TryResolveLifecycle(
         Dictionary<Type, ZLinkSpotActorLifecycleDescriptor> source,
         Type actorType,
-        out ZLinkSpotActorLifecycleDescriptor? descriptor)
+        out ZLinkSpotActorLifecycleDescriptor? descriptor
+    )
     {
-        if (source.TryGetValue(actorType, out descriptor)) return true;
+        if (source.TryGetValue(actorType, out descriptor))
+            return true;
 
         foreach (var candidate in source)
             if (candidate.Key.IsAssignableFrom(actorType))
@@ -224,6 +250,7 @@ internal sealed class ZLinkSpotActorHandlerRegistry
     {
         if (_bound)
             throw new InvalidOperationException(
-                "Actor handler registration is only allowed while Configure is running.");
+                "Actor handler registration is only allowed while Configure is running."
+            );
     }
 }

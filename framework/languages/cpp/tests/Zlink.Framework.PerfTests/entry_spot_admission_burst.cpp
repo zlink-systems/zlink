@@ -71,20 +71,11 @@ struct admission_entry_spot_t
         co_return zlink::framework::spot_actor_join_result_t::accept ();
     }
 
-    zlink::framework::task_t<void> on_actor_joined (player_actor_t &)
-    {
-        co_return;
-    }
+    zlink::framework::task_t<void> on_actor_joined (player_actor_t &) { co_return; }
 
-    zlink::framework::task_t<void> on_leave_actor (player_actor_t &)
-    {
-        co_return;
-    }
+    zlink::framework::task_t<void> on_leave_actor (player_actor_t &) { co_return; }
 
-    zlink::framework::task_t<void> on_disconnect_actor (player_actor_t &)
-    {
-        co_return;
-    }
+    zlink::framework::task_t<void> on_disconnect_actor (player_actor_t &) { co_return; }
 
     std::atomic<std::size_t> admitted{0};
     std::mutex mutex;
@@ -146,9 +137,8 @@ double percentile (const std::vector<double> &sorted, double ratio)
     if (sorted.empty ()) {
         return 0.0;
     }
-    const auto index =
-      std::min (sorted.size () - 1,
-                static_cast<std::size_t> (std::ceil (sorted.size () * ratio)) - 1);
+    const auto index = std::min (sorted.size () - 1,
+                                 static_cast<std::size_t> (std::ceil (sorted.size () * ratio)) - 1);
     return sorted[index];
 }
 
@@ -166,8 +156,8 @@ benchmark_result_t run_burst (fixture_t &fixture, std::size_t packets_per_actor_
             for (std::size_t packet = 0; packet < packets_per_actor_for_run; ++packet) {
                 const auto packet_started = std::chrono::steady_clock::now ();
                 zlink::framework::spot_inbound_message_t metadata;
-                metadata.content_type = fixture.serializers.content_type (
-                  std::type_index (typeid (admission_request_t)));
+                metadata.content_type =
+                  fixture.serializers.content_type (std::type_index (typeid (admission_request_t)));
                 auto result = fixture.context.handlers ().invoke_actor_packet (
                   "admission.move", fixture.spot, actor, fixture.services, fixture.serializers,
                   zlink::message_t::from (std::to_string (packet)), std::move (metadata));
@@ -188,8 +178,7 @@ benchmark_result_t run_burst (fixture_t &fixture, std::size_t packets_per_actor_
     const auto finished = std::chrono::steady_clock::now ();
 
     std::sort (latencies_us.begin (), latencies_us.end ());
-    const auto wall_ms =
-      std::chrono::duration<double, std::milli> (finished - started).count ();
+    const auto wall_ms = std::chrono::duration<double, std::milli> (finished - started).count ();
     return benchmark_result_t{wall_ms,
                               total_packets / (wall_ms / 1000.0),
                               percentile (latencies_us, 0.50),
@@ -222,12 +211,12 @@ int main (int argc, char **argv)
         results.push_back (run_burst (fixture, packets_per_actor));
     }
 
-    const auto expected_packets = (warmup_packets / actor_count * actor_count)
-                                  + (actor_count * packets_per_actor * rounds);
+    const auto expected_packets =
+      (warmup_packets / actor_count * actor_count) + (actor_count * packets_per_actor * rounds);
     if (fixture.spot.admitted.load (std::memory_order_relaxed) != expected_packets) {
         std::cerr << "packet count mismatch: "
-                  << fixture.spot.admitted.load (std::memory_order_relaxed) << " != "
-                  << expected_packets << '\n';
+                  << fixture.spot.admitted.load (std::memory_order_relaxed)
+                  << " != " << expected_packets << '\n';
         return 1;
     }
 
@@ -245,8 +234,8 @@ int main (int argc, char **argv)
         p99s.push_back (result.p99_us);
     }
 
-    std::cout << "entry-spot admission burst ("
-              << (serial ? "unified-serial" : "legacy-inline") << " dispatch)\n";
+    std::cout << "entry-spot admission burst (" << (serial ? "unified-serial" : "legacy-inline")
+              << " dispatch)\n";
     std::cout << "actors=" << actor_count << " packetsPerActor=" << packets_per_actor
               << " totalPackets=" << total_packets << " rounds=" << rounds << '\n';
     for (std::size_t index = 0; index < results.size (); ++index) {

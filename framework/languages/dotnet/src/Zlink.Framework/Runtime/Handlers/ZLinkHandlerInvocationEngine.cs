@@ -8,7 +8,8 @@ internal static class ZLinkHandlerInvocationEngine
         IReadOnlyList<ZLinkHandlerArgumentKind> argumentPlan,
         object? message,
         IZLinkMessageContext context,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken
+    )
     {
         object? arg0 = null;
         object? arg1 = null;
@@ -18,14 +19,16 @@ internal static class ZLinkHandlerInvocationEngine
         for (var i = 0; i < argumentPlan.Count; i++)
         {
             if (i >= 5)
-                throw new InvalidOperationException("Handler methods support at most five arguments.");
+                throw new InvalidOperationException(
+                    "Handler methods support at most five arguments."
+                );
 
             var value = argumentPlan[i] switch
             {
                 ZLinkHandlerArgumentKind.Message => message,
                 ZLinkHandlerArgumentKind.Context => context,
                 ZLinkHandlerArgumentKind.CancellationToken => cancellationToken,
-                _ => null
+                _ => null,
             };
 
             switch (i)
@@ -60,7 +63,8 @@ internal static class ZLinkHandlerInvocationEngine
         object? arg1 = null,
         object? arg2 = null,
         object? arg3 = null,
-        object? arg4 = null)
+        object? arg4 = null
+    )
     {
         ZLinkApplicationJobQueueInvocation.ReleaseForHandlerStart();
         var result = invoker(handler, arg0, arg1, arg2, arg3, arg4);

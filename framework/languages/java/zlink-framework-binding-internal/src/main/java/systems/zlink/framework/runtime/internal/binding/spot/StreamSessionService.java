@@ -6,6 +6,7 @@ import systems.zlink.contracts.core.RoutingId;
 import systems.zlink.contracts.messaging.Message;
 import systems.zlink.contracts.sockets.SendFlags;
 import systems.zlink.contracts.sockets.StreamSocket;
+
 import java.time.Duration;
 import java.util.List;
 
@@ -14,7 +15,7 @@ interface StreamSessionService extends AutoCloseable {
     /** Creates a STREAM session service over the given node and stream socket. */
     static StreamSessionService create(MeshNode node, StreamSocket stream) {
         throw new UnsupportedOperationException(
-            "STREAM session service is provided by the Framework stream runtime");
+                "STREAM session service is provided by the Framework stream runtime");
     }
 
     /** Starts the service. */
@@ -30,19 +31,22 @@ interface StreamSessionService extends AutoCloseable {
     OperationId bindActor(RoutingId sessionRid, ActorRef actor, Duration timeout);
 
     /** Unbinds the given actor from the given session. */
-    OperationId unbindActor(RoutingId sessionRid, ActorRef actor,
-                            long expectedBindingGeneration, Duration timeout);
+    OperationId unbindActor(
+            RoutingId sessionRid, ActorRef actor, long expectedBindingGeneration, Duration timeout);
 
     /** Returns the bindings for the given session. */
     List<StreamSessionBinding> bindings(RoutingId sessionRid);
 
     /** Sends a message to a bound actor over the given session. */
-    void sendToActor(RoutingId sessionRid, ActorRef actor, List<Message> parts,
-                     SendFlags flags);
+    void sendToActor(RoutingId sessionRid, ActorRef actor, List<Message> parts, SendFlags flags);
 
     /** Sends a request to a bound actor over the given session. */
-    OperationId requestToActor(RoutingId sessionRid, ActorRef actor, List<Message> parts,
-                               SendFlags flags, Duration timeout);
+    OperationId requestToActor(
+            RoutingId sessionRid,
+            ActorRef actor,
+            List<Message> parts,
+            SendFlags flags,
+            Duration timeout);
 
     @Override
     void close();

@@ -4,5 +4,5 @@ internal enum ZLinkRelocationReplyAckState : byte
 {
     NotAcknowledged = 0,
     TerminalReceived = 1,
-    AlreadyTerminal = 2
+    AlreadyTerminal = 2,
 }

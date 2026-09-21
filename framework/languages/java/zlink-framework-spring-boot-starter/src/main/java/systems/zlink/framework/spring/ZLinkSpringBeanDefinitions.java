@@ -6,19 +6,14 @@ import org.springframework.beans.factory.support.BeanDefinitionRegistry;
 import org.springframework.beans.factory.support.RootBeanDefinition;
 
 final class ZLinkSpringBeanDefinitions {
-    private ZLinkSpringBeanDefinitions() {
-    }
+    private ZLinkSpringBeanDefinitions() {}
 
-    static boolean hasBean(
-        ConfigurableListableBeanFactory beanFactory,
-        Class<?> beanType) {
+    static boolean hasBean(ConfigurableListableBeanFactory beanFactory, Class<?> beanType) {
         return beanFactory.getBeanNamesForType(beanType, true, false).length > 0;
     }
 
     static void registerDelegate(
-        BeanDefinitionRegistry registry,
-        String beanName,
-        Class<?> beanClass) {
+            BeanDefinitionRegistry registry, String beanName, Class<?> beanClass) {
         if (registry.containsBeanDefinition(beanName)) {
             return;
         }

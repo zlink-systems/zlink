@@ -13,22 +13,21 @@ import java.util.function.Supplier;
  * <p>Two kinds of operations are accepted.
  *
  * <ul>
- *   <li><b>Dispatch operations</b> ({@link #enqueue}) carry handler callbacks such as
- *       actor packets, route packets, timers, and lifecycle callbacks. They are
- *       non-reentrant: the next dispatch operation does not start until the
- *       {@link CompletionStage} returned by the previous one completes, even when the
- *       handler finishes asynchronously.</li>
- *   <li><b>Continuation operations</b> ({@link #enqueueContinuation}) carry framework
- *       completions that re-enter the Spot line, such as request replies and worker
- *       results. They are serialized with every other operation, but they are allowed
- *       to run while a dispatch operation is gated on its asynchronous completion;
- *       otherwise a handler awaiting its own request reply could never complete.</li>
+ *   <li><b>Dispatch operations</b> ({@link #enqueue}) carry handler callbacks such as actor
+ *       packets, route packets, timers, and lifecycle callbacks. They are non-reentrant: the next
+ *       dispatch operation does not start until the {@link CompletionStage} returned by the
+ *       previous one completes, even when the handler finishes asynchronously.
+ *   <li><b>Continuation operations</b> ({@link #enqueueContinuation}) carry framework completions
+ *       that re-enter the Spot line, such as request replies and worker results. They are
+ *       serialized with every other operation, but they are allowed to run while a dispatch
+ *       operation is gated on its asynchronous completion; otherwise a handler awaiting its own
+ *       request reply could never complete.
  * </ul>
  *
- * <p>At most one operation slice executes at a time. For a dispatch operation the
- * slice is its synchronous part (until it returns its stage); for a continuation the
- * slice spans its full stage. Continuation operations always run on the configured
- * executor so backend callback threads never execute user code directly.
+ * <p>At most one operation slice executes at a time. For a dispatch operation the slice is its
+ * synchronous part (until it returns its stage); for a continuation the slice spans its full stage.
+ * Continuation operations always run on the configured executor so backend callback threads never
+ * execute user code directly.
  */
 public final class ZLinkSpotDispatchQueue {
     private final Executor continuationExecutor;
@@ -41,27 +40,23 @@ public final class ZLinkSpotDispatchQueue {
 
     public ZLinkSpotDispatchQueue(Executor continuationExecutor) {
         this.continuationExecutor =
-            Objects.requireNonNull(continuationExecutor, "continuationExecutor");
+                Objects.requireNonNull(continuationExecutor, "continuationExecutor");
     }
 
     /**
-     * Enqueues a non-reentrant dispatch operation. The returned stage completes with
-     * the outcome of the operation's stage.
+     * Enqueues a non-reentrant dispatch operation. The returned stage completes with the outcome of
+     * the operation's stage.
      */
     public CompletionStage<Void> enqueue(Supplier<CompletionStage<Void>> operation) {
-        return submit(new QueuedOperation(
-            Objects.requireNonNull(operation, "operation"),
-            true));
+        return submit(new QueuedOperation(Objects.requireNonNull(operation, "operation"), true));
     }
 
     /**
-     * Enqueues a continuation operation that may pass the non-reentrancy gate of a
-     * pending dispatch operation. The operation runs on the continuation executor.
+     * Enqueues a continuation operation that may pass the non-reentrancy gate of a pending dispatch
+     * operation. The operation runs on the continuation executor.
      */
     public CompletionStage<Void> enqueueContinuation(Supplier<CompletionStage<Void>> operation) {
-        return submit(new QueuedOperation(
-            Objects.requireNonNull(operation, "operation"),
-            false));
+        return submit(new QueuedOperation(Objects.requireNonNull(operation, "operation"), false));
     }
 
     private CompletionStage<Void> submit(QueuedOperation queued) {
@@ -123,27 +118,30 @@ public final class ZLinkSpotDispatchQueue {
         synchronized (lock) {
             sliceRunning = false;
         }
-        stage.whenComplete((value, error) -> {
-            synchronized (lock) {
-                gated = false;
-            }
-            complete(operation, value, error);
-            pump();
-        });
-    }
-
-    private void scheduleContinuation(QueuedOperation operation) {
-        try {
-            continuationExecutor.execute(() -> {
-                CompletionStage<Void> stage = invoke(operation);
-                stage.whenComplete((value, error) -> {
+        stage.whenComplete(
+                (value, error) -> {
                     synchronized (lock) {
-                        sliceRunning = false;
+                        gated = false;
                     }
                     complete(operation, value, error);
                     pump();
                 });
-            });
+    }
+
+    private void scheduleContinuation(QueuedOperation operation) {
+        try {
+            continuationExecutor.execute(
+                    () -> {
+                        CompletionStage<Void> stage = invoke(operation);
+                        stage.whenComplete(
+                                (value, error) -> {
+                                    synchronized (lock) {
+                                        sliceRunning = false;
+                                    }
+                                    complete(operation, value, error);
+                                    pump();
+                                });
+                    });
         } catch (RuntimeException ex) {
             synchronized (lock) {
                 sliceRunning = false;

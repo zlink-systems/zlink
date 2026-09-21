@@ -16,11 +16,14 @@ export interface ZLinkFormalRemoteActorTransfer {
 /** Keeps the source-leave fence attached to one admitted formal transfer. */
 export class ZLinkFormalRemoteActorTransferRegistry {
   private readonly lane = new ZLinkStateLane();
-  private readonly transfers = new Map<string, {
-    readonly transfer: ZLinkFormalRemoteActorTransfer;
-    readonly resolveTargetLifecycleCompleted: () => void;
-    readonly resolveSourceLeaveTerminal: (succeeded: boolean) => void;
-  }>();
+  private readonly transfers = new Map<
+    string,
+    {
+      readonly transfer: ZLinkFormalRemoteActorTransfer;
+      readonly resolveTargetLifecycleCompleted: () => void;
+      readonly resolveSourceLeaveTerminal: (succeeded: boolean) => void;
+    }
+  >();
   private readonly transfersById = new Map<string, ZLinkFormalRemoteActorTransfer>();
 
   has(actorId: string): boolean {
@@ -108,19 +111,21 @@ export class ZLinkFormalRemoteActorTransferRegistry {
     const pending = this.completeSourceLeaveTerminalStartCore(actorId, transferId);
     if (pending === undefined) return false;
     await pending.transfer.targetLifecycleCompleted;
-    return await this.lane.run(() => this.completeSourceLeaveTerminalCore(
-      actorId,
-      transferId,
-      pending,
-      succeeded
-    ));
+    return await this.lane.run(() =>
+      this.completeSourceLeaveTerminalCore(actorId, transferId, pending, succeeded)
+    );
   }
 
-  private completeSourceLeaveTerminalStartCore(actorId: string, transferId: string): {
-    readonly transfer: ZLinkFormalRemoteActorTransfer;
-    readonly resolveTargetLifecycleCompleted: () => void;
-    readonly resolveSourceLeaveTerminal: (succeeded: boolean) => void;
-  } | undefined {
+  private completeSourceLeaveTerminalStartCore(
+    actorId: string,
+    transferId: string
+  ):
+    | {
+        readonly transfer: ZLinkFormalRemoteActorTransfer;
+        readonly resolveTargetLifecycleCompleted: () => void;
+        readonly resolveSourceLeaveTerminal: (succeeded: boolean) => void;
+      }
+    | undefined {
     const pending = this.transfers.get(actorId);
     return pending === undefined || pending.transfer.transferId !== transferId
       ? undefined
@@ -137,10 +142,8 @@ export class ZLinkFormalRemoteActorTransferRegistry {
     },
     succeeded: boolean
   ): boolean {
-    if (
-      pending.transfer.transferId !== transferId
-      || this.transfers.get(actorId) !== pending
-    ) return false;
+    if (pending.transfer.transferId !== transferId || this.transfers.get(actorId) !== pending)
+      return false;
     pending.resolveSourceLeaveTerminal(succeeded);
     return true;
   }

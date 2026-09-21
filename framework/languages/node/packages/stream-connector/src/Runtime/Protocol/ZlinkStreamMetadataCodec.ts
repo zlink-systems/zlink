@@ -16,7 +16,11 @@ export class ZlinkStreamMetadataCodec {
       }
       return size;
     } catch (cause) {
-      throw connectorError(ZlinkStreamErrorCode.ValidationFailed, streamWireErrorMessage(cause), cause);
+      throw connectorError(
+        ZlinkStreamErrorCode.ValidationFailed,
+        streamWireErrorMessage(cause),
+        cause
+      );
     }
   }
 
@@ -24,7 +28,11 @@ export class ZlinkStreamMetadataCodec {
     try {
       destination.set(encodeStreamWireMetadata(metadata.values));
     } catch (cause) {
-      throw connectorError(ZlinkStreamErrorCode.ValidationFailed, streamWireErrorMessage(cause), cause);
+      throw connectorError(
+        ZlinkStreamErrorCode.ValidationFailed,
+        streamWireErrorMessage(cause),
+        cause
+      );
     }
   }
 
@@ -33,7 +41,11 @@ export class ZlinkStreamMetadataCodec {
       const values = decodeStreamWireMetadata(metadata);
       return values.size === 0 ? ZlinkStreamMetadataMap.empty : ZlinkStreamMetadataMap.from(values);
     } catch (cause) {
-      throw connectorError(ZlinkStreamErrorCode.FrameDecodeFailed, streamWireErrorMessage(cause), cause);
+      throw connectorError(
+        ZlinkStreamErrorCode.FrameDecodeFailed,
+        streamWireErrorMessage(cause),
+        cause
+      );
     }
   }
 }

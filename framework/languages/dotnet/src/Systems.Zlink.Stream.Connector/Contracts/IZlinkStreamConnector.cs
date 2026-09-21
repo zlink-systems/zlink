@@ -130,7 +130,8 @@ public interface IZlinkStreamConnector : IAsyncDisposable
     ///     Dispose the returned registration to remove the handler.
     /// </remarks>
     IDisposable OnConnectionStateChanged(
-        Func<ZlinkStreamConnectionStateChanged, CancellationToken, ValueTask> handler);
+        Func<ZlinkStreamConnectionStateChanged, CancellationToken, ValueTask> handler
+    );
 
     /// <summary>
     ///     Gets the number of messages received with <paramref name="name" /> on the
@@ -165,7 +166,8 @@ public interface IZlinkStreamConnector : IAsyncDisposable
     /// </remarks>
     IDisposable On(
         string name,
-        Func<ZlinkStreamMessage<ZlinkStreamEncodedPayload>, CancellationToken, ValueTask> handler);
+        Func<ZlinkStreamMessage<ZlinkStreamEncodedPayload>, CancellationToken, ValueTask> handler
+    );
 
     /// <summary>
     ///     Starts a wait operation for the next unread received message with the given packet name.

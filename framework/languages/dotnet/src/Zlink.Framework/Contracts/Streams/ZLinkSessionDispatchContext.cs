@@ -3,23 +3,20 @@ namespace Zlink.Framework.Contracts.Streams;
 public sealed class ZLinkSessionDispatchContext
 {
     private int _replyClaimed;
+
     public ZLinkSessionDispatchContext(
         string packetName,
         ZLinkMessageMetadata? metadata = null,
-        bool canReply = false)
-        : this(
-            packetName,
-            metadata ?? ZLinkMessageMetadata.Empty,
-            canReply,
-            null)
-    {
-    }
+        bool canReply = false
+    )
+        : this(packetName, metadata ?? ZLinkMessageMetadata.Empty, canReply, null) { }
 
     internal ZLinkSessionDispatchContext(
         string packetName,
         ZLinkMessageMetadata metadata,
         bool canReply,
-        object? runtimeState)
+        object? runtimeState
+    )
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(packetName);
         ArgumentNullException.ThrowIfNull(metadata);

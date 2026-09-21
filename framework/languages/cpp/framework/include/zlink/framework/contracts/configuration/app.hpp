@@ -77,7 +77,8 @@ class app_t
     zlink_framework_options_t &add_zlink_framework ();
     app_t &add_zlink_framework (std::function<void (zlink_framework_options_t &)> configure);
     template <typename TModule, typename... TArgs>
-    requires framework_module_contract_t<TModule> app_t &add_zlink_framework (TArgs &&...args)
+        requires framework_module_contract_t<TModule>
+    app_t &add_zlink_framework (TArgs &&...args)
     {
         TModule module (std::forward<TArgs> (args)...);
         module.configure_services (_services ());

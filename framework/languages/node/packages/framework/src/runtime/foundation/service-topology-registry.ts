@@ -3,12 +3,7 @@ import { SmoothWeightedSelection } from './service-weighted-selection';
 import { SERVICE_WIRE_REQUIRED_CAPABILITY } from './service-wire-constants.generated';
 
 export type ServiceNodeState =
-  | 'preparing'
-  | 'serving'
-  | 'retiring'
-  | 'draining'
-  | 'stopped'
-  | 'error';
+  'preparing' | 'serving' | 'retiring' | 'draining' | 'stopped' | 'error';
 
 export type ServiceObjectRole = 'none' | 'client' | 'server';
 
@@ -50,17 +45,9 @@ export interface ServicePeerAdmissionExpectation {
 }
 
 export type PeerAdmissionResult =
-  | 'admitted'
-  | 'notRequired'
-  | 'meshMismatch'
-  | 'invalidDescriptor'
-  | 'staleDescriptor';
+  'admitted' | 'notRequired' | 'meshMismatch' | 'invalidDescriptor' | 'staleDescriptor';
 
-export type ServiceObjectPlacementStatus =
-  | 'available'
-  | 'unsupported'
-  | 'capacity'
-  | 'unavailable';
+export type ServiceObjectPlacementStatus = 'available' | 'unsupported' | 'capacity' | 'unavailable';
 
 const REQUIRED_CAPABILITY = SERVICE_WIRE_REQUIRED_CAPABILITY;
 const MAX_CAPACITY = 0x7fff_ffff;
@@ -90,9 +77,9 @@ export class ServiceTopologyRegistry {
   publishLocal(descriptor: ServiceNodeDescriptor): void {
     validateDescriptor(descriptor);
     if (
-      descriptor.meshName !== this.local.meshName
-      || descriptor.nodeRoutingId !== this.local.nodeRoutingId
-      || descriptor.lifecycleGeneration !== this.local.lifecycleGeneration
+      descriptor.meshName !== this.local.meshName ||
+      descriptor.nodeRoutingId !== this.local.nodeRoutingId ||
+      descriptor.lifecycleGeneration !== this.local.lifecycleGeneration
     ) {
       throw new TypeError('Published descriptor changes the local node identity.');
     }
@@ -124,12 +111,11 @@ export class ServiceTopologyRegistry {
     if (descriptor.meshName !== this.local.meshName) return 'meshMismatch';
     if (descriptor.nodeRoutingId === this.local.nodeRoutingId) return 'invalidDescriptor';
     if (
-      (expected?.endpoint !== undefined
-        && descriptor.advertisedEndpoint !== expected.endpoint)
-      || (expected?.securityIdentity !== undefined
-        && descriptor.securityIdentity !== expected.securityIdentity)
-      || (expected?.lifecycleGeneration !== undefined
-        && descriptor.lifecycleGeneration !== expected.lifecycleGeneration)
+      (expected?.endpoint !== undefined && descriptor.advertisedEndpoint !== expected.endpoint) ||
+      (expected?.securityIdentity !== undefined &&
+        descriptor.securityIdentity !== expected.securityIdentity) ||
+      (expected?.lifecycleGeneration !== undefined &&
+        descriptor.lifecycleGeneration !== expected.lifecycleGeneration)
     ) {
       return 'invalidDescriptor';
     }
@@ -144,40 +130,35 @@ export class ServiceTopologyRegistry {
 
     const current = this.peersByRid.get(descriptor.nodeRoutingId);
     if (
-      current !== undefined
-      && current.descriptor.lifecycleGeneration === descriptor.lifecycleGeneration
-      && descriptor.descriptorRevision > current.descriptor.descriptorRevision
-      && !sameImmutableDescriptor(current.descriptor, descriptor)
+      current !== undefined &&
+      current.descriptor.lifecycleGeneration === descriptor.lifecycleGeneration &&
+      descriptor.descriptorRevision > current.descriptor.descriptorRevision &&
+      !sameImmutableDescriptor(current.descriptor, descriptor)
     ) {
       return 'invalidDescriptor';
     }
     if (
-      current !== undefined
-      && current.descriptor.lifecycleGeneration === descriptor.lifecycleGeneration
-      && (
-        current.descriptor.descriptorRevision > descriptor.descriptorRevision
-        || (
-          current.descriptor.descriptorRevision === descriptor.descriptorRevision
-          && !sameServiceNodeDescriptor(current.descriptor, descriptor)
-        )
-      )
+      current !== undefined &&
+      current.descriptor.lifecycleGeneration === descriptor.lifecycleGeneration &&
+      (current.descriptor.descriptorRevision > descriptor.descriptorRevision ||
+        (current.descriptor.descriptorRevision === descriptor.descriptorRevision &&
+          !sameServiceNodeDescriptor(current.descriptor, descriptor)))
     ) {
       return 'staleDescriptor';
     }
     if (
-      current !== undefined
-      && current.descriptor.lifecycleGeneration === descriptor.lifecycleGeneration
-      && current.descriptor.descriptorRevision === descriptor.descriptorRevision
-      && sameServiceNodeDescriptor(current.descriptor, descriptor)
-      && current.connectionId !== connectionId
+      current !== undefined &&
+      current.descriptor.lifecycleGeneration === descriptor.lifecycleGeneration &&
+      current.descriptor.descriptorRevision === descriptor.descriptorRevision &&
+      sameServiceNodeDescriptor(current.descriptor, descriptor) &&
+      current.connectionId !== connectionId &&
       // A fallback candidate is only a logical placeholder. Once the
       // monitor reports the physical connection, its evidence supersedes
       // candidate ordering so the request path uses the native route.
-      && !(
-        isUnmonitoredConnectionId(current.connectionId)
-        && !isUnmonitoredConnectionId(connectionId)
-      )
-      && compareConnectionCandidate(
+      !(
+        isUnmonitoredConnectionId(current.connectionId) && !isUnmonitoredConnectionId(connectionId)
+      ) &&
+      compareConnectionCandidate(
         current.connectionDiscriminator,
         current.connectionId,
         connectionDiscriminator,
@@ -218,7 +199,9 @@ export class ServiceTopologyRegistry {
 
   private peersCore(): readonly AdmittedServicePeer[] {
     return [...this.peersByRid.values()]
-      .sort((left, right) => compareOrdinal(left.descriptor.nodeRoutingId, right.descriptor.nodeRoutingId))
+      .sort((left, right) =>
+        compareOrdinal(left.descriptor.nodeRoutingId, right.descriptor.nodeRoutingId)
+      )
       .map(clonePeer);
   }
 
@@ -228,16 +211,14 @@ export class ServiceTopologyRegistry {
       .map(cloneDescriptor);
   }
 
-  replaceDiscoveredNotRequired(
-    descriptors: readonly ServiceNodeDescriptor[]
-  ): void {
+  replaceDiscoveredNotRequired(descriptors: readonly ServiceNodeDescriptor[]): void {
     const next = new Map<string, ServiceNodeDescriptor>();
     for (const descriptor of descriptors) {
       validateDescriptor(descriptor);
       if (
-        descriptor.meshName === this.local.meshName
-        && descriptor.nodeRoutingId !== this.local.nodeRoutingId
-        && descriptorConnectionNotRequired(this.local, descriptor)
+        descriptor.meshName === this.local.meshName &&
+        descriptor.nodeRoutingId !== this.local.nodeRoutingId &&
+        descriptorConnectionNotRequired(this.local, descriptor)
       ) {
         next.set(descriptor.nodeRoutingId, cloneDescriptor(descriptor));
       }
@@ -253,9 +234,9 @@ export class ServiceTopologyRegistry {
   markNotRequired(descriptor: ServiceNodeDescriptor): void {
     validateDescriptor(descriptor);
     if (
-      descriptor.meshName !== this.local.meshName
-      || descriptor.nodeRoutingId === this.local.nodeRoutingId
-      || !descriptorConnectionNotRequired(this.local, descriptor)
+      descriptor.meshName !== this.local.meshName ||
+      descriptor.nodeRoutingId === this.local.nodeRoutingId ||
+      !descriptorConnectionNotRequired(this.local, descriptor)
     ) {
       return;
     }
@@ -271,21 +252,18 @@ export class ServiceTopologyRegistry {
 
   knownDescriptor(nodeRoutingId: string): ServiceNodeDescriptor | undefined {
     const admitted = this.peersByRid.get(nodeRoutingId)?.descriptor;
-    const descriptor = admitted
-      ?? this.notRequiredByRid.get(nodeRoutingId)
-      ?? this.knownByRid.get(nodeRoutingId);
+    const descriptor =
+      admitted ?? this.notRequiredByRid.get(nodeRoutingId) ?? this.knownByRid.get(nodeRoutingId);
     return descriptor === undefined ? undefined : cloneDescriptor(descriptor);
   }
 
   private remember(descriptor: ServiceNodeDescriptor): void {
     const current = this.knownByRid.get(descriptor.nodeRoutingId);
     if (
-      current === undefined
-      || descriptor.lifecycleGeneration !== current.lifecycleGeneration
-      || (
-        descriptor.lifecycleGeneration === current.lifecycleGeneration
-        && descriptor.descriptorRevision >= current.descriptorRevision
-      )
+      current === undefined ||
+      descriptor.lifecycleGeneration !== current.lifecycleGeneration ||
+      (descriptor.lifecycleGeneration === current.lifecycleGeneration &&
+        descriptor.descriptorRevision >= current.descriptorRevision)
     ) {
       this.knownByRid.set(descriptor.nodeRoutingId, cloneDescriptor(descriptor));
     }
@@ -304,23 +282,28 @@ export class ServiceTopologyRegistry {
           connectionId: 'local',
           connectionDiscriminator: 'local'
         };
-        return [local, ...this.peersByRid.values()].map(peer => ({
-          peer: clonePeer(peer),
-          channel: findChannel(peer.descriptor, channelName)
-        })).filter((value): value is {
-          peer: AdmittedServicePeer;
-          channel: ServiceChannelDescriptor;
-        } => value.channel !== undefined
-          && value.peer.descriptor.state === 'serving'
-          && value.channel.weight > 0);
+        return [local, ...this.peersByRid.values()]
+          .map((peer) => ({
+            peer: clonePeer(peer),
+            channel: findChannel(peer.descriptor, channelName)
+          }))
+          .filter(
+            (
+              value
+            ): value is {
+              peer: AdmittedServicePeer;
+              channel: ServiceChannelDescriptor;
+            } =>
+              value.channel !== undefined &&
+              value.peer.descriptor.state === 'serving' &&
+              value.channel.weight > 0
+          );
       },
-      value => value.channel.weight,
-      value => value.peer.descriptor.nodeRoutingId,
-      (left, right) => compareOrdinal(
-        left.peer.descriptor.nodeRoutingId,
-        right.peer.descriptor.nodeRoutingId
-      ),
-      value => isReady(value.peer)
+      (value) => value.channel.weight,
+      (value) => value.peer.descriptor.nodeRoutingId,
+      (left, right) =>
+        compareOrdinal(left.peer.descriptor.nodeRoutingId, right.peer.descriptor.nodeRoutingId),
+      (value) => isReady(value.peer)
     )?.peer;
   }
 
@@ -329,17 +312,23 @@ export class ServiceTopologyRegistry {
   ): AdmittedServicePeer | undefined {
     return this.selectWeightedCycle(
       'placement',
-      () => [...this.peersByRid.values()].filter(peer => {
-        const descriptor = peer.descriptor;
-        return descriptor.state === 'serving'
-          && descriptor.objectRole === 'server'
-          && descriptor.placementWeight > 0
-          && descriptor.activeCapacityUsed < descriptor.activeCapacityLimit
-          && descriptor.pendingCapacityUsed < descriptor.pendingCapacityLimit;
-      }).map(clonePeer),
-      peer => peer.descriptor.placementWeight,
-      peer => peer.descriptor.nodeRoutingId,
-      (left, right) => compareOrdinal(left.descriptor.nodeRoutingId, right.descriptor.nodeRoutingId),
+      () =>
+        [...this.peersByRid.values()]
+          .filter((peer) => {
+            const descriptor = peer.descriptor;
+            return (
+              descriptor.state === 'serving' &&
+              descriptor.objectRole === 'server' &&
+              descriptor.placementWeight > 0 &&
+              descriptor.activeCapacityUsed < descriptor.activeCapacityLimit &&
+              descriptor.pendingCapacityUsed < descriptor.pendingCapacityLimit
+            );
+          })
+          .map(clonePeer),
+      (peer) => peer.descriptor.placementWeight,
+      (peer) => peer.descriptor.nodeRoutingId,
+      (left, right) =>
+        compareOrdinal(left.descriptor.nodeRoutingId, right.descriptor.nodeRoutingId),
       isReady
     );
   }
@@ -353,19 +342,21 @@ export class ServiceTopologyRegistry {
       `object:${stableType}`,
       () => {
         const capability = `object-type:${stableType}`;
-        return [this.local, ...this.peersByRid.values()].map(value =>
-          'descriptor' in value ? value.descriptor : value
-        ).filter(descriptor =>
-          descriptor.state === 'serving'
-          && descriptor.objectRole === 'server'
-          && descriptor.placementWeight > 0
-          && descriptor.activeCapacityUsed < descriptor.activeCapacityLimit
-          && descriptor.pendingCapacityUsed < descriptor.pendingCapacityLimit
-          && descriptor.protocolCapabilities.includes(capability)
-        ).map(cloneDescriptor);
+        return [this.local, ...this.peersByRid.values()]
+          .map((value) => ('descriptor' in value ? value.descriptor : value))
+          .filter(
+            (descriptor) =>
+              descriptor.state === 'serving' &&
+              descriptor.objectRole === 'server' &&
+              descriptor.placementWeight > 0 &&
+              descriptor.activeCapacityUsed < descriptor.activeCapacityLimit &&
+              descriptor.pendingCapacityUsed < descriptor.pendingCapacityLimit &&
+              descriptor.protocolCapabilities.includes(capability)
+          )
+          .map(cloneDescriptor);
       },
-      descriptor => descriptor.placementWeight,
-      descriptor => descriptor.nodeRoutingId,
+      (descriptor) => descriptor.placementWeight,
+      (descriptor) => descriptor.nodeRoutingId,
       (left, right) => compareOrdinal(left.nodeRoutingId, right.nodeRoutingId),
       isReady
     );
@@ -377,37 +368,41 @@ export class ServiceTopologyRegistry {
   ): ServiceObjectPlacementStatus {
     requireText(stableType, 'stableType');
     const capability = `object-type:${stableType}`;
-    const supported = [this.local, ...[...this.peersByRid.values()].map(peer => peer.descriptor)]
-      .filter(descriptor =>
-        descriptor.state === 'serving'
-        && descriptor.objectRole === 'server'
-        && descriptor.protocolCapabilities.includes(capability)
-      );
+    const supported = [
+      this.local,
+      ...[...this.peersByRid.values()].map((peer) => peer.descriptor)
+    ].filter(
+      (descriptor) =>
+        descriptor.state === 'serving' &&
+        descriptor.objectRole === 'server' &&
+        descriptor.protocolCapabilities.includes(capability)
+    );
     if (supported.length === 0) return 'unsupported';
-    const withCapacity = supported.filter(descriptor =>
-      descriptor.activeCapacityUsed < descriptor.activeCapacityLimit
-      && descriptor.pendingCapacityUsed < descriptor.pendingCapacityLimit
+    const withCapacity = supported.filter(
+      (descriptor) =>
+        descriptor.activeCapacityUsed < descriptor.activeCapacityLimit &&
+        descriptor.pendingCapacityUsed < descriptor.pendingCapacityLimit
     );
     if (withCapacity.length === 0) return 'capacity';
-    const weighted = withCapacity.filter(descriptor => descriptor.placementWeight > 0);
+    const weighted = withCapacity.filter((descriptor) => descriptor.placementWeight > 0);
     if (weighted.length === 0) return 'unsupported';
     return weighted.some(isReady) ? 'available' : 'unavailable';
   }
 
   instanceSpotPlacementTypes(): readonly string[] {
     const prefix = 'instance-spot-type:';
-    return [...new Set([
-      this.local,
-      ...this.peersCore().map(peer => peer.descriptor)
-    ]
-      .filter(descriptor =>
-        descriptor.state === 'serving'
-        && descriptor.objectRole === 'server')
-      .flatMap(descriptor => descriptor.protocolCapabilities)
-      .filter(capability => capability.startsWith(prefix))
-      .map(capability => capability.slice(prefix.length))
-      .filter(stableType => stableType.length > 0))]
-      .sort();
+    return [
+      ...new Set(
+        [this.local, ...this.peersCore().map((peer) => peer.descriptor)]
+          .filter(
+            (descriptor) => descriptor.state === 'serving' && descriptor.objectRole === 'server'
+          )
+          .flatMap((descriptor) => descriptor.protocolCapabilities)
+          .filter((capability) => capability.startsWith(prefix))
+          .map((capability) => capability.slice(prefix.length))
+          .filter((stableType) => stableType.length > 0)
+      )
+    ].sort();
   }
 
   private selectWeightedCycle<T>(
@@ -420,17 +415,19 @@ export class ServiceTopologyRegistry {
   ): T | undefined {
     let entry = this.selections.get(key);
     if (entry === undefined) {
-      const selection = new SmoothWeightedSelection<unknown>(() => eligible()
-        .map(value => ({
-          value,
-          id: identity(value),
-          weight: weight(value)
-        }))
-        .sort((left, right) => compare(left.value as T, right.value as T)));
+      const selection = new SmoothWeightedSelection<unknown>(() =>
+        eligible()
+          .map((value) => ({
+            value,
+            id: identity(value),
+            weight: weight(value)
+          }))
+          .sort((left, right) => compare(left.value as T, right.value as T))
+      );
       entry = { selection };
       this.selections.set(key, entry);
     }
-    return entry.selection.select(value => accept(value as T)) as T | undefined;
+    return entry.selection.select((value) => accept(value as T)) as T | undefined;
   }
 
   private rebuildSelections(): void {
@@ -446,9 +443,7 @@ export function validateDescriptor(descriptor: ServiceNodeDescriptor): void {
   if (descriptor.lifecycleGeneration <= 0n || descriptor.descriptorRevision <= 0n) {
     throw new RangeError('Lifecycle generation and descriptor revision must be non-zero.');
   }
-  if (
-    descriptor.applicationVersion < 0n
-  ) {
+  if (descriptor.applicationVersion < 0n) {
     throw new RangeError('Descriptor application version is invalid.');
   }
   if (descriptor.maintenanceWave !== undefined) {
@@ -463,14 +458,14 @@ export function validateDescriptor(descriptor: ServiceNodeDescriptor): void {
   validateCapacity(descriptor.activeCapacityUsed, true, 'activeCapacityUsed');
   validateCapacity(descriptor.pendingCapacityUsed, true, 'pendingCapacityUsed');
   if (
-    descriptor.activeCapacityUsed > descriptor.activeCapacityLimit
-    || descriptor.pendingCapacityUsed > descriptor.pendingCapacityLimit
+    descriptor.activeCapacityUsed > descriptor.activeCapacityLimit ||
+    descriptor.pendingCapacityUsed > descriptor.pendingCapacityLimit
   ) {
     throw new RangeError('Descriptor capacity use exceeds its limit.');
   }
   validateSortedUnique(
     descriptor.channels,
-    channel => {
+    (channel) => {
       requireText(channel.name, 'channel.name');
       validatePublicWeight(channel.weight, 'channel.weight');
       return channel.name;
@@ -479,7 +474,7 @@ export function validateDescriptor(descriptor: ServiceNodeDescriptor): void {
   );
   validateSortedUnique(
     descriptor.protocolCapabilities,
-    capability => {
+    (capability) => {
       requireText(capability, 'protocol capability');
       return capability;
     },
@@ -521,7 +516,7 @@ function findChannel(
   descriptor: ServiceNodeDescriptor,
   channelName: string
 ): ServiceChannelDescriptor | undefined {
-  return descriptor.channels.find(channel => channel.name === channelName);
+  return descriptor.channels.find((channel) => channel.name === channelName);
 }
 
 function requireText(value: string, field: string): void {
@@ -533,7 +528,7 @@ function requireText(value: string, field: string): void {
 function cloneDescriptor(descriptor: ServiceNodeDescriptor): ServiceNodeDescriptor {
   return {
     ...descriptor,
-    channels: descriptor.channels.map(channel => ({ ...channel })),
+    channels: descriptor.channels.map((channel) => ({ ...channel })),
     protocolCapabilities: [...descriptor.protocolCapabilities]
   };
 }
@@ -546,7 +541,10 @@ function clonePeer(peer: AdmittedServicePeer): AdmittedServicePeer {
   };
 }
 
-export function sameServiceNodeDescriptor(left: ServiceNodeDescriptor, right: ServiceNodeDescriptor): boolean {
+export function sameServiceNodeDescriptor(
+  left: ServiceNodeDescriptor,
+  right: ServiceNodeDescriptor
+): boolean {
   return JSON.stringify(toComparable(left)) === JSON.stringify(toComparable(right));
 }
 
@@ -554,21 +552,21 @@ function sameImmutableDescriptor(
   left: ServiceNodeDescriptor,
   right: ServiceNodeDescriptor
 ): boolean {
-  return left.advertisedEndpoint === right.advertisedEndpoint
-    && left.securityIdentity === right.securityIdentity
-    && left.applicationVersion === right.applicationVersion
-    && arraysEqual(left.protocolCapabilities, right.protocolCapabilities)
-    && left.objectRole === right.objectRole
-    && left.activeCapacityLimit === right.activeCapacityLimit
-    && left.pendingCapacityLimit === right.pendingCapacityLimit
-    && left.channels.length === right.channels.length
-    && left.channels.every((channel, index) =>
-      channel.name === right.channels[index]?.name);
+  return (
+    left.advertisedEndpoint === right.advertisedEndpoint &&
+    left.securityIdentity === right.securityIdentity &&
+    left.applicationVersion === right.applicationVersion &&
+    arraysEqual(left.protocolCapabilities, right.protocolCapabilities) &&
+    left.objectRole === right.objectRole &&
+    left.activeCapacityLimit === right.activeCapacityLimit &&
+    left.pendingCapacityLimit === right.pendingCapacityLimit &&
+    left.channels.length === right.channels.length &&
+    left.channels.every((channel, index) => channel.name === right.channels[index]?.name)
+  );
 }
 
 function arraysEqual(left: readonly string[], right: readonly string[]): boolean {
-  return left.length === right.length
-    && left.every((value, index) => value === right[index]);
+  return left.length === right.length && left.every((value, index) => value === right[index]);
 }
 
 function isUnmonitoredConnectionId(connectionId: string): boolean {

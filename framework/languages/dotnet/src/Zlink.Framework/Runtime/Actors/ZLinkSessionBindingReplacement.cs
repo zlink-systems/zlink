@@ -3,9 +3,11 @@ namespace Zlink.Framework.Runtime.Actors;
 internal static class ZLinkSessionBindingReplacement
 {
     internal static ZLinkActorPreviousBindingFence? CreateFence(
-        ZLinkRemoteSessionPreviousBinding? previous)
+        ZLinkRemoteSessionPreviousBinding? previous
+    )
     {
-        if (previous is null) return null;
+        if (previous is null)
+            return null;
         return new ZLinkActorPreviousBindingFence(
             RoutingId.From(previous.TargetNodeRid),
             RoutingId.From(previous.SessionNodeRid),
@@ -13,16 +15,14 @@ internal static class ZLinkSessionBindingReplacement
             previous.BindingToken,
             previous.BindingGeneration,
             previous.ObjectGeneration,
-            ZLinkMeshName.FromBoundary(
-                previous.MeshName,
-                nameof(previous.MeshName)),
+            ZLinkMeshName.FromBoundary(previous.MeshName, nameof(previous.MeshName)),
             previous.TargetNodeGeneration,
             previous.AuthorityOwnerGeneration,
             previous.OwnerLeaseGeneration,
             previous.SessionOwnerNodeGeneration,
             previous.AcceptedHighWater,
             previous.SessionOwnerId,
-            previous.SessionOwnerLeaseGeneration);
+            previous.SessionOwnerLeaseGeneration
+        );
     }
-
 }

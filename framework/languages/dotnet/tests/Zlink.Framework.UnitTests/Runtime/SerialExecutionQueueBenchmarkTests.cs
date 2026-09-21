@@ -1,5 +1,4 @@
 using System.Diagnostics;
-
 using Xunit.Abstractions;
 
 namespace Zlink.Framework.UnitTests;
@@ -15,24 +14,30 @@ public sealed class SerialExecutionQueueBenchmarkTests(ITestOutputHelper output)
         await using var queue = new ZLinkSerialExecutionQueue(
             new ZLinkRuntimeTaskRunner(errorSink, CancellationToken.None),
             errorSink,
-            CancellationToken.None);
+            CancellationToken.None
+        );
         var firstStarted = new TaskCompletionSource(
-            TaskCreationOptions.RunContinuationsAsynchronously);
+            TaskCreationOptions.RunContinuationsAsynchronously
+        );
         var releaseFirst = new TaskCompletionSource(
-            TaskCreationOptions.RunContinuationsAsynchronously);
+            TaskCreationOptions.RunContinuationsAsynchronously
+        );
         var admissionLatencies = new long[AdmissionAttempts];
         var accepted = 0;
         var rejected = 0;
         var firstRejectionOrdinal = 0;
 
         var firstStartedAt = Stopwatch.GetTimestamp();
-        Assert.True(queue.TryPost(
-            async _ =>
-            {
-                firstStarted.TrySetResult();
-                await releaseFirst.Task.ConfigureAwait(false);
-            },
-            out _));
+        Assert.True(
+            queue.TryPost(
+                async _ =>
+                {
+                    firstStarted.TrySetResult();
+                    await releaseFirst.Task.ConfigureAwait(false);
+                },
+                out _
+            )
+        );
         admissionLatencies[0] = Stopwatch.GetTimestamp() - firstStartedAt;
         accepted++;
         await firstStarted.Task.WaitAsync(TimeSpan.FromSeconds(5));
@@ -41,9 +46,7 @@ public sealed class SerialExecutionQueueBenchmarkTests(ITestOutputHelper output)
         for (var index = 1; index < AdmissionAttempts; index++)
         {
             var startedAt = Stopwatch.GetTimestamp();
-            if (queue.TryPost(
-                    static _ => ValueTask.CompletedTask,
-                    out _))
+            if (queue.TryPost(static _ => ValueTask.CompletedTask, out _))
             {
                 accepted++;
             }
@@ -60,9 +63,7 @@ public sealed class SerialExecutionQueueBenchmarkTests(ITestOutputHelper output)
 
         var recoveryStartedAt = Stopwatch.GetTimestamp();
         releaseFirst.TrySetResult();
-        while (!queue.TryPost(
-                   static _ => ValueTask.CompletedTask,
-                   out _))
+        while (!queue.TryPost(static _ => ValueTask.CompletedTask, out _))
             await Task.Yield();
         var firstReadmission = Stopwatch.GetElapsedTime(recoveryStartedAt);
         await queue.ApplicationDrained.WaitAsync(TimeSpan.FromSeconds(10));
@@ -78,17 +79,20 @@ public sealed class SerialExecutionQueueBenchmarkTests(ITestOutputHelper output)
             AdmissionAttempts,
             accepted,
             rejected,
-            firstRejectionOrdinal);
+            firstRejectionOrdinal
+        );
         output.WriteLine(
             "throughputPerSecond={0:F0} p95Microseconds={1:F3} p99Microseconds={2:F3}",
             throughput,
             TicksToMicroseconds(p95),
-            TicksToMicroseconds(p99));
+            TicksToMicroseconds(p99)
+        );
         output.WriteLine(
             "peakPending={0} firstReadmissionMilliseconds={1:F3} fullyDrainedMilliseconds={2:F3}",
             peakPending,
             firstReadmission.TotalMilliseconds,
-            fullyDrained.TotalMilliseconds);
+            fullyDrained.TotalMilliseconds
+        );
 
         // The serial execution queue has no bound of its own, so a burst is
         // accepted in full and nothing is refused for want of room.

@@ -73,8 +73,8 @@ int check (const char *label,
 
 int main ()
 {
-    if (const int rc = check ("poll tick 1ms", std::chrono::microseconds (1000),
-                              millisecond_tick_budget, 1))
+    if (const int rc =
+          check ("poll tick 1ms", std::chrono::microseconds (1000), millisecond_tick_budget, 1))
         return rc;
     if (const int rc = check ("poll tick 100us", std::chrono::microseconds (100),
                               sub_millisecond_tick_budget, 2))

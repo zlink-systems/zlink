@@ -1,6 +1,6 @@
 package systems.zlink.stream.connector;
-import java.io.EOFException;
 
+import java.io.EOFException;
 import java.net.URI;
 import java.net.http.HttpClient;
 import java.net.http.WebSocket;
@@ -11,12 +11,12 @@ import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionStage;
 
 final class ZLinkWebSocketTransportConnection
-    implements ZLinkStreamTransportConnection, WebSocket.Listener {
+        implements ZLinkStreamTransportConnection, WebSocket.Listener {
     private final CompletableFuture<ZLinkWebSocketTransportConnection> opened =
-        new CompletableFuture<>();
+            new CompletableFuture<>();
     private final Queue<ZLinkStreamWireProtocol.Frame> frames = new ArrayDeque<>();
     private final Queue<CompletableFuture<ZLinkStreamWireProtocol.Frame>> waiters =
-        new ArrayDeque<>();
+            new ArrayDeque<>();
     private volatile WebSocket webSocket;
     private volatile Throwable failure;
     private final int maxReceivePayloadSize;
@@ -26,18 +26,17 @@ final class ZLinkWebSocketTransportConnection
     }
 
     static CompletionStage<ZLinkWebSocketTransportConnection> connectStage(
-        HttpClient client,
-        URI endpoint,
-        int maxReceivePayloadSize) {
+            HttpClient client, URI endpoint, int maxReceivePayloadSize) {
         ZLinkWebSocketTransportConnection connection =
-            new ZLinkWebSocketTransportConnection(maxReceivePayloadSize);
+                new ZLinkWebSocketTransportConnection(maxReceivePayloadSize);
         client.newWebSocketBuilder()
-            .buildAsync(endpoint, connection)
-            .whenComplete((socket, ex) -> {
-                if (ex != null) {
-                    connection.fail(ex);
-                }
-            });
+                .buildAsync(endpoint, connection)
+                .whenComplete(
+                        (socket, ex) -> {
+                            if (ex != null) {
+                                connection.fail(ex);
+                            }
+                        });
         return connection.opened;
     }
 
@@ -51,17 +50,19 @@ final class ZLinkWebSocketTransportConnection
     @Override
     public CompletionStage<?> onBinary(WebSocket socket, ByteBuffer data, boolean last) {
         if (!last) {
-            fail(ZLinkStreamException.of(
-                ZLinkStreamErrorCode.FRAME_DECODE_FAILED,
-                "fragmented WebSocket frames are not supported"));
+            fail(
+                    ZLinkStreamException.of(
+                            ZLinkStreamErrorCode.FRAME_DECODE_FAILED,
+                            "fragmented WebSocket frames are not supported"));
             socket.request(1);
             return CompletableFuture.completedFuture(null);
         }
         if (data.remaining() > ZLinkStreamWireProtocol.maxFrameLength(maxReceivePayloadSize)) {
             //  Spec 32 9: a received frame over the limit is FrameTooLarge.
-            fail(ZLinkStreamException.of(
-                ZLinkStreamErrorCode.FRAME_TOO_LARGE,
-                "websocket frame exceeds max receive payload size"));
+            fail(
+                    ZLinkStreamException.of(
+                            ZLinkStreamErrorCode.FRAME_TOO_LARGE,
+                            "websocket frame exceeds max receive payload size"));
             socket.request(1);
             return CompletableFuture.completedFuture(null);
         }
@@ -107,10 +108,9 @@ final class ZLinkWebSocketTransportConnection
         WebSocket current = webSocket;
         if (current == null) {
             return CompletableFuture.failedFuture(
-                ZLinkStreamException.disconnected("websocket is not connected"));
+                    ZLinkStreamException.disconnected("websocket is not connected"));
         }
-        return current.sendBinary(ByteBuffer.wrap(frame), true)
-            .thenApply(ignored -> null);
+        return current.sendBinary(ByteBuffer.wrap(frame), true).thenApply(ignored -> null);
     }
 
     @Override

@@ -70,8 +70,8 @@ std::vector<std::uint8_t> from_hex (const std::string &value)
     std::vector<std::uint8_t> result;
     result.reserve (value.size () / 2);
     for (std::size_t index = 0; index < value.size (); index += 2)
-        result.push_back (static_cast<std::uint8_t> (
-          (digit (value[index]) << 4) | digit (value[index + 1])));
+        result.push_back (
+          static_cast<std::uint8_t> ((digit (value[index]) << 4) | digit (value[index + 1])));
     return result;
 }
 
@@ -91,19 +91,18 @@ std::string to_hex (const std::uint8_t *data, std::size_t size)
 std::array<std::uint8_t, 32> sha256 (const std::vector<std::uint8_t> &input)
 {
     static const std::uint32_t k[64] = {
-      0x428a2f98, 0x71374491, 0xb5c0fbcf, 0xe9b5dba5, 0x3956c25b, 0x59f111f1,
-      0x923f82a4, 0xab1c5ed5, 0xd807aa98, 0x12835b01, 0x243185be, 0x550c7dc3,
-      0x72be5d74, 0x80deb1fe, 0x9bdc06a7, 0xc19bf174, 0xe49b69c1, 0xefbe4786,
-      0x0fc19dc6, 0x240ca1cc, 0x2de92c6f, 0x4a7484aa, 0x5cb0a9dc, 0x76f988da,
-      0x983e5152, 0xa831c66d, 0xb00327c8, 0xbf597fc7, 0xc6e00bf3, 0xd5a79147,
-      0x06ca6351, 0x14292967, 0x27b70a85, 0x2e1b2138, 0x4d2c6dfc, 0x53380d13,
-      0x650a7354, 0x766a0abb, 0x81c2c92e, 0x92722c85, 0xa2bfe8a1, 0xa81a664b,
-      0xc24b8b70, 0xc76c51a3, 0xd192e819, 0xd6990624, 0xf40e3585, 0x106aa070,
-      0x19a4c116, 0x1e376c08, 0x2748774c, 0x34b0bcb5, 0x391c0cb3, 0x4ed8aa4a,
-      0x5b9cca4f, 0x682e6ff3, 0x748f82ee, 0x78a5636f, 0x84c87814, 0x8cc70208,
-      0x90befffa, 0xa4506ceb, 0xbef9a3f7, 0xc67178f2};
+      0x428a2f98, 0x71374491, 0xb5c0fbcf, 0xe9b5dba5, 0x3956c25b, 0x59f111f1, 0x923f82a4,
+      0xab1c5ed5, 0xd807aa98, 0x12835b01, 0x243185be, 0x550c7dc3, 0x72be5d74, 0x80deb1fe,
+      0x9bdc06a7, 0xc19bf174, 0xe49b69c1, 0xefbe4786, 0x0fc19dc6, 0x240ca1cc, 0x2de92c6f,
+      0x4a7484aa, 0x5cb0a9dc, 0x76f988da, 0x983e5152, 0xa831c66d, 0xb00327c8, 0xbf597fc7,
+      0xc6e00bf3, 0xd5a79147, 0x06ca6351, 0x14292967, 0x27b70a85, 0x2e1b2138, 0x4d2c6dfc,
+      0x53380d13, 0x650a7354, 0x766a0abb, 0x81c2c92e, 0x92722c85, 0xa2bfe8a1, 0xa81a664b,
+      0xc24b8b70, 0xc76c51a3, 0xd192e819, 0xd6990624, 0xf40e3585, 0x106aa070, 0x19a4c116,
+      0x1e376c08, 0x2748774c, 0x34b0bcb5, 0x391c0cb3, 0x4ed8aa4a, 0x5b9cca4f, 0x682e6ff3,
+      0x748f82ee, 0x78a5636f, 0x84c87814, 0x8cc70208, 0x90befffa, 0xa4506ceb, 0xbef9a3f7,
+      0xc67178f2};
     std::uint32_t h[8] = {0x6a09e667, 0xbb67ae85, 0x3c6ef372, 0xa54ff53a,
-                           0x510e527f, 0x9b05688c, 0x1f83d9ab, 0x5be0cd19};
+                          0x510e527f, 0x9b05688c, 0x1f83d9ab, 0x5be0cd19};
 
     std::vector<std::uint8_t> message (input);
     const std::uint64_t bit_length = static_cast<std::uint64_t> (input.size ()) * 8;
@@ -121,15 +120,15 @@ std::array<std::uint8_t, 32> sha256 (const std::vector<std::uint8_t> &input)
         std::uint32_t w[64];
         for (int index = 0; index < 16; ++index) {
             w[index] = (static_cast<std::uint32_t> (message[chunk + index * 4]) << 24)
-              | (static_cast<std::uint32_t> (message[chunk + index * 4 + 1]) << 16)
-              | (static_cast<std::uint32_t> (message[chunk + index * 4 + 2]) << 8)
-              | (static_cast<std::uint32_t> (message[chunk + index * 4 + 3]));
+                       | (static_cast<std::uint32_t> (message[chunk + index * 4 + 1]) << 16)
+                       | (static_cast<std::uint32_t> (message[chunk + index * 4 + 2]) << 8)
+                       | (static_cast<std::uint32_t> (message[chunk + index * 4 + 3]));
         }
         for (int index = 16; index < 64; ++index) {
-            const std::uint32_t s0 = rotr (w[index - 15], 7) ^ rotr (w[index - 15], 18)
-              ^ (w[index - 15] >> 3);
-            const std::uint32_t s1 = rotr (w[index - 2], 17) ^ rotr (w[index - 2], 19)
-              ^ (w[index - 2] >> 10);
+            const std::uint32_t s0 =
+              rotr (w[index - 15], 7) ^ rotr (w[index - 15], 18) ^ (w[index - 15] >> 3);
+            const std::uint32_t s1 =
+              rotr (w[index - 2], 17) ^ rotr (w[index - 2], 19) ^ (w[index - 2] >> 10);
             w[index] = w[index - 16] + s0 + w[index - 7] + s1;
         }
 
@@ -151,11 +150,17 @@ std::array<std::uint8_t, 32> sha256 (const std::vector<std::uint8_t> &input)
             b = a;
             a = temp1 + temp2;
         }
-        h[0] += a; h[1] += b; h[2] += c; h[3] += d;
-        h[4] += e; h[5] += f; h[6] += g; h[7] += hh;
+        h[0] += a;
+        h[1] += b;
+        h[2] += c;
+        h[3] += d;
+        h[4] += e;
+        h[5] += f;
+        h[6] += g;
+        h[7] += hh;
     }
 
-    std::array<std::uint8_t, 32> digest {};
+    std::array<std::uint8_t, 32> digest{};
     for (int index = 0; index < 8; ++index) {
         digest[index * 4] = static_cast<std::uint8_t> (h[index] >> 24);
         digest[index * 4 + 1] = static_cast<std::uint8_t> (h[index] >> 16);
@@ -189,8 +194,8 @@ std::vector<std::uint8_t> read_str (const std::vector<std::uint8_t> &bytes, std:
     } else if (tag == 0xd9) {
         length = next_byte (bytes, offset);
     } else if (tag == 0xda) {
-        length = (static_cast<std::size_t> (next_byte (bytes, offset)) << 8)
-          | next_byte (bytes, offset);
+        length =
+          (static_cast<std::size_t> (next_byte (bytes, offset)) << 8) | next_byte (bytes, offset);
     } else if (tag == 0xdb) {
         for (int shift = 0; shift < 4; ++shift)
             length = (length << 8) | next_byte (bytes, offset);
@@ -207,19 +212,23 @@ std::vector<std::uint8_t> read_str (const std::vector<std::uint8_t> &bytes, std:
 std::uint64_t read_uint (const std::vector<std::uint8_t> &bytes, std::size_t &offset)
 {
     const std::uint8_t tag = next_byte (bytes, offset);
-    if ((tag & 0x80) == 0) return tag;
-    if (tag == 0xcc) return next_byte (bytes, offset);
+    if ((tag & 0x80) == 0)
+        return tag;
+    if (tag == 0xcc)
+        return next_byte (bytes, offset);
     if (tag == 0xcd)
         return (static_cast<std::uint64_t> (next_byte (bytes, offset)) << 8)
-          | next_byte (bytes, offset);
+               | next_byte (bytes, offset);
     if (tag == 0xce) {
         std::uint64_t value = 0;
-        for (int shift = 0; shift < 4; ++shift) value = (value << 8) | next_byte (bytes, offset);
+        for (int shift = 0; shift < 4; ++shift)
+            value = (value << 8) | next_byte (bytes, offset);
         return value;
     }
     if (tag == 0xcf) {
         std::uint64_t value = 0;
-        for (int shift = 0; shift < 8; ++shift) value = (value << 8) | next_byte (bytes, offset);
+        for (int shift = 0; shift < 8; ++shift)
+            value = (value << 8) | next_byte (bytes, offset);
         return value;
     }
     assert (false && "invalid msgpack uint tag");
@@ -229,8 +238,10 @@ std::uint64_t read_uint (const std::vector<std::uint8_t> &bytes, std::size_t &of
 bool read_bool (const std::vector<std::uint8_t> &bytes, std::size_t &offset)
 {
     const std::uint8_t tag = next_byte (bytes, offset);
-    if (tag == 0xc2) return false;
-    if (tag == 0xc3) return true;
+    if (tag == 0xc2)
+        return false;
+    if (tag == 0xc3)
+        return true;
     assert (false && "invalid msgpack bool tag");
     return false;
 }
@@ -296,7 +307,7 @@ int main ()
     const auto relocation_bytes = from_hex (relocation_blob.at ("rawBytesHex").get<std::string> ());
     assert (!relocation_bytes.empty ());
     const auto expected_relocation_key = prefix + ":{zlink-relocation-v1}:blob:"
-      + relocation_blob.at ("reference").get<std::string> ();
+                                         + relocation_blob.at ("reference").get<std::string> ();
     assert (expected_relocation_key == relocation_blob.at ("redisKey").get<std::string> ());
 
     for (const auto &vector : root.at ("valueVectors").at ("genericOpaqueRecord")) {
@@ -311,7 +322,8 @@ int main ()
         assert (to_hex (decoded.raw_bytes.data (), decoded.raw_bytes.size ())
                 == vector.at ("jsonBytesHex").get<std::string> ());
         assert (decoded.version == vector.at ("version").get<std::string> ());
-        assert (std::to_string (decoded.expires_at_ms) == vector.at ("expiresAtMs").get<std::string> ());
+        assert (std::to_string (decoded.expires_at_ms)
+                == vector.at ("expiresAtMs").get<std::string> ());
         assert (decoded.tombstone == vector.at ("tombstone").get<bool> ());
 
         const auto expected_member = from_hex (vector.at ("cmsgpackMemberHex").get<std::string> ());
@@ -330,8 +342,8 @@ int main ()
         // not just this file's from-scratch one, must decode every vector
         // identically.
         const auto full_bytes = from_hex (vector.at ("fullValueHex").get<std::string> ());
-        const std::string full_string (
-          reinterpret_cast<const char *> (full_bytes.data ()), full_bytes.size ());
+        const std::string full_string (reinterpret_cast<const char *> (full_bytes.data ()),
+                                       full_bytes.size ());
         const auto production_decoded =
           zlink::framework::redis::detail::decode_opaque_value (full_string);
         assert (production_decoded.original_key
@@ -442,8 +454,8 @@ int main ()
         auto tampered = from_hex (vector.at ("fullValueHex").get<std::string> ());
         assert (tampered[0] == 0x01);
         tampered[0] = 0x02;
-        const std::string tampered_string (
-          reinterpret_cast<const char *> (tampered.data ()), tampered.size ());
+        const std::string tampered_string (reinterpret_cast<const char *> (tampered.data ()),
+                                           tampered.size ());
         bool threw = false;
         try {
             (void) zlink::framework::redis::detail::decode_opaque_value (tampered_string);
@@ -537,16 +549,14 @@ int main ()
         const auto *found = std::get_if<store_found_t> (&stored);
         assert (found != nullptr);
 
-        const auto &owner_lease_vector =
-          root.at ("valueVectors").at ("genericOpaqueRecord").at (4);
+        const auto &owner_lease_vector = root.at ("valueVectors").at ("genericOpaqueRecord").at (4);
         assert (owner_lease_vector.at ("name").get<std::string> () == "ownerLease-expired");
 
         // Field-compare (order-independent) against the golden's "decoded"
         // object -- see the block comment above for why this is not yet a
         // byte-exact compare.
-        const auto produced_json = nlohmann::json::parse (
-          std::string (reinterpret_cast<const char *> (found->value.bytes.data ()),
-                       found->value.bytes.size ()));
+        const auto produced_json = nlohmann::json::parse (std::string (
+          reinterpret_cast<const char *> (found->value.bytes.data ()), found->value.bytes.size ()));
         assert (produced_json == owner_lease_vector.at ("decoded"));
     }
 
@@ -660,16 +670,15 @@ int main ()
             assert (std::holds_alternative<store_write_applied_t> (
               store
                 .write ({.conditions = {store_missing_condition_t{store_key_t{std::string (key)}}},
-                         .mutations = {store_put_t{store_key_t{std::string (key)},
-                                                    bytes (value), std::nullopt}}})
+                         .mutations = {store_put_t{store_key_t{std::string (key)}, bytes (value),
+                                                   std::nullopt}}})
                 .result ()
                 .value ()));
         };
         seed_counter ("zlink:v11:object-counter", "7");
         seed_counter ("zlink:v11:authority-owner-counter", "3");
 
-        object_creation_target_t target{"main", node_rid_t::from_string (rid_raw), 1,
-                                        claim->token};
+        object_creation_target_t target{"main", node_rid_t::from_string (rid_raw), 1, claim->token};
         object_reserve_request_t actor_request;
         actor_request.key = {placement_object_kind_t::actor, "user:42"};
         actor_request.intent.stable_type = "chat";
@@ -681,8 +690,8 @@ int main ()
         assert (reservation != nullptr);
         assert (reservation->fence.object_generation == 7);
         assert (reservation->fence.authority_owner_generation == 3);
-        const auto object_counter = std::get<store_found_t> (
-          store.read ({"zlink:v11:object-counter"}).result ().value ());
+        const auto object_counter =
+          std::get<store_found_t> (store.read ({"zlink:v11:object-counter"}).result ().value ());
         const auto authority_owner_counter = std::get<store_found_t> (
           store.read ({"zlink:v11:authority-owner-counter"}).result ().value ());
         assert (object_counter.value.bytes == bytes ("8"));
@@ -720,9 +729,9 @@ int main ()
             std::cerr << "creation terminal golden reservation failed\n";
             return 1;
         }
-        const auto node_terminal_raw = from_hex (
-          "01000000250000000000000000010200180f6163746f722d63616e6f6e6963616c"
-          "000000000000000100");
+        const auto node_terminal_raw =
+          from_hex ("01000000250000000000000000010200180f6163746f722d63616e6f6e6963616c"
+                    "000000000000000100");
         std::vector<std::byte> node_terminal;
         node_terminal.reserve (node_terminal_raw.size ());
         for (const auto byte : node_terminal_raw)
@@ -732,17 +741,19 @@ int main ()
         const creation_terminal_publication_t terminal_publication{
           terminal_operation, node_terminal,
           std::chrono::system_clock::now () + std::chrono::minutes (1)};
-        const auto terminal_result = repository.complete_creation (
-          {terminal_request.key, terminal_fence->fence,
-           object_creation_completed_t{ready_payload, terminal_publication}})
-          .result ().value ();
+        const auto terminal_result =
+          repository
+            .complete_creation ({terminal_request.key, terminal_fence->fence,
+                                 object_creation_completed_t{ready_payload, terminal_publication}})
+            .result ()
+            .value ();
         if (!std::holds_alternative<object_creation_completed_result_t> (terminal_result)) {
             std::cerr << "creation terminal golden publication failed\n";
             return 1;
         }
         const auto &key_derivations = root.at ("keyDerivation");
-        const auto terminal_key_vector = std::find_if (
-          key_derivations.begin (), key_derivations.end (), [] (const auto &vector) {
+        const auto terminal_key_vector =
+          std::find_if (key_derivations.begin (), key_derivations.end (), [] (const auto &vector) {
               return vector.at ("record").template get<std::string> () == "creation-terminal";
           });
         if (terminal_key_vector == key_derivations.end ()) {

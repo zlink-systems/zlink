@@ -12,7 +12,8 @@ internal static class ZlinkStreamLz4PayloadCodec
     public static bool TryDecompress(
         ReadOnlyMemory<byte> payload,
         int maxDecompressedPayloadSize,
-        out ReadOnlyMemory<byte> decompressed)
+        out ReadOnlyMemory<byte> decompressed
+    )
     {
         if (LZ4Pickler.UnpickledSize(payload.Span) > maxDecompressedPayloadSize)
         {

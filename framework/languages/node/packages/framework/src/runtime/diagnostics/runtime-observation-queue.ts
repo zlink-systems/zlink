@@ -1,7 +1,4 @@
-import type {
-  ZLinkObservationLoss,
-  ZLinkObservedStatus
-} from '../../contracts';
+import type { ZLinkObservationLoss, ZLinkObservedStatus } from '../../contracts';
 
 export const ZLINK_DEFAULT_TERMINAL_OBSERVATION_CAPACITY = 64;
 export const ZLINK_SIGNED_OBSERVATION_LOSS_MAXIMUM = 9_223_372_036_854_775_807n;
@@ -55,9 +52,7 @@ class RuntimeObservationLossState {
   }
 
   recordDiscardedTerminal(): void {
-    this.discardedTerminal = saturatingObservationLossIncrement(
-      this.discardedTerminal
-    );
+    this.discardedTerminal = saturatingObservationLossIncrement(this.discardedTerminal);
   }
 
   snapshot(): ZLinkObservationLoss {
@@ -74,8 +69,11 @@ class RuntimeObservationLossState {
  * dispatcher; they never invoke an iterator continuation directly.
  */
 export class RuntimeEventQueue<T>
-  implements AsyncIterable<ZLinkObservedStatus<T>>, AsyncIterator<ZLinkObservedStatus<T>>,
-    RuntimeObservationDispatchTarget {
+  implements
+    AsyncIterable<ZLinkObservedStatus<T>>,
+    AsyncIterator<ZLinkObservedStatus<T>>,
+    RuntimeObservationDispatchTarget
+{
   private readonly intermediateBySource = new Map<unknown, RetainedObservation<T>>();
   private readonly terminalFifo: Array<RetainedObservation<T> | undefined> = [];
   private readonly terminalCountBySource = new Map<unknown, number>();
@@ -108,7 +106,9 @@ export class RuntimeEventQueue<T>
     }
   }
 
-  [Symbol.asyncIterator](): AsyncIterator<ZLinkObservedStatus<T>> { return this; }
+  [Symbol.asyncIterator](): AsyncIterator<ZLinkObservedStatus<T>> {
+    return this;
+  }
 
   next(): Promise<IteratorResult<ZLinkObservedStatus<T>>> {
     if (this.waitersCount === 0) {
@@ -126,7 +126,7 @@ export class RuntimeEventQueue<T>
         return Promise.resolve({ done: true, value: undefined });
       }
     }
-    return new Promise(resolve => {
+    return new Promise((resolve) => {
       this.waiters.push(resolve);
       this.waitersCount += 1;
       if (this.hasRetained() || this.closed || this.completeWhenDrained) {
@@ -217,10 +217,7 @@ export class RuntimeEventQueue<T>
     }
     this.terminalFifo.push(this.retain(value, source));
     this.terminalCount += 1;
-    this.terminalCountBySource.set(
-      source,
-      (this.terminalCountBySource.get(source) ?? 0) + 1
-    );
+    this.terminalCountBySource.set(source, (this.terminalCountBySource.get(source) ?? 0) + 1);
     this.signalDispatcher();
   }
 
@@ -236,9 +233,8 @@ export class RuntimeEventQueue<T>
     const terminal = this.peekTerminal();
     const intermediate = this.oldestIntermediate();
     if (
-      terminal !== undefined
-      && (intermediate === undefined
-        || terminal.publishOrdinal <= intermediate.publishOrdinal)
+      terminal !== undefined &&
+      (intermediate === undefined || terminal.publishOrdinal <= intermediate.publishOrdinal)
     ) {
       return this.takeTerminal();
     }
@@ -248,9 +244,7 @@ export class RuntimeEventQueue<T>
   }
 
   private peekTerminal(): RetainedObservation<T> | undefined {
-    return this.terminalCount === 0
-      ? undefined
-      : this.terminalFifo[this.terminalHead];
+    return this.terminalCount === 0 ? undefined : this.terminalFifo[this.terminalHead];
   }
 
   private oldestIntermediate(): RetainedObservation<T> | undefined {
@@ -297,10 +291,7 @@ export class RuntimeEventQueue<T>
     if (this.terminalCount === 0) {
       this.terminalFifo.length = 0;
       this.terminalHead = 0;
-    } else if (
-      this.terminalHead >= 1024
-      && this.terminalHead * 2 >= this.terminalFifo.length
-    ) {
+    } else if (this.terminalHead >= 1024 && this.terminalHead * 2 >= this.terminalFifo.length) {
       this.terminalFifo.splice(0, this.terminalHead);
       this.terminalHead = 0;
     }
@@ -333,9 +324,7 @@ export class RuntimeEventQueue<T>
     return { status, loss: this.loss.snapshot() };
   }
 
-  private takeWaiter():
-    | ((result: IteratorResult<ZLinkObservedStatus<T>>) => void)
-    | undefined {
+  private takeWaiter(): ((result: IteratorResult<ZLinkObservedStatus<T>>) => void) | undefined {
     if (this.waitersCount === 0) return undefined;
     const waiter = this.waiters[this.waitersHead];
     this.waiters[this.waitersHead] = undefined;

@@ -1,5 +1,3 @@
 package systems.zlink.framework.runtime.internal.locations;
 
-public record ZLinkAggregateStale()
-    implements ZLinkAggregatePrepareResult {
-}
+public record ZLinkAggregateStale() implements ZLinkAggregatePrepareResult {}

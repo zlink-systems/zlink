@@ -11,10 +11,7 @@ import type {
   ZLinkSpotPublisherClient
 } from '../../contracts';
 import type { SpotHandle } from '../spots/spot-handle';
-import {
-  ZLinkConfigurationException,
-  type ZLinkFrameworkRegistration
-} from '../configuration';
+import { ZLinkConfigurationException, type ZLinkFrameworkRegistration } from '../configuration';
 import {
   ZLinkFrameworkInternalErrorKind,
   createInternalFrameworkException
@@ -56,13 +53,9 @@ export class DefaultZLinkChannelClient implements ZLinkChannelClient {
     return new DefaultZLinkSendCall(
       () => this.requireChannel(channelName),
       async (packetName, metadata, signal) =>
-        normalizeSubmitResult(await this.requireTransport().send(
-          channelName,
-          packetName,
-          message,
-          signal,
-          metadata
-        ))
+        normalizeSubmitResult(
+          await this.requireTransport().send(channelName, packetName, message, signal, metadata)
+        )
     );
   }
 
@@ -83,9 +76,11 @@ export class DefaultZLinkChannelClient implements ZLinkChannelClient {
   }
 
   private defaultRequestTimeout(channelName: string): number {
-    return this.registration.channels.get(channelName)?.requestTimeoutMs
-      ?? this.registration.requestTimeoutMs
-      ?? 30_000;
+    return (
+      this.registration.channels.get(channelName)?.requestTimeoutMs ??
+      this.registration.requestTimeoutMs ??
+      30_000
+    );
   }
 
   private requireChannel(channelName: string): void {
@@ -105,9 +100,7 @@ export class DefaultZLinkChannelClient implements ZLinkChannelClient {
   }
 
   private requireTransport(): ZLinkChannelClientTransport {
-    const transport = typeof this.transport === 'function'
-      ? this.transport()
-      : this.transport;
+    const transport = typeof this.transport === 'function' ? this.transport() : this.transport;
     if (transport === undefined) {
       throw new ZLinkConfigurationException('Channel runtime is not started.');
     }
@@ -123,24 +116,24 @@ export class DefaultZLinkFanoutClient implements ZLinkFanoutClient {
 
   publish(channelName: string, event: unknown): ZLinkFanoutPublishCall;
   publish(channelName: string, topic: string, event: unknown): ZLinkFanoutPublishCall;
-  publish(channelName: string, topicOrEvent: string | unknown, explicitEvent?: unknown): ZLinkFanoutPublishCall {
+  publish(
+    channelName: string,
+    topicOrEvent: string | unknown,
+    explicitEvent?: unknown
+  ): ZLinkFanoutPublishCall {
     const hasExplicitTopic = arguments.length === 3;
     const event = hasExplicitTopic ? explicitEvent : topicOrEvent;
     const topic = hasExplicitTopic
-      ? topicOrEvent as string
+      ? (topicOrEvent as string)
       : resolveFrameworkPacketName(event, undefined, 'Fanout');
     requirePublicFanoutTopic(topic);
     const packetName = resolveFrameworkPacketName(event, undefined, 'Fanout');
     return new DefaultZLinkFanoutPublishCall(
       () => this.requirePublisherChannel(channelName),
       async (signal) => ({
-        status: (await this.requireTransport().publish(
-          channelName,
-          topic,
-          packetName,
-          event,
-          signal
-        )).status
+        status: (
+          await this.requireTransport().publish(channelName, topic, packetName, event, signal)
+        ).status
       })
     );
   }
@@ -158,14 +151,14 @@ export class DefaultZLinkFanoutClient implements ZLinkFanoutClient {
 
   private requirePublisherChannel(channelName: string): void {
     if (!this.registration.fanoutPublishers.has(channelName)) {
-      throw new ZLinkConfigurationException(`Channel '${channelName}' does not have a publisher capability.`);
+      throw new ZLinkConfigurationException(
+        `Channel '${channelName}' does not have a publisher capability.`
+      );
     }
   }
 
   private requireTransport(): ZLinkChannelClientTransport {
-    const transport = typeof this.transport === 'function'
-      ? this.transport()
-      : this.transport;
+    const transport = typeof this.transport === 'function' ? this.transport() : this.transport;
     if (transport === undefined) {
       throw new ZLinkConfigurationException('Channel runtime is not started.');
     }
@@ -177,21 +170,24 @@ export class DefaultZLinkRouteClient implements ZLinkRouteClient {
   constructor(
     private readonly registration: ZLinkFrameworkRegistration,
     private readonly transport?: ZLinkRouteClientTransport,
-    private readonly spotRouterChannelIdForMesh: (meshName: string) => string = (meshName) => meshName
+    private readonly spotRouterChannelIdForMesh: (meshName: string) => string = (meshName) =>
+      meshName
   ) {}
 
   sendToNode(meshName: string, targetNodeRid: string, message: unknown): ZLinkSendCall {
     return new DefaultZLinkSendCall(
       () => this.requireMesh(meshName),
       async (packetName, metadata, signal) =>
-        normalizeSubmitResult(await this.requireTransport().submit(
-          meshName,
-          targetNodeRid,
-          packetName,
-          message,
-          signal,
-          metadata
-        ))
+        normalizeSubmitResult(
+          await this.requireTransport().submit(
+            meshName,
+            targetNodeRid,
+            packetName,
+            message,
+            signal,
+            metadata
+          )
+        )
     );
   }
 
@@ -214,24 +210,30 @@ export class DefaultZLinkRouteClient implements ZLinkRouteClient {
 
   sendToChannel(channelName: string, message: unknown): ZLinkSendCall {
     return new DefaultZLinkSendCall(
-      () => { this.resolveMeshChannel(channelName); },
+      () => {
+        this.resolveMeshChannel(channelName);
+      },
       async (packetName, metadata, signal) => {
         const meshName = this.resolveMeshChannel(channelName);
-        return normalizeSubmitResult(await this.requireTransport().submitToChannel(
-          meshName,
-          channelName,
-          packetName,
-          message,
-          signal,
-          metadata
-        ));
+        return normalizeSubmitResult(
+          await this.requireTransport().submitToChannel(
+            meshName,
+            channelName,
+            packetName,
+            message,
+            signal,
+            metadata
+          )
+        );
       }
     );
   }
 
   requestToChannel(channelName: string, request: unknown): ZLinkChannelRequestCall {
     return new DefaultZLinkRequestCall(
-      () => { this.resolveMeshChannel(channelName); },
+      () => {
+        this.resolveMeshChannel(channelName);
+      },
       (packetName, timeoutMs, metadata, signal) => {
         const meshName = this.resolveMeshChannel(channelName);
         return this.requireTransport().requestToChannel(
@@ -250,7 +252,9 @@ export class DefaultZLinkRouteClient implements ZLinkRouteClient {
 
   sendToSpot(spot: SpotHandle, message: unknown): ZLinkSendCall {
     return new DefaultZLinkSendCall(
-      () => { this.requireSpotTransport(); },
+      () => {
+        this.requireSpotTransport();
+      },
       async (_packetName, metadata, signal) => {
         await sendToSpotHandle(this.requireSpotTransport(), spot, message, {
           signal,
@@ -264,38 +268,43 @@ export class DefaultZLinkRouteClient implements ZLinkRouteClient {
 
   requestToSpot(spot: SpotHandle, request: unknown): ZLinkRequestCall {
     return new DefaultZLinkRequestCall(
-      () => { this.requireSpotTransport(); },
-      (_packetName, timeoutMs, metadata, signal) => requestToSpotHandle(
-        this.requireSpotTransport(),
-        spot,
-        request,
-        {
+      () => {
+        this.requireSpotTransport();
+      },
+      (_packetName, timeoutMs, metadata, signal) =>
+        requestToSpotHandle(this.requireSpotTransport(), spot, request, {
           timeoutMs,
           signal,
           metadata,
           spotRouterChannelIdForMesh: this.spotRouterChannelIdForMesh
-        }
-      ),
+        }),
       this.registration.requestTimeoutMs ?? 30_000
     );
   }
 
   private defaultRequestTimeout(meshName: string): number {
-    return this.registration.spotNodes.get(meshName)?.requestTimeoutMs
-      ?? this.registration.routeChannelOptions.get(meshName)?.requestTimeoutMs
-      ?? this.registration.requestTimeoutMs
-      ?? 30_000;
+    return (
+      this.registration.spotNodes.get(meshName)?.requestTimeoutMs ??
+      this.registration.routeChannelOptions.get(meshName)?.requestTimeoutMs ??
+      this.registration.requestTimeoutMs ??
+      30_000
+    );
   }
 
   private requireMesh(meshName: string): void {
-    if (!this.registration.spotNodes.has(meshName) && !this.registration.routeChannels.has(meshName)) {
+    if (
+      !this.registration.spotNodes.has(meshName) &&
+      !this.registration.routeChannels.has(meshName)
+    ) {
       throw new ZLinkConfigurationException(`RouteMesh '${meshName}' is not registered.`);
     }
   }
 
   private resolveMeshChannel(channelName: string): string {
     const matches = [...this.registration.spotNodes.entries()]
-      .filter(([, mesh]) => Object.prototype.hasOwnProperty.call(mesh.meshChannels ?? {}, channelName))
+      .filter(([, mesh]) =>
+        Object.prototype.hasOwnProperty.call(mesh.meshChannels ?? {}, channelName)
+      )
       .map(([meshName]) => meshName);
     if (matches.length === 0) {
       throw createInternalFrameworkException(
@@ -312,11 +321,10 @@ export class DefaultZLinkRouteClient implements ZLinkRouteClient {
   }
 
   private defaultRequestTimeoutForChannel(channelName: string): number {
-    const match = [...this.registration.spotNodes.entries()]
-      .find(([, mesh]) => Object.prototype.hasOwnProperty.call(mesh.meshChannels ?? {}, channelName));
-    return match?.[1].requestTimeoutMs
-      ?? this.registration.requestTimeoutMs
-      ?? 30_000;
+    const match = [...this.registration.spotNodes.entries()].find(([, mesh]) =>
+      Object.prototype.hasOwnProperty.call(mesh.meshChannels ?? {}, channelName)
+    );
+    return match?.[1].requestTimeoutMs ?? this.registration.requestTimeoutMs ?? 30_000;
   }
 
   private requireTransport(): ZLinkRouteClientTransport {
@@ -329,11 +337,12 @@ export class DefaultZLinkRouteClient implements ZLinkRouteClient {
   private requireSpotTransport(): ZLinkSpotRoutedTransport {
     const transport = this.requireTransport();
     if (transport.sendToSpot === undefined || transport.requestToSpot === undefined) {
-      throw new ZLinkConfigurationException('Route channel runtime does not support SpotHandle messaging.');
+      throw new ZLinkConfigurationException(
+        'Route channel runtime does not support SpotHandle messaging.'
+      );
     }
     return transport as ZLinkSpotRoutedTransport;
   }
-
 }
 
 export class DefaultZLinkSpotPublisherClient implements ZLinkSpotPublisherClient {
@@ -346,13 +355,24 @@ export class DefaultZLinkSpotPublisherClient implements ZLinkSpotPublisherClient
     return new DefaultZLinkPublishCall(
       () => this.requireMeshChannel(meshName, channelName),
       (packetName, metadata, signal) =>
-        this.requireTransport().publish(meshName, channelName, topic, packetName, event, signal, metadata)
+        this.requireTransport().publish(
+          meshName,
+          channelName,
+          topic,
+          packetName,
+          event,
+          signal,
+          metadata
+        )
     );
   }
 
   private requireMeshChannel(meshName: string, channelName: string): void {
     const mesh = this.registration.spotNodes.get(meshName);
-    if (mesh === undefined || !Object.prototype.hasOwnProperty.call(mesh.meshChannels ?? {}, channelName)) {
+    if (
+      mesh === undefined ||
+      !Object.prototype.hasOwnProperty.call(mesh.meshChannels ?? {}, channelName)
+    ) {
       throw new ZLinkConfigurationException(
         `Channel '${channelName}' is not registered in RouteMesh '${meshName}'.`
       );

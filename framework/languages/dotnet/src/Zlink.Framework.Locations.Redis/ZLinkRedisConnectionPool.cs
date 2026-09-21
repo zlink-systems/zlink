@@ -7,23 +7,21 @@ namespace Zlink.Framework.Locations.Redis;
 internal static class ZLinkRedisConnectionPool
 {
     private static readonly object Gate = new();
-    private static readonly Dictionary<string, PoolEntry> Entries =
-        new(StringComparer.Ordinal);
+    private static readonly Dictionary<string, PoolEntry> Entries = new(StringComparer.Ordinal);
 
     internal static string CreateKey(ConfigurationOptions configuration)
     {
         ArgumentNullException.ThrowIfNull(configuration);
         var normalized = configuration.ToString(includePassword: true);
-        return Convert.ToHexString(
-                SHA256.HashData(Encoding.UTF8.GetBytes(normalized)))
+        return Convert
+            .ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(normalized)))
             .ToLowerInvariant();
     }
 
-    internal static Func<
-        ConfigurationOptions,
-        ValueTask<IZLinkRedisConnection>> CreateFactory(
-            ConfigurationOptions configuration,
-            bool shareConnection)
+    internal static Func<ConfigurationOptions, ValueTask<IZLinkRedisConnection>> CreateFactory(
+        ConfigurationOptions configuration,
+        bool shareConnection
+    )
     {
         // Explicit ConfigurationOptions can carry callbacks that ToString()
         // cannot identify. Callers disable sharing for that configuration.
@@ -37,7 +35,8 @@ internal static class ZLinkRedisConnectionPool
     internal static async ValueTask<IZLinkRedisConnection> RentAsync(
         string key,
         ConfigurationOptions configuration,
-        Func<ConfigurationOptions, ValueTask<IZLinkRedisConnection>> connect)
+        Func<ConfigurationOptions, ValueTask<IZLinkRedisConnection>> connect
+    )
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(key);
         ArgumentNullException.ThrowIfNull(configuration);
@@ -48,8 +47,7 @@ internal static class ZLinkRedisConnectionPool
         {
             if (!Entries.TryGetValue(key, out entry!))
             {
-                entry = new PoolEntry(
-                    connect(configuration.Clone()).AsTask());
+                entry = new PoolEntry(connect(configuration.Clone()).AsTask());
                 Entries.Add(key, entry);
             }
 
@@ -63,8 +61,7 @@ internal static class ZLinkRedisConnectionPool
         }
         catch
         {
-            await ReleaseAsync(key, entry, connectionWasPublished: false)
-                .ConfigureAwait(false);
+            await ReleaseAsync(key, entry, connectionWasPublished: false).ConfigureAwait(false);
             throw;
         }
     }
@@ -72,7 +69,8 @@ internal static class ZLinkRedisConnectionPool
     private static async ValueTask ReleaseAsync(
         string key,
         PoolEntry entry,
-        bool connectionWasPublished)
+        bool connectionWasPublished
+    )
     {
         var dispose = false;
         lock (Gate)
@@ -80,9 +78,11 @@ internal static class ZLinkRedisConnectionPool
             if (entry.ReferenceCount <= 0)
                 return;
             entry.ReferenceCount--;
-            if (entry.ReferenceCount == 0
+            if (
+                entry.ReferenceCount == 0
                 && Entries.TryGetValue(key, out var current)
-                && ReferenceEquals(current, entry))
+                && ReferenceEquals(current, entry)
+            )
             {
                 Entries.Remove(key);
                 dispose = connectionWasPublished;
@@ -97,10 +97,11 @@ internal static class ZLinkRedisConnectionPool
     }
 
     private static async ValueTask<IZLinkRedisConnection> ConnectAsync(
-        ConfigurationOptions options) =>
+        ConfigurationOptions options
+    ) =>
         new ZLinkStackExchangeRedisConnection(
-            await ConnectionMultiplexer.ConnectAsync(options)
-                .ConfigureAwait(false));
+            await ConnectionMultiplexer.ConnectAsync(options).ConfigureAwait(false)
+        );
 
     private sealed class PoolEntry(Task<IZLinkRedisConnection> connection)
     {
@@ -112,7 +113,8 @@ internal static class ZLinkRedisConnectionPool
     private sealed class ConnectionLease(
         string key,
         PoolEntry entry,
-        IZLinkRedisConnection connection) : IZLinkRedisConnection
+        IZLinkRedisConnection connection
+    ) : IZLinkRedisConnection
     {
         private PoolEntry? _entry = entry;
 
@@ -123,11 +125,7 @@ internal static class ZLinkRedisConnectionPool
             var owned = Interlocked.Exchange(ref _entry, null);
             if (owned is not null)
             {
-                await ReleaseAsync(
-                        key,
-                        owned,
-                        connectionWasPublished: true)
-                    .ConfigureAwait(false);
+                await ReleaseAsync(key, owned, connectionWasPublished: true).ConfigureAwait(false);
             }
         }
     }

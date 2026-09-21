@@ -1,8 +1,9 @@
 package systems.zlink.framework.runtime.spots;
 
+import systems.zlink.framework.spots.ZLinkWorkerCancellation;
+
 import java.util.concurrent.CancellationException;
 import java.util.concurrent.atomic.AtomicBoolean;
-import systems.zlink.framework.spots.ZLinkWorkerCancellation;
 
 final class DefaultZLinkWorkerCancellation implements ZLinkWorkerCancellation {
     private final AtomicBoolean cancellationRequested = new AtomicBoolean();

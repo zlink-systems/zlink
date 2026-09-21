@@ -4,10 +4,10 @@ import systems.zlink.framework.ZLinkEncodedPayload;
 import systems.zlink.framework.ZLinkMessageSerializer;
 
 final class ZLinkMessagePackMessageSerializer implements ZLinkMessageSerializer {
-    static final ZLinkMessagePackMessageSerializer INSTANCE = new ZLinkMessagePackMessageSerializer();
+    static final ZLinkMessagePackMessageSerializer INSTANCE =
+            new ZLinkMessagePackMessageSerializer();
 
-    private ZLinkMessagePackMessageSerializer() {
-    }
+    private ZLinkMessagePackMessageSerializer() {}
 
     @Override
     public <T> ZLinkEncodedPayload serialize(T value) {

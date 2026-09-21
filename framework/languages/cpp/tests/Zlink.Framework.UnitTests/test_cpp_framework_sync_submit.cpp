@@ -27,9 +27,11 @@ using namespace zlink::framework;
 using namespace std::chrono_literals;
 
 static_assert (std::is_same_v<decltype (std::declval<request_call_t<int> &> ().submit ()), int>);
-static_assert (std::is_same_v<decltype (std::declval<channel_request_call_t &> ().submit<int> ()), int>);
+static_assert (
+  std::is_same_v<decltype (std::declval<channel_request_call_t &> ().submit<int> ()), int>);
 static_assert (std::is_same_v<decltype (std::declval<send_call_t &> ().submit ()), void>);
-static_assert (std::is_same_v<decltype (std::declval<bound_session_send_call_t &> ().submit ()), void>);
+static_assert (
+  std::is_same_v<decltype (std::declval<bound_session_send_call_t &> ().submit ()), void>);
 static_assert (std::is_same_v<decltype (std::declval<stream_send_call_t &> ().submit ()), void>);
 static_assert (std::is_same_v<decltype (std::declval<stream_write_call_t &> ().submit ()), void>);
 
@@ -54,27 +56,25 @@ struct calls_t
     int sends = 0;
     int bound_sends = 0;
     serializer_registry_t serializers;
-    request_call_t<int> request{
-      "request",
-      [this] (const auto &, auto, const auto &) {
-          ++requests;
-          return task_t<int> (result_t<int>::success (42));
-      },
-      [this] (bool) {
-          ++preflights;
-          return result_t<void>::success ();
-      }};
+    request_call_t<int> request{"request",
+                                [this] (const auto &, auto, const auto &) {
+                                    ++requests;
+                                    return task_t<int> (result_t<int>::success (42));
+                                },
+                                [this] (bool) {
+                                    ++preflights;
+                                    return result_t<void>::success ();
+                                }};
     channel_request_call_t channel_request{
-      "channel-request", &serializers,
-      [this] (const auto &, auto, const auto &) {
+      "channel-request", &serializers, [this] (const auto &, auto, const auto &) {
           ++channel_requests;
           return task_t<zlink::message_t> (
             result_t<zlink::message_t>::success (zlink::message_t::from (std::string ("42"))));
       }};
     send_call_t send{"send", [this] (const auto &, const auto &) {
-                        ++sends;
-                        return result_t<void>::success ();
-                    }};
+                         ++sends;
+                         return result_t<void>::success ();
+                     }};
     bound_session_send_call_t bound_send{
       send_call_t{"bound-send", [this] (const auto &, const auto &) {
                       ++bound_sends;
@@ -191,11 +191,10 @@ TEST (ZLinkFrameworkSyncSubmit, ChannelHandlerRejectsBeforeMessageSubmission)
     auto provider = services.build_provider ();
     serializer_registry_t serializers;
     handler_registry_t handlers;
-    handlers.on_request<channel_handler_t, int, int> (
-      "sync-submit", "", &channel_handler_t::handle, {.packet_name = "request"});
-    const auto result = handlers.invoke (
-      "sync-submit", "request", provider, serializers,
-      zlink::message_t::from (std::string ("42")));
+    handlers.on_request<channel_handler_t, int, int> ("sync-submit", "", &channel_handler_t::handle,
+                                                      {.packet_name = "request"});
+    const auto result = handlers.invoke ("sync-submit", "request", provider, serializers,
+                                         zlink::message_t::from (std::string ("42")));
     ASSERT_TRUE (result);
     EXPECT_EQ ("42", result.value ().to_string ());
     // Rejected calls remain unclaimed and submit exactly once outside the turn.
@@ -215,19 +214,18 @@ TEST (ZLinkFrameworkSyncSubmit, AsyncChannelHandlerRejectsBeforeAndAfterSuspensi
     auto &handler = provider.get_required<channel_handler_t> ();
     serializer_registry_t serializers;
     handler_registry_t handlers;
-    handlers.on_send<channel_handler_t, int> (
-      "sync-submit", "", &channel_handler_t::handle_async, {.packet_name = "request"});
+    handlers.on_send<channel_handler_t, int> ("sync-submit", "", &channel_handler_t::handle_async,
+                                              {.packet_name = "request"});
     detail::channel_runtime_t channel (nullptr);
-    auto result = channel.dispatch_send_async (
-      "sync-submit", "", "request", provider, serializers, handlers,
-      zlink::message_t::from (std::string ("42")), {});
+    auto result =
+      channel.dispatch_send_async ("sync-submit", "", "request", provider, serializers, handlers,
+                                   zlink::message_t::from (std::string ("42")), {});
     handler.entered.get_future ().wait ();
     // The single worker reaches this queued barrier only after the handler
     // suspends. Completion then resumes it on this application thread.
     std::promise<const void *> suspended;
-    runtime::handler_coroutine_executor ().post_native_continuation ([&] {
-        suspended.set_value (detail::application_job_context_t::current ());
-    });
+    runtime::handler_coroutine_executor ().post_native_continuation (
+      [&] { suspended.set_value (detail::application_job_context_t::current ()); });
     EXPECT_EQ (nullptr, suspended.get_future ().get ());
     EXPECT_EQ (nullptr, detail::application_job_context_t::current ());
     handler.resume.complete (result_t<void>::success ());
@@ -246,9 +244,8 @@ TEST (ZLinkFrameworkSyncSubmit, ChannelHandlerKeepsAllAsyncTerminalsAvailable)
     handlers.on_request<channel_handler_t, int, int> (
       "sync-submit", "", &channel_handler_t::handle_with_async_terminals,
       {.packet_name = "request"});
-    const auto result = handlers.invoke (
-      "sync-submit", "request", provider, serializers,
-      zlink::message_t::from (std::string ("42")));
+    const auto result = handlers.invoke ("sync-submit", "request", provider, serializers,
+                                         zlink::message_t::from (std::string ("42")));
     ASSERT_TRUE (result);
     EXPECT_EQ ("42", result.value ().to_string ());
     const auto &calls = provider.get_required<channel_handler_t> ().calls;
@@ -284,9 +281,8 @@ TEST (ZLinkFrameworkSyncSubmit, ApplicationCallbacksCompletedInlineKeepTheHandle
     handlers.on_request<channel_handler_t, int, int> (
       "sync-submit", "", &channel_handler_t::complete_application_callbacks,
       {.packet_name = "request"});
-    ASSERT_TRUE (handlers.invoke (
-      "sync-submit", "request", provider, serializers,
-      zlink::message_t::from (std::string ("42"))));
+    ASSERT_TRUE (handlers.invoke ("sync-submit", "request", provider, serializers,
+                                  zlink::message_t::from (std::string ("42"))));
     EXPECT_EQ (1, completions);
     EXPECT_EQ (1, terminals);
     EXPECT_EQ (nullptr, detail::application_job_context_t::current ());
@@ -323,10 +319,12 @@ TEST (ZLinkFrameworkSyncSubmit, StateLaneRejectsBeforeSideEffects)
     calls_t calls;
     runtime::offload_executor_t executor (1);
     runtime::state_lane_t lane (executor);
-    lane.run ([&] {
-        ASSERT_EQ (&lane, runtime::state_lane_t::current ());
-        calls.expect_rejected ();
-    }).get ();
+    lane
+      .run ([&] {
+          ASSERT_EQ (&lane, runtime::state_lane_t::current ());
+          calls.expect_rejected ();
+      })
+      .get ();
     calls.expect_application_submission ();
 }
 
@@ -344,14 +342,14 @@ TEST (ZLinkFrameworkSyncSubmit, RequestWaitsForApplicationReply)
 {
     detail::task_completion_source_t<int> reply;
     std::promise<void> submitted;
-    request_call_t<int> call{
-      "request", [&] (const auto &packet, auto timeout, const auto &metadata) {
-          EXPECT_EQ ("request", packet);
-          EXPECT_EQ (250ms, timeout);
-          EXPECT_EQ ("sync", metadata.at ("trace"));
-          submitted.set_value ();
-          return reply.task ();
-      }};
+    request_call_t<int> call{"request",
+                             [&] (const auto &packet, auto timeout, const auto &metadata) {
+                                 EXPECT_EQ ("request", packet);
+                                 EXPECT_EQ (250ms, timeout);
+                                 EXPECT_EQ ("sync", metadata.at ("trace"));
+                                 submitted.set_value ();
+                                 return reply.task ();
+                             }};
     call.timeout (250ms).metadata ("trace", "sync");
     auto result = std::async (std::launch::async, [&] { return call.submit (); });
     submitted.get_future ().wait ();
@@ -365,17 +363,16 @@ TEST (ZLinkFrameworkSyncSubmit, ChannelRequestWaitsForTypedApplicationReply)
     serializer_registry_t serializers;
     detail::task_completion_source_t<zlink::message_t> reply;
     std::promise<void> submitted;
-    channel_request_call_t call{
-      "channel-request", &serializers,
-      [&] (const auto &, auto, const auto &) {
-          submitted.set_value ();
-          return reply.task ();
-      }};
+    channel_request_call_t call{"channel-request", &serializers,
+                                [&] (const auto &, auto, const auto &) {
+                                    submitted.set_value ();
+                                    return reply.task ();
+                                }};
     auto result = std::async (std::launch::async, [&] { return call.submit<int> (); });
     submitted.get_future ().wait ();
     EXPECT_EQ (std::future_status::timeout, result.wait_for (0ms));
-    reply.complete (result_t<zlink::message_t>::success (
-      zlink::message_t::from (std::string ("73"))));
+    reply.complete (
+      result_t<zlink::message_t>::success (zlink::message_t::from (std::string ("73"))));
     EXPECT_EQ (73, result.get ());
 }
 
@@ -385,14 +382,14 @@ TEST (ZLinkFrameworkSyncSubmit, StreamSendWaitsForAdmission)
     stream_t stream;
     detail::task_completion_source_t<void> admitted;
     std::promise<void> submitted;
-    runtime.attach_transport_writer (
-      stream, [&] (const auto &header, const auto &payload, auto timeout) {
-          EXPECT_EQ ("sync-packet", header.packet_name ());
-          EXPECT_EQ ("payload", payload.to_string ());
-          EXPECT_EQ (250ms, timeout);
-          submitted.set_value ();
-          return admitted.task ();
-      });
+    runtime.attach_transport_writer (stream,
+                                     [&] (const auto &header, const auto &payload, auto timeout) {
+                                         EXPECT_EQ ("sync-packet", header.packet_name ());
+                                         EXPECT_EQ ("payload", payload.to_string ());
+                                         EXPECT_EQ (250ms, timeout);
+                                         submitted.set_value ();
+                                         return admitted.task ();
+                                     });
     auto call = stream.write_packet (zlink::message_t::from (std::string ("payload")));
     call.packet_name ("sync-packet").timeout (250ms);
     auto result = std::async (std::launch::async, [&] { call.submit (); });
@@ -415,8 +412,8 @@ TEST (ZLinkFrameworkSyncSubmit, StreamSendPropagatesDeferredAdmissionFailure)
     auto call = stream.write_packet (zlink::message_t::from (std::string ("payload")));
     auto result = std::async (std::launch::async, [&] { call.submit (); });
     submitted.get_future ().wait ();
-    admitted.complete (result_t<void>::failure (
-      framework_error_kind_t::deadline_exceeded, "admission deadline"));
+    admitted.complete (
+      result_t<void>::failure (framework_error_kind_t::deadline_exceeded, "admission deadline"));
     try {
         result.get ();
         FAIL () << "submit must observe the deferred admission failure";
@@ -459,18 +456,17 @@ TEST (ZLinkFrameworkSyncSubmit, SessionHandlerRejectionPreservesReplyAdmission)
     detail::task_completion_source_t<void> admitted;
     std::promise<void> submitted;
     std::atomic_int writes{0};
-    runtime.attach_transport_writer (
-      stream, [&] (const auto &header, const auto &payload, auto) {
-          ++writes;
-          EXPECT_EQ (detail::stream_message_kind_t::response, header.kind ());
-          EXPECT_EQ (12, header.request_seq ());
-          EXPECT_EQ ("reply", payload.to_string ());
-          submitted.set_value ();
-          return admitted.task ();
-      });
-    detail::stream_header_t header (
-      detail::stream_message_kind_t::request, stream_codec_t::raw,
-      detail::stream_header_flags_t::has_request_seq, 12, "request", {});
+    runtime.attach_transport_writer (stream, [&] (const auto &header, const auto &payload, auto) {
+        ++writes;
+        EXPECT_EQ (detail::stream_message_kind_t::response, header.kind ());
+        EXPECT_EQ (12, header.request_seq ());
+        EXPECT_EQ ("reply", payload.to_string ());
+        submitted.set_value ();
+        return admitted.task ();
+    });
+    detail::stream_header_t header (detail::stream_message_kind_t::request, stream_codec_t::raw,
+                                    detail::stream_header_flags_t::has_request_seq, 12, "request",
+                                    {});
     std::promise<result_t<void>> handled;
     ASSERT_TRUE (runtime.dispatch_packet_async (
       session, stream, header, zlink::message_t::from (std::string ("reply")),
@@ -490,10 +486,10 @@ TEST (ZLinkFrameworkSyncSubmit, SessionHandlerRejectionPreservesReplyAdmission)
 
 TEST (ZLinkFrameworkSyncSubmit, SubmissionFailuresKeepTheirFrameworkErrorKind)
 {
-    request_call_t<int> request{result_t<int>::failure (
-      framework_error_kind_t::deadline_exceeded, "request deadline")};
-    send_call_t send{result_t<void>::failure (
-      framework_error_kind_t::unavailable, "send unavailable")};
+    request_call_t<int> request{
+      result_t<int>::failure (framework_error_kind_t::deadline_exceeded, "request deadline")};
+    send_call_t send{
+      result_t<void>::failure (framework_error_kind_t::unavailable, "send unavailable")};
     try {
         (void) request.submit ();
         FAIL () << "request failure must be thrown";

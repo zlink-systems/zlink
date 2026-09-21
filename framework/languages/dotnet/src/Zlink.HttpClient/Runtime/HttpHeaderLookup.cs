@@ -11,10 +11,12 @@ internal static class HttpHeaderLookup
 
     public static IReadOnlyDictionary<string, string> Without(
         IReadOnlyDictionary<string, string> headers,
-        params string[] names)
+        params string[] names
+    )
     {
         var copy = new Dictionary<string, string>(headers, StringComparer.OrdinalIgnoreCase);
-        foreach (var name in names) copy.Remove(name);
+        foreach (var name in names)
+            copy.Remove(name);
         return copy;
     }
 }

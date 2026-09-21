@@ -15,7 +15,8 @@ internal static partial class ZLinkServiceWireCodec
         RoutingId TargetNodeRid,
         ulong TargetNodeGeneration,
         ulong ExpectedAuthorityOwnerGeneration,
-        ulong ExpectedOwnerLeaseGeneration);
+        ulong ExpectedOwnerLeaseGeneration
+    );
 
     /// <summary>
     /// The exact retired session owner identity. Every field participates in
@@ -27,14 +28,15 @@ internal static partial class ZLinkServiceWireCodec
         string SessionOwnerId,
         ulong SessionOwnerLeaseGeneration,
         RoutingId SessionRid,
-        ulong RetiredBindingGeneration);
+        ulong RetiredBindingGeneration
+    );
 
     internal readonly record struct BoundSessionReplacedRecord(
         BoundSessionReplacedActorAuthority ActorAuthority,
-        BoundSessionReplacedRetiredSession RetiredSession);
+        BoundSessionReplacedRetiredSession RetiredSession
+    );
 
-    internal static byte[] EncodeBoundSessionReplaced(
-        BoundSessionReplacedRecord record)
+    internal static byte[] EncodeBoundSessionReplaced(BoundSessionReplacedRecord record)
     {
         ValidateBoundSessionReplaced(record);
         var writer = new WireWriter();
@@ -54,7 +56,8 @@ internal static partial class ZLinkServiceWireCodec
         var bytes = Prefix(
             ServiceWireConstants.Command.BoundSessionReplaced,
             ServiceWireConstants.Flag.None,
-            writer.Count);
+            writer.Count
+        );
         writer.CopyTo(bytes.AsSpan(5));
         return bytes;
     }
@@ -62,7 +65,8 @@ internal static partial class ZLinkServiceWireCodec
     internal static bool TryDecodeBoundSessionReplaced(
         ReadOnlySpan<byte> bytes,
         out BoundSessionReplacedRecord record,
-        out DecodeError error)
+        out DecodeError error
+    )
     {
         record = default;
         try
@@ -81,7 +85,8 @@ internal static partial class ZLinkServiceWireCodec
             }
 
             var reader = new WireReader(bytes[5..]);
-            if (!reader.TryText8(out var actorId)
+            if (
+                !reader.TryText8(out var actorId)
                 || !reader.TryU64(out var objectGeneration)
                 || !reader.TryRid(out var targetNodeRid)
                 || !reader.TryU64(out var targetNodeGeneration)
@@ -93,10 +98,9 @@ internal static partial class ZLinkServiceWireCodec
                 || !reader.TryU64(out var sessionOwnerLeaseGeneration)
                 || !reader.TryRid(out var sessionRid)
                 || !reader.TryU64(out var retiredBindingGeneration)
-                || reader.Remaining != 0)
-                return DecodeBoundSessionReplacedFailure(
-                    ref reader,
-                    out error);
+                || reader.Remaining != 0
+            )
+                return DecodeBoundSessionReplacedFailure(ref reader, out error);
 
             var decoded = new BoundSessionReplacedRecord(
                 new BoundSessionReplacedActorAuthority(
@@ -105,23 +109,24 @@ internal static partial class ZLinkServiceWireCodec
                     targetNodeRid,
                     targetNodeGeneration,
                     authorityOwnerGeneration,
-                    ownerLeaseGeneration),
+                    ownerLeaseGeneration
+                ),
                 new BoundSessionReplacedRetiredSession(
                     sessionOwnerNodeRid,
                     sessionOwnerNodeGeneration,
                     sessionOwnerId,
                     sessionOwnerLeaseGeneration,
                     sessionRid,
-                    retiredBindingGeneration));
+                    retiredBindingGeneration
+                )
+            );
             ValidateBoundSessionReplaced(decoded);
             record = decoded;
             error = DecodeError.None;
             return true;
         }
         catch (Exception exception)
-            when (exception is ArgumentException
-                or FormatException
-                or OverflowException)
+            when (exception is ArgumentException or FormatException or OverflowException)
         {
             record = default;
             error = DecodeError.InvalidField;
@@ -131,22 +136,22 @@ internal static partial class ZLinkServiceWireCodec
 
     private static bool DecodeBoundSessionReplacedFailure(
         ref WireReader reader,
-        out DecodeError error)
+        out DecodeError error
+    )
     {
-        error = reader.Truncated
-            ? DecodeError.TruncatedField
-            : reader.Remaining == 0
-                ? DecodeError.InvalidField
-                : DecodeError.TrailingByte;
+        error =
+            reader.Truncated ? DecodeError.TruncatedField
+            : reader.Remaining == 0 ? DecodeError.InvalidField
+            : DecodeError.TrailingByte;
         return false;
     }
 
-    private static void ValidateBoundSessionReplaced(
-        BoundSessionReplacedRecord record)
+    private static void ValidateBoundSessionReplaced(BoundSessionReplacedRecord record)
     {
         var actor = record.ActorAuthority;
         var retired = record.RetiredSession;
-        if (string.IsNullOrWhiteSpace(actor.ActorId)
+        if (
+            string.IsNullOrWhiteSpace(actor.ActorId)
             || actor.ActorId.Contains('\0')
             || actor.ObjectGeneration == 0
             || actor.TargetNodeRid.IsEmpty
@@ -159,7 +164,8 @@ internal static partial class ZLinkServiceWireCodec
             || retired.SessionOwnerId.Contains('\0')
             || retired.SessionOwnerLeaseGeneration == 0
             || retired.SessionRid.IsEmpty
-            || retired.RetiredBindingGeneration == 0)
+            || retired.RetiredBindingGeneration == 0
+        )
             throw new ArgumentOutOfRangeException(nameof(record));
     }
 }

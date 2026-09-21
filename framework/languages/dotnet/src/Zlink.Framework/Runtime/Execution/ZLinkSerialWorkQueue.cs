@@ -5,8 +5,7 @@ namespace Zlink.Framework.Runtime.Execution;
 /// <summary>
 /// Stores serial work without allocating while an item is appended.
 /// </summary>
-internal sealed class ZLinkSerialWorkQueue
-    : IEnumerable<ZLinkSerialWorkItem>
+internal sealed class ZLinkSerialWorkQueue : IEnumerable<ZLinkSerialWorkItem>
 {
     private ZLinkSerialWorkItem? _head;
     private ZLinkSerialWorkItem? _tail;
@@ -20,13 +19,12 @@ internal sealed class ZLinkSerialWorkQueue
         EnsureConsistentState();
         if (item.Next is not null)
             throw new InvalidOperationException(
-                "ZLink serial work is already attached to a queue.");
+                "ZLink serial work is already attached to a queue."
+            );
 
         var nextCount = checked(Count + 1);
-        if (_tail is not null
-            && !ReferenceEquals(_tail.Next, _tail))
-            throw new InvalidOperationException(
-                "ZLink serial work queue tail is corrupt.");
+        if (_tail is not null && !ReferenceEquals(_tail.Next, _tail))
+            throw new InvalidOperationException("ZLink serial work queue tail is corrupt.");
 
         if (_tail is null)
             _head = item;
@@ -55,9 +53,9 @@ internal sealed class ZLinkSerialWorkQueue
         }
 
         item = _head;
-        var link = item.Next
-                   ?? throw new InvalidOperationException(
-                       "ZLink serial work queue link is corrupt.");
+        var link =
+            item.Next
+            ?? throw new InvalidOperationException("ZLink serial work queue link is corrupt.");
         var next = ReferenceEquals(link, item) ? null : link;
         item.Next = null;
         _head = next;
@@ -74,14 +72,15 @@ internal sealed class ZLinkSerialWorkQueue
     public void Clear()
     {
         EnsureConsistentState();
-        if (_head is null) return;
+        if (_head is null)
+            return;
 
         var current = _head;
         while (current is not null)
         {
-            var link = current.Next
-                       ?? throw new InvalidOperationException(
-                           "ZLink serial work queue link is corrupt.");
+            var link =
+                current.Next
+                ?? throw new InvalidOperationException("ZLink serial work queue link is corrupt.");
             var next = ReferenceEquals(link, current) ? null : link;
             current.Next = null;
             current = next;
@@ -98,17 +97,15 @@ internal sealed class ZLinkSerialWorkQueue
 
     public Enumerator GetEnumerator() => new(this);
 
-    IEnumerator<ZLinkSerialWorkItem>
-        IEnumerable<ZLinkSerialWorkItem>.GetEnumerator() => GetEnumerator();
+    IEnumerator<ZLinkSerialWorkItem> IEnumerable<ZLinkSerialWorkItem>.GetEnumerator() =>
+        GetEnumerator();
 
     IEnumerator IEnumerable.GetEnumerator() => GetEnumerator();
 
     private void EnsureConsistentState()
     {
-        if ((_head is null) != (_tail is null)
-            || (Count == 0) != (_head is null))
-            throw new InvalidOperationException(
-                "ZLink serial work queue state is corrupt.");
+        if ((_head is null) != (_tail is null) || (Count == 0) != (_head is null))
+            throw new InvalidOperationException("ZLink serial work queue state is corrupt.");
     }
 
     internal struct Enumerator : IEnumerator<ZLinkSerialWorkItem>
@@ -129,7 +126,8 @@ internal sealed class ZLinkSerialWorkQueue
         public ZLinkSerialWorkItem Current =>
             _current
             ?? throw new InvalidOperationException(
-                "The ZLink serial work queue enumerator is not positioned on an item.");
+                "The ZLink serial work queue enumerator is not positioned on an item."
+            );
 
         object IEnumerator.Current => Current;
 
@@ -137,7 +135,8 @@ internal sealed class ZLinkSerialWorkQueue
         {
             if (_version != _queue._version)
                 throw new InvalidOperationException(
-                    "The ZLink serial work queue changed during enumeration.");
+                    "The ZLink serial work queue changed during enumeration."
+                );
             if (_next is null)
             {
                 _current = null;
@@ -145,9 +144,9 @@ internal sealed class ZLinkSerialWorkQueue
             }
 
             _current = _next;
-            var link = _current.Next
-                       ?? throw new InvalidOperationException(
-                           "ZLink serial work queue link is corrupt.");
+            var link =
+                _current.Next
+                ?? throw new InvalidOperationException("ZLink serial work queue link is corrupt.");
             _next = ReferenceEquals(link, _current) ? null : link;
             return true;
         }

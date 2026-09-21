@@ -1,9 +1,9 @@
 package systems.zlink.framework.runtime.host;
 
 /**
- * Orders a host Shutdown request against the currently executing relocation
- * unit. Shutdown may stop later units, but it cannot run teardown concurrently
- * with the unit that already crossed its source barrier.
+ * Orders a host Shutdown request against the currently executing relocation unit. Shutdown may stop
+ * later units, but it cannot run teardown concurrently with the unit that already crossed its
+ * source barrier.
  */
 final class ZLinkRelocationShutdownGate {
     private boolean relocationUnitInProgress;

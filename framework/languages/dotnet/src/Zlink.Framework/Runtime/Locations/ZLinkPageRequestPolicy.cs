@@ -10,8 +10,6 @@ internal static class ZLinkPageRequestPolicy
         if (request.PageSize is < 0 or > MaximumPageSize)
             throw new ArgumentOutOfRangeException(nameof(request));
 
-        return request.PageSize == 0
-            ? request with { PageSize = DefaultPageSize }
-            : request;
+        return request.PageSize == 0 ? request with { PageSize = DefaultPageSize } : request;
     }
 }

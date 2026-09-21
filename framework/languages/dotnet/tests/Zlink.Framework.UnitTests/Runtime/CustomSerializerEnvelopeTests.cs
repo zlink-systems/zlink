@@ -1,7 +1,7 @@
-using System.Text;
-using System.Text.Json;
 using System.Reflection;
 using System.Reflection.Emit;
+using System.Text;
+using System.Text.Json;
 using MessagePack;
 using Systems.Zlink.Stream.Connector.Contracts;
 using Zlink.Framework.Codecs.MessagePack;
@@ -29,9 +29,15 @@ public sealed class CustomSerializerEnvelopeTests
             null,
             null,
             null,
-            null);
+            null
+        );
 
-        var parts = ZLinkEnvelopeCodec.EncodeParts(header, new Probe("hello"), typeof(Probe), codecs);
+        var parts = ZLinkEnvelopeCodec.EncodeParts(
+            header,
+            new Probe("hello"),
+            typeof(Probe),
+            codecs
+        );
 
         // The custom serializer's content type is carried on the envelope header.
         var decodedHeader = ZLinkEnvelopeCodec.DecodeHeader(parts);
@@ -65,17 +71,32 @@ public sealed class CustomSerializerEnvelopeTests
         var serializer = new MarkerSerializer();
         codecs.AddSerializer("application/avro", serializer);
 
-        var results = await Task.WhenAll(Enumerable.Range(0, 256).Select(_ => Task.Run(() =>
-        {
-            Assert.True(codecs.TryResolveSerializer(typeof(Probe), out var contentType, out var resolved));
-            return (contentType, resolved);
-        })));
+        var results = await Task.WhenAll(
+            Enumerable
+                .Range(0, 256)
+                .Select(_ =>
+                    Task.Run(() =>
+                    {
+                        Assert.True(
+                            codecs.TryResolveSerializer(
+                                typeof(Probe),
+                                out var contentType,
+                                out var resolved
+                            )
+                        );
+                        return (contentType, resolved);
+                    })
+                )
+        );
 
-        Assert.All(results, result =>
-        {
-            Assert.Equal("application/avro", result.contentType);
-            Assert.Same(serializer, result.resolved);
-        });
+        Assert.All(
+            results,
+            result =>
+            {
+                Assert.Equal("application/avro", result.contentType);
+                Assert.Same(serializer, result.resolved);
+            }
+        );
     }
 
     [Fact]
@@ -85,11 +106,17 @@ public sealed class CustomSerializerEnvelopeTests
         codecs.Use(ZLinkProtobufCodec.Default);
         var value = new StringValue { Value = "hello" };
 
-        var parts = ZLinkEnvelopeCodec.EncodeParts(CreateHeader(nameof(StringValue)), value, typeof(StringValue),
-            codecs);
+        var parts = ZLinkEnvelopeCodec.EncodeParts(
+            CreateHeader(nameof(StringValue)),
+            value,
+            typeof(StringValue),
+            codecs
+        );
 
         Assert.Equal("application/x-protobuf", ZLinkEnvelopeCodec.DecodeHeader(parts).ContentType);
-        var decoded = Assert.IsType<StringValue>(ZLinkEnvelopeCodec.DecodeBody(parts, typeof(StringValue), codecs));
+        var decoded = Assert.IsType<StringValue>(
+            ZLinkEnvelopeCodec.DecodeBody(parts, typeof(StringValue), codecs)
+        );
         Assert.Equal("hello", decoded.Value);
     }
 
@@ -100,11 +127,17 @@ public sealed class CustomSerializerEnvelopeTests
         codecs.Use(ZLinkMessagePackCodec.Default);
         var value = new PackedProbe("hello");
 
-        var parts = ZLinkEnvelopeCodec.EncodeParts(CreateHeader(nameof(PackedProbe)), value, typeof(PackedProbe),
-            codecs);
+        var parts = ZLinkEnvelopeCodec.EncodeParts(
+            CreateHeader(nameof(PackedProbe)),
+            value,
+            typeof(PackedProbe),
+            codecs
+        );
 
         Assert.Equal("application/x-msgpack", ZLinkEnvelopeCodec.DecodeHeader(parts).ContentType);
-        var decoded = Assert.IsType<PackedProbe>(ZLinkEnvelopeCodec.DecodeBody(parts, typeof(PackedProbe), codecs));
+        var decoded = Assert.IsType<PackedProbe>(
+            ZLinkEnvelopeCodec.DecodeBody(parts, typeof(PackedProbe), codecs)
+        );
         Assert.Equal(value, decoded);
     }
 
@@ -115,7 +148,8 @@ public sealed class CustomSerializerEnvelopeTests
             new ZLinkCodecRegistryBuilder(),
             new Probe("create-request"),
             new Probe("create-reply"),
-            "application/json");
+            "application/json"
+        );
     }
 
     [Fact]
@@ -128,7 +162,8 @@ public sealed class CustomSerializerEnvelopeTests
             codecs,
             new StringValue { Value = "create-request" },
             new StringValue { Value = "create-reply" },
-            "application/x-protobuf");
+            "application/x-protobuf"
+        );
     }
 
     [Fact]
@@ -156,7 +191,8 @@ public sealed class CustomSerializerEnvelopeTests
             codecs,
             new Probe("create-request"),
             new Probe("create-reply"),
-            "application/avro");
+            "application/avro"
+        );
     }
 
     [Fact]
@@ -166,7 +202,8 @@ public sealed class CustomSerializerEnvelopeTests
             new ZLinkCodecRegistryBuilder(),
             new Probe("session"),
             ZlinkStreamCodec.Json,
-            "application/json");
+            "application/json"
+        );
     }
 
     [Fact]
@@ -179,7 +216,8 @@ public sealed class CustomSerializerEnvelopeTests
             codecs,
             new StringValue { Value = "session" },
             ZlinkStreamCodec.Protobuf,
-            "application/x-protobuf");
+            "application/x-protobuf"
+        );
     }
 
     [Fact]
@@ -192,7 +230,8 @@ public sealed class CustomSerializerEnvelopeTests
             codecs,
             new PackedProbe("session"),
             ZlinkStreamCodec.MessagePack,
-            "application/x-msgpack");
+            "application/x-msgpack"
+        );
     }
 
     [Fact]
@@ -205,7 +244,8 @@ public sealed class CustomSerializerEnvelopeTests
             codecs,
             new Probe("session"),
             ZlinkStreamCodec.Protobuf,
-            "application/avro");
+            "application/avro"
+        );
     }
 
     [Fact]
@@ -215,7 +255,8 @@ public sealed class CustomSerializerEnvelopeTests
             new ZLinkCodecRegistryBuilder(),
             new Probe("join-request"),
             new Probe("join-reply"),
-            "application/json");
+            "application/json"
+        );
     }
 
     [Fact]
@@ -243,7 +284,8 @@ public sealed class CustomSerializerEnvelopeTests
             codecs,
             new PackedProbe("join-request"),
             new PackedProbe("join-reply"),
-            "application/x-msgpack");
+            "application/x-msgpack"
+        );
     }
 
     [Fact]
@@ -271,7 +313,8 @@ public sealed class CustomSerializerEnvelopeTests
             codecs,
             new Probe("join-request"),
             new Probe("join-reply"),
-            "application/avro");
+            "application/avro"
+        );
     }
 
     [Fact]
@@ -282,10 +325,17 @@ public sealed class CustomSerializerEnvelopeTests
         codecs.Use(ZLinkMessagePackCodec.Default);
         var value = new Probe("hello");
 
-        var parts = ZLinkEnvelopeCodec.EncodeParts(CreateHeader(nameof(Probe)), value, typeof(Probe), codecs);
+        var parts = ZLinkEnvelopeCodec.EncodeParts(
+            CreateHeader(nameof(Probe)),
+            value,
+            typeof(Probe),
+            codecs
+        );
 
         Assert.Equal("application/json", ZLinkEnvelopeCodec.DecodeHeader(parts).ContentType);
-        var decoded = Assert.IsType<Probe>(ZLinkEnvelopeCodec.DecodeBody(parts, typeof(Probe), codecs));
+        var decoded = Assert.IsType<Probe>(
+            ZLinkEnvelopeCodec.DecodeBody(parts, typeof(Probe), codecs)
+        );
         Assert.Equal(value, decoded);
     }
 
@@ -303,9 +353,15 @@ public sealed class CustomSerializerEnvelopeTests
             null,
             null,
             null,
-            null);
+            null
+        );
 
-        var parts = ZLinkEnvelopeCodec.EncodeParts(header, new Probe("hello"), typeof(Probe), codecs);
+        var parts = ZLinkEnvelopeCodec.EncodeParts(
+            header,
+            new Probe("hello"),
+            typeof(Probe),
+            codecs
+        );
 
         Assert.Equal("application/json", ZLinkEnvelopeCodec.DecodeHeader(parts).ContentType);
         var decoded = ZLinkEnvelopeCodec.DecodeBody(parts, typeof(Probe), codecs);
@@ -324,13 +380,15 @@ public sealed class CustomSerializerEnvelopeTests
             {
                 resolutionCalls++;
                 return false;
-            });
+            }
+        );
 
         var parts = ZLinkEnvelopeCodec.EncodeParts(
             CreateHeader(nameof(Probe)),
             new Probe("hello"),
             typeof(Probe),
-            codecs);
+            codecs
+        );
         try
         {
             Assert.Equal(1, resolutionCalls);
@@ -341,7 +399,8 @@ public sealed class CustomSerializerEnvelopeTests
                 CreateHeader(nameof(Probe)),
                 new Probe("again"),
                 typeof(Probe),
-                codecs);
+                codecs
+            );
             Assert.Equal(1, resolutionCalls);
         }
         finally
@@ -363,20 +422,25 @@ public sealed class CustomSerializerEnvelopeTests
                 Interlocked.Increment(ref resolutionCalls);
                 Thread.Sleep(5);
                 return true;
-            });
+            }
+        );
         using var start = new ManualResetEventSlim();
 
-        var resolutions = Enumerable.Range(0, 32)
-            .Select(_ => Task.Run(() =>
-            {
-                start.Wait();
-                return codecs.TryResolveSerializer(
-                    typeof(Probe),
-                    out var contentType,
-                    out var serializer)
-                    && contentType == "application/avro"
-                    && serializer is MarkerSerializer;
-            }))
+        var resolutions = Enumerable
+            .Range(0, 32)
+            .Select(_ =>
+                Task.Run(() =>
+                {
+                    start.Wait();
+                    return codecs.TryResolveSerializer(
+                            typeof(Probe),
+                            out var contentType,
+                            out var serializer
+                        )
+                        && contentType == "application/avro"
+                        && serializer is MarkerSerializer;
+                })
+            )
             .ToArray();
         start.Set();
 
@@ -396,16 +460,15 @@ public sealed class CustomSerializerEnvelopeTests
             {
                 resolutions[type] = resolutions.GetValueOrDefault(type) + 1;
                 return type == typeof(Probe);
-            });
+            }
+        );
 
-        Assert.True(codecs.TryResolveSerializer(
-            typeof(Probe),
-            out _,
-            out _));
+        Assert.True(codecs.TryResolveSerializer(typeof(Probe), out _, out _));
 
         var assembly = AssemblyBuilder.DefineDynamicAssembly(
             new AssemblyName("Zlink.SerializerCacheSaturation"),
-            AssemblyBuilderAccess.Run);
+            AssemblyBuilderAccess.Run
+        );
         var module = assembly.DefineDynamicModule("Main");
         Type? uncachedType = null;
         for (var index = 0; index < 1_024; index++)
@@ -415,10 +478,7 @@ public sealed class CustomSerializerEnvelopeTests
             uncachedType = type;
         }
 
-        Assert.True(codecs.TryResolveSerializer(
-            typeof(Probe),
-            out _,
-            out _));
+        Assert.True(codecs.TryResolveSerializer(typeof(Probe), out _, out _));
         Assert.Equal(1, resolutions[typeof(Probe)]);
         Assert.NotNull(uncachedType);
         Assert.False(codecs.TryResolveSerializer(uncachedType, out _, out _));
@@ -437,7 +497,8 @@ public sealed class CustomSerializerEnvelopeTests
             {
                 resolutionCalls++;
                 return true;
-            });
+            }
+        );
 
         var encoded = ZLinkMessage.From(new Probe("hello")).Encode(codecs);
 
@@ -452,7 +513,11 @@ public sealed class CustomSerializerEnvelopeTests
         var codecs = new ZLinkCodecRegistryBuilder();
         codecs.Use(AvroStreamCodecExtension.Instance);
 
-        var encoded = ZLinkStreamPacketPayloadCodec.Encode(new Probe("hello"), typeof(Probe), codecs);
+        var encoded = ZLinkStreamPacketPayloadCodec.Encode(
+            new Probe("hello"),
+            typeof(Probe),
+            codecs
+        );
 
         Assert.Equal(ZlinkStreamCodec.Protobuf, encoded.Codec);
         Assert.Equal("AVRO:hello", Encoding.UTF8.GetString(encoded.Payload.Span));
@@ -464,13 +529,15 @@ public sealed class CustomSerializerEnvelopeTests
             ZlinkStreamHeaderFlags.None,
             null,
             "orders.created",
-            ZlinkStreamMetadata.Empty);
+            ZlinkStreamMetadata.Empty
+        );
 
         var message = ZLinkStreamPacketPayloadCodec.DecodeMessage(
             header,
             payload,
             codecs,
-            ZLinkStreamProtocolDefaults.CreateLz4CompressionCodec());
+            ZLinkStreamProtocolDefaults.CreateLz4CompressionCodec()
+        );
 
         Assert.Equal("application/avro", message.ContentType);
         Assert.Equal(ZlinkStreamCodec.Protobuf, message.StreamCodec);
@@ -487,17 +554,23 @@ public sealed class CustomSerializerEnvelopeTests
             ZlinkStreamHeaderFlags.None,
             null,
             "orders.created",
-            ZlinkStreamMetadata.Empty);
+            ZlinkStreamMetadata.Empty
+        );
 
         using var payload = Message.From("AVRO:hello");
         var message = ZLinkStreamPacketPayloadCodec.DecodeMessage(
             header,
             payload,
             codecs,
-            ZLinkStreamProtocolDefaults.CreateLz4CompressionCodec());
+            ZLinkStreamProtocolDefaults.CreateLz4CompressionCodec()
+        );
 
         var error = Assert.Throws<InvalidOperationException>(() => message.Decode<Probe>());
-        Assert.Contains("no matching codec extension is registered", error.Message, StringComparison.Ordinal);
+        Assert.Contains(
+            "no matching codec extension is registered",
+            error.Message,
+            StringComparison.Ordinal
+        );
     }
 
     [Fact]
@@ -517,12 +590,17 @@ public sealed class CustomSerializerEnvelopeTests
     [Fact]
     public void Codec_Content_Type_And_Receive_Lookup_Match_Shared_Fixture()
     {
-        using var document = JsonDocument.Parse(File.ReadAllText(Path.Combine(
-            Common.FrameworkTestEnvironment.GetRepoRoot(),
-            "framework",
-            "runtime",
-            "conformance",
-            "codec-selection-v1.json")));
+        using var document = JsonDocument.Parse(
+            File.ReadAllText(
+                Path.Combine(
+                    Common.FrameworkTestEnvironment.GetRepoRoot(),
+                    "framework",
+                    "runtime",
+                    "conformance",
+                    "codec-selection-v1.json"
+                )
+            )
+        );
         var root = document.RootElement;
         Assert.Equal("zlink.framework.codec-selection", root.GetProperty("fixture").GetString());
         Assert.Equal(1, root.GetProperty("version").GetInt32());
@@ -534,14 +612,16 @@ public sealed class CustomSerializerEnvelopeTests
             if (scenario.TryGetProperty("expectedError", out _))
             {
                 Assert.Throws<ArgumentException>(() =>
-                    codecs.AddSerializer(input, new MarkerSerializer()));
+                    codecs.AddSerializer(input, new MarkerSerializer())
+                );
                 continue;
             }
 
             codecs.AddSerializer(input, new MarkerSerializer());
             Assert.Equal(
                 scenario.GetProperty("expected").GetString(),
-                Assert.Single(codecs.Serializers).Key);
+                Assert.Single(codecs.Serializers).Key
+            );
         }
 
         var duplicate = root.GetProperty("normalizedDuplicateScenario");
@@ -552,7 +632,8 @@ public sealed class CustomSerializerEnvelopeTests
         duplicateCodecs.AddSerializer(registrations[1].GetString()!, replacement);
         Assert.Equal(
             duplicate.GetProperty("finalEntryCount").GetInt32(),
-            duplicateCodecs.Serializers.Count);
+            duplicateCodecs.Serializers.Count
+        );
         Assert.Same(replacement, duplicateCodecs.Serializers["application/x-base"]);
 
         var receiveCodecs = new ZLinkCodecRegistryBuilder();
@@ -560,11 +641,8 @@ public sealed class CustomSerializerEnvelopeTests
         foreach (var scenario in root.GetProperty("receiveScenarios").EnumerateArray())
         {
             var contentType = scenario.GetProperty("wireContentType").GetString()!;
-            var expectedSuccess = scenario.GetProperty("expectedTerminal").GetString()
-                                  == "success";
-            Assert.Equal(
-                expectedSuccess,
-                receiveCodecs.TryGetSerializer(contentType, out _));
+            var expectedSuccess = scenario.GetProperty("expectedTerminal").GetString() == "success";
+            Assert.Equal(expectedSuccess, receiveCodecs.TryGetSerializer(contentType, out _));
         }
     }
 
@@ -575,17 +653,18 @@ public sealed class CustomSerializerEnvelopeTests
         codecs.AddSerializer(
             "application/x-first",
             new MarkerSerializer(),
-            static type => type == typeof(Probe));
+            static type => type == typeof(Probe)
+        );
         var selected = new ReplacementSerializer();
         codecs.AddSerializer(
             "application/x-second",
             selected,
-            static type => type == typeof(Probe));
+            static type => type == typeof(Probe)
+        );
 
-        Assert.True(codecs.TryResolveSerializer(
-            typeof(Probe),
-            out var contentType,
-            out var serializer));
+        Assert.True(
+            codecs.TryResolveSerializer(typeof(Probe), out var contentType, out var serializer)
+        );
         Assert.Equal("application/x-second", contentType);
         Assert.Same(selected, serializer);
     }
@@ -599,9 +678,11 @@ public sealed class CustomSerializerEnvelopeTests
         codecs.Freeze();
 
         Assert.Throws<InvalidOperationException>(() =>
-            codecs.AddSerializer("application/x-after", new ReplacementSerializer()));
+            codecs.AddSerializer("application/x-after", new ReplacementSerializer())
+        );
         Assert.Throws<InvalidOperationException>(() =>
-            codecs.RegisterStreamCodec("application/x-stream", ZlinkStreamCodec.MessagePack));
+            codecs.RegisterStreamCodec("application/x-stream", ZlinkStreamCodec.MessagePack)
+        );
         Assert.Single(codecs.Serializers);
     }
 
@@ -632,14 +713,16 @@ public sealed class CustomSerializerEnvelopeTests
             null,
             null,
             null,
-            null);
+            null
+        );
     }
 
     private static void AssertEnvelopeRequestAndReplyRoundTrip<TRequest, TReply>(
         ZLinkCodecRegistryBuilder codecs,
         TRequest request,
         TReply reply,
-        string expectedContentType)
+        string expectedContentType
+    )
     {
         var receivedRequest = EnvelopeRoundTrip(codecs, request, expectedContentType);
         AssertDecodedEquals(request, receivedRequest.Decode<TRequest>());
@@ -651,7 +734,8 @@ public sealed class CustomSerializerEnvelopeTests
     private static ZLinkMessage EnvelopeRoundTrip<T>(
         ZLinkCodecRegistryBuilder codecs,
         T value,
-        string expectedContentType)
+        string expectedContentType
+    )
     {
         var encoded = ZLinkMessage.From(value).Encode(codecs);
         using var payload = Message.From(encoded.Payload.Bytes.Span);
@@ -664,7 +748,8 @@ public sealed class CustomSerializerEnvelopeTests
         ZLinkCodecRegistryBuilder codecs,
         T value,
         ZlinkStreamCodec expectedCodec,
-        string expectedContentType)
+        string expectedContentType
+    )
     {
         var encoded = ZLinkStreamPacketPayloadCodec.Encode(value, typeof(T), codecs);
 
@@ -677,13 +762,15 @@ public sealed class CustomSerializerEnvelopeTests
             ZlinkStreamHeaderFlags.None,
             null,
             "orders.created",
-            ZlinkStreamMetadata.Empty);
+            ZlinkStreamMetadata.Empty
+        );
 
         var message = ZLinkStreamPacketPayloadCodec.DecodeMessage(
             header,
             payload,
             codecs,
-            ZLinkStreamProtocolDefaults.CreateLz4CompressionCodec());
+            ZLinkStreamProtocolDefaults.CreateLz4CompressionCodec()
+        );
 
         Assert.Equal(expectedContentType, message.ContentType);
         Assert.Equal(expectedCodec, message.StreamCodec);
@@ -717,7 +804,9 @@ public sealed class CustomSerializerEnvelopeTests
         public object? Deserialize(ZLinkEncodedPayload payload, Type type)
         {
             var text = Encoding.UTF8.GetString(payload.Bytes.Span);
-            var value = text.StartsWith("AVRO:", StringComparison.Ordinal) ? text["AVRO:".Length..] : text;
+            var value = text.StartsWith("AVRO:", StringComparison.Ordinal)
+                ? text["AVRO:".Length..]
+                : text;
             return new Probe(value);
         }
     }
@@ -739,9 +828,9 @@ public sealed class CustomSerializerEnvelopeTests
         }
     }
 
-    private sealed class AvroStreamCodecExtension :
-        IZLinkCodecExtension,
-        IZlinkStreamCodecRegistration
+    private sealed class AvroStreamCodecExtension
+        : IZLinkCodecExtension,
+            IZlinkStreamCodecRegistration
     {
         public static AvroStreamCodecExtension Instance { get; } = new();
 

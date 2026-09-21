@@ -1,15 +1,12 @@
 package systems.zlink.framework.runtime.host;
-import java.util.List;
-import java.util.concurrent.CompletableFuture;
-import java.util.concurrent.CompletionStage;
-import java.util.stream.Stream;
-import systems.zlink.framework.runtime.mesh.MeshNodeRegistration;
-import systems.zlink.framework.runtime.spots.SpotNodeRegistration;
 
 import systems.zlink.contracts.core.RoutingId;
 import systems.zlink.framework.locations.ZLinkLocationRuntimeQuery;
 import systems.zlink.framework.runtime.configuration.ZLinkFrameworkRegistration;
+import systems.zlink.framework.runtime.internal.channels.ZLinkClientServerRuntimeConfiguration;
+import systems.zlink.framework.runtime.internal.channels.ZLinkFanoutRuntimeConfiguration;
 import systems.zlink.framework.runtime.internal.handlers.ZLinkHandlerActivator;
+import systems.zlink.framework.runtime.internal.spots.SpotTransportAddressResolver;
 import systems.zlink.framework.runtime.locations.ZLinkLiveLocationRows;
 import systems.zlink.framework.runtime.locations.ZLinkLocationAutoConnectHost;
 import systems.zlink.framework.runtime.locations.ZLinkLocationLifecycle;
@@ -18,12 +15,16 @@ import systems.zlink.framework.runtime.locations.ZLinkLocationRuntimeQueryServic
 import systems.zlink.framework.runtime.locations.ZLinkLocationStoreResolver;
 import systems.zlink.framework.runtime.locations.ZLinkRegisteredLocationStores;
 import systems.zlink.framework.runtime.locations.ZLinkStoreLocationResolvers;
-import systems.zlink.framework.runtime.internal.channels.ZLinkClientServerRuntimeConfiguration;
-import systems.zlink.framework.runtime.internal.channels.ZLinkFanoutRuntimeConfiguration;
-import systems.zlink.framework.spots.SpotHandleResolver;
+import systems.zlink.framework.runtime.mesh.MeshNodeRegistration;
+import systems.zlink.framework.runtime.spots.SpotNodeRegistration;
 import systems.zlink.framework.spots.ActorSpotHandleResolver;
+import systems.zlink.framework.spots.SpotHandleResolver;
 import systems.zlink.framework.spots.ZLinkStoreSpotHandleResolver;
-import systems.zlink.framework.runtime.internal.spots.SpotTransportAddressResolver;
+
+import java.util.List;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CompletionStage;
+import java.util.stream.Stream;
 
 final class ZLinkFrameworkLocationSubsystem {
     private final ZLinkRegisteredLocationStores locationStores;
@@ -36,14 +37,14 @@ final class ZLinkFrameworkLocationSubsystem {
     private final CompletionStage<Void> startup;
 
     private ZLinkFrameworkLocationSubsystem(
-        ZLinkRegisteredLocationStores locationStores,
-        ZLinkLocationRuntime locationRuntime,
-        ZLinkLocationRuntimeQuery locationRuntimeQuery,
-        ZLinkLocationLifecycle locationLifecycle,
-        ZLinkLocationAutoConnectHost locationAutoConnectHost,
-        SpotTransportAddressResolver spotTransportAddressResolver,
-        ZLinkStoreLocationResolvers storeLocationResolvers,
-        CompletionStage<Void> startup) {
+            ZLinkRegisteredLocationStores locationStores,
+            ZLinkLocationRuntime locationRuntime,
+            ZLinkLocationRuntimeQuery locationRuntimeQuery,
+            ZLinkLocationLifecycle locationLifecycle,
+            ZLinkLocationAutoConnectHost locationAutoConnectHost,
+            SpotTransportAddressResolver spotTransportAddressResolver,
+            ZLinkStoreLocationResolvers storeLocationResolvers,
+            CompletionStage<Void> startup) {
         this.locationStores = locationStores;
         this.locationRuntime = locationRuntime;
         this.locationRuntimeQuery = locationRuntimeQuery;
@@ -55,89 +56,83 @@ final class ZLinkFrameworkLocationSubsystem {
     }
 
     static ZLinkFrameworkLocationSubsystem create(
-        ZLinkFrameworkRegistration registration,
-        ZLinkHandlerActivator.MutableServices runtimeHandlers) {
-        ZLinkRegisteredLocationStores locationStores = ZLinkLocationStoreResolver.resolve(
-            registration.locations(),
-            runtimeHandlers);
+            ZLinkFrameworkRegistration registration,
+            ZLinkHandlerActivator.MutableServices runtimeHandlers) {
+        ZLinkRegisteredLocationStores locationStores =
+                ZLinkLocationStoreResolver.resolve(registration.locations(), runtimeHandlers);
         if (locationStores == null) {
             return disabled();
         }
 
         locationStores.addTo(runtimeHandlers);
-        ZLinkLocationRuntime locationRuntime = new ZLinkLocationRuntime(
-            locationStores,
-            registration.locations().options().ownerLeaseTtl(),
-            registration.locations().options().ownerLeaseRenewInterval(),
-            registration.locations().options().ownerLeaseRenewTimeout(),
-            registration.locations().options().ownerLeaseFencingMargin());
+        ZLinkLocationRuntime locationRuntime =
+                new ZLinkLocationRuntime(
+                        locationStores,
+                        registration.locations().options().ownerLeaseTtl(),
+                        registration.locations().options().ownerLeaseRenewInterval(),
+                        registration.locations().options().ownerLeaseRenewTimeout(),
+                        registration.locations().options().ownerLeaseFencingMargin());
         CompletionStage<Void> startup =
-            locationRuntime.start(RoutingId.from(locationRuntime.ownerId()));
+                locationRuntime.start(RoutingId.from(locationRuntime.ownerId()));
 
-        ZLinkLiveLocationRows liveLocationRows = ZLinkLiveLocationRows.create(
-            locationStores,
-            registration.locations().options());
-        ZLinkLocationRuntimeQuery locationRuntimeQuery = new ZLinkLocationRuntimeQueryService(
-            locationStores,
-            locationRuntime,
-            registration.locations().options(),
-            liveLocationRows,
-            registration.meshNodes().stream()
-                .map(MeshNodeRegistration::meshName)
-                .distinct()
-                .toList());
+        ZLinkLiveLocationRows liveLocationRows =
+                ZLinkLiveLocationRows.create(locationStores, registration.locations().options());
+        ZLinkLocationRuntimeQuery locationRuntimeQuery =
+                new ZLinkLocationRuntimeQueryService(
+                        locationStores,
+                        locationRuntime,
+                        registration.locations().options(),
+                        liveLocationRows,
+                        registration.meshNodes().stream()
+                                .map(MeshNodeRegistration::meshName)
+                                .distinct()
+                                .toList());
         ZLinkLocationLifecycle locationLifecycle = new ZLinkLocationLifecycle(locationRuntime);
         ZLinkStoreLocationResolvers storeLocationResolvers =
-            new ZLinkStoreLocationResolvers(locationStores, liveLocationRows);
+                new ZLinkStoreLocationResolvers(locationStores, liveLocationRows);
         ZLinkClientServerRuntimeConfiguration clientServerConfiguration =
-            new ZLinkClientServerRuntimeConfiguration(
-                locationStores.clientServerStore(),
-                registration.locations().options());
-        runtimeHandlers.add(
-            ZLinkClientServerRuntimeConfiguration.class,
-            clientServerConfiguration);
+                new ZLinkClientServerRuntimeConfiguration(
+                        locationStores.clientServerStore(), registration.locations().options());
+        runtimeHandlers.add(ZLinkClientServerRuntimeConfiguration.class, clientServerConfiguration);
         ZLinkFanoutRuntimeConfiguration fanoutConfiguration =
-            new ZLinkFanoutRuntimeConfiguration(
-                locationStores.fanoutStore(),
-                registration.locations().options());
-        runtimeHandlers.add(
-            ZLinkFanoutRuntimeConfiguration.class,
-            fanoutConfiguration);
-        ZLinkLocationAutoConnectHost locationAutoConnectHost = new ZLinkLocationAutoConnectHost(
-            locationRuntime,
-            storeLocationResolvers,
-            registration.locations().options(),
-            clientServerConfiguration,
-            fanoutConfiguration);
+                new ZLinkFanoutRuntimeConfiguration(
+                        locationStores.fanoutStore(), registration.locations().options());
+        runtimeHandlers.add(ZLinkFanoutRuntimeConfiguration.class, fanoutConfiguration);
+        ZLinkLocationAutoConnectHost locationAutoConnectHost =
+                new ZLinkLocationAutoConnectHost(
+                        locationRuntime,
+                        storeLocationResolvers,
+                        registration.locations().options(),
+                        clientServerConfiguration,
+                        fanoutConfiguration);
         ZLinkStoreLocationResolvers.AddressResolvers locationAddressResolvers =
-            new ZLinkStoreLocationResolvers.AddressResolvers(
-                spotMeshNames(registration),
-                storeLocationResolvers);
+                new ZLinkStoreLocationResolvers.AddressResolvers(
+                        spotMeshNames(registration), storeLocationResolvers);
         ZLinkStoreSpotHandleResolver locationSpotHandleResolver =
-            new ZLinkStoreSpotHandleResolver(
-                locationAddressResolvers,
-                locationStores.authorityStore());
+                new ZLinkStoreSpotHandleResolver(
+                        locationAddressResolvers, locationStores.authorityStore());
 
         runtimeHandlers.add(ZLinkLocationRuntime.class, locationRuntime);
         runtimeHandlers.add(ZLinkLocationRuntimeQuery.class, locationRuntimeQuery);
         runtimeHandlers.add(ZLinkLocationLifecycle.class, locationLifecycle);
         runtimeHandlers.add(ZLinkLocationAutoConnectHost.class, locationAutoConnectHost);
         runtimeHandlers.add(ZLinkStoreLocationResolvers.class, storeLocationResolvers);
-        runtimeHandlers.add(ZLinkStoreLocationResolvers.AddressResolvers.class, locationAddressResolvers);
+        runtimeHandlers.add(
+                ZLinkStoreLocationResolvers.AddressResolvers.class, locationAddressResolvers);
         runtimeHandlers.add(ZLinkStoreSpotHandleResolver.class, locationSpotHandleResolver);
         runtimeHandlers.add(SpotHandleResolver.class, locationSpotHandleResolver);
         runtimeHandlers.add(ActorSpotHandleResolver.class, locationSpotHandleResolver);
         runtimeHandlers.add(SpotTransportAddressResolver.class, locationSpotHandleResolver);
 
         return new ZLinkFrameworkLocationSubsystem(
-            locationStores,
-            locationRuntime,
-            locationRuntimeQuery,
-            locationLifecycle,
-            locationAutoConnectHost,
-            locationSpotHandleResolver,
-            storeLocationResolvers,
-            startup);
+                locationStores,
+                locationRuntime,
+                locationRuntimeQuery,
+                locationLifecycle,
+                locationAutoConnectHost,
+                locationSpotHandleResolver,
+                storeLocationResolvers,
+                startup);
     }
 
     boolean enabled() {
@@ -178,21 +173,21 @@ final class ZLinkFrameworkLocationSubsystem {
 
     private static ZLinkFrameworkLocationSubsystem disabled() {
         return new ZLinkFrameworkLocationSubsystem(
-            null, null, null, null, null, null, null,
-            CompletableFuture.completedFuture(null));
+                null, null, null, null, null, null, null, CompletableFuture.completedFuture(null));
     }
 
     private static List<String> spotMeshNames(ZLinkFrameworkRegistration registration) {
         return Stream.concat(
-                registration.spotNodes().stream()
-                    .map(SpotNodeRegistration::meshName),
-                registration.meshNodes().stream()
-                    .filter(node -> !node.spotFactories().isEmpty()
-                        || !node.entrySpots().isEmpty()
-                        || !node.actorFactories().isEmpty()
-                        || !node.channelNames().isEmpty())
-                    .map(MeshNodeRegistration::meshName))
-            .distinct()
-            .toList();
+                        registration.spotNodes().stream().map(SpotNodeRegistration::meshName),
+                        registration.meshNodes().stream()
+                                .filter(
+                                        node ->
+                                                !node.spotFactories().isEmpty()
+                                                        || !node.entrySpots().isEmpty()
+                                                        || !node.actorFactories().isEmpty()
+                                                        || !node.channelNames().isEmpty())
+                                .map(MeshNodeRegistration::meshName))
+                .distinct()
+                .toList();
     }
 }

@@ -32,7 +32,11 @@ import type {
 export * from './RegistrationTypes';
 import { validateFrameworkRegistration } from './RegistrationValidators';
 export { validateFrameworkRegistration };
-export { normalizeEndpoint, buildAdvertisedEndpoint, parseEndpointHostPort } from './EndpointNotation';
+export {
+  normalizeEndpoint,
+  buildAdvertisedEndpoint,
+  parseEndpointHostPort
+} from './EndpointNotation';
 
 const DEFAULT_MESSAGE_FOLLOW_DURATION_MS = 30_000;
 const DEFAULT_SESSION_REPLACEMENT_CALLBACK_TIMEOUT_MS = 30_000;
@@ -50,7 +54,10 @@ export function createFrameworkRegistration(
     maintenanceWave: normalizeMaintenanceWave(options.maintenanceWave),
     messageSerializers: codecRegistry.registeredSerializers,
     codecs: codecRegistry.registration,
-    requestTimeoutMs: normalizeOptionalPositiveInteger(options.requestTimeoutMs, 'requestTimeoutMs'),
+    requestTimeoutMs: normalizeOptionalPositiveInteger(
+      options.requestTimeoutMs,
+      'requestTimeoutMs'
+    ),
     actorFactories: actorFactoriesFromSpotNodes(spotNodes),
     actorTransferTimeoutMs: normalizeOptionalPositiveInteger(
       options.actorTransferTimeoutMs,
@@ -69,7 +76,10 @@ export function createFrameworkRegistration(
     spotFactories: toSpotFactorySet(options.spotFactories, spotNodes),
     channels: toChannelMap(options.channels, network),
     channelClients: channelNamesWith(options.channels, (channel) => channel.client !== undefined),
-    fanoutPublishers: channelNamesWith(options.channels, (channel) => channel.publisher !== undefined),
+    fanoutPublishers: channelNamesWith(
+      options.channels,
+      (channel) => channel.publisher !== undefined
+    ),
     routeChannels: new Set(routeChannelOptions.keys()),
     routeChannelOptions,
     streamNodes: toStreamNodeMap(options.streamNodes, network),
@@ -96,26 +106,32 @@ function normalizeApplicationJobQueue(
     throw new TypeError('applicationJobQueue.profile must be a supported profile.');
   }
   const maxQueuedApplicationJobs = value?.maxQueuedApplicationJobs;
-  if (maxQueuedApplicationJobs !== undefined
-      && (typeof maxQueuedApplicationJobs !== 'bigint'
-        || maxQueuedApplicationJobs < 1n
-        || maxQueuedApplicationJobs > 2_147_483_647n)) {
+  if (
+    maxQueuedApplicationJobs !== undefined &&
+    (typeof maxQueuedApplicationJobs !== 'bigint' ||
+      maxQueuedApplicationJobs < 1n ||
+      maxQueuedApplicationJobs > 2_147_483_647n)
+  ) {
     throw new TypeError(
       'applicationJobQueue.maxQueuedApplicationJobs must be a bigint in the range 1..2147483647.'
     );
   }
   const pauseThresholdPercent = value?.pauseThresholdPercent ?? 80;
   const resumeThresholdPercent = value?.resumeThresholdPercent ?? 60;
-  if (!Number.isInteger(pauseThresholdPercent)
-      || pauseThresholdPercent < 1
-      || pauseThresholdPercent > 100) {
+  if (
+    !Number.isInteger(pauseThresholdPercent) ||
+    pauseThresholdPercent < 1 ||
+    pauseThresholdPercent > 100
+  ) {
     throw new TypeError(
       'applicationJobQueue.pauseThresholdPercent must be an integer in the range 1..100.'
     );
   }
-  if (!Number.isInteger(resumeThresholdPercent)
-      || resumeThresholdPercent < 0
-      || resumeThresholdPercent > 99) {
+  if (
+    !Number.isInteger(resumeThresholdPercent) ||
+    resumeThresholdPercent < 0 ||
+    resumeThresholdPercent > 99
+  ) {
     throw new TypeError(
       'applicationJobQueue.resumeThresholdPercent must be an integer in the range 0..99.'
     );
@@ -141,7 +157,10 @@ function normalizeCoreHwm(
   if (profile !== undefined && (!Number.isInteger(profile) || profile < 0 || profile > 3)) {
     throw new TypeError('coreHwm.profile must be a Core Auto HWM profile value.');
   }
-  for (const [name, bytes] of [['memoryLimitBytes', memoryLimitBytes], ['budgetBytes', budgetBytes]] as const) {
+  for (const [name, bytes] of [
+    ['memoryLimitBytes', memoryLimitBytes],
+    ['budgetBytes', budgetBytes]
+  ] as const) {
     if (bytes !== undefined && (typeof bytes !== 'bigint' || bytes <= 0n)) {
       throw new TypeError(`coreHwm.${name} must be a positive bigint.`);
     }
@@ -154,7 +173,9 @@ const MAX_APPLICATION_VERSION = 9_223_372_036_854_775_807n;
 function normalizeApplicationVersion(value: bigint | undefined): bigint {
   const version = value ?? 0n;
   if (typeof version !== 'bigint' || version < 0n || version > MAX_APPLICATION_VERSION) {
-    throw new TypeError('applicationVersion must be a bigint in the signed 64-bit non-negative range.');
+    throw new TypeError(
+      'applicationVersion must be a bigint in the signed 64-bit non-negative range.'
+    );
   }
   return version;
 }
@@ -168,7 +189,11 @@ function normalizeMaintenanceWave(value: string | undefined): string | undefined
   return value;
 }
 
-function normalizeNonNegativeInteger(value: number | undefined, name: string, fallback: number): number {
+function normalizeNonNegativeInteger(
+  value: number | undefined,
+  name: string,
+  fallback: number
+): number {
   if (value === undefined) return fallback;
   if (!Number.isSafeInteger(value) || value < 0) {
     throw new TypeError(`${name} must be a non-negative safe integer.`);
@@ -176,7 +201,11 @@ function normalizeNonNegativeInteger(value: number | undefined, name: string, fa
   return value;
 }
 
-function normalizePositiveInteger(value: number | undefined, name: string, fallback: number): number {
+function normalizePositiveInteger(
+  value: number | undefined,
+  name: string,
+  fallback: number
+): number {
   if (value === undefined) return fallback;
   if (!Number.isSafeInteger(value) || value <= 0) {
     throw new TypeError(`${name} must be a positive safe integer.`);

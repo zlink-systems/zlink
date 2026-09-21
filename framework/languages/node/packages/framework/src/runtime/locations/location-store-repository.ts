@@ -67,10 +67,7 @@ import type {
   ZLinkSpotLocationFilter,
   ZLinkSpotLocationKey
 } from './internal-location-contracts';
-import {
-  ZLinkFrameworkRuntimeState,
-  ZLinkObjectRole
-} from '../../contracts';
+import { ZLinkFrameworkRuntimeState, ZLinkObjectRole } from '../../contracts';
 import { ZLinkLocationWriteStatus as WriteStatus } from '../../contracts/Locations';
 import { ZLinkInMemoryLocationStore } from './in-memory-location-store';
 import { storeKey } from './in-memory-provider-location-store';
@@ -99,10 +96,7 @@ const AGGREGATE_COMMIT_RETRY_WINDOW_MS = 5_000;
 const MAX_AGGREGATE_COMMIT_CONFLICT_RETRIES = 64;
 const MAX_DESCRIPTOR_WRITE_RETRIES = 3;
 
-type StoredAuthoritySnapshot = Omit<
-  ZLinkAuthoritySnapshot,
-  'kind' | 'storeVersion' | 'storeNow'
->;
+type StoredAuthoritySnapshot = Omit<ZLinkAuthoritySnapshot, 'kind' | 'storeVersion' | 'storeNow'>;
 
 interface AuthorityRecord {
   readonly snapshot: StoredAuthoritySnapshot;
@@ -224,13 +218,15 @@ export class ZLinkLocationStoreRepository extends ZLinkInMemoryLocationStore {
     if (!Number.isInteger(limit) || limit < 1 || limit > 1_000) {
       throw new RangeError('Authority scan limit must be in 1..1000.');
     }
-    const scan = await this.provider.scan({
-      prefix: AUTHORITY_PREIMAGE_PREFIX,
-      cursor: cursor === undefined
-        ? undefined
-        : ({ value: cursor.encoded } as ZLinkStoreScanCursor),
-      limit
-    }, signal);
+    const scan = await this.provider.scan(
+      {
+        prefix: AUTHORITY_PREIMAGE_PREFIX,
+        cursor:
+          cursor === undefined ? undefined : ({ value: cursor.encoded } as ZLinkStoreScanCursor),
+        limit
+      },
+      signal
+    );
     if (scan.kind === 'expired') return { kind: 'scanExpired' };
     const items = [];
     for (const item of scan.value.items) {
@@ -247,9 +243,10 @@ export class ZLinkLocationStoreRepository extends ZLinkInMemoryLocationStore {
     return {
       kind: 'page',
       items,
-      nextCursor: scan.value.nextCursor === undefined
-        ? undefined
-        : ({ encoded: scan.value.nextCursor.value } as ZLinkAuthorityScanCursor)
+      nextCursor:
+        scan.value.nextCursor === undefined
+          ? undefined
+          : ({ encoded: scan.value.nextCursor.value } as ZLinkAuthorityScanCursor)
     };
   }
 
@@ -280,39 +277,36 @@ export class ZLinkLocationStoreRepository extends ZLinkInMemoryLocationStore {
         return { kind: 'conflict', current: snapshot };
       }
       if (
-        record.snapshot.allocation.state !== 'active'
-        || (record.visibleStoreVersion ?? current.value.version.value)
-          !== expectedStoreVersion.value
+        record.snapshot.allocation.state !== 'active' ||
+        (record.visibleStoreVersion ?? current.value.version.value) !== expectedStoreVersion.value
       ) {
         return { kind: 'conflict', current: snapshot };
       }
       if (mutation.kind === 'rebindOwnerLease') {
         if (
-          mutation.expectedOwner.ownerId !== record.snapshot.ownerId
-          || mutation.expectedOwner.leaseGeneration !== record.snapshot.ownerLeaseGeneration
-          || mutation.targetOwner.ownerId !== record.snapshot.ownerId
-          || mutation.targetOwner.leaseGeneration === record.snapshot.ownerLeaseGeneration
+          mutation.expectedOwner.ownerId !== record.snapshot.ownerId ||
+          mutation.expectedOwner.leaseGeneration !== record.snapshot.ownerLeaseGeneration ||
+          mutation.targetOwner.ownerId !== record.snapshot.ownerId ||
+          mutation.targetOwner.leaseGeneration === record.snapshot.ownerLeaseGeneration
         ) {
           return { kind: 'conflict', current: snapshot };
         }
         const descriptorKey = meshKey(
           record.snapshot.allocation.descriptor.meshName,
           record.snapshot.allocation.descriptor.rid
-      );
+        );
         const [descriptorRead, targetLeaseRead] = await Promise.all([
           this.provider.read(descriptorKey, signal),
           this.provider.read(ownerKey(mutation.targetOwner.ownerId), signal)
         ]);
-        if (liveTargetDescriptor(
-          descriptorRead,
-          targetLeaseRead,
-          {
+        if (
+          liveTargetDescriptor(descriptorRead, targetLeaseRead, {
             meshName: record.snapshot.allocation.descriptor.meshName,
             nodeRid: record.snapshot.allocation.descriptor.rid,
             nodeLifecycleGeneration: record.snapshot.allocation.descriptorLifecycleGeneration,
             owner: mutation.targetOwner
-          }
-        ) === undefined) {
+          }) === undefined
+        ) {
           return { kind: 'conflict', current: snapshot };
         }
         const nextRecord: AuthorityRecord = {
@@ -324,17 +318,21 @@ export class ZLinkLocationStoreRepository extends ZLinkInMemoryLocationStore {
             payload: Buffer.from(mutation.payload)
           }
         };
-        const result = await this.provider.write({
-          conditions: [
-            { kind: 'version', key: rowKey, expected: current.value.version },
-            versionCondition(descriptorKey, descriptorRead),
-            versionCondition(ownerKey(mutation.targetOwner.ownerId), targetLeaseRead)
-          ],
-          mutations: [{ kind: 'put', key: rowKey, bytes: encodeAuthorityRecord(nextRecord) }]
-        }, signal);
+        const result = await this.provider.write(
+          {
+            conditions: [
+              { kind: 'version', key: rowKey, expected: current.value.version },
+              versionCondition(descriptorKey, descriptorRead),
+              versionCondition(ownerKey(mutation.targetOwner.ownerId), targetLeaseRead)
+            ],
+            mutations: [{ kind: 'put', key: rowKey, bytes: encodeAuthorityRecord(nextRecord) }]
+          },
+          signal
+        );
         if (result.kind === 'conflict') continue;
-        const storeVersion = result.putVersions.find(entry =>
-          entry.key.value === rowKey.value)?.version;
+        const storeVersion = result.putVersions.find(
+          (entry) => entry.key.value === rowKey.value
+        )?.version;
         if (storeVersion === undefined) {
           throw new Error('Authority lease rebind did not return a row version.');
         }
@@ -343,74 +341,70 @@ export class ZLinkLocationStoreRepository extends ZLinkInMemoryLocationStore {
         return { kind: 'stored', ...withoutKind };
       }
       if (
-        mutation.kind === 'restore'
-        && (
-          mutation.expectedOwner.ownerId !== record.snapshot.ownerId
-          || mutation.expectedOwner.leaseGeneration
-            !== record.snapshot.ownerLeaseGeneration
-        )
+        mutation.kind === 'restore' &&
+        (mutation.expectedOwner.ownerId !== record.snapshot.ownerId ||
+          mutation.expectedOwner.leaseGeneration !== record.snapshot.ownerLeaseGeneration)
       ) {
         return { kind: 'conflict', current: snapshot };
       }
       const leaseKey = ownerKey(record.snapshot.ownerId);
       const lease = await this.provider.read(leaseKey, signal);
-      if (
-        mutation.kind !== 'restore'
-        && !sameLiveOwner(lease, record.snapshot)
-      ) {
+      if (mutation.kind !== 'restore' && !sameLiveOwner(lease, record.snapshot)) {
         return { kind: 'conflict', current: snapshot };
       }
       const capacityRowKey = capacityKey(
         record.snapshot.allocation.descriptor.meshName,
         String(record.snapshot.allocation.descriptor.rid)
       );
-      const capacityRead = mutation.kind === 'delete'
-        ? await this.provider.read(capacityRowKey, signal)
-        : undefined;
-      const nextRecord: AuthorityRecord | undefined = mutation.kind === 'delete'
-        ? undefined
-        : {
-            ...record,
-            visibleStoreVersion: undefined,
-            snapshot: {
-              ...record.snapshot,
-              payload: Buffer.from(mutation.payload)
-            }
-          };
-      const result = await this.provider.write({
-        conditions: [
-          { kind: 'version', key: rowKey, expected: current.value.version },
-          ...(mutation.kind === 'restore'
-            ? []
-            : [versionCondition(leaseKey, lease)]),
-          ...(capacityRead === undefined
-            ? []
-            : [conditionFor(capacityRowKey, capacityRead)])
-        ],
-        mutations: mutation.kind === 'delete'
-          ? [
-              { kind: 'delete', key: rowKey },
-              {
-                kind: 'put',
-                key: capacityRowKey,
-                bytes: encodeJson({
-                  active: subtractCapacity(
-                    capacityRead?.kind === 'found'
-                      ? decodeJson<CapacityRecord>(capacityRead.value.bytes).active
-                      : emptyCapacityRecord().active,
-                    record.snapshot.allocation.capacity
-                  ),
-                  pending: capacityRead?.kind === 'found'
-                    ? decodeJson<CapacityRecord>(capacityRead.value.bytes).pending
-                    : emptyCapacityRecord().pending
-                } satisfies CapacityRecord)
+      const capacityRead =
+        mutation.kind === 'delete' ? await this.provider.read(capacityRowKey, signal) : undefined;
+      const nextRecord: AuthorityRecord | undefined =
+        mutation.kind === 'delete'
+          ? undefined
+          : {
+              ...record,
+              visibleStoreVersion: undefined,
+              snapshot: {
+                ...record.snapshot,
+                payload: Buffer.from(mutation.payload)
               }
-            ]
-          : [{ kind: 'put', key: rowKey, bytes: encodeAuthorityRecord(nextRecord!) }]
-      }, signal);
+            };
+      const result = await this.provider.write(
+        {
+          conditions: [
+            { kind: 'version', key: rowKey, expected: current.value.version },
+            ...(mutation.kind === 'restore' ? [] : [versionCondition(leaseKey, lease)]),
+            ...(capacityRead === undefined ? [] : [conditionFor(capacityRowKey, capacityRead)])
+          ],
+          mutations:
+            mutation.kind === 'delete'
+              ? [
+                  { kind: 'delete', key: rowKey },
+                  {
+                    kind: 'put',
+                    key: capacityRowKey,
+                    bytes: encodeJson({
+                      active: subtractCapacity(
+                        capacityRead?.kind === 'found'
+                          ? decodeJson<CapacityRecord>(capacityRead.value.bytes).active
+                          : emptyCapacityRecord().active,
+                        record.snapshot.allocation.capacity
+                      ),
+                      pending:
+                        capacityRead?.kind === 'found'
+                          ? decodeJson<CapacityRecord>(capacityRead.value.bytes).pending
+                          : emptyCapacityRecord().pending
+                    } satisfies CapacityRecord)
+                  }
+                ]
+              : [{ kind: 'put', key: rowKey, bytes: encodeAuthorityRecord(nextRecord!) }]
+        },
+        signal
+      );
       if (result.kind === 'conflict') continue;
-      const storeVersion = result.putVersions.find(entry =>
-        entry.key.value === rowKey.value)?.version;
+      const storeVersion = result.putVersions.find(
+        (entry) => entry.key.value === rowKey.value
+      )?.version;
       if (mutation.kind === 'delete') {
         return {
           kind: 'deleted',
@@ -449,10 +443,13 @@ export class ZLinkLocationStoreRepository extends ZLinkInMemoryLocationStore {
       }
     } else {
       const staging = aggregateRecord(request, fingerprint, 'staging');
-      const claimed = await this.provider.write({
-        conditions: [{ kind: 'missing', key: rowKey }],
-        mutations: [{ kind: 'put', key: rowKey, bytes: encodeJson(staging) }]
-      }, signal);
+      const claimed = await this.provider.write(
+        {
+          conditions: [{ kind: 'missing', key: rowKey }],
+          mutations: [{ kind: 'put', key: rowKey, bytes: encodeJson(staging) }]
+        },
+        signal
+      );
       if (claimed.kind === 'conflict') {
         aggregateRead = await this.provider.read(rowKey, signal);
         if (aggregateRead.kind === 'missing') return { kind: 'conflict' };
@@ -460,8 +457,9 @@ export class ZLinkLocationStoreRepository extends ZLinkInMemoryLocationStore {
         const reconciled = reconcileAggregatePrepare(existing, fingerprint, fence);
         if (reconciled !== undefined) return reconciled;
       } else {
-        const version = claimed.putVersions.find(value =>
-          value.key.value === rowKey.value)?.version;
+        const version = claimed.putVersions.find(
+          (value) => value.key.value === rowKey.value
+        )?.version;
         if (version === undefined) {
           throw new Error('Aggregate staging did not return a Store version.');
         }
@@ -476,28 +474,21 @@ export class ZLinkLocationStoreRepository extends ZLinkInMemoryLocationStore {
       }
     }
     const aggregate = decodeJson<AggregateRecord>(aggregateRead.value.bytes);
-    if (
-      aggregate.state !== 'staging'
-      || aggregate.requestFingerprint !== fingerprint
-    ) {
+    if (aggregate.state !== 'staging' || aggregate.requestFingerprint !== fingerprint) {
       return { kind: 'conflict' };
     }
     try {
       await this.aggregateInventory.store(request, signal);
-      const entries = await this.aggregateInventory.read(
-        fence,
-        request.inventoryDigest,
-        signal
-      );
+      const entries = await this.aggregateInventory.read(fence, request.inventoryDigest, signal);
       if (entries.length !== request.participants.length) {
         throw new Error('Aggregate inventory count changed after staging.');
       }
       await parallelForEach(request.participants, 64, async (participant, index) => {
         const entry = entries[index]!;
         if (
-          entry.authorityKey !== participant.authorityKey.value
-          || entry.expectedStoreVersion !== participant.expectedStoreVersion.value
-          || entry.ownerTransition !== participant.ownerTransition
+          entry.authorityKey !== participant.authorityKey.value ||
+          entry.expectedStoreVersion !== participant.expectedStoreVersion.value ||
+          entry.ownerTransition !== participant.ownerTransition
         ) {
           throw new Error('Aggregate inventory differs from its participant request.');
         }
@@ -522,26 +513,19 @@ export class ZLinkLocationStoreRepository extends ZLinkInMemoryLocationStore {
         request.targetDescriptor.meshName,
         request.targetDescriptor.rid
       );
-      const [
-        descriptorRead,
-        leaseRead,
-        targetCapacityRead
-      ] = await Promise.all([
+      const [descriptorRead, leaseRead, targetCapacityRead] = await Promise.all([
         this.provider.read(targetDescriptorKey, signal),
         this.provider.read(targetLeaseKey, signal),
         this.provider.read(targetCapacityKey, signal)
       ]);
-      const descriptor = liveTargetDescriptor(
-        descriptorRead,
-        leaseRead,
-        aggregateTarget(request)
-      );
-      const targetCapacity = targetCapacityRead.kind === 'missing'
-        ? emptyCapacityRecord()
-        : decodeJson<CapacityRecord>(targetCapacityRead.value.bytes);
+      const descriptor = liveTargetDescriptor(descriptorRead, leaseRead, aggregateTarget(request));
+      const targetCapacity =
+        targetCapacityRead.kind === 'missing'
+          ? emptyCapacityRecord()
+          : decodeJson<CapacityRecord>(targetCapacityRead.value.bytes);
       if (
-        descriptor === undefined
-        || !capacityAvailable(descriptor, request.capacity, targetCapacity)
+        descriptor === undefined ||
+        !capacityAvailable(descriptor, request.capacity, targetCapacity)
       ) {
         await this.abortAggregateStaging(fence, signal);
         return { kind: 'conflict' };
@@ -559,7 +543,10 @@ export class ZLinkLocationStoreRepository extends ZLinkInMemoryLocationStore {
           await this.abortAggregateStaging(fence, signal);
           return { kind: 'generationExhausted' };
         }
-      } else if (ownerGenerationEnd !== ownerGenerationStart + BigInt(request.participants.length) - 1n) {
+      } else if (
+        ownerGenerationEnd !==
+        ownerGenerationStart + BigInt(request.participants.length) - 1n
+      ) {
         await this.abortAggregateStaging(fence, signal);
         return { kind: 'conflict' };
       }
@@ -582,8 +569,10 @@ export class ZLinkLocationStoreRepository extends ZLinkInMemoryLocationStore {
             const reservedAggregate = await this.provider.read(rowKey, signal);
             if (reservedAggregate.kind === 'missing') return { kind: 'conflict' };
             const reservedRecord = decodeJson<AggregateRecord>(reservedAggregate.value.bytes);
-            if (reservedRecord.ownerGenerationStart === undefined
-              || reservedRecord.ownerGenerationEnd === undefined) {
+            if (
+              reservedRecord.ownerGenerationStart === undefined ||
+              reservedRecord.ownerGenerationEnd === undefined
+            ) {
               return { kind: 'conflict' };
             }
             ownerGenerationStart = reservedRecord.ownerGenerationStart;
@@ -596,18 +585,15 @@ export class ZLinkLocationStoreRepository extends ZLinkInMemoryLocationStore {
             expectedStoreVersion: participant.expectedStoreVersion.value
           });
           if (participant.ownerTransition === 'newOwner') {
-            sourceCapacity = addCapacityVector(
-              sourceCapacity,
-              record.snapshot.allocation.capacity
-            );
+            sourceCapacity = addCapacityVector(sourceCapacity, record.snapshot.allocation.capacity);
           }
           continue;
         }
         if (
-          record.aggregate !== undefined
-          || record.snapshot.allocation.state !== 'active'
-          || (record.visibleStoreVersion ?? current.value.version.value)
-            !== participant.expectedStoreVersion.value
+          record.aggregate !== undefined ||
+          record.snapshot.allocation.state !== 'active' ||
+          (record.visibleStoreVersion ?? current.value.version.value) !==
+            participant.expectedStoreVersion.value
         ) {
           await this.clearAggregateMarkers(fence, installed, signal);
           await this.abortAggregateStaging(fence, signal);
@@ -621,75 +607,85 @@ export class ZLinkLocationStoreRepository extends ZLinkInMemoryLocationStore {
             return { kind: 'conflict' };
           }
         } else {
-          sourceCapacity = addCapacityVector(
-            sourceCapacity,
-            record.snapshot.allocation.capacity
-          );
+          sourceCapacity = addCapacityVector(sourceCapacity, record.snapshot.allocation.capacity);
         }
-        const targetAuthorityOwnerGeneration = participant.ownerTransition === 'newOwner'
-          ? ownerGenerationStart + BigInt(index)
-          : record.snapshot.authorityOwnerGeneration;
+        const targetAuthorityOwnerGeneration =
+          participant.ownerTransition === 'newOwner'
+            ? ownerGenerationStart + BigInt(index)
+            : record.snapshot.authorityOwnerGeneration;
         const marker: AggregateParticipantFenceRecord = {
-            aggregateId: fence.aggregateId.value,
-            aggregateGeneration: fence.aggregateGeneration,
-            index,
-            expectedStoreVersion: participant.expectedStoreVersion.value,
-            ownerTransition: participant.ownerTransition,
-            targetAuthorityOwnerGeneration,
-            authorityPayloadSha256: entry.authorityPayloadSha256,
-            membershipMutationSha256: entry.membershipMutationSha256
-          };
+          aggregateId: fence.aggregateId.value,
+          aggregateGeneration: fence.aggregateGeneration,
+          index,
+          expectedStoreVersion: participant.expectedStoreVersion.value,
+          ownerTransition: participant.ownerTransition,
+          targetAuthorityOwnerGeneration,
+          authorityPayloadSha256: entry.authorityPayloadSha256,
+          membershipMutationSha256: entry.membershipMutationSha256
+        };
         const reservingOwnerGenerationBlock = ownerGenerationCounterRead !== undefined;
-        const stored = await this.provider.write({
-          conditions: [
-            { kind: 'version', key: authorityRowKey, expected: current.value.version },
-            ...(reservingOwnerGenerationBlock
-              ? [conditionFor(AUTHORITY_OWNER_COUNTER_KEY, ownerGenerationCounterRead!)]
-              : []),
-            ...(reservingOwnerGenerationBlock
-              ? [{ kind: 'version' as const, key: rowKey, expected: aggregateRead.value.version }]
-              : [])
-          ],
-          mutations: [
-            {
-              kind: 'put', key: authorityRowKey, bytes: encodeAuthorityRecord({
-                ...record,
-                aggregate: marker,
-                visibleStoreVersion:
-                  record.visibleStoreVersion ?? current.value.version.value
-              } satisfies AuthorityRecord)
-            },
-            ...(reservingOwnerGenerationBlock
-              ? [
-                  {
-                    kind: 'put' as const,
-                    key: AUTHORITY_OWNER_COUNTER_KEY,
-                    bytes: encodeText((ownerGenerationEnd! + 1n).toString())
-                  },
-                  {
-                    kind: 'put' as const,
-                    key: rowKey,
-                    bytes: encodeJson({
-                      ...aggregate,
-                      ownerGenerationStart,
-                      ownerGenerationEnd
-                    } satisfies AggregateRecord)
-                  }
-                ]
-              : [])
-          ]
-        }, signal);
+        const stored = await this.provider.write(
+          {
+            conditions: [
+              { kind: 'version', key: authorityRowKey, expected: current.value.version },
+              ...(reservingOwnerGenerationBlock
+                ? [conditionFor(AUTHORITY_OWNER_COUNTER_KEY, ownerGenerationCounterRead!)]
+                : []),
+              ...(reservingOwnerGenerationBlock
+                ? [{ kind: 'version' as const, key: rowKey, expected: aggregateRead.value.version }]
+                : [])
+            ],
+            mutations: [
+              {
+                kind: 'put',
+                key: authorityRowKey,
+                bytes: encodeAuthorityRecord({
+                  ...record,
+                  aggregate: marker,
+                  visibleStoreVersion: record.visibleStoreVersion ?? current.value.version.value
+                } satisfies AuthorityRecord)
+              },
+              ...(reservingOwnerGenerationBlock
+                ? [
+                    {
+                      kind: 'put' as const,
+                      key: AUTHORITY_OWNER_COUNTER_KEY,
+                      bytes: encodeText((ownerGenerationEnd! + 1n).toString())
+                    },
+                    {
+                      kind: 'put' as const,
+                      key: rowKey,
+                      bytes: encodeJson({
+                        ...aggregate,
+                        ownerGenerationStart,
+                        ownerGenerationEnd
+                      } satisfies AggregateRecord)
+                    }
+                  ]
+                : [])
+            ]
+          },
+          signal
+        );
         if (stored.kind === 'conflict') {
           const raced = await this.provider.read(authorityRowKey, signal);
-          if (raced.kind === 'found' && sameAggregateMarker(
-            decodeAuthorityRecord(raced.value.bytes).aggregate, fence, index, participant
-          )) {
+          if (
+            raced.kind === 'found' &&
+            sameAggregateMarker(
+              decodeAuthorityRecord(raced.value.bytes).aggregate,
+              fence,
+              index,
+              participant
+            )
+          ) {
             if (reservingOwnerGenerationBlock) {
               const reservedAggregate = await this.provider.read(rowKey, signal);
               if (reservedAggregate.kind === 'missing') return { kind: 'conflict' };
               const reservedRecord = decodeJson<AggregateRecord>(reservedAggregate.value.bytes);
-              if (reservedRecord.ownerGenerationStart === undefined
-                || reservedRecord.ownerGenerationEnd === undefined) {
+              if (
+                reservedRecord.ownerGenerationStart === undefined ||
+                reservedRecord.ownerGenerationEnd === undefined
+              ) {
                 return { kind: 'conflict' };
               }
               ownerGenerationStart = reservedRecord.ownerGenerationStart;
@@ -697,7 +693,10 @@ export class ZLinkLocationStoreRepository extends ZLinkInMemoryLocationStore {
               ownerGenerationCounterRead = undefined;
               aggregateRead = reservedAggregate;
             }
-            installed.push({ key: authorityRowKey, expectedStoreVersion: participant.expectedStoreVersion.value });
+            installed.push({
+              key: authorityRowKey,
+              expectedStoreVersion: participant.expectedStoreVersion.value
+            });
             continue;
           }
           // A peer can be in the middle of publishing this same aggregate.
@@ -706,8 +705,10 @@ export class ZLinkLocationStoreRepository extends ZLinkInMemoryLocationStore {
           const aggregateRaced = await this.provider.read(rowKey, signal);
           if (aggregateRaced.kind === 'found') {
             const aggregateRecord = decodeJson<AggregateRecord>(aggregateRaced.value.bytes);
-            if (aggregateRecord.requestFingerprint === fingerprint
-              && (aggregateRecord.state === 'staging' || aggregateRecord.state === 'prepared')) {
+            if (
+              aggregateRecord.requestFingerprint === fingerprint &&
+              (aggregateRecord.state === 'staging' || aggregateRecord.state === 'prepared')
+            ) {
               return await this.prepareAggregate(request, signal);
             }
           }
@@ -738,29 +739,32 @@ export class ZLinkLocationStoreRepository extends ZLinkInMemoryLocationStore {
       if (latest.state !== 'staging' || latest.requestFingerprint !== fingerprint) {
         return { kind: 'conflict' };
       }
-      const reserved = await this.provider.write({
-        conditions: [
-          { kind: 'version', key: rowKey, expected: aggregateRead.value.version },
-          versionCondition(targetDescriptorKey, descriptorRead),
-          versionCondition(targetLeaseKey, leaseRead),
-          conditionFor(targetCapacityKey, targetCapacityRead)
-        ],
-        mutations: [
-          {
-            kind: 'put',
-            key: rowKey,
-            bytes: encodeJson({ ...latest, state: 'prepared' } satisfies AggregateRecord)
-          },
-          {
-            kind: 'put',
-            key: targetCapacityKey,
-            bytes: encodeJson({
-              active: targetCapacity.active,
-              pending: addCapacity(targetCapacity.pending, request.capacity)
-            } satisfies CapacityRecord)
-          }
-        ]
-      }, signal);
+      const reserved = await this.provider.write(
+        {
+          conditions: [
+            { kind: 'version', key: rowKey, expected: aggregateRead.value.version },
+            versionCondition(targetDescriptorKey, descriptorRead),
+            versionCondition(targetLeaseKey, leaseRead),
+            conditionFor(targetCapacityKey, targetCapacityRead)
+          ],
+          mutations: [
+            {
+              kind: 'put',
+              key: rowKey,
+              bytes: encodeJson({ ...latest, state: 'prepared' } satisfies AggregateRecord)
+            },
+            {
+              kind: 'put',
+              key: targetCapacityKey,
+              bytes: encodeJson({
+                active: targetCapacity.active,
+                pending: addCapacity(targetCapacity.pending, request.capacity)
+              } satisfies CapacityRecord)
+            }
+          ]
+        },
+        signal
+      );
       if (reserved.kind === 'conflict') {
         const raced = await this.provider.read(rowKey, signal);
         if (raced.kind === 'found') {
@@ -840,20 +844,12 @@ export class ZLinkLocationStoreRepository extends ZLinkInMemoryLocationStore {
         return { kind: 'stale' };
       }
       const [payload, membership] = await Promise.all([
-        requireProviderBytes(
-          this.provider,
-          aggregateParticipantPayloadKey(fence, index),
-          signal
-        ),
-        requireProviderBytes(
-          this.provider,
-          aggregateParticipantMembershipKey(fence, index),
-          signal
-        )
+        requireProviderBytes(this.provider, aggregateParticipantPayloadKey(fence, index), signal),
+        requireProviderBytes(this.provider, aggregateParticipantMembershipKey(fence, index), signal)
       ]);
       if (
-        sha256Hex(payload) !== entry.authorityPayloadSha256
-        || sha256Hex(membership) !== entry.membershipMutationSha256
+        sha256Hex(payload) !== entry.authorityPayloadSha256 ||
+        sha256Hex(membership) !== entry.membershipMutationSha256
       ) {
         throw new Error('Aggregate participant staging checksum does not match inventory.');
       }
@@ -874,11 +870,8 @@ export class ZLinkLocationStoreRepository extends ZLinkInMemoryLocationStore {
       this.provider.read(targetLeaseKey, signal)
     ]);
     if (
-      liveTargetDescriptor(
-        descriptorRead,
-        leaseRead,
-        aggregateTargetFromRecord(aggregate)
-      ) === undefined
+      liveTargetDescriptor(descriptorRead, leaseRead, aggregateTargetFromRecord(aggregate)) ===
+      undefined
     ) {
       return { kind: 'stale' };
     }
@@ -939,44 +932,44 @@ export class ZLinkLocationStoreRepository extends ZLinkInMemoryLocationStore {
         bytes: encodeJson(capacity)
       });
     }
-    const published = await this.provider.write({
-      conditions: [
-        { kind: 'version', key: rowKey, expected: aggregateRead.value.version },
-        versionCondition(targetDescriptorKey, descriptorRead),
-        versionCondition(targetLeaseKey, leaseRead),
-        ...[...capacityReads.entries()].map(([value, read]) => ({
-          kind: 'version' as const,
-          key: capacityKeys.get(value)!,
-          expected: read.value.version
-        }))
-      ],
-      mutations: [
-        {
-          kind: 'put',
-          key: rowKey,
-          bytes: encodeJson({ ...aggregate, state: 'committed' } satisfies AggregateRecord)
-        },
-        ...capacityMutations
-      ]
-    }, signal);
+    const published = await this.provider.write(
+      {
+        conditions: [
+          { kind: 'version', key: rowKey, expected: aggregateRead.value.version },
+          versionCondition(targetDescriptorKey, descriptorRead),
+          versionCondition(targetLeaseKey, leaseRead),
+          ...[...capacityReads.entries()].map(([value, read]) => ({
+            kind: 'version' as const,
+            key: capacityKeys.get(value)!,
+            expected: read.value.version
+          }))
+        ],
+        mutations: [
+          {
+            kind: 'put',
+            key: rowKey,
+            bytes: encodeJson({ ...aggregate, state: 'committed' } satisfies AggregateRecord)
+          },
+          ...capacityMutations
+        ]
+      },
+      signal
+    );
     if (published.kind === 'conflict') {
       aggregateRead = await this.provider.read(rowKey, signal);
       if (aggregateRead.kind === 'missing') return { kind: 'stale' };
       aggregate = decodeJson<AggregateRecord>(aggregateRead.value.bytes);
-      if (aggregate.state === 'prepared'
-        && retryAttempt < MAX_AGGREGATE_COMMIT_CONFLICT_RETRIES
-        && performance.now() < retryDeadlineAtMs) {
+      if (
+        aggregate.state === 'prepared' &&
+        retryAttempt < MAX_AGGREGATE_COMMIT_CONFLICT_RETRIES &&
+        performance.now() < retryDeadlineAtMs
+      ) {
         // The commit CAS also fences the target's live owner lease, descriptor,
         // and capacity rows. Re-read the whole prepared fence after an
         // auxiliary-row race; a changed aggregate or participant fence exits
         // through the normal stale checks on the next attempt.
         await waitForAggregateCommitRetry(retryAttempt, retryDeadlineAtMs, signal);
-        return await this.commitAggregateCore(
-          fence,
-          retryAttempt + 1,
-          retryDeadlineAtMs,
-          signal
-        );
+        return await this.commitAggregateCore(fence, retryAttempt + 1, retryDeadlineAtMs, signal);
       }
       if (aggregate.state !== 'committed') return { kind: 'stale' };
     } else {
@@ -1001,16 +994,20 @@ export class ZLinkLocationStoreRepository extends ZLinkInMemoryLocationStore {
         return { kind: 'alreadyAborted' };
       }
       if (aggregate.state === 'committed') return { kind: 'stale' };
-      const conditions: ZLinkStoreCondition[] = [{
-        kind: 'version',
-        key: rowKey,
-        expected: current.value.version
-      }];
-      const mutations: ZLinkStoreWriteRequest['mutations'][number][] = [{
-        kind: 'put',
-        key: rowKey,
-        bytes: encodeJson({ ...aggregate, state: 'aborted' } satisfies AggregateRecord)
-      }];
+      const conditions: ZLinkStoreCondition[] = [
+        {
+          kind: 'version',
+          key: rowKey,
+          expected: current.value.version
+        }
+      ];
+      const mutations: ZLinkStoreWriteRequest['mutations'][number][] = [
+        {
+          kind: 'put',
+          key: rowKey,
+          bytes: encodeJson({ ...aggregate, state: 'aborted' } satisfies AggregateRecord)
+        }
+      ];
       if (aggregate.state === 'prepared') {
         const targetCapacityKey = capacityKey(
           aggregate.targetDescriptor.meshName,
@@ -1044,19 +1041,13 @@ export class ZLinkLocationStoreRepository extends ZLinkInMemoryLocationStore {
     request: ZLinkObjectReserveRequest,
     signal?: AbortSignal
   ): Promise<ZLinkObjectReserveResult> {
-    const encodedAuthorityKey = encodeAuthorityKey(
-      request.key.kind,
-      request.key.globalId
-    );
+    const encodedAuthorityKey = encodeAuthorityKey(request.key.kind, request.key.globalId);
     for (;;) {
       signal?.throwIfAborted();
       const rowKey = authorityKey(encodedAuthorityKey.value);
       const descriptorKey = meshKey(request.target.meshName, request.target.nodeRid);
       const leaseKey = ownerKey(request.target.owner.ownerId);
-      const capacityRowKey = capacityKey(
-        request.target.meshName,
-        String(request.target.nodeRid)
-      );
+      const capacityRowKey = capacityKey(request.target.meshName, String(request.target.nodeRid));
       const [
         current,
         descriptorRead,
@@ -1064,15 +1055,14 @@ export class ZLinkLocationStoreRepository extends ZLinkInMemoryLocationStore {
         capacityRead,
         objectGenerationRead,
         authorityOwnerGenerationRead
-      ] =
-        await Promise.all([
-          this.provider.read(rowKey, signal),
-          this.provider.read(descriptorKey, signal),
-          this.provider.read(leaseKey, signal),
-          this.provider.read(capacityRowKey, signal),
-          this.provider.read(OBJECT_COUNTER_KEY, signal),
-          this.provider.read(AUTHORITY_OWNER_COUNTER_KEY, signal)
-        ]);
+      ] = await Promise.all([
+        this.provider.read(rowKey, signal),
+        this.provider.read(descriptorKey, signal),
+        this.provider.read(leaseKey, signal),
+        this.provider.read(capacityRowKey, signal),
+        this.provider.read(OBJECT_COUNTER_KEY, signal),
+        this.provider.read(AUTHORITY_OWNER_COUNTER_KEY, signal)
+      ]);
       if (current.kind === 'found') {
         const record = decodeAuthorityRecord(current.value.bytes);
         const snapshot = authoritySnapshot(
@@ -1081,16 +1071,18 @@ export class ZLinkLocationStoreRepository extends ZLinkInMemoryLocationStore {
           current.value.storeNow
         );
         if (
-          snapshot.allocation.objectKind !== request.key.kind
-          || snapshot.allocation.stableType !== request.intent.stableType
+          snapshot.allocation.objectKind !== request.key.kind ||
+          snapshot.allocation.stableType !== request.intent.stableType
         ) {
           return { kind: 'typeMismatch', current: snapshot };
         }
         if (snapshot.allocation.state === 'active') {
           return { kind: 'alreadyExists', current: snapshot };
         }
-        if (record.aggregate !== undefined
-          || isCanonicalAuthorityPayload(record.snapshot.payload)) {
+        if (
+          record.aggregate !== undefined ||
+          isCanonicalAuthorityPayload(record.snapshot.payload)
+        ) {
           // A relocation record carries its own recovery protocol. Reserve
           // may reclaim only an unfinished plain creation.
           return { kind: 'conflict', current: snapshot };
@@ -1107,8 +1099,7 @@ export class ZLinkLocationStoreRepository extends ZLinkInMemoryLocationStore {
           this.provider.read(staleOwnerKey, signal),
           this.provider.read(staleCapacityKey, signal)
         ]);
-        if (staleOwnerRead.kind === 'found'
-          && staleOwnerRead.value.expiresAt === undefined) {
+        if (staleOwnerRead.kind === 'found' && staleOwnerRead.value.expiresAt === undefined) {
           // A lease is always written with a positive TTL, so a missing
           // expiry is a corrupt record. Reclaiming deletes authority state,
           // so refuse rather than read the absence as expiry.
@@ -1117,43 +1108,44 @@ export class ZLinkLocationStoreRepository extends ZLinkInMemoryLocationStore {
         if (sameLiveOwner(staleOwnerRead, record.snapshot)) {
           return { kind: 'conflict', current: snapshot };
         }
-        const staleCapacity = staleCapacityRead.kind === 'missing'
-          ? emptyCapacityRecord()
-          : decodeJson<CapacityRecord>(staleCapacityRead.value.bytes);
-        await this.provider.write({
-          conditions: [
-            { kind: 'version', key: rowKey, expected: current.value.version },
-            versionCondition(staleOwnerKey, staleOwnerRead),
-            conditionFor(staleCapacityKey, staleCapacityRead)
-          ],
-          mutations: [
-            { kind: 'delete', key: rowKey },
-            {
-              kind: 'put',
-              key: staleCapacityKey,
-              bytes: encodeJson({
-                active: staleCapacity.active,
-                pending: subtractCapacity(
-                  staleCapacity.pending,
-                  record.snapshot.allocation.capacity
-                )
-              } satisfies CapacityRecord)
-            }
-          ]
-        }, signal);
+        const staleCapacity =
+          staleCapacityRead.kind === 'missing'
+            ? emptyCapacityRecord()
+            : decodeJson<CapacityRecord>(staleCapacityRead.value.bytes);
+        await this.provider.write(
+          {
+            conditions: [
+              { kind: 'version', key: rowKey, expected: current.value.version },
+              versionCondition(staleOwnerKey, staleOwnerRead),
+              conditionFor(staleCapacityKey, staleCapacityRead)
+            ],
+            mutations: [
+              { kind: 'delete', key: rowKey },
+              {
+                kind: 'put',
+                key: staleCapacityKey,
+                bytes: encodeJson({
+                  active: staleCapacity.active,
+                  pending: subtractCapacity(
+                    staleCapacity.pending,
+                    record.snapshot.allocation.capacity
+                  )
+                } satisfies CapacityRecord)
+              }
+            ]
+          },
+          signal
+        );
         continue;
       }
-      const descriptor = liveTargetDescriptor(
-        descriptorRead,
-        leaseRead,
-        request.target
-      );
+      const descriptor = liveTargetDescriptor(descriptorRead, leaseRead, request.target);
       if (descriptor === undefined) {
         return { kind: 'conflict', current: { kind: 'missing', storeNow: current.storeNow } };
       }
-      const capacity = capacityRead.kind === 'missing'
-        ? emptyCapacityRecord()
-        : decodeJson<CapacityRecord>(capacityRead.value.bytes);
+      const capacity =
+        capacityRead.kind === 'missing'
+          ? emptyCapacityRecord()
+          : decodeJson<CapacityRecord>(capacityRead.value.bytes);
       if (!capacityAvailable(descriptor, request.capacity, capacity)) {
         return { kind: 'placementCapacityExhausted' };
       }
@@ -1193,40 +1185,42 @@ export class ZLinkLocationStoreRepository extends ZLinkInMemoryLocationStore {
           }
         }
       };
-      const result = await this.provider.write({
-        conditions: [
-          { kind: 'missing', key: rowKey },
-          versionCondition(descriptorKey, descriptorRead),
-          versionCondition(leaseKey, leaseRead),
-          conditionFor(capacityRowKey, capacityRead),
-          conditionFor(OBJECT_COUNTER_KEY, objectGenerationRead),
-          conditionFor(AUTHORITY_OWNER_COUNTER_KEY, authorityOwnerGenerationRead)
-        ],
-        mutations: [
-          { kind: 'put', key: rowKey, bytes: encodeAuthorityRecord(record) },
-          {
-            kind: 'put',
-            key: capacityRowKey,
-            bytes: encodeJson({
-              active: capacity.active,
-              pending: addCapacity(capacity.pending, request.capacity)
-            } satisfies CapacityRecord)
-          },
-          {
-            kind: 'put',
-            key: OBJECT_COUNTER_KEY,
-            bytes: encodeText((generation + 1n).toString())
-          },
-          {
-            kind: 'put',
-            key: AUTHORITY_OWNER_COUNTER_KEY,
-            bytes: encodeText((authorityOwnerGeneration + 1n).toString())
-          }
-        ]
-      }, signal);
+      const result = await this.provider.write(
+        {
+          conditions: [
+            { kind: 'missing', key: rowKey },
+            versionCondition(descriptorKey, descriptorRead),
+            versionCondition(leaseKey, leaseRead),
+            conditionFor(capacityRowKey, capacityRead),
+            conditionFor(OBJECT_COUNTER_KEY, objectGenerationRead),
+            conditionFor(AUTHORITY_OWNER_COUNTER_KEY, authorityOwnerGenerationRead)
+          ],
+          mutations: [
+            { kind: 'put', key: rowKey, bytes: encodeAuthorityRecord(record) },
+            {
+              kind: 'put',
+              key: capacityRowKey,
+              bytes: encodeJson({
+                active: capacity.active,
+                pending: addCapacity(capacity.pending, request.capacity)
+              } satisfies CapacityRecord)
+            },
+            {
+              kind: 'put',
+              key: OBJECT_COUNTER_KEY,
+              bytes: encodeText((generation + 1n).toString())
+            },
+            {
+              kind: 'put',
+              key: AUTHORITY_OWNER_COUNTER_KEY,
+              bytes: encodeText((authorityOwnerGeneration + 1n).toString())
+            }
+          ]
+        },
+        signal
+      );
       if (result.kind === 'conflict') continue;
-      const version = result.putVersions.find(entry =>
-        entry.key.value === rowKey.value)?.version;
+      const version = result.putVersions.find((entry) => entry.key.value === rowKey.value)?.version;
       if (version === undefined) throw new Error('Authority reserve did not return a row version.');
       return {
         kind: 'reserved',
@@ -1248,9 +1242,9 @@ export class ZLinkLocationStoreRepository extends ZLinkInMemoryLocationStore {
       if (current.kind === 'missing') return { kind: 'stale' };
       const record = decodeAuthorityRecord(current.value.bytes);
       if (
-        record.terminal === 'committed'
-        && record.snapshot.pendingCreation === undefined
-        && record.snapshot.allocation.state === 'active'
+        record.terminal === 'committed' &&
+        record.snapshot.pendingCreation === undefined &&
+        record.snapshot.allocation.state === 'active'
       ) {
         return {
           kind: 'alreadyCommitted',
@@ -1258,10 +1252,10 @@ export class ZLinkLocationStoreRepository extends ZLinkInMemoryLocationStore {
         };
       }
       if (
-        record.snapshot.pendingCreation?.reservationId !== request.reservationId
-        || current.value.version.value !== request.expectedStoreVersion
-        || record.snapshot.allocation.state !== 'reserved'
-        || !sameCreationTarget(record.snapshot, request.target)
+        record.snapshot.pendingCreation?.reservationId !== request.reservationId ||
+        current.value.version.value !== request.expectedStoreVersion ||
+        record.snapshot.allocation.state !== 'reserved' ||
+        !sameCreationTarget(record.snapshot, request.target)
       ) {
         return { kind: 'stale' };
       }
@@ -1276,9 +1270,10 @@ export class ZLinkLocationStoreRepository extends ZLinkInMemoryLocationStore {
       if (liveTargetDescriptor(descriptorRead, leaseRead, request.target) === undefined) {
         return { kind: 'stale' };
       }
-      const capacity = capacityRead.kind === 'missing'
-        ? emptyCapacityRecord()
-        : decodeJson<CapacityRecord>(capacityRead.value.bytes);
+      const capacity =
+        capacityRead.kind === 'missing'
+          ? emptyCapacityRecord()
+          : decodeJson<CapacityRecord>(capacityRead.value.bytes);
       const ready: AuthorityRecord = {
         terminal: 'committed',
         snapshot: {
@@ -1288,28 +1283,30 @@ export class ZLinkLocationStoreRepository extends ZLinkInMemoryLocationStore {
           pendingCreation: undefined
         }
       };
-      const result = await this.provider.write({
-        conditions: [
-          { kind: 'version', key: rowKey, expected: current.value.version },
-          versionCondition(descriptorKey, descriptorRead),
-          versionCondition(leaseKey, leaseRead),
-          conditionFor(capacityRowKey, capacityRead)
-        ],
-        mutations: [
-          { kind: 'put', key: rowKey, bytes: encodeAuthorityRecord(ready) },
-          {
-            kind: 'put',
-            key: capacityRowKey,
-            bytes: encodeJson({
-              active: addCapacity(capacity.active, record.snapshot.allocation.capacity),
-              pending: subtractCapacity(capacity.pending, record.snapshot.allocation.capacity)
-            } satisfies CapacityRecord)
-          }
-        ]
-      }, signal);
+      const result = await this.provider.write(
+        {
+          conditions: [
+            { kind: 'version', key: rowKey, expected: current.value.version },
+            versionCondition(descriptorKey, descriptorRead),
+            versionCondition(leaseKey, leaseRead),
+            conditionFor(capacityRowKey, capacityRead)
+          ],
+          mutations: [
+            { kind: 'put', key: rowKey, bytes: encodeAuthorityRecord(ready) },
+            {
+              kind: 'put',
+              key: capacityRowKey,
+              bytes: encodeJson({
+                active: addCapacity(capacity.active, record.snapshot.allocation.capacity),
+                pending: subtractCapacity(capacity.pending, record.snapshot.allocation.capacity)
+              } satisfies CapacityRecord)
+            }
+          ]
+        },
+        signal
+      );
       if (result.kind === 'conflict') continue;
-      const version = result.putVersions.find(entry =>
-        entry.key.value === rowKey.value)?.version;
+      const version = result.putVersions.find((entry) => entry.key.value === rowKey.value)?.version;
       if (version === undefined) throw new Error('Authority commit did not return a row version.');
       return {
         kind: 'committed',
@@ -1330,18 +1327,15 @@ export class ZLinkLocationStoreRepository extends ZLinkInMemoryLocationStore {
       if (current.kind === 'missing') return { kind: 'stale' };
       const record = decodeAuthorityRecord(current.value.bytes);
       if (
-        record.snapshot.pendingCreation?.reservationId !== request.reservationId
-        || current.value.version.value !== request.expectedStoreVersion
-        || record.snapshot.allocation.state !== 'reserved'
-        || !sameCreationTarget(record.snapshot, request.target)
+        record.snapshot.pendingCreation?.reservationId !== request.reservationId ||
+        current.value.version.value !== request.expectedStoreVersion ||
+        record.snapshot.allocation.state !== 'reserved' ||
+        !sameCreationTarget(record.snapshot, request.target)
       ) {
         return { kind: 'stale' };
       }
       const leaseKey = ownerKey(request.target.owner.ownerId);
-      const capacityRowKey = capacityKey(
-        request.target.meshName,
-        String(request.target.nodeRid)
-      );
+      const capacityRowKey = capacityKey(request.target.meshName, String(request.target.nodeRid));
       const [leaseRead, capacityRead] = await Promise.all([
         this.provider.read(leaseKey, signal),
         this.provider.read(capacityRowKey, signal)
@@ -1353,30 +1347,31 @@ export class ZLinkLocationStoreRepository extends ZLinkInMemoryLocationStore {
         throw new Error('Location Store owner lease record is invalid.');
       }
       if (!sameLiveOwner(leaseRead, record.snapshot)) return { kind: 'stale' };
-      const capacity = capacityRead.kind === 'missing'
-        ? emptyCapacityRecord()
-        : decodeJson<CapacityRecord>(capacityRead.value.bytes);
-      const result = await this.provider.write({
-        conditions: [
-          { kind: 'version', key: rowKey, expected: current.value.version },
-          versionCondition(leaseKey, leaseRead),
-          conditionFor(capacityRowKey, capacityRead)
-        ],
-        mutations: [
-          { kind: 'delete', key: rowKey },
-          {
-            kind: 'put',
-            key: capacityRowKey,
-            bytes: encodeJson({
-              active: capacity.active,
-              pending: subtractCapacity(
-                capacity.pending,
-                record.snapshot.allocation.capacity
-              )
-            } satisfies CapacityRecord)
-          }
-        ]
-      }, signal);
+      const capacity =
+        capacityRead.kind === 'missing'
+          ? emptyCapacityRecord()
+          : decodeJson<CapacityRecord>(capacityRead.value.bytes);
+      const result = await this.provider.write(
+        {
+          conditions: [
+            { kind: 'version', key: rowKey, expected: current.value.version },
+            versionCondition(leaseKey, leaseRead),
+            conditionFor(capacityRowKey, capacityRead)
+          ],
+          mutations: [
+            { kind: 'delete', key: rowKey },
+            {
+              kind: 'put',
+              key: capacityRowKey,
+              bytes: encodeJson({
+                active: capacity.active,
+                pending: subtractCapacity(capacity.pending, record.snapshot.allocation.capacity)
+              } satisfies CapacityRecord)
+            }
+          ]
+        },
+        signal
+      );
       if (result.kind === 'conflict') continue;
       return { kind: 'aborted' };
     }
@@ -1389,13 +1384,8 @@ export class ZLinkLocationStoreRepository extends ZLinkInMemoryLocationStore {
     if (request.key.kind !== 'actor') {
       throw new TypeError('completeCreation is reserved for Actor creation.');
     }
-    const terminal = createTerminalRecord(
-      request,
-      this.nowProvider()
-    );
-    const rowKey = authorityKey(
-      encodeAuthorityKey(request.key.kind, request.key.globalId).value
-    );
+    const terminal = createTerminalRecord(request, this.nowProvider());
+    const rowKey = authorityKey(encodeAuthorityKey(request.key.kind, request.key.globalId).value);
     const terminalRowKey = creationTerminalKey(terminal.operation);
     for (;;) {
       signal?.throwIfAborted();
@@ -1417,10 +1407,10 @@ export class ZLinkLocationStoreRepository extends ZLinkInMemoryLocationStore {
       if (current.kind === 'missing') return { kind: 'stale' };
       const record = decodeAuthorityRecord(current.value.bytes);
       if (
-        record.snapshot.pendingCreation?.reservationId !== request.reservationId
-        || current.value.version.value !== request.expectedStoreVersion
-        || record.snapshot.allocation.state !== 'reserved'
-        || !sameCreationTarget(record.snapshot, request.target)
+        record.snapshot.pendingCreation?.reservationId !== request.reservationId ||
+        current.value.version.value !== request.expectedStoreVersion ||
+        record.snapshot.allocation.state !== 'reserved' ||
+        !sameCreationTarget(record.snapshot, request.target)
       ) {
         return { kind: 'stale' };
       }
@@ -1435,73 +1425,77 @@ export class ZLinkLocationStoreRepository extends ZLinkInMemoryLocationStore {
       if (liveTargetDescriptor(descriptorRead, leaseRead, request.target) === undefined) {
         return { kind: 'stale' };
       }
-      const capacity = capacityRead.kind === 'missing'
-        ? emptyCapacityRecord()
-        : decodeJson<CapacityRecord>(capacityRead.value.bytes);
+      const capacity =
+        capacityRead.kind === 'missing'
+          ? emptyCapacityRecord()
+          : decodeJson<CapacityRecord>(capacityRead.value.bytes);
       const terminalAtStore = {
         ...terminal,
         storeNow: current.value.storeNow
       };
-      const retentionMs = terminalAtStore.expiresAt.getTime()
-        - current.value.storeNow.getTime();
+      const retentionMs = terminalAtStore.expiresAt.getTime() - current.value.storeNow.getTime();
       if (retentionMs <= 0) {
         throw new RangeError(
           'Creation terminal expiry must be the live operation deadline plus five minutes.'
         );
       }
-      const mutations = request.completion.kind === 'created'
-        ? [
+      const mutations =
+        request.completion.kind === 'created'
+          ? [
+              {
+                kind: 'put' as const,
+                key: rowKey,
+                bytes: encodeAuthorityRecord({
+                  terminal: 'committed',
+                  snapshot: {
+                    ...record.snapshot,
+                    payload: Buffer.from(request.completion.readyPayload),
+                    allocation: { ...record.snapshot.allocation, state: 'active' },
+                    pendingCreation: undefined
+                  }
+                } satisfies AuthorityRecord)
+              },
+              {
+                kind: 'put' as const,
+                key: capacityRowKey,
+                bytes: encodeJson({
+                  active: addCapacity(capacity.active, record.snapshot.allocation.capacity),
+                  pending: subtractCapacity(capacity.pending, record.snapshot.allocation.capacity)
+                } satisfies CapacityRecord)
+              }
+            ]
+          : [
+              { kind: 'delete' as const, key: rowKey },
+              {
+                kind: 'put' as const,
+                key: capacityRowKey,
+                bytes: encodeJson({
+                  active: capacity.active,
+                  pending: subtractCapacity(capacity.pending, record.snapshot.allocation.capacity)
+                } satisfies CapacityRecord)
+              }
+            ];
+      const result = await this.provider.write(
+        {
+          conditions: [
+            { kind: 'version', key: rowKey, expected: current.value.version },
+            { kind: 'missing', key: terminalRowKey },
+            versionCondition(descriptorKey, descriptorRead),
+            versionCondition(leaseKey, leaseRead),
+            conditionFor(capacityRowKey, capacityRead)
+          ],
+          mutations: [
+            ...mutations,
             {
-              kind: 'put' as const,
-              key: rowKey,
-              bytes: encodeAuthorityRecord({
-                terminal: 'committed',
-                snapshot: {
-                  ...record.snapshot,
-                  payload: Buffer.from(request.completion.readyPayload),
-                  allocation: { ...record.snapshot.allocation, state: 'active' },
-                  pendingCreation: undefined
-                }
-              } satisfies AuthorityRecord)
-            },
-            {
-              kind: 'put' as const,
-              key: capacityRowKey,
-              bytes: encodeJson({
-                active: addCapacity(capacity.active, record.snapshot.allocation.capacity),
-                pending: subtractCapacity(capacity.pending, record.snapshot.allocation.capacity)
-              } satisfies CapacityRecord)
+              kind: 'put',
+              key: terminalRowKey,
+              bytes: terminalAtStore.terminalEnvelope,
+              retentionMs
             }
           ]
-        : [
-            { kind: 'delete' as const, key: rowKey },
-            {
-              kind: 'put' as const,
-              key: capacityRowKey,
-              bytes: encodeJson({
-                active: capacity.active,
-                pending: subtractCapacity(capacity.pending, record.snapshot.allocation.capacity)
-              } satisfies CapacityRecord)
-            }
-          ];
-      const result = await this.provider.write({
-        conditions: [
-          { kind: 'version', key: rowKey, expected: current.value.version },
-          { kind: 'missing', key: terminalRowKey },
-          versionCondition(descriptorKey, descriptorRead),
-          versionCondition(leaseKey, leaseRead),
-          conditionFor(capacityRowKey, capacityRead)
-        ],
-        mutations: [
-          ...mutations,
-          {
-            kind: 'put',
-            key: terminalRowKey,
-            bytes: terminalAtStore.terminalEnvelope,
-            retentionMs
-          }
-        ]
-      }, signal);
+        },
+        signal
+      );
       if (result.kind === 'conflict') continue;
       const publishedTerminal = {
         ...terminalAtStore,
@@ -1510,8 +1504,7 @@ export class ZLinkLocationStoreRepository extends ZLinkInMemoryLocationStore {
       if (request.completion.kind !== 'created') {
         return { kind: request.completion.kind, terminal: publishedTerminal };
       }
-      const version = result.putVersions.find(entry =>
-        entry.key.value === rowKey.value)?.version;
+      const version = result.putVersions.find((entry) => entry.key.value === rowKey.value)?.version;
       if (version === undefined) {
         throw new Error('Actor creation completion did not return an authority row version.');
       }
@@ -1571,22 +1564,25 @@ export class ZLinkLocationStoreRepository extends ZLinkInMemoryLocationStore {
           ? { kind: 'missing', key: OWNER_COUNTER_KEY }
           : { kind: 'version', key: OWNER_COUNTER_KEY, expected: counter.value.version }
       ];
-      const result = await this.provider.write({
-        conditions,
-        mutations: [
-          {
-            kind: 'put',
-            key: ownerKey(ownerId),
-            bytes: encodeOwnerRecord(ownerId, generation),
-            retentionMs: leaseTtlMs
-          },
-          {
-            kind: 'put',
-            key: OWNER_COUNTER_KEY,
-            bytes: encodeText((generation + 1n).toString())
-          }
-        ]
-      }, signal);
+      const result = await this.provider.write(
+        {
+          conditions,
+          mutations: [
+            {
+              kind: 'put',
+              key: ownerKey(ownerId),
+              bytes: encodeOwnerRecord(ownerId, generation),
+              retentionMs: leaseTtlMs
+            },
+            {
+              kind: 'put',
+              key: OWNER_COUNTER_KEY,
+              bytes: encodeText((generation + 1n).toString())
+            }
+          ]
+        },
+        signal
+      );
       if (result.kind === 'conflict') continue;
       return {
         kind: 'claimed',
@@ -1626,15 +1622,20 @@ export class ZLinkLocationStoreRepository extends ZLinkInMemoryLocationStore {
     if (current.kind === 'missing') return { kind: 'stale' };
     const record = decodeOwnerRecord(current.value.bytes);
     if (BigInt(record.leaseGeneration) !== token.leaseGeneration) return { kind: 'stale' };
-    const result = await this.provider.write({
-      conditions: [{ kind: 'version', key, expected: current.value.version }],
-      mutations: [{
-        kind: 'put',
-        key,
-        bytes: current.value.bytes,
-        retentionMs: leaseTtlMs
-      }]
-    }, signal);
+    const result = await this.provider.write(
+      {
+        conditions: [{ kind: 'version', key, expected: current.value.version }],
+        mutations: [
+          {
+            kind: 'put',
+            key,
+            bytes: current.value.bytes,
+            retentionMs: leaseTtlMs
+          }
+        ]
+      },
+      signal
+    );
     if (result.kind === 'conflict') return { kind: 'stale' };
     return {
       kind: 'renewed',
@@ -1652,10 +1653,13 @@ export class ZLinkLocationStoreRepository extends ZLinkInMemoryLocationStore {
     if (current.kind === 'missing') return 'stale';
     const record = decodeOwnerRecord(current.value.bytes);
     if (BigInt(record.leaseGeneration) !== token.leaseGeneration) return 'stale';
-    const result = await this.provider.write({
-      conditions: [{ kind: 'version', key, expected: current.value.version }],
-      mutations: [{ kind: 'delete', key }]
-    }, signal);
+    const result = await this.provider.write(
+      {
+        conditions: [{ kind: 'version', key, expected: current.value.version }],
+        mutations: [{ kind: 'delete', key }]
+      },
+      signal
+    );
     return result.kind === 'applied' ? 'released' : 'stale';
   }
 
@@ -1683,15 +1687,22 @@ export class ZLinkLocationStoreRepository extends ZLinkInMemoryLocationStore {
     const rowKey = meshKey(key.meshName, key.rid);
     const current = await this.provider.read(rowKey, signal);
     if (current.kind === 'missing') return WriteStatus.IgnoredStale;
-    const descriptor = reviveMeshDescriptor(decodeCanonicalDescriptorRecord<ZLinkMeshNodeDescriptor>(current.value.bytes).descriptor);
-    if (descriptor.ownerId !== owner.ownerId
-      || descriptor.leaseGeneration !== owner.leaseGeneration) {
+    const descriptor = reviveMeshDescriptor(
+      decodeCanonicalDescriptorRecord<ZLinkMeshNodeDescriptor>(current.value.bytes).descriptor
+    );
+    if (
+      descriptor.ownerId !== owner.ownerId ||
+      descriptor.leaseGeneration !== owner.leaseGeneration
+    ) {
       return WriteStatus.IgnoredStale;
     }
-    const result = await this.provider.write({
-      conditions: [{ kind: 'version', key: rowKey, expected: current.value.version }],
-      mutations: [{ kind: 'delete', key: rowKey }]
-    }, signal);
+    const result = await this.provider.write(
+      {
+        conditions: [{ kind: 'version', key: rowKey, expected: current.value.version }],
+        mutations: [{ kind: 'delete', key: rowKey }]
+      },
+      signal
+    );
     return result.kind === 'applied' ? WriteStatus.Stored : WriteStatus.IgnoredStale;
   }
 
@@ -1700,55 +1711,62 @@ export class ZLinkLocationStoreRepository extends ZLinkInMemoryLocationStore {
     page: ZLinkPageRequest = {},
     signal?: AbortSignal
   ): Promise<ZLinkLocationPage<ZLinkMeshNodeDescriptor>> {
-    const result = await this.provider.scan({
-      prefix: meshPrefix(meshName),
-      cursor: page.continuationToken === undefined
-        ? undefined
-        : ({ value: page.continuationToken } as ZLinkStoreScanCursor),
-      limit: page.pageSize ?? 100
-    }, signal);
+    const result = await this.provider.scan(
+      {
+        prefix: meshPrefix(meshName),
+        cursor:
+          page.continuationToken === undefined
+            ? undefined
+            : ({ value: page.continuationToken } as ZLinkStoreScanCursor),
+        limit: page.pageSize ?? 100
+      },
+      signal
+    );
     if (result.kind === 'expired') {
       throw new Error('Location Store scan snapshot expired.');
     }
-    const items = await Promise.all(result.value.items.map(async item => {
-      const descriptor = reviveMeshDescriptor(
-        decodeCanonicalDescriptorRecord<ZLinkMeshNodeDescriptor>(item.value.bytes).descriptor
-      );
-      const capacityRead = await this.provider.read(
-        capacityKey(descriptor.meshName, String(descriptor.rid)),
-        signal
-      );
-      const capacity = capacityRead.kind === 'missing'
-        ? emptyCapacityRecord()
-        : decodeJson<CapacityRecord>(capacityRead.value.bytes);
-      return {
-        ...descriptor,
-        populationCapacity: {
-          actors: {
-            ...descriptor.populationCapacity.actors,
-            active: capacity.active.actors,
-            reserved: capacity.pending.actors
-          },
-          spots: {
-            ...descriptor.populationCapacity.spots,
-            active: capacity.active.spots,
-            reserved: capacity.pending.spots
-          },
-          spotTypes: descriptor.populationCapacity.spotTypes.map(value => {
-            const key = capacityTypeKey({
-              objectKind: value.objectKind,
-              stableType: value.stableType,
-              count: 0
-            });
-            return {
-              ...value,
-              active: capacity.active.spotTypes[key] ?? 0,
-              reserved: capacity.pending.spotTypes[key] ?? 0
-            };
-          })
-        }
-      };
-    }));
+    const items = await Promise.all(
+      result.value.items.map(async (item) => {
+        const descriptor = reviveMeshDescriptor(
+          decodeCanonicalDescriptorRecord<ZLinkMeshNodeDescriptor>(item.value.bytes).descriptor
+        );
+        const capacityRead = await this.provider.read(
+          capacityKey(descriptor.meshName, String(descriptor.rid)),
+          signal
+        );
+        const capacity =
+          capacityRead.kind === 'missing'
+            ? emptyCapacityRecord()
+            : decodeJson<CapacityRecord>(capacityRead.value.bytes);
+        return {
+          ...descriptor,
+          populationCapacity: {
+            actors: {
+              ...descriptor.populationCapacity.actors,
+              active: capacity.active.actors,
+              reserved: capacity.pending.actors
+            },
+            spots: {
+              ...descriptor.populationCapacity.spots,
+              active: capacity.active.spots,
+              reserved: capacity.pending.spots
+            },
+            spotTypes: descriptor.populationCapacity.spotTypes.map((value) => {
+              const key = capacityTypeKey({
+                objectKind: value.objectKind,
+                stableType: value.stableType,
+                count: 0
+              });
+              return {
+                ...value,
+                active: capacity.active.spotTypes[key] ?? 0,
+                reserved: capacity.pending.spotTypes[key] ?? 0
+              };
+            })
+          }
+        };
+      })
+    );
     return {
       items,
       continuationToken: result.value.nextCursor?.value
@@ -1835,12 +1853,7 @@ export class ZLinkLocationStoreRepository extends ZLinkInMemoryLocationStore {
     page: ZLinkPageRequest = {},
     signal?: AbortSignal
   ): Promise<ZLinkLocationPage<ZLinkFanoutPublisherDescriptor>> {
-    return this.listDescriptors(
-      fanoutPrefix(channelName),
-      page,
-      reviveFanoutDescriptor,
-      signal
-    );
+    return this.listDescriptors(fanoutPrefix(channelName), page, reviveFanoutDescriptor, signal);
   }
 
   override async updateSpot(
@@ -1861,11 +1874,7 @@ export class ZLinkLocationStoreRepository extends ZLinkInMemoryLocationStore {
     owner: ZLinkLocationOwnerToken,
     signal?: AbortSignal
   ): Promise<ZLinkLocationWriteStatus> {
-    return this.removeOwnedLocation(
-      spotKey(key.meshName, String(key.spotId)),
-      owner,
-      signal
-    );
+    return this.removeOwnedLocation(spotKey(key.meshName, String(key.spotId)), owner, signal);
   }
 
   override async resolveSpot(
@@ -1888,7 +1897,7 @@ export class ZLinkLocationStoreRepository extends ZLinkInMemoryLocationStore {
       `${PREFIX}spot:`,
       page,
       normalizeSpot,
-      value => matchesSpot(value, filter),
+      (value) => matchesSpot(value, filter),
       signal
     );
   }
@@ -1934,7 +1943,7 @@ export class ZLinkLocationStoreRepository extends ZLinkInMemoryLocationStore {
       `${PREFIX}actor:`,
       page,
       normalizeActor,
-      value => matchesActor(value, filter),
+      (value) => matchesActor(value, filter),
       signal
     );
   }
@@ -1962,9 +1971,11 @@ export class ZLinkLocationStoreRepository extends ZLinkInMemoryLocationStore {
             updatedAt: current.value.storeNow
           };
         }
-      } else if (intent === 2
-        && (stored.ownerId !== normalized.ownerId
-          || normalized.generation !== 0n && stored.generation !== normalized.generation)) {
+      } else if (
+        intent === 2 &&
+        (stored.ownerId !== normalized.ownerId ||
+          (normalized.generation !== 0n && stored.generation !== normalized.generation))
+      ) {
         return {
           status: WriteStatus.IgnoredStale,
           generation,
@@ -1977,17 +1988,22 @@ export class ZLinkLocationStoreRepository extends ZLinkInMemoryLocationStore {
       return rejected(new Date());
     }
     const stored = { ...normalized, generation };
-    const result = await this.provider.write({
-      conditions: [condition],
-      mutations: [{
-        kind: 'put',
-        key: rowKey,
-        bytes: encodeJson<DescriptorRecord<ZLinkRouteLocation>>({
-          generation: generation.toString(),
-          descriptor: stored
-        })
-      }]
-    }, signal);
+    const result = await this.provider.write(
+      {
+        conditions: [condition],
+        mutations: [
+          {
+            kind: 'put',
+            key: rowKey,
+            bytes: encodeJson<DescriptorRecord<ZLinkRouteLocation>>({
+              generation: generation.toString(),
+              descriptor: stored
+            })
+          }
+        ]
+      },
+      signal
+    );
     return result.kind === 'applied'
       ? { status: WriteStatus.Stored, generation, updatedAt: result.storeNow }
       : rejected(result.storeNow);
@@ -2002,20 +2018,29 @@ export class ZLinkLocationStoreRepository extends ZLinkInMemoryLocationStore {
     const current = await this.provider.read(rowKey, signal);
     if (current.kind === 'missing') return rejected(current.storeNow);
     const record = decodeJson<DescriptorRecord<ZLinkRouteLocation>>(current.value.bytes);
-    if (record.descriptor.ownerId !== owner.ownerId
-      || record.descriptor.generation !== owner.leaseGeneration) {
+    if (
+      record.descriptor.ownerId !== owner.ownerId ||
+      record.descriptor.generation !== owner.leaseGeneration
+    ) {
       return {
         status: WriteStatus.IgnoredStale,
         generation: BigInt(record.generation),
         updatedAt: current.value.storeNow
       };
     }
-    const result = await this.provider.write({
-      conditions: [{ kind: 'version', key: rowKey, expected: current.value.version }],
-      mutations: [{ kind: 'delete', key: rowKey }]
-    }, signal);
+    const result = await this.provider.write(
+      {
+        conditions: [{ kind: 'version', key: rowKey, expected: current.value.version }],
+        mutations: [{ kind: 'delete', key: rowKey }]
+      },
+      signal
+    );
     return result.kind === 'applied'
-      ? { status: WriteStatus.Stored, generation: BigInt(record.generation), updatedAt: result.storeNow }
+      ? {
+          status: WriteStatus.Stored,
+          generation: BigInt(record.generation),
+          updatedAt: result.storeNow
+        }
       : rejected(result.storeNow);
   }
 
@@ -2039,7 +2064,7 @@ export class ZLinkLocationStoreRepository extends ZLinkInMemoryLocationStore {
       `${PREFIX}route:`,
       page,
       normalizeRoute,
-      value => matchesRoute(value, filter),
+      (value) => matchesRoute(value, filter),
       signal
     );
   }
@@ -2094,7 +2119,7 @@ export class ZLinkLocationStoreRepository extends ZLinkInMemoryLocationStore {
         signal
       );
     }
-    return removed + await super.removeAllByOwner(owner);
+    return removed + (await super.removeAllByOwner(owner));
   }
 
   private async removeOwnedAuthorities(
@@ -2107,11 +2132,14 @@ export class ZLinkLocationStoreRepository extends ZLinkInMemoryLocationStore {
       let cursor: ZLinkStoreScanCursor | undefined;
       let expired = false;
       do {
-        const result = await this.provider.scan({
-          prefix: AUTHORITY_PREIMAGE_PREFIX,
-          cursor,
-          limit: 1_000
-        }, signal);
+        const result = await this.provider.scan(
+          {
+            prefix: AUTHORITY_PREIMAGE_PREFIX,
+            cursor,
+            limit: 1_000
+          },
+          signal
+        );
         if (result.kind === 'expired') {
           expired = true;
           break;
@@ -2133,14 +2161,15 @@ export class ZLinkLocationStoreRepository extends ZLinkInMemoryLocationStore {
     for (const candidate of candidates) {
       signal?.throwIfAborted();
       const current = await this.provider.read(candidate.key, signal);
-      if (current.kind === 'missing'
-        || current.value.version.value !== candidate.scanVersion.value) continue;
+      if (current.kind === 'missing' || current.value.version.value !== candidate.scanVersion.value)
+        continue;
       const record = decodeAuthorityRecord(current.value.bytes);
       if (
-        record.snapshot.ownerId !== owner.ownerId
-        || record.snapshot.ownerLeaseGeneration !== owner.leaseGeneration
-        || record.aggregate !== undefined
-      ) continue;
+        record.snapshot.ownerId !== owner.ownerId ||
+        record.snapshot.ownerLeaseGeneration !== owner.leaseGeneration ||
+        record.aggregate !== undefined
+      )
+        continue;
       const encodedAuthority = authorityContractValueFromPreimage(candidate.key.value);
       const identity = decodeAuthorityKey({ value: encodedAuthority } as ZLinkAuthorityKey);
       if (record.snapshot.allocation.state === 'active') {
@@ -2155,21 +2184,23 @@ export class ZLinkLocationStoreRepository extends ZLinkInMemoryLocationStore {
       }
       const reservationId = record.snapshot.pendingCreation?.reservationId;
       if (reservationId === undefined) continue;
-      const aborted = await this.abort({
-        key: identity,
-        reservationId,
-        expectedStoreVersion: current.value.version.value,
-        target: {
-          meshName: record.snapshot.allocation.descriptor.meshName,
-          nodeRid: record.snapshot.allocation.descriptor.rid,
-          nodeLifecycleGeneration:
-            record.snapshot.allocation.descriptorLifecycleGeneration,
-          owner: {
-            ownerId: record.snapshot.ownerId,
-            leaseGeneration: record.snapshot.ownerLeaseGeneration
+      const aborted = await this.abort(
+        {
+          key: identity,
+          reservationId,
+          expectedStoreVersion: current.value.version.value,
+          target: {
+            meshName: record.snapshot.allocation.descriptor.meshName,
+            nodeRid: record.snapshot.allocation.descriptor.rid,
+            nodeLifecycleGeneration: record.snapshot.allocation.descriptorLifecycleGeneration,
+            owner: {
+              ownerId: record.snapshot.ownerId,
+              leaseGeneration: record.snapshot.ownerLeaseGeneration
+            }
           }
-        }
-      }, signal);
+        },
+        signal
+      );
       if (aborted.kind === 'aborted') removed += 1n;
     }
     return removed;
@@ -2183,20 +2214,25 @@ export class ZLinkLocationStoreRepository extends ZLinkInMemoryLocationStore {
   ): Promise<bigint> {
     if (candidates.length === 0) return 0n;
 
-    const currentRows = await Promise.all(candidates.map(candidate =>
-      this.provider.read(candidate.key, signal)));
+    const currentRows = await Promise.all(
+      candidates.map((candidate) => this.provider.read(candidate.key, signal))
+    );
     const unchangedOwnedRows: OwnerCleanupCandidate[] = [];
     for (let index = 0; index < candidates.length; index += 1) {
       const candidate = candidates[index]!;
       const current = currentRows[index]!;
-      if (current.kind === 'missing'
-        || current.value.version.value !== candidate.scanVersion.value) {
+      if (
+        current.kind === 'missing' ||
+        current.value.version.value !== candidate.scanVersion.value
+      ) {
         continue;
       }
       const record = decodeJson<OwnerCleanupRecord>(current.value.bytes);
       const descriptor = record.descriptor;
-      if (descriptor.ownerId !== owner.ownerId
-        || descriptorOwnerLeaseGeneration(descriptor) !== owner.leaseGeneration) {
+      if (
+        descriptor.ownerId !== owner.ownerId ||
+        descriptorOwnerLeaseGeneration(descriptor) !== owner.leaseGeneration
+      ) {
         continue;
       }
       unchangedOwnedRows.push({
@@ -2207,24 +2243,29 @@ export class ZLinkLocationStoreRepository extends ZLinkInMemoryLocationStore {
     if (unchangedOwnedRows.length === 0) return 0n;
 
     const currentLease = await this.provider.read(leaseKey, signal);
-    if (currentLease.kind === 'missing'
-      || liveOwnerLeaseGeneration(currentLease) !== owner.leaseGeneration) {
+    if (
+      currentLease.kind === 'missing' ||
+      liveOwnerLeaseGeneration(currentLease) !== owner.leaseGeneration
+    ) {
       return 0n;
     }
-    const result = await this.provider.write({
-      conditions: [
-        { kind: 'version', key: leaseKey, expected: currentLease.value.version },
-        ...unchangedOwnedRows.map(row => ({
-          kind: 'version' as const,
-          key: row.key,
-          expected: row.scanVersion
+    const result = await this.provider.write(
+      {
+        conditions: [
+          { kind: 'version', key: leaseKey, expected: currentLease.value.version },
+          ...unchangedOwnedRows.map((row) => ({
+            kind: 'version' as const,
+            key: row.key,
+            expected: row.scanVersion
+          }))
+        ],
+        mutations: unchangedOwnedRows.map((row) => ({
+          kind: 'delete' as const,
+          key: row.key
         }))
-      ],
-      mutations: unchangedOwnedRows.map(row => ({
-        kind: 'delete' as const,
-        key: row.key
-      }))
-    }, signal);
+      },
+      signal
+    );
     if (result.kind === 'applied') return BigInt(unchangedOwnedRows.length);
 
     // A row may have changed while the page was being prepared. Split the
@@ -2263,11 +2304,7 @@ export class ZLinkLocationStoreRepository extends ZLinkInMemoryLocationStore {
       this.provider.read(rowKey, signal)
     ]);
     if (lease.kind === 'missing') return rejected(lease.storeNow);
-    if (!matchesLiveOwnerLease(
-      lease,
-      descriptor.ownerId,
-      descriptor.leaseGeneration
-    )) {
+    if (!matchesLiveOwnerLease(lease, descriptor.ownerId, descriptor.leaseGeneration)) {
       return rejected(lease.value.storeNow);
     }
 
@@ -2330,16 +2367,20 @@ export class ZLinkLocationStoreRepository extends ZLinkInMemoryLocationStore {
     let currentRow = predecessor;
 
     for (let attempt = 0; attempt <= MAX_DESCRIPTOR_WRITE_RETRIES; attempt += 1) {
-      const rowCondition: ZLinkStoreCondition = currentRow.kind === 'found'
-        ? { kind: 'version', key: rowKey, expected: currentRow.value.version }
-        : { kind: 'missing', key: rowKey };
-      const result = await this.provider.write({
-        conditions: [
-          { kind: 'version', key: leaseKey, expected: currentLease.value.version },
-          rowCondition
-        ],
-        mutations: [{ kind: 'put', key: rowKey, bytes: encodedDescriptor }]
-      }, signal);
+      const rowCondition: ZLinkStoreCondition =
+        currentRow.kind === 'found'
+          ? { kind: 'version', key: rowKey, expected: currentRow.value.version }
+          : { kind: 'missing', key: rowKey };
+      const result = await this.provider.write(
+        {
+          conditions: [
+            { kind: 'version', key: leaseKey, expected: currentLease.value.version },
+            rowCondition
+          ],
+          mutations: [{ kind: 'put', key: rowKey, bytes: encodedDescriptor }]
+        },
+        signal
+      );
       if (result.kind === 'applied') {
         return { status: WriteStatus.Stored, generation, updatedAt: result.storeNow };
       }
@@ -2349,9 +2390,11 @@ export class ZLinkLocationStoreRepository extends ZLinkInMemoryLocationStore {
         this.provider.read(leaseKey, signal),
         this.provider.read(rowKey, signal)
       ]);
-      if (refreshedLease.kind === 'missing'
-        || !matchesLiveOwnerLease(refreshedLease, ownerId, leaseGeneration)
-        || !sameDescriptorPredecessor(predecessor, refreshedRow)) {
+      if (
+        refreshedLease.kind === 'missing' ||
+        !matchesLiveOwnerLease(refreshedLease, ownerId, leaseGeneration) ||
+        !sameDescriptorPredecessor(predecessor, refreshedRow)
+      ) {
         return ignoredStale(result.storeNow);
       }
 
@@ -2369,16 +2412,20 @@ export class ZLinkLocationStoreRepository extends ZLinkInMemoryLocationStore {
   ): Promise<ZLinkLocationWriteStatus> {
     const current = await this.provider.read(rowKey, signal);
     if (current.kind === 'missing') return WriteStatus.IgnoredStale;
-    const descriptor = revive(
-      decodeCanonicalDescriptorRecord<T>(current.value.bytes).descriptor);
-    if (descriptor.ownerId !== owner.ownerId
-      || descriptor.leaseGeneration !== owner.leaseGeneration) {
+    const descriptor = revive(decodeCanonicalDescriptorRecord<T>(current.value.bytes).descriptor);
+    if (
+      descriptor.ownerId !== owner.ownerId ||
+      descriptor.leaseGeneration !== owner.leaseGeneration
+    ) {
       return WriteStatus.IgnoredStale;
     }
-    const result = await this.provider.write({
-      conditions: [{ kind: 'version', key: rowKey, expected: current.value.version }],
-      mutations: [{ kind: 'delete', key: rowKey }]
-    }, signal);
+    const result = await this.provider.write(
+      {
+        conditions: [{ kind: 'version', key: rowKey, expected: current.value.version }],
+        mutations: [{ kind: 'delete', key: rowKey }]
+      },
+      signal
+    );
     return result.kind === 'applied' ? WriteStatus.Stored : WriteStatus.IgnoredStale;
   }
 
@@ -2388,19 +2435,24 @@ export class ZLinkLocationStoreRepository extends ZLinkInMemoryLocationStore {
     revive: (descriptor: T) => T,
     signal?: AbortSignal
   ): Promise<ZLinkLocationPage<T>> {
-    const result = await this.provider.scan({
-      prefix,
-      cursor: page.continuationToken === undefined
-        ? undefined
-        : ({ value: page.continuationToken } as ZLinkStoreScanCursor),
-      limit: page.pageSize ?? 100
-    }, signal);
+    const result = await this.provider.scan(
+      {
+        prefix,
+        cursor:
+          page.continuationToken === undefined
+            ? undefined
+            : ({ value: page.continuationToken } as ZLinkStoreScanCursor),
+        limit: page.pageSize ?? 100
+      },
+      signal
+    );
     if (result.kind === 'expired') {
       throw new Error('Location Store scan snapshot expired.');
     }
     return {
-      items: result.value.items.map(item =>
-        revive(decodeCanonicalDescriptorRecord<T>(item.value.bytes).descriptor)),
+      items: result.value.items.map((item) =>
+        revive(decodeCanonicalDescriptorRecord<T>(item.value.bytes).descriptor)
+      ),
       continuationToken: result.value.nextCursor?.value
     };
   }
@@ -2428,8 +2480,10 @@ export class ZLinkLocationStoreRepository extends ZLinkInMemoryLocationStore {
       generation = BigInt(record.generation);
       const stored = record.descriptor;
       if (intent === 2) {
-        if (stored.ownerId !== location.ownerId
-          || locationOwnerGeneration(stored) !== locationOwnerGeneration(location)) {
+        if (
+          stored.ownerId !== location.ownerId ||
+          locationOwnerGeneration(stored) !== locationOwnerGeneration(location)
+        ) {
           return {
             status: WriteStatus.IgnoredStale,
             generation,
@@ -2461,20 +2515,25 @@ export class ZLinkLocationStoreRepository extends ZLinkInMemoryLocationStore {
       return rejected(lease.value.storeNow);
     }
 
-    const result = await this.provider.write({
-      conditions: [
-        { kind: 'version', key: leaseKey, expected: lease.value.version },
-        rowCondition
-      ],
-      mutations: [{
-        kind: 'put',
-        key: rowKey,
-        bytes: encodeJson<DescriptorRecord<T>>({
-          generation: generation.toString(),
-          descriptor: location
-        })
-      }]
-    }, signal);
+    const result = await this.provider.write(
+      {
+        conditions: [
+          { kind: 'version', key: leaseKey, expected: lease.value.version },
+          rowCondition
+        ],
+        mutations: [
+          {
+            kind: 'put',
+            key: rowKey,
+            bytes: encodeJson<DescriptorRecord<T>>({
+              generation: generation.toString(),
+              descriptor: location
+            })
+          }
+        ]
+      },
+      signal
+    );
     return result.kind === 'applied'
       ? { status: WriteStatus.Stored, generation, updatedAt: result.storeNow }
       : rejected(result.storeNow);
@@ -2493,14 +2552,16 @@ export class ZLinkLocationStoreRepository extends ZLinkInMemoryLocationStore {
       readonly leaseGeneration?: bigint;
     };
     const leaseGeneration = descriptor.leaseGeneration ?? BigInt(record.generation);
-    if (descriptor.ownerId !== owner.ownerId
-      || leaseGeneration !== owner.leaseGeneration) {
+    if (descriptor.ownerId !== owner.ownerId || leaseGeneration !== owner.leaseGeneration) {
       return WriteStatus.IgnoredStale;
     }
-    const result = await this.provider.write({
-      conditions: [{ kind: 'version', key: rowKey, expected: current.value.version }],
-      mutations: [{ kind: 'delete', key: rowKey }]
-    }, signal);
+    const result = await this.provider.write(
+      {
+        conditions: [{ kind: 'version', key: rowKey, expected: current.value.version }],
+        mutations: [{ kind: 'delete', key: rowKey }]
+      },
+      signal
+    );
     return result.kind === 'applied' ? WriteStatus.Stored : WriteStatus.IgnoredStale;
   }
 
@@ -2522,22 +2583,25 @@ export class ZLinkLocationStoreRepository extends ZLinkInMemoryLocationStore {
     signal?: AbortSignal
   ): Promise<ZLinkLocationPage<T>> {
     const requested = page.pageSize ?? 100;
-    let cursor = page.continuationToken === undefined
-      ? undefined
-      : ({ value: page.continuationToken } as ZLinkStoreScanCursor);
+    let cursor =
+      page.continuationToken === undefined
+        ? undefined
+        : ({ value: page.continuationToken } as ZLinkStoreScanCursor);
     const items: T[] = [];
     do {
-      const result = await this.provider.scan({
-        prefix,
-        cursor,
-        limit: requested
-      }, signal);
+      const result = await this.provider.scan(
+        {
+          prefix,
+          cursor,
+          limit: requested
+        },
+        signal
+      );
       if (result.kind === 'expired') {
         throw new Error('Location Store scan snapshot expired.');
       }
       for (const item of result.value.items) {
-        const value = revive(
-          decodeJson<DescriptorRecord<T>>(item.value.bytes).descriptor);
+        const value = revive(decodeJson<DescriptorRecord<T>>(item.value.bytes).descriptor);
         if (matches(value)) items.push(value);
         if (items.length === requested) {
           return {
@@ -2568,10 +2632,7 @@ export class ZLinkLocationStoreRepository extends ZLinkInMemoryLocationStore {
       );
     }
     const aggregateRead = await this.provider.read(
-      aggregateKey(aggregateFence(
-        aggregateId(marker.aggregateId),
-        marker.aggregateGeneration
-      )),
+      aggregateKey(aggregateFence(aggregateId(marker.aggregateId), marker.aggregateGeneration)),
       signal
     );
     if (aggregateRead.kind === 'missing') {
@@ -2585,10 +2646,7 @@ export class ZLinkLocationStoreRepository extends ZLinkInMemoryLocationStore {
         storeNow
       );
     }
-    const fence = aggregateFence(
-      aggregateId(marker.aggregateId),
-      marker.aggregateGeneration
-    );
+    const fence = aggregateFence(aggregateId(marker.aggregateId), marker.aggregateGeneration);
     const payload = await requireProviderBytes(
       this.provider,
       aggregateParticipantPayloadKey(fence, marker.index),
@@ -2597,25 +2655,25 @@ export class ZLinkLocationStoreRepository extends ZLinkInMemoryLocationStore {
     if (sha256Hex(payload) !== marker.authorityPayloadSha256) {
       throw new Error('Committed aggregate participant payload checksum is invalid.');
     }
-    const projected: StoredAuthoritySnapshot = marker.ownerTransition === 'newOwner'
-      ? {
-          payload: Buffer.from(payload),
-          objectGeneration: record.snapshot.objectGeneration,
-          authorityOwnerGeneration: marker.targetAuthorityOwnerGeneration,
-          ownerId: aggregate.targetOwner.ownerId,
-          ownerLeaseGeneration: aggregate.targetOwner.leaseGeneration,
-          allocation: {
-            ...record.snapshot.allocation,
-            descriptor: { ...aggregate.targetDescriptor },
-            descriptorLifecycleGeneration:
-              aggregate.targetDescriptorLifecycleGeneration,
-            capacity: cloneCapacity(record.snapshot.allocation.capacity)
+    const projected: StoredAuthoritySnapshot =
+      marker.ownerTransition === 'newOwner'
+        ? {
+            payload: Buffer.from(payload),
+            objectGeneration: record.snapshot.objectGeneration,
+            authorityOwnerGeneration: marker.targetAuthorityOwnerGeneration,
+            ownerId: aggregate.targetOwner.ownerId,
+            ownerLeaseGeneration: aggregate.targetOwner.leaseGeneration,
+            allocation: {
+              ...record.snapshot.allocation,
+              descriptor: { ...aggregate.targetDescriptor },
+              descriptorLifecycleGeneration: aggregate.targetDescriptorLifecycleGeneration,
+              capacity: cloneCapacity(record.snapshot.allocation.capacity)
+            }
           }
-        }
-      : {
-          ...record.snapshot,
-          payload: Buffer.from(payload)
-        };
+        : {
+            ...record.snapshot,
+            payload: Buffer.from(payload)
+          };
     return authoritySnapshot(projected, version, storeNow);
   }
 
@@ -2640,11 +2698,13 @@ export class ZLinkLocationStoreRepository extends ZLinkInMemoryLocationStore {
         if (record.aggregate === undefined) {
           if (
             !Buffer.from(record.snapshot.payload).equals(
-              Buffer.from(await requireProviderBytes(
-                this.provider,
-                aggregateParticipantPayloadKey(fence, index),
-                signal
-              ))
+              Buffer.from(
+                await requireProviderBytes(
+                  this.provider,
+                  aggregateParticipantPayloadKey(fence, index),
+                  signal
+                )
+              )
             )
           ) {
             throw new Error('Normalized aggregate participant payload changed.');
@@ -2667,15 +2727,13 @@ export class ZLinkLocationStoreRepository extends ZLinkInMemoryLocationStore {
             ? {
                 payload: Buffer.from(payload),
                 objectGeneration: record.snapshot.objectGeneration,
-                authorityOwnerGeneration:
-                  record.aggregate.targetAuthorityOwnerGeneration,
+                authorityOwnerGeneration: record.aggregate.targetAuthorityOwnerGeneration,
                 ownerId: aggregate.targetOwner.ownerId,
                 ownerLeaseGeneration: aggregate.targetOwner.leaseGeneration,
                 allocation: {
                   ...record.snapshot.allocation,
                   descriptor: { ...aggregate.targetDescriptor },
-                  descriptorLifecycleGeneration:
-                    aggregate.targetDescriptorLifecycleGeneration,
+                  descriptorLifecycleGeneration: aggregate.targetDescriptorLifecycleGeneration,
                   capacity: cloneCapacity(record.snapshot.allocation.capacity)
                 }
               }
@@ -2689,18 +2747,25 @@ export class ZLinkLocationStoreRepository extends ZLinkInMemoryLocationStore {
           aggregate: undefined,
           visibleStoreVersion: undefined
         };
-        const result = await this.provider.write({
-          conditions: [{
-            kind: 'version',
-            key: rowKey,
-            expected: current.value.version
-          }],
-          mutations: [{
-            kind: 'put',
-            key: rowKey,
-            bytes: encodeAuthorityRecord(normalized)
-          }]
-        }, signal);
+        const result = await this.provider.write(
+          {
+            conditions: [
+              {
+                kind: 'version',
+                key: rowKey,
+                expected: current.value.version
+              }
+            ],
+            mutations: [
+              {
+                kind: 'put',
+                key: rowKey,
+                bytes: encodeAuthorityRecord(normalized)
+              }
+            ]
+          },
+          signal
+        );
         if (result.kind === 'applied') return;
       }
     });
@@ -2714,16 +2779,16 @@ export class ZLinkLocationStoreRepository extends ZLinkInMemoryLocationStore {
     if (bytes.byteLength > 1024 * 1024) {
       throw new RangeError('Aggregate participant staging value exceeds 1 MiB.');
     }
-    const result = await this.provider.write({
-      conditions: [{ kind: 'missing', key }],
-      mutations: [{ kind: 'put', key, bytes: Buffer.from(bytes) }]
-    }, signal);
+    const result = await this.provider.write(
+      {
+        conditions: [{ kind: 'missing', key }],
+        mutations: [{ kind: 'put', key, bytes: Buffer.from(bytes) }]
+      },
+      signal
+    );
     if (result.kind === 'applied') return;
     const current = await this.provider.read(key, signal);
-    if (
-      current.kind !== 'found'
-      || !Buffer.from(current.value.bytes).equals(Buffer.from(bytes))
-    ) {
+    if (current.kind !== 'found' || !Buffer.from(current.value.bytes).equals(Buffer.from(bytes))) {
       throw new Error(`Immutable aggregate participant value changed: ${key.value}.`);
     }
   }
@@ -2742,14 +2807,19 @@ export class ZLinkLocationStoreRepository extends ZLinkInMemoryLocationStore {
         return;
       }
       if (record.state !== 'staging') return;
-      const result = await this.provider.write({
-        conditions: [{ kind: 'version', key, expected: current.value.version }],
-        mutations: [{
-          kind: 'put',
-          key,
-          bytes: encodeJson({ ...record, state: 'aborted' } satisfies AggregateRecord)
-        }]
-      }, signal);
+      const result = await this.provider.write(
+        {
+          conditions: [{ kind: 'version', key, expected: current.value.version }],
+          mutations: [
+            {
+              kind: 'put',
+              key,
+              bytes: encodeJson({ ...record, state: 'aborted' } satisfies AggregateRecord)
+            }
+          ]
+        },
+        signal
+      );
       if (result.kind === 'applied') {
         await this.clearAggregateMarkersByScan(fence, signal);
         return;
@@ -2765,7 +2835,7 @@ export class ZLinkLocationStoreRepository extends ZLinkInMemoryLocationStore {
     }[],
     signal?: AbortSignal
   ): Promise<void> {
-    await parallelForEach(installed, 64, async value => {
+    await parallelForEach(installed, 64, async (value) => {
       await this.clearAggregateMarker(fence, value.key, signal);
     });
   }
@@ -2776,21 +2846,26 @@ export class ZLinkLocationStoreRepository extends ZLinkInMemoryLocationStore {
   ): Promise<void> {
     let cursor: ZLinkStoreScanCursor | undefined;
     for (;;) {
-      const result = await this.provider.scan({
-        prefix: AUTHORITY_PREIMAGE_PREFIX,
-        cursor,
-        limit: 1_000
-      }, signal);
+      const result = await this.provider.scan(
+        {
+          prefix: AUTHORITY_PREIMAGE_PREFIX,
+          cursor,
+          limit: 1_000
+        },
+        signal
+      );
       if (result.kind === 'expired') {
         cursor = undefined;
         continue;
       }
-      const matching = result.value.items.filter(item => {
+      const matching = result.value.items.filter((item) => {
         const record = decodeAuthorityRecord(item.value.bytes);
-        return record.aggregate?.aggregateId === fence.aggregateId.value
-          && record.aggregate.aggregateGeneration === fence.aggregateGeneration;
+        return (
+          record.aggregate?.aggregateId === fence.aggregateId.value &&
+          record.aggregate.aggregateGeneration === fence.aggregateGeneration
+        );
       });
-      await parallelForEach(matching, 64, async item => {
+      await parallelForEach(matching, 64, async (item) => {
         await this.clearAggregateMarker(fence, item.key, signal);
       });
       if (result.value.nextCursor === undefined) return;
@@ -2808,20 +2883,28 @@ export class ZLinkLocationStoreRepository extends ZLinkInMemoryLocationStore {
       if (current.kind === 'missing') return;
       const record = decodeAuthorityRecord(current.value.bytes);
       if (
-        record.aggregate === undefined
-        || record.aggregate.aggregateId !== fence.aggregateId.value
-        || record.aggregate.aggregateGeneration !== fence.aggregateGeneration
+        record.aggregate === undefined ||
+        record.aggregate.aggregateId !== fence.aggregateId.value ||
+        record.aggregate.aggregateGeneration !== fence.aggregateGeneration
       ) {
         return;
       }
-      const result = await this.provider.write({
-        conditions: [{ kind: 'version', key, expected: current.value.version }],
-        mutations: [{
-          kind: 'put',
-          key,
-          bytes: encodeAuthorityRecord({ ...record, aggregate: undefined } satisfies AuthorityRecord)
-        }]
-      }, signal);
+      const result = await this.provider.write(
+        {
+          conditions: [{ kind: 'version', key, expected: current.value.version }],
+          mutations: [
+            {
+              kind: 'put',
+              key,
+              bytes: encodeAuthorityRecord({
+                ...record,
+                aggregate: undefined
+              } satisfies AuthorityRecord)
+            }
+          ]
+        },
+        signal
+      );
       if (result.kind === 'applied') return;
     }
   }
@@ -2846,10 +2929,7 @@ class AmbiguousWriteReconcilingLocationStore implements ZLinkLocationStore {
     return this.inner.read(key, signal);
   }
 
-  scan(
-    request: ZLinkStoreScanRequest,
-    signal?: AbortSignal
-  ): Promise<ZLinkStoreScanResult> {
+  scan(request: ZLinkStoreScanRequest, signal?: AbortSignal): Promise<ZLinkStoreScanResult> {
     return this.inner.scan(request, signal);
   }
 
@@ -2868,18 +2948,14 @@ class AmbiguousWriteReconcilingLocationStore implements ZLinkLocationStore {
     }
   }
 
-  private async reconcile(
-    request: ZLinkStoreWriteRequest
-  ): Promise<ZLinkStoreWriteResult> {
+  private async reconcile(request: ZLinkStoreWriteRequest): Promise<ZLinkStoreWriteResult> {
     if (request.mutations.length === 0) {
       throw new Error('Cannot reconcile an opaque Store write without mutations.');
     }
-    const reconciliationSignal = AbortSignal.timeout(
-      AMBIGUOUS_WRITE_RECONCILIATION_TIMEOUT_MS
+    const reconciliationSignal = AbortSignal.timeout(AMBIGUOUS_WRITE_RECONCILIATION_TIMEOUT_MS);
+    const reads = await Promise.all(
+      request.mutations.map((mutation) => this.inner.read(mutation.key, reconciliationSignal))
     );
-    const reads = await Promise.all(request.mutations.map(
-      mutation => this.inner.read(mutation.key, reconciliationSignal)
-    ));
     const putVersions: Array<{
       readonly key: ZLinkStoreKey;
       readonly version: ZLinkStoreVersion;
@@ -2889,17 +2965,20 @@ class AmbiguousWriteReconcilingLocationStore implements ZLinkLocationStore {
     for (let index = 0; index < request.mutations.length; index += 1) {
       const mutation = request.mutations[index];
       const read = reads[index];
-      storeNow = read.kind === 'found'
-        ? latestDate(storeNow, read.value.storeNow)
-        : latestDate(storeNow, read.storeNow);
+      storeNow =
+        read.kind === 'found'
+          ? latestDate(storeNow, read.value.storeNow)
+          : latestDate(storeNow, read.storeNow);
 
       if (mutation.kind === 'delete') {
         if (read.kind !== 'missing') return { kind: 'conflict', storeNow };
         continue;
       }
-      if (read.kind !== 'found'
-        || !Buffer.from(read.value.bytes).equals(Buffer.from(mutation.bytes))
-        || !versionAdvanced(request.conditions, mutation.key, read.value.version)) {
+      if (
+        read.kind !== 'found' ||
+        !Buffer.from(read.value.bytes).equals(Buffer.from(mutation.bytes)) ||
+        !versionAdvanced(request.conditions, mutation.key, read.value.version)
+      ) {
         return { kind: 'conflict', storeNow };
       }
       putVersions.push({ key: mutation.key, version: read.value.version });
@@ -2914,7 +2993,7 @@ function versionAdvanced(
   key: ZLinkStoreKey,
   current: ZLinkStoreVersion
 ): boolean {
-  const condition = conditions.find(candidate => candidate.key.value === key.value);
+  const condition = conditions.find((candidate) => candidate.key.value === key.value);
   return condition?.kind !== 'version' || condition.expected.value !== current.value;
 }
 
@@ -2923,9 +3002,7 @@ function latestDate(left: Date, right: Date): Date {
 }
 
 type OwnedDescriptor =
-  | ZLinkMeshNodeDescriptor
-  | ZLinkClientServerServerDescriptor
-  | ZLinkFanoutPublisherDescriptor;
+  ZLinkMeshNodeDescriptor | ZLinkClientServerServerDescriptor | ZLinkFanoutPublisherDescriptor;
 
 type LeaseOwnedLocation = ZLinkSpotLocation | ZLinkActorLocation;
 type StoredLocation = LeaseOwnedLocation | ZLinkRouteLocation;
@@ -2939,10 +3016,10 @@ function validateProviderAggregateRequest(request: ZLinkAggregatePrepareRequest)
   if (request.inventoryDigest.byteLength !== 32) {
     throw new TypeError('Aggregate inventory digest must contain 32 bytes.');
   }
-  const keys = request.participants.map(value => value.authorityKey.value);
+  const keys = request.participants.map((value) => value.authorityKey.value);
   if (
-    new Set(keys).size !== keys.length
-    || keys.some((key, index) => index > 0 && keys[index - 1]!.localeCompare(key) >= 0)
+    new Set(keys).size !== keys.length ||
+    keys.some((key, index) => index > 0 && keys[index - 1]!.localeCompare(key) >= 0)
   ) {
     throw new TypeError('Aggregate participants must be unique and canonically sorted.');
   }
@@ -2950,8 +3027,8 @@ function validateProviderAggregateRequest(request: ZLinkAggregatePrepareRequest)
     requireText(participant.authorityKey.value, 'aggregate authority key');
     requireText(participant.expectedStoreVersion.value, 'aggregate expected Store version');
     if (
-      participant.authorityPayload.byteLength > 1024 * 1024
-      || participant.membershipMutation.byteLength > 1024 * 1024
+      participant.authorityPayload.byteLength > 1024 * 1024 ||
+      participant.membershipMutation.byteLength > 1024 * 1024
     ) {
       throw new RangeError('Aggregate participant value exceeds 1 MiB.');
     }
@@ -2976,8 +3053,7 @@ function aggregateRecord(
     participantCount: request.participants.length,
     inventoryDigest: Buffer.from(request.inventoryDigest),
     targetDescriptor: { ...request.targetDescriptor },
-    targetDescriptorLifecycleGeneration:
-      request.targetDescriptorLifecycleGeneration,
+    targetDescriptorLifecycleGeneration: request.targetDescriptorLifecycleGeneration,
     capacity: cloneCapacity(request.capacity),
     targetOwner: { ...request.targetOwner }
   };
@@ -3001,12 +3077,14 @@ function sameAggregateMarker(
   index: number,
   participant: ZLinkAggregatePrepareRequest['participants'][number]
 ): boolean {
-  return marker !== undefined
-    && marker.aggregateId === fence.aggregateId.value
-    && marker.aggregateGeneration === fence.aggregateGeneration
-    && marker.index === index
-    && marker.expectedStoreVersion === participant.expectedStoreVersion.value
-    && marker.ownerTransition === participant.ownerTransition;
+  return (
+    marker !== undefined &&
+    marker.aggregateId === fence.aggregateId.value &&
+    marker.aggregateGeneration === fence.aggregateGeneration &&
+    marker.index === index &&
+    marker.expectedStoreVersion === participant.expectedStoreVersion.value &&
+    marker.ownerTransition === participant.ownerTransition
+  );
 }
 
 function sameAggregateMarkerEntry(
@@ -3020,14 +3098,16 @@ function sameAggregateMarkerEntry(
     readonly membershipMutationSha256: string;
   }
 ): boolean {
-  return marker !== undefined
-    && marker.aggregateId === fence.aggregateId.value
-    && marker.aggregateGeneration === fence.aggregateGeneration
-    && marker.index === index
-    && marker.expectedStoreVersion === entry.expectedStoreVersion
-    && marker.ownerTransition === entry.ownerTransition
-    && marker.authorityPayloadSha256 === entry.authorityPayloadSha256
-    && marker.membershipMutationSha256 === entry.membershipMutationSha256;
+  return (
+    marker !== undefined &&
+    marker.aggregateId === fence.aggregateId.value &&
+    marker.aggregateGeneration === fence.aggregateGeneration &&
+    marker.index === index &&
+    marker.expectedStoreVersion === entry.expectedStoreVersion &&
+    marker.ownerTransition === entry.ownerTransition &&
+    marker.authorityPayloadSha256 === entry.authorityPayloadSha256 &&
+    marker.membershipMutationSha256 === entry.membershipMutationSha256
+  );
 }
 
 function aggregateTarget(
@@ -3041,9 +3121,7 @@ function aggregateTarget(
   };
 }
 
-function aggregateTargetFromRecord(
-  record: AggregateRecord
-): ZLinkObjectCommitRequest['target'] {
+function aggregateTargetFromRecord(record: AggregateRecord): ZLinkObjectCommitRequest['target'] {
   return {
     meshName: record.targetDescriptor.meshName,
     nodeRid: record.targetDescriptor.rid,
@@ -3059,11 +3137,9 @@ function addCapacityVector(
   let spotType = left.spotType;
   if (right.spotType !== undefined) {
     if (
-      spotType !== undefined
-      && (
-        spotType.objectKind !== right.spotType.objectKind
-        || spotType.stableType !== right.spotType.stableType
-      )
+      spotType !== undefined &&
+      (spotType.objectKind !== right.spotType.objectKind ||
+        spotType.stableType !== right.spotType.stableType)
     ) {
       throw new TypeError('Aggregate capacity contains more than one Spot type.');
     }
@@ -3097,15 +3173,14 @@ async function parallelForEach<T>(
   operation: (value: T, index: number) => Promise<void>
 ): Promise<void> {
   let next = 0;
-  await Promise.all(Array.from(
-    { length: Math.min(concurrency, values.length) },
-    async () => {
+  await Promise.all(
+    Array.from({ length: Math.min(concurrency, values.length) }, async () => {
       while (next < values.length) {
         const index = next++;
         await operation(values[index]!, index);
       }
-    }
-  ));
+    })
+  );
 }
 
 async function waitForAggregateCommitRetry(
@@ -3160,11 +3235,7 @@ function authorityPreimage(value: string): string {
   // §2.3: Entry|User|Instance Spot kinds share one segment ("spot") -- one
   // Id has exactly one authority row regardless of spot kind.
   const segment = decoded.kind === 'actor' ? 'actor' : 'spot';
-  return opaqueRecordPreimage(
-    'authority',
-    segment,
-    requireNoNul(decoded.globalId, 'Authority Id')
-  );
+  return opaqueRecordPreimage('authority', segment, requireNoNul(decoded.globalId, 'Authority Id'));
 }
 
 // Reverses authorityPreimage(): recovers the framework-internal zla1-encoded
@@ -3200,10 +3271,7 @@ function aggregateId(value: string): ZLinkAggregateId {
   return { value } as ZLinkAggregateId;
 }
 
-function aggregateFence(
-  id: ZLinkAggregateId,
-  generation: bigint
-): ZLinkAggregateFence {
+function aggregateFence(id: ZLinkAggregateId, generation: bigint): ZLinkAggregateFence {
   return { aggregateId: id, aggregateGeneration: generation };
 }
 
@@ -3213,13 +3281,10 @@ function aggregateKey(fence: ZLinkAggregateFence): ZLinkStoreKey {
   );
 }
 
-function aggregateParticipantPayloadKey(
-  fence: ZLinkAggregateFence,
-  index: number
-): ZLinkStoreKey {
+function aggregateParticipantPayloadKey(fence: ZLinkAggregateFence, index: number): ZLinkStoreKey {
   return storeKey(
-    `${PREFIX}aggregate-participant:${encodeURIComponent(fence.aggregateId.value)}:`
-      + `${fence.aggregateGeneration}:${index}:authority`
+    `${PREFIX}aggregate-participant:${encodeURIComponent(fence.aggregateId.value)}:` +
+      `${fence.aggregateGeneration}:${index}:authority`
   );
 }
 
@@ -3228,8 +3293,8 @@ function aggregateParticipantMembershipKey(
   index: number
 ): ZLinkStoreKey {
   return storeKey(
-    `${PREFIX}aggregate-participant:${encodeURIComponent(fence.aggregateId.value)}:`
-      + `${fence.aggregateGeneration}:${index}:membership`
+    `${PREFIX}aggregate-participant:${encodeURIComponent(fence.aggregateId.value)}:` +
+      `${fence.aggregateGeneration}:${index}:membership`
   );
 }
 
@@ -3249,56 +3314,53 @@ function meshPrefix(meshName: string): string {
 }
 
 function meshKey(meshName: string, nodeRid: RoutingId) {
-  return storeKey(opaqueRecordPreimage(
-    'mesh-node',
-    requireNoNul(meshName, 'MeshName'),
-    routingIdHexSegment(nodeRid)
-  ));
+  return storeKey(
+    opaqueRecordPreimage(
+      'mesh-node',
+      requireNoNul(meshName, 'MeshName'),
+      routingIdHexSegment(nodeRid)
+    )
+  );
 }
 
 function clientServerPrefix(channelName: string): string {
-  return `${opaqueRecordPreimage(
-    'client-server',
-    requireNoNul(channelName, 'ChannelName')
-  )}\0`;
+  return `${opaqueRecordPreimage('client-server', requireNoNul(channelName, 'ChannelName'))}\0`;
 }
 
 function clientServerKey(channelName: string, serverRid: RoutingId) {
-  return storeKey(opaqueRecordPreimage(
-    'client-server',
-    requireNoNul(channelName, 'ChannelName'),
-    routingIdHexSegment(serverRid)
-  ));
+  return storeKey(
+    opaqueRecordPreimage(
+      'client-server',
+      requireNoNul(channelName, 'ChannelName'),
+      routingIdHexSegment(serverRid)
+    )
+  );
 }
 
 function fanoutPrefix(channelName: string): string {
-  return `${opaqueRecordPreimage(
-    'fanout-publisher',
-    requireNoNul(channelName, 'ChannelName')
-  )}\0`;
+  return `${opaqueRecordPreimage('fanout-publisher', requireNoNul(channelName, 'ChannelName'))}\0`;
 }
 
 function fanoutKey(channelName: string, publisherRid: RoutingId) {
-  return storeKey(opaqueRecordPreimage(
-    'fanout-publisher',
-    requireNoNul(channelName, 'ChannelName'),
-    routingIdHexSegment(publisherRid)
-  ));
+  return storeKey(
+    opaqueRecordPreimage(
+      'fanout-publisher',
+      requireNoNul(channelName, 'ChannelName'),
+      routingIdHexSegment(publisherRid)
+    )
+  );
 }
 
 function spotKey(meshName: string, spotId: string) {
-  return storeKey(
-    `${PREFIX}spot:${encodeURIComponent(meshName)}:${encodeURIComponent(spotId)}`);
+  return storeKey(`${PREFIX}spot:${encodeURIComponent(meshName)}:${encodeURIComponent(spotId)}`);
 }
 
 function actorKey(meshName: string, actorId: string) {
-  return storeKey(
-    `${PREFIX}actor:${encodeURIComponent(meshName)}:${encodeURIComponent(actorId)}`);
+  return storeKey(`${PREFIX}actor:${encodeURIComponent(meshName)}:${encodeURIComponent(actorId)}`);
 }
 
 function routeKey(routeKind: string, value: string) {
-  return storeKey(
-    `${PREFIX}route:${encodeURIComponent(routeKind)}:${encodeURIComponent(value)}`);
+  return storeKey(`${PREFIX}route:${encodeURIComponent(routeKind)}:${encodeURIComponent(value)}`);
 }
 
 function encodeText(value: string): Uint8Array {
@@ -3324,24 +3386,28 @@ function counterNextValue(counter: ZLinkStoreReadResult): bigint {
 }
 
 function encodeJson<T>(value: T): Uint8Array {
-  return Buffer.from(JSON.stringify(value, (key, candidate) => {
-    if (typeof candidate === 'bigint') return { $bigint: candidate.toString() };
-    if (candidate instanceof Uint8Array) {
-      return { $bytes: Buffer.from(candidate).toString('base64') };
-    }
-    if (
-      key === 'spotTypes'
-      && candidate !== null
-      && typeof candidate === 'object'
-      && !Array.isArray(candidate)
-    ) {
-      return Object.fromEntries(
-        Object.entries(candidate as Record<string, unknown>)
-          .sort(([left], [right]) => compareUtf16Ordinal(left, right))
-      );
-    }
-    return candidate;
-  }), 'utf8');
+  return Buffer.from(
+    JSON.stringify(value, (key, candidate) => {
+      if (typeof candidate === 'bigint') return { $bigint: candidate.toString() };
+      if (candidate instanceof Uint8Array) {
+        return { $bytes: Buffer.from(candidate).toString('base64') };
+      }
+      if (
+        key === 'spotTypes' &&
+        candidate !== null &&
+        typeof candidate === 'object' &&
+        !Array.isArray(candidate)
+      ) {
+        return Object.fromEntries(
+          Object.entries(candidate as Record<string, unknown>).sort(([left], [right]) =>
+            compareUtf16Ordinal(left, right)
+          )
+        );
+      }
+      return candidate;
+    }),
+    'utf8'
+  );
 }
 
 function compareUtf16Ordinal(left: string, right: string): number {
@@ -3350,16 +3416,20 @@ function compareUtf16Ordinal(left: string, right: string): number {
 
 function decodeJson<T>(value: Uint8Array): T {
   return JSON.parse(decodeText(value), (_key, candidate) => {
-    if (candidate !== null
-      && typeof candidate === 'object'
-      && Object.keys(candidate).length === 1
-      && typeof candidate.$bigint === 'string') {
+    if (
+      candidate !== null &&
+      typeof candidate === 'object' &&
+      Object.keys(candidate).length === 1 &&
+      typeof candidate.$bigint === 'string'
+    ) {
       return BigInt(candidate.$bigint);
     }
-    if (candidate !== null
-      && typeof candidate === 'object'
-      && Object.keys(candidate).length === 1
-      && typeof candidate.$bytes === 'string') {
+    if (
+      candidate !== null &&
+      typeof candidate === 'object' &&
+      Object.keys(candidate).length === 1 &&
+      typeof candidate.$bytes === 'string'
+    ) {
       return Buffer.from(candidate.$bytes, 'base64');
     }
     return candidate;
@@ -3367,8 +3437,11 @@ function decodeJson<T>(value: Uint8Array): T {
 }
 
 function requireRecordVersion(value: unknown, kind: string): void {
-  if (value === null || typeof value !== 'object'
-    || (value as { recordVersion?: unknown }).recordVersion !== 1) {
+  if (
+    value === null ||
+    typeof value !== 'object' ||
+    (value as { recordVersion?: unknown }).recordVersion !== 1
+  ) {
     throw new Error(`Location Store ${kind} record has an unrecognized recordVersion.`);
   }
 }
@@ -3379,21 +3452,33 @@ function canonicalize(value: unknown): unknown {
   if (value instanceof Date) return value.toISOString();
   if (Array.isArray(value)) return value.map(canonicalize);
   if (value !== null && typeof value === 'object') {
-    return Object.fromEntries(Object.entries(value).map(([key, item]) => [key, canonicalize(item)]));
+    return Object.fromEntries(
+      Object.entries(value).map(([key, item]) => [key, canonicalize(item)])
+    );
   }
   return value;
 }
 
 function reviveCanonical(value: unknown, key = ''): unknown {
   const generationKeys = new Set([
-    'generation', 'leaseGeneration', 'ownerLeaseGeneration', 'objectGeneration',
-    'authorityOwnerGeneration', 'aggregateGeneration', 'lifecycleGeneration', 'descriptorRevision',
-    'nodeGeneration', 'applicationVersion', 'requestEncodedSize'
+    'generation',
+    'leaseGeneration',
+    'ownerLeaseGeneration',
+    'objectGeneration',
+    'authorityOwnerGeneration',
+    'aggregateGeneration',
+    'lifecycleGeneration',
+    'descriptorRevision',
+    'nodeGeneration',
+    'applicationVersion',
+    'requestEncodedSize'
   ]);
   if (typeof value === 'string' && generationKeys.has(key)) return BigInt(value);
-  if (Array.isArray(value)) return value.map(item => reviveCanonical(item));
+  if (Array.isArray(value)) return value.map((item) => reviveCanonical(item));
   if (value !== null && typeof value === 'object') {
-    return Object.fromEntries(Object.entries(value).map(([name, item]) => [name, reviveCanonical(item, name)]));
+    return Object.fromEntries(
+      Object.entries(value).map(([name, item]) => [name, reviveCanonical(item, name)])
+    );
   }
   return value;
 }
@@ -3405,7 +3490,11 @@ function decodeOwnerRecord(bytes: Uint8Array): OwnerRecord {
 }
 
 function encodeOwnerRecord(ownerId: string, leaseGeneration: bigint): Uint8Array {
-  return encodeJson<OwnerRecord>({ recordVersion: 1, ownerId, leaseGeneration: leaseGeneration.toString() });
+  return encodeJson<OwnerRecord>({
+    recordVersion: 1,
+    ownerId,
+    leaseGeneration: leaseGeneration.toString()
+  });
 }
 
 function encodeCanonicalDescriptorRecord<T extends OwnedDescriptor>(
@@ -3416,16 +3505,21 @@ function encodeCanonicalDescriptorRecord<T extends OwnedDescriptor>(
   // cmsgpack version is the interoperable row version, so it is deliberately
   // not serialized (21-location-runtime §2.4).
   void generation;
-  return Buffer.from(JSON.stringify({
-    recordVersion: 1,
-    ownerId: descriptor.ownerId,
-    leaseGeneration: descriptor.leaseGeneration.toString(),
-    descriptorRevision: descriptor.descriptorRevision.toString(),
-    descriptor: canonicalDescriptor(descriptor)
-  } satisfies CanonicalDescriptorRecord<unknown>), 'utf8');
+  return Buffer.from(
+    JSON.stringify({
+      recordVersion: 1,
+      ownerId: descriptor.ownerId,
+      leaseGeneration: descriptor.leaseGeneration.toString(),
+      descriptorRevision: descriptor.descriptorRevision.toString(),
+      descriptor: canonicalDescriptor(descriptor)
+    } satisfies CanonicalDescriptorRecord<unknown>),
+    'utf8'
+  );
 }
 
-function decodeCanonicalDescriptorRecord<T extends OwnedDescriptor>(bytes: Uint8Array): CanonicalDescriptorRecord<T> {
+function decodeCanonicalDescriptorRecord<T extends OwnedDescriptor>(
+  bytes: Uint8Array
+): CanonicalDescriptorRecord<T> {
   const record = JSON.parse(decodeText(bytes)) as CanonicalDescriptorRecord<unknown>;
   requireRecordVersion(record, 'descriptor');
   return reviveCanonical(record) as CanonicalDescriptorRecord<T>;
@@ -3440,19 +3534,20 @@ function descriptorStoreGeneration(
 
 function canonicalDescriptor(descriptor: OwnedDescriptor): Record<string, unknown> {
   if ('rid' in descriptor) return canonicalMeshDescriptor(descriptor);
-  if ('serverRid' in descriptor) return {
-    channelName: descriptor.channelName,
-    serverRoutingIdHex: encodeRoutingIdStorageHex(descriptor.serverRid),
-    lifecycleGeneration: descriptor.lifecycleGeneration.toString(),
-    descriptorRevision: descriptor.descriptorRevision.toString(),
-    endpoint: descriptor.endpoint,
-    weight: descriptor.weight,
-    state: canonicalRuntimeState(descriptor.state),
-    securityIdentity: descriptor.securityIdentity,
-    ownerId: descriptor.ownerId,
-    leaseGeneration: descriptor.leaseGeneration.toString(),
-    updatedAtEpochMs: descriptor.updatedAt.getTime().toString()
-  };
+  if ('serverRid' in descriptor)
+    return {
+      channelName: descriptor.channelName,
+      serverRoutingIdHex: encodeRoutingIdStorageHex(descriptor.serverRid),
+      lifecycleGeneration: descriptor.lifecycleGeneration.toString(),
+      descriptorRevision: descriptor.descriptorRevision.toString(),
+      endpoint: descriptor.endpoint,
+      weight: descriptor.weight,
+      state: canonicalRuntimeState(descriptor.state),
+      securityIdentity: descriptor.securityIdentity,
+      ownerId: descriptor.ownerId,
+      leaseGeneration: descriptor.leaseGeneration.toString(),
+      updatedAtEpochMs: descriptor.updatedAt.getTime().toString()
+    };
   const publisher = descriptor as ZLinkFanoutPublisherDescriptor;
   return {
     channelName: publisher.channelName,
@@ -3478,7 +3573,7 @@ function canonicalMeshDescriptor(descriptor: ZLinkMeshNodeDescriptor): Record<st
     entrySpotId: descriptor.entrySpotId ?? null,
     channelWeights: descriptor.channelWeights,
     applicationVersion: descriptor.applicationVersion.toString(),
-    objectCapabilities: descriptor.objectCapabilities.map(capability => ({
+    objectCapabilities: descriptor.objectCapabilities.map((capability) => ({
       ...capability,
       objectKind: canonicalObjectKind(capability.objectKind),
       policy: capability.policy === 'disabled' ? 'disabled' : capability.policy
@@ -3488,7 +3583,7 @@ function canonicalMeshDescriptor(descriptor: ZLinkMeshNodeDescriptor): Record<st
     capacity: {
       actors: descriptor.populationCapacity.actors,
       spots: descriptor.populationCapacity.spots,
-      spotTypes: descriptor.populationCapacity.spotTypes.map(capacity => ({
+      spotTypes: descriptor.populationCapacity.spotTypes.map((capacity) => ({
         ...capacity,
         objectKind: canonicalObjectKind(capacity.objectKind)
       }))
@@ -3503,19 +3598,23 @@ function canonicalMeshDescriptor(descriptor: ZLinkMeshNodeDescriptor): Record<st
   };
 }
 
-function reviveCanonicalCapacity(value: Record<string, unknown>): ZLinkMeshNodeDescriptor['populationCapacity'] {
+function reviveCanonicalCapacity(
+  value: Record<string, unknown>
+): ZLinkMeshNodeDescriptor['populationCapacity'] {
   return {
     actors: value.actors as ZLinkMeshNodeDescriptor['populationCapacity']['actors'],
     spots: value.spots as ZLinkMeshNodeDescriptor['populationCapacity']['spots'],
-    spotTypes: (value.spotTypes as readonly Record<string, unknown>[]).map(capacity => ({
+    spotTypes: (value.spotTypes as readonly Record<string, unknown>[]).map((capacity) => ({
       ...capacity,
       objectKind: runtimeSpotObjectKind(String(capacity.objectKind))
     })) as unknown as ZLinkMeshNodeDescriptor['populationCapacity']['spotTypes']
   };
 }
 
-function reviveCanonicalCapabilities(value: unknown): ZLinkMeshNodeDescriptor['objectCapabilities'] {
-  return (value as readonly Record<string, unknown>[]).map(capability => ({
+function reviveCanonicalCapabilities(
+  value: unknown
+): ZLinkMeshNodeDescriptor['objectCapabilities'] {
+  return (value as readonly Record<string, unknown>[]).map((capability) => ({
     ...capability,
     objectKind: runtimeObjectKind(String(capability.objectKind))
   })) as unknown as ZLinkMeshNodeDescriptor['objectCapabilities'];
@@ -3534,17 +3633,30 @@ function runtimeObjectKind(kind: string): 'actor' | 'user_spot' | 'instance_spot
 
 function runtimeSpotObjectKind(kind: string): 'user_spot' | 'instance_spot' {
   const result = runtimeObjectKind(kind);
-  if (result === 'actor') throw new TypeError('Location Store spot capacity cannot have actor objectKind.');
+  if (result === 'actor')
+    throw new TypeError('Location Store spot capacity cannot have actor objectKind.');
   return result;
 }
 
 function canonicalRuntimeState(state: ZLinkFrameworkRuntimeState): string {
-  return ['preparing', 'serving', 'relocating', 'relocated', 'draining', 'stopped', 'error'][state]
-    ?? (() => { throw new TypeError(`Location Store descriptor has invalid state '${state}'.`); })();
+  return (
+    ['preparing', 'serving', 'relocating', 'relocated', 'draining', 'stopped', 'error'][state] ??
+    (() => {
+      throw new TypeError(`Location Store descriptor has invalid state '${state}'.`);
+    })()
+  );
 }
 
 function runtimeState(state: string): ZLinkFrameworkRuntimeState {
-  const index = ['preparing', 'serving', 'relocating', 'relocated', 'draining', 'stopped', 'error'].indexOf(state);
+  const index = [
+    'preparing',
+    'serving',
+    'relocating',
+    'relocated',
+    'draining',
+    'stopped',
+    'error'
+  ].indexOf(state);
   if (index < 0) throw new TypeError(`Location Store descriptor has invalid state '${state}'.`);
   return index as ZLinkFrameworkRuntimeState;
 }
@@ -3570,19 +3682,23 @@ function encodeAuthorityRecord(record: AuthorityRecord): Uint8Array {
       descriptorLifecycleGeneration: allocation.descriptorLifecycleGeneration.toString(),
       capacity: canonicalAuthorityCapacity(allocation.capacity)
     },
-    pendingCreation: snapshot.pendingCreation === undefined ? null : {
-      reservationId: snapshot.pendingCreation.reservationId,
-      requestContentReference: snapshot.pendingCreation.requestContentReference,
-      requestSha256: Buffer.from(snapshot.pendingCreation.requestSha256).toString('hex'),
-      requestEncodedSize: Number(snapshot.pendingCreation.requestEncodedSize)
-    }
+    pendingCreation:
+      snapshot.pendingCreation === undefined
+        ? null
+        : {
+            reservationId: snapshot.pendingCreation.reservationId,
+            requestContentReference: snapshot.pendingCreation.requestContentReference,
+            requestSha256: Buffer.from(snapshot.pendingCreation.requestSha256).toString('hex'),
+            requestEncodedSize: Number(snapshot.pendingCreation.requestEncodedSize)
+          }
   };
   // These fields gate Node-only creation/aggregate recovery.  They are absent
   // from normal authority values (including the golden vector), while the
   // interoperable envelope above remains byte-canonical.
   if (record.terminal !== undefined) envelope.terminal = record.terminal;
   if (record.aggregate !== undefined) envelope.aggregate = canonicalize(record.aggregate);
-  if (record.visibleStoreVersion !== undefined) envelope.visibleStoreVersion = record.visibleStoreVersion;
+  if (record.visibleStoreVersion !== undefined)
+    envelope.visibleStoreVersion = record.visibleStoreVersion;
   return Buffer.from(JSON.stringify(envelope), 'utf8');
 }
 
@@ -3596,11 +3712,12 @@ function decodeAuthorityRecord(bytes: Uint8Array): AuthorityRecord {
   const objectKind = runtimePlacementObjectKind(String(allocation.objectKind));
   return {
     terminal: value.terminal as AuthorityRecord['terminal'],
-    aggregate: value.aggregate === undefined
-      ? undefined
-      : reviveCanonical(value.aggregate) as AggregateParticipantFenceRecord,
-    visibleStoreVersion: typeof value.visibleStoreVersion === 'string'
-      ? value.visibleStoreVersion : undefined,
+    aggregate:
+      value.aggregate === undefined
+        ? undefined
+        : (reviveCanonical(value.aggregate) as AggregateParticipantFenceRecord),
+    visibleStoreVersion:
+      typeof value.visibleStoreVersion === 'string' ? value.visibleStoreVersion : undefined,
     snapshot: {
       payload: Buffer.from(String(value.payload), 'base64'),
       objectGeneration: BigInt(String(value.objectGeneration)),
@@ -3613,44 +3730,52 @@ function decodeAuthorityRecord(bytes: Uint8Array): AuthorityRecord {
         stableType: String(allocation.stableType),
         descriptor: {
           meshName: String(descriptor.meshName),
-          rid: decodeRoutingId(
-            String(descriptor.routingIdHex),
-            descriptor.routingIdHex
-          )
+          rid: decodeRoutingId(String(descriptor.routingIdHex), descriptor.routingIdHex)
         },
         descriptorLifecycleGeneration: BigInt(String(allocation.descriptorLifecycleGeneration)),
         capacity: {
           actors: Number(capacity.actors),
           spots: Number(capacity.spots),
-          spotType: capacity.spotType === null
-            ? undefined
-            : decodeAuthoritySpotType(capacity.spotType)
+          spotType:
+            capacity.spotType === null ? undefined : decodeAuthoritySpotType(capacity.spotType)
         }
       },
-      pendingCreation: pending === null ? undefined : {
-        reservationId: String(pending.reservationId),
-        requestContentReference: String(pending.requestContentReference),
-        requestSha256: Buffer.from(String(pending.requestSha256), 'hex'),
-        requestEncodedSize: BigInt(String(pending.requestEncodedSize))
-      }
+      pendingCreation:
+        pending === null
+          ? undefined
+          : {
+              reservationId: String(pending.reservationId),
+              requestContentReference: String(pending.requestContentReference),
+              requestSha256: Buffer.from(String(pending.requestSha256), 'hex'),
+              requestEncodedSize: BigInt(String(pending.requestEncodedSize))
+            }
     }
   };
 }
 
 function canonicalPlacementObjectKind(kind: ZLinkPlacementAllocation['objectKind']): string {
   switch (kind) {
-    case 'actor': return 'actor';
-    case 'user_spot': return 'userSpot';
-    case 'instance_spot': return 'instanceSpot';
+    case 'actor':
+      return 'actor';
+    case 'user_spot':
+      return 'userSpot';
+    case 'instance_spot':
+      return 'instanceSpot';
   }
 }
 
 function runtimePlacementObjectKind(kind: string): ZLinkPlacementAllocation['objectKind'] {
   switch (kind) {
-    case 'actor': return 'actor';
-    case 'userSpot': return 'user_spot';
-    case 'instanceSpot': return 'instance_spot';
-    default: throw new Error(`Location Store authority record has an invalid allocation objectKind '${kind}'.`);
+    case 'actor':
+      return 'actor';
+    case 'userSpot':
+      return 'user_spot';
+    case 'instanceSpot':
+      return 'instance_spot';
+    default:
+      throw new Error(
+        `Location Store authority record has an invalid allocation objectKind '${kind}'.`
+      );
   }
 }
 
@@ -3658,13 +3783,14 @@ function canonicalAuthorityCapacity(capacity: ZLinkCapacityVector): Record<strin
   return {
     actors: capacity.actors,
     spots: capacity.spots,
-    spotType: capacity.spotType === undefined
-      ? null
-      : {
-          objectKind: canonicalPlacementObjectKind(capacity.spotType.objectKind),
-          stableType: capacity.spotType.stableType,
-          count: capacity.spotType.count
-        }
+    spotType:
+      capacity.spotType === undefined
+        ? null
+        : {
+            objectKind: canonicalPlacementObjectKind(capacity.spotType.objectKind),
+            stableType: capacity.spotType.stableType,
+            count: capacity.spotType.count
+          }
   };
 }
 
@@ -3699,9 +3825,9 @@ function createTerminalRecord(
   const deadlineMs = publication.operationDeadline.getTime();
   const expiresAtMs = deadlineMs + CREATION_TERMINAL_RETENTION_MS;
   if (
-    !Number.isSafeInteger(deadlineMs)
-    || !Number.isSafeInteger(expiresAtMs)
-    || expiresAtMs <= now.getTime()
+    !Number.isSafeInteger(deadlineMs) ||
+    !Number.isSafeInteger(expiresAtMs) ||
+    expiresAtMs <= now.getTime()
   ) {
     throw new RangeError(
       'Creation terminal expiry must be the live operation deadline plus five minutes.'
@@ -3752,13 +3878,13 @@ function validateCreationOperation(operation: ZLinkCreationOperationIdentity): v
     );
   }
   if (
-    operation.sourceNodeGeneration < 1n
-    || operation.sourceNodeGeneration > MAX_U64
-    || operation.operationId.high < 0n
-    || operation.operationId.high > MAX_U64
-    || operation.operationId.low < 0n
-    || operation.operationId.low > MAX_U64
-    || (operation.operationId.high === 0n && operation.operationId.low === 0n)
+    operation.sourceNodeGeneration < 1n ||
+    operation.sourceNodeGeneration > MAX_U64 ||
+    operation.operationId.high < 0n ||
+    operation.operationId.high > MAX_U64 ||
+    operation.operationId.low < 0n ||
+    operation.operationId.low > MAX_U64 ||
+    (operation.operationId.high === 0n && operation.operationId.low === 0n)
   ) {
     throw new RangeError('Creation terminal source generation and operation ID are invalid.');
   }
@@ -3786,12 +3912,13 @@ function authoritySnapshot(
     kind: 'snapshot',
     ...snapshot,
     payload: Buffer.from(snapshot.payload),
-    pendingCreation: snapshot.pendingCreation === undefined
-      ? undefined
-      : {
-          ...snapshot.pendingCreation,
-          requestSha256: Buffer.from(snapshot.pendingCreation.requestSha256)
-        },
+    pendingCreation:
+      snapshot.pendingCreation === undefined
+        ? undefined
+        : {
+            ...snapshot.pendingCreation,
+            requestSha256: Buffer.from(snapshot.pendingCreation.requestSha256)
+          },
     storeVersion: { value: storeVersion.value } as ZLinkAuthorityStoreVersion,
     storeNow
   };
@@ -3812,34 +3939,28 @@ function liveTargetDescriptor(
     decodeCanonicalDescriptorRecord<ZLinkMeshNodeDescriptor>(descriptorRead.value.bytes).descriptor
   );
   const lease = decodeOwnerRecord(leaseRead.value.bytes);
-  return descriptor.meshName === target.meshName
-    && String(descriptor.rid) === String(target.nodeRid)
-    && descriptor.lifecycleGeneration === target.nodeLifecycleGeneration
-    && descriptor.ownerId === target.owner.ownerId
-    && descriptor.leaseGeneration === target.owner.leaseGeneration
-    && descriptor.objectRole === ZLinkObjectRole.Server
-    && descriptor.state === ZLinkFrameworkRuntimeState.Serving
-    && lease.ownerId === target.owner.ownerId
-    && BigInt(lease.leaseGeneration) === target.owner.leaseGeneration
-    && leaseRead.value.expiresAt !== undefined
-    && leaseRead.value.expiresAt.getTime() > leaseRead.value.storeNow.getTime()
-      ? descriptor
-      : undefined;
+  return descriptor.meshName === target.meshName &&
+    String(descriptor.rid) === String(target.nodeRid) &&
+    descriptor.lifecycleGeneration === target.nodeLifecycleGeneration &&
+    descriptor.ownerId === target.owner.ownerId &&
+    descriptor.leaseGeneration === target.owner.leaseGeneration &&
+    descriptor.objectRole === ZLinkObjectRole.Server &&
+    descriptor.state === ZLinkFrameworkRuntimeState.Serving &&
+    lease.ownerId === target.owner.ownerId &&
+    BigInt(lease.leaseGeneration) === target.owner.leaseGeneration &&
+    leaseRead.value.expiresAt !== undefined &&
+    leaseRead.value.expiresAt.getTime() > leaseRead.value.storeNow.getTime()
+    ? descriptor
+    : undefined;
 }
 
-function conditionFor(
-  key: ZLinkStoreKey,
-  read: ZLinkStoreReadResult
-): ZLinkStoreCondition {
+function conditionFor(key: ZLinkStoreKey, read: ZLinkStoreReadResult): ZLinkStoreCondition {
   return read.kind === 'missing'
     ? { kind: 'missing', key }
     : { kind: 'version', key, expected: read.value.version };
 }
 
-function versionCondition(
-  key: ZLinkStoreKey,
-  read: ZLinkStoreReadResult
-): ZLinkStoreCondition {
+function versionCondition(key: ZLinkStoreKey, read: ZLinkStoreReadResult): ZLinkStoreCondition {
   if (read.kind === 'missing') {
     throw new Error(`Required provider row '${key}' is missing.`);
   }
@@ -3859,24 +3980,30 @@ function capacityAvailable(
   capacity: CapacityRecord
 ): boolean {
   const spotType = requested.spotType;
-  const typeCapacity = spotType === undefined
-    ? undefined
-    : descriptor.populationCapacity.spotTypes.find(candidate =>
-        candidate.objectKind === spotType.objectKind
-        && candidate.stableType === spotType.stableType);
+  const typeCapacity =
+    spotType === undefined
+      ? undefined
+      : descriptor.populationCapacity.spotTypes.find(
+          (candidate) =>
+            candidate.objectKind === spotType.objectKind &&
+            candidate.stableType === spotType.stableType
+        );
   const typeKey = spotType === undefined ? undefined : capacityTypeKey(spotType);
-  return (descriptor.populationCapacity.actors.limit === 0
-      || capacity.active.actors + capacity.pending.actors + requested.actors
-        <= descriptor.populationCapacity.actors.limit)
-    && (descriptor.populationCapacity.spots.limit === 0
-      || capacity.active.spots + capacity.pending.spots + requested.spots
-        <= descriptor.populationCapacity.spots.limit)
-    && (spotType === undefined
-      || typeCapacity !== undefined
-        && (typeCapacity.limit === 0
-          || (capacity.active.spotTypes[typeKey!] ?? 0)
-            + (capacity.pending.spotTypes[typeKey!] ?? 0)
-            + spotType.count <= typeCapacity.limit));
+  return (
+    (descriptor.populationCapacity.actors.limit === 0 ||
+      capacity.active.actors + capacity.pending.actors + requested.actors <=
+        descriptor.populationCapacity.actors.limit) &&
+    (descriptor.populationCapacity.spots.limit === 0 ||
+      capacity.active.spots + capacity.pending.spots + requested.spots <=
+        descriptor.populationCapacity.spots.limit) &&
+    (spotType === undefined ||
+      (typeCapacity !== undefined &&
+        (typeCapacity.limit === 0 ||
+          (capacity.active.spotTypes[typeKey!] ?? 0) +
+            (capacity.pending.spotTypes[typeKey!] ?? 0) +
+            spotType.count <=
+            typeCapacity.limit)))
+  );
 }
 
 function addCapacity(usage: CapacityUsage, delta: ZLinkCapacityVector): CapacityUsage {
@@ -3906,9 +4033,7 @@ function adjustCapacity(
   return { actors, spots, spotTypes };
 }
 
-function capacityTypeKey(
-  value: NonNullable<ZLinkCapacityVector['spotType']>
-): string {
+function capacityTypeKey(value: NonNullable<ZLinkCapacityVector['spotType']>): string {
   return `${value.objectKind}\0${value.stableType}`;
 }
 
@@ -3921,46 +4046,42 @@ function cloneCapacity(value: ZLinkCapacityVector): ZLinkCapacityVector {
 }
 
 function sameCapacityVector(left: ZLinkCapacityVector, right: ZLinkCapacityVector): boolean {
-  return left.actors === right.actors
-    && left.spots === right.spots
-    && left.spotType?.objectKind === right.spotType?.objectKind
-    && left.spotType?.stableType === right.spotType?.stableType
-    && left.spotType?.count === right.spotType?.count;
+  return (
+    left.actors === right.actors &&
+    left.spots === right.spots &&
+    left.spotType?.objectKind === right.spotType?.objectKind &&
+    left.spotType?.stableType === right.spotType?.stableType &&
+    left.spotType?.count === right.spotType?.count
+  );
 }
 
 function sameCreationTarget(
   snapshot: StoredAuthoritySnapshot,
   target: ZLinkObjectCommitRequest['target']
 ): boolean {
-  return snapshot.allocation.descriptor.meshName === target.meshName
-    && String(snapshot.allocation.descriptor.rid) === String(target.nodeRid)
-    && snapshot.allocation.descriptorLifecycleGeneration
-      === target.nodeLifecycleGeneration
-    && snapshot.ownerId === target.owner.ownerId
-    && snapshot.ownerLeaseGeneration === target.owner.leaseGeneration;
+  return (
+    snapshot.allocation.descriptor.meshName === target.meshName &&
+    String(snapshot.allocation.descriptor.rid) === String(target.nodeRid) &&
+    snapshot.allocation.descriptorLifecycleGeneration === target.nodeLifecycleGeneration &&
+    snapshot.ownerId === target.owner.ownerId &&
+    snapshot.ownerLeaseGeneration === target.owner.leaseGeneration
+  );
 }
 
 const CANONICAL_AUTHORITY_MAGIC = Buffer.from('ZLAU');
 
 function isCanonicalAuthorityPayload(payload: Uint8Array): boolean {
-  return payload.byteLength >= CANONICAL_AUTHORITY_MAGIC.byteLength
-    && Buffer.from(
-      payload.buffer,
-      payload.byteOffset,
-      CANONICAL_AUTHORITY_MAGIC.byteLength
-    ).equals(CANONICAL_AUTHORITY_MAGIC);
+  return (
+    payload.byteLength >= CANONICAL_AUTHORITY_MAGIC.byteLength &&
+    Buffer.from(payload.buffer, payload.byteOffset, CANONICAL_AUTHORITY_MAGIC.byteLength).equals(
+      CANONICAL_AUTHORITY_MAGIC
+    )
+  );
 }
 
-function sameLiveOwner(
-  lease: ZLinkStoreReadResult,
-  snapshot: StoredAuthoritySnapshot
-): boolean {
+function sameLiveOwner(lease: ZLinkStoreReadResult, snapshot: StoredAuthoritySnapshot): boolean {
   if (lease.kind === 'missing') return false;
-  return matchesLiveOwnerLease(
-    lease,
-    snapshot.ownerId,
-    snapshot.ownerLeaseGeneration
-  );
+  return matchesLiveOwnerLease(lease, snapshot.ownerId, snapshot.ownerLeaseGeneration);
 }
 
 function matchesLiveOwnerLease(
@@ -3968,13 +4089,14 @@ function matchesLiveOwnerLease(
   ownerId: string,
   leaseGeneration: bigint
 ): boolean {
-  if (lease.value.expiresAt === undefined
-    || lease.value.expiresAt.getTime() <= lease.value.storeNow.getTime()) {
+  if (
+    lease.value.expiresAt === undefined ||
+    lease.value.expiresAt.getTime() <= lease.value.storeNow.getTime()
+  ) {
     return false;
   }
   const owner = decodeOwnerRecord(lease.value.bytes);
-  return owner.ownerId === ownerId
-    && BigInt(owner.leaseGeneration) === leaseGeneration;
+  return owner.ownerId === ownerId && BigInt(owner.leaseGeneration) === leaseGeneration;
 }
 
 function sameDescriptorPredecessor(
@@ -3987,12 +4109,12 @@ function sameDescriptorPredecessor(
   return Buffer.from(expected.value.bytes).equals(Buffer.from(current.value.bytes));
 }
 
-function liveOwnerLeaseGeneration(
-  lease: ZLinkStoreReadResult
-): bigint | undefined {
-  if (lease.kind === 'missing'
-    || lease.value.expiresAt === undefined
-    || lease.value.expiresAt.getTime() <= lease.value.storeNow.getTime()) {
+function liveOwnerLeaseGeneration(lease: ZLinkStoreReadResult): bigint | undefined {
+  if (
+    lease.kind === 'missing' ||
+    lease.value.expiresAt === undefined ||
+    lease.value.expiresAt.getTime() <= lease.value.storeNow.getTime()
+  ) {
     return undefined;
   }
   return BigInt(decodeOwnerRecord(lease.value.bytes).leaseGeneration);
@@ -4015,9 +4137,11 @@ function canTakeOverStoredLocation(
     return false;
   }
   if (liveLeaseGeneration === undefined) return true;
-  return currentOwnerId === nextOwnerId
-    && currentLeaseGeneration !== nextLeaseGeneration
-    && liveLeaseGeneration === nextLeaseGeneration;
+  return (
+    currentOwnerId === nextOwnerId &&
+    currentLeaseGeneration !== nextLeaseGeneration &&
+    liveLeaseGeneration === nextLeaseGeneration
+  );
 }
 
 function persistMeshDescriptor(descriptor: ZLinkMeshNodeDescriptor): ZLinkMeshNodeDescriptor {
@@ -4035,15 +4159,18 @@ function reviveMeshDescriptor(descriptor: ZLinkMeshNodeDescriptor): ZLinkMeshNod
       descriptorRevision: BigInt(String(value.descriptorRevision)),
       endpoint: String(value.endpoint),
       objectRole: value.objectRole as ZLinkObjectRole,
-      entrySpotId: value.entrySpotId === null ? undefined : value.entrySpotId as string | undefined,
+      entrySpotId:
+        value.entrySpotId === null ? undefined : (value.entrySpotId as string | undefined),
       placementWeight: Number(value.placementWeight),
       populationCapacity: reviveCanonicalCapacity(capacity),
-      activationConcurrency: value.activationConcurrency as ZLinkMeshNodeDescriptor['activationConcurrency'],
+      activationConcurrency:
+        value.activationConcurrency as ZLinkMeshNodeDescriptor['activationConcurrency'],
       channelWeights: value.channelWeights as Readonly<Record<string, number>>,
       applicationVersion: BigInt(String(value.applicationVersion)),
       spotTypes: [],
       objectCapabilities: reviveCanonicalCapabilities(value.objectCapabilities),
-      maintenanceWave: value.maintenanceWave === null ? undefined : value.maintenanceWave as string | undefined,
+      maintenanceWave:
+        value.maintenanceWave === null ? undefined : (value.maintenanceWave as string | undefined),
       state: runtimeState(String(value.state)),
       securityIdentity: String(value.securityIdentity),
       ownerId: String(value.ownerId),
@@ -4054,9 +4181,8 @@ function reviveMeshDescriptor(descriptor: ZLinkMeshNodeDescriptor): ZLinkMeshNod
   return {
     ...descriptor,
     rid: descriptor.rid,
-    updatedAt: descriptor.updatedAt instanceof Date
-      ? descriptor.updatedAt
-      : new Date(descriptor.updatedAt)
+    updatedAt:
+      descriptor.updatedAt instanceof Date ? descriptor.updatedAt : new Date(descriptor.updatedAt)
   };
 }
 
@@ -4093,7 +4219,10 @@ function reviveFanoutDescriptor(
   if ('publisherRoutingIdHex' in value) {
     return {
       channelName: String(value.channelName),
-      publisherRid: decodeRoutingId(String(value.publisherRoutingIdHex), value.publisherRoutingIdHex),
+      publisherRid: decodeRoutingId(
+        String(value.publisherRoutingIdHex),
+        value.publisherRoutingIdHex
+      ),
       lifecycleGeneration: BigInt(String(value.lifecycleGeneration)),
       descriptorRevision: BigInt(String(value.descriptorRevision)),
       endpoint: String(value.endpoint),
@@ -4147,24 +4276,30 @@ function normalizeRoute(value: ZLinkRouteLocation): ZLinkRouteLocation {
 }
 
 function matchesSpot(value: ZLinkSpotLocation, filter: ZLinkSpotLocationFilter): boolean {
-  return (filter.meshName === undefined || value.meshName === filter.meshName)
-    && (filter.spotType === undefined || value.spotType === filter.spotType)
-    && (filter.nodeRid === undefined || String(value.ownerNodeRid) === String(filter.nodeRid))
-    && (filter.spotKind === undefined || value.spotKind === filter.spotKind);
+  return (
+    (filter.meshName === undefined || value.meshName === filter.meshName) &&
+    (filter.spotType === undefined || value.spotType === filter.spotType) &&
+    (filter.nodeRid === undefined || String(value.ownerNodeRid) === String(filter.nodeRid)) &&
+    (filter.spotKind === undefined || value.spotKind === filter.spotKind)
+  );
 }
 
 function matchesActor(value: ZLinkActorLocation, filter: ZLinkActorLocationFilter): boolean {
-  return (filter.actorType === undefined || value.actorType === filter.actorType)
-    && (filter.nodeRid === undefined || String(value.ownerNodeRid) === String(filter.nodeRid))
-    && (filter.spotId === undefined || String(value.spotId) === String(filter.spotId))
-    && (filter.locationKind === undefined || value.spotKind === filter.locationKind);
+  return (
+    (filter.actorType === undefined || value.actorType === filter.actorType) &&
+    (filter.nodeRid === undefined || String(value.ownerNodeRid) === String(filter.nodeRid)) &&
+    (filter.spotId === undefined || String(value.spotId) === String(filter.spotId)) &&
+    (filter.locationKind === undefined || value.spotKind === filter.locationKind)
+  );
 }
 
 function matchesRoute(value: ZLinkRouteLocation, filter: ZLinkRouteLocationFilter): boolean {
-  return (filter.routeKind === undefined || value.routeKind === filter.routeKind)
-    && (filter.ownerNodeRid === undefined
-      || String(value.ownerNodeRid) === String(filter.ownerNodeRid))
-    && (filter.ownerId === undefined || value.ownerId === filter.ownerId);
+  return (
+    (filter.routeKind === undefined || value.routeKind === filter.routeKind) &&
+    (filter.ownerNodeRid === undefined ||
+      String(value.ownerNodeRid) === String(filter.ownerNodeRid)) &&
+    (filter.ownerId === undefined || value.ownerId === filter.ownerId)
+  );
 }
 
 function locationOwnerGeneration(value: LeaseOwnedLocation): bigint {
@@ -4178,9 +4313,7 @@ function descriptorOwnerLeaseGeneration(value: OwnedStoreRecord): bigint | undef
       : BigInt(value.leaseGeneration);
   }
   if ('generation' in value) {
-    return typeof value.generation === 'bigint'
-      ? value.generation
-      : BigInt(value.generation);
+    return typeof value.generation === 'bigint' ? value.generation : BigInt(value.generation);
   }
   return undefined;
 }
@@ -4190,7 +4323,8 @@ function sameMeshDescriptor(
   right: ZLinkMeshNodeDescriptor
 ): boolean {
   return Buffer.from(encodeJson(persistMeshDescriptor(left))).equals(
-    Buffer.from(encodeJson(persistMeshDescriptor(right))));
+    Buffer.from(encodeJson(persistMeshDescriptor(right)))
+  );
 }
 
 function sameClientServerDescriptor(
@@ -4207,44 +4341,43 @@ function sameFanoutDescriptor(
   return descriptorFingerprint(left, ['updatedAt']) === descriptorFingerprint(right, ['updatedAt']);
 }
 
-function canRenewMesh(
-  current: ZLinkMeshNodeDescriptor,
-  next: ZLinkMeshNodeDescriptor
-): boolean {
-  return sameOwnerGeneration(current, next)
-    && next.descriptorRevision > current.descriptorRevision;
+function canRenewMesh(current: ZLinkMeshNodeDescriptor, next: ZLinkMeshNodeDescriptor): boolean {
+  return sameOwnerGeneration(current, next) && next.descriptorRevision > current.descriptorRevision;
 }
 
 function canRenewClientServer(
   current: ZLinkClientServerServerDescriptor,
   next: ZLinkClientServerServerDescriptor
 ): boolean {
-  return sameOwnerGeneration(current, next)
-    && next.descriptorRevision > current.descriptorRevision
-    && descriptorFingerprint(current, ['descriptorRevision', 'weight', 'state', 'updatedAt'])
-      === descriptorFingerprint(next, ['descriptorRevision', 'weight', 'state', 'updatedAt']);
+  return (
+    sameOwnerGeneration(current, next) &&
+    next.descriptorRevision > current.descriptorRevision &&
+    descriptorFingerprint(current, ['descriptorRevision', 'weight', 'state', 'updatedAt']) ===
+      descriptorFingerprint(next, ['descriptorRevision', 'weight', 'state', 'updatedAt'])
+  );
 }
 
 function canRenewFanout(
   current: ZLinkFanoutPublisherDescriptor,
   next: ZLinkFanoutPublisherDescriptor
 ): boolean {
-  return sameOwnerGeneration(current, next)
-    && next.descriptorRevision > current.descriptorRevision
-    && descriptorFingerprint(current, ['descriptorRevision', 'state', 'updatedAt'])
-      === descriptorFingerprint(next, ['descriptorRevision', 'state', 'updatedAt']);
+  return (
+    sameOwnerGeneration(current, next) &&
+    next.descriptorRevision > current.descriptorRevision &&
+    descriptorFingerprint(current, ['descriptorRevision', 'state', 'updatedAt']) ===
+      descriptorFingerprint(next, ['descriptorRevision', 'state', 'updatedAt'])
+  );
 }
 
 function sameOwnerGeneration(left: OwnedDescriptor, right: OwnedDescriptor): boolean {
-  return left.ownerId === right.ownerId
-    && left.leaseGeneration === right.leaseGeneration
-    && left.lifecycleGeneration === right.lifecycleGeneration;
+  return (
+    left.ownerId === right.ownerId &&
+    left.leaseGeneration === right.leaseGeneration &&
+    left.lifecycleGeneration === right.lifecycleGeneration
+  );
 }
 
-function descriptorFingerprint(
-  descriptor: OwnedDescriptor,
-  omitted: readonly string[]
-): string {
+function descriptorFingerprint(descriptor: OwnedDescriptor, omitted: readonly string[]): string {
   // Descriptor rows are canonicalized through routing-id hex.  Comparing the
   // in-memory shape here would distinguish a binding RoutingId instance from
   // the equivalent ID revived from a canonical row, incorrectly rejecting a
@@ -4257,13 +4390,16 @@ function descriptorFingerprint(
 }
 
 function validateClientServerDescriptor(descriptor: ZLinkClientServerServerDescriptor): void {
-  validateDescriptorIdentity([
-    descriptor.channelName,
-    String(descriptor.serverRid),
-    descriptor.endpoint,
-    descriptor.securityIdentity,
-    descriptor.ownerId
-  ], 'ClientServer');
+  validateDescriptorIdentity(
+    [
+      descriptor.channelName,
+      String(descriptor.serverRid),
+      descriptor.endpoint,
+      descriptor.securityIdentity,
+      descriptor.ownerId
+    ],
+    'ClientServer'
+  );
   validateDescriptorGenerations(descriptor, 'ClientServer');
   if (!Number.isInteger(descriptor.weight) || descriptor.weight < 0 || descriptor.weight > 10_000) {
     throw new RangeError('ClientServer descriptor weight must be an integer in 0..10000.');
@@ -4271,26 +4407,34 @@ function validateClientServerDescriptor(descriptor: ZLinkClientServerServerDescr
 }
 
 function validateFanoutPublisherDescriptor(descriptor: ZLinkFanoutPublisherDescriptor): void {
-  validateDescriptorIdentity([
-    descriptor.channelName,
-    String(descriptor.publisherRid),
-    descriptor.endpoint,
-    descriptor.securityIdentity,
-    descriptor.ownerId
-  ], 'Fanout publisher');
+  validateDescriptorIdentity(
+    [
+      descriptor.channelName,
+      String(descriptor.publisherRid),
+      descriptor.endpoint,
+      descriptor.securityIdentity,
+      descriptor.ownerId
+    ],
+    'Fanout publisher'
+  );
   validateDescriptorGenerations(descriptor, 'Fanout publisher');
 }
 
 function validateDescriptorIdentity(values: readonly string[], kind: string): void {
-  if (values.some(value => Buffer.byteLength(value, 'utf8') < 1 || value.includes('\0'))) {
+  if (values.some((value) => Buffer.byteLength(value, 'utf8') < 1 || value.includes('\0'))) {
     throw new TypeError(`${kind} descriptor identity and endpoint are required.`);
   }
 }
 
 function validateDescriptorGenerations(descriptor: OwnedDescriptor, kind: string): void {
-  if (descriptor.lifecycleGeneration < 1n || descriptor.lifecycleGeneration > MAX_GENERATION
-    || descriptor.descriptorRevision < 1n || descriptor.descriptorRevision > MAX_GENERATION
-    || descriptor.leaseGeneration < 1n || descriptor.leaseGeneration > MAX_GENERATION) {
+  if (
+    descriptor.lifecycleGeneration < 1n ||
+    descriptor.lifecycleGeneration > MAX_GENERATION ||
+    descriptor.descriptorRevision < 1n ||
+    descriptor.descriptorRevision > MAX_GENERATION ||
+    descriptor.leaseGeneration < 1n ||
+    descriptor.leaseGeneration > MAX_GENERATION
+  ) {
     throw new RangeError(`${kind} descriptor generations are invalid.`);
   }
 }

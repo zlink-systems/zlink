@@ -28,11 +28,11 @@ internal readonly record struct ZLinkChannelName
     internal static ZLinkChannelName FromBoundary(string value, string paramName)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(value, paramName);
-        if (value.Contains('\0')
-            || System.Text.Encoding.UTF8.GetByteCount(value) > byte.MaxValue)
+        if (value.Contains('\0') || System.Text.Encoding.UTF8.GetByteCount(value) > byte.MaxValue)
             throw new ArgumentOutOfRangeException(
                 paramName,
-                "Channel name must be 1 to 255 UTF-8 bytes without NUL.");
+                "Channel name must be 1 to 255 UTF-8 bytes without NUL."
+            );
         return new ZLinkChannelName(value);
     }
 
@@ -50,11 +50,11 @@ internal readonly record struct ZLinkActorId
     internal static ZLinkActorId FromBoundary(string value, string paramName)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(value, paramName);
-        if (value.Contains('\0')
-            || System.Text.Encoding.UTF8.GetByteCount(value) > byte.MaxValue)
+        if (value.Contains('\0') || System.Text.Encoding.UTF8.GetByteCount(value) > byte.MaxValue)
             throw new ArgumentOutOfRangeException(
                 paramName,
-                "Actor ID must be 1 to 255 UTF-8 bytes without NUL.");
+                "Actor ID must be 1 to 255 UTF-8 bytes without NUL."
+            );
         return new ZLinkActorId(value);
     }
 
@@ -117,132 +117,106 @@ internal static class ZLinkRuntimeIdentifierDictionaryExtensions
     internal static bool TryGetValue<TValue>(
         this Dictionary<ZLinkActorId, TValue> source,
         string value,
-        out TValue result) =>
-        source.TryGetValue(
-            ZLinkActorId.FromBoundary(value, nameof(value)),
-            out result!);
+        out TValue result
+    ) => source.TryGetValue(ZLinkActorId.FromBoundary(value, nameof(value)), out result!);
 
     internal static bool ContainsKey<TValue>(
         this Dictionary<ZLinkActorId, TValue> source,
-        string value) =>
-        source.ContainsKey(ZLinkActorId.FromBoundary(value, nameof(value)));
+        string value
+    ) => source.ContainsKey(ZLinkActorId.FromBoundary(value, nameof(value)));
 
     internal static void Add<TValue>(
         this Dictionary<ZLinkActorId, TValue> source,
         string value,
-        TValue item) =>
-        source.Add(
-            ZLinkActorId.FromBoundary(value, nameof(value)),
-            item);
+        TValue item
+    ) => source.Add(ZLinkActorId.FromBoundary(value, nameof(value)), item);
 
     internal static bool Remove<TValue>(
         this Dictionary<ZLinkActorId, TValue> source,
-        string value) =>
-        source.Remove(ZLinkActorId.FromBoundary(value, nameof(value)));
+        string value
+    ) => source.Remove(ZLinkActorId.FromBoundary(value, nameof(value)));
 
     internal static bool TryGetValue<TValue>(
         this Dictionary<ZLinkChannelName, TValue> source,
         string value,
-        out TValue result) =>
-        source.TryGetValue(
-            ZLinkChannelName.FromBoundary(value, nameof(value)),
-            out result!);
+        out TValue result
+    ) => source.TryGetValue(ZLinkChannelName.FromBoundary(value, nameof(value)), out result!);
 
     internal static void Add<TValue>(
         this Dictionary<ZLinkChannelName, TValue> source,
         string value,
-        TValue item) =>
-        source.Add(
-            ZLinkChannelName.FromBoundary(value, nameof(value)),
-            item);
+        TValue item
+    ) => source.Add(ZLinkChannelName.FromBoundary(value, nameof(value)), item);
 
     internal static bool Remove<TValue>(
         this Dictionary<ZLinkChannelName, TValue> source,
-        string value) =>
-        source.Remove(ZLinkChannelName.FromBoundary(value, nameof(value)));
+        string value
+    ) => source.Remove(ZLinkChannelName.FromBoundary(value, nameof(value)));
 
     internal static bool TryGetValue<TValue>(
         this Dictionary<ZLinkSpotNodeName, TValue> source,
         string value,
-        out TValue result) =>
-        source.TryGetValue(
-            ZLinkSpotNodeName.FromBoundary(value, nameof(value)),
-            out result!);
+        out TValue result
+    ) => source.TryGetValue(ZLinkSpotNodeName.FromBoundary(value, nameof(value)), out result!);
 
     internal static void Add<TValue>(
         this Dictionary<ZLinkSpotNodeName, TValue> source,
         string value,
-        TValue item) =>
-        source.Add(
-            ZLinkSpotNodeName.FromBoundary(value, nameof(value)),
-            item);
+        TValue item
+    ) => source.Add(ZLinkSpotNodeName.FromBoundary(value, nameof(value)), item);
 
     internal static bool Remove<TValue>(
         this Dictionary<ZLinkSpotNodeName, TValue> source,
-        string value) =>
-        source.Remove(ZLinkSpotNodeName.FromBoundary(value, nameof(value)));
+        string value
+    ) => source.Remove(ZLinkSpotNodeName.FromBoundary(value, nameof(value)));
 
     internal static bool TryGetValue<TValue>(
         this Dictionary<ZLinkStreamNodeName, TValue> source,
         string value,
-        out TValue result) =>
-        source.TryGetValue(
-            ZLinkStreamNodeName.FromBoundary(value, nameof(value)),
-            out result!);
+        out TValue result
+    ) => source.TryGetValue(ZLinkStreamNodeName.FromBoundary(value, nameof(value)), out result!);
 
     internal static void Add<TValue>(
         this Dictionary<ZLinkStreamNodeName, TValue> source,
         string value,
-        TValue item) =>
-        source.Add(
-            ZLinkStreamNodeName.FromBoundary(value, nameof(value)),
-            item);
+        TValue item
+    ) => source.Add(ZLinkStreamNodeName.FromBoundary(value, nameof(value)), item);
 
     internal static bool Remove<TValue>(
         this Dictionary<ZLinkStreamNodeName, TValue> source,
-        string value) =>
-        source.Remove(ZLinkStreamNodeName.FromBoundary(value, nameof(value)));
+        string value
+    ) => source.Remove(ZLinkStreamNodeName.FromBoundary(value, nameof(value)));
 }
 
 internal static class ZLinkSpotIdDictionaryExtensions
 {
     internal static bool ContainsKey<TValue>(
         this Dictionary<ZLinkSpotId, TValue> source,
-        string spotId) =>
-        source.ContainsKey(ZLinkSpotId.FromBoundary(
-            spotId,
-            nameof(spotId)));
+        string spotId
+    ) => source.ContainsKey(ZLinkSpotId.FromBoundary(spotId, nameof(spotId)));
 
     internal static bool TryGetValue<TValue>(
         this Dictionary<ZLinkSpotId, TValue> source,
         string spotId,
-        out TValue value) =>
-        source.TryGetValue(
-            ZLinkSpotId.FromBoundary(spotId, nameof(spotId)),
-            out value!);
+        out TValue value
+    ) => source.TryGetValue(ZLinkSpotId.FromBoundary(spotId, nameof(spotId)), out value!);
 
     internal static void Add<TValue>(
         this Dictionary<ZLinkSpotId, TValue> source,
         string spotId,
-        TValue value) =>
-        source.Add(
-            ZLinkSpotId.FromBoundary(spotId, nameof(spotId)),
-            value);
+        TValue value
+    ) => source.Add(ZLinkSpotId.FromBoundary(spotId, nameof(spotId)), value);
 
     internal static bool Remove<TValue>(
         this Dictionary<ZLinkSpotId, TValue> source,
-        string spotId) =>
-        source.Remove(ZLinkSpotId.FromBoundary(
-            spotId,
-            nameof(spotId)));
+        string spotId
+    ) => source.Remove(ZLinkSpotId.FromBoundary(spotId, nameof(spotId)));
 
     internal static bool Remove<TValue>(
         this Dictionary<ZLinkSpotId, TValue> source,
         string spotId,
-        out TValue value) =>
-        source.Remove(
-            ZLinkSpotId.FromBoundary(spotId, nameof(spotId)),
-            out value!);
+        out TValue value
+    ) => source.Remove(ZLinkSpotId.FromBoundary(spotId, nameof(spotId)), out value!);
 }
 
 /// <summary>
@@ -256,6 +230,5 @@ internal sealed class ZLinkRoutingIdOrder : IComparer<RoutingId>
 {
     internal static ZLinkRoutingIdOrder Instance { get; } = new();
 
-    public int Compare(RoutingId x, RoutingId y) =>
-        x.ToBytes().SequenceCompareTo(y.ToBytes());
+    public int Compare(RoutingId x, RoutingId y) => x.ToBytes().SequenceCompareTo(y.ToBytes());
 }

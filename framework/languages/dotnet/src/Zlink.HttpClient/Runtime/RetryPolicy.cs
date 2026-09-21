@@ -24,17 +24,20 @@ internal sealed class RetryPolicy(HttpClientOptions options)
     public async ValueTask<RawHttpResponse> ExecuteAsync(
         HttpRequestSpec request,
         Func<HttpRequestSpec, CancellationToken, ValueTask<RawHttpResponse>> perform,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken
+    )
     {
         var maxRetries = request.IsStreaming ? 0 : options.RetryAttempts;
         var timeout = request.Timeout ?? options.Timeout;
 
-        for (var attempt = 0;; attempt++)
+        for (var attempt = 0; ; attempt++)
         {
             Exception failure;
             try
             {
-                using var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+                using var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(
+                    cancellationToken
+                );
                 timeoutCts.CancelAfter(timeout);
                 return await perform(request, timeoutCts.Token).ConfigureAwait(false);
             }
@@ -48,7 +51,8 @@ internal sealed class RetryPolicy(HttpClientOptions options)
                     ZLinkFrameworkErrorKind.DeadlineExceeded,
                     "HTTP request exceeded timeout",
                     ZLinkRetryAdvice.RetryAfterBackoff,
-                    new TimeoutException("HTTP request exceeded timeout", ex));
+                    new TimeoutException("HTTP request exceeded timeout", ex)
+                );
             }
             catch (ZLinkFrameworkException ex)
             {
@@ -63,7 +67,8 @@ internal sealed class RetryPolicy(HttpClientOptions options)
                     ZLinkFrameworkErrorKind.Unavailable,
                     ex.Message,
                     ZLinkRetryAdvice.RetryAfterBackoff,
-                    ex);
+                    ex
+                );
             }
             catch (System.Net.Sockets.SocketException ex)
             {
@@ -71,7 +76,8 @@ internal sealed class RetryPolicy(HttpClientOptions options)
                     ZLinkFrameworkErrorKind.Unavailable,
                     ex.Message,
                     ZLinkRetryAdvice.RetryAfterBackoff,
-                    ex);
+                    ex
+                );
             }
             catch (IOException ex)
             {
@@ -79,7 +85,8 @@ internal sealed class RetryPolicy(HttpClientOptions options)
                     ZLinkFrameworkErrorKind.Unavailable,
                     ex.Message,
                     ZLinkRetryAdvice.RetryAfterBackoff,
-                    ex);
+                    ex
+                );
             }
 
             if (attempt < maxRetries)

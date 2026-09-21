@@ -22,8 +22,8 @@ internal sealed class ZLinkRouteMeshRuntimeOptionsService(ZLinkFrameworkRuntime 
 internal sealed class ZLinkMeshPlacementRuntimeOptions(
     ZLinkFrameworkRuntime runtime,
     ZLinkSpotNodeRegistration registration,
-    IZLinkBackendSpotNode node)
-    : IZLinkMeshPlacementRuntimeOptions
+    IZLinkBackendSpotNode node
+) : IZLinkMeshPlacementRuntimeOptions
 {
     public int PlacementWeight
     {
@@ -42,8 +42,8 @@ internal sealed class ZLinkMeshChannelRuntimeOptions(
     ZLinkMeshChannelMembership? membership,
     string? meshName,
     ZLinkChannelServerCapabilityRegistration? clientServer,
-    ZLinkClientServerServerIdentity? clientServerIdentity)
-    : IZLinkMeshChannelRuntimeOptions
+    ZLinkClientServerServerIdentity? clientServerIdentity
+) : IZLinkMeshChannelRuntimeOptions
 {
     public int Weight
     {
@@ -54,10 +54,7 @@ internal sealed class ZLinkMeshChannelRuntimeOptions(
             if (membership is not null)
                 runtime.SetMeshChannelWeight(node!, membership, meshName!, value);
             else
-                runtime.SetClientServerWeight(
-                    clientServer!,
-                    clientServerIdentity!,
-                    value);
+                runtime.SetClientServerWeight(clientServer!, clientServerIdentity!, value);
         }
     }
 }

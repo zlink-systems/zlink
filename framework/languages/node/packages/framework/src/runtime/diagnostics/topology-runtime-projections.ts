@@ -39,8 +39,7 @@ export class ZLinkClientServerRuntimeProjection implements ZLinkClientServerRunt
 
   constructor(
     private readonly runtime: RuntimeAccessor,
-    private readonly hostState: HostStateAccessor =
-      () => ZLinkFrameworkRuntimeState.Serving
+    private readonly hostState: HostStateAccessor = () => ZLinkFrameworkRuntimeState.Serving
   ) {}
 
   snapshot(channelName: string): ZLinkClientServerStatus {
@@ -50,23 +49,30 @@ export class ZLinkClientServerRuntimeProjection implements ZLinkClientServerRunt
   private snapshotCore(channelName: string): ZLinkClientServerStatus {
     const topology = this.requireRuntime().clientServerTopology(channelName);
     if (topology.localRole === undefined) {
-      throw new ZLinkConfigurationException(`ClientServer channel '${channelName}' is not registered.`);
+      throw new ZLinkConfigurationException(
+        `ClientServer channel '${channelName}' is not registered.`
+      );
     }
     const targets = topology.descriptors.map((descriptor): ZLinkClientServerTargetStatus => ({
       nodeRid: descriptor.serverRoutingId,
       weight: descriptor.weight,
-      state: descriptor.state === 'serving' ? ZLinkPeerState.Ready
-        : descriptor.state === 'retiring' ? ZLinkPeerState.Draining
-          : descriptor.state === 'preparing' ? ZLinkPeerState.Connecting
-            : ZLinkPeerState.NotConnected,
-      unavailableReason: descriptor.state === 'serving' && descriptor.weight > 0
-        ? undefined
-        : descriptor.state === 'retiring'
-          ? ZLinkTopologyReason.Draining
-          : ZLinkTopologyReason.NoReadyTarget
+      state:
+        descriptor.state === 'serving'
+          ? ZLinkPeerState.Ready
+          : descriptor.state === 'retiring'
+            ? ZLinkPeerState.Draining
+            : descriptor.state === 'preparing'
+              ? ZLinkPeerState.Connecting
+              : ZLinkPeerState.NotConnected,
+      unavailableReason:
+        descriptor.state === 'serving' && descriptor.weight > 0
+          ? undefined
+          : descriptor.state === 'retiring'
+            ? ZLinkTopologyReason.Draining
+            : ZLinkTopologyReason.NoReadyTarget
     }));
     const readyTargetCount = targets.filter(
-      target => target.state === ZLinkPeerState.Ready && target.weight > 0
+      (target) => target.state === ZLinkPeerState.Ready && target.weight > 0
     ).length;
     const hostState = this.hostState();
     const isReady = topologyRuntimeIsReady(hostState, readyTargetCount);
@@ -110,13 +116,16 @@ export class ZLinkClientServerRuntimeProjection implements ZLinkClientServerRunt
         } catch {
           // The last complete projection remains valid after native teardown.
         }
-        queue.seal({
-          ...current,
-          state: ZLinkTopologyState.Stopped,
-          isReady: false,
-          sequence: this.sequence,
-          observedAt: new Date()
-        }, channelName);
+        queue.seal(
+          {
+            ...current,
+            state: ZLinkTopologyState.Stopped,
+            isReady: false,
+            sequence: this.sequence,
+            observedAt: new Date()
+          },
+          channelName
+        );
       }
     };
     this.hostObservers.add(hostObserver);
@@ -154,7 +163,8 @@ export class ZLinkClientServerRuntimeProjection implements ZLinkClientServerRunt
 
   private requireRuntime(): ZLinkChannelRuntimeManager {
     const runtime = this.runtime();
-    if (runtime === undefined) throw new ZLinkConfigurationException('ClientServer runtime has not started.');
+    if (runtime === undefined)
+      throw new ZLinkConfigurationException('ClientServer runtime has not started.');
     return runtime;
   }
 }
@@ -165,8 +175,7 @@ export class ZLinkFanoutRuntimeProjection implements ZLinkFanoutRuntime {
 
   constructor(
     private readonly runtime: RuntimeAccessor,
-    private readonly hostState: HostStateAccessor =
-      () => ZLinkFrameworkRuntimeState.Serving
+    private readonly hostState: HostStateAccessor = () => ZLinkFrameworkRuntimeState.Serving
   ) {}
 
   snapshot(channelName: string): ZLinkFanoutStatus {
@@ -174,21 +183,27 @@ export class ZLinkFanoutRuntimeProjection implements ZLinkFanoutRuntime {
   }
 
   private snapshotCore(channelName: string): ZLinkFanoutStatus {
-    const publishers = this.requireRuntime().fanoutTopology(channelName).descriptors
-      .map((descriptor): ZLinkPeerStatus => ({
+    const publishers = this.requireRuntime()
+      .fanoutTopology(channelName)
+      .descriptors.map((descriptor): ZLinkPeerStatus => ({
         nodeRid: descriptor.publisherRoutingId,
-        state: descriptor.state === 'serving' ? ZLinkPeerState.Ready
-          : descriptor.state === 'retiring' ? ZLinkPeerState.Draining
-            : descriptor.state === 'preparing' ? ZLinkPeerState.Connecting
-              : ZLinkPeerState.NotConnected,
-        unavailableReason: descriptor.state === 'serving'
-          ? undefined
-          : descriptor.state === 'retiring'
-            ? ZLinkTopologyReason.Draining
-            : ZLinkTopologyReason.NoReadyTarget
+        state:
+          descriptor.state === 'serving'
+            ? ZLinkPeerState.Ready
+            : descriptor.state === 'retiring'
+              ? ZLinkPeerState.Draining
+              : descriptor.state === 'preparing'
+                ? ZLinkPeerState.Connecting
+                : ZLinkPeerState.NotConnected,
+        unavailableReason:
+          descriptor.state === 'serving'
+            ? undefined
+            : descriptor.state === 'retiring'
+              ? ZLinkTopologyReason.Draining
+              : ZLinkTopologyReason.NoReadyTarget
       }));
     const readyPublisherCount = publishers.filter(
-      publisher => publisher.state === ZLinkPeerState.Ready
+      (publisher) => publisher.state === ZLinkPeerState.Ready
     ).length;
     const hostState = this.hostState();
     const hostReady = runtimeStateIsReady(hostState);
@@ -235,13 +250,16 @@ export class ZLinkFanoutRuntimeProjection implements ZLinkFanoutRuntime {
         } catch {
           // The last complete projection remains valid after native teardown.
         }
-        queue.seal({
-          ...current,
-          state: ZLinkTopologyState.Stopped,
-          isReady: false,
-          sequence: this.sequence,
-          observedAt: new Date()
-        }, channelName);
+        queue.seal(
+          {
+            ...current,
+            state: ZLinkTopologyState.Stopped,
+            isReady: false,
+            sequence: this.sequence,
+            observedAt: new Date()
+          },
+          channelName
+        );
       }
     };
     this.hostObservers.add(hostObserver);
@@ -275,7 +293,8 @@ export class ZLinkFanoutRuntimeProjection implements ZLinkFanoutRuntime {
 
   private requireRuntime(): ZLinkChannelRuntimeManager {
     const runtime = this.runtime();
-    if (runtime === undefined) throw new ZLinkConfigurationException('Fanout runtime has not started.');
+    if (runtime === undefined)
+      throw new ZLinkConfigurationException('Fanout runtime has not started.');
     return runtime;
   }
 }

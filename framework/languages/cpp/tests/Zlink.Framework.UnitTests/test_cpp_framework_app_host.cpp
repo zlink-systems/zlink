@@ -307,13 +307,11 @@ struct create_game_http_handler_t
         {
             if (context.method == zlink::framework::http_method_t::post && name.empty ()) {
                 throw zlink::framework::framework_exception_t (
-                  zlink::framework::framework_error_kind_t::protocol_error,
-                  "name is required");
+                  zlink::framework::framework_error_kind_t::protocol_error, "name is required");
             }
             if (name == "invalid") {
                 throw zlink::framework::framework_exception_t (
-                  zlink::framework::framework_error_kind_t::protocol_error,
-                  "name is invalid");
+                  zlink::framework::framework_error_kind_t::protocol_error, "name is invalid");
             }
         }
     };
@@ -329,15 +327,16 @@ struct create_game_http_handler_t
     reply_type handle (const request_type &request, zlink::framework::http_context_t &context)
     {
         if (request.name == "timeout") {
-            throw zlink::framework::detail::make_boundary_exception (zlink::framework::detail::boundary_error_t::timed_out, "handler timeout");
+            throw zlink::framework::detail::make_boundary_exception (
+              zlink::framework::detail::boundary_error_t::timed_out, "handler timeout");
         }
         if (request.name == "shutdown") {
-            throw zlink::framework::detail::make_boundary_exception (zlink::framework::detail::boundary_error_t::shutdown, "handler shutdown");
+            throw zlink::framework::detail::make_boundary_exception (
+              zlink::framework::detail::boundary_error_t::shutdown, "handler shutdown");
         }
         if (request.name == "protocol") {
             throw zlink::framework::framework_exception_t (
-              zlink::framework::framework_error_kind_t::protocol_error,
-              "handler protocol error");
+              zlink::framework::framework_error_kind_t::protocol_error, "handler protocol error");
         }
         if (request.name == "failed") {
             throw zlink::framework::framework_exception_t (
@@ -359,7 +358,8 @@ struct async_game_http_handler_t
                                                  zlink::framework::http_context_t &context)
     {
         if (request.name == "async-timeout") {
-            co_return zlink::framework::detail::boundary_failure<reply_type> (zlink::framework::detail::boundary_error_t::timed_out, "async handler timeout");
+            co_return zlink::framework::detail::boundary_failure<reply_type> (
+              zlink::framework::detail::boundary_error_t::timed_out, "async handler timeout");
         }
         co_return reply_type{.id = request.id,
                              .name = request.name,
@@ -398,8 +398,7 @@ struct nested_app_http_handler_t
         const auto exit_code = nested.run (0, nullptr);
         if (exit_code != 0) {
             throw zlink::framework::framework_exception_t (
-              zlink::framework::framework_error_kind_t::internal_failure,
-              "nested app failed");
+              zlink::framework::framework_error_kind_t::internal_failure, "nested app failed");
         }
         return {.id = request.id, .name = "nested:" + request.name};
     }
@@ -759,8 +758,7 @@ make_app_host_test_client (std::string base_url,
     return builder.build ();
 }
 
-bool wait_for_ready (const zlink::http_client::client_t &client,
-                     std::string *last_error = nullptr)
+bool wait_for_ready (const zlink::http_client::client_t &client, std::string *last_error = nullptr)
 {
     for (int attempt = 0; attempt < 100; ++attempt) {
         auto result = client.get ("/ready").submit<health_http_reply_t> ();
@@ -771,8 +769,8 @@ bool wait_for_ready (const zlink::http_client::client_t &client,
             if (result.error ()) {
                 *last_error = result.error ()->what ();
             } else if (result.has_value ()) {
-                *last_error = "readiness returned status "
-                              + std::to_string (result.value ().status);
+                *last_error =
+                  "readiness returned status " + std::to_string (result.value ().status);
             }
         }
         std::this_thread::sleep_for (std::chrono::milliseconds (10));
@@ -865,8 +863,7 @@ int main (int test_argc, char **test_argv)
             != zlink::framework::message_flow_log_mode_t::normal) {
             return 138;
         }
-        diagnostics_app.set_message_flow_mode (
-          zlink::framework::message_flow_log_mode_t::detailed);
+        diagnostics_app.set_message_flow_mode (zlink::framework::message_flow_log_mode_t::detailed);
         if (diagnostics_app.message_flow_mode ()
             != zlink::framework::message_flow_log_mode_t::detailed) {
             return 139;
@@ -1004,8 +1001,8 @@ int main (int test_argc, char **test_argv)
     std::string readiness_error;
     trace.phase = "main app readiness";
     if (!wait_for_ready (http_client, &readiness_error)) {
-        std::cerr << "main HTTP app did not become ready at " << http_endpoint
-                  << ": " << readiness_error << '\n';
+        std::cerr << "main HTTP app did not become ready at " << http_endpoint << ": "
+                  << readiness_error << '\n';
         app.stop ();
         app_thread.join ();
         return 13;
@@ -1023,8 +1020,8 @@ int main (int test_argc, char **test_argv)
       http_client.post ("/games")
         .body (create_game_http_handler_t::request_type{.name = "after-nested"})
         .submit<create_game_http_handler_t::reply_type> ();
-    const auto get_result = http_client.get ("/games/1?filter=active")
-                              .submit<create_game_http_handler_t::reply_type> ();
+    const auto get_result =
+      http_client.get ("/games/1?filter=active").submit<create_game_http_handler_t::reply_type> ();
     const auto number_get_result =
       http_client.get ("/numbers/41?page=2").submit<number_http_handler_t::reply_type> ();
     const auto response_object_result =
@@ -1047,8 +1044,7 @@ int main (int test_argc, char **test_argv)
     const auto secure_get_result = http_client.get ("/secure-games/7")
                                      .header ("authorization", "Bearer test-token")
                                      .submit<create_game_http_handler_t::reply_type> ();
-    const auto unauthorized_get_result =
-      http_client.get ("/secure-games/7").submit_raw ();
+    const auto unauthorized_get_result = http_client.get ("/secure-games/7").submit_raw ();
     const auto put_result = http_client.put ("/games/1")
                               .body (create_game_http_handler_t::request_type{
                                 .id = "body-id", .name = "put", .filter = "body-filter"})
@@ -1071,11 +1067,9 @@ int main (int test_argc, char **test_argv)
                                              .submit_raw ();
     const auto route_parse_failure_result =
       http_client.get ("/numbers/not-a-number?page=2").submit_raw ();
-    const auto query_parse_failure_result =
-      http_client.get ("/numbers/41?page=bad").submit_raw ();
-    const auto missing_required_field_result = http_client.post ("/games")
-                                                 .body (create_game_http_handler_t::request_type{})
-                                                 .submit_raw ();
+    const auto query_parse_failure_result = http_client.get ("/numbers/41?page=bad").submit_raw ();
+    const auto missing_required_field_result =
+      http_client.post ("/games").body (create_game_http_handler_t::request_type{}).submit_raw ();
     const auto dto_validation_result =
       http_client.post ("/games")
         .body (create_game_http_handler_t::request_type{.name = "invalid"})
@@ -1123,8 +1117,8 @@ int main (int test_argc, char **test_argv)
       http_client.post ("/injected-games")
         .body (create_game_http_handler_t::request_type{.name = "handler"})
         .submit<create_game_http_handler_t::reply_type> ();
-    const auto short_circuit_result = http_client.get ("/games/blocked")
-                                        .submit<create_game_http_handler_t::reply_type> ();
+    const auto short_circuit_result =
+      http_client.get ("/games/blocked").submit<create_game_http_handler_t::reply_type> ();
     const auto health_result = http_client.get ("/health").submit<health_http_reply_t> ();
     const auto liveness_result = http_client.get ("/live").submit<health_http_reply_t> ();
     const bool keep_alive_ok = http_keep_alive_round_trip (http_endpoint);
@@ -1211,22 +1205,19 @@ int main (int test_argc, char **test_argv)
         return 26;
     }
     if (!invalid_json_shape_result || invalid_json_shape_result.value ().status != 400
-        || invalid_json_shape_result.value ().body.find ("protocol_error")
-             == std::string::npos
+        || invalid_json_shape_result.value ().body.find ("protocol_error") == std::string::npos
         || invalid_json_shape_result.value ().body.find ("corr-invalid-json") == std::string::npos
         || invalid_json_shape_result.value ().headers.at ("x-middleware-after") != "seen") {
         return 22;
     }
     if (!route_parse_failure_result || route_parse_failure_result.value ().status != 400
-        || route_parse_failure_result.value ().body.find ("protocol_error")
-             == std::string::npos
+        || route_parse_failure_result.value ().body.find ("protocol_error") == std::string::npos
         || route_parse_failure_result.value ().body.find ("invalid route id")
              == std::string::npos) {
         return 47;
     }
     if (!query_parse_failure_result || query_parse_failure_result.value ().status != 400
-        || query_parse_failure_result.value ().body.find ("protocol_error")
-             == std::string::npos
+        || query_parse_failure_result.value ().body.find ("protocol_error") == std::string::npos
         || query_parse_failure_result.value ().body.find ("invalid query page")
              == std::string::npos) {
         return 48;
@@ -1259,8 +1250,7 @@ int main (int test_argc, char **test_argv)
         return 28;
     }
     if (!protocol_mapping_result || protocol_mapping_result.value ().status != 400
-        || protocol_mapping_result.value ().body.find ("protocol_error")
-             == std::string::npos) {
+        || protocol_mapping_result.value ().body.find ("protocol_error") == std::string::npos) {
         return 29;
     }
     if (!failed_mapping_result || failed_mapping_result.value ().status != 500
@@ -1299,8 +1289,8 @@ int main (int test_argc, char **test_argv)
     }
 
     if (exit_code != 0 || !zlink_configured) {
-        std::cerr << "main app exit_code=" << exit_code
-                  << " zlink_configured=" << zlink_configured << '\n';
+        std::cerr << "main app exit_code=" << exit_code << " zlink_configured=" << zlink_configured
+                  << '\n';
         return 1;
     }
     // The focused F2 regression reuses every HTTP response assertion and
@@ -1356,8 +1346,8 @@ int main (int test_argc, char **test_argv)
     if (!app.logging ().console_enabled () || app.logging ().level () != "debug") {
         return 6;
     }
-    const auto app_host_log = std::find_if (
-      observed_logs.begin (), observed_logs.end (), [] (const auto &record) {
+    const auto app_host_log =
+      std::find_if (observed_logs.begin (), observed_logs.end (), [] (const auto &record) {
           return record.category == "app-host-test" && record.message == "startup";
       });
     if (!app.logging ().async_enabled ()
@@ -1398,44 +1388,33 @@ int main (int test_argc, char **test_argv)
     }
     auto provider = app.advanced ().services ().build_provider ();
     (void) provider.get_required<zlink::framework::actor_client_t> ();
-    auto &framework_runtime =
-      provider.get_required<zlink::framework::framework_runtime_t> ();
+    auto &framework_runtime = provider.get_required<zlink::framework::framework_runtime_t> ();
     const auto runtime_status = framework_runtime.status ();
     if (runtime_status.sequence == 0
-        || runtime_status.capacity.application_job_queue
-             .effective_processor_count == 0
-        || runtime_status.capacity.application_job_queue
-             .effective_max_queued_application_jobs == 0) {
+        || runtime_status.capacity.application_job_queue.effective_processor_count == 0
+        || runtime_status.capacity.application_job_queue.effective_max_queued_application_jobs
+             == 0) {
         return 61;
     }
-    const auto measurement_epoch =
-      runtime_status.capacity.measurement_epoch;
+    const auto measurement_epoch = runtime_status.capacity.measurement_epoch;
     framework_runtime.reset_capacity_metrics ();
     const auto reset_status = framework_runtime.status ();
     if (reset_status.capacity.measurement_epoch <= measurement_epoch
-        || reset_status.capacity.application_job_queue
-             .peak_permits_in_use
+        || reset_status.capacity.application_job_queue.peak_permits_in_use
              != reset_status.capacity.application_job_queue.permits_in_use
         || reset_status.capacity.application_job_queue.capacity_wait_count != 0
         || reset_status.capacity.application_job_queue.capacity_wait_duration
              != std::chrono::nanoseconds::zero ()) {
         return 66;
     }
-    std::promise<zlink::framework::framework_runtime_status_t>
-      observed_runtime_status;
-    auto observed_runtime_status_future =
-      observed_runtime_status.get_future ();
+    std::promise<zlink::framework::framework_runtime_status_t> observed_runtime_status;
+    auto observed_runtime_status_future = observed_runtime_status.get_future ();
     auto runtime_observation =
-      provider.get_required<zlink::framework::framework_runtime_t> ()
-        .observe (
-          1,
-          [&observed_runtime_status] (
-            const zlink::framework::observed_status_t<
-              zlink::framework::framework_runtime_status_t> &observed) {
-              observed_runtime_status.set_value (observed.status);
-          });
-    if (observed_runtime_status_future.wait_for (
-          std::chrono::seconds (1))
+      provider.get_required<zlink::framework::framework_runtime_t> ().observe (
+        1, [&observed_runtime_status] (
+             const zlink::framework::observed_status_t<zlink::framework::framework_runtime_status_t>
+               &observed) { observed_runtime_status.set_value (observed.status); });
+    if (observed_runtime_status_future.wait_for (std::chrono::seconds (1))
         != std::future_status::ready) {
         return 62;
     }
@@ -1452,8 +1431,7 @@ int main (int test_argc, char **test_argv)
         const auto core_context =
           zlink::framework::detail::zlink_builder_access_t::shared_core_context (
             core_hwm_app.advanced ().zlink ());
-        if (!core_context
-            || core_context->options ().core_hwm_memory_limit_bytes ().bytes () != 0
+        if (!core_context || core_context->options ().core_hwm_memory_limit_bytes ().bytes () != 0
             || core_context->options ().core_hwm_budget_bytes ().bytes () != 1024
             || core_context->options ().core_hwm_profile ()
                  != zlink::auto_hwm_profile::throughput) {
@@ -1461,52 +1439,39 @@ int main (int test_argc, char **test_argv)
         }
     }
     std::promise<void> allow_self_close;
-    auto allow_self_close_future =
-      allow_self_close.get_future ().share ();
+    auto allow_self_close_future = allow_self_close.get_future ().share ();
     std::promise<void> self_close_completed;
-    auto self_close_completed_future =
-      self_close_completed.get_future ();
+    auto self_close_completed_future = self_close_completed.get_future ();
     zlink::framework::runtime_observation_t *self_closing_raw = nullptr;
     auto self_closing_observation =
-      provider.get_required<zlink::framework::framework_runtime_t> ()
-        .observe (
-          1,
-          [&] (const zlink::framework::observed_status_t<
-                 zlink::framework::framework_runtime_status_t> &) {
-              allow_self_close_future.wait ();
-              self_closing_raw->close ();
-              self_close_completed.set_value ();
-          });
+      provider.get_required<zlink::framework::framework_runtime_t> ().observe (
+        1,
+        [&] (const zlink::framework::observed_status_t<zlink::framework::framework_runtime_status_t>
+               &) {
+            allow_self_close_future.wait ();
+            self_closing_raw->close ();
+            self_close_completed.set_value ();
+        });
     self_closing_raw = self_closing_observation.get ();
     allow_self_close.set_value ();
-    if (self_close_completed_future.wait_for (
-          std::chrono::seconds (1))
+    if (self_close_completed_future.wait_for (std::chrono::seconds (1))
         != std::future_status::ready) {
         return 63;
     }
     self_closing_observation.reset ();
     zlink::framework::service_provider_t detached_provider;
-    std::unique_ptr<zlink::framework::runtime_observation_t>
-      detached_observation;
+    std::unique_ptr<zlink::framework::runtime_observation_t> detached_observation;
     {
         auto short_lived_app = zlink::framework::app_t::create ();
-        short_lived_app.add_zlink_framework (
-          [] (zlink::framework::zlink_framework_options_t &) {});
-        detached_provider =
-          short_lived_app.advanced ().services ().build_provider ();
+        short_lived_app.add_zlink_framework ([] (zlink::framework::zlink_framework_options_t &) {});
+        detached_provider = short_lived_app.advanced ().services ().build_provider ();
         detached_observation =
-          detached_provider
-            .get_required<zlink::framework::framework_runtime_t> ()
-            .observe (
-              1,
-              [] (const zlink::framework::observed_status_t<
-                    zlink::framework::framework_runtime_status_t> &) {});
+          detached_provider.get_required<zlink::framework::framework_runtime_t> ().observe (
+            1, [] (const zlink::framework::observed_status_t<
+                   zlink::framework::framework_runtime_status_t> &) {});
     }
     std::this_thread::sleep_for (std::chrono::milliseconds (30));
-    if (detached_provider
-          .get_required<zlink::framework::framework_runtime_t> ()
-          .status ()
-          .sequence
+    if (detached_provider.get_required<zlink::framework::framework_runtime_t> ().status ().sequence
         == 0) {
         return 64;
     }
@@ -1519,10 +1484,9 @@ int main (int test_argc, char **test_argv)
       .create ("app-default-logger")
       .info ("resolved");
     const auto captured_records = app.logging ().captured_records ();
-    if (std::none_of (
-          captured_records.begin (), captured_records.end (), [] (const auto &record) {
-              return record.category == "app-default-logger";
-          })) {
+    if (std::none_of (captured_records.begin (), captured_records.end (), [] (const auto &record) {
+            return record.category == "app-default-logger";
+        })) {
         return 42;
     }
 
@@ -1639,8 +1603,7 @@ int main (int test_argc, char **test_argv)
               });
         }
         catch (const zlink::framework::framework_exception_t &error) {
-            rejected =
-              error.kind () == zlink::framework::framework_error_kind_t::protocol_error;
+            rejected = error.kind () == zlink::framework::framework_error_kind_t::protocol_error;
         }
         return rejected;
     };
@@ -1748,9 +1711,8 @@ int main (int test_argc, char **test_argv)
     auto *blocking_service_ptr = blocking_service.get ();
     bounded_shutdown_app.add_hosted_service (std::move (blocking_service));
     int bounded_shutdown_exit_code = -1;
-    std::thread bounded_shutdown_thread ([&] {
-        bounded_shutdown_exit_code = bounded_shutdown_app.run (1, argv);
-    });
+    std::thread bounded_shutdown_thread (
+      [&] { bounded_shutdown_exit_code = bounded_shutdown_app.run (1, argv); });
     if (!blocking_service_ptr->wait_started (std::chrono::seconds (1))) {
         blocking_service_ptr->release_stop ();
         bounded_shutdown_app.stop ();
@@ -1758,8 +1720,7 @@ int main (int test_argc, char **test_argv)
         return 70;
     }
     const auto bounded_shutdown_started = std::chrono::steady_clock::now ();
-    auto bounded_shutdown_task = bounded_shutdown_app.shutdown (
-      std::chrono::milliseconds (100));
+    auto bounded_shutdown_task = bounded_shutdown_app.shutdown (std::chrono::milliseconds (100));
     const auto &bounded_shutdown_result = bounded_shutdown_task.result ();
     const auto bounded_shutdown_elapsed =
       std::chrono::steady_clock::now () - bounded_shutdown_started;

@@ -238,7 +238,7 @@ concept typed_session_packet_handler_for =
   };
 
 template <typename TPayload, typename THandler>
-  requires typed_session_packet_handler_for<THandler, stream_t, TPayload>
+    requires typed_session_packet_handler_for<THandler, stream_t, TPayload>
 task_t<void> dispatch_typed_session_packet (THandler &handler,
                                             stream_t &stream,
                                             serializer_registry_t &serializers,
@@ -256,8 +256,7 @@ class packet_stream_session_t
     virtual task_t<void> on_connected (stream_t &stream) = 0;
     virtual task_t<void> on_disconnected (stream_t &stream) = 0;
     virtual task_t<void> on_error (stream_t &stream, const stream_error_t &error) = 0;
-    virtual task_t<void> on_actor_binding_replaced (stream_t &stream,
-                                                     std::string actor_id)
+    virtual task_t<void> on_actor_binding_replaced (stream_t &stream, std::string actor_id)
     {
         (void) stream;
         (void) actor_id;

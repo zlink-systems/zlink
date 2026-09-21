@@ -156,8 +156,8 @@ class encoded_payload_t
     static encoded_payload_t from_text (std::string text)
     {
         auto storage = std::make_unique<std::string> (std::move (text));
-        const auto data = std::as_writable_bytes (
-          std::span<char> (storage->data (), storage->size ()));
+        const auto data =
+          std::as_writable_bytes (std::span<char> (storage->data (), storage->size ()));
         encoded_payload_t payload;
         payload._message = zlink::advanced::external_message_t::from (
           data, [] (void *, void *hint) { delete static_cast<std::string *> (hint); },

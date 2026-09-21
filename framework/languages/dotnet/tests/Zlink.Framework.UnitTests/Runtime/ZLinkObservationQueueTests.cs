@@ -10,10 +10,12 @@ public sealed class ZLinkObservationQueueTests
     {
         var first = new ZLinkObservationQueue<TestStatus>(
             static status => status.Source,
-            terminalCapacity: 2);
+            terminalCapacity: 2
+        );
         var second = new ZLinkObservationQueue<TestStatus>(
             static status => status.Source,
-            terminalCapacity: 2);
+            terminalCapacity: 2
+        );
         await using var firstReader = first.ReadAllAsync().GetAsyncEnumerator();
         await using var secondReader = second.ReadAllAsync().GetAsyncEnumerator();
 
@@ -42,7 +44,8 @@ public sealed class ZLinkObservationQueueTests
     {
         var queue = new ZLinkObservationQueue<TestStatus>(
             static status => status.Source,
-            terminalCapacity: 2);
+            terminalCapacity: 2
+        );
         await using var reader = queue.ReadAllAsync().GetAsyncEnumerator();
 
         queue.Publish(new TestStatus("A", 1), terminal: false);
@@ -70,22 +73,28 @@ public sealed class ZLinkObservationQueueTests
         {
             InstrumentPublished = (instrument, owner) =>
             {
-                if (instrument.Meter.Name == ZLinkMeters.Framework
-                    && instrument.Name == "zlink.observability.events.overflow")
+                if (
+                    instrument.Meter.Name == ZLinkMeters.Framework
+                    && instrument.Name == "zlink.observability.events.overflow"
+                )
                     owner.EnableMeasurementEvents(instrument);
-            }
+            },
         };
-        listener.SetMeasurementEventCallback<long>((instrument, _, tags, _) =>
-        {
-            if (instrument.Name != "zlink.observability.events.overflow") return;
-            samples.Add(Tag(tags, "source"));
-        });
+        listener.SetMeasurementEventCallback<long>(
+            (instrument, _, tags, _) =>
+            {
+                if (instrument.Name != "zlink.observability.events.overflow")
+                    return;
+                samples.Add(Tag(tags, "source"));
+            }
+        );
         listener.Start();
 
         var queue = new ZLinkObservationQueue<TestStatus>(
             static status => status.Source,
             terminalCapacity: 1,
-            eventName: "unit-test");
+            eventName: "unit-test"
+        );
         queue.Publish(new TestStatus("A", 1), terminal: true);
         queue.Publish(new TestStatus("B", 2), terminal: true);
 
@@ -109,7 +118,9 @@ public sealed class ZLinkObservationQueueTests
                 ConnectionIntent: true,
                 Ready: true,
                 ZLinkFanoutPublisherConnectionState.Ready,
-                LastFailure: null));
+                LastFailure: null
+            )
+        );
         var fanoutTerminal = new ZLinkFanoutRuntimeEvent.PublisherChanged(
             2,
             now,
@@ -118,11 +129,13 @@ public sealed class ZLinkObservationQueueTests
             {
                 ConnectionIntent = false,
                 Ready = false,
-                State = ZLinkFanoutPublisherConnectionState.Disconnected
-            });
+                State = ZLinkFanoutPublisherConnectionState.Disconnected,
+            }
+        );
         Assert.Equal(fanoutIntermediate.SourceKey, fanoutTerminal.SourceKey);
-        var fanout = new ZLinkObservationQueue<ZLinkFanoutRuntimeEvent>(
-            static item => item.SourceKey);
+        var fanout = new ZLinkObservationQueue<ZLinkFanoutRuntimeEvent>(static item =>
+            item.SourceKey
+        );
         fanout.Publish(fanoutIntermediate, terminal: false);
         fanout.Publish(fanoutTerminal, terminal: true);
         fanout.Complete();
@@ -141,24 +154,26 @@ public sealed class ZLinkObservationQueueTests
             Ready: false,
             ZLinkClientServerServerState.Connecting,
             DescriptorSource: "test",
-            LastFailure: null);
+            LastFailure: null
+        );
         var readyServer = connectingServer with
         {
             DescriptorRevision = 11,
             Ready = true,
-            State = ZLinkClientServerServerState.Ready
+            State = ZLinkClientServerServerState.Ready,
         };
         var before = ClientSnapshot(1, now, [connectingServer]);
         var ready = ClientSnapshot(2, now, [readyServer]);
         var removed = ClientSnapshot(3, now, []);
         var clientIntermediate = Assert.Single(
-            ZLinkClientServerRuntimeService.Changes(before, ready));
-        var clientTerminal = Assert.Single(
-            ZLinkClientServerRuntimeService.Changes(ready, removed));
+            ZLinkClientServerRuntimeService.Changes(before, ready)
+        );
+        var clientTerminal = Assert.Single(ZLinkClientServerRuntimeService.Changes(ready, removed));
         Assert.Equal(clientIntermediate.SourceKey, clientTerminal.SourceKey);
         Assert.True(clientTerminal.IsTerminal);
-        var clientServer = new ZLinkObservationQueue<ZLinkClientServerRuntimeEvent>(
-            static item => item.SourceKey);
+        var clientServer = new ZLinkObservationQueue<ZLinkClientServerRuntimeEvent>(static item =>
+            item.SourceKey
+        );
         clientServer.Publish(clientIntermediate, terminal: false);
         clientServer.Publish(clientTerminal, clientTerminal.IsTerminal);
         clientServer.Complete();
@@ -174,7 +189,8 @@ public sealed class ZLinkObservationQueueTests
     {
         var queue = new ZLinkObservationQueue<TestStatus>(
             static status => status.Source,
-            terminalCapacity: 2);
+            terminalCapacity: 2
+        );
         queue.Publish(new TestStatus("A", 1), terminal: true);
         queue.Publish(new TestStatus("A", 2), terminal: false);
         await using var reader = queue.ReadAllAsync().GetAsyncEnumerator();
@@ -195,7 +211,8 @@ public sealed class ZLinkObservationQueueTests
     {
         var queue = new ZLinkObservationQueue<TestStatus>(
             static status => status.Source,
-            terminalCapacity: 1);
+            terminalCapacity: 1
+        );
         queue.Publish(new TestStatus("A", 1), terminal: true);
         queue.Publish(new TestStatus("A", 2), terminal: false);
         queue.Publish(new TestStatus("B", 3), terminal: true);
@@ -208,26 +225,29 @@ public sealed class ZLinkObservationQueueTests
         Assert.Contains(retained, item => item.Status == new TestStatus("B", 3));
         Assert.Contains(retained, item => item.Status == new TestStatus("A", 4));
         Assert.DoesNotContain(retained, item => item.Status.Sequence == 2);
-        Assert.All(retained, item =>
-        {
-            Assert.Equal(1UL, item.Loss.CoalescedCount);
-            Assert.Equal(1UL, item.Loss.DiscardedTerminalCount);
-        });
+        Assert.All(
+            retained,
+            item =>
+            {
+                Assert.Equal(1UL, item.Loss.CoalescedCount);
+                Assert.Equal(1UL, item.Loss.DiscardedTerminalCount);
+            }
+        );
     }
 
-    private static string? Tag(
-        ReadOnlySpan<KeyValuePair<string, object?>> tags,
-        string name)
+    private static string? Tag(ReadOnlySpan<KeyValuePair<string, object?>> tags, string name)
     {
         foreach (var tag in tags)
-            if (tag.Key == name) return tag.Value as string;
+            if (tag.Key == name)
+                return tag.Value as string;
         return null;
     }
 
     private static ZLinkClientServerChannelSnapshot ClientSnapshot(
         ulong sequence,
         DateTimeOffset observedAt,
-        IReadOnlyList<ZLinkClientServerServerSnapshot> servers) =>
+        IReadOnlyList<ZLinkClientServerServerSnapshot> servers
+    ) =>
         new(
             "client-server-channel",
             Zlink.Framework.Contracts.Configuration.ZLinkClientServerRole.Client,
@@ -238,7 +258,8 @@ public sealed class ZLinkObservationQueueTests
             sequence,
             observedAt,
             servers,
-            new ZLinkLocationRuntimeSnapshot("ready", observedAt, null));
+            new ZLinkLocationRuntimeSnapshot("ready", observedAt, null)
+        );
 
     private sealed record TestStatus(string Source, ulong Sequence);
 }

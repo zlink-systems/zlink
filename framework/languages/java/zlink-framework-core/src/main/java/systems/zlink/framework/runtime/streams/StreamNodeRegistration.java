@@ -1,12 +1,13 @@
 package systems.zlink.framework.runtime.streams;
 
-import java.util.List;
-import java.util.ArrayList;
 import systems.zlink.framework.configuration.ZLinkStreamSocketConfig;
 import systems.zlink.framework.errors.ZLinkConfigurationException;
-import systems.zlink.framework.runtime.mesh.MeshNodeRegistration;
 import systems.zlink.framework.runtime.internal.transport.ZLinkListenerIdentity;
+import systems.zlink.framework.runtime.mesh.MeshNodeRegistration;
 import systems.zlink.framework.streams.ZLinkSession;
+
+import java.util.ArrayList;
+import java.util.List;
 
 public final class StreamNodeRegistration {
     private final String name;
@@ -16,8 +17,7 @@ public final class StreamNodeRegistration {
     private Class<? extends ZLinkSession> sessionType;
     private boolean actorDispatchEnabled;
     private final StreamSocketConfig socketConfig = new StreamSocketConfig();
-    private final List<Class<?>> sessionPacketHandlers =
-        new ArrayList<>();
+    private final List<Class<?>> sessionPacketHandlers = new ArrayList<>();
 
     public StreamNodeRegistration(String name) {
         this.name = name;
@@ -81,24 +81,18 @@ public final class StreamNodeRegistration {
     }
 
     public String advertisedEndpoint(String actualEndpoint) {
-        return ZLinkListenerIdentity.advertisedEndpoint(
-            actualEndpoint, advertiseHost);
+        return ZLinkListenerIdentity.advertisedEndpoint(actualEndpoint, advertiseHost);
     }
 
-    void setTlsServer(
-        String certificatePath,
-        String keyPath,
-        boolean requireClientCertificate) {
+    void setTlsServer(String certificatePath, String keyPath, boolean requireClientCertificate) {
         if (certificatePath == null || certificatePath.isBlank()) {
-            throw new ZLinkConfigurationException("stream TLS certificate path is required: " + name);
+            throw new ZLinkConfigurationException(
+                    "stream TLS certificate path is required: " + name);
         }
         if (keyPath == null || keyPath.isBlank()) {
             throw new ZLinkConfigurationException("stream TLS key path is required: " + name);
         }
-        tlsServer = new TlsServerRegistration(
-            certificatePath,
-            keyPath,
-            requireClientCertificate);
+        tlsServer = new TlsServerRegistration(certificatePath, keyPath, requireClientCertificate);
     }
 
     void registerSession(Class<? extends ZLinkSession> type) {
@@ -107,7 +101,7 @@ public final class StreamNodeRegistration {
         }
         if (sessionType != null) {
             throw new ZLinkConfigurationException(
-                "stream node registers multiple sessions: " + name);
+                    "stream node registers multiple sessions: " + name);
         }
         sessionType = type;
     }
@@ -119,7 +113,7 @@ public final class StreamNodeRegistration {
     public void addSessionPacketHandler(Class<?> handlerType) {
         if (handlerType == null) {
             throw new ZLinkConfigurationException(
-                "session packet handler type is required: " + name);
+                    "session packet handler type is required: " + name);
         }
         if (sessionPacketHandlers.contains(handlerType)) {
             return;
@@ -136,7 +130,7 @@ public final class StreamNodeRegistration {
         }
         if (actorDispatchEnabled && meshNodes.isEmpty()) {
             throw new ZLinkConfigurationException(
-                "stream actor dispatch requires a configured RouteMesh: " + name);
+                    "stream actor dispatch requires a configured RouteMesh: " + name);
         }
     }
 
@@ -153,15 +147,12 @@ public final class StreamNodeRegistration {
         public void setMaxMessageSize(long value) {
             if (value < 0) {
                 throw new ZLinkConfigurationException(
-                    "MaxMessageSize must be zero or a positive byte count.");
+                        "MaxMessageSize must be zero or a positive byte count.");
             }
             maxMessageSize = value;
         }
     }
 
     public record TlsServerRegistration(
-        String certificatePath,
-        String keyPath,
-        boolean requireClientCertificate) {
-    }
+            String certificatePath, String keyPath, boolean requireClientCertificate) {}
 }

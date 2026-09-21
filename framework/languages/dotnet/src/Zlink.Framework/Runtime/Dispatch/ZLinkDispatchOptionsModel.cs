@@ -29,11 +29,14 @@ internal sealed class ZLinkDiagnosticsLevelCell
 
 internal sealed class ZLinkUnhandledDispatchOptionsModel : IZLinkUnhandledDispatchOptions
 {
-    public ZLinkUnhandledDispatchAction Request { get; set; } = ZLinkUnhandledDispatchAction.ReplyError;
+    public ZLinkUnhandledDispatchAction Request { get; set; } =
+        ZLinkUnhandledDispatchAction.ReplyError;
 
-    public ZLinkUnhandledDispatchAction Send { get; set; } = ZLinkUnhandledDispatchAction.LogAndDrop;
+    public ZLinkUnhandledDispatchAction Send { get; set; } =
+        ZLinkUnhandledDispatchAction.LogAndDrop;
 
-    public ZLinkUnhandledDispatchAction Publish { get; set; } = ZLinkUnhandledDispatchAction.LogAndDrop;
+    public ZLinkUnhandledDispatchAction Publish { get; set; } =
+        ZLinkUnhandledDispatchAction.LogAndDrop;
 }
 
 internal sealed class ZLinkDiagnosticsOptionsModel : IZLinkDiagnosticsOptions
@@ -68,7 +71,8 @@ internal sealed class ZLinkDiagnosticsOptionsModel : IZLinkDiagnosticsOptions
         if (!Enum.IsDefined(level))
             throw new ArgumentOutOfRangeException(nameof(level));
         ConfiguredLevel = level;
-        if (LiveLevel is { } cell) cell.Level = level;
+        if (LiveLevel is { } cell)
+            cell.Level = level;
         ZLinkTelemetry.SetDiagnosticsLevel(level);
         return this;
     }

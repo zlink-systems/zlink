@@ -73,9 +73,9 @@ import {
   matchesSpotLocation
 } from '../../location-store-integration';
 
-export class ZLinkInMemoryLocationStore implements
-  ZLinkDomainLocationStore,
-  ZLinkFanoutLocationStore {
+export class ZLinkInMemoryLocationStore
+  implements ZLinkDomainLocationStore, ZLinkFanoutLocationStore
+{
   private readonly leases = new Map<string, InMemoryOwnerLease>();
   private readonly meshNodes = new RowTable<ZLinkMeshNodeDescriptor>();
   private readonly clientServers = new RowTable<ZLinkClientServerServerDescriptor>();
@@ -91,42 +91,53 @@ export class ZLinkInMemoryLocationStore implements
   private readonly authority: ZLinkInMemoryAuthorityStore;
 
   constructor(private readonly now: () => Date = () => new Date()) {
-    this.authority = new ZLinkInMemoryAuthorityStore({
-      isTargetLive: (key, lifecycleGeneration, owner) => {
-        const descriptor = this.meshNodes.rows.get(meshNodeKey(key.meshName, key.rid));
-        const lease = this.leases.get(owner.ownerId);
-        return descriptor !== undefined
-          && descriptor.lifecycleGeneration === lifecycleGeneration
-          && descriptor.ownerId === owner.ownerId
-          && descriptor.leaseGeneration === owner.leaseGeneration
-          && descriptor.objectRole === ZLinkObjectRole.Server
-          && descriptor.state === ZLinkFrameworkRuntimeState.Serving
-          && lease !== undefined
-          && lease.token.leaseGeneration === owner.leaseGeneration
-          && lease.leaseExpiresAt.getTime() > this.now().getTime();
+    this.authority = new ZLinkInMemoryAuthorityStore(
+      {
+        isTargetLive: (key, lifecycleGeneration, owner) => {
+          const descriptor = this.meshNodes.rows.get(meshNodeKey(key.meshName, key.rid));
+          const lease = this.leases.get(owner.ownerId);
+          return (
+            descriptor !== undefined &&
+            descriptor.lifecycleGeneration === lifecycleGeneration &&
+            descriptor.ownerId === owner.ownerId &&
+            descriptor.leaseGeneration === owner.leaseGeneration &&
+            descriptor.objectRole === ZLinkObjectRole.Server &&
+            descriptor.state === ZLinkFrameworkRuntimeState.Serving &&
+            lease !== undefined &&
+            lease.token.leaseGeneration === owner.leaseGeneration &&
+            lease.leaseExpiresAt.getTime() > this.now().getTime()
+          );
+        },
+        placementCapacityAvailable: (key, requested, reserved, active) => {
+          const descriptor = this.meshNodes.rows.get(meshNodeKey(key.meshName, key.rid));
+          if (descriptor === undefined) return false;
+          const spotType = requested.spotType;
+          const typeCapacity =
+            spotType === undefined
+              ? undefined
+              : descriptor.populationCapacity.spotTypes.find(
+                  (candidate) =>
+                    candidate.objectKind === spotType.objectKind &&
+                    candidate.stableType === spotType.stableType
+                );
+          return (
+            active.actors + reserved.actors + requested.actors <=
+              descriptor.populationCapacity.actors.limit &&
+            active.spots + reserved.spots + requested.spots <=
+              descriptor.populationCapacity.spots.limit &&
+            (spotType === undefined ||
+              (typeCapacity !== undefined &&
+                (typeCapacity.limit === 0 ||
+                  (active.spotType?.count ?? 0) +
+                    (reserved.spotType?.count ?? 0) +
+                    spotType.count <=
+                    typeCapacity.limit)))
+          );
+        },
+        identityClaimed: (authorityKey) => this.entrySpotClaims.has(authorityKey)
       },
-      placementCapacityAvailable: (key, requested, reserved, active) => {
-        const descriptor = this.meshNodes.rows.get(meshNodeKey(key.meshName, key.rid));
-        if (descriptor === undefined) return false;
-        const spotType = requested.spotType;
-        const typeCapacity = spotType === undefined
-          ? undefined
-          : descriptor.populationCapacity.spotTypes.find(candidate =>
-              candidate.objectKind === spotType.objectKind
-              && candidate.stableType === spotType.stableType);
-        return active.actors + reserved.actors + requested.actors
-            <= descriptor.populationCapacity.actors.limit
-          && active.spots + reserved.spots + requested.spots
-            <= descriptor.populationCapacity.spots.limit
-          && (spotType === undefined
-            || typeCapacity !== undefined
-              && (typeCapacity.limit === 0
-                || (active.spotType?.count ?? 0)
-                  + (reserved.spotType?.count ?? 0)
-                  + spotType.count <= typeCapacity.limit));
-      },
-      identityClaimed: (authorityKey) => this.entrySpotClaims.has(authorityKey)
-    }, now);
+      now
+    );
   }
 
   async readAuthority(
@@ -219,14 +230,19 @@ export class ZLinkInMemoryLocationStore implements
     const current = this.meshNodes.rows.get(key);
     const lease = this.leases.get(descriptor.ownerId);
     const updatedAt = this.now();
-    if (lease === undefined
-      || lease.token.leaseGeneration !== descriptor.leaseGeneration
-      || lease.leaseExpiresAt.getTime() <= updatedAt.getTime()) {
+    if (
+      lease === undefined ||
+      lease.token.leaseGeneration !== descriptor.leaseGeneration ||
+      lease.leaseExpiresAt.getTime() <= updatedAt.getTime()
+    ) {
       return rejectedConflict();
     }
     if (current === undefined) {
-      if (intent !== ZLinkLocationWriteIntent.NewClaim
-        && intent !== ZLinkLocationWriteIntent.Takeover) return ignoredStale();
+      if (
+        intent !== ZLinkLocationWriteIntent.NewClaim &&
+        intent !== ZLinkLocationWriteIntent.Takeover
+      )
+        return ignoredStale();
       if (!this.claimEntrySpotIdentity(descriptor, key)) return rejectedConflict();
       this.meshNodes.rows.set(key, { ...descriptor, updatedAt });
       this.meshNodes.generations.set(key, 1n);
@@ -234,15 +250,17 @@ export class ZLinkInMemoryLocationStore implements
       return stored(1n, updatedAt);
     }
     const currentLease = this.leases.get(current.ownerId);
-    if (canTakeOver(
-      current.ownerId,
-      current.leaseGeneration,
-      currentLease,
-      descriptor.ownerId,
-      descriptor.leaseGeneration,
-      intent,
-      updatedAt
-    )) {
+    if (
+      canTakeOver(
+        current.ownerId,
+        current.leaseGeneration,
+        currentLease,
+        descriptor.ownerId,
+        descriptor.leaseGeneration,
+        intent,
+        updatedAt
+      )
+    ) {
       if (!this.claimEntrySpotIdentity(descriptor, key)) return rejectedConflict();
       this.releaseEntrySpotIdentity(current);
       const next = (this.meshNodes.generations.get(key) ?? 0n) + 1n;
@@ -251,18 +269,22 @@ export class ZLinkInMemoryLocationStore implements
       this.bump(ZLinkLocationKind.Peer, descriptor.meshName);
       return stored(next, updatedAt);
     }
-    if (current.ownerId === descriptor.ownerId
-      && current.leaseGeneration === descriptor.leaseGeneration
-      && current.lifecycleGeneration === descriptor.lifecycleGeneration
-      && descriptor.descriptorRevision === current.descriptorRevision
-      && meshNodeDescriptorFingerprint(current) === meshNodeDescriptorFingerprint(descriptor)) {
+    if (
+      current.ownerId === descriptor.ownerId &&
+      current.leaseGeneration === descriptor.leaseGeneration &&
+      current.lifecycleGeneration === descriptor.lifecycleGeneration &&
+      descriptor.descriptorRevision === current.descriptorRevision &&
+      meshNodeDescriptorFingerprint(current) === meshNodeDescriptorFingerprint(descriptor)
+    ) {
       return stored(this.meshNodes.generations.get(key) ?? 1n, current.updatedAt);
     }
-    if (current.ownerId !== descriptor.ownerId
-      || current.leaseGeneration !== descriptor.leaseGeneration
-      || current.lifecycleGeneration !== descriptor.lifecycleGeneration
-      || descriptor.descriptorRevision <= current.descriptorRevision
-      || meshNodeImmutableFingerprint(current) !== meshNodeImmutableFingerprint(descriptor)) {
+    if (
+      current.ownerId !== descriptor.ownerId ||
+      current.leaseGeneration !== descriptor.leaseGeneration ||
+      current.lifecycleGeneration !== descriptor.lifecycleGeneration ||
+      descriptor.descriptorRevision <= current.descriptorRevision ||
+      meshNodeImmutableFingerprint(current) !== meshNodeImmutableFingerprint(descriptor)
+    ) {
       return ignoredStale();
     }
     this.meshNodes.rows.set(key, { ...descriptor, updatedAt });
@@ -277,9 +299,9 @@ export class ZLinkInMemoryLocationStore implements
     const encoded = meshNodeKey(key.meshName, key.rid);
     const current = this.meshNodes.rows.get(encoded);
     if (
-      current === undefined
-      || current.ownerId !== owner.ownerId
-      || current.leaseGeneration !== owner.leaseGeneration
+      current === undefined ||
+      current.ownerId !== owner.ownerId ||
+      current.leaseGeneration !== owner.leaseGeneration
     ) {
       return ZLinkLocationWriteStatus.IgnoredStale;
     }
@@ -302,7 +324,7 @@ export class ZLinkInMemoryLocationStore implements
         const objectCapabilities = row.objectCapabilities.map((capability) => {
           return { ...capability };
         });
-        const spotTypes = row.populationCapacity.spotTypes.map(capacity => {
+        const spotTypes = row.populationCapacity.spotTypes.map((capacity) => {
           const usage = this.authority.capacityUsage(
             descriptor,
             row.lifecycleGeneration,
@@ -312,9 +334,12 @@ export class ZLinkInMemoryLocationStore implements
           return { ...capacity, ...usage };
         });
         const actors = this.authority.capacityUsage(
-          descriptor, row.lifecycleGeneration, 'actor', '');
-        const spots = this.authority.capacityUsage(
-          descriptor, row.lifecycleGeneration, 'spot', '');
+          descriptor,
+          row.lifecycleGeneration,
+          'actor',
+          ''
+        );
+        const spots = this.authority.capacityUsage(descriptor, row.lifecycleGeneration, 'spot', '');
         return {
           ...row,
           objectCapabilities,
@@ -325,7 +350,7 @@ export class ZLinkInMemoryLocationStore implements
           }
         };
       });
-    return pageValues(rows, page ?? {}, row => meshNodeKey(row.meshName, row.rid));
+    return pageValues(rows, page ?? {}, (row) => meshNodeKey(row.meshName, row.rid));
   }
 
   async updateClientServer(
@@ -339,14 +364,19 @@ export class ZLinkInMemoryLocationStore implements
     const current = this.clientServers.rows.get(key);
     const lease = this.leases.get(descriptor.ownerId);
     const updatedAt = this.now();
-    if (lease === undefined
-      || lease.token.leaseGeneration !== descriptor.leaseGeneration
-      || lease.leaseExpiresAt.getTime() <= updatedAt.getTime()) {
+    if (
+      lease === undefined ||
+      lease.token.leaseGeneration !== descriptor.leaseGeneration ||
+      lease.leaseExpiresAt.getTime() <= updatedAt.getTime()
+    ) {
       return rejectedConflict();
     }
     if (current === undefined) {
-      if (intent !== ZLinkLocationWriteIntent.NewClaim
-        && intent !== ZLinkLocationWriteIntent.Takeover) return ignoredStale();
+      if (
+        intent !== ZLinkLocationWriteIntent.NewClaim &&
+        intent !== ZLinkLocationWriteIntent.Takeover
+      )
+        return ignoredStale();
       const generation = (this.clientServers.generations.get(key) ?? 0n) + 1n;
       this.clientServers.rows.set(key, { ...descriptor, updatedAt });
       this.clientServers.generations.set(key, generation);
@@ -354,29 +384,35 @@ export class ZLinkInMemoryLocationStore implements
       return stored(generation, updatedAt);
     }
     const currentLease = this.leases.get(current.ownerId);
-    if (canTakeOver(
-      current.ownerId,
-      current.leaseGeneration,
-      currentLease,
-      descriptor.ownerId,
-      descriptor.leaseGeneration,
-      intent,
-      updatedAt
-    )) {
+    if (
+      canTakeOver(
+        current.ownerId,
+        current.leaseGeneration,
+        currentLease,
+        descriptor.ownerId,
+        descriptor.leaseGeneration,
+        intent,
+        updatedAt
+      )
+    ) {
       const generation = (this.clientServers.generations.get(key) ?? 0n) + 1n;
       this.clientServers.rows.set(key, { ...descriptor, updatedAt });
       this.clientServers.generations.set(key, generation);
       this.bump(ZLinkLocationKind.ClientServer, descriptor.channelName);
       return stored(generation, updatedAt);
     }
-    if (clientServerDescriptorFingerprint(current) === clientServerDescriptorFingerprint(descriptor)) {
+    if (
+      clientServerDescriptorFingerprint(current) === clientServerDescriptorFingerprint(descriptor)
+    ) {
       return stored(this.clientServers.generations.get(key) ?? 1n, current.updatedAt);
     }
-    if (current.ownerId !== descriptor.ownerId
-      || current.leaseGeneration !== descriptor.leaseGeneration
-      || current.lifecycleGeneration !== descriptor.lifecycleGeneration
-      || descriptor.descriptorRevision <= current.descriptorRevision
-      || clientServerImmutableFingerprint(current) !== clientServerImmutableFingerprint(descriptor)) {
+    if (
+      current.ownerId !== descriptor.ownerId ||
+      current.leaseGeneration !== descriptor.leaseGeneration ||
+      current.lifecycleGeneration !== descriptor.lifecycleGeneration ||
+      descriptor.descriptorRevision <= current.descriptorRevision ||
+      clientServerImmutableFingerprint(current) !== clientServerImmutableFingerprint(descriptor)
+    ) {
       return ignoredStale();
     }
     this.clientServers.rows.set(key, { ...descriptor, updatedAt });
@@ -392,9 +428,11 @@ export class ZLinkInMemoryLocationStore implements
     signal?.throwIfAborted();
     const encoded = clientServerKey(key.channelName, key.serverRid);
     const current = this.clientServers.rows.get(encoded);
-    if (current === undefined
-      || current.ownerId !== owner.ownerId
-      || current.leaseGeneration !== owner.leaseGeneration) {
+    if (
+      current === undefined ||
+      current.ownerId !== owner.ownerId ||
+      current.leaseGeneration !== owner.leaseGeneration
+    ) {
       return ZLinkLocationWriteStatus.IgnoredStale;
     }
     this.clientServers.rows.delete(encoded);
@@ -422,44 +460,55 @@ export class ZLinkInMemoryLocationStore implements
     const current = this.fanoutPublishers.rows.get(key);
     const lease = this.leases.get(descriptor.ownerId);
     const updatedAt = this.now();
-    if (lease === undefined
-      || lease.token.leaseGeneration !== descriptor.leaseGeneration
-      || lease.leaseExpiresAt.getTime() <= updatedAt.getTime()) {
+    if (
+      lease === undefined ||
+      lease.token.leaseGeneration !== descriptor.leaseGeneration ||
+      lease.leaseExpiresAt.getTime() <= updatedAt.getTime()
+    ) {
       return rejectedConflict();
     }
     if (current === undefined) {
-      if (intent !== ZLinkLocationWriteIntent.NewClaim
-        && intent !== ZLinkLocationWriteIntent.Takeover) return ignoredStale();
+      if (
+        intent !== ZLinkLocationWriteIntent.NewClaim &&
+        intent !== ZLinkLocationWriteIntent.Takeover
+      )
+        return ignoredStale();
       const generation = (this.fanoutPublishers.generations.get(key) ?? 0n) + 1n;
       this.fanoutPublishers.rows.set(key, { ...descriptor, updatedAt });
       this.fanoutPublishers.generations.set(key, generation);
       return stored(generation, updatedAt);
     }
     const currentLease = this.leases.get(current.ownerId);
-    if (canTakeOver(
-      current.ownerId,
-      current.leaseGeneration,
-      currentLease,
-      descriptor.ownerId,
-      descriptor.leaseGeneration,
-      intent,
-      updatedAt
-    )) {
+    if (
+      canTakeOver(
+        current.ownerId,
+        current.leaseGeneration,
+        currentLease,
+        descriptor.ownerId,
+        descriptor.leaseGeneration,
+        intent,
+        updatedAt
+      )
+    ) {
       const generation = (this.fanoutPublishers.generations.get(key) ?? 0n) + 1n;
       this.fanoutPublishers.rows.set(key, { ...descriptor, updatedAt });
       this.fanoutPublishers.generations.set(key, generation);
       return stored(generation, updatedAt);
     }
-    if (fanoutPublisherDescriptorFingerprint(current)
-      === fanoutPublisherDescriptorFingerprint(descriptor)) {
+    if (
+      fanoutPublisherDescriptorFingerprint(current) ===
+      fanoutPublisherDescriptorFingerprint(descriptor)
+    ) {
       return stored(this.fanoutPublishers.generations.get(key) ?? 1n, current.updatedAt);
     }
-    if (current.ownerId !== descriptor.ownerId
-      || current.leaseGeneration !== descriptor.leaseGeneration
-      || current.lifecycleGeneration !== descriptor.lifecycleGeneration
-      || descriptor.descriptorRevision <= current.descriptorRevision
-      || fanoutPublisherImmutableFingerprint(current)
-        !== fanoutPublisherImmutableFingerprint(descriptor)) {
+    if (
+      current.ownerId !== descriptor.ownerId ||
+      current.leaseGeneration !== descriptor.leaseGeneration ||
+      current.lifecycleGeneration !== descriptor.lifecycleGeneration ||
+      descriptor.descriptorRevision <= current.descriptorRevision ||
+      fanoutPublisherImmutableFingerprint(current) !==
+        fanoutPublisherImmutableFingerprint(descriptor)
+    ) {
       return ignoredStale();
     }
     this.fanoutPublishers.rows.set(key, { ...descriptor, updatedAt });
@@ -474,9 +523,11 @@ export class ZLinkInMemoryLocationStore implements
     signal?.throwIfAborted();
     const encoded = fanoutPublisherKey(key.channelName, key.publisherRid);
     const current = this.fanoutPublishers.rows.get(encoded);
-    if (current === undefined
-      || current.ownerId !== owner.ownerId
-      || current.leaseGeneration !== owner.leaseGeneration) {
+    if (
+      current === undefined ||
+      current.ownerId !== owner.ownerId ||
+      current.leaseGeneration !== owner.leaseGeneration
+    ) {
       return ZLinkLocationWriteStatus.IgnoredStale;
     }
     this.fanoutPublishers.rows.delete(encoded);
@@ -522,7 +573,10 @@ export class ZLinkInMemoryLocationStore implements
     );
   }
 
-  async removePeer(key: ZLinkPeerLocationKey, owner: ZLinkLocationOwnerToken): Promise<ZLinkLocationWriteResult> {
+  async removePeer(
+    key: ZLinkPeerLocationKey,
+    owner: ZLinkLocationOwnerToken
+  ): Promise<ZLinkLocationWriteResult> {
     return this.remove(
       this.peers,
       ZLinkLocationKeyCodec.encodePeerKey(key),
@@ -542,24 +596,33 @@ export class ZLinkInMemoryLocationStore implements
     spot: ZLinkSpotLocation,
     intent: ZLinkLocationWriteIntent
   ): Promise<ZLinkLocationWriteResult> {
-    const key = ZLinkLocationKeyCodec.encodeSpotKey({ meshName: spot.meshName, spotId: spot.spotId });
+    const key = ZLinkLocationKeyCodec.encodeSpotKey({
+      meshName: spot.meshName,
+      spotId: spot.spotId
+    });
     const updatedAt = this.now();
     const current = this.spots.rows.get(key);
-    if (intent === ZLinkLocationWriteIntent.NewClaim
-      && current !== undefined
-      && this.isOwnerLive(current.ownerId, updatedAt)) {
+    if (
+      intent === ZLinkLocationWriteIntent.NewClaim &&
+      current !== undefined &&
+      this.isOwnerLive(current.ownerId, updatedAt)
+    ) {
       return rejectedConflict();
     }
     if (intent === ZLinkLocationWriteIntent.Renew) {
-      if (current === undefined
-        || current.ownerId !== spot.ownerId
-        || current.leaseGeneration !== spot.leaseGeneration) return ignoredStale();
+      if (
+        current === undefined ||
+        current.ownerId !== spot.ownerId ||
+        current.leaseGeneration !== spot.leaseGeneration
+      )
+        return ignoredStale();
       this.spots.rows.set(key, { ...spot, updatedAt });
       this.bump(ZLinkLocationKind.Spot, spot.meshName);
       return stored(this.spots.generations.get(key) ?? 0n, updatedAt);
     }
-    if (current !== undefined
-      && !canTakeOver(
+    if (
+      current !== undefined &&
+      !canTakeOver(
         current.ownerId,
         current.leaseGeneration,
         this.leases.get(current.ownerId),
@@ -567,7 +630,9 @@ export class ZLinkInMemoryLocationStore implements
         spot.leaseGeneration,
         intent,
         updatedAt
-      )) return rejectedConflict();
+      )
+    )
+      return rejectedConflict();
     const generation = (this.spots.generations.get(key) ?? 0n) + 1n;
     this.spots.generations.set(key, generation);
     this.spots.rows.set(key, { ...spot, updatedAt });
@@ -575,13 +640,18 @@ export class ZLinkInMemoryLocationStore implements
     return stored(generation, updatedAt);
   }
 
-  async removeSpot(key: ZLinkSpotLocationKey, owner: ZLinkLocationOwnerToken): Promise<ZLinkLocationWriteStatus> {
+  async removeSpot(
+    key: ZLinkSpotLocationKey,
+    owner: ZLinkLocationOwnerToken
+  ): Promise<ZLinkLocationWriteStatus> {
     const encoded = ZLinkLocationKeyCodec.encodeSpotKey(key);
     const current = this.spots.rows.get(encoded);
     const leaseGeneration = current?.leaseGeneration ?? this.spots.generations.get(encoded);
-    if (current === undefined
-      || current.ownerId !== owner.ownerId
-      || leaseGeneration !== owner.leaseGeneration) {
+    if (
+      current === undefined ||
+      current.ownerId !== owner.ownerId ||
+      leaseGeneration !== owner.leaseGeneration
+    ) {
       return ZLinkLocationWriteStatus.IgnoredStale;
     }
     this.spots.rows.delete(encoded);
@@ -604,24 +674,33 @@ export class ZLinkInMemoryLocationStore implements
     actor: ZLinkActorLocation,
     intent: ZLinkLocationWriteIntent
   ): Promise<ZLinkLocationWriteResult> {
-    const key = ZLinkLocationKeyCodec.encodeActorKey({ meshName: actor.meshName, actorId: actor.actorId });
+    const key = ZLinkLocationKeyCodec.encodeActorKey({
+      meshName: actor.meshName,
+      actorId: actor.actorId
+    });
     const updatedAt = this.now();
     const current = this.actors.rows.get(key);
-    if (intent === ZLinkLocationWriteIntent.NewClaim
-      && current !== undefined
-      && this.isOwnerLive(current.ownerId, updatedAt)) {
+    if (
+      intent === ZLinkLocationWriteIntent.NewClaim &&
+      current !== undefined &&
+      this.isOwnerLive(current.ownerId, updatedAt)
+    ) {
       return rejectedConflict();
     }
     if (intent === ZLinkLocationWriteIntent.Renew) {
-      if (current === undefined
-        || current.ownerId !== actor.ownerId
-        || current.leaseGeneration !== actor.leaseGeneration) return ignoredStale();
+      if (
+        current === undefined ||
+        current.ownerId !== actor.ownerId ||
+        current.leaseGeneration !== actor.leaseGeneration
+      )
+        return ignoredStale();
       this.actors.rows.set(key, { ...actor, updatedAt });
       this.bump(ZLinkLocationKind.Actor, actor.meshName);
       return stored(this.actors.generations.get(key) ?? 0n, updatedAt);
     }
-    if (current !== undefined
-      && !canTakeOver(
+    if (
+      current !== undefined &&
+      !canTakeOver(
         current.ownerId,
         current.leaseGeneration,
         this.leases.get(current.ownerId),
@@ -629,7 +708,9 @@ export class ZLinkInMemoryLocationStore implements
         actor.leaseGeneration,
         intent,
         updatedAt
-      )) return rejectedConflict();
+      )
+    )
+      return rejectedConflict();
     const generation = (this.actors.generations.get(key) ?? 0n) + 1n;
     this.actors.generations.set(key, generation);
     this.actors.rows.set(key, { ...actor, updatedAt });
@@ -637,13 +718,18 @@ export class ZLinkInMemoryLocationStore implements
     return stored(generation, updatedAt);
   }
 
-  async removeActor(key: ZLinkActorLocationKey, owner: ZLinkLocationOwnerToken): Promise<ZLinkLocationWriteStatus> {
+  async removeActor(
+    key: ZLinkActorLocationKey,
+    owner: ZLinkLocationOwnerToken
+  ): Promise<ZLinkLocationWriteStatus> {
     const encoded = ZLinkLocationKeyCodec.encodeActorKey(key);
     const current = this.actors.rows.get(encoded);
     const leaseGeneration = current?.leaseGeneration ?? this.actors.generations.get(encoded);
-    if (current === undefined
-      || current.ownerId !== owner.ownerId
-      || leaseGeneration !== owner.leaseGeneration) {
+    if (
+      current === undefined ||
+      current.ownerId !== owner.ownerId ||
+      leaseGeneration !== owner.leaseGeneration
+    ) {
       return ZLinkLocationWriteStatus.IgnoredStale;
     }
     this.actors.rows.delete(encoded);
@@ -668,7 +754,10 @@ export class ZLinkInMemoryLocationStore implements
   ): Promise<ZLinkLocationWriteResult> {
     return this.write(
       this.routes,
-      ZLinkLocationKeyCodec.encodeRouteKey({ routeKind: route.routeKind, routeKey: route.routeKey }),
+      ZLinkLocationKeyCodec.encodeRouteKey({
+        routeKind: route.routeKind,
+        routeKey: route.routeKey
+      }),
       route,
       intent,
       route.ownerId,
@@ -681,7 +770,10 @@ export class ZLinkInMemoryLocationStore implements
     );
   }
 
-  async removeRoute(key: ZLinkRouteLocationKey, owner: ZLinkLocationOwnerToken): Promise<ZLinkLocationWriteResult> {
+  async removeRoute(
+    key: ZLinkRouteLocationKey,
+    owner: ZLinkLocationOwnerToken
+  ): Promise<ZLinkLocationWriteResult> {
     return this.remove(
       this.routes,
       ZLinkLocationKeyCodec.encodeRouteKey(key),
@@ -752,7 +844,13 @@ export class ZLinkInMemoryLocationStore implements
   ): Promise<ZLinkActorTransferWriteResult> {
     signal?.throwIfAborted();
     return this.transitionActorTransfer(
-      meshName, actorId, transferId, recoveryOwnerId, 'prepared', 'committed', false
+      meshName,
+      actorId,
+      transferId,
+      recoveryOwnerId,
+      'prepared',
+      'committed',
+      false
     );
   }
 
@@ -765,7 +863,13 @@ export class ZLinkInMemoryLocationStore implements
   ): Promise<ZLinkActorTransferWriteResult> {
     signal?.throwIfAborted();
     return this.transitionActorTransfer(
-      meshName, actorId, transferId, recoveryOwnerId, 'committed', 'activated', true
+      meshName,
+      actorId,
+      transferId,
+      recoveryOwnerId,
+      'committed',
+      'activated',
+      true
     );
   }
 
@@ -778,7 +882,13 @@ export class ZLinkInMemoryLocationStore implements
   ): Promise<ZLinkActorTransferWriteResult> {
     signal?.throwIfAborted();
     return this.transitionActorTransfer(
-      meshName, actorId, transferId, recoveryOwnerId, 'prepared', 'aborted', true
+      meshName,
+      actorId,
+      transferId,
+      recoveryOwnerId,
+      'prepared',
+      'aborted',
+      true
     );
   }
 
@@ -793,7 +903,9 @@ export class ZLinkInMemoryLocationStore implements
     signal?.throwIfAborted();
     validateTransferIdentity(meshName, actorId, transferId);
     validateTransferLease(successorOwnerId, recoveryLeaseTtlMs);
-    const record = this.actorTransfers.get(actorTransferKey(meshName, actorId))?.records.get(transferId);
+    const record = this.actorTransfers
+      .get(actorTransferKey(meshName, actorId))
+      ?.records.get(transferId);
     if (record === undefined) return transferResult('notFound');
     if (record.state !== 'prepared' && record.state !== 'committed') {
       return transferResult('invalidState');
@@ -819,7 +931,9 @@ export class ZLinkInMemoryLocationStore implements
   ): Promise<ZLinkActorTransferRecord | undefined> {
     signal?.throwIfAborted();
     const slot = this.actorTransfers.get(actorTransferKey(meshName, actorId));
-    return slot?.activeTransferId === undefined ? undefined : slot.records.get(slot.activeTransferId);
+    return slot?.activeTransferId === undefined
+      ? undefined
+      : slot.records.get(slot.activeTransferId);
   }
 
   async claimOwnerLease(
@@ -843,10 +957,7 @@ export class ZLinkInMemoryLocationStore implements
     return { kind: 'claimed', token, leaseExpiresAt, storeNow };
   }
 
-  async readOwnerLease(
-    ownerId: string,
-    signal?: AbortSignal
-  ): Promise<ZLinkOwnerLeaseReadResult> {
+  async readOwnerLease(ownerId: string, signal?: AbortSignal): Promise<ZLinkOwnerLeaseReadResult> {
     signal?.throwIfAborted();
     if (ownerId.trim().length === 0) throw new TypeError('ownerId is required.');
     const storeNow = this.now();
@@ -873,9 +984,9 @@ export class ZLinkInMemoryLocationStore implements
     const storeNow = this.now();
     const current = this.leases.get(token.ownerId);
     if (
-      current === undefined
-      || current.leaseExpiresAt.getTime() <= storeNow.getTime()
-      || current.token.leaseGeneration !== token.leaseGeneration
+      current === undefined ||
+      current.leaseExpiresAt.getTime() <= storeNow.getTime() ||
+      current.token.leaseGeneration !== token.leaseGeneration
     ) {
       return { kind: 'stale' };
     }
@@ -897,15 +1008,14 @@ export class ZLinkInMemoryLocationStore implements
     return 'released';
   }
 
-  async removeAllByOwner(
-    owner: ZLinkLocationOwnerToken,
-    signal?: AbortSignal
-  ): Promise<bigint> {
+  async removeAllByOwner(owner: ZLinkLocationOwnerToken, signal?: AbortSignal): Promise<bigint> {
     signal?.throwIfAborted();
     const lease = this.leases.get(owner.ownerId);
-    if (lease === undefined
-      || lease.token.leaseGeneration !== owner.leaseGeneration
-      || lease.leaseExpiresAt.getTime() <= this.now().getTime()) {
+    if (
+      lease === undefined ||
+      lease.token.leaseGeneration !== owner.leaseGeneration ||
+      lease.leaseExpiresAt.getTime() <= this.now().getTime()
+    ) {
       return 0n;
     }
     const ownerId = owner.ownerId;
@@ -917,10 +1027,34 @@ export class ZLinkInMemoryLocationStore implements
       this.bump(ZLinkLocationKind.Peer, row.meshName);
       removed++;
     }
-    removed += this.removeByOwner(this.peers, ownerId, (row) => row.ownerId, ZLinkLocationKind.Peer, (row) => row.meshName);
-    removed += this.removeByOwner(this.spots, ownerId, (row) => row.ownerId, ZLinkLocationKind.Spot, (row) => row.meshName);
-    removed += this.removeByOwner(this.actors, ownerId, (row) => row.ownerId, ZLinkLocationKind.Actor, () => undefined);
-    removed += this.removeByOwner(this.routes, ownerId, (row) => row.ownerId, ZLinkLocationKind.Route, () => undefined);
+    removed += this.removeByOwner(
+      this.peers,
+      ownerId,
+      (row) => row.ownerId,
+      ZLinkLocationKind.Peer,
+      (row) => row.meshName
+    );
+    removed += this.removeByOwner(
+      this.spots,
+      ownerId,
+      (row) => row.ownerId,
+      ZLinkLocationKind.Spot,
+      (row) => row.meshName
+    );
+    removed += this.removeByOwner(
+      this.actors,
+      ownerId,
+      (row) => row.ownerId,
+      ZLinkLocationKind.Actor,
+      () => undefined
+    );
+    removed += this.removeByOwner(
+      this.routes,
+      ownerId,
+      (row) => row.ownerId,
+      ZLinkLocationKind.Route,
+      () => undefined
+    );
     removed += this.removeByOwner(
       this.clientServers,
       ownerId,
@@ -940,9 +1074,11 @@ export class ZLinkInMemoryLocationStore implements
     const authorityKey = encodeAuthorityKey('user_spot', descriptor.entrySpotId).value;
     const current = this.entrySpotClaims.get(authorityKey);
     if (current !== undefined) {
-      if (current.descriptorKey !== descriptorKey
-        || current.ownerId !== descriptor.ownerId
-        || current.lifecycleGeneration !== descriptor.lifecycleGeneration) {
+      if (
+        current.descriptorKey !== descriptorKey ||
+        current.ownerId !== descriptor.ownerId ||
+        current.lifecycleGeneration !== descriptor.lifecycleGeneration
+      ) {
         return false;
       }
       this.entrySpotClaims.set(authorityKey, {
@@ -964,9 +1100,11 @@ export class ZLinkInMemoryLocationStore implements
     if (descriptor.entrySpotId === undefined) return;
     const authorityKey = encodeAuthorityKey('user_spot', descriptor.entrySpotId).value;
     const current = this.entrySpotClaims.get(authorityKey);
-    if (current?.ownerId === descriptor.ownerId
-      && current.leaseGeneration === descriptor.leaseGeneration
-      && current.lifecycleGeneration === descriptor.lifecycleGeneration) {
+    if (
+      current?.ownerId === descriptor.ownerId &&
+      current.leaseGeneration === descriptor.leaseGeneration &&
+      current.lifecycleGeneration === descriptor.lifecycleGeneration
+    ) {
       this.entrySpotClaims.delete(authorityKey);
     }
   }
@@ -991,13 +1129,18 @@ export class ZLinkInMemoryLocationStore implements
     const updatedAt = this.now();
     const current = table.rows.get(key);
 
-    if (intent === ZLinkLocationWriteIntent.NewClaim
-      && current !== undefined
-      && this.isOwnerLive(ownerOf(current), updatedAt)) {
+    if (
+      intent === ZLinkLocationWriteIntent.NewClaim &&
+      current !== undefined &&
+      this.isOwnerLive(ownerOf(current), updatedAt)
+    ) {
       return rejectedConflict();
     }
 
-    if (intent === ZLinkLocationWriteIntent.NewClaim || intent === ZLinkLocationWriteIntent.Takeover) {
+    if (
+      intent === ZLinkLocationWriteIntent.NewClaim ||
+      intent === ZLinkLocationWriteIntent.Takeover
+    ) {
       const next = (table.generations.get(key) ?? 0n) + 1n;
       table.generations.set(key, next);
       table.rows.set(key, finalize(row, next, updatedAt));
@@ -1005,9 +1148,11 @@ export class ZLinkInMemoryLocationStore implements
       return stored(next, updatedAt);
     }
 
-    if (current !== undefined
-      && ownerOf(current) === ownerId
-      && (generation === 0n || generationOf(current) === generation)) {
+    if (
+      current !== undefined &&
+      ownerOf(current) === ownerId &&
+      (generation === 0n || generationOf(current) === generation)
+    ) {
       table.rows.set(key, finalize(row, generation, updatedAt));
       this.bump(kind, meshName);
       return stored(table.generations.get(key) ?? generation, updatedAt);
@@ -1053,8 +1198,11 @@ export class ZLinkInMemoryLocationStore implements
     meshName: string | undefined
   ): ZLinkLocationWriteResult {
     const current = table.rows.get(key);
-    if (current === undefined || ownerOf(current) !== owner.ownerId
-      || generationOf(current) !== owner.leaseGeneration) {
+    if (
+      current === undefined ||
+      ownerOf(current) !== owner.ownerId ||
+      generationOf(current) !== owner.leaseGeneration
+    ) {
       return ignoredStale();
     }
 
@@ -1133,10 +1281,16 @@ function validateMeshNodeDescriptor(descriptor: ZLinkMeshNodeDescriptor): void {
     throw new TypeError('Only Object Server descriptors may publish an Entry Spot ID.');
   }
   const maxGeneration = 0x7fff_ffff_ffff_ffffn;
-  if (descriptor.lifecycleGeneration < 1n || descriptor.lifecycleGeneration > maxGeneration
-    || descriptor.descriptorRevision < 1n || descriptor.descriptorRevision > maxGeneration
-    || descriptor.leaseGeneration < 1n || descriptor.leaseGeneration > maxGeneration
-    || descriptor.applicationVersion < 0n || descriptor.applicationVersion > maxGeneration) {
+  if (
+    descriptor.lifecycleGeneration < 1n ||
+    descriptor.lifecycleGeneration > maxGeneration ||
+    descriptor.descriptorRevision < 1n ||
+    descriptor.descriptorRevision > maxGeneration ||
+    descriptor.leaseGeneration < 1n ||
+    descriptor.leaseGeneration > maxGeneration ||
+    descriptor.applicationVersion < 0n ||
+    descriptor.applicationVersion > maxGeneration
+  ) {
     throw new RangeError('MeshNode descriptor generations are invalid.');
   }
   const capacities = [
@@ -1144,22 +1298,26 @@ function validateMeshNodeDescriptor(descriptor: ZLinkMeshNodeDescriptor): void {
     descriptor.populationCapacity.spots,
     ...descriptor.populationCapacity.spotTypes
   ];
-  const values = capacities.flatMap(capacity =>
-    [capacity.active, capacity.reserved, capacity.limit]);
-  if (values.some(value => !Number.isSafeInteger(value) || value < 0)
-    || capacities.some(capacity =>
-      capacity.active + capacity.reserved > capacity.limit
-      && capacity.limit !== 0)
-    || !Number.isSafeInteger(descriptor.activationConcurrency.active)
-    || descriptor.activationConcurrency.active < 0
-    || !Number.isSafeInteger(descriptor.activationConcurrency.limit)
-    || descriptor.activationConcurrency.limit < 1
-    || descriptor.activationConcurrency.active > descriptor.activationConcurrency.limit
-    || descriptor.placementWeight < 0
-    || descriptor.placementWeight > 10_000
-    || descriptor.objectCapabilities.length > 1024
-    || (descriptor.objectRole !== ZLinkObjectRole.Server
-      && descriptor.objectCapabilities.length !== 0)) {
+  const values = capacities.flatMap((capacity) => [
+    capacity.active,
+    capacity.reserved,
+    capacity.limit
+  ]);
+  if (
+    values.some((value) => !Number.isSafeInteger(value) || value < 0) ||
+    capacities.some(
+      (capacity) => capacity.active + capacity.reserved > capacity.limit && capacity.limit !== 0
+    ) ||
+    !Number.isSafeInteger(descriptor.activationConcurrency.active) ||
+    descriptor.activationConcurrency.active < 0 ||
+    !Number.isSafeInteger(descriptor.activationConcurrency.limit) ||
+    descriptor.activationConcurrency.limit < 1 ||
+    descriptor.activationConcurrency.active > descriptor.activationConcurrency.limit ||
+    descriptor.placementWeight < 0 ||
+    descriptor.placementWeight > 10_000 ||
+    descriptor.objectCapabilities.length > 1024 ||
+    (descriptor.objectRole !== ZLinkObjectRole.Server && descriptor.objectCapabilities.length !== 0)
+  ) {
     throw new RangeError('MeshNode object capacity is invalid.');
   }
   const keys = new Set<string>();
@@ -1173,8 +1331,11 @@ function validateMeshNodeDescriptor(descriptor: ZLinkMeshNodeDescriptor): void {
     if ((capability.policy === 'snapshot') !== capability.hasSnapshotAdapter) {
       throw new TypeError('Snapshot adapter presence does not match the maintenance policy.');
     }
-    if (!Number.isSafeInteger(capability.limit) || capability.limit < 0
-      || capability.objectKind === 'actor' && capability.limit !== 0) {
+    if (
+      !Number.isSafeInteger(capability.limit) ||
+      capability.limit < 0 ||
+      (capability.objectKind === 'actor' && capability.limit !== 0)
+    ) {
       throw new RangeError('MeshNode capability limit is invalid.');
     }
   }
@@ -1186,11 +1347,10 @@ function validDescriptorText(value: string): boolean {
 }
 
 function meshNodeImmutableFingerprint(descriptor: ZLinkMeshNodeDescriptor): string {
-  const capabilities = [...descriptor.objectCapabilities]
-    .sort((left, right) => {
-      const byKind = left.objectKind.localeCompare(right.objectKind);
-      return byKind !== 0 ? byKind : left.stableType.localeCompare(right.stableType);
-    });
+  const capabilities = [...descriptor.objectCapabilities].sort((left, right) => {
+    const byKind = left.objectKind.localeCompare(right.objectKind);
+    return byKind !== 0 ? byKind : left.stableType.localeCompare(right.stableType);
+  });
   return JSON.stringify({
     meshName: descriptor.meshName,
     rid: String(descriptor.rid),
@@ -1239,38 +1399,45 @@ interface InMemoryOwnerLease {
 const TRANSFER_ID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 
 function meshNodeKey(meshName: string, rid: RoutingId): string {
-  const value = typeof rid === 'string'
-    ? rid
-    : (rid as unknown as { toHex(): string }).toHex();
+  const value = typeof rid === 'string' ? rid : (rid as unknown as { toHex(): string }).toHex();
   return `${meshName.length}:${meshName}:${value.length}:${value}`;
 }
 
 function clientServerKey(channelName: string, serverRid: RoutingId): string {
-  const value = typeof serverRid === 'string'
-    ? serverRid
-    : (serverRid as unknown as { toHex(): string }).toHex();
+  const value =
+    typeof serverRid === 'string'
+      ? serverRid
+      : (serverRid as unknown as { toHex(): string }).toHex();
   return `${channelName.length}:${channelName}:${value.length}:${value}`;
 }
 
 function fanoutPublisherKey(channelName: string, publisherRid: RoutingId): string {
-  const value = typeof publisherRid === 'string'
-    ? publisherRid
-    : (publisherRid as unknown as { toHex(): string }).toHex();
+  const value =
+    typeof publisherRid === 'string'
+      ? publisherRid
+      : (publisherRid as unknown as { toHex(): string }).toHex();
   return `${channelName.length}:${channelName}:${value.length}:${value}`;
 }
 
 function validateClientServerDescriptor(descriptor: ZLinkClientServerServerDescriptor): void {
-  if (!validDescriptorText(descriptor.channelName)
-    || !validDescriptorText(String(descriptor.serverRid))
-    || !validDescriptorText(descriptor.endpoint)
-    || !validDescriptorText(descriptor.securityIdentity)
-    || !validDescriptorText(descriptor.ownerId)) {
+  if (
+    !validDescriptorText(descriptor.channelName) ||
+    !validDescriptorText(String(descriptor.serverRid)) ||
+    !validDescriptorText(descriptor.endpoint) ||
+    !validDescriptorText(descriptor.securityIdentity) ||
+    !validDescriptorText(descriptor.ownerId)
+  ) {
     throw new TypeError('ClientServer descriptor identity and endpoint are required.');
   }
   const maxGeneration = 0x7fff_ffff_ffff_ffffn;
-  if (descriptor.lifecycleGeneration < 1n || descriptor.lifecycleGeneration > maxGeneration
-    || descriptor.descriptorRevision < 1n || descriptor.descriptorRevision > maxGeneration
-    || descriptor.leaseGeneration < 1n || descriptor.leaseGeneration > maxGeneration) {
+  if (
+    descriptor.lifecycleGeneration < 1n ||
+    descriptor.lifecycleGeneration > maxGeneration ||
+    descriptor.descriptorRevision < 1n ||
+    descriptor.descriptorRevision > maxGeneration ||
+    descriptor.leaseGeneration < 1n ||
+    descriptor.leaseGeneration > maxGeneration
+  ) {
     throw new RangeError('ClientServer descriptor generations are invalid.');
   }
   if (!Number.isInteger(descriptor.weight) || descriptor.weight < 0 || descriptor.weight > 10_000) {
@@ -1300,17 +1467,24 @@ function clientServerDescriptorFingerprint(descriptor: ZLinkClientServerServerDe
 }
 
 function validateFanoutPublisherDescriptor(descriptor: ZLinkFanoutPublisherDescriptor): void {
-  if (!validDescriptorText(descriptor.channelName)
-    || !validDescriptorText(String(descriptor.publisherRid))
-    || !validDescriptorText(descriptor.endpoint)
-    || !validDescriptorText(descriptor.securityIdentity)
-    || !validDescriptorText(descriptor.ownerId)) {
+  if (
+    !validDescriptorText(descriptor.channelName) ||
+    !validDescriptorText(String(descriptor.publisherRid)) ||
+    !validDescriptorText(descriptor.endpoint) ||
+    !validDescriptorText(descriptor.securityIdentity) ||
+    !validDescriptorText(descriptor.ownerId)
+  ) {
     throw new TypeError('Fanout publisher descriptor identity and endpoint are required.');
   }
   const maxGeneration = 0x7fff_ffff_ffff_ffffn;
-  if (descriptor.lifecycleGeneration < 1n || descriptor.lifecycleGeneration > maxGeneration
-    || descriptor.descriptorRevision < 1n || descriptor.descriptorRevision > maxGeneration
-    || descriptor.leaseGeneration < 1n || descriptor.leaseGeneration > maxGeneration) {
+  if (
+    descriptor.lifecycleGeneration < 1n ||
+    descriptor.lifecycleGeneration > maxGeneration ||
+    descriptor.descriptorRevision < 1n ||
+    descriptor.descriptorRevision > maxGeneration ||
+    descriptor.leaseGeneration < 1n ||
+    descriptor.leaseGeneration > maxGeneration
+  ) {
     throw new RangeError('Fanout publisher descriptor generations are invalid.');
   }
 }
@@ -1369,7 +1543,9 @@ function transferStored(record: ZLinkActorTransferRecord): ZLinkActorTransferWri
   return { status: 'stored', record };
 }
 
-function transferResult(status: ZLinkActorTransferWriteResult['status']): ZLinkActorTransferWriteResult {
+function transferResult(
+  status: ZLinkActorTransferWriteResult['status']
+): ZLinkActorTransferWriteResult {
   return { status };
 }
 
@@ -1390,7 +1566,8 @@ function pageRows<TRow>(
     .sort(([left], [right]) => left.localeCompare(right))
     .map(([, row]) => row);
   const offset = parseContinuationToken(page.continuationToken);
-  const size = page.pageSize !== undefined && page.pageSize > 0 ? page.pageSize : Number.MAX_SAFE_INTEGER;
+  const size =
+    page.pageSize !== undefined && page.pageSize > 0 ? page.pageSize : Number.MAX_SAFE_INTEGER;
   const items = ordered.slice(offset, offset + size);
   const nextOffset = offset + items.length;
   return {
@@ -1406,9 +1583,8 @@ function pageValues<TRow>(
 ): ZLinkLocationPage<TRow> {
   const ordered = [...rows].sort((left, right) => key(left).localeCompare(key(right)));
   const offset = parseContinuationToken(page.continuationToken);
-  const size = page.pageSize !== undefined && page.pageSize > 0
-    ? page.pageSize
-    : Number.MAX_SAFE_INTEGER;
+  const size =
+    page.pageSize !== undefined && page.pageSize > 0 ? page.pageSize : Number.MAX_SAFE_INTEGER;
   const items = ordered.slice(offset, offset + size);
   const nextOffset = offset + items.length;
   return {
@@ -1438,7 +1614,11 @@ function ignoredStale(): ZLinkLocationWriteResult {
 }
 
 function rejectedConflict(): ZLinkLocationWriteResult {
-  return { status: ZLinkLocationWriteStatus.RejectedConflict, generation: 0n, updatedAt: new Date(0) };
+  return {
+    status: ZLinkLocationWriteStatus.RejectedConflict,
+    generation: 0n,
+    updatedAt: new Date(0)
+  };
 }
 
 function canTakeOver(
@@ -1458,10 +1638,12 @@ function canTakeOver(
   if (intent !== ZLinkLocationWriteIntent.NewClaim) {
     return false;
   }
-  const ownerGone = currentLease === undefined
-    || currentLease.leaseExpiresAt.getTime() <= now.getTime();
+  const ownerGone =
+    currentLease === undefined || currentLease.leaseExpiresAt.getTime() <= now.getTime();
   if (ownerGone) return true;
-  return currentOwnerId === nextOwnerId
-    && currentLeaseGeneration !== nextLeaseGeneration
-    && currentLease.token.leaseGeneration === nextLeaseGeneration;
+  return (
+    currentOwnerId === nextOwnerId &&
+    currentLeaseGeneration !== nextLeaseGeneration &&
+    currentLease.token.leaseGeneration === nextLeaseGeneration
+  );
 }

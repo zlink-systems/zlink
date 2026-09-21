@@ -24,18 +24,18 @@ actor_location_t make_actor (std::string actor_id, std::int64_t generation = 0)
 {
     (void) generation;
     const auto actor_id_copy = actor_id;
-    return actor_location_t{.mesh_name = "node-a",
-                            .actor_id = std::move (actor_id),
-                            .actor_type = "player",
-                            .actor_ref = zlink::framework::detail::actor_ref_access_t::make (
-                              zlink::framework::node_rid_t::from_string ("node-a"),
-                              "player", actor_id_copy, 1),
-                            .owner_node_rid = zlink::routing_id_t::from ("node-a"),
-                            .owner_node_generation = 1,
-                            .spot_id = "entry-spot",
-                            .spot_generation = 1,
-                            .spot_kind = zlink::spot_kind::entry,
-                            .membership_epoch = 1};
+    return actor_location_t{
+      .mesh_name = "node-a",
+      .actor_id = std::move (actor_id),
+      .actor_type = "player",
+      .actor_ref = zlink::framework::detail::actor_ref_access_t::make (
+        zlink::framework::node_rid_t::from_string ("node-a"), "player", actor_id_copy, 1),
+      .owner_node_rid = zlink::routing_id_t::from ("node-a"),
+      .owner_node_generation = 1,
+      .spot_id = "entry-spot",
+      .spot_generation = 1,
+      .spot_kind = zlink::spot_kind::entry,
+      .membership_epoch = 1};
 }
 
 spot_location_t make_spot (std::string spot_id)
@@ -95,8 +95,7 @@ TEST (ZLinkFrameworkLocationLifecycle, ReleasesTrackedActor)
     ASSERT_EQ (location_write_status_t::stored,
                lifecycle.claim_actor (make_actor ("actor-1")).status);
     const auto released =
-      lifecycle.release_actor (
-        actor_location_key_t{.mesh_name = "node-a", .actor_id = "actor-1"});
+      lifecycle.release_actor (actor_location_key_t{.mesh_name = "node-a", .actor_id = "actor-1"});
     EXPECT_EQ (location_write_status_t::stored, released.status);
     EXPECT_EQ (0u, lifecycle.tracked_actor_count ());
     runtime.stop ();
@@ -113,14 +112,12 @@ TEST (ZLinkFrameworkLocationLifecycle, IgnoresActorOperationsWhenClaimIsNotTrack
     const auto updated = lifecycle.update_actor_location (std::move (moved));
     EXPECT_EQ (location_write_status_t::ignored_stale, updated.status);
 
-    const auto renewed =
-      lifecycle.renew_actor (
-        actor_location_key_t{.mesh_name = "node-a", .actor_id = "actor-missing"});
+    const auto renewed = lifecycle.renew_actor (
+      actor_location_key_t{.mesh_name = "node-a", .actor_id = "actor-missing"});
     EXPECT_EQ (location_write_status_t::ignored_stale, renewed.status);
 
-    const auto released =
-      lifecycle.release_actor (
-        actor_location_key_t{.mesh_name = "node-a", .actor_id = "actor-missing"});
+    const auto released = lifecycle.release_actor (
+      actor_location_key_t{.mesh_name = "node-a", .actor_id = "actor-missing"});
     EXPECT_EQ (location_write_status_t::ignored_stale, released.status);
     EXPECT_EQ (0u, lifecycle.tracked_actor_count ());
 
@@ -137,8 +134,7 @@ TEST (ZLinkFrameworkLocationLifecycle, UpdatesTrackedActorLocationWithoutChangin
     const auto claim = lifecycle.claim_actor (make_actor ("actor-1"));
     ASSERT_EQ (location_write_status_t::stored, claim.status);
     EXPECT_TRUE (
-      lifecycle.owns_actor (
-        actor_location_key_t{.mesh_name = "node-a", .actor_id = "actor-1"}));
+      lifecycle.owns_actor (actor_location_key_t{.mesh_name = "node-a", .actor_id = "actor-1"}));
 
     auto moved = make_actor ("actor-1");
     moved.spot_kind = zlink::spot_kind::user;
@@ -164,7 +160,8 @@ TEST (ZLinkFrameworkLocationLifecycle, TracksSpotMaterializationPerProcess)
     location_lifecycle_t lifecycle_b (owner_b);
     const auto key = spot_location_key_t{.spot_id = "spot-1"};
 
-    ASSERT_EQ (location_write_status_t::stored, lifecycle_a.claim_spot (make_spot ("spot-1")).status);
+    ASSERT_EQ (location_write_status_t::stored,
+               lifecycle_a.claim_spot (make_spot ("spot-1")).status);
     EXPECT_EQ (location_write_status_t::stored,
                lifecycle_b.claim_spot (make_spot ("spot-1")).status);
 
@@ -172,8 +169,7 @@ TEST (ZLinkFrameworkLocationLifecycle, TracksSpotMaterializationPerProcess)
     EXPECT_EQ (location_write_status_t::stored, release_b.status);
     const auto release_b_again = lifecycle_b.release_spot (key);
     EXPECT_EQ (location_write_status_t::ignored_stale, release_b_again.status);
-    EXPECT_EQ (location_write_status_t::stored,
-               lifecycle_a.release_spot (key).status);
+    EXPECT_EQ (location_write_status_t::stored, lifecycle_a.release_spot (key).status);
 
     owner_b.stop ();
     owner_a.stop ();
@@ -192,8 +188,7 @@ TEST (ZLinkFrameworkLocationLifecycle, ClaimsAndReleasesTrackedSpot)
     const auto key = spot_location_key_t{.spot_id = "spot-1"};
     const auto released = lifecycle.release_spot (key);
     EXPECT_EQ (location_write_status_t::stored, released.status);
-    EXPECT_EQ (location_write_status_t::ignored_stale,
-               lifecycle.release_spot (key).status);
+    EXPECT_EQ (location_write_status_t::ignored_stale, lifecycle.release_spot (key).status);
 
     runtime.stop ();
 }
@@ -206,14 +201,12 @@ TEST (ZLinkFrameworkLocationLifecycle, RenewKeepsTrackedActor)
 
     location_lifecycle_t lifecycle_a (owner_a);
     std::vector<std::string> deactivated;
-    const auto claim = lifecycle_a.claim_actor (make_actor ("actor-1"), [&] (const auto &actor) {
-        deactivated.push_back (actor.actor_id);
-    });
+    const auto claim = lifecycle_a.claim_actor (
+      make_actor ("actor-1"), [&] (const auto &actor) { deactivated.push_back (actor.actor_id); });
     ASSERT_EQ (location_write_status_t::stored, claim.status);
 
     const auto renewed =
-      lifecycle_a.renew_actor (
-        actor_location_key_t{.mesh_name = "node-a", .actor_id = "actor-1"});
+      lifecycle_a.renew_actor (actor_location_key_t{.mesh_name = "node-a", .actor_id = "actor-1"});
     EXPECT_EQ (location_write_status_t::stored, renewed.status);
     EXPECT_TRUE (deactivated.empty ());
     EXPECT_EQ (1u, lifecycle_a.tracked_actor_count ());

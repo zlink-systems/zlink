@@ -94,11 +94,7 @@ test('lifecycle seal quiesces a yielded turn and rejects its late continuation',
 
   assert.equal(barrier.abort(seal), true);
   await held;
-  assert.deepEqual(events, [
-    'yielded:start',
-    'before-seal',
-    'after-abort'
-  ]);
+  assert.deepEqual(events, ['yielded:start', 'before-seal', 'after-abort']);
 });
 
 test('PerActor lifecycle barrier quiesces Actor, Spot, and timer lanes together', async () => {
@@ -116,12 +112,7 @@ test('PerActor lifecycle barrier quiesces Actor, Spot, and timer lanes together'
     (name, operation) => serialExecutor.executeTimer(name, operation),
     (name) => serialExecutor.isTimerExecuting(name)
   );
-  const state = activation(
-    spotSerial,
-    timers,
-    ZLinkUserSpotExecutionMode.PerActor,
-    serialExecutor
-  );
+  const state = activation(spotSerial, timers, ZLinkUserSpotExecutionMode.PerActor, serialExecutor);
   const actorDone = deferred();
   const actorStarted = deferred();
   const spotDone = deferred();
@@ -129,10 +120,12 @@ test('PerActor lifecycle barrier quiesces Actor, Spot, and timer lanes together'
   const timerDone = deferred();
   const timerStarted = deferred();
 
-  const actor = state.executeActor('actor-a', serial => serial.execute(async () => {
-    actorStarted.resolve();
-    await actorDone.promise;
-  }));
+  const actor = state.executeActor('actor-a', (serial) =>
+    serial.execute(async () => {
+      actorStarted.resolve();
+      await actorDone.promise;
+    })
+  );
   const spot = spotSerial.execute(async () => {
     spotStarted.resolve();
     await spotDone.promise;
@@ -225,12 +218,7 @@ test('Spot close invokes lifecycle cleanup only after its execution seal is quie
 
   activeDone.resolve();
   await Promise.all([active, closing]);
-  assert.deepEqual(events, [
-    'active:start',
-    'active:complete',
-    'closing',
-    'released'
-  ]);
+  assert.deepEqual(events, ['active:start', 'active:complete', 'closing', 'released']);
   await assert.rejects(
     () => serial.post(() => undefined),
     (error: unknown) => {

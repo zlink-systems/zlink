@@ -14,10 +14,7 @@ import {
 import type { Message } from '../../contracts/Common/Message';
 import { SubmitResult } from '../backend/runtime-values';
 import type { ReceiveRecord } from '../foundation/service-runtime-contracts';
-import {
-  ZLinkConfigurationException,
-  type ZLinkRouteChannelOptions
-} from '../configuration';
+import { ZLinkConfigurationException, type ZLinkRouteChannelOptions } from '../configuration';
 import type { ZLinkBackendSpotRouteBridge } from '../backend/contracts';
 import type { ZLinkRuntimeMetrics } from '../diagnostics';
 import {
@@ -102,18 +99,25 @@ export class ZLinkChannelRequestDispatcher {
     return this.options.dispatchErrors.flow.flowCreationEnabled();
   }
 
-  async dispatch(received: {
-    parts: readonly Message[];
-    routingId: unknown;
-    spotId?: unknown;
-    replyToken: unknown | null;
-    send?: () => ZLinkMultipartOperation<ZLinkMultipartAsyncSubmitOperation>;
-  }, router: {
-    reply(routingId: unknown, replyToken: unknown): ZLinkMultipartReplyOperation;
-  }, signal?: AbortSignal, decodedHeader?: ZLinkChannelEnvelopeHeader): Promise<boolean | void> {
+  async dispatch(
+    received: {
+      parts: readonly Message[];
+      routingId: unknown;
+      spotId?: unknown;
+      replyToken: unknown | null;
+      send?: () => ZLinkMultipartOperation<ZLinkMultipartAsyncSubmitOperation>;
+    },
+    router: {
+      reply(routingId: unknown, replyToken: unknown): ZLinkMultipartReplyOperation;
+    },
+    signal?: AbortSignal,
+    decodedHeader?: ZLinkChannelEnvelopeHeader
+  ): Promise<boolean | void> {
     if (received.spotId !== null && received.spotId !== undefined) {
       if (received.send === undefined) {
-        throw new ZLinkConfigurationException('Routed SPOT packet is missing a local SPOT delivery context.');
+        throw new ZLinkConfigurationException(
+          'Routed SPOT packet is missing a local SPOT delivery context.'
+        );
       }
       await appendParts(received.send(), received.parts).submit().admitted;
       return true;
@@ -131,18 +135,20 @@ export class ZLinkChannelRequestDispatcher {
         info,
         error,
         transportRequest: replyToken !== null,
-        writeProtocolError: replyToken === null
-          ? undefined
-          : protocolError => this.submitReply(
-              appendParts(
-                router.reply(received.routingId, replyToken),
-                encodeChannelErrorReplyParts(
-                  malformedProtocolErrorRequestHeader(this.options.channelName, info),
-                  protocolError
+        writeProtocolError:
+          replyToken === null
+            ? undefined
+            : (protocolError) =>
+                this.submitReply(
+                  appendParts(
+                    router.reply(received.routingId, replyToken),
+                    encodeChannelErrorReplyParts(
+                      malformedProtocolErrorRequestHeader(this.options.channelName, info),
+                      protocolError
+                    )
+                  ),
+                  signal
                 )
-              ),
-              signal
-            )
       });
       return;
     }
@@ -211,20 +217,22 @@ export class ZLinkChannelRequestDispatcher {
       context,
       signal,
       missingHandlerMessage: `No channel request handler is registered for '${this.options.channelName}:${packetName}'.`,
-      writeReply: reply => this.submitReply(
-        appendParts(
-          router.reply(received.routingId, replyToken),
-          encodeChannelReplyParts(envelope.header, reply, this.options.codecs)
+      writeReply: (reply) =>
+        this.submitReply(
+          appendParts(
+            router.reply(received.routingId, replyToken),
+            encodeChannelReplyParts(envelope.header, reply, this.options.codecs)
+          ),
+          signal
         ),
-        signal
-      ),
-      writeError: error => this.submitReply(
-        appendParts(
-          router.reply(received.routingId, replyToken),
-          encodeChannelErrorReplyParts(envelope.header, error)
-        ),
-        signal
-      )
+      writeError: (error) =>
+        this.submitReply(
+          appendParts(
+            router.reply(received.routingId, replyToken),
+            encodeChannelErrorReplyParts(envelope.header, error)
+          ),
+          signal
+        )
     });
   }
 
@@ -243,10 +251,14 @@ export class ZLinkChannelRequestDispatcher {
         transportRequest: false,
         sourceRid: record.sourceNodeRid == null ? undefined : String(record.sourceNodeRid),
         writeProtocolError: async (protocolError) => {
-          requireMeshReplyAccepted(record.reply(encodeChannelErrorReplyParts(
-            malformedProtocolErrorRequestHeader(this.options.channelName, info),
-            protocolError
-          )));
+          requireMeshReplyAccepted(
+            record.reply(
+              encodeChannelErrorReplyParts(
+                malformedProtocolErrorRequestHeader(this.options.channelName, info),
+                protocolError
+              )
+            )
+          );
         }
       });
       return;
@@ -292,19 +304,22 @@ export class ZLinkChannelRequestDispatcher {
       signal,
       missingHandlerMessage: `No channel request handler is registered for '${this.options.channelName}:${packetName}'.`,
       writeReply: async (reply) => {
-        requireMeshReplyAccepted(record.reply(
-          encodeChannelReplyParts(envelope.header, reply, this.options.codecs)
-        ));
+        requireMeshReplyAccepted(
+          record.reply(encodeChannelReplyParts(envelope.header, reply, this.options.codecs))
+        );
       },
       writeError: async (error) => {
-        requireMeshReplyAccepted(record.reply(
-          encodeChannelErrorReplyParts(envelope.header, error)
-        ));
+        requireMeshReplyAccepted(
+          record.reply(encodeChannelErrorReplyParts(envelope.header, error))
+        );
       }
     });
   }
 
-  private submitReply(operation: ZLinkMultipartReplyOperation, signal?: AbortSignal): Promise<void> {
+  private submitReply(
+    operation: ZLinkMultipartReplyOperation,
+    signal?: AbortSignal
+  ): Promise<void> {
     void signal;
     if (operation.submit() === false) {
       throw new ZLinkConfigurationException('Channel reply was not accepted by Core.');
@@ -337,7 +352,9 @@ export class ZLinkChannelRequestDispatcher {
 
 function requireMeshReplyAccepted(result: number): void {
   if (result !== SubmitResult.Ok) {
-    throw new ZLinkConfigurationException(`MeshNode channel reply was not accepted (submit result ${result}).`);
+    throw new ZLinkConfigurationException(
+      `MeshNode channel reply was not accepted (submit result ${result}).`
+    );
   }
 }
 
@@ -447,7 +464,9 @@ export interface ZLinkRoutePacketDispatcherOptions {
   readonly spotRouteBridge?: ZLinkBackendSpotRouteBridge;
 }
 
-export function collectRouteChannelHandlers(routeChannel: ZLinkRouteChannelOptions): ZLinkRouteHandlerRegistration[] {
+export function collectRouteChannelHandlers(
+  routeChannel: ZLinkRouteChannelOptions
+): ZLinkRouteHandlerRegistration[] {
   return [
     ...(routeChannel.handlers ?? []),
     ...(routeChannel.sendHandlers ?? []).map((handler): ZLinkRouteHandlerRegistration => ({
@@ -484,7 +503,9 @@ export class ZLinkRoutePacketDispatcher {
     for (const handler of options.handlers) {
       const target = handler.kind === 'send' ? this.sendHandlers : this.requestHandlers;
       if (target.has(handler.packetName)) {
-        throw new ZLinkConfigurationException(`Duplicate routed handler '${options.routerChannelId}:${handler.kind}:${handler.packetName}'.`);
+        throw new ZLinkConfigurationException(
+          `Duplicate routed handler '${options.routerChannelId}:${handler.kind}:${handler.packetName}'.`
+        );
       }
       target.set(handler.packetName, handler.handler as never);
     }
@@ -508,9 +529,9 @@ export class ZLinkRoutePacketDispatcher {
   }): boolean | Promise<void> {
     const channelHeader = tryDecodeChannelHeader(received.parts, this.flowEnabled());
     if (
-      this.spotRouteBridge !== undefined
-      && channelHeader === undefined
-      && this.spotRouteBridge.handleRouterReceived(
+      this.spotRouteBridge !== undefined &&
+      channelHeader === undefined &&
+      this.spotRouteBridge.handleRouterReceived(
         this.routerChannelId,
         received.routingId as RoutingId,
         0n,
@@ -521,23 +542,32 @@ export class ZLinkRoutePacketDispatcher {
     }
     if (received.spotId !== null && received.spotId !== undefined) {
       if (received.send === undefined) {
-        throw new ZLinkConfigurationException('Routed SPOT packet is missing a local SPOT delivery context.');
+        throw new ZLinkConfigurationException(
+          'Routed SPOT packet is missing a local SPOT delivery context.'
+        );
       }
       return appendParts(received.send(), received.parts).submit().admitted;
     }
     return false;
   }
 
-  async dispatch(received: {
-    parts: readonly Message[];
-    routingId: unknown;
-    spotId?: unknown;
-    replyToken: unknown | null;
-    send?: () => ZLinkMultipartOperation<ZLinkMultipartAsyncSubmitOperation>;
-  }, router: {
-    reply(routingId: unknown, replyToken: unknown): ZLinkMultipartReplyOperation;
-  }, signal?: AbortSignal, decodedHeader?: ZLinkChannelEnvelopeHeader, infrastructureChecked = false): Promise<boolean | void> {
-    const channelHeader = decodedHeader ?? tryDecodeChannelHeader(received.parts, this.flowEnabled());
+  async dispatch(
+    received: {
+      parts: readonly Message[];
+      routingId: unknown;
+      spotId?: unknown;
+      replyToken: unknown | null;
+      send?: () => ZLinkMultipartOperation<ZLinkMultipartAsyncSubmitOperation>;
+    },
+    router: {
+      reply(routingId: unknown, replyToken: unknown): ZLinkMultipartReplyOperation;
+    },
+    signal?: AbortSignal,
+    decodedHeader?: ZLinkChannelEnvelopeHeader,
+    infrastructureChecked = false
+  ): Promise<boolean | void> {
+    const channelHeader =
+      decodedHeader ?? tryDecodeChannelHeader(received.parts, this.flowEnabled());
     if (!infrastructureChecked) {
       const infrastructure = this.dispatchInfrastructure(received);
       if (infrastructure !== false) {
@@ -559,17 +589,19 @@ export class ZLinkRoutePacketDispatcher {
         error,
         transportRequest: replyToken !== null,
         sourceRid: String(received.routingId),
-        writeProtocolError: replyToken === null
-          ? undefined
-          : protocolError => this.submitReply(
-              appendParts(
-                router.reply(received.routingId, replyToken),
-                encodeChannelErrorReplyParts(
-                  malformedProtocolErrorRequestHeader(this.routerChannelId, info),
-                  protocolError
+        writeProtocolError:
+          replyToken === null
+            ? undefined
+            : (protocolError) =>
+                this.submitReply(
+                  appendParts(
+                    router.reply(received.routingId, replyToken),
+                    encodeChannelErrorReplyParts(
+                      malformedProtocolErrorRequestHeader(this.routerChannelId, info),
+                      protocolError
+                    )
+                  )
                 )
-              )
-            )
       });
       return;
     }
@@ -636,18 +668,20 @@ export class ZLinkRoutePacketDispatcher {
       context: this.createRouteContext(envelope, received.routingId),
       signal,
       missingHandlerMessage: `No routed request handler is registered for '${this.routerChannelId}:${packetName}'.`,
-      writeReply: reply => this.submitReply(
-        appendParts(
-          router.reply(received.routingId, replyToken),
-          encodeChannelReplyParts(envelope.header, reply, codecs)
+      writeReply: (reply) =>
+        this.submitReply(
+          appendParts(
+            router.reply(received.routingId, replyToken),
+            encodeChannelReplyParts(envelope.header, reply, codecs)
+          )
+        ),
+      writeError: (error) =>
+        this.submitReply(
+          appendParts(
+            router.reply(received.routingId, replyToken),
+            encodeChannelErrorReplyParts(envelope.header, error)
+          )
         )
-      ),
-      writeError: error => this.submitReply(
-        appendParts(
-          router.reply(received.routingId, replyToken),
-          encodeChannelErrorReplyParts(envelope.header, error)
-        )
-      )
     });
   }
 
@@ -666,10 +700,14 @@ export class ZLinkRoutePacketDispatcher {
         transportRequest: false,
         sourceRid: record.sourceNodeRid == null ? undefined : String(record.sourceNodeRid),
         writeProtocolError: async (protocolError) => {
-          requireMeshReplyAccepted(record.reply(encodeChannelErrorReplyParts(
-            malformedProtocolErrorRequestHeader(this.routerChannelId, info),
-            protocolError
-          )));
+          requireMeshReplyAccepted(
+            record.reply(
+              encodeChannelErrorReplyParts(
+                malformedProtocolErrorRequestHeader(this.routerChannelId, info),
+                protocolError
+              )
+            )
+          );
         }
       });
       return;
@@ -681,7 +719,13 @@ export class ZLinkRoutePacketDispatcher {
     const sourceNodeRid = String(record.sourceNodeRid ?? '');
     const correlationId = envelope.header.correlationId ?? undefined;
     if (envelope.header.kind === ZLinkChannelMessageKind.Command) {
-      await this.dispatchMeshCommand(envelope, packetName, sourceNodeRid, record.sourceNodeRid, signal);
+      await this.dispatchMeshCommand(
+        envelope,
+        packetName,
+        sourceNodeRid,
+        record.sourceNodeRid,
+        signal
+      );
       return;
     }
     if (envelope.header.kind !== ZLinkChannelMessageKind.Request) {
@@ -705,10 +749,14 @@ export class ZLinkRoutePacketDispatcher {
       signal,
       missingHandlerMessage: `No routed request handler is registered for '${this.routerChannelId}:${packetName}'.`,
       writeReply: async (reply) => {
-        requireMeshReplyAccepted(record.reply(encodeChannelReplyParts(envelope.header, reply, codecs)));
+        requireMeshReplyAccepted(
+          record.reply(encodeChannelReplyParts(envelope.header, reply, codecs))
+        );
       },
       writeError: async (error) => {
-        requireMeshReplyAccepted(record.reply(encodeChannelErrorReplyParts(envelope.header, error)));
+        requireMeshReplyAccepted(
+          record.reply(encodeChannelErrorReplyParts(envelope.header, error))
+        );
       }
     });
   }
@@ -733,13 +781,21 @@ export class ZLinkRoutePacketDispatcher {
       return;
     }
     if (envelope.header.kind !== ZLinkChannelMessageKind.Command) {
-      throw new ZLinkConfigurationException('Local node-direct dispatch requires a command packet.');
+      throw new ZLinkConfigurationException(
+        'Local node-direct dispatch requires a command packet.'
+      );
     }
     const packetName = envelope.packetName;
     if (packetName === undefined) {
       throw new ZLinkConfigurationException('Route packet is missing packetName.');
     }
-    await this.dispatchMeshCommand(envelope, packetName, String(sourceNodeRid), sourceNodeRid, signal);
+    await this.dispatchMeshCommand(
+      envelope,
+      packetName,
+      String(sourceNodeRid),
+      sourceNodeRid,
+      signal
+    );
   }
 
   private dispatchMeshCommand(

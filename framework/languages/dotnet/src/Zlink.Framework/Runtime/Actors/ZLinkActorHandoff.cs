@@ -5,19 +5,20 @@ internal enum ZLinkActorFrameRoute
     Current,
     MessageFollow,
     MessageFollowExpired,
-    Stale
+    Stale,
 }
 
 internal enum ZLinkActorHandoffCaptureResult
 {
     NotSealed,
     Captured,
-    Full
+    Full,
 }
 
 internal sealed class ZLinkActorHandoffRejectedException(
     string message,
-    Exception? innerException = null) : InvalidOperationException(message, innerException);
+    Exception? innerException = null
+) : InvalidOperationException(message, innerException);
 
 internal sealed record ZLinkActorBoundSessionHandoffFence(
     string ActorId,
@@ -25,7 +26,8 @@ internal sealed record ZLinkActorBoundSessionHandoffFence(
     RoutingId SessionRid,
     string BindingToken,
     ulong BindingGeneration,
-    ulong SessionSequence);
+    ulong SessionSequence
+);
 
 internal sealed record ZLinkActorHandoffFrame(
     byte[] ReplyActorNodeRid,
@@ -42,33 +44,35 @@ internal sealed record ZLinkActorHandoffFrame(
     ZLinkServiceWireCodec.RequestSourceFence? RequestSource = null,
     ulong RelocationReplyRouteId = 0,
     long CanonicalEncodedLength = 0,
-    ZLinkActorBoundSessionHandoffFence? BoundSessionSource = null);
+    ZLinkActorBoundSessionHandoffFence? BoundSessionSource = null
+);
 
 internal sealed record ZLinkActorAcceptedRecord(
     ZLinkActorHandoffFrame Frame,
     ZLinkServiceWireCodec.RequestSourceFence RequestSource,
-    ZLinkBackendActorRef? FrozenTargetActor = null);
+    ZLinkBackendActorRef? FrozenTargetActor = null
+);
 
 internal readonly record struct ZLinkActorHandoffCommitBoundary(
     IReadOnlyList<ZLinkActorHandoffFrame> Frames,
     ulong AcceptedHighWater,
     int RemainingHoldRecords,
-    long RemainingHoldBytes);
+    long RemainingHoldBytes
+);
 
 internal static class ZLinkActorHandoffFrames
 {
-
-    public static ZLinkActorHandoffFrame Capture(
-        ZLinkSpotActorFrame frame,
-        long arrivalIndex)
+    public static ZLinkActorHandoffFrame Capture(ZLinkSpotActorFrame frame, long arrivalIndex)
     {
         // Bound-session requests do not use the direct reply-preservation
         // registry. Their existing ReplyRequestId is the stable correlation
         // needed when the accepted frame is frozen for target replay.
         var relocationReplyRouteId = frame.RelocationReplyRouteId;
-        if (relocationReplyRouteId == 0
+        if (
+            relocationReplyRouteId == 0
             && (frame.Flags & 1U) != 0
-            && frame.RouteContext.IsBoundSessionRoute)
+            && frame.RouteContext.IsBoundSessionRoute
+        )
             relocationReplyRouteId = frame.RouteContext.ReplyRequestId;
 
         return new ZLinkActorHandoffFrame(
@@ -87,22 +91,27 @@ internal static class ZLinkActorHandoffFrames
             relocationReplyRouteId,
             BoundSessionSource: ZLinkActorBoundSessionHandoffMetadata.TryDecode(
                 frame.ApplicationMetadata.Span,
-                out var boundSession)
+                out var boundSession
+            )
                 ? boundSession
-                : null);
+                : null
+        );
     }
 
     internal static long CanonicalEncodedLength(
         ZLinkActorHandoffFrame frame,
-        ZLinkBackendActorRef targetActor)
+        ZLinkBackendActorRef targetActor
+    )
     {
         ArgumentNullException.ThrowIfNull(frame);
-        var source = frame.RequestSource
-                     ?? throw new ZLinkActorHandoffRejectedException(
-                         "Canonical Actor ingress requires a request-source fence.");
-        return ZLinkCanonicalActorAcceptedJournal.Encode(
-            new ZLinkActorAcceptedRecord(frame, source, targetActor),
-            targetActor).LongLength;
+        var source =
+            frame.RequestSource
+            ?? throw new ZLinkActorHandoffRejectedException(
+                "Canonical Actor ingress requires a request-source fence."
+            );
+        return ZLinkCanonicalActorAcceptedJournal
+            .Encode(new ZLinkActorAcceptedRecord(frame, source, targetActor), targetActor)
+            .LongLength;
     }
 
     private static RoutingId RidOrDefault(byte[] rid) =>
@@ -110,7 +119,8 @@ internal static class ZLinkActorHandoffFrames
 
     public static ZLinkSpotActorFrameBatch Restore(
         ZLinkBackendActorRef actor,
-        IReadOnlyList<ZLinkActorHandoffFrame> frames)
+        IReadOnlyList<ZLinkActorHandoffFrame> frames
+    )
     {
         var restored = new List<ZLinkSpotActorFrame>(frames.Count);
         try
@@ -120,7 +130,8 @@ internal static class ZLinkActorHandoffFrames
                 var replyActor = new ZLinkBackendActorRef(
                     RidOrDefault(frame.ReplyActorNodeRid),
                     actor.ActorId,
-                    frame.ReplyActorGeneration);
+                    frame.ReplyActorGeneration
+                );
                 var restoredFrame = new ZLinkSpotActorFrame(
                     actor,
                     replyActor,
@@ -137,10 +148,10 @@ internal static class ZLinkActorHandoffFrames
                     applicationMetadata: frame.BoundSessionSource is { } bound
                         ? ZLinkActorBoundSessionHandoffMetadata.Encode(bound)
                         : default,
-                    handoffArrivalIndex: frame.ArrivalIndex);
+                    handoffArrivalIndex: frame.ArrivalIndex
+                );
                 if (frame.RelocationReplyRouteId != 0)
-                    restoredFrame.BindRelocationReplyRoute(
-                        frame.RelocationReplyRouteId);
+                    restoredFrame.BindRelocationReplyRoute(frame.RelocationReplyRouteId);
                 restored.Add(restoredFrame);
             }
 
@@ -148,7 +159,8 @@ internal static class ZLinkActorHandoffFrames
         }
         catch
         {
-            foreach (var frame in restored) frame.Dispose();
+            foreach (var frame in restored)
+                frame.Dispose();
             throw;
         }
     }
@@ -156,27 +168,32 @@ internal static class ZLinkActorHandoffFrames
     internal static ZLinkSpotActorFrameBatch RestoreCanonical(
         ZLinkBackendActorRef currentActor,
         ZLinkBackendActorRef expectedSourceActor,
-        IReadOnlyList<ZLinkActorAcceptedRecord> accepted)
+        IReadOnlyList<ZLinkActorAcceptedRecord> accepted
+    )
     {
-        if (currentActor.ActorId != expectedSourceActor.ActorId
-            || currentActor.Generation != expectedSourceActor.Generation)
+        if (
+            currentActor.ActorId != expectedSourceActor.ActorId
+            || currentActor.Generation != expectedSourceActor.Generation
+        )
             throw new ZLinkRelocationDataLostException(
-                "Standalone Actor relocation changed the logical Actor generation.");
+                "Standalone Actor relocation changed the logical Actor generation."
+            );
         foreach (var record in accepted)
         {
-            var frozen = record.FrozenTargetActor
-                         ?? throw new ZLinkRelocationDataLostException(
-                             "Standalone Actor frozen record lost its source target fence.");
+            var frozen =
+                record.FrozenTargetActor
+                ?? throw new ZLinkRelocationDataLostException(
+                    "Standalone Actor frozen record lost its source target fence."
+                );
             if (frozen != expectedSourceActor)
                 throw new ZLinkRelocationDataLostException(
-                    "Standalone Actor frozen record does not match the relocation source fence.");
+                    "Standalone Actor frozen record does not match the relocation source fence."
+                );
         }
 
         // The immutable frozen records keep the source target fence. Only this
         // replay endpoint, after validating that fence against the root, binds
         // dispatch to the materialized target instance.
-        return Restore(
-            currentActor,
-            accepted.Select(static record => record.Frame).ToArray());
+        return Restore(currentActor, accepted.Select(static record => record.Frame).ToArray());
     }
 }

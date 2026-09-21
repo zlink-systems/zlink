@@ -9,5 +9,4 @@ import java.util.Map;
  *
  * @param <T> the decoded body type
  */
-public record HttpResponse<T>(int status, Map<String, String> headers, T body, String rawBody) {
-}
+public record HttpResponse<T>(int status, Map<String, String> headers, T body, String rawBody) {}

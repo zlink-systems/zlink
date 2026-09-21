@@ -1,5 +1,5 @@
-using Zlink.Framework.Runtime.Messaging;
 using Zlink.Framework.Runtime.Execution;
+using Zlink.Framework.Runtime.Messaging;
 
 namespace Zlink.Framework.Runtime.Spots;
 
@@ -7,7 +7,8 @@ internal sealed class ZLinkCurrentSpotPublishCall<TEvent>(
     IZLinkCurrentSpotActivation activation,
     string channelName,
     string topic,
-    TEvent message) : IZLinkPublishCall
+    TEvent message
+) : IZLinkPublishCall
 {
     private readonly ZLinkCallMetadata _metadata = new();
     private readonly ZLinkOneWayCallGate _submission = new("Spot publish");
@@ -25,29 +26,31 @@ internal sealed class ZLinkCurrentSpotPublishCall<TEvent>(
         return this;
     }
 
-    public async ValueTask Async(
-        CancellationToken cancellationToken = default)
+    public async ValueTask Async(CancellationToken cancellationToken = default)
     {
         _submission.Claim();
         using var flow = ZLinkFlowContext.EnterCurrentOrCreate(
             ZLinkFlowOrigin.Application,
-            activation.Flow.CaptureEnabled);
+            activation.Flow.CaptureEnabled
+        );
         cancellationToken.ThrowIfCancellationRequested();
         var parts = ZLinkSpotPublishEnvelope.EncodeParts(
             channelName,
             _messageName,
             topic,
             message,
-            activation.Codecs);
-        var result = await activation.OutboundEndpoint
-            .PublishCurrentAsync(
+            activation.Codecs
+        );
+        var result = await activation
+            .OutboundEndpoint.PublishCurrentAsync(
                 channelName,
                 topic,
                 parts,
                 cancellationToken,
                 _metadata.Encode(),
                 () => ZLinkMessageParts.DisposeAll(parts),
-                activation.ErrorSink)
+                activation.ErrorSink
+            )
             .ConfigureAwait(false);
         ZLinkLogicalMulticastOutcome.EnsureCompleted(result);
     }
@@ -56,13 +59,9 @@ internal sealed class ZLinkCurrentSpotPublishCall<TEvent>(
 internal sealed class ZLinkSpotPublisherClientService(ZLinkFrameworkRuntime runtime)
     : IZLinkSpotPublisherClient
 {
-    public IZLinkPublishCall Publish<TEvent>(
-        string channelName,
-        string topic,
-        TEvent message)
+    public IZLinkPublishCall Publish<TEvent>(string channelName, string topic, TEvent message)
     {
-        return new ZLinkExternalSpotPublishCall<TEvent>(
-            runtime, channelName, topic, message);
+        return new ZLinkExternalSpotPublishCall<TEvent>(runtime, channelName, topic, message);
     }
 }
 
@@ -70,7 +69,8 @@ internal sealed class ZLinkExternalSpotPublishCall<TEvent>(
     ZLinkFrameworkRuntime runtime,
     string channelName,
     string topic,
-    TEvent message) : IZLinkPublishCall
+    TEvent message
+) : IZLinkPublishCall
 {
     private readonly ZLinkCallMetadata _metadata = new();
     private readonly ZLinkOneWayCallGate _submission = new("Logical Multicast publish");
@@ -88,14 +88,14 @@ internal sealed class ZLinkExternalSpotPublishCall<TEvent>(
         return this;
     }
 
-    public async ValueTask Async(
-        CancellationToken cancellationToken = default)
+    public async ValueTask Async(CancellationToken cancellationToken = default)
     {
         _submission.Claim();
         using var operation = runtime.EnterOperation();
         using var flow = ZLinkFlowContext.EnterCurrentOrCreate(
             ZLinkFlowOrigin.Application,
-            runtime.Flow.CaptureEnabled);
+            runtime.Flow.CaptureEnabled
+        );
         var bundle = runtime.GetSpotPublisherBundle(channelName);
         var packetName = _messageName;
         var metadata = _metadata.Encode();
@@ -104,32 +104,31 @@ internal sealed class ZLinkExternalSpotPublishCall<TEvent>(
             packetName,
             topic,
             message,
-            runtime.Registration.Codecs);
+            runtime.Registration.Codecs
+        );
         var backgroundOperation = runtime.RetainOperationForBackgroundWork();
         var released = 0;
 
         void ReleaseWorkerResources()
         {
-            if (Interlocked.Exchange(ref released, 1) != 0) return;
+            if (Interlocked.Exchange(ref released, 1) != 0)
+                return;
             ZLinkMessageParts.DisposeAll(parts);
             backgroundOperation.Dispose();
         }
 
         try
         {
-            var result = await ZLinkLogicalMulticastSubmitter.SubmitAsync(
+            var result = await ZLinkLogicalMulticastSubmitter
+                .SubmitAsync(
                     runtime.LogicalMulticastWorkerPool,
-                    () => bundle.Spot.Publish(
-                        channelName,
-                        topic,
-                        parts,
-                        SendFlags.None,
-                        metadata),
+                    () => bundle.Spot.Publish(channelName, topic, parts, SendFlags.None, metadata),
                     cancellationToken,
                     runtime.ShutdownToken,
                     runtime.Registration.DefaultSocketSendTimeout,
                     ReleaseWorkerResources,
-                    runtime.ErrorSink)
+                    runtime.ErrorSink
+                )
                 .ConfigureAwait(false);
             ZLinkLogicalMulticastOutcome.EnsureCompleted(result);
         }
@@ -150,7 +149,8 @@ internal static class ZLinkLogicalMulticastSubmitter
         CancellationToken shutdownToken,
         TimeSpan admissionTimeout,
         Action release,
-        IZLinkRuntimeFailureReporter errorSink)
+        IZLinkRuntimeFailureReporter errorSink
+    )
     {
         ArgumentNullException.ThrowIfNull(workerPool);
         ArgumentNullException.ThrowIfNull(publish);
@@ -162,7 +162,8 @@ internal static class ZLinkLogicalMulticastSubmitter
             release,
             errorSink,
             cancellationToken,
-            shutdownToken);
+            shutdownToken
+        );
         if (cancellationToken.IsCancellationRequested)
         {
             operation.CancelBeforeCommit();
@@ -176,19 +177,23 @@ internal static class ZLinkLogicalMulticastSubmitter
         ZLinkWorkerSubmitResult admission;
         using var admissionCancellation = CancellationTokenSource.CreateLinkedTokenSource(
             cancellationToken,
-            shutdownToken);
+            shutdownToken
+        );
         try
         {
-            admission = await workerPool.SubmitDirectAsync(
+            admission = await workerPool
+                .SubmitDirectAsync(
                     operation.Run,
                     operation.FailShutdownBeforeStart,
                     admissionTimeout,
-                    admissionCancellation.Token)
+                    admissionCancellation.Token
+                )
                 .ConfigureAwait(false);
         }
-        catch (OperationCanceledException) when (
-            shutdownToken.IsCancellationRequested
-            && !cancellationToken.IsCancellationRequested)
+        catch (OperationCanceledException)
+            when (shutdownToken.IsCancellationRequested
+                && !cancellationToken.IsCancellationRequested
+            )
         {
             admission = ZLinkWorkerSubmitResult.Stopped;
         }
@@ -208,7 +213,8 @@ internal static class ZLinkLogicalMulticastSubmitter
         private readonly Action _release;
         private readonly CancellationToken _shutdownToken;
         private readonly TaskCompletionSource<SubmitResult> _source = new(
-            TaskCreationOptions.RunContinuationsAsynchronously);
+            TaskCreationOptions.RunContinuationsAsynchronously
+        );
         private CancellationTokenRegistration _cancellationRegistration;
         private CancellationTokenRegistration _shutdownRegistration;
         private int _released;
@@ -219,7 +225,8 @@ internal static class ZLinkLogicalMulticastSubmitter
             Action release,
             IZLinkRuntimeFailureReporter errorSink,
             CancellationToken cancellationToken,
-            CancellationToken shutdownToken)
+            CancellationToken shutdownToken
+        )
         {
             _publish = publish;
             _release = release;
@@ -228,27 +235,33 @@ internal static class ZLinkLogicalMulticastSubmitter
             _shutdownToken = shutdownToken;
             _cancellationRegistration = cancellationToken.Register(
                 static state => ((LogicalMulticastOperation)state!).CancelBeforeCommit(),
-                this);
+                this
+            );
             _shutdownRegistration = shutdownToken.Register(
                 static state => ((LogicalMulticastOperation)state!).FailShutdownBeforeStart(),
-                this);
-            if (Volatile.Read(ref _state) == Terminal) DisposeRegistrations();
+                this
+            );
+            if (Volatile.Read(ref _state) == Terminal)
+                DisposeRegistrations();
         }
 
         public Task<SubmitResult> Task => _source.Task;
 
         public void ResolveAdmission(ZLinkWorkerSubmitResult admission)
         {
-            if (admission == ZLinkWorkerSubmitResult.Accepted) return;
-            var result = admission == ZLinkWorkerSubmitResult.Full
-                ? SubmitResult.Backpressured
-                : SubmitResult.Terminated;
+            if (admission == ZLinkWorkerSubmitResult.Accepted)
+                return;
+            var result =
+                admission == ZLinkWorkerSubmitResult.Full
+                    ? SubmitResult.Backpressured
+                    : SubmitResult.Terminated;
             CompletePending(result);
         }
 
         public void Run(CancellationToken shutdownToken)
         {
-            if (Interlocked.CompareExchange(ref _state, Committed, Pending) != Pending) return;
+            if (Interlocked.CompareExchange(ref _state, Committed, Pending) != Pending)
+                return;
             DisposeRegistrations();
             _source.TrySetResult(SubmitResult.Ok);
             try
@@ -257,14 +270,13 @@ internal static class ZLinkLogicalMulticastSubmitter
                 // committed publish has no public failure result, but it must
                 // not start target processing after its MeshNode/socket owner
                 // has entered forced cleanup.
-                if (shutdownToken.IsCancellationRequested) return;
+                if (shutdownToken.IsCancellationRequested)
+                    return;
                 _publish();
             }
             catch (Exception error)
             {
-                _errorSink.ReportRuntimeTaskException(
-                    "logical-multicast-publish",
-                    error);
+                _errorSink.ReportRuntimeTaskException("logical-multicast-publish", error);
             }
             finally
             {
@@ -280,7 +292,8 @@ internal static class ZLinkLogicalMulticastSubmitter
 
         public void CancelBeforeCommit()
         {
-            if (Interlocked.CompareExchange(ref _state, Terminal, Pending) != Pending) return;
+            if (Interlocked.CompareExchange(ref _state, Terminal, Pending) != Pending)
+                return;
             _source.TrySetCanceled(_cancellationToken);
             ReleaseOnce();
             DisposeRegistrations();
@@ -288,7 +301,8 @@ internal static class ZLinkLogicalMulticastSubmitter
 
         private void CompletePending(SubmitResult result)
         {
-            if (Interlocked.CompareExchange(ref _state, Terminal, Pending) != Pending) return;
+            if (Interlocked.CompareExchange(ref _state, Terminal, Pending) != Pending)
+                return;
             _source.TrySetResult(result);
             ReleaseOnce();
             DisposeRegistrations();
@@ -307,6 +321,7 @@ internal static class ZLinkLogicalMulticastSubmitter
         }
     }
 }
+
 internal static class ZLinkLogicalMulticastOutcome
 {
     public static void EnsureCompleted(SubmitResult result)
@@ -319,18 +334,20 @@ internal static class ZLinkLogicalMulticastOutcome
                 throw new ZLinkFrameworkException(
                     ZLinkFrameworkErrorKind.DeadlineExceeded,
                     "Logical Multicast timed out before worker admission completed.",
-                    ZLinkRetryAdvice.RetryAfterBackoff);
+                    ZLinkRetryAdvice.RetryAfterBackoff
+                );
             case SubmitResult.Terminated:
                 throw new ZLinkFrameworkException(
                     ZLinkFrameworkErrorKind.ShuttingDown,
-                    "Logical Multicast was rejected because the runtime is shutting down.");
+                    "Logical Multicast was rejected because the runtime is shutting down."
+                );
             default:
                 throw new InvalidOperationException(
-                    $"Logical Multicast failed with submit result '{result}'.");
+                    $"Logical Multicast failed with submit result '{result}'."
+                );
         }
     }
 }
-
 
 internal static class ZLinkSpotPublishEnvelope
 {
@@ -340,7 +357,8 @@ internal static class ZLinkSpotPublishEnvelope
         string topic,
         TEvent message,
         ZLinkCodecRegistryBuilder? codecs = null,
-        string? correlationId = null)
+        string? correlationId = null
+    )
     {
         var header = new ZLinkEnvelopeHeader(
             ZLinkMessageKind.Publish,
@@ -352,11 +370,13 @@ internal static class ZLinkSpotPublishEnvelope
             topic,
             null,
             null,
-            channelName);
+            channelName
+        );
         return ZLinkEnvelopeCodec.EncodeParts(
             header,
             message,
             message?.GetType() ?? typeof(TEvent),
-            codecs);
+            codecs
+        );
     }
 }

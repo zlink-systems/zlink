@@ -11,5 +11,5 @@ public enum ZLinkHttpMethod
     Delete,
     Patch,
     Head,
-    Options
+    Options,
 }

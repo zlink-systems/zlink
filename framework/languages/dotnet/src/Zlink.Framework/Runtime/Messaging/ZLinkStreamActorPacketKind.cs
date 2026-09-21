@@ -2,9 +2,7 @@ namespace Zlink.Framework.Runtime.Messaging;
 
 internal static class ZLinkStreamActorPacketKind
 {
-    public static bool TryMap(
-        ZlinkStreamMessageKind streamKind,
-        out ZLinkMessageKind messageKind)
+    public static bool TryMap(ZlinkStreamMessageKind streamKind, out ZLinkMessageKind messageKind)
     {
         switch (streamKind)
         {

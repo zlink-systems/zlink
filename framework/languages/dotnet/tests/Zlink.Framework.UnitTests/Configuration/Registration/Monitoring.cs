@@ -1,6 +1,6 @@
+using System.Reflection;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
-using System.Reflection;
 using Zlink.Framework.AspNetCore;
 using Zlink.Framework.Codecs.Protobuf;
 using Zlink.Framework.Runtime.Backend.Contracts;
@@ -16,9 +16,7 @@ public sealed class MonitoringTests : RegistrationValidationSupport
         var property = typeof(ZLinkLocationOptions).GetProperty(propertyName);
 
         Assert.NotNull(property);
-        Assert.Equal(
-            TimeSpan.FromSeconds(3),
-            property.GetValue(new ZLinkLocationOptions()));
+        Assert.Equal(TimeSpan.FromSeconds(3), property.GetValue(new ZLinkLocationOptions()));
         Assert.Null(typeof(IZLinkFrameworkOptions).GetProperty(propertyName));
     }
 
@@ -30,20 +28,21 @@ public sealed class MonitoringTests : RegistrationValidationSupport
             TimeSpan.Zero,
             TimeSpan.FromMilliseconds(-2),
             Timeout.InfiniteTimeSpan,
-            TimeSpan.FromTicks(TimeSpan.TicksPerMillisecond + 1)
+            TimeSpan.FromTicks(TimeSpan.TicksPerMillisecond + 1),
         };
 
         foreach (var invalid in invalidValues)
         {
             var exception = Assert.Throws<ZLinkConfigurationException>(() =>
                 new ServiceCollection().AddZLinkFramework(options =>
-                    SetSessionRelocationSealTimeout(
-                        options.ConfigureLocations(),
-                        invalid)));
+                    SetSessionRelocationSealTimeout(options.ConfigureLocations(), invalid)
+                )
+            );
             Assert.Contains(
                 "SessionRelocationSealTimeout",
                 exception.Message,
-                StringComparison.Ordinal);
+                StringComparison.Ordinal
+            );
         }
     }
 
@@ -55,15 +54,11 @@ public sealed class MonitoringTests : RegistrationValidationSupport
         services.AddZLinkFramework(options =>
         {
             locations = options.ConfigureLocations();
-            SetSessionRelocationSealTimeout(
-                locations,
-                TimeSpan.FromMilliseconds(17));
+            SetSessionRelocationSealTimeout(locations, TimeSpan.FromMilliseconds(17));
         });
 
         Assert.NotNull(locations);
-        SetSessionRelocationSealTimeout(
-            locations,
-            TimeSpan.FromMilliseconds(29));
+        SetSessionRelocationSealTimeout(locations, TimeSpan.FromMilliseconds(29));
         using var provider = services.BuildServiceProvider();
         var registration = provider.GetRequiredService<ZLinkFrameworkRegistration>();
         var coordinator = new ZLinkActorBoundSessionCoordinator(
@@ -71,28 +66,30 @@ public sealed class MonitoringTests : RegistrationValidationSupport
             static () => null,
             static _ => null,
             registration,
-            static () => CancellationToken.None);
+            static () => CancellationToken.None
+        );
         var bindings = Assert.IsType<ZLinkSessionActorBindingTable>(
             typeof(ZLinkActorBoundSessionCoordinator)
-                .GetField(
-                    "_sessionBindings",
-                    BindingFlags.Instance | BindingFlags.NonPublic)!
-                .GetValue(coordinator));
+                .GetField("_sessionBindings", BindingFlags.Instance | BindingFlags.NonPublic)!
+                .GetValue(coordinator)
+        );
         Assert.Equal(
             TimeSpan.FromMilliseconds(17),
             typeof(ZLinkSessionActorBindingTable)
                 .GetField(
                     "_canonicalRelocationSealTimeout",
-                    BindingFlags.Instance | BindingFlags.NonPublic)!
-                .GetValue(bindings));
+                    BindingFlags.Instance | BindingFlags.NonPublic
+                )!
+                .GetValue(bindings)
+        );
     }
 
     private static void SetSessionRelocationSealTimeout(
         ZLinkLocationOptions options,
-        TimeSpan value)
+        TimeSpan value
+    )
     {
-        var property = typeof(ZLinkLocationOptions).GetProperty(
-            "SessionRelocationSealTimeout");
+        var property = typeof(ZLinkLocationOptions).GetProperty("SessionRelocationSealTimeout");
         Assert.NotNull(property);
         property.SetValue(options, value);
     }
@@ -103,7 +100,8 @@ public sealed class MonitoringTests : RegistrationValidationSupport
         var withoutEgress = new ServiceCollection();
         withoutEgress.AddZLinkFramework(options =>
         {
-            var mesh = options.AddRouteMesh("gateway")
+            var mesh = options
+                .AddRouteMesh("gateway")
                 .Listen("tcp://127.0.0.1:7101")
                 .SetRoutingId(RoutingId.From("gateway"));
             mesh.Channel("gateway").Server().SetWeight(0);
@@ -112,13 +110,17 @@ public sealed class MonitoringTests : RegistrationValidationSupport
         using (var provider = withoutEgress.BuildServiceProvider())
         {
             _ = provider;
-            Assert.DoesNotContain(typeof(IZLinkSpotOutbound).Assembly.GetTypes(), IsRemovedSpotEgressClient);
+            Assert.DoesNotContain(
+                typeof(IZLinkSpotOutbound).Assembly.GetTypes(),
+                IsRemovedSpotEgressClient
+            );
         }
 
         var routeMeshEgress = new ServiceCollection();
         routeMeshEgress.AddZLinkFramework(options =>
         {
-            var mesh = options.AddRouteMesh("gateway.route")
+            var mesh = options
+                .AddRouteMesh("gateway.route")
                 .Listen("tcp://127.0.0.1:7301")
                 .SetRoutingId(RoutingId.From("gateway-route"));
             mesh.Channel("gateway.route").Server();
@@ -128,16 +130,19 @@ public sealed class MonitoringTests : RegistrationValidationSupport
         using (var provider = routeMeshEgress.BuildServiceProvider())
         {
             _ = provider;
-            Assert.DoesNotContain(typeof(IZLinkSpotOutbound).Assembly.GetTypes(), IsRemovedSpotEgressClient);
+            Assert.DoesNotContain(
+                typeof(IZLinkSpotOutbound).Assembly.GetTypes(),
+                IsRemovedSpotEgressClient
+            );
         }
     }
 
     private static bool IsRemovedSpotEgressClient(Type type)
     {
         return type.Namespace == "Zlink.Framework.Contracts.Spots"
-               && type.Name.Contains("Routed", StringComparison.Ordinal)
-               && type.Name.Contains("Spot", StringComparison.Ordinal)
-               && type.Name.Contains("Client", StringComparison.Ordinal);
+            && type.Name.Contains("Routed", StringComparison.Ordinal)
+            && type.Name.Contains("Spot", StringComparison.Ordinal)
+            && type.Name.Contains("Client", StringComparison.Ordinal);
     }
 
     [Fact]
@@ -146,10 +151,17 @@ public sealed class MonitoringTests : RegistrationValidationSupport
         var services = new ServiceCollection();
 
         var exception = Assert.Throws<ZLinkConfigurationException>(() =>
-            services.AddZLinkFramework(options => { options.AddFanoutChannel("profile").EnablePublisher(""); }));
+            services.AddZLinkFramework(options =>
+            {
+                options.AddFanoutChannel("profile").EnablePublisher("");
+            })
+        );
 
-        Assert.Contains("Channel publisher bind endpoint must not be empty", exception.Message,
-            StringComparison.Ordinal);
+        Assert.Contains(
+            "Channel publisher bind endpoint must not be empty",
+            exception.Message,
+            StringComparison.Ordinal
+        );
     }
 
     [Fact]
@@ -164,11 +176,18 @@ public sealed class MonitoringTests : RegistrationValidationSupport
             options.UseFilter<TestFilter>();
             options.UseTestLocationStore();
 
-            var profile = options.AddRouteMesh("profile")
+            var profile = options
+                .AddRouteMesh("profile")
                 .Listen("tcp://127.0.0.1:7101")
                 .SetRoutingIdPrefix("profile");
-            profile.Channel("profile").Server()
-                .AddRequestHandler<TestChannelRequestHandler, TestChannelRequest, TestChannelReply>();
+            profile
+                .Channel("profile")
+                .Server()
+                .AddRequestHandler<
+                    TestChannelRequestHandler,
+                    TestChannelRequest,
+                    TestChannelReply
+                >();
 
             {
                 var events = options.AddFanoutChannel("profile.events");
@@ -190,8 +209,9 @@ public sealed class MonitoringTests : RegistrationValidationSupport
                     {
                         var router = spot.Listen("tcp://127.0.0.1:9000");
                     }
-                    spot.Objects().Server().AddSpotFactory<TestSpot>(
-                        "test", factory => factory.DisableRelocation());
+                    spot.Objects()
+                        .Server()
+                        .AddSpotFactory<TestSpot>("test", factory => factory.DisableRelocation());
                 }
             }
         });
@@ -218,7 +238,8 @@ public sealed class MonitoringTests : RegistrationValidationSupport
         services.AddZLinkFramework(options =>
         {
             options.DefaultRequestTimeout = TimeSpan.FromSeconds(30);
-            var mesh = options.AddRouteMesh("route")
+            var mesh = options
+                .AddRouteMesh("route")
                 .Listen("tcp://127.0.0.1:7201")
                 .SetRoutingId(RoutingId.From("route"))
                 .SetDefaultRequestTimeout(TimeSpan.FromSeconds(3));
@@ -230,8 +251,12 @@ public sealed class MonitoringTests : RegistrationValidationSupport
 
         Assert.Equal(
             TimeSpan.FromSeconds(3),
-            registration.SpotNodes["route"].DefaultRequestTimeout);
-        Assert.Equal(TimeSpan.FromSeconds(30), registration.ResolveChannelRequestTimeout("missing"));
+            registration.SpotNodes["route"].DefaultRequestTimeout
+        );
+        Assert.Equal(
+            TimeSpan.FromSeconds(30),
+            registration.ResolveChannelRequestTimeout("missing")
+        );
         Assert.Equal(TimeSpan.FromSeconds(3), registration.ResolveMeshRequestTimeout("route"));
         Assert.Equal(TimeSpan.FromSeconds(30), registration.ResolveMeshRequestTimeout("missing"));
     }
@@ -239,14 +264,19 @@ public sealed class MonitoringTests : RegistrationValidationSupport
     private sealed class FailIfRuntimeStartsBackendAdapterFactory : IZLinkBackendAdapterFactory
     {
         public IZLinkBackendRuntimeContext CreateRuntimeContext() =>
-            throw new InvalidOperationException("Static monitoring validation must run before native startup.");
+            throw new InvalidOperationException(
+                "Static monitoring validation must run before native startup."
+            );
 
-        public IZLinkMonitoringBackendAdapter CreateMonitoringAdapter() => new UnusedMonitoringBackendAdapter();
+        public IZLinkMonitoringBackendAdapter CreateMonitoringAdapter() =>
+            new UnusedMonitoringBackendAdapter();
     }
 
     private sealed class UnusedMonitoringBackendAdapter : IZLinkMonitoringBackendAdapter
     {
         public IZLinkBackendSocketMonitor OpenSocketMonitor(IAsyncDisposable socket) =>
-            throw new InvalidOperationException("Static monitoring validation must not open a monitor.");
+            throw new InvalidOperationException(
+                "Static monitoring validation must not open a monitor."
+            );
     }
 }

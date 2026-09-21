@@ -10,15 +10,14 @@ namespace zlink::framework::runtime
 {
 
 template <typename TSocket>
-receive_flow_state_apply_result_t apply_application_job_receive_flow_state (
-  TSocket &socket,
-  application_job_queue_pressure_state_t state) noexcept
+receive_flow_state_apply_result_t
+apply_application_job_receive_flow_state (TSocket &socket,
+                                          application_job_queue_pressure_state_t state) noexcept
 {
     try {
-        socket.set_receive_flow_state (
-          state == application_job_queue_pressure_state_t::paused
-            ? zlink::receive_flow_state_t::paused
-            : zlink::receive_flow_state_t::running);
+        socket.set_receive_flow_state (state == application_job_queue_pressure_state_t::paused
+                                         ? zlink::receive_flow_state_t::paused
+                                         : zlink::receive_flow_state_t::running);
         return receive_flow_state_apply_result_t::applied;
     }
     catch (const zlink::config_error_t &error) {

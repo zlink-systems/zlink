@@ -21,16 +21,14 @@ namespace
 
 result_t<void> deadline_exceeded ()
 {
-    return result_t<void>::failure (
-      framework_error_kind_t::deadline_exceeded,
-      "logical multicast admission deadline was exceeded");
+    return result_t<void>::failure (framework_error_kind_t::deadline_exceeded,
+                                    "logical multicast admission deadline was exceeded");
 }
 
 result_t<void> runtime_shutdown ()
 {
-    return result_t<void>::failure (
-      framework_error_kind_t::shutting_down,
-      "logical multicast runtime is stopped");
+    return result_t<void>::failure (framework_error_kind_t::shutting_down,
+                                    "logical multicast runtime is stopped");
 }
 
 class logical_multicast_executor_t
@@ -38,8 +36,7 @@ class logical_multicast_executor_t
   public:
     logical_multicast_executor_t ()
     {
-        const auto count = std::max<std::size_t> (
-          2, std::thread::hardware_concurrency ());
+        const auto count = std::max<std::size_t> (2, std::thread::hardware_concurrency ());
         _available = count;
         _workers.reserve (count);
         for (std::size_t index = 0; index < count; ++index)
@@ -67,24 +64,22 @@ class logical_multicast_executor_t
         }
     }
 
-    task_t<void> submit (std::function<result_t<void> ()> work,
-                         std::chrono::milliseconds timeout)
+    task_t<void> submit (std::function<result_t<void> ()> work, std::chrono::milliseconds timeout)
     {
         if (!work) {
-            return task_t<void> (result_t<void>::failure (
-              framework_error_kind_t::protocol_error,
-              "logical multicast call is not bound to a publisher"));
+            return task_t<void> (
+              result_t<void>::failure (framework_error_kind_t::protocol_error,
+                                       "logical multicast call is not bound to a publisher"));
         }
         return enqueue ({std::move (work), {}, {}, {}}, timeout);
     }
 
-    task_t<void> submit (std::function<task_t<void> ()> work,
-                         std::chrono::milliseconds timeout)
+    task_t<void> submit (std::function<task_t<void> ()> work, std::chrono::milliseconds timeout)
     {
         if (!work) {
-            return task_t<void> (result_t<void>::failure (
-              framework_error_kind_t::protocol_error,
-              "logical multicast call is not bound to a publisher"));
+            return task_t<void> (
+              result_t<void>::failure (framework_error_kind_t::protocol_error,
+                                       "logical multicast call is not bound to a publisher"));
         }
         return enqueue ({{}, std::move (work), {}, {}}, timeout);
     }
@@ -98,11 +93,9 @@ class logical_multicast_executor_t
         std::chrono::steady_clock::time_point deadline;
     };
 
-    task_t<void> enqueue (multicast_job_t job,
-                          std::chrono::milliseconds timeout)
+    task_t<void> enqueue (multicast_job_t job, std::chrono::milliseconds timeout)
     {
-        job.completion =
-          std::make_shared<detail::task_completion_source_t<void>> ();
+        job.completion = std::make_shared<detail::task_completion_source_t<void>> ();
         auto task = job.completion->task ();
         job.deadline = std::chrono::steady_clock::now () + timeout;
         bool overflow = false;
@@ -112,8 +105,7 @@ class logical_multicast_executor_t
             std::lock_guard lock (_mutex);
             if (_stopping) {
                 stopping = true;
-            }
-            else if (_available != 0 && _handoff) {
+            } else if (_available != 0 && _handoff) {
                 if (_handoff->deadline <= std::chrono::steady_clock::now ()) {
                     expired = std::move (_handoff);
                     _handoff.reset ();
@@ -173,9 +165,7 @@ class logical_multicast_executor_t
                 if (job.async_work) {
                     auto observed = std::make_shared<task_t<void>> (job.async_work ());
                     detail::observe_task_completion (
-                      *observed, [this, observed] (const result_t<void> &) {
-                          release_slot ();
-                      });
+                      *observed, [this, observed] (const result_t<void> &) { release_slot (); });
                     continue;
                 }
                 (void) job.work ();
@@ -212,9 +202,8 @@ class logical_multicast_executor_t
                         break;
                     }
                     const auto deadline = _handoff->deadline;
-                    if (!_changed.wait_until (lock, deadline, [this] {
-                            return _stopping || _available != 0;
-                        })) {
+                    if (!_changed.wait_until (lock, deadline,
+                                              [this] { return _stopping || _available != 0; })) {
                         expired = std::move (_handoff);
                         _handoff.reset ();
                         _changed.notify_all ();
@@ -252,20 +241,16 @@ logical_multicast_executor_t &multicast_executor ()
 namespace zlink::framework::detail
 {
 
-task_t<void>
-submit_logical_multicast_task (std::function<result_t<void> ()> submit,
-                               std::chrono::milliseconds timeout)
+task_t<void> submit_logical_multicast_task (std::function<result_t<void> ()> submit,
+                                            std::chrono::milliseconds timeout)
 {
-    return runtime::messaging::multicast_executor ().submit (
-      std::move (submit), timeout);
+    return runtime::messaging::multicast_executor ().submit (std::move (submit), timeout);
 }
 
-task_t<void>
-submit_logical_multicast_async_task (std::function<task_t<void> ()> submit,
-                                     std::chrono::milliseconds timeout)
+task_t<void> submit_logical_multicast_async_task (std::function<task_t<void> ()> submit,
+                                                  std::chrono::milliseconds timeout)
 {
-    return runtime::messaging::multicast_executor ().submit (
-      std::move (submit), timeout);
+    return runtime::messaging::multicast_executor ().submit (std::move (submit), timeout);
 }
 
 } // namespace zlink::framework::detail

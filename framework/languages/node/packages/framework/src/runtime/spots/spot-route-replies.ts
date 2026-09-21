@@ -34,15 +34,11 @@ export function submitRoutePayloadReply(
   payload: unknown
 ): boolean {
   if (envelope === undefined) {
-    return submitRouteReply(
-      received.reply()
-        .message(Buffer.from(JSON.stringify(payload)))
-    );
+    return submitRouteReply(received.reply().message(Buffer.from(JSON.stringify(payload))));
   }
-  return submitRouteReply(appendRouteReplyParts(
-    received.reply(),
-    encodeChannelReplyParts(envelope.header, payload)
-  ));
+  return submitRouteReply(
+    appendRouteReplyParts(received.reply(), encodeChannelReplyParts(envelope.header, payload))
+  );
 }
 
 export function submitSpotRouteBridgeReply(
@@ -59,15 +55,14 @@ export function submitRoutedActorJoinReply(
   payload: unknown
 ): boolean {
   if (decoded.raw) {
-    return submitRouteReply(
-      received.reply()
-        .message(Buffer.from(JSON.stringify(payload)))
-    );
+    return submitRouteReply(received.reply().message(Buffer.from(JSON.stringify(payload))));
   }
-  return submitRouteReply(appendRouteReplyParts(
-    received.reply(),
-    encodeChannelReplyParts(requireRoutedActorJoinEnvelope(decoded).header, payload)
-  ));
+  return submitRouteReply(
+    appendRouteReplyParts(
+      received.reply(),
+      encodeChannelReplyParts(requireRoutedActorJoinEnvelope(decoded).header, payload)
+    )
+  );
 }
 
 export function submitRoutedActorJoinError(
@@ -83,13 +78,15 @@ export function submitRoutedActorJoinError(
       actorGeneration: '0'
     });
   }
-  return submitRouteReply(appendRouteReplyParts(
-    received.reply(),
-    encodeChannelErrorReplyParts(
-      requireRoutedActorJoinEnvelope(decoded).header,
-      error instanceof Error ? error.message : String(error)
+  return submitRouteReply(
+    appendRouteReplyParts(
+      received.reply(),
+      encodeChannelErrorReplyParts(
+        requireRoutedActorJoinEnvelope(decoded).header,
+        error instanceof Error ? error.message : String(error)
+      )
     )
-  ));
+  );
 }
 
 export function appendRouteReplyParts(
@@ -120,7 +117,9 @@ function requireRoutedActorJoinEnvelope(
 }
 
 function isNativeBadAddress(error: unknown): boolean {
-  return typeof error === 'object' &&
+  return (
+    typeof error === 'object' &&
     error !== null &&
-    Number((error as { nativeErrno?: unknown }).nativeErrno) === 14;
+    Number((error as { nativeErrno?: unknown }).nativeErrno) === 14
+  );
 }

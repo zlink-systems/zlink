@@ -22,8 +22,7 @@ class location_runtime_query_t
     virtual task_t<std::optional<location_object_entry_t>>
     find_spot_location (spot_id_t spot_id) = 0;
     virtual task_t<location_page_t<location_object_entry_t>>
-    list_object_locations (location_object_filter_t filter,
-                           location_page_request_t page = {}) = 0;
+    list_object_locations (location_object_filter_t filter, location_page_request_t page = {}) = 0;
 };
 
 } // namespace zlink::framework

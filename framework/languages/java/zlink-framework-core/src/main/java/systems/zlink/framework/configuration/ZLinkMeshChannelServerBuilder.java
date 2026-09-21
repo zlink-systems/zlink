@@ -10,18 +10,16 @@ public interface ZLinkMeshChannelServerBuilder {
     ZLinkMeshChannelServerBuilder addHandlerGroup(String groupName);
 
     <THandler extends ZLinkSendHandler<TMessage>, TMessage>
-    ZLinkMeshChannelServerBuilder addSendHandler(
-        Class<THandler> handlerType,
-        Class<TMessage> messageType);
+            ZLinkMeshChannelServerBuilder addSendHandler(
+                    Class<THandler> handlerType, Class<TMessage> messageType);
 
     <THandler extends ZLinkRouteSendHandler<TMessage>, TMessage>
-    ZLinkMeshChannelServerBuilder addRouteSendHandler(
-        Class<THandler> handlerType,
-        Class<TMessage> messageType);
+            ZLinkMeshChannelServerBuilder addRouteSendHandler(
+                    Class<THandler> handlerType, Class<TMessage> messageType);
 
     <THandler extends ZLinkRequestHandler<TRequest, TReply>, TRequest, TReply>
-    ZLinkMeshChannelServerBuilder addRequestHandler(
-        Class<THandler> handlerType,
-        Class<TRequest> requestType,
-        Class<TReply> replyType);
+            ZLinkMeshChannelServerBuilder addRequestHandler(
+                    Class<THandler> handlerType,
+                    Class<TRequest> requestType,
+                    Class<TReply> replyType);
 }

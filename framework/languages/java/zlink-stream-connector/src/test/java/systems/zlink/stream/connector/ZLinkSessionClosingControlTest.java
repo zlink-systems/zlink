@@ -9,15 +9,17 @@ final class ZLinkSessionClosingControlTest {
     @Test
     void decodesServerDrainCloseReason() {
         assertEquals(
-            ZLinkStreamCloseReason.SERVER_DRAIN,
-            ZLinkSessionClosingControl.decode(new byte[] {1, 4, 0, 0}));
+                ZLinkStreamCloseReason.SERVER_DRAIN,
+                ZLinkSessionClosingControl.decode(new byte[] {1, 4, 0, 0}));
     }
 
     @Test
     void rejectsUnknownVersionAndReason() {
-        assertThrows(IllegalArgumentException.class,
-            () -> ZLinkSessionClosingControl.decode(new byte[] {2, 4, 0, 0}));
-        assertThrows(IllegalArgumentException.class,
-            () -> ZLinkSessionClosingControl.decode(new byte[] {1, 7, 0, 0}));
+        assertThrows(
+                IllegalArgumentException.class,
+                () -> ZLinkSessionClosingControl.decode(new byte[] {2, 4, 0, 0}));
+        assertThrows(
+                IllegalArgumentException.class,
+                () -> ZLinkSessionClosingControl.decode(new byte[] {1, 7, 0, 0}));
     }
 }

@@ -16,11 +16,7 @@ internal sealed class ZLinkCompletionDispatcher
 
     internal ZLinkCompletionDispatcher()
     {
-        var worker = new Thread(Run)
-        {
-            IsBackground = true,
-            Name = "zlink-framework-completion"
-        };
+        var worker = new Thread(Run) { IsBackground = true, Name = "zlink-framework-completion" };
         if (ExecutionContext.IsFlowSuppressed())
             worker.Start();
         else

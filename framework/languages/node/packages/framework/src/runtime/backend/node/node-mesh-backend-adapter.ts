@@ -21,11 +21,15 @@ export class ZLinkNodeMeshBackendAdapter implements ZLinkMeshBackendAdapter {
     }
   ): ZLinkBackendMeshNode {
     if (options.trustProfile !== undefined) {
-      throw new Error('M6A raw MeshNode trust profiles require the service admission security runtime.');
+      throw new Error(
+        'M6A raw MeshNode trust profiles require the service admission security runtime.'
+      );
     }
     const bindingContext = context.nativeInstance;
     if (!isBindingContext(bindingContext)) {
-      throw new TypeError('Node MeshNode creation requires the Node binding Context owned by the host.');
+      throw new TypeError(
+        'Node MeshNode creation requires the Node binding Context owned by the host.'
+      );
     }
     return new ZLinkNodeRawMeshBackend(
       options.meshName,
@@ -39,7 +43,10 @@ export class ZLinkNodeMeshBackendAdapter implements ZLinkMeshBackendAdapter {
 }
 
 function isBindingContext(value: unknown): value is Context {
-  return typeof value === 'object' && value !== null
-    && typeof (value as { shutdown?: unknown }).shutdown === 'function'
-    && typeof (value as { close?: unknown }).close === 'function';
+  return (
+    typeof value === 'object' &&
+    value !== null &&
+    typeof (value as { shutdown?: unknown }).shutdown === 'function' &&
+    typeof (value as { close?: unknown }).close === 'function'
+  );
 }

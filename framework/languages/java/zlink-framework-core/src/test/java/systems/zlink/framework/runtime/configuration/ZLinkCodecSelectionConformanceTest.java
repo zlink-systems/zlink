@@ -8,6 +8,19 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+
+import org.junit.jupiter.api.Test;
+
+import systems.zlink.framework.ZLinkEncodedPayload;
+import systems.zlink.framework.ZLinkMessageSerializer;
+import systems.zlink.framework.errors.ZLinkConfigurationException;
+import systems.zlink.framework.errors.ZLinkFrameworkErrorKind;
+import systems.zlink.framework.errors.ZLinkFrameworkException;
+import systems.zlink.framework.messaging.ZLinkMessage;
+import systems.zlink.framework.runtime.internal.configuration.ZLinkCodecRegistration;
+import systems.zlink.framework.runtime.messaging.ZLinkPayloadEncoding;
+import systems.zlink.framework.streams.ZLinkStreamCodec;
+
 import java.lang.reflect.Proxy;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
@@ -22,16 +35,6 @@ import java.util.concurrent.Future;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
-import org.junit.jupiter.api.Test;
-import systems.zlink.framework.ZLinkEncodedPayload;
-import systems.zlink.framework.ZLinkMessageSerializer;
-import systems.zlink.framework.errors.ZLinkConfigurationException;
-import systems.zlink.framework.errors.ZLinkFrameworkErrorKind;
-import systems.zlink.framework.errors.ZLinkFrameworkException;
-import systems.zlink.framework.messaging.ZLinkMessage;
-import systems.zlink.framework.runtime.internal.configuration.ZLinkCodecRegistration;
-import systems.zlink.framework.runtime.messaging.ZLinkPayloadEncoding;
-import systems.zlink.framework.streams.ZLinkStreamCodec;
 
 final class ZLinkCodecSelectionConformanceTest {
     private static final ZLinkMessageSerializer JSON = new TaggedSerializer("json");
@@ -48,15 +51,15 @@ final class ZLinkCodecSelectionConformanceTest {
             if (scenario.has("expectedError")) {
                 assertEquals("configurationError", scenario.path("expectedError").asText());
                 assertThrows(
-                    ZLinkConfigurationException.class,
-                    () -> registration.addSerializer(input, new TaggedSerializer("candidate")));
+                        ZLinkConfigurationException.class,
+                        () -> registration.addSerializer(input, new TaggedSerializer("candidate")));
                 continue;
             }
             registration.addSerializer(input, new TaggedSerializer("candidate"));
             assertEquals(
-                List.of(scenario.path("expected").asText()),
-                List.copyOf(registration.serializers().keySet()),
-                scenario.path("name").asText());
+                    List.of(scenario.path("expected").asText()),
+                    List.copyOf(registration.serializers().keySet()),
+                    scenario.path("name").asText());
         }
     }
 
@@ -68,7 +71,7 @@ final class ZLinkCodecSelectionConformanceTest {
 
         for (JsonNode input : scenario.path("registrationInputs")) {
             ZLinkMessageSerializer serializer =
-                new TaggedSerializer("registration-" + registrations.size());
+                    new TaggedSerializer("registration-" + registrations.size());
             registrations.add(serializer);
             registration.addSerializer(input.asText(), serializer, ignored -> true);
         }
@@ -76,8 +79,8 @@ final class ZLinkCodecSelectionConformanceTest {
         assertEquals(scenario.path("finalEntryCount").asInt(), registration.serializers().size());
         int selected = scenario.path("selectedRegistrationIndex").asInt();
         assertSame(
-            registrations.get(selected),
-            registration.serializerForSending(BaseMessage.class, JSON));
+                registrations.get(selected),
+                registration.serializerForSending(BaseMessage.class, JSON));
         assertEquals("application/x-base", registration.contentTypeFor(BaseMessage.class));
     }
 
@@ -95,63 +98,59 @@ final class ZLinkCodecSelectionConformanceTest {
                 TaggedSerializer serializer = new TaggedSerializer(name);
                 serializers.put(name, serializer);
                 registration.addSerializer(
-                    extension.path("contentType").asText(),
-                    serializer,
-                    declared -> matchesDeclaredType(extension, declared));
+                        extension.path("contentType").asText(),
+                        serializer,
+                        declared -> matchesDeclaredType(extension, declared));
                 registration.addStreamCodec(
-                    extension.path("contentType").asText(),
-                    streamCodec(name));
+                        extension.path("contentType").asText(), streamCodec(name));
             }
             registration.freeze();
 
             Class<?> declaredType = messageType(scenario.path("declaredType").asText());
             Object runtimeValue = messageValue(scenario.path("runtimeType").asText());
             String expectedCodec = scenario.path("expectedCodec").asText();
-            ZLinkMessageSerializer expectedSerializer = "json".equals(expectedCodec)
-                ? JSON
-                : serializers.get(expectedCodec);
+            ZLinkMessageSerializer expectedSerializer =
+                    "json".equals(expectedCodec) ? JSON : serializers.get(expectedCodec);
 
             assertEquals(
-                scenario.path("expectedContentType").asText(),
-                registration.contentTypeFor(declaredType),
-                scenario.path("name").asText());
+                    scenario.path("expectedContentType").asText(),
+                    registration.contentTypeFor(declaredType),
+                    scenario.path("name").asText());
             assertSame(
-                expectedSerializer,
-                registration.serializerForSending(declaredType, JSON),
-                scenario.path("name").asText());
+                    expectedSerializer,
+                    registration.serializerForSending(declaredType, JSON),
+                    scenario.path("name").asText());
 
             ZLinkMessageSerializer composite = registration.serializerWithFallback(JSON);
             ZLinkEncodedPayload declaredEncoded =
-                ZLinkCodecRegistration.serializeForDeclaredType(
-                    composite, runtimeValue, declaredType);
+                    ZLinkCodecRegistration.serializeForDeclaredType(
+                            composite, runtimeValue, declaredType);
             assertTrue(
-                text(declaredEncoded).startsWith(expectedCodec + ":"),
-                scenario.path("name").asText());
+                    text(declaredEncoded).startsWith(expectedCodec + ":"),
+                    scenario.path("name").asText());
 
             ZLinkMessage outbound = ZLinkMessage.of(runtimeValue, declaredType);
             assertEquals(
-                "json".equals(expectedCodec)
-                    ? ZLinkStreamCodec.JSON
-                    : streamCodec(expectedCodec),
-                ZLinkPayloadEncoding.streamCodec(
-                    composite, outbound, ZLinkStreamCodec.RAW),
-                scenario.path("name").asText());
+                    "json".equals(expectedCodec)
+                            ? ZLinkStreamCodec.JSON
+                            : streamCodec(expectedCodec),
+                    ZLinkPayloadEncoding.streamCodec(composite, outbound, ZLinkStreamCodec.RAW),
+                    scenario.path("name").asText());
             ZLinkPayloadEncoding.EncodedPayload wireEncoded =
-                ZLinkPayloadEncoding.encode(composite, outbound);
+                    ZLinkPayloadEncoding.encode(composite, outbound);
             try {
                 assertEquals(
-                    scenario.path("expectedContentType").asText(),
-                    wireEncoded.contentType(),
-                    scenario.path("name").asText());
+                        scenario.path("expectedContentType").asText(),
+                        wireEncoded.contentType(),
+                        scenario.path("name").asText());
                 assertEquals(
-                    declaredType.getSimpleName(),
-                    wireEncoded.packetName(),
-                    scenario.path("name").asText());
+                        declaredType.getSimpleName(),
+                        wireEncoded.packetName(),
+                        scenario.path("name").asText());
                 assertTrue(
-                    new String(
-                        wireEncoded.payload().toByteArray(),
-                        StandardCharsets.UTF_8).startsWith(expectedCodec + ":"),
-                    scenario.path("name").asText());
+                        new String(wireEncoded.payload().toByteArray(), StandardCharsets.UTF_8)
+                                .startsWith(expectedCodec + ":"),
+                        scenario.path("name").asText());
             } finally {
                 wireEncoded.payload().close();
             }
@@ -168,9 +167,9 @@ final class ZLinkCodecSelectionConformanceTest {
             TaggedSerializer serializer = new TaggedSerializer(name);
             serializers.put(name, serializer);
             registration.addSerializer(
-                extension.path("contentType").asText(),
-                serializer,
-                declared -> matchesDeclaredType(extension, declared));
+                    extension.path("contentType").asText(),
+                    serializer,
+                    declared -> matchesDeclaredType(extension, declared));
         }
         registration.freeze();
 
@@ -178,16 +177,19 @@ final class ZLinkCodecSelectionConformanceTest {
             String wireContentType = scenario.path("wireContentType").asText();
             if ("success".equals(scenario.path("expectedTerminal").asText())) {
                 assertSame(
-                    serializers.get(scenario.path("expectedCodec").asText()),
-                    registration.serializerForReceivedContentType(wireContentType, JSON),
-                    scenario.path("name").asText());
+                        serializers.get(scenario.path("expectedCodec").asText()),
+                        registration.serializerForReceivedContentType(wireContentType, JSON),
+                        scenario.path("name").asText());
                 continue;
             }
             assertEquals("protocolError", scenario.path("expectedTerminal").asText());
-            ZLinkFrameworkException failure = assertThrows(
-                ZLinkFrameworkException.class,
-                () -> registration.serializerForReceivedContentType(wireContentType, JSON),
-                scenario.path("name").asText());
+            ZLinkFrameworkException failure =
+                    assertThrows(
+                            ZLinkFrameworkException.class,
+                            () ->
+                                    registration.serializerForReceivedContentType(
+                                            wireContentType, JSON),
+                            scenario.path("name").asText());
             assertEquals(ZLinkFrameworkErrorKind.PROTOCOL_ERROR, failure.kind());
         }
     }
@@ -204,33 +206,42 @@ final class ZLinkCodecSelectionConformanceTest {
         registration.freeze();
 
         assertSame(
-            startup,
-            registration.serializerForReceivedContentType("application/x-startup", JSON));
+                startup,
+                registration.serializerForReceivedContentType("application/x-startup", JSON));
         assertThrows(
-            ZLinkConfigurationException.class,
-            () -> registration.addSerializer(
-                "application/x-late", new TaggedSerializer("late"), ignored -> true));
+                ZLinkConfigurationException.class,
+                () ->
+                        registration.addSerializer(
+                                "application/x-late",
+                                new TaggedSerializer("late"),
+                                ignored -> true));
         assertThrows(
-            ZLinkConfigurationException.class,
-            () -> registration.use(codecs -> codecs.addSerializer(
-                "application/x-late", new TaggedSerializer("late"))));
+                ZLinkConfigurationException.class,
+                () ->
+                        registration.use(
+                                codecs ->
+                                        codecs.addSerializer(
+                                                "application/x-late",
+                                                new TaggedSerializer("late"))));
     }
 
     @Test
     void selectedCustomStreamCodecRequiresAnExactMapping() {
         ZLinkCodecRegistration registration = new ZLinkCodecRegistration();
         registration.addSerializer(
-            "application/x-unmapped",
-            new TaggedSerializer("unmapped"),
-            BaseMessage.class::equals);
+                "application/x-unmapped",
+                new TaggedSerializer("unmapped"),
+                BaseMessage.class::equals);
         ZLinkMessageSerializer composite = registration.serializerWithFallback(JSON);
 
-        ZLinkConfigurationException failure = assertThrows(
-            ZLinkConfigurationException.class,
-            () -> ZLinkPayloadEncoding.streamCodec(
-                composite,
-                ZLinkMessage.of(new BaseMessage(), BaseMessage.class),
-                ZLinkStreamCodec.JSON));
+        ZLinkConfigurationException failure =
+                assertThrows(
+                        ZLinkConfigurationException.class,
+                        () ->
+                                ZLinkPayloadEncoding.streamCodec(
+                                        composite,
+                                        ZLinkMessage.of(new BaseMessage(), BaseMessage.class),
+                                        ZLinkStreamCodec.JSON));
 
         assertTrue(failure.getMessage().contains("does not have a STREAM codec mapping"));
     }
@@ -240,9 +251,7 @@ final class ZLinkCodecSelectionConformanceTest {
         JsonNode scenario = fixture().path("cacheScenarios").get(0);
         int distinctTypes = scenario.path("distinctDeclaredTypes").asInt();
         int cachedTypes = scenario.path("cachedTypes").asInt();
-        assertEquals(
-            fixture().path("limits").path("sendTypeCacheCapacity").asInt(),
-            cachedTypes);
+        assertEquals(fixture().path("limits").path("sendTypeCacheCapacity").asInt(), cachedTypes);
         assertEquals(distinctTypes - cachedTypes, scenario.path("uncachedTypes").asInt());
         assertFalse(scenario.path("existingCachedSelectionChanges").asBoolean());
         assertTrue(scenario.path("uncachedTypeReevaluatesSelector").asBoolean());
@@ -251,12 +260,12 @@ final class ZLinkCodecSelectionConformanceTest {
         AtomicBoolean matches = new AtomicBoolean(true);
         ZLinkCodecRegistration registration = new ZLinkCodecRegistration();
         registration.addSerializer(
-            "application/x-cache",
-            new TaggedSerializer("cache"),
-            ignored -> {
-                selectorCalls.incrementAndGet();
-                return matches.get();
-            });
+                "application/x-cache",
+                new TaggedSerializer("cache"),
+                ignored -> {
+                    selectorCalls.incrementAndGet();
+                    return matches.get();
+                });
         registration.freeze();
 
         List<Class<?>> types = distinctProxyTypes(distinctTypes);
@@ -279,21 +288,21 @@ final class ZLinkCodecSelectionConformanceTest {
         CountDownLatch releaseSelector = new CountDownLatch(1);
         ZLinkCodecRegistration registration = new ZLinkCodecRegistration();
         registration.addSerializer(
-            "application/x-single-flight",
-            new TaggedSerializer("single-flight"),
-            ignored -> {
-                selectorCalls.incrementAndGet();
-                selectorEntered.countDown();
-                try {
-                    if (!releaseSelector.await(5, TimeUnit.SECONDS)) {
-                        throw new AssertionError("selector release timed out");
+                "application/x-single-flight",
+                new TaggedSerializer("single-flight"),
+                ignored -> {
+                    selectorCalls.incrementAndGet();
+                    selectorEntered.countDown();
+                    try {
+                        if (!releaseSelector.await(5, TimeUnit.SECONDS)) {
+                            throw new AssertionError("selector release timed out");
+                        }
+                    } catch (InterruptedException interrupted) {
+                        Thread.currentThread().interrupt();
+                        throw new AssertionError(interrupted);
                     }
-                } catch (InterruptedException interrupted) {
-                    Thread.currentThread().interrupt();
-                    throw new AssertionError(interrupted);
-                }
-                return true;
-            });
+                    return true;
+                });
         registration.freeze();
 
         var executor = Executors.newFixedThreadPool(12);
@@ -301,10 +310,12 @@ final class ZLinkCodecSelectionConformanceTest {
             CountDownLatch start = new CountDownLatch(1);
             List<Future<String>> results = new ArrayList<>();
             for (int index = 0; index < 24; index++) {
-                results.add(executor.submit(() -> {
-                    start.await();
-                    return registration.contentTypeFor(BaseMessage.class);
-                }));
+                results.add(
+                        executor.submit(
+                                () -> {
+                                    start.await();
+                                    return registration.contentTypeFor(BaseMessage.class);
+                                }));
             }
             start.countDown();
             assertTrue(selectorEntered.await(5, TimeUnit.SECONDS));
@@ -361,8 +372,8 @@ final class ZLinkCodecSelectionConformanceTest {
             case "baseCodec" -> ZLinkStreamCodec.PROTOBUF;
             case "broadCodec" -> ZLinkStreamCodec.MESSAGE_PACK;
             case "otherCodec" -> ZLinkStreamCodec.RAW;
-            default -> throw new AssertionError(
-                "unknown fixture codec extension: " + extensionName);
+            default ->
+                    throw new AssertionError("unknown fixture codec extension: " + extensionName);
         };
     }
 
@@ -370,9 +381,8 @@ final class ZLinkCodecSelectionConformanceTest {
     private static List<Class<?>> distinctProxyTypes(int count) {
         List<Class<?>> types = new ArrayList<>(count);
         for (int index = 0; index < count; index++) {
-            ClassLoader loader = new ClassLoader(
-                ZLinkCodecSelectionConformanceTest.class.getClassLoader()) {
-            };
+            ClassLoader loader =
+                    new ClassLoader(ZLinkCodecSelectionConformanceTest.class.getClassLoader()) {};
             types.add(Proxy.getProxyClass(loader, Runnable.class));
         }
         return types;
@@ -389,8 +399,7 @@ final class ZLinkCodecSelectionConformanceTest {
     private static Path sharedFixture() {
         Path current = Path.of(System.getProperty("user.dir")).toAbsolutePath();
         while (current != null) {
-            Path candidate = current.resolve(
-                "runtime/conformance/codec-selection-v1.json");
+            Path candidate = current.resolve("runtime/conformance/codec-selection-v1.json");
             if (Files.isRegularFile(candidate)) {
                 return candidate;
             }
@@ -399,24 +408,19 @@ final class ZLinkCodecSelectionConformanceTest {
         throw new IllegalStateException("shared codec selection fixture was not found");
     }
 
-    static class BaseMessage {
-    }
+    static class BaseMessage {}
 
-    static final class DerivedMessage extends BaseMessage {
-    }
+    static final class DerivedMessage extends BaseMessage {}
 
-    static final class OtherMessage {
-    }
+    static final class OtherMessage {}
 
-    static final class UnregisteredMessage {
-    }
+    static final class UnregisteredMessage {}
 
     private record TaggedSerializer(String tag) implements ZLinkMessageSerializer {
         @Override
         public <T> ZLinkEncodedPayload serialize(T value) {
             String type = value == null ? "null" : value.getClass().getSimpleName();
-            return ZLinkEncodedPayload.from(
-                (tag + ":" + type).getBytes(StandardCharsets.UTF_8));
+            return ZLinkEncodedPayload.from((tag + ":" + type).getBytes(StandardCharsets.UTF_8));
         }
 
         @Override

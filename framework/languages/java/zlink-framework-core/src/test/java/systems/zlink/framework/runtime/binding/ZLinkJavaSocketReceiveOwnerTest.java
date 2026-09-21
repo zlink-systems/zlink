@@ -5,15 +5,8 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
-import java.time.Duration;
-import java.util.List;
-import java.util.concurrent.CompletionStage;
-import java.util.concurrent.ExecutorService;
-import java.util.concurrent.Executors;
-import java.util.concurrent.Future;
-import java.util.concurrent.TimeUnit;
-import java.util.concurrent.atomic.AtomicReference;
 import org.junit.jupiter.api.Test;
+
 import systems.zlink.contracts.core.RoutingId;
 import systems.zlink.contracts.core.Zlink;
 import systems.zlink.contracts.messaging.Message;
@@ -25,16 +18,23 @@ import systems.zlink.contracts.sockets.RouterSocket;
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendReceived;
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendRecvMode;
 
+import java.time.Duration;
+import java.util.List;
+import java.util.concurrent.CompletionStage;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicReference;
+
 final class ZLinkJavaSocketReceiveOwnerTest {
     private static final Duration OPERATION_TIMEOUT = Duration.ofSeconds(2);
 
     @Test
     void subscriberReadinessDoesNotClaimAnUnsupportedCompletionQueue() {
         try (var context = Zlink.createContext();
-             var subscriber = new ZLinkJavaSubscriberSocket(
-                 context.createSubSocket())) {
-            assertDoesNotThrow(() ->
-                subscriber.waitForReadable(Duration.ZERO));
+                var subscriber = new ZLinkJavaSubscriberSocket(context.createSubSocket())) {
+            assertDoesNotThrow(() -> subscriber.waitForReadable(Duration.ZERO));
         }
     }
 
@@ -42,9 +42,9 @@ final class ZLinkJavaSocketReceiveOwnerTest {
     void dealerRequestReplyArrivesThroughTheReceivePollerCompletionOwner() throws Exception {
         String endpoint = "inproc://receive-owner-dealer-request-" + System.nanoTime();
         try (var context = Zlink.createContext();
-             DealerSocket nativeDealer = context.createDealerSocket();
-             RouterSocket nativeRouter = context.createRouterSocket();
-             Received request = new Received()) {
+                DealerSocket nativeDealer = context.createDealerSocket();
+                RouterSocket nativeRouter = context.createRouterSocket();
+                Received request = new Received()) {
             nativeRouter.options().recvTimeout(OPERATION_TIMEOUT);
             nativeRouter.bind(endpoint);
             nativeDealer.connect(endpoint);
@@ -57,13 +57,14 @@ final class ZLinkJavaSocketReceiveOwnerTest {
 
                 List<Message> parts = List.of(Message.from("ping"));
                 CompletionStage<ZLinkBackendReceived> reply =
-                    dealer.request(parts, OPERATION_TIMEOUT);
+                        dealer.request(parts, OPERATION_TIMEOUT);
                 assertTrue(nativeRouter.recv(request, RecvFlags.NONE));
                 request.reply().message(Message.from("pong")).submit();
                 dealer.waitForReadable(OPERATION_TIMEOUT);
 
-                try (ZLinkBackendReceived received = reply.toCompletableFuture()
-                        .get(OPERATION_TIMEOUT.toMillis(), TimeUnit.MILLISECONDS)) {
+                try (ZLinkBackendReceived received =
+                        reply.toCompletableFuture()
+                                .get(OPERATION_TIMEOUT.toMillis(), TimeUnit.MILLISECONDS)) {
                     assertEquals("pong", received.parts().get(0).toUtf8String());
                 } finally {
                     parts.forEach(Message::close);
@@ -79,21 +80,22 @@ final class ZLinkJavaSocketReceiveOwnerTest {
         String endpoint = "inproc://receive-owner-topology-" + System.nanoTime();
         String additionalEndpoint = endpoint + "-additional";
         try (var context = Zlink.createContext();
-             RouterSocket nativeRouter = context.createRouterSocket();
-             DealerSocket nativeDealer = context.createDealerSocket();
-             ExecutorService executor = Executors.newFixedThreadPool(2)) {
+                RouterSocket nativeRouter = context.createRouterSocket();
+                DealerSocket nativeDealer = context.createDealerSocket();
+                ExecutorService executor = Executors.newFixedThreadPool(2)) {
             nativeRouter.options().recvTimeout(Duration.ofSeconds(5));
             ZLinkJavaRouterSocket router = new ZLinkJavaRouterSocket(nativeRouter);
             router.bind(endpoint);
             nativeDealer.connect(endpoint);
             AtomicReference<Thread> receiveOwner = new AtomicReference<>();
-            Future<?> receive = executor.submit(() -> {
-                receiveOwner.set(Thread.currentThread());
-                assertNotNull(router.recv(ZLinkBackendRecvMode.BLOCK));
-            });
+            Future<?> receive =
+                    executor.submit(
+                            () -> {
+                                receiveOwner.set(Thread.currentThread());
+                                assertNotNull(router.recv(ZLinkBackendRecvMode.BLOCK));
+                            });
             awaitReceiveEntry(receiveOwner, ZLinkJavaRouterSocket.class);
-            Future<?> topology = executor.submit(() ->
-                router.connect(additionalEndpoint));
+            Future<?> topology = executor.submit(() -> router.connect(additionalEndpoint));
 
             try {
                 assertDoesNotThrow(() -> topology.get(1, TimeUnit.SECONDS));
@@ -110,9 +112,9 @@ final class ZLinkJavaSocketReceiveOwnerTest {
         RoutingId dealerRid = RoutingId.from("receive-owner-dealer");
         String endpoint = "inproc://receive-owner-dealer-" + System.nanoTime();
         try (var context = Zlink.createContext();
-             DealerSocket nativeDealer = context.createDealerSocket();
-             RouterSocket nativeRouter = context.createRouterSocket();
-             ExecutorService executor = Executors.newFixedThreadPool(2)) {
+                DealerSocket nativeDealer = context.createDealerSocket();
+                RouterSocket nativeRouter = context.createRouterSocket();
+                ExecutorService executor = Executors.newFixedThreadPool(2)) {
             nativeDealer.options().recvTimeout(Duration.ofSeconds(5));
             nativeDealer.setRoutingId(dealerRid);
             nativeRouter.bind(endpoint);
@@ -120,13 +122,15 @@ final class ZLinkJavaSocketReceiveOwnerTest {
             RoutingId admittedRid = admitDealer(nativeDealer, nativeRouter);
             ZLinkJavaDealerSocket dealer = new ZLinkJavaDealerSocket(nativeDealer);
             AtomicReference<Thread> receiveOwner = new AtomicReference<>();
-            Future<?> receive = executor.submit(() -> {
-                receiveOwner.set(Thread.currentThread());
-                assertNotNull(dealer.recv(ZLinkBackendRecvMode.BLOCK));
-            });
+            Future<?> receive =
+                    executor.submit(
+                            () -> {
+                                receiveOwner.set(Thread.currentThread());
+                                assertNotNull(dealer.recv(ZLinkBackendRecvMode.BLOCK));
+                            });
             awaitReceiveEntry(receiveOwner, ZLinkJavaDealerSocket.class);
-            Future<?> flow = executor.submit(() ->
-                dealer.setReceiveFlowState(ReceiveFlowState.RUNNING));
+            Future<?> flow =
+                    executor.submit(() -> dealer.setReceiveFlowState(ReceiveFlowState.RUNNING));
 
             try {
                 assertDoesNotThrow(() -> flow.get(1, TimeUnit.SECONDS));
@@ -142,21 +146,23 @@ final class ZLinkJavaSocketReceiveOwnerTest {
     void routerReceiveFlowEntryDoesNotWaitForTheReceiveOwner() throws Exception {
         String endpoint = "inproc://receive-owner-router-" + System.nanoTime();
         try (var context = Zlink.createContext();
-             RouterSocket nativeRouter = context.createRouterSocket();
-             DealerSocket nativeDealer = context.createDealerSocket();
-             ExecutorService executor = Executors.newFixedThreadPool(2)) {
+                RouterSocket nativeRouter = context.createRouterSocket();
+                DealerSocket nativeDealer = context.createDealerSocket();
+                ExecutorService executor = Executors.newFixedThreadPool(2)) {
             nativeRouter.options().recvTimeout(Duration.ofSeconds(5));
             nativeRouter.bind(endpoint);
             nativeDealer.connect(endpoint);
             ZLinkJavaRouterSocket router = new ZLinkJavaRouterSocket(nativeRouter);
             AtomicReference<Thread> receiveOwner = new AtomicReference<>();
-            Future<?> receive = executor.submit(() -> {
-                receiveOwner.set(Thread.currentThread());
-                assertNotNull(router.recv(ZLinkBackendRecvMode.BLOCK));
-            });
+            Future<?> receive =
+                    executor.submit(
+                            () -> {
+                                receiveOwner.set(Thread.currentThread());
+                                assertNotNull(router.recv(ZLinkBackendRecvMode.BLOCK));
+                            });
             awaitReceiveEntry(receiveOwner, ZLinkJavaRouterSocket.class);
-            Future<?> flow = executor.submit(() ->
-                router.setReceiveFlowState(ReceiveFlowState.RUNNING));
+            Future<?> flow =
+                    executor.submit(() -> router.setReceiveFlowState(ReceiveFlowState.RUNNING));
 
             try {
                 assertDoesNotThrow(() -> flow.get(1, TimeUnit.SECONDS));
@@ -168,31 +174,29 @@ final class ZLinkJavaSocketReceiveOwnerTest {
         }
     }
 
-    private static void awaitReceiveEntry(
-        AtomicReference<Thread> owner,
-        Class<?> wrapperType) throws Exception {
+    private static void awaitReceiveEntry(AtomicReference<Thread> owner, Class<?> wrapperType)
+            throws Exception {
         long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(1);
         while (true) {
             Thread thread = owner.get();
             if (thread != null) {
                 for (StackTraceElement frame : thread.getStackTrace()) {
                     if (frame.getClassName().equals(wrapperType.getName())
-                        && frame.getMethodName().equals("recv")) {
+                            && frame.getMethodName().equals("recv")) {
                         return;
                     }
                 }
             }
             if (System.nanoTime() >= deadline) {
                 throw new AssertionError(
-                    "receive owner did not enter " + wrapperType.getSimpleName());
+                        "receive owner did not enter " + wrapperType.getSimpleName());
             }
             Thread.sleep(1);
         }
     }
 
-    private static RoutingId admitDealer(
-        DealerSocket dealer,
-        RouterSocket router) throws Exception {
+    private static RoutingId admitDealer(DealerSocket dealer, RouterSocket router)
+            throws Exception {
         send(dealer, "admit");
         try (Received received = new Received()) {
             long deadline = System.nanoTime() + OPERATION_TIMEOUT.toNanos();
@@ -208,20 +212,23 @@ final class ZLinkJavaSocketReceiveOwnerTest {
 
     private static void send(DealerSocket socket, String value) throws Exception {
         try (Message message = Message.from(value)) {
-            socket.send().message(message).submit().admitted()
-                .toCompletableFuture()
-                .get(OPERATION_TIMEOUT.toMillis(), TimeUnit.MILLISECONDS);
+            socket.send()
+                    .message(message)
+                    .submit()
+                    .admitted()
+                    .toCompletableFuture()
+                    .get(OPERATION_TIMEOUT.toMillis(), TimeUnit.MILLISECONDS);
         }
     }
 
-    private static void send(
-        RouterSocket socket,
-        RoutingId target,
-        String value) throws Exception {
+    private static void send(RouterSocket socket, RoutingId target, String value) throws Exception {
         try (Message message = Message.from(value)) {
-            socket.send(target).message(message).submit().admitted()
-                .toCompletableFuture()
-                .get(OPERATION_TIMEOUT.toMillis(), TimeUnit.MILLISECONDS);
+            socket.send(target)
+                    .message(message)
+                    .submit()
+                    .admitted()
+                    .toCompletableFuture()
+                    .get(OPERATION_TIMEOUT.toMillis(), TimeUnit.MILLISECONDS);
         }
     }
 }

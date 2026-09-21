@@ -1,5 +1,8 @@
 package systems.zlink.framework.runtime.internal.service;
 
+import systems.zlink.contracts.core.RoutingId;
+import systems.zlink.framework.runtime.internal.execution.ZLinkStateLane;
+
 import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import java.util.ArrayList;
@@ -12,25 +15,19 @@ import java.util.Map;
 import java.util.Objects;
 import java.util.concurrent.CompletionException;
 import java.util.function.Supplier;
-import systems.zlink.contracts.core.RoutingId;
-import systems.zlink.framework.runtime.internal.execution.ZLinkStateLane;
 
 /**
  * Tracks classic fanout receive activity and the publisher beacon schedule.
  *
- * <p>Each subscriber connection is isolated by publisher and connection ID.
- * A malformed record on the reserved topic removes only that connection.
+ * <p>Each subscriber connection is isolated by publisher and connection ID. A malformed record on
+ * the reserved topic removes only that connection.
  */
 public final class ZLinkClassicFanoutLiveness {
-    public static final Duration DEFAULT_BEACON_INTERVAL =
-        Duration.ofSeconds(5);
-    public static final Duration DEFAULT_PUBLISHER_TIMEOUT =
-        Duration.ofSeconds(15);
+    public static final Duration DEFAULT_BEACON_INTERVAL = Duration.ofSeconds(5);
+    public static final Duration DEFAULT_PUBLISHER_TIMEOUT = Duration.ofSeconds(15);
 
-    private static final byte[] RESERVED_TOPIC =
-        new byte[] {0x01, 0x5a, 0x4c, 0x46, 0x31};
-    private static final byte[] BEACON_PAYLOAD =
-        new byte[] {0x5a, 0x46, 0x01, 0x01};
+    private static final byte[] RESERVED_TOPIC = new byte[] {0x01, 0x5a, 0x4c, 0x46, 0x31};
+    private static final byte[] BEACON_PAYLOAD = new byte[] {0x5a, 0x46, 0x01, 0x01};
 
     private final long beaconIntervalNanos;
     private final long publisherTimeoutNanos;
@@ -44,23 +41,17 @@ public final class ZLinkClassicFanoutLiveness {
     }
 
     public ZLinkClassicFanoutLiveness(long nowNanos) {
-        this(
-            DEFAULT_BEACON_INTERVAL,
-            DEFAULT_PUBLISHER_TIMEOUT,
-            nowNanos);
+        this(DEFAULT_BEACON_INTERVAL, DEFAULT_PUBLISHER_TIMEOUT, nowNanos);
     }
 
-    ZLinkClassicFanoutLiveness(
-        Duration beaconInterval,
-        Duration publisherTimeout,
-        long nowNanos) {
+    ZLinkClassicFanoutLiveness(Duration beaconInterval, Duration publisherTimeout, long nowNanos) {
         Objects.requireNonNull(beaconInterval, "beaconInterval");
         Objects.requireNonNull(publisherTimeout, "publisherTimeout");
         if (beaconInterval.isZero()
-            || beaconInterval.isNegative()
-            || publisherTimeout.compareTo(beaconInterval) <= 0) {
+                || beaconInterval.isNegative()
+                || publisherTimeout.compareTo(beaconInterval) <= 0) {
             throw new IllegalArgumentException(
-                "publisher timeout must be larger than a positive beacon interval");
+                    "publisher timeout must be larger than a positive beacon interval");
         }
         beaconIntervalNanos = beaconInterval.toNanos();
         publisherTimeoutNanos = publisherTimeout.toNanos();
@@ -92,8 +83,7 @@ public final class ZLinkClassicFanoutLiveness {
         return true;
     }
 
-    public static List<String> subscriberTopics(
-        Collection<String> applicationTopics) {
+    public static List<String> subscriberTopics(Collection<String> applicationTopics) {
         Objects.requireNonNull(applicationTopics, "applicationTopics");
         LinkedHashSet<String> topics = new LinkedHashSet<>(applicationTopics);
         if (topics.isEmpty()) {
@@ -103,66 +93,60 @@ public final class ZLinkClassicFanoutLiveness {
         return List.copyOf(topics);
     }
 
-    public void connect(
-        RoutingId publisherRoutingId,
-        String connectionId,
-        long nowNanos) {
-        inStateLane(() -> {
-            requireConnection(publisherRoutingId, connectionId);
-            publishers.put(
-                publisherRoutingId,
-                new PublisherState(
-                    connectionId,
-                    false,
-                    addExact(nowNanos, publisherTimeoutNanos)));
-            return null;
-        });
+    public void connect(RoutingId publisherRoutingId, String connectionId, long nowNanos) {
+        inStateLane(
+                () -> {
+                    requireConnection(publisherRoutingId, connectionId);
+                    publishers.put(
+                            publisherRoutingId,
+                            new PublisherState(
+                                    connectionId,
+                                    false,
+                                    addExact(nowNanos, publisherTimeoutNanos)));
+                    return null;
+                });
     }
 
     public ReceiveKind receive(
-        RoutingId publisherRoutingId,
-        String connectionId,
-        List<byte[]> frames,
-        long nowNanos) {
-        return inStateLane(() -> receiveCore(
-            publisherRoutingId, connectionId, frames, nowNanos));
+            RoutingId publisherRoutingId, String connectionId, List<byte[]> frames, long nowNanos) {
+        return inStateLane(() -> receiveCore(publisherRoutingId, connectionId, frames, nowNanos));
     }
 
-    public boolean disconnect(
-        RoutingId publisherRoutingId,
-        String connectionId) {
+    public boolean disconnect(RoutingId publisherRoutingId, String connectionId) {
         return inStateLane(() -> disconnectCore(publisherRoutingId, connectionId));
     }
 
     public boolean isReady(RoutingId publisherRoutingId) {
-        return inStateLane(() -> {
-            PublisherState current = publishers.get(publisherRoutingId);
-            return current != null && current.ready;
-        });
+        return inStateLane(
+                () -> {
+                    PublisherState current = publishers.get(publisherRoutingId);
+                    return current != null && current.ready;
+                });
     }
 
     public boolean beaconDue(long nowNanos) {
-        return inStateLane(() -> {
-            if (nowNanos < nextBeaconNanos) {
-                return false;
-            }
-            nextBeaconNanos = addExact(nowNanos, beaconIntervalNanos);
-            return true;
-        });
+        return inStateLane(
+                () -> {
+                    if (nowNanos < nextBeaconNanos) {
+                        return false;
+                    }
+                    nextBeaconNanos = addExact(nowNanos, beaconIntervalNanos);
+                    return true;
+                });
     }
 
     public List<RoutingId> expire(long nowNanos) {
-        return inStateLane(() -> {
-            List<RoutingId> expired = new ArrayList<>();
-            for (Map.Entry<RoutingId, PublisherState> entry
-                : publishers.entrySet()) {
-                if (nowNanos >= entry.getValue().deadlineNanos) {
-                    expired.add(entry.getKey());
-                }
-            }
-            expired.forEach(publishers::remove);
-            return List.copyOf(expired);
-        });
+        return inStateLane(
+                () -> {
+                    List<RoutingId> expired = new ArrayList<>();
+                    for (Map.Entry<RoutingId, PublisherState> entry : publishers.entrySet()) {
+                        if (nowNanos >= entry.getValue().deadlineNanos) {
+                            expired.add(entry.getKey());
+                        }
+                    }
+                    expired.forEach(publishers::remove);
+                    return List.copyOf(expired);
+                });
     }
 
     public int size() {
@@ -170,39 +154,31 @@ public final class ZLinkClassicFanoutLiveness {
     }
 
     private ReceiveKind receiveCore(
-        RoutingId publisherRoutingId,
-        String connectionId,
-        List<byte[]> frames,
-        long nowNanos) {
+            RoutingId publisherRoutingId, String connectionId, List<byte[]> frames, long nowNanos) {
         Objects.requireNonNull(frames, "frames");
         PublisherState current = publishers.get(publisherRoutingId);
         if (current == null || !current.connectionId.equals(connectionId)) {
             return ReceiveKind.STALE_CONNECTION;
         }
         if (frames.isEmpty() || frames.getFirst() == null) {
-            throw new IllegalArgumentException(
-                "a fanout record requires a topic frame");
+            throw new IllegalArgumentException("a fanout record requires a topic frame");
         }
 
         boolean reserved = isReservedTopic(frames.getFirst());
         if (reserved
-            && (frames.size() != 2
-                || frames.get(1) == null
-                || !Arrays.equals(BEACON_PAYLOAD, frames.get(1)))) {
+                && (frames.size() != 2
+                        || frames.get(1) == null
+                        || !Arrays.equals(BEACON_PAYLOAD, frames.get(1)))) {
             publishers.remove(publisherRoutingId);
-            throw new ZLinkServiceWireException(
-                "malformed classic fanout liveness beacon");
+            throw new ZLinkServiceWireException("malformed classic fanout liveness beacon");
         }
 
         current.ready = true;
-        current.deadlineNanos =
-            addExact(nowNanos, publisherTimeoutNanos);
+        current.deadlineNanos = addExact(nowNanos, publisherTimeoutNanos);
         return reserved ? ReceiveKind.BEACON : ReceiveKind.APPLICATION;
     }
 
-    private boolean disconnectCore(
-        RoutingId publisherRoutingId,
-        String connectionId) {
+    private boolean disconnectCore(RoutingId publisherRoutingId, String connectionId) {
         PublisherState current = publishers.get(publisherRoutingId);
         if (current == null || !current.connectionId.equals(connectionId)) {
             return false;
@@ -226,9 +202,7 @@ public final class ZLinkClassicFanoutLiveness {
         }
     }
 
-    private static void requireConnection(
-        RoutingId publisherRoutingId,
-        String connectionId) {
+    private static void requireConnection(RoutingId publisherRoutingId, String connectionId) {
         Objects.requireNonNull(publisherRoutingId, "publisherRoutingId");
         if (connectionId == null || connectionId.isBlank()) {
             throw new IllegalArgumentException("connectionId is required");
@@ -250,10 +224,7 @@ public final class ZLinkClassicFanoutLiveness {
         private boolean ready;
         private long deadlineNanos;
 
-        private PublisherState(
-            String connectionId,
-            boolean ready,
-            long deadlineNanos) {
+        private PublisherState(String connectionId, boolean ready, long deadlineNanos) {
             this.connectionId = connectionId;
             this.ready = ready;
             this.deadlineNanos = deadlineNanos;

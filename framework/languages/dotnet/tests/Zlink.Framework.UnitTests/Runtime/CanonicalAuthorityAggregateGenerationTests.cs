@@ -15,16 +15,13 @@ public sealed class CanonicalAuthorityAggregateGenerationTests
     {
         var steady = UserSpotAuthority();
         var issuedRoot = Root((ulong)long.MaxValue - 1);
-        var issued = ZLinkCanonicalRelocationAuthorityStateCodec
-            .ReplaceRelocationState(
-                steady,
-                State(issuedRoot),
-                issuedRoot);
+        var issued = ZLinkCanonicalRelocationAuthorityStateCodec.ReplaceRelocationState(
+            steady,
+            State(issuedRoot),
+            issuedRoot
+        );
 
-        Assert.True(
-            ZLinkRelocationAuthorityPayloadCodec.TryDecode(
-                issued,
-                out var publication));
+        Assert.True(ZLinkRelocationAuthorityPayloadCodec.TryDecode(issued, out var publication));
         Assert.Equal((ulong)long.MaxValue - 1, publication.AggregateGeneration);
 
         var exhaustedRoot = Root((ulong)long.MaxValue);
@@ -32,7 +29,9 @@ public sealed class CanonicalAuthorityAggregateGenerationTests
             ZLinkCanonicalRelocationAuthorityStateCodec.ReplaceRelocationState(
                 issued,
                 State(exhaustedRoot),
-                exhaustedRoot));
+                exhaustedRoot
+            )
+        );
     }
 
     [Fact]
@@ -57,16 +56,18 @@ public sealed class CanonicalAuthorityAggregateGenerationTests
                 7,
                 "mesh",
                 RoutingId.From("source-node"),
-                11));
+                11
+            )
+        );
 
     private static ZLinkRelocationEnvelope Root(
         ulong aggregateGeneration,
-        ZLinkPlacementObjectKind kind = ZLinkPlacementObjectKind.UserSpot)
+        ZLinkPlacementObjectKind kind = ZLinkPlacementObjectKind.UserSpot
+    )
     {
         var key = new ZLinkAuthorityKey(
-            kind == ZLinkPlacementObjectKind.Actor
-                ? "actor:player-1"
-                : "spot:room-1");
+            kind == ZLinkPlacementObjectKind.Actor ? "actor:player-1" : "spot:room-1"
+        );
         var participant = new ZLinkRelocationParticipantEnvelope(
             key,
             kind,
@@ -74,19 +75,20 @@ public sealed class CanonicalAuthorityAggregateGenerationTests
             11,
             new byte[] { 1 },
             [],
-            [])
+            []
+        )
         {
-            CanonicalParticipantId = 1
+            CanonicalParticipantId = 1,
         };
         return new ZLinkRelocationEnvelope(
             Guid.NewGuid(),
             aggregateGeneration,
             SHA256.HashData([2]),
-            [participant]);
+            [participant]
+        );
     }
 
-    private static ZLinkCanonicalRelocationAuthorityState State(
-        ZLinkRelocationEnvelope root)
+    private static ZLinkCanonicalRelocationAuthorityState State(ZLinkRelocationEnvelope root)
     {
         Span<byte> id = stackalloc byte[16];
         root.AggregateId.TryWriteBytes(id, bigEndian: true, out _);
@@ -107,11 +109,12 @@ public sealed class CanonicalAuthorityAggregateGenerationTests
             RoutingId.From("target-node").ToHex(),
             CoordinatorNodeGeneration: 13,
             Phase: 4,
-            ApplicationVersion: 3)
+            ApplicationVersion: 3
+        )
         {
             AggregateGeneration = root.AggregateGeneration,
             RelocationReference = "root-reference",
-            RelocationChecksumCrc32c = 17
+            RelocationChecksumCrc32c = 17,
         };
     }
 
@@ -119,14 +122,19 @@ public sealed class CanonicalAuthorityAggregateGenerationTests
     {
         var path = Path.Combine(
             Common.FrameworkTestEnvironment.GetRepoRoot(),
-            "framework/runtime/protocol/golden/authority-relocation-state-v1.json");
+            "framework/runtime/protocol/golden/authority-relocation-state-v1.json"
+        );
         using var fixture = JsonDocument.Parse(File.ReadAllText(path));
-        var vector = fixture.RootElement.GetProperty("invalid")
+        var vector = fixture
+            .RootElement.GetProperty("invalid")
             .EnumerateArray()
             .Single(item => item.GetProperty("name").GetString() == name);
-        Assert.False(ZLinkCanonicalRelocationAuthorityStateCodec.TryReadSlot(
-            Convert.FromHexString(vector.GetProperty("hex").GetString()!),
-            ulong.Parse(vector.GetProperty("rootAggregateGeneration").GetString()!),
-            out _));
+        Assert.False(
+            ZLinkCanonicalRelocationAuthorityStateCodec.TryReadSlot(
+                Convert.FromHexString(vector.GetProperty("hex").GetString()!),
+                ulong.Parse(vector.GetProperty("rootAggregateGeneration").GetString()!),
+                out _
+            )
+        );
     }
 }

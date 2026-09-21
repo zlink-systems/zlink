@@ -1,5 +1,3 @@
 package systems.zlink.framework.runtime.internal.locations;
 
-public sealed interface ZLinkAuthorityExpectation
-    permits ZLinkAuthorityExpectFound {
-}
+public sealed interface ZLinkAuthorityExpectation permits ZLinkAuthorityExpectFound {}

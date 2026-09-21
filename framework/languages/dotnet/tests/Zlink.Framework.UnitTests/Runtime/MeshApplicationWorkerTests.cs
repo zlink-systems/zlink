@@ -16,40 +16,62 @@ public sealed class MeshApplicationWorkerTests
         var failures = new Failures();
         var runner = new ZLinkRuntimeTaskRunner(failures, CancellationToken.None);
         await using var serial = new ZLinkSerialExecutionQueue(
-            runner, failures, CancellationToken.None);
+            runner,
+            failures,
+            CancellationToken.None
+        );
         var events = new ConcurrentQueue<string>();
         var started = Signal();
         var release = Signal();
         var queued = Signal();
-        var worker = runner.Run("application-worker", async ct =>
-        {
-            var completion = serial.RunAsync(async _ =>
+        var worker = runner.Run(
+            "application-worker",
+            async ct =>
             {
-                events.Enqueue("first:start");
-                started.TrySetResult();
-                await release.Task;
-                events.Enqueue("first:end");
-            }, ct, out var reservedDrain);
-            Assert.NotNull(reservedDrain);
-            Assert.False(started.Task.IsCompleted);
-            _ = Assert.Single(runner.ActiveOnSupervisorLane);
-            var drain = reservedDrain(ct);
-            await started.Task;
-            var second = serial.RunAsync(_ =>
-            {
-                events.Enqueue("second");
-                return ValueTask.CompletedTask;
-            }, ct, out var secondDrain);
-            Assert.Null(secondDrain);
-            var lifecycle = serial.RunLifecycleAsync(_ =>
-            {
-                events.Enqueue("lifecycle");
-                return ValueTask.CompletedTask;
-            }, ct);
-            _ = Assert.Single(runner.ActiveOnSupervisorLane);
-            queued.TrySetResult();
-            await Task.WhenAll(drain.AsTask(), completion.AsTask(), second.AsTask(), lifecycle.AsTask());
-        });
+                var completion = serial.RunAsync(
+                    async _ =>
+                    {
+                        events.Enqueue("first:start");
+                        started.TrySetResult();
+                        await release.Task;
+                        events.Enqueue("first:end");
+                    },
+                    ct,
+                    out var reservedDrain
+                );
+                Assert.NotNull(reservedDrain);
+                Assert.False(started.Task.IsCompleted);
+                _ = Assert.Single(runner.ActiveOnSupervisorLane);
+                var drain = reservedDrain(ct);
+                await started.Task;
+                var second = serial.RunAsync(
+                    _ =>
+                    {
+                        events.Enqueue("second");
+                        return ValueTask.CompletedTask;
+                    },
+                    ct,
+                    out var secondDrain
+                );
+                Assert.Null(secondDrain);
+                var lifecycle = serial.RunLifecycleAsync(
+                    _ =>
+                    {
+                        events.Enqueue("lifecycle");
+                        return ValueTask.CompletedTask;
+                    },
+                    ct
+                );
+                _ = Assert.Single(runner.ActiveOnSupervisorLane);
+                queued.TrySetResult();
+                await Task.WhenAll(
+                    drain.AsTask(),
+                    completion.AsTask(),
+                    second.AsTask(),
+                    lifecycle.AsTask()
+                );
+            }
+        );
         try
         {
             await queued.Task.WaitAsync(TimeSpan.FromSeconds(5));
@@ -69,9 +91,14 @@ public sealed class MeshApplicationWorkerTests
     public async Task WorkersPersistAcrossBatches_AndDrainSuspendedHandlersOnShutdown()
     {
         await using var context = Systems.Zlink.Zlink.CreateContext();
-        using var jobs = new ZLinkApplicationJobQueue(new(
-            ZLinkApplicationJobQueueProfile.Balanced, 128, 2, 128));
-        await using var node = new ZLinkManagedMeshNode(context, "workers", applicationJobQueue: jobs);
+        using var jobs = new ZLinkApplicationJobQueue(
+            new(ZLinkApplicationJobQueueProfile.Balanced, 128, 2, 128)
+        );
+        await using var node = new ZLinkManagedMeshNode(
+            context,
+            "workers",
+            applicationJobQueue: jobs
+        );
         var rid = RoutingId.From("worker-node");
         node.SetRoutingId(rid);
         node.Start();
@@ -84,28 +111,31 @@ public sealed class MeshApplicationWorkerTests
         var returned = Signal();
         ZLinkBackendRouteReceived? first = null;
         var count = 0;
-        pump.SetNodeRouteHandler(async (records, ct) =>
-        {
-            Assert.True(runner.IsCurrentExecution);
-            foreach (var received in records)
+        pump.SetNodeRouteHandler(
+            async (records, ct) =>
             {
-                using (received)
+                Assert.True(runner.IsCurrentExecution);
+                foreach (var received in records)
                 {
-                    received.ApplicationJobAdmission?.ReleaseForHandlerStart();
-                    if (Interlocked.Increment(ref count) == 1)
+                    using (received)
                     {
-                        first = received;
-                        firstStarted.TrySetResult();
-                        await release.Task;
-                        returned.TrySetResult();
-                    }
-                    else
-                    {
-                        secondStarted.TrySetResult();
+                        received.ApplicationJobAdmission?.ReleaseForHandlerStart();
+                        if (Interlocked.Increment(ref count) == 1)
+                        {
+                            first = received;
+                            firstStarted.TrySetResult();
+                            await release.Task;
+                            returned.TrySetResult();
+                        }
+                        else
+                        {
+                            secondStarted.TrySetResult();
+                        }
                     }
                 }
-            }
-        }, runner);
+            },
+            runner
+        );
         pump.EnsureStarted();
         // Registrations are stable until cancellation: no per-batch runner task.
         var workers = runner.ActiveOnSupervisorLane.ToArray();
@@ -140,9 +170,14 @@ public sealed class MeshApplicationWorkerTests
     public async Task SpotDispatchResults_RemainOwnedByPersistentWorkersUntilShutdown()
     {
         await using var context = Systems.Zlink.Zlink.CreateContext();
-        using var jobs = new ZLinkApplicationJobQueue(new(
-            ZLinkApplicationJobQueueProfile.Balanced, 128, 2, 128));
-        await using var node = new ZLinkManagedMeshNode(context, "workers", applicationJobQueue: jobs);
+        using var jobs = new ZLinkApplicationJobQueue(
+            new(ZLinkApplicationJobQueueProfile.Balanced, 128, 2, 128)
+        );
+        await using var node = new ZLinkManagedMeshNode(
+            context,
+            "workers",
+            applicationJobQueue: jobs
+        );
         var rid = RoutingId.From("spot-worker-node");
         node.SetRoutingId(rid);
         node.Start();
@@ -151,12 +186,15 @@ public sealed class MeshApplicationWorkerTests
         var failures = new Failures();
         var runner = new ZLinkRuntimeTaskRunner(failures, CancellationToken.None);
         var pump = new ZLinkMeshDispatchPump(node, new ZLinkMeshCompletionTable(), jobs);
-        pump.SetNodeRouteHandler((records, _) =>
-        {
-            foreach (var record in records)
-                record.Dispose();
-            return ValueTask.CompletedTask;
-        }, runner);
+        pump.SetNodeRouteHandler(
+            (records, _) =>
+            {
+                foreach (var record in records)
+                    record.Dispose();
+                return ValueTask.CompletedTask;
+            },
+            runner
+        );
         var state = pump.RegisterSpot(spotId);
         var firstStarted = Signal();
         var secondStarted = Signal();
@@ -187,11 +225,15 @@ public sealed class MeshApplicationWorkerTests
         try
         {
             using var payload = Message.From(new byte[4096]);
-            Assert.Equal(SubmitResult.Ok,
-                spot.SendToSpot(rid, spotId, spot.LifecycleGeneration, [payload]));
+            Assert.Equal(
+                SubmitResult.Ok,
+                spot.SendToSpot(rid, spotId, spot.LifecycleGeneration, [payload])
+            );
             await firstStarted.Task.WaitAsync(TimeSpan.FromSeconds(5));
-            Assert.Equal(SubmitResult.Ok,
-                spot.SendToSpot(rid, spotId, spot.LifecycleGeneration, [payload]));
+            Assert.Equal(
+                SubmitResult.Ok,
+                spot.SendToSpot(rid, spotId, spot.LifecycleGeneration, [payload])
+            );
             await secondStarted.Task.WaitAsync(TimeSpan.FromSeconds(5));
             Assert.Equal(workers, runner.ActiveOnSupervisorLane.ToHashSet());
             Assert.Equal(0UL, jobs.GetStatus().PermitsInUse);
@@ -230,31 +272,32 @@ public sealed class MeshApplicationWorkerTests
         var secondStarted = Signal();
         using var release = new ManualResetEventSlim();
         await using var pump = new ZLinkMeshDispatchPump(target, new ZLinkMeshCompletionTable());
-        pump.SetNodeRouteHandler((records, _) =>
-        {
-            foreach (var received in records)
+        pump.SetNodeRouteHandler(
+            (records, _) =>
             {
-                using (received)
+                foreach (var received in records)
                 {
-                    if (received.ChannelName is null)
+                    using (received)
                     {
-                        firstStarted.TrySetResult();
-                        Assert.True(release.Wait(TimeSpan.FromSeconds(5)));
+                        if (received.ChannelName is null)
+                        {
+                            firstStarted.TrySetResult();
+                            Assert.True(release.Wait(TimeSpan.FromSeconds(5)));
+                        }
+                        else
+                            secondStarted.TrySetResult();
                     }
-                    else
-                        secondStarted.TrySetResult();
                 }
+                return ValueTask.CompletedTask;
             }
-            return ValueTask.CompletedTask;
-        });
+        );
         target.Start();
         source.Start();
         pump.EnsureStarted();
         try
         {
             var deadline = DateTime.UtcNow.AddSeconds(5);
-            while (source.Status().AdmittedPeerCount != 1
-                   || target.Status().AdmittedPeerCount != 1)
+            while (source.Status().AdmittedPeerCount != 1 || target.Status().AdmittedPeerCount != 1)
             {
                 Assert.True(DateTime.UtcNow < deadline);
                 await Task.Delay(1);
@@ -262,8 +305,10 @@ public sealed class MeshApplicationWorkerTests
             using var payload = Message.From(new byte[4096]);
             Assert.Equal(SubmitResult.Ok, source.SendToNode(targetRid, [payload]));
             await firstStarted.Task.WaitAsync(TimeSpan.FromSeconds(5));
-            Assert.Equal(SubmitResult.Ok,
-                source.SendToChannel("independent", [payload], SendFlags.None, default));
+            Assert.Equal(
+                SubmitResult.Ok,
+                source.SendToChannel("independent", [payload], SendFlags.None, default)
+            );
             await secondStarted.Task.WaitAsync(TimeSpan.FromSeconds(5));
         }
         finally
@@ -276,24 +321,37 @@ public sealed class MeshApplicationWorkerTests
     public async Task AdmissionWake_ReleasesTheClaimBeforeAnotherWorkerConsumesIt()
     {
         await using var context = Systems.Zlink.Zlink.CreateContext();
-        using var jobs = new ZLinkApplicationJobQueue(new(
-            ZLinkApplicationJobQueueProfile.Balanced, 1, 2, 1));
-        await using var node = new ZLinkManagedMeshNode(context, "workers", applicationJobQueue: jobs);
+        using var jobs = new ZLinkApplicationJobQueue(
+            new(ZLinkApplicationJobQueueProfile.Balanced, 1, 2, 1)
+        );
+        await using var node = new ZLinkManagedMeshNode(
+            context,
+            "workers",
+            applicationJobQueue: jobs
+        );
         var rid = RoutingId.From("admission-worker");
         node.SetRoutingId(rid);
         node.Start();
-        await using var pump = new ZLinkMeshDispatchPump(node, new ZLinkMeshCompletionTable(), jobs);
+        await using var pump = new ZLinkMeshDispatchPump(
+            node,
+            new ZLinkMeshCompletionTable(),
+            jobs
+        );
         var first = new TaskCompletionSource<ZLinkBackendRouteReceived>(
-            TaskCreationOptions.RunContinuationsAsynchronously);
+            TaskCreationOptions.RunContinuationsAsynchronously
+        );
         var second = new TaskCompletionSource<ZLinkBackendRouteReceived>(
-            TaskCreationOptions.RunContinuationsAsynchronously);
+            TaskCreationOptions.RunContinuationsAsynchronously
+        );
         var count = 0;
-        pump.SetNodeRouteHandler((records, _) =>
-        {
-            foreach (var record in records)
-                (Interlocked.Increment(ref count) == 1 ? first : second).TrySetResult(record);
-            return ValueTask.CompletedTask;
-        });
+        pump.SetNodeRouteHandler(
+            (records, _) =>
+            {
+                foreach (var record in records)
+                    (Interlocked.Increment(ref count) == 1 ? first : second).TrySetResult(record);
+                return ValueTask.CompletedTask;
+            }
+        );
         using var payload = Message.From(new byte[4096]);
         Assert.Equal(SubmitResult.Ok, node.SendToNode(rid, [payload]));
         Assert.Equal(SubmitResult.Ok, node.SendToNode(rid, [payload]));
@@ -318,8 +376,13 @@ public sealed class MeshApplicationWorkerTests
     private sealed class Failures : IZLinkRuntimeFailureReporter
     {
         internal ConcurrentQueue<Exception> Errors { get; } = new();
+
         public void ReportHandlerException(Exception exception) => Errors.Enqueue(exception);
-        public void ReportUnhandledCallbackException(Exception exception) => Errors.Enqueue(exception);
-        public void ReportRuntimeTaskException(string name, Exception exception) => Errors.Enqueue(exception);
+
+        public void ReportUnhandledCallbackException(Exception exception) =>
+            Errors.Enqueue(exception);
+
+        public void ReportRuntimeTaskException(string name, Exception exception) =>
+            Errors.Enqueue(exception);
     }
 }

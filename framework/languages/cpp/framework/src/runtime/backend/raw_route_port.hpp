@@ -28,8 +28,7 @@ namespace zlink::framework::detail::backend
 
 using raw_bytes_t = std::vector<std::uint8_t>;
 using raw_message_t = std::vector<raw_bytes_t>;
-using raw_send_stage_trace_t =
-  std::function<void (std::string_view, std::string_view)>;
+using raw_send_stage_trace_t = std::function<void (std::string_view, std::string_view)>;
 
 struct raw_received_t
 {
@@ -91,33 +90,26 @@ class raw_route_port_t
     explicit raw_route_port_t (
       zlink::router_socket_t &socket,
       std::mutex *shared_socket_mutex = nullptr,
-      zlink::poll_event_flag_t receive_events =
-        zlink::poll_event_flag_t::pollin,
+      zlink::poll_event_flag_t receive_events = zlink::poll_event_flag_t::pollin,
       zlink::poller_t *shared_poller = nullptr,
       std::uintptr_t poller_slot = 1);
 
-    raw_send_submission_t submit_send (
-      const raw_bytes_t &target_routing_id,
-      raw_message_t parts,
-      raw_send_stage_trace_t trace = {});
-    task_t<zlink::submit_result_t> send_result (
-      const raw_bytes_t &target_routing_id,
-      raw_message_t parts,
-      raw_send_stage_trace_t trace = {});
-    task_t<bool> send (const raw_bytes_t &target_routing_id,
-                       raw_message_t parts);
-    task_t<raw_request_completion_t> request (
-      const raw_bytes_t &target_routing_id,
-      raw_message_t parts,
-      std::chrono::milliseconds timeout);
+    raw_send_submission_t submit_send (const raw_bytes_t &target_routing_id,
+                                       raw_message_t parts,
+                                       raw_send_stage_trace_t trace = {});
+    task_t<zlink::submit_result_t> send_result (const raw_bytes_t &target_routing_id,
+                                                raw_message_t parts,
+                                                raw_send_stage_trace_t trace = {});
+    task_t<bool> send (const raw_bytes_t &target_routing_id, raw_message_t parts);
+    task_t<raw_request_completion_t> request (const raw_bytes_t &target_routing_id,
+                                              raw_message_t parts,
+                                              std::chrono::milliseconds timeout);
     zlink::poll_event_flag_t poll (std::chrono::milliseconds timeout,
                                    bool accept_application_receive = true);
     void signal_activity () noexcept;
-    std::optional<raw_received_t> receive_if_ready (
-      zlink::poll_event_flag_t revents);
+    std::optional<raw_received_t> receive_if_ready (zlink::poll_event_flag_t revents);
     std::optional<raw_received_t> try_receive ();
-    bool reply (const raw_received_t &request,
-                raw_message_t parts);
+    bool reply (const raw_received_t &request, raw_message_t parts);
     void close () noexcept;
 
   private:

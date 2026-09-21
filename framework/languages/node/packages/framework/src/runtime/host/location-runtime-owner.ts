@@ -94,10 +94,14 @@ export class ZLinkLocationRuntimeOwner {
       metrics: this.options.metrics,
       meshNames: [...this.options.registration.spotNodes.keys()],
       leaseScopes: [
-        ...[...this.options.registration.spotNodes.keys()]
-          .map(name => ({ kind: 'mesh' as const, name })),
-        ...[...this.options.registration.channels.keys()]
-          .map(name => ({ kind: 'channel' as const, name }))
+        ...[...this.options.registration.spotNodes.keys()].map((name) => ({
+          kind: 'mesh' as const,
+          name
+        })),
+        ...[...this.options.registration.channels.keys()].map((name) => ({
+          kind: 'channel' as const,
+          name
+        }))
       ],
       rewriteAuthorityPayloadForOwner: this.options.rewriteAuthorityPayloadForOwner
     });
@@ -108,7 +112,7 @@ export class ZLinkLocationRuntimeOwner {
       primaryMeshName ?? '',
       stores.authorityStore,
       stores.spotStore,
-      spotId => this.spotRouteInvalidator?.(spotId)
+      (spotId) => this.spotRouteInvalidator?.(spotId)
     );
     return runtime;
   }
@@ -131,7 +135,9 @@ export class ZLinkLocationRuntimeOwner {
   createSpotRouteResolver(
     spotMeshNames: readonly string[],
     spotRouterChannelIdByMesh: (meshName: string) => string,
-    resolveLocalSpot?: (spotId: RoutingId) => import('../spots/spot-routing-internal').ZLinkSpotRouteTarget | undefined
+    resolveLocalSpot?: (
+      spotId: RoutingId
+    ) => import('../spots/spot-routing-internal').ZLinkSpotRouteTarget | undefined
   ): ZLinkSpotRouteResolver | undefined {
     const stores = this.stores;
     if (stores === undefined || spotMeshNames.length === 0) {
@@ -150,7 +156,9 @@ export class ZLinkLocationRuntimeOwner {
     );
   }
 
-  createActorLocationResolver(spotMeshNames: readonly string[]): ZLinkStoreLocationResolvers | undefined {
+  createActorLocationResolver(
+    spotMeshNames: readonly string[]
+  ): ZLinkStoreLocationResolvers | undefined {
     const stores = this.stores;
     if (stores === undefined) {
       return undefined;
@@ -166,9 +174,8 @@ export class ZLinkLocationRuntimeOwner {
 
   ownerNodeRid(spotNodeRuntime?: ZLinkSpotNodeRuntimeManager): RoutingId {
     const primaryMeshNode = spotNodeRuntime?.primaryMeshNode;
-    const spotNodeRid = primaryMeshNode === undefined
-      ? undefined
-      : String(primaryMeshNode.status().routingId);
+    const spotNodeRid =
+      primaryMeshNode === undefined ? undefined : String(primaryMeshNode.status().routingId);
     if (spotNodeRid !== undefined) {
       return spotNodeRid;
     }
@@ -184,7 +191,8 @@ export class ZLinkLocationRuntimeOwner {
       }
     }
     for (const spotNode of this.options.registration.spotNodes.values()) {
-      const routingId = spotNode.routingId ?? spotNode.router?.routingId ?? spotNode.pubSub?.routingId;
+      const routingId =
+        spotNode.routingId ?? spotNode.router?.routingId ?? spotNode.pubSub?.routingId;
       if (routingId !== undefined) {
         return routingId;
       }
@@ -297,19 +305,23 @@ export class ZLinkLocationRuntimeOwner {
 }
 
 function isActorTransferStore(value: unknown): value is ZLinkActorTransferStore {
-  const store = value as Partial<Record<
-    | 'prepareActorTransfer'
-    | 'commitActorTransfer'
-    | 'activateActorTransfer'
-    | 'abortActorTransfer'
-    | 'takeOverActorTransfer'
-    | 'resolveActorTransfer',
-    unknown
-  >>;
-  return typeof store.prepareActorTransfer === 'function'
-    && typeof store.commitActorTransfer === 'function'
-    && typeof store.activateActorTransfer === 'function'
-    && typeof store.abortActorTransfer === 'function'
-    && typeof store.takeOverActorTransfer === 'function'
-    && typeof store.resolveActorTransfer === 'function';
+  const store = value as Partial<
+    Record<
+      | 'prepareActorTransfer'
+      | 'commitActorTransfer'
+      | 'activateActorTransfer'
+      | 'abortActorTransfer'
+      | 'takeOverActorTransfer'
+      | 'resolveActorTransfer',
+      unknown
+    >
+  >;
+  return (
+    typeof store.prepareActorTransfer === 'function' &&
+    typeof store.commitActorTransfer === 'function' &&
+    typeof store.activateActorTransfer === 'function' &&
+    typeof store.abortActorTransfer === 'function' &&
+    typeof store.takeOverActorTransfer === 'function' &&
+    typeof store.resolveActorTransfer === 'function'
+  );
 }

@@ -107,11 +107,13 @@ internal static class ZLinkEndpointNotation
         if (!IsAsciiLetter(candidate[0]))
             return false;
         foreach (var character in candidate)
-            if (!IsAsciiLetter(character)
+            if (
+                !IsAsciiLetter(character)
                 && !IsAsciiDigit(character)
                 && character != '+'
                 && character != '-'
-                && character != '.')
+                && character != '.'
+            )
                 return false;
         return true;
     }
@@ -119,8 +121,7 @@ internal static class ZLinkEndpointNotation
     private static bool IsAsciiLetter(char character) =>
         character is >= 'a' and <= 'z' or >= 'A' and <= 'Z';
 
-    private static bool IsAsciiDigit(char character) =>
-        character is >= '0' and <= '9';
+    private static bool IsAsciiDigit(char character) => character is >= '0' and <= '9';
 
     private static string NormalizeHost(string original, Uri uri)
     {
@@ -131,9 +132,7 @@ internal static class ZLinkEndpointNotation
         // Uri.Host drops the IPv6 zone id entirely, so it must be recovered
         // from the original text and reattached in canonical %25 form.
         var bracketed = uri.Host;
-        var innerAddress = bracketed.Length >= 2
-            ? bracketed[1..^1]
-            : bracketed;
+        var innerAddress = bracketed.Length >= 2 ? bracketed[1..^1] : bracketed;
         var zoneId = ExtractZoneId(original);
         return zoneId is null ? $"[{innerAddress}]" : $"[{innerAddress}%25{zoneId}]";
     }

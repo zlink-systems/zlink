@@ -1,6 +1,14 @@
 package systems.zlink.framework.runtime.internal.configuration;
+
 import systems.zlink.framework.ZLinkEncodedPayload;
+import systems.zlink.framework.ZLinkMessageSerializer;
 import systems.zlink.framework.configuration.ZLinkCodecExtension;
+import systems.zlink.framework.configuration.ZLinkCodecRegistrar;
+import systems.zlink.framework.configuration.ZLinkCodecRegistryBuilder;
+import systems.zlink.framework.errors.ZLinkConfigurationException;
+import systems.zlink.framework.errors.ZLinkFrameworkErrorKind;
+import systems.zlink.framework.errors.ZLinkFrameworkException;
+import systems.zlink.framework.streams.ZLinkStreamCodec;
 
 import java.util.Collections;
 import java.util.LinkedHashMap;
@@ -9,24 +17,17 @@ import java.util.Objects;
 import java.util.Optional;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.function.Predicate;
-import systems.zlink.framework.ZLinkMessageSerializer;
-import systems.zlink.framework.configuration.ZLinkCodecRegistryBuilder;
-import systems.zlink.framework.configuration.ZLinkCodecRegistrar;
-import systems.zlink.framework.errors.ZLinkConfigurationException;
-import systems.zlink.framework.errors.ZLinkFrameworkException;
-import systems.zlink.framework.errors.ZLinkFrameworkErrorKind;
-import systems.zlink.framework.streams.ZLinkStreamCodec;
 
-public final class ZLinkCodecRegistration implements ZLinkCodecRegistryBuilder, ZLinkCodecRegistrar {
+public final class ZLinkCodecRegistration
+        implements ZLinkCodecRegistryBuilder, ZLinkCodecRegistrar {
     private static final String DEFAULT_JSON_CONTENT_TYPE = "application/json";
-    private static final String LEGACY_JSON_CONTENT_TYPE =
-        "application/zlink-framework-json-v1";
+    private static final String LEGACY_JSON_CONTENT_TYPE = "application/zlink-framework-json-v1";
     private static final int MAX_TYPE_CACHE_ENTRIES = 1024;
     private volatile Map<String, RegisteredSerializer> serializers = new LinkedHashMap<>();
     private volatile Map<String, ZLinkStreamCodec> streamCodecsByContentType =
-        new LinkedHashMap<>();
+            new LinkedHashMap<>();
     private volatile Map<ZLinkStreamCodec, String> contentTypesByStreamCodec =
-        new LinkedHashMap<>();
+            new LinkedHashMap<>();
     private final Map<Class<?>, SendSelection> sendTypeCache = new ConcurrentHashMap<>();
     private final Object sendTypeCacheGate = new Object();
     private volatile boolean frozen;
@@ -44,25 +45,25 @@ public final class ZLinkCodecRegistration implements ZLinkCodecRegistryBuilder, 
 
     @Override
     public void addSerializer(
-        String contentType,
-        ZLinkMessageSerializer serializer,
-        Predicate<Class<?>> canSerialize) {
+            String contentType,
+            ZLinkMessageSerializer serializer,
+            Predicate<Class<?>> canSerialize) {
         addSerializer(contentType, serializer, canSerialize, false);
     }
 
     private synchronized void addSerializer(
-        String contentType,
-        ZLinkMessageSerializer serializer,
-        Predicate<Class<?>> canSerialize,
-        boolean fallbackSerializer) {
+            String contentType,
+            ZLinkMessageSerializer serializer,
+            Predicate<Class<?>> canSerialize,
+            boolean fallbackSerializer) {
         requireMutable();
         Objects.requireNonNull(contentType, "contentType");
         Objects.requireNonNull(serializer, "serializer");
         Objects.requireNonNull(canSerialize, "canSerialize");
-        String normalized = normalizeRegistrationContentType(
-            contentType, "custom serializer");
+        String normalized = normalizeRegistrationContentType(contentType, "custom serializer");
         serializers.remove(normalized);
-        serializers.put(normalized, new RegisteredSerializer(serializer, canSerialize, fallbackSerializer));
+        serializers.put(
+                normalized, new RegisteredSerializer(serializer, canSerialize, fallbackSerializer));
         clearSendTypeCache();
     }
 
@@ -97,7 +98,8 @@ public final class ZLinkCodecRegistration implements ZLinkCodecRegistryBuilder, 
 
     public Map<String, ZLinkMessageSerializer> serializers() {
         Map<String, ZLinkMessageSerializer> snapshot = new LinkedHashMap<>();
-        serializers.forEach((contentType, serializer) -> snapshot.put(contentType, serializer.serializer()));
+        serializers.forEach(
+                (contentType, serializer) -> snapshot.put(contentType, serializer.serializer()));
         return Collections.unmodifiableMap(snapshot);
     }
 
@@ -106,17 +108,15 @@ public final class ZLinkCodecRegistration implements ZLinkCodecRegistryBuilder, 
             return Optional.empty();
         }
         return Optional.ofNullable(
-            streamCodecsByContentType.get(
-                normalizeRegistrationContentType(contentType, "stream codec")));
+                streamCodecsByContentType.get(
+                        normalizeRegistrationContentType(contentType, "stream codec")));
     }
 
     /**
-     * Resolves the stream marker carried by an incoming application envelope.
-     * JSON is the only built-in content type; every other type must have an
-     * explicit immutable registration.
+     * Resolves the stream marker carried by an incoming application envelope. JSON is the only
+     * built-in content type; every other type must have an explicit immutable registration.
      */
-    public Optional<ZLinkStreamCodec> streamCodecForReceivedContentType(
-        String contentType) {
+    public Optional<ZLinkStreamCodec> streamCodecForReceivedContentType(String contentType) {
         if (contentType == null) {
             return Optional.empty();
         }
@@ -124,7 +124,7 @@ public final class ZLinkCodecRegistration implements ZLinkCodecRegistryBuilder, 
             return Optional.empty();
         }
         if (DEFAULT_JSON_CONTENT_TYPE.equals(contentType)
-            || LEGACY_JSON_CONTENT_TYPE.equals(contentType)) {
+                || LEGACY_JSON_CONTENT_TYPE.equals(contentType)) {
             return Optional.of(ZLinkStreamCodec.JSON);
         }
         return Optional.ofNullable(streamCodecsByContentType.get(contentType));
@@ -136,21 +136,26 @@ public final class ZLinkCodecRegistration implements ZLinkCodecRegistryBuilder, 
             return Optional.of(registered);
         }
         return codec == ZLinkStreamCodec.JSON
-            ? Optional.of(DEFAULT_JSON_CONTENT_TYPE)
-            : Optional.empty();
+                ? Optional.of(DEFAULT_JSON_CONTENT_TYPE)
+                : Optional.empty();
     }
 
     /** Resolves the content type represented by an incoming STREAM codec marker. */
     public String contentTypeForReceivedStreamCodec(ZLinkStreamCodec codec) {
         Objects.requireNonNull(codec, "codec");
-        return streamContentType(codec).orElseThrow(() -> protocolError(
-            "No payload content type is registered for received STREAM codec '"
-                + codec + "'"));
+        return streamContentType(codec)
+                .orElseThrow(
+                        () ->
+                                protocolError(
+                                        "No payload content type is registered for received STREAM"
+                                                + " codec '"
+                                                + codec
+                                                + "'"));
     }
 
     public Optional<ZLinkStreamCodec> streamCodecForCustomSerializer() {
         Optional<Map.Entry<String, RegisteredSerializer>> fallbackSerializer =
-            lastFallbackSerializer();
+                lastFallbackSerializer();
         if (fallbackSerializer.isEmpty()) {
             if (serializers.size() == 1) {
                 return streamCodec(serializers.keySet().iterator().next());
@@ -162,8 +167,7 @@ public final class ZLinkCodecRegistration implements ZLinkCodecRegistryBuilder, 
 
     /** Returns the last registered serializer that applies to every declared type. */
     public Optional<ZLinkMessageSerializer> customSerializer() {
-        return lastFallbackSerializer()
-            .map(entry -> entry.getValue().serializer());
+        return lastFallbackSerializer().map(entry -> entry.getValue().serializer());
     }
 
     private Optional<Map.Entry<String, RegisteredSerializer>> lastFallbackSerializer() {
@@ -189,43 +193,39 @@ public final class ZLinkCodecRegistration implements ZLinkCodecRegistryBuilder, 
     }
 
     public ZLinkMessageSerializer serializerForSending(
-        Class<?> declaredType,
-        ZLinkMessageSerializer jsonFallback) {
+            Class<?> declaredType, ZLinkMessageSerializer jsonFallback) {
         Objects.requireNonNull(jsonFallback, "jsonFallback");
         RegisteredSerializer selected = sendSelectionFor(declaredType).serializer();
         return selected == null ? jsonFallback : selected.serializer();
     }
 
     /**
-     * Resolves the serializer selected by an incoming wire content type.
-     * Incoming non-JSON content types are strict: the JSON fallback is not
-     * allowed to reinterpret a payload whose envelope selected another type.
+     * Resolves the serializer selected by an incoming wire content type. Incoming non-JSON content
+     * types are strict: the JSON fallback is not allowed to reinterpret a payload whose envelope
+     * selected another type.
      */
     public ZLinkMessageSerializer serializerForReceivedContentType(
-        String contentType,
-        ZLinkMessageSerializer jsonFallback) {
+            String contentType, ZLinkMessageSerializer jsonFallback) {
         Objects.requireNonNull(jsonFallback, "jsonFallback");
         if (!isCanonicalWireContentType(contentType)) {
-            throw protocolError(
-                "received payload content type is not a canonical bare media type");
+            throw protocolError("received payload content type is not a canonical bare media type");
         }
         if (DEFAULT_JSON_CONTENT_TYPE.equals(contentType)
-            || LEGACY_JSON_CONTENT_TYPE.equals(contentType)) {
+                || LEGACY_JSON_CONTENT_TYPE.equals(contentType)) {
             return jsonFallback;
         }
         RegisteredSerializer registered = serializers.get(contentType);
         if (registered == null) {
             throw protocolError(
-                "No payload serializer is registered for received content type '"
-                    + contentType + "'");
+                    "No payload serializer is registered for received content type '"
+                            + contentType
+                            + "'");
         }
         return registered.serializer();
     }
 
     public static <T> ZLinkEncodedPayload serializeForContentType(
-        ZLinkMessageSerializer serializer,
-        T value,
-        String contentType) {
+            ZLinkMessageSerializer serializer, T value, String contentType) {
         if (serializer instanceof CompositeSerializer composite) {
             return composite.serializeForContentType(value, contentType);
         }
@@ -233,9 +233,7 @@ public final class ZLinkCodecRegistration implements ZLinkCodecRegistryBuilder, 
     }
 
     public static <T> ZLinkEncodedPayload serializeForDeclaredType(
-        ZLinkMessageSerializer serializer,
-        T value,
-        Class<?> declaredType) {
+            ZLinkMessageSerializer serializer, T value, Class<?> declaredType) {
         if (serializer instanceof CompositeSerializer composite) {
             return composite.serializeForDeclaredType(value, declaredType);
         }
@@ -243,45 +241,40 @@ public final class ZLinkCodecRegistration implements ZLinkCodecRegistryBuilder, 
     }
 
     public static ZLinkMessageSerializer serializerForReceivedContentType(
-        ZLinkMessageSerializer serializer,
-        String contentType) {
+            ZLinkMessageSerializer serializer, String contentType) {
         Objects.requireNonNull(serializer, "serializer");
         if (serializer instanceof CompositeSerializer composite) {
             return composite.serializerForReceivedContentType(contentType);
         }
         if (!isCanonicalWireContentType(contentType)) {
-            throw protocolError(
-                "received payload content type is not a canonical bare media type");
+            throw protocolError("received payload content type is not a canonical bare media type");
         }
         if (DEFAULT_JSON_CONTENT_TYPE.equals(contentType)
-            || LEGACY_JSON_CONTENT_TYPE.equals(contentType)) {
+                || LEGACY_JSON_CONTENT_TYPE.equals(contentType)) {
             return serializer;
         }
         throw protocolError(
-            "No payload serializer is registered for received content type '"
-                + contentType + "'");
+                "No payload serializer is registered for received content type '"
+                        + contentType
+                        + "'");
     }
 
     public static ZLinkMessageSerializer serializerForReceivedStreamCodec(
-        ZLinkMessageSerializer serializer,
-        ZLinkStreamCodec codec) {
+            ZLinkMessageSerializer serializer, ZLinkStreamCodec codec) {
         Objects.requireNonNull(serializer, "serializer");
         Objects.requireNonNull(codec, "codec");
         if (serializer instanceof CompositeSerializer composite) {
             return composite.serializerForReceivedStreamCodec(codec);
         }
-        if (codec == ZLinkStreamCodec.JSON
-            || codec == ZLinkStreamCodec.RAW) {
+        if (codec == ZLinkStreamCodec.JSON || codec == ZLinkStreamCodec.RAW) {
             return serializer;
         }
         throw protocolError(
-            "No payload serializer is registered for received STREAM codec '"
-                + codec + "'");
+                "No payload serializer is registered for received STREAM codec '" + codec + "'");
     }
 
     public static String contentTypeForReceivedStreamCodec(
-        ZLinkMessageSerializer serializer,
-        ZLinkStreamCodec codec) {
+            ZLinkMessageSerializer serializer, ZLinkStreamCodec codec) {
         Objects.requireNonNull(serializer, "serializer");
         Objects.requireNonNull(codec, "codec");
         if (serializer instanceof CompositeSerializer composite) {
@@ -291,14 +284,11 @@ public final class ZLinkCodecRegistration implements ZLinkCodecRegistryBuilder, 
             return DEFAULT_JSON_CONTENT_TYPE;
         }
         throw protocolError(
-            "No payload content type is registered for received STREAM codec '"
-                + codec + "'");
+                "No payload content type is registered for received STREAM codec '" + codec + "'");
     }
 
     public static ZLinkStreamCodec streamCodecForDeclaredType(
-        ZLinkMessageSerializer serializer,
-        Class<?> declaredType,
-        ZLinkStreamCodec fallback) {
+            ZLinkMessageSerializer serializer, Class<?> declaredType, ZLinkStreamCodec fallback) {
         Objects.requireNonNull(serializer, "serializer");
         Objects.requireNonNull(fallback, "fallback");
         if (serializer instanceof CompositeSerializer composite) {
@@ -308,9 +298,7 @@ public final class ZLinkCodecRegistration implements ZLinkCodecRegistryBuilder, 
     }
 
     public static String contentTypeForDeclaredType(
-        ZLinkMessageSerializer serializer,
-        Class<?> declaredType,
-        String fallback) {
+            ZLinkMessageSerializer serializer, Class<?> declaredType, String fallback) {
         Objects.requireNonNull(serializer, "serializer");
         Objects.requireNonNull(fallback, "fallback");
         if (serializer instanceof CompositeSerializer composite) {
@@ -320,8 +308,7 @@ public final class ZLinkCodecRegistration implements ZLinkCodecRegistryBuilder, 
     }
 
     private static Optional<Map.Entry<String, RegisteredSerializer>> lastSerializerFor(
-        Map<String, RegisteredSerializer> serializers,
-        Class<?> type) {
+            Map<String, RegisteredSerializer> serializers, Class<?> type) {
         Map.Entry<String, RegisteredSerializer> match = null;
         for (Map.Entry<String, RegisteredSerializer> entry : serializers.entrySet()) {
             if (entry.getValue().canSerialize().test(type)) {
@@ -344,9 +331,10 @@ public final class ZLinkCodecRegistration implements ZLinkCodecRegistryBuilder, 
             if (cached != null) {
                 return cached;
             }
-            SendSelection selected = lastSerializerFor(serializers, type)
-                .map(entry -> new SendSelection(entry.getKey(), entry.getValue()))
-                .orElse(SendSelection.JSON);
+            SendSelection selected =
+                    lastSerializerFor(serializers, type)
+                            .map(entry -> new SendSelection(entry.getKey(), entry.getValue()))
+                            .orElse(SendSelection.JSON);
             if (sendTypeCache.size() < MAX_TYPE_CACHE_ENTRIES) {
                 sendTypeCache.put(type, selected);
             }
@@ -355,17 +343,17 @@ public final class ZLinkCodecRegistration implements ZLinkCodecRegistryBuilder, 
     }
 
     private ZLinkMessageSerializer serializerForContentType(
-        String contentType,
-        ZLinkMessageSerializer jsonFallback) {
+            String contentType, ZLinkMessageSerializer jsonFallback) {
         if (DEFAULT_JSON_CONTENT_TYPE.equals(contentType)
-            || LEGACY_JSON_CONTENT_TYPE.equals(contentType)) {
+                || LEGACY_JSON_CONTENT_TYPE.equals(contentType)) {
             return jsonFallback;
         }
         RegisteredSerializer selected = serializers.get(contentType);
         if (selected == null) {
             throw new ZLinkConfigurationException(
-                "no payload serializer is registered for selected content type '"
-                    + contentType + "'");
+                    "no payload serializer is registered for selected content type '"
+                            + contentType
+                            + "'");
         }
         return selected.serializer();
     }
@@ -373,15 +361,15 @@ public final class ZLinkCodecRegistration implements ZLinkCodecRegistryBuilder, 
     private ZLinkStreamCodec streamCodecForSending(Class<?> declaredType) {
         SendSelection selected = sendSelectionFor(declaredType);
         if (DEFAULT_JSON_CONTENT_TYPE.equals(selected.contentType())
-            || LEGACY_JSON_CONTENT_TYPE.equals(selected.contentType())) {
+                || LEGACY_JSON_CONTENT_TYPE.equals(selected.contentType())) {
             return ZLinkStreamCodec.JSON;
         }
-        ZLinkStreamCodec streamCodec =
-            streamCodecsByContentType.get(selected.contentType());
+        ZLinkStreamCodec streamCodec = streamCodecsByContentType.get(selected.contentType());
         if (streamCodec == null) {
             throw new ZLinkConfigurationException(
-                "selected payload content type '" + selected.contentType()
-                    + "' does not have a STREAM codec mapping");
+                    "selected payload content type '"
+                            + selected.contentType()
+                            + "' does not have a STREAM codec mapping");
         }
         return streamCodec;
     }
@@ -395,7 +383,7 @@ public final class ZLinkCodecRegistration implements ZLinkCodecRegistryBuilder, 
     private void requireMutable() {
         if (frozen) {
             throw new ZLinkConfigurationException(
-                "codec registry is immutable after framework startup");
+                    "codec registry is immutable after framework startup");
         }
     }
 
@@ -423,9 +411,8 @@ public final class ZLinkCodecRegistration implements ZLinkCodecRegistryBuilder, 
             if (!isTokenCharacter(value)) {
                 throw invalidContentType(label, contentType);
             }
-            normalized[target] = value >= 'A' && value <= 'Z'
-                ? (char) (value + ('a' - 'A'))
-                : value;
+            normalized[target] =
+                    value >= 'A' && value <= 'Z' ? (char) (value + ('a' - 'A')) : value;
         }
         if (slash <= 0 || slash >= normalized.length - 1) {
             throw invalidContentType(label, contentType);
@@ -460,20 +447,36 @@ public final class ZLinkCodecRegistration implements ZLinkCodecRegistryBuilder, 
 
     private static boolean isTokenCharacter(char value) {
         return value >= 'a' && value <= 'z'
-            || value >= 'A' && value <= 'Z'
-            || value >= '0' && value <= '9'
-            || switch (value) {
-                case '!', '#', '$', '%', '&', '\'', '*', '+', '-', '.', '^', '_', '`', '|', '~' -> true;
-                default -> false;
-            };
+                || value >= 'A' && value <= 'Z'
+                || value >= '0' && value <= '9'
+                || switch (value) {
+                    case '!',
+                            '#',
+                            '$',
+                            '%',
+                            '&',
+                            '\'',
+                            '*',
+                            '+',
+                            '-',
+                            '.',
+                            '^',
+                            '_',
+                            '`',
+                            '|',
+                            '~' ->
+                            true;
+                    default -> false;
+                };
     }
 
     private static ZLinkConfigurationException invalidContentType(
-        String label,
-        String contentType) {
+            String label, String contentType) {
         return new ZLinkConfigurationException(
-            label + " content type must be a bare type/subtype media type: '"
-                + contentType + "'");
+                label
+                        + " content type must be a bare type/subtype media type: '"
+                        + contentType
+                        + "'");
     }
 
     private static ZLinkFrameworkException protocolError(String message) {
@@ -485,25 +488,20 @@ public final class ZLinkCodecRegistration implements ZLinkCodecRegistryBuilder, 
     }
 
     private record RegisteredSerializer(
-        ZLinkMessageSerializer serializer,
-        Predicate<Class<?>> canSerialize,
-        boolean fallbackSerializer) {
-    }
+            ZLinkMessageSerializer serializer,
+            Predicate<Class<?>> canSerialize,
+            boolean fallbackSerializer) {}
 
-    private record SendSelection(
-        String contentType,
-        RegisteredSerializer serializer) {
+    private record SendSelection(String contentType, RegisteredSerializer serializer) {
         private static final SendSelection JSON =
-            new SendSelection(DEFAULT_JSON_CONTENT_TYPE, null);
+                new SendSelection(DEFAULT_JSON_CONTENT_TYPE, null);
     }
 
     private static final class CompositeSerializer implements ZLinkMessageSerializer {
         private final ZLinkCodecRegistration registration;
         private final ZLinkMessageSerializer fallback;
 
-        CompositeSerializer(
-            ZLinkCodecRegistration registration,
-            ZLinkMessageSerializer fallback) {
+        CompositeSerializer(ZLinkCodecRegistration registration, ZLinkMessageSerializer fallback) {
             this.registration = registration;
             this.fallback = fallback;
         }
@@ -519,14 +517,14 @@ public final class ZLinkCodecRegistration implements ZLinkCodecRegistryBuilder, 
         @Override
         public <T> ZLinkEncodedPayload serialize(T value, Class<?> declaredType) {
             Objects.requireNonNull(declaredType, "declaredType");
-            return registration.serializerForSending(declaredType, fallback)
-                .serialize(value, declaredType);
+            return registration
+                    .serializerForSending(declaredType, fallback)
+                    .serialize(value, declaredType);
         }
 
         @Override
         public <T> T deserialize(ZLinkEncodedPayload payload, Class<T> type) {
-            return registration.serializerForSending(type, fallback)
-                .deserialize(payload, type);
+            return registration.serializerForSending(type, fallback).deserialize(payload, type);
         }
 
         @Override
@@ -534,16 +532,11 @@ public final class ZLinkCodecRegistration implements ZLinkCodecRegistryBuilder, 
             registration.serializerForSending(type, fallback).prepare(type);
         }
 
-        private <T> ZLinkEncodedPayload serializeForContentType(
-            T value,
-            String contentType) {
-            return registration.serializerForContentType(contentType, fallback)
-                .serialize(value);
+        private <T> ZLinkEncodedPayload serializeForContentType(T value, String contentType) {
+            return registration.serializerForContentType(contentType, fallback).serialize(value);
         }
 
-        private <T> ZLinkEncodedPayload serializeForDeclaredType(
-            T value,
-            Class<?> declaredType) {
+        private <T> ZLinkEncodedPayload serializeForDeclaredType(T value, Class<?> declaredType) {
             return serialize(value, declaredType);
         }
 
@@ -551,18 +544,16 @@ public final class ZLinkCodecRegistration implements ZLinkCodecRegistryBuilder, 
             return registration.streamCodecForSending(declaredType);
         }
 
-        private ZLinkMessageSerializer serializerForReceivedContentType(
-            String contentType) {
+        private ZLinkMessageSerializer serializerForReceivedContentType(String contentType) {
             return registration.serializerForReceivedContentType(contentType, fallback);
         }
 
-        private ZLinkMessageSerializer serializerForReceivedStreamCodec(
-            ZLinkStreamCodec codec) {
+        private ZLinkMessageSerializer serializerForReceivedStreamCodec(ZLinkStreamCodec codec) {
             if (codec == ZLinkStreamCodec.RAW) {
                 return fallback;
             }
             return serializerForReceivedContentType(
-                registration.contentTypeForReceivedStreamCodec(codec));
+                    registration.contentTypeForReceivedStreamCodec(codec));
         }
     }
 }

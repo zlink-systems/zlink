@@ -1,8 +1,8 @@
 using System.Collections.Concurrent;
 using System.Diagnostics;
 using Microsoft.Extensions.DependencyInjection;
-using Systems.Zlink.Stream.Connector.Contracts;
 using Systems.Zlink.Framework.Runtime.Protocol;
+using Systems.Zlink.Stream.Connector.Contracts;
 using Zlink.Framework.Contracts.Messaging;
 using Zlink.Framework.Runtime.Actors;
 using Zlink.Framework.Runtime.Backend.Contracts;
@@ -22,21 +22,29 @@ public sealed class BoundSessionReplacementLifecycleTests
     public async Task Replacement_Closes_Application_Ingress_Allows_Guidance_And_Deduplicates_Callback()
     {
         await using var fixture = await ReplacementFixture.CreateAsync(
-            ReplacementCallbackBehavior.Success);
+            ReplacementCallbackBehavior.Success
+        );
         fixture.BindRetiredSessionActor("actor-a");
 
         Assert.True(fixture.NotifyReplacement("actor-a"));
         Assert.True(fixture.NotifyReplacement("actor-a"));
 
         var admissions = await Task.WhenAll(
-            Enumerable.Range(0, 64).Select(_ => Task.Run(() =>
-            {
-                using var header = Message.From([1]);
-                using var payload = Message.From([2]);
-                return fixture.Session.TryEnqueuePacket(header, payload);
-            })));
-        Assert.All(admissions, static admission =>
-            Assert.Equal(ZLinkSerialPostAdmission.Closed, admission));
+            Enumerable
+                .Range(0, 64)
+                .Select(_ =>
+                    Task.Run(() =>
+                    {
+                        using var header = Message.From([1]);
+                        using var payload = Message.From([2]);
+                        return fixture.Session.TryEnqueuePacket(header, payload);
+                    })
+                )
+        );
+        Assert.All(
+            admissions,
+            static admission => Assert.Equal(ZLinkSerialPostAdmission.Closed, admission)
+        );
         await fixture.Lifetime.CallbackTerminal.Task.WaitAsync(TimeSpan.FromSeconds(2));
         await fixture.Socket.FrameSent.Task.WaitAsync(TimeSpan.FromSeconds(2));
         await fixture.Time.TimerScheduled.Task.WaitAsync(TimeSpan.FromSeconds(2));
@@ -56,7 +64,8 @@ public sealed class BoundSessionReplacementLifecycleTests
     public async Task Callback_OperationCanceledException_Is_A_Failure_With_The_Fixed_Grace_Window()
     {
         await using var fixture = await ReplacementFixture.CreateAsync(
-            ReplacementCallbackBehavior.ThrowOperationCanceled);
+            ReplacementCallbackBehavior.ThrowOperationCanceled
+        );
         fixture.BindRetiredSessionActor("actor-a");
 
         Assert.True(fixture.NotifyReplacement("actor-a"));
@@ -77,7 +86,8 @@ public sealed class BoundSessionReplacementLifecycleTests
     {
         await using var fixture = await ReplacementFixture.CreateAsync(
             ReplacementCallbackBehavior.WaitForDeadline,
-            sessionReplacementCallbackTimeout: TimeSpan.FromMilliseconds(40));
+            sessionReplacementCallbackTimeout: TimeSpan.FromMilliseconds(40)
+        );
         fixture.BindRetiredSessionActor("actor-a");
 
         Assert.True(fixture.NotifyReplacement("actor-a"));
@@ -92,17 +102,15 @@ public sealed class BoundSessionReplacementLifecycleTests
     public async Task Grace_Timer_Revalidates_The_Exact_Retired_Binding_Before_Close()
     {
         await using var fixture = await ReplacementFixture.CreateAsync(
-            ReplacementCallbackBehavior.Success);
+            ReplacementCallbackBehavior.Success
+        );
         var bindingToken = fixture.BindRetiredSessionActor("actor-a");
 
         Assert.True(fixture.NotifyReplacement("actor-a"));
         await fixture.Lifetime.CallbackTerminal.Task.WaitAsync(TimeSpan.FromSeconds(2));
         await fixture.Time.TimerScheduled.Task.WaitAsync(TimeSpan.FromSeconds(2));
         await WaitUntilAsync(() => fixture.Time.ActiveTimerCount == 1);
-        fixture.Runtime.UnbindSessionActor(
-            "actor-a",
-            fixture.Lifetime.Context,
-            bindingToken);
+        fixture.Runtime.UnbindSessionActor("actor-a", fixture.Lifetime.Context, bindingToken);
 
         fixture.Time.Advance(TimeSpan.FromMilliseconds(100));
         await Task.Yield();
@@ -113,7 +121,8 @@ public sealed class BoundSessionReplacementLifecycleTests
     public async Task Physical_Close_Cleans_All_Retired_Actors_And_Preserves_The_Replacement()
     {
         await using var fixture = await ReplacementFixture.CreateAsync(
-            ReplacementCallbackBehavior.Success);
+            ReplacementCallbackBehavior.Success
+        );
         fixture.BindRetiredSessionActor("actor-a");
         fixture.BindRetiredSessionActor("actor-b");
         var newSessionRid = RoutingId.From("replacement-session");
@@ -127,7 +136,8 @@ public sealed class BoundSessionReplacementLifecycleTests
             objectGeneration: 1,
             authorityOwnerGeneration: 2,
             meshName: "actors",
-            ownerLeaseGeneration: 2);
+            ownerLeaseGeneration: 2
+        );
         fixture.Runtime.BindActorSession(
             "actor-b",
             null,
@@ -136,7 +146,8 @@ public sealed class BoundSessionReplacementLifecycleTests
             objectGeneration: 1,
             authorityOwnerGeneration: 1,
             meshName: "actors",
-            ownerLeaseGeneration: 1);
+            ownerLeaseGeneration: 1
+        );
 
         Assert.True(fixture.NotifyReplacement("actor-a"));
         await fixture.Lifetime.CallbackTerminal.Task.WaitAsync(TimeSpan.FromSeconds(2));
@@ -165,24 +176,28 @@ public sealed class BoundSessionReplacementLifecycleTests
         await using var target = await HostedReplacementFixture.CreateAsync(
             targetRid,
             targetEndpoint,
-            ReplacementCallbackBehavior.Success);
+            ReplacementCallbackBehavior.Success
+        );
         await using var source = await HostedReplacementFixture.CreateAsync(
             sourceRid,
             sourceEndpoint,
-            ReplacementCallbackBehavior.Success);
+            ReplacementCallbackBehavior.Success
+        );
 
         source.Node.ConnectPeer(targetRid, target.Endpoint);
         await WaitUntilAsync(() =>
             target.Node.MeshStatus().AdmittedPeerCount == 1
-            && source.Node.MeshStatus().AdmittedPeerCount == 1);
+            && source.Node.MeshStatus().AdmittedPeerCount == 1
+        );
 
         target.BindRetiredSessionActor("actor-a");
         var targetGeneration = target.Node.MeshStatus().LifecycleGeneration;
-        var sourceGeneration = target.Node.MeshPeers()
+        var sourceGeneration = target
+            .Node.MeshPeers()
             .Single(peer => peer.RoutingId == sourceRid)
             .LifecycleGeneration;
-        var sourceSender = Assert.IsAssignableFrom<
-            IZLinkBackendBoundSessionReplacementNotifications>(source.Node);
+        var sourceSender =
+            Assert.IsAssignableFrom<IZLinkBackendBoundSessionReplacementNotifications>(source.Node);
 
         ZLinkServiceWireCodec.BoundSessionReplacedRecord Record(
             string actorId = "actor-a",
@@ -192,27 +207,28 @@ public sealed class BoundSessionReplacementLifecycleTests
             ulong? retiredBindingGeneration = null,
             RoutingId? authoritySourceNodeRid = null,
             ulong? authoritySourceNodeGeneration = null,
-            ulong? sessionOwnerNodeGeneration = null) => new(
-            new ZLinkServiceWireCodec.BoundSessionReplacedActorAuthority(
-                actorId,
-                ObjectGeneration: 1,
-                authoritySourceNodeRid ?? sourceRid,
-                authoritySourceNodeGeneration ?? sourceGeneration,
-                ExpectedAuthorityOwnerGeneration: 3,
-                ExpectedOwnerLeaseGeneration: 5),
-            new ZLinkServiceWireCodec.BoundSessionReplacedRetiredSession(
-                targetRid,
-                sessionOwnerNodeGeneration ?? targetGeneration,
-                string.IsNullOrEmpty(sessionOwnerId)
-                    ? target.SessionOwnerId
-                    : sessionOwnerId,
-                sessionOwnerLeaseGeneration ?? target.SessionOwnerLeaseGeneration,
-                sessionRid ?? target.SessionRid,
-                retiredBindingGeneration ?? target.BindingGeneration));
+            ulong? sessionOwnerNodeGeneration = null
+        ) =>
+            new(
+                new ZLinkServiceWireCodec.BoundSessionReplacedActorAuthority(
+                    actorId,
+                    ObjectGeneration: 1,
+                    authoritySourceNodeRid ?? sourceRid,
+                    authoritySourceNodeGeneration ?? sourceGeneration,
+                    ExpectedAuthorityOwnerGeneration: 3,
+                    ExpectedOwnerLeaseGeneration: 5
+                ),
+                new ZLinkServiceWireCodec.BoundSessionReplacedRetiredSession(
+                    targetRid,
+                    sessionOwnerNodeGeneration ?? targetGeneration,
+                    string.IsNullOrEmpty(sessionOwnerId) ? target.SessionOwnerId : sessionOwnerId,
+                    sessionOwnerLeaseGeneration ?? target.SessionOwnerLeaseGeneration,
+                    sessionRid ?? target.SessionRid,
+                    retiredBindingGeneration ?? target.BindingGeneration
+                )
+            );
 
-        Assert.True(sourceSender.TrySendBoundSessionReplacedNotification(
-            targetRid,
-            Record()));
+        Assert.True(sourceSender.TrySendBoundSessionReplacedNotification(targetRid, Record()));
         await target.Lifetime.CallbackTerminal.Task.WaitAsync(TimeSpan.FromSeconds(2));
         Assert.Equal(1, Volatile.Read(ref target.Lifetime.CallbackCount));
         Assert.Equal(0, target.Socket.DisconnectCount);
@@ -225,41 +241,38 @@ public sealed class BoundSessionReplacementLifecycleTests
             Record(sessionOwnerId: "forged-owner"),
             Record(sessionOwnerLeaseGeneration: target.SessionOwnerLeaseGeneration + 1),
             Record(sessionRid: RoutingId.From("forged-session")),
-            Record(retiredBindingGeneration: target.BindingGeneration + 1)
+            Record(retiredBindingGeneration: target.BindingGeneration + 1),
         };
         foreach (var invalid in invalidRecords)
         {
-            Assert.True(sourceSender.TrySendBoundSessionReplacedNotification(
-                targetRid,
-                invalid));
+            Assert.True(sourceSender.TrySendBoundSessionReplacedNotification(targetRid, invalid));
         }
 
-        target.BindRetiredSessionActor(
-            "actor-b",
-            target.BindingGeneration + 1);
-        Assert.True(sourceSender.TrySendBoundSessionReplacedNotification(
-            targetRid,
-            Record(
-                actorId: "actor-b",
-                retiredBindingGeneration: target.BindingGeneration + 1)));
+        target.BindRetiredSessionActor("actor-b", target.BindingGeneration + 1);
+        Assert.True(
+            sourceSender.TrySendBoundSessionReplacedNotification(
+                targetRid,
+                Record(actorId: "actor-b", retiredBindingGeneration: target.BindingGeneration + 1)
+            )
+        );
         await target.Lifetime.ActorBCallback.Task.WaitAsync(TimeSpan.FromSeconds(2));
 
         // A third valid record is a serial transport/dispatch barrier.  Once
         // actor-c has entered the session executor, all earlier records from
         // this sender have been received and enqueued in order.
-        target.BindRetiredSessionActor(
-            "actor-c",
-            target.BindingGeneration + 2);
-        Assert.True(sourceSender.TrySendBoundSessionReplacedNotification(
-            targetRid,
-            Record(
-                actorId: "actor-c",
-                retiredBindingGeneration: target.BindingGeneration + 2)));
+        target.BindRetiredSessionActor("actor-c", target.BindingGeneration + 2);
+        Assert.True(
+            sourceSender.TrySendBoundSessionReplacedNotification(
+                targetRid,
+                Record(actorId: "actor-c", retiredBindingGeneration: target.BindingGeneration + 2)
+            )
+        );
         await target.Lifetime.ActorCCallback.Task.WaitAsync(TimeSpan.FromSeconds(2));
 
         Assert.Equal(
             new[] { "actor-a", "actor-b", "actor-c" },
-            target.Lifetime.CallbackActorIds.ToArray());
+            target.Lifetime.CallbackActorIds.ToArray()
+        );
         Assert.Equal(3, Volatile.Read(ref target.Lifetime.CallbackCount));
         Assert.Equal(0, target.Socket.DisconnectCount);
     }
@@ -268,22 +281,21 @@ public sealed class BoundSessionReplacementLifecycleTests
     public async Task Retired_Binding_Lookup_Requires_Every_Owner_Fence_Field()
     {
         await using var fixture = await ReplacementFixture.CreateAsync(
-            ReplacementCallbackBehavior.Success);
+            ReplacementCallbackBehavior.Success
+        );
         var table = new ZLinkSessionActorBindingTable(
             TimeSpan.FromSeconds(30),
-            new ZLinkLocationOptions().SessionRelocationSealTimeout);
+            new ZLinkLocationOptions().SessionRelocationSealTimeout
+        );
         const string actorId = "actor-fence";
         const string bindingToken = "binding-fence";
-        var actor = new ActorRef(
-            actorId,
-            1,
-            "actors",
-            RoutingId.From("actor-node"));
+        var actor = new ActorRef(actorId, 1, "actors", RoutingId.From("actor-node"));
         var bound = new ZLinkSessionActor(
             fixture.Lifetime.Context,
             actorId,
             fixture.SessionRid,
-            bindingToken);
+            bindingToken
+        );
         var actorKey = ZLinkActorId.FromBoundary(actorId, nameof(actorId));
         _ = await table.BindAsync(
             actorKey,
@@ -296,51 +308,94 @@ public sealed class BoundSessionReplacementLifecycleTests
                 "actors",
                 targetNodeGeneration: 2,
                 authorityOwnerGeneration: 3,
-                ownerLeaseGeneration: 5),
+                ownerLeaseGeneration: 5
+            ),
             ReplacementFixture.SessionOwnerNodeGeneration,
             ReplacementFixture.SessionOwnerNodeRid,
             ReplacementFixture.SessionOwnerId,
-            ReplacementFixture.SessionOwnerLeaseGeneration);
+            ReplacementFixture.SessionOwnerLeaseGeneration
+        );
 
-        await AssertExactAsync(true, actorId, ReplacementFixture.SessionOwnerNodeRid,
-            fixture.SessionRid, ReplacementFixture.SessionOwnerNodeGeneration,
+        await AssertExactAsync(
+            true,
+            actorId,
+            ReplacementFixture.SessionOwnerNodeRid,
+            fixture.SessionRid,
+            ReplacementFixture.SessionOwnerNodeGeneration,
             ReplacementFixture.SessionOwnerId,
             ReplacementFixture.SessionOwnerLeaseGeneration,
-            ReplacementFixture.BindingGeneration);
-        await AssertExactAsync(false, "other-actor", ReplacementFixture.SessionOwnerNodeRid,
-            fixture.SessionRid, ReplacementFixture.SessionOwnerNodeGeneration,
+            ReplacementFixture.BindingGeneration
+        );
+        await AssertExactAsync(
+            false,
+            "other-actor",
+            ReplacementFixture.SessionOwnerNodeRid,
+            fixture.SessionRid,
+            ReplacementFixture.SessionOwnerNodeGeneration,
             ReplacementFixture.SessionOwnerId,
             ReplacementFixture.SessionOwnerLeaseGeneration,
-            ReplacementFixture.BindingGeneration);
-        await AssertExactAsync(false, actorId, RoutingId.From("other-owner-node"),
-            fixture.SessionRid, ReplacementFixture.SessionOwnerNodeGeneration,
+            ReplacementFixture.BindingGeneration
+        );
+        await AssertExactAsync(
+            false,
+            actorId,
+            RoutingId.From("other-owner-node"),
+            fixture.SessionRid,
+            ReplacementFixture.SessionOwnerNodeGeneration,
             ReplacementFixture.SessionOwnerId,
             ReplacementFixture.SessionOwnerLeaseGeneration,
-            ReplacementFixture.BindingGeneration);
-        await AssertExactAsync(false, actorId, ReplacementFixture.SessionOwnerNodeRid,
-            RoutingId.From("other-session"), ReplacementFixture.SessionOwnerNodeGeneration,
+            ReplacementFixture.BindingGeneration
+        );
+        await AssertExactAsync(
+            false,
+            actorId,
+            ReplacementFixture.SessionOwnerNodeRid,
+            RoutingId.From("other-session"),
+            ReplacementFixture.SessionOwnerNodeGeneration,
             ReplacementFixture.SessionOwnerId,
             ReplacementFixture.SessionOwnerLeaseGeneration,
-            ReplacementFixture.BindingGeneration);
-        await AssertExactAsync(false, actorId, ReplacementFixture.SessionOwnerNodeRid,
-            fixture.SessionRid, ReplacementFixture.SessionOwnerNodeGeneration + 1,
+            ReplacementFixture.BindingGeneration
+        );
+        await AssertExactAsync(
+            false,
+            actorId,
+            ReplacementFixture.SessionOwnerNodeRid,
+            fixture.SessionRid,
+            ReplacementFixture.SessionOwnerNodeGeneration + 1,
             ReplacementFixture.SessionOwnerId,
             ReplacementFixture.SessionOwnerLeaseGeneration,
-            ReplacementFixture.BindingGeneration);
-        await AssertExactAsync(false, actorId, ReplacementFixture.SessionOwnerNodeRid,
-            fixture.SessionRid, ReplacementFixture.SessionOwnerNodeGeneration,
-            "other-owner", ReplacementFixture.SessionOwnerLeaseGeneration,
-            ReplacementFixture.BindingGeneration);
-        await AssertExactAsync(false, actorId, ReplacementFixture.SessionOwnerNodeRid,
-            fixture.SessionRid, ReplacementFixture.SessionOwnerNodeGeneration,
+            ReplacementFixture.BindingGeneration
+        );
+        await AssertExactAsync(
+            false,
+            actorId,
+            ReplacementFixture.SessionOwnerNodeRid,
+            fixture.SessionRid,
+            ReplacementFixture.SessionOwnerNodeGeneration,
+            "other-owner",
+            ReplacementFixture.SessionOwnerLeaseGeneration,
+            ReplacementFixture.BindingGeneration
+        );
+        await AssertExactAsync(
+            false,
+            actorId,
+            ReplacementFixture.SessionOwnerNodeRid,
+            fixture.SessionRid,
+            ReplacementFixture.SessionOwnerNodeGeneration,
             ReplacementFixture.SessionOwnerId,
             ReplacementFixture.SessionOwnerLeaseGeneration + 1,
-            ReplacementFixture.BindingGeneration);
-        await AssertExactAsync(false, actorId, ReplacementFixture.SessionOwnerNodeRid,
-            fixture.SessionRid, ReplacementFixture.SessionOwnerNodeGeneration,
+            ReplacementFixture.BindingGeneration
+        );
+        await AssertExactAsync(
+            false,
+            actorId,
+            ReplacementFixture.SessionOwnerNodeRid,
+            fixture.SessionRid,
+            ReplacementFixture.SessionOwnerNodeGeneration,
             ReplacementFixture.SessionOwnerId,
             ReplacementFixture.SessionOwnerLeaseGeneration,
-            ReplacementFixture.BindingGeneration + 1);
+            ReplacementFixture.BindingGeneration + 1
+        );
         return;
 
         async Task AssertExactAsync(
@@ -351,7 +406,8 @@ public sealed class BoundSessionReplacementLifecycleTests
             ulong ownerNodeGeneration,
             string ownerId,
             ulong ownerLeaseGeneration,
-            ulong bindingGeneration)
+            ulong bindingGeneration
+        )
         {
             Assert.Equal(
                 expected,
@@ -362,7 +418,10 @@ public sealed class BoundSessionReplacementLifecycleTests
                     ownerNodeGeneration,
                     ownerId,
                     ownerLeaseGeneration,
-                    bindingGeneration) is not null);
+                    bindingGeneration
+                )
+                    is not null
+            );
         }
     }
 
@@ -372,17 +431,19 @@ public sealed class BoundSessionReplacementLifecycleTests
         var time = new ReplacementTimeProvider();
         var attempts = 0;
 
-        var retry = ZLinkBoundSessionReplacementAdmissionRetry.RunAsync(
-            () => Interlocked.Increment(ref attempts) == 3,
-            TimeSpan.FromSeconds(1),
-            time,
-            CancellationToken.None).AsTask();
+        var retry = ZLinkBoundSessionReplacementAdmissionRetry
+            .RunAsync(
+                () => Interlocked.Increment(ref attempts) == 3,
+                TimeSpan.FromSeconds(1),
+                time,
+                CancellationToken.None
+            )
+            .AsTask();
 
         Assert.Equal(1, Volatile.Read(ref attempts));
         Assert.False(retry.IsCompleted);
         time.Advance(TimeSpan.FromMilliseconds(10));
-        await WaitUntilAsync(() => Volatile.Read(ref attempts) == 2
-                                   && time.ActiveTimerCount == 1);
+        await WaitUntilAsync(() => Volatile.Read(ref attempts) == 2 && time.ActiveTimerCount == 1);
         time.Advance(TimeSpan.FromMilliseconds(10));
 
         Assert.True(await retry.WaitAsync(TimeSpan.FromSeconds(2)));
@@ -396,19 +457,21 @@ public sealed class BoundSessionReplacementLifecycleTests
         var time = new ReplacementTimeProvider();
         var attempts = 0;
 
-        var retry = ZLinkBoundSessionReplacementAdmissionRetry.RunAsync(
-            () =>
-            {
-                Interlocked.Increment(ref attempts);
-                return false;
-            },
-            TimeSpan.FromMilliseconds(15),
-            time,
-            CancellationToken.None).AsTask();
+        var retry = ZLinkBoundSessionReplacementAdmissionRetry
+            .RunAsync(
+                () =>
+                {
+                    Interlocked.Increment(ref attempts);
+                    return false;
+                },
+                TimeSpan.FromMilliseconds(15),
+                time,
+                CancellationToken.None
+            )
+            .AsTask();
 
         time.Advance(TimeSpan.FromMilliseconds(10));
-        await WaitUntilAsync(() => Volatile.Read(ref attempts) == 2
-                                   && time.ActiveTimerCount == 1);
+        await WaitUntilAsync(() => Volatile.Read(ref attempts) == 2 && time.ActiveTimerCount == 1);
         time.Advance(TimeSpan.FromMilliseconds(5));
 
         Assert.False(await retry.WaitAsync(TimeSpan.FromSeconds(2)));
@@ -431,12 +494,13 @@ public sealed class BoundSessionReplacementLifecycleTests
     {
         Success,
         ThrowOperationCanceled,
-        WaitForDeadline
+        WaitForDeadline,
     }
 
     private sealed class ReplacementSession(
         IZLinkSessionContext context,
-        ReplacementLifetime lifetime) : IZLinkSession
+        ReplacementLifetime lifetime
+    ) : IZLinkSession
     {
         public IZLinkSessionContext Context { get; } = lifetime.Capture(context);
 
@@ -452,7 +516,8 @@ public sealed class BoundSessionReplacementLifecycleTests
 
         public async ValueTask OnActorBindingReplacedAsync(
             string actorId,
-            CancellationToken cancellationToken)
+            CancellationToken cancellationToken
+        )
         {
             Interlocked.Increment(ref lifetime.CallbackCount);
             lifetime.CallbackActorIds.Enqueue(actorId);
@@ -475,18 +540,19 @@ public sealed class BoundSessionReplacementLifecycleTests
 
         public ValueTask OnErrorAsync(
             ZLinkStreamError error,
-            CancellationToken cancellationToken) => ValueTask.CompletedTask;
+            CancellationToken cancellationToken
+        ) => ValueTask.CompletedTask;
 
         public ValueTask OnDispatchAsync(
             ZLinkSessionDispatchContext dispatch,
             ZLinkMessage payload,
-            CancellationToken cancellationToken) => ValueTask.CompletedTask;
+            CancellationToken cancellationToken
+        ) => ValueTask.CompletedTask;
     }
 
     private sealed record ReplacementGuidance(string ActorId);
 
-    private sealed class ReplacementLifetime(
-        ReplacementCallbackBehavior behavior)
+    private sealed class ReplacementLifetime(ReplacementCallbackBehavior behavior)
     {
         public ReplacementCallbackBehavior Behavior { get; } = behavior;
 
@@ -526,8 +592,9 @@ public sealed class BoundSessionReplacementLifecycleTests
         internal const string SessionOwnerId = "session-owner";
         internal const ulong SessionOwnerLeaseGeneration = 13;
 
-        internal static readonly RoutingId SessionOwnerNodeRid =
-            RoutingId.From("session-owner-node");
+        internal static readonly RoutingId SessionOwnerNodeRid = RoutingId.From(
+            "session-owner-node"
+        );
 
         private readonly ServiceProvider _provider;
 
@@ -538,7 +605,8 @@ public sealed class BoundSessionReplacementLifecycleTests
             ReplacementStreamSocket socket,
             ZLinkStreamSessionRuntime session,
             ReplacementLifetime lifetime,
-            RoutingId sessionRid)
+            RoutingId sessionRid
+        )
         {
             _provider = provider;
             Runtime = runtime;
@@ -558,13 +626,14 @@ public sealed class BoundSessionReplacementLifecycleTests
 
         internal static async Task<ReplacementFixture> CreateAsync(
             ReplacementCallbackBehavior behavior,
-            TimeSpan? sessionReplacementCallbackTimeout = null)
+            TimeSpan? sessionReplacementCallbackTimeout = null
+        )
         {
             var registration = new ZLinkFrameworkRegistration
             {
                 DefaultRequestTimeout = TimeSpan.FromSeconds(5),
                 SessionReplacementCallbackTimeout =
-                    sessionReplacementCallbackTimeout ?? TimeSpan.FromSeconds(5)
+                    sessionReplacementCallbackTimeout ?? TimeSpan.FromSeconds(5),
             };
             var lifetime = new ReplacementLifetime(behavior);
             ZLinkFrameworkRuntime runtime = null!;
@@ -580,7 +649,9 @@ public sealed class BoundSessionReplacementLifecycleTests
                 new ZLinkHandlerRegistry([]),
                 new ZLinkHandlerDispatcher(
                     provider.GetRequiredService<IServiceScopeFactory>(),
-                    registration));
+                    registration
+                )
+            );
             var time = new ReplacementTimeProvider();
             var socket = new ReplacementStreamSocket();
             var sessionRid = RoutingId.From("retired-session");
@@ -591,7 +662,8 @@ public sealed class BoundSessionReplacementLifecycleTests
                 typeof(ReplacementSession),
                 static _ => { },
                 "test",
-                time);
+                time
+            );
             return new ReplacementFixture(
                 provider,
                 runtime,
@@ -599,22 +671,15 @@ public sealed class BoundSessionReplacementLifecycleTests
                 socket,
                 session,
                 lifetime,
-                sessionRid);
+                sessionRid
+            );
         }
 
         internal string BindRetiredSessionActor(string actorId)
         {
             var bindingToken = $"binding-{actorId}";
-            var actor = new ActorRef(
-                actorId,
-                1,
-                "actors",
-                RoutingId.From("actor-owner"));
-            var bound = new ZLinkSessionActor(
-                Lifetime.Context,
-                actorId,
-                SessionRid,
-                bindingToken);
+            var actor = new ActorRef(actorId, 1, "actors", RoutingId.From("actor-owner"));
+            var bound = new ZLinkSessionActor(Lifetime.Context, actorId, SessionRid, bindingToken);
             _ = Runtime.BindSessionActor(
                 actorId,
                 Lifetime.Context,
@@ -626,11 +691,13 @@ public sealed class BoundSessionReplacementLifecycleTests
                     "actors",
                     targetNodeGeneration: 2,
                     authorityOwnerGeneration: 3,
-                    ownerLeaseGeneration: 5),
+                    ownerLeaseGeneration: 5
+                ),
                 SessionOwnerNodeGeneration,
                 SessionOwnerNodeRid,
                 SessionOwnerId,
-                SessionOwnerLeaseGeneration);
+                SessionOwnerLeaseGeneration
+            );
             return bindingToken;
         }
 
@@ -643,7 +710,8 @@ public sealed class BoundSessionReplacementLifecycleTests
                 SessionOwnerLeaseGeneration,
                 SessionRid,
                 BindingGeneration,
-                $"binding-{actorId}");
+                $"binding-{actorId}"
+            );
 
         public async ValueTask DisposeAsync()
         {
@@ -666,7 +734,8 @@ public sealed class BoundSessionReplacementLifecycleTests
             ZLinkStreamSessionRuntime session,
             ReplacementLifetime lifetime,
             RoutingId sessionRid,
-            ulong bindingGeneration)
+            ulong bindingGeneration
+        )
         {
             _provider = provider;
             Runtime = runtime;
@@ -701,21 +770,19 @@ public sealed class BoundSessionReplacementLifecycleTests
         internal static async Task<HostedReplacementFixture> CreateAsync(
             RoutingId nodeRid,
             string endpoint,
-            ReplacementCallbackBehavior behavior)
+            ReplacementCallbackBehavior behavior
+        )
         {
             var registration = new ZLinkFrameworkRegistration
             {
                 DefaultRequestTimeout = TimeSpan.FromSeconds(5),
-                ImplicitHandlerAutoRegistrationEnabled = false
+                ImplicitHandlerAutoRegistrationEnabled = false,
             };
             registration.SpotNodes["actors"] = new ZLinkSpotNodeRegistration
             {
                 SpotNodeName = "actors",
                 RoutingId = nodeRid,
-                Router = new ZLinkSpotRouterCapabilityRegistration
-                {
-                    BindEndpoint = endpoint
-                }
+                Router = new ZLinkSpotRouterCapabilityRegistration { BindEndpoint = endpoint },
             };
 
             var lifetime = new ReplacementLifetime(behavior);
@@ -732,14 +799,15 @@ public sealed class BoundSessionReplacementLifecycleTests
                 new ZLinkHandlerRegistry([]),
                 new ZLinkHandlerDispatcher(
                     services.GetRequiredService<IServiceScopeFactory>(),
-                    registration));
+                    registration
+                )
+            );
             await runtime.StartAsync(CancellationToken.None);
 
             var node = runtime.GetSpotNodeRuntime(nodeRid).Node;
             var time = new ReplacementTimeProvider();
             var socket = new ReplacementStreamSocket();
-            var sessionRid = RoutingId.From(
-                $"retired-session-{nodeRid.ToHex()}");
+            var sessionRid = RoutingId.From($"retired-session-{nodeRid.ToHex()}");
             var session = await ZLinkStreamSessionRuntime.CreateAsync(
                 services,
                 socket,
@@ -747,7 +815,8 @@ public sealed class BoundSessionReplacementLifecycleTests
                 typeof(ReplacementSession),
                 static _ => { },
                 "test",
-                time);
+                time
+            );
             return new HostedReplacementFixture(
                 services,
                 runtime,
@@ -758,25 +827,16 @@ public sealed class BoundSessionReplacementLifecycleTests
                 session,
                 lifetime,
                 sessionRid,
-                bindingGeneration: 7);
+                bindingGeneration: 7
+            );
         }
 
-        internal void BindRetiredSessionActor(
-            string actorId,
-            ulong? bindingGeneration = null)
+        internal void BindRetiredSessionActor(string actorId, ulong? bindingGeneration = null)
         {
             var bindingToken = $"binding-{actorId}";
             var exactBindingGeneration = bindingGeneration ?? BindingGeneration;
-            var actor = new ActorRef(
-                actorId,
-                1,
-                "actors",
-                RoutingId.From("actor-owner"));
-            var bound = new ZLinkSessionActor(
-                Lifetime.Context,
-                actorId,
-                SessionRid,
-                bindingToken);
+            var actor = new ActorRef(actorId, 1, "actors", RoutingId.From("actor-owner"));
+            var bound = new ZLinkSessionActor(Lifetime.Context, actorId, SessionRid, bindingToken);
             _ = Runtime.BindSessionActor(
                 actorId,
                 Lifetime.Context,
@@ -788,11 +848,13 @@ public sealed class BoundSessionReplacementLifecycleTests
                     "actors",
                     targetNodeGeneration: 2,
                     authorityOwnerGeneration: 3,
-                    ownerLeaseGeneration: 5),
+                    ownerLeaseGeneration: 5
+                ),
                 SessionOwnerNodeGeneration,
                 SessionOwnerNodeRid,
                 SessionOwnerId,
-                SessionOwnerLeaseGeneration);
+                SessionOwnerLeaseGeneration
+            );
         }
 
         public async ValueTask DisposeAsync()
@@ -818,13 +880,15 @@ public sealed class BoundSessionReplacementLifecycleTests
             new(TaskCreationOptions.RunContinuationsAsynchronously);
 
         public void Bind(string endpoint) { }
+
         public void SetTlsServer(string certPath, string keyPath, bool requireClientCert) { }
-        public IZLinkBackendSocketPoller CreateReceivePoller() =>
-            throw new NotSupportedException();
+
+        public IZLinkBackendSocketPoller CreateReceivePoller() => throw new NotSupportedException();
 
         public bool RecvPacket(
             out ZLinkBackendStreamReceive? received,
-            RecvFlags flags = RecvFlags.None)
+            RecvFlags flags = RecvFlags.None
+        )
         {
             received = null;
             return false;
@@ -833,7 +897,8 @@ public sealed class BoundSessionReplacementLifecycleTests
         public Task SendAsync(
             RoutingId routingId,
             Message payload,
-            CancellationToken cancellationToken = default)
+            CancellationToken cancellationToken = default
+        )
         {
             cancellationToken.ThrowIfCancellationRequested();
             Interlocked.Increment(ref _sendCount);
@@ -852,19 +917,22 @@ public sealed class BoundSessionReplacementLifecycleTests
             RoutingId sessionRid,
             ZLinkBackendActorRef actor,
             TimeSpan timeout,
-            CancellationToken cancellationToken) => ValueTask.CompletedTask;
+            CancellationToken cancellationToken
+        ) => ValueTask.CompletedTask;
 
         public ValueTask UnbindActorAsync(
             RoutingId sessionRid,
             string actorId,
             TimeSpan timeout,
-            CancellationToken cancellationToken) => ValueTask.CompletedTask;
+            CancellationToken cancellationToken
+        ) => ValueTask.CompletedTask;
 
         public bool SendBoundActor(
             RoutingId sessionRid,
             string actorId,
             IReadOnlyList<Message> parts,
-            SendFlags flags) => true;
+            SendFlags flags
+        ) => true;
 
         public ValueTask DisposeAsync() => ValueTask.CompletedTask;
     }
@@ -882,7 +950,8 @@ public sealed class BoundSessionReplacementLifecycleTests
         {
             get
             {
-                lock (_gate) return _timers.Count(timer => timer.IsScheduled);
+                lock (_gate)
+                    return _timers.Count(timer => timer.IsScheduled);
             }
         }
 
@@ -894,7 +963,8 @@ public sealed class BoundSessionReplacementLifecycleTests
             TimerCallback callback,
             object? state,
             TimeSpan dueTime,
-            TimeSpan period)
+            TimeSpan period
+        )
         {
             var timer = new ReplacementTimer(this, callback, state);
             lock (_gate)
@@ -927,7 +997,8 @@ public sealed class BoundSessionReplacementLifecycleTests
         private sealed class ReplacementTimer(
             ReplacementTimeProvider owner,
             TimerCallback callback,
-            object? state) : ITimer
+            object? state
+        ) : ITimer
         {
             private long? _dueAt;
             private TimeSpan _period;
@@ -939,7 +1010,8 @@ public sealed class BoundSessionReplacementLifecycleTests
             {
                 lock (owner._gate)
                 {
-                    if (_disposed) return false;
+                    if (_disposed)
+                        return false;
                     ChangeCore(owner._timestamp, dueTime, period);
                     return true;
                 }
@@ -948,24 +1020,20 @@ public sealed class BoundSessionReplacementLifecycleTests
             internal void ChangeCore(long now, TimeSpan dueTime, TimeSpan period)
             {
                 _period = period;
-                _dueAt = dueTime == Timeout.InfiniteTimeSpan
-                    ? null
-                    : checked(now + dueTime.Ticks);
+                _dueAt = dueTime == Timeout.InfiniteTimeSpan ? null : checked(now + dueTime.Ticks);
             }
 
-            internal bool TryTakeDue(
-                long now,
-                out (TimerCallback Callback, object? State) due)
+            internal bool TryTakeDue(long now, out (TimerCallback Callback, object? State) due)
             {
                 if (_disposed || _dueAt is not { } dueAt || dueAt > now)
                 {
                     due = default;
                     return false;
                 }
-                _dueAt = _period > TimeSpan.Zero
-                              && _period != Timeout.InfiniteTimeSpan
-                    ? checked(now + _period.Ticks)
-                    : null;
+                _dueAt =
+                    _period > TimeSpan.Zero && _period != Timeout.InfiniteTimeSpan
+                        ? checked(now + _period.Ticks)
+                        : null;
                 due = (callback, state);
                 return true;
             }
@@ -974,7 +1042,8 @@ public sealed class BoundSessionReplacementLifecycleTests
             {
                 lock (owner._gate)
                 {
-                    if (_disposed) return;
+                    if (_disposed)
+                        return;
                     _disposed = true;
                     _dueAt = null;
                     owner._timers.Remove(this);

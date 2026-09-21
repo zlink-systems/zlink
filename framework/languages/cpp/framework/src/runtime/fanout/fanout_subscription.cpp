@@ -21,9 +21,8 @@ fanout_subscription_topics (const std::vector<std::string> &application_topics)
     return {topics.begin (), topics.end ()};
 }
 
-void apply_fanout_subscriptions (
-  zlink::sub_socket_t &socket,
-  const std::vector<std::string> &application_topics)
+void apply_fanout_subscriptions (zlink::sub_socket_t &socket,
+                                 const std::vector<std::string> &application_topics)
 {
     for (const auto &topic : fanout_subscription_topics (application_topics)) {
         socket.set_subscription (topic);

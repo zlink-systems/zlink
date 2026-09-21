@@ -1,11 +1,12 @@
 namespace Zlink.Framework.Runtime.Configuration.Builders;
 
-internal sealed class ZLinkStreamCompressionBuilder(
-    ZLinkFrameworkRegistration registration) : IZLinkStreamCompressionBuilder
+internal sealed class ZLinkStreamCompressionBuilder(ZLinkFrameworkRegistration registration)
+    : IZLinkStreamCompressionBuilder
 {
     public IZLinkStreamCompressionBuilder UseDefault()
     {
-        registration.StreamCompressionCodec = ZLinkStreamProtocolDefaults.CreateLz4CompressionCodec();
+        registration.StreamCompressionCodec =
+            ZLinkStreamProtocolDefaults.CreateLz4CompressionCodec();
         return this;
     }
 
@@ -16,7 +17,8 @@ internal sealed class ZLinkStreamCompressionBuilder(
 
     public IZLinkStreamCompressionBuilder Use(IZlinkStreamCompressionCodec codec)
     {
-        registration.StreamCompressionCodec = codec ?? throw new ArgumentNullException(nameof(codec));
+        registration.StreamCompressionCodec =
+            codec ?? throw new ArgumentNullException(nameof(codec));
         return this;
     }
 

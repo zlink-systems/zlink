@@ -299,21 +299,16 @@ std::string routing_id_string (const std::vector<std::uint8_t> &value)
     return {value.begin (), value.end ()};
 }
 
-runtime::protocol::message_follow_notice_t make_message_follow_notice (
-  const runtime::mesh::service_node_descriptor_t &source_node,
-  const runtime::mesh::service_node_descriptor_t &target_node,
-  std::uint64_t operation_low)
+runtime::protocol::message_follow_notice_t
+make_message_follow_notice (const runtime::mesh::service_node_descriptor_t &source_node,
+                            const runtime::mesh::service_node_descriptor_t &target_node,
+                            std::uint64_t operation_low)
 {
-    const auto actor_route = [] (
-      const runtime::mesh::service_node_descriptor_t &node,
-      std::uint64_t authority_owner_generation) {
+    const auto actor_route = [] (const runtime::mesh::service_node_descriptor_t &node,
+                                 std::uint64_t authority_owner_generation) {
         return runtime::protocol::actor_route_fence_t{
-          "cross-language-message-follow",
-          1,
-          node.node_routing_id,
-          node.lifecycle_generation,
-          authority_owner_generation,
-          8};
+          "cross-language-message-follow", 1, node.node_routing_id, node.lifecycle_generation,
+          authority_owner_generation,      8};
     };
     return runtime::protocol::message_follow_notice_t{
       actor_route (source_node, 7),
@@ -348,8 +343,8 @@ int run_message_follow_host ()
     options.descriptor.advertised_endpoint = require ("bind-endpoint");
     options.descriptor.state = service_node_state_t::preparing;
     options.descriptor.security_identity = "default";
-    options.descriptor.protocol_capabilities = {
-      "framework-service-v12", runtime::protocol::required_capability};
+    options.descriptor.protocol_capabilities = {"framework-service-v12",
+                                                runtime::protocol::required_capability};
 
     raw_mesh_node_owner_t owner (std::move (options));
     owner.start ();
@@ -358,20 +353,18 @@ int run_message_follow_host ()
 
     event_sink_t sink (option ("event-file"));
     write_ready ();
-    const auto deadline = std::chrono::steady_clock::now ()
-                          + std::chrono::seconds (60);
+    const auto deadline = std::chrono::steady_clock::now () + std::chrono::seconds (60);
     bool sent = false;
     bool received = false;
     while (std::chrono::steady_clock::now () < deadline) {
-        const auto now =
-          runtime::mesh::service_liveness_registry_t::clock_t::now ();
+        const auto now = runtime::mesh::service_liveness_registry_t::clock_t::now ();
         (void) owner.drain_monitor_events (now);
         (void) owner.pump_one (now);
         (void) owner.tick_liveness (now);
 
         while (true) {
-            auto claim = owner.mailbox ().try_claim (
-              service_mailbox_domain_t::infrastructure, 16, 1024 * 1024);
+            auto claim = owner.mailbox ().try_claim (service_mailbox_domain_t::infrastructure, 16,
+                                                     1024 * 1024);
             if (!claim)
                 break;
             for (const auto &record : claim->records) {
@@ -388,11 +381,9 @@ int run_message_follow_host ()
                       return routing_id_string (route.target_node_routing_id);
                   },
                   notice.target);
-                sink.append (
-                  "message-follow-received|source-node=" + source
-                  + "|target-node=" + target
-                  + "|operation-low="
-                  + std::to_string (notice.original_operation.low));
+                sink.append ("message-follow-received|source-node=" + source
+                             + "|target-node=" + target
+                             + "|operation-low=" + std::to_string (notice.original_operation.low));
                 received = true;
             }
             (void) owner.mailbox ().release (*claim);
@@ -402,10 +393,8 @@ int run_message_follow_host ()
         if (!sent && received && peer) {
             sent = owner
                      .send_message_follow (
-                       peer_rid,
-                       make_message_follow_notice (
-                         owner.topology ().local_descriptor (),
-                         peer->descriptor, 101))
+                       peer_rid, make_message_follow_notice (owner.topology ().local_descriptor (),
+                                                             peer->descriptor, 101))
                      .result ()
                      .value ();
         }
@@ -415,10 +404,9 @@ int run_message_follow_host ()
         }
         std::this_thread::sleep_for (std::chrono::milliseconds (1));
     }
-    throw std::runtime_error (
-      "message-follow process exchange timed out (sent="
-      + std::string (sent ? "true" : "false")
-      + ", received=" + std::string (received ? "true" : "false") + ")");
+    throw std::runtime_error ("message-follow process exchange timed out (sent="
+                              + std::string (sent ? "true" : "false")
+                              + ", received=" + std::string (received ? "true" : "false") + ")");
 }
 
 /* Channel server handlers: mirror TestHostProfileRequestHandler/SendHandler so
@@ -466,9 +454,8 @@ class published_event_handler_t
 
     explicit published_event_handler_t (event_sink_t &sink) : _sink (sink) {}
 
-    void handle (
-      const test_host_published_event_t &event,
-      const fw::publish_message_context_t &context)
+    void handle (const test_host_published_event_t &event,
+                 const fw::publish_message_context_t &context)
     {
         _sink.append (std::string (context.topic) + ":" + event.value);
     }
@@ -524,9 +511,7 @@ class spot_route_client_service_t final : public fw::hosted_service_t
 {
   public:
     spot_route_client_service_t (std::string channel, std::string peer_rid, std::string value) :
-        _channel (std::move (channel)),
-        _peer_rid (std::move (peer_rid)),
-        _value (std::move (value))
+        _channel (std::move (channel)), _peer_rid (std::move (peer_rid)), _value (std::move (value))
     {
     }
 
@@ -540,12 +525,11 @@ class spot_route_client_service_t final : public fw::hosted_service_t
          * unavailability is retried until the deadline. */
         const auto deadline = std::chrono::steady_clock::now () + std::chrono::seconds (60);
         while (true) {
-            auto reply = routes
-                           .request_to_node (_channel, target,
-                                             test_host_spot_route_request_t{_value})
-                           .timeout (std::chrono::seconds (5))
-                           .async<test_host_spot_route_reply_t> ()
-                           .result ();
+            auto reply =
+              routes.request_to_node (_channel, target, test_host_spot_route_request_t{_value})
+                .timeout (std::chrono::seconds (5))
+                .async<test_host_spot_route_reply_t> ()
+                .result ();
             if (reply) {
                 sink.append ("spot-route-reply|" + reply.value ().value);
                 break;
@@ -595,8 +579,7 @@ class spot_route_client_service_t final : public fw::hosted_service_t
             sink.append (marker + "|unexpected-success");
             return;
         }
-        sink.append (marker + "|kind=" + error_kind_wire_name (reply.error_kind ())
-                     + "|origin="
+        sink.append (marker + "|kind=" + error_kind_wire_name (reply.error_kind ()) + "|origin="
                      + (reply.error () ? error_origin_wire_name (*reply.error ())
                                        : std::string ("unspecified")));
     }
@@ -611,7 +594,6 @@ class spot_route_client_service_t final : public fw::hosted_service_t
 class raw_stream_session_t final : public fw::packet_stream_session_t
 {
   public:
-
     explicit raw_stream_session_t (event_sink_t &sink) : _sink (sink) {}
 
     fw::task_t<void> on_connected (fw::stream_t &) override { co_return; }
@@ -622,8 +604,7 @@ class raw_stream_session_t final : public fw::packet_stream_session_t
                                 const fw::session_message_context_t &dispatch,
                                 const zlink::message_t &payload) override
     {
-        _sink.append ("raw|" + std::string (dispatch.packet_name) + "|"
-                      + payload.to_string ());
+        _sink.append ("raw|" + std::string (dispatch.packet_name) + "|" + payload.to_string ());
         stream.reply_packet (zlink::message_t::from_json (std::string ("pong"))).async ();
         co_return;
     }
@@ -723,9 +704,8 @@ constexpr const char *cross_lang_user_spot_type = "cross-lang-relocation-user-sp
  * both spellings -- the same rule read_value_field already applies to the
  * channel DTOs. Emission stays camelCase, the proven cpp -> all-peers
  * direction. */
-const nlohmann::json *find_field (const nlohmann::json &json,
-                                  const char *camel,
-                                  const char *pascal_case)
+const nlohmann::json *
+find_field (const nlohmann::json &json, const char *camel, const char *pascal_case)
 {
     if (json.contains (camel)) {
         return &json.at (camel);
@@ -830,8 +810,8 @@ inline void to_json (nlohmann::json &json, const cross_lang_actor_create_req_t &
 inline void from_json (const nlohmann::json &json, cross_lang_actor_create_req_t &value)
 {
     value.state_version = read_int (json, "stateVersion", "StateVersion");
-    value.application_state_bytes = read_int (json, "applicationStateBytes",
-                                              "ApplicationStateBytes");
+    value.application_state_bytes =
+      read_int (json, "applicationStateBytes", "ApplicationStateBytes");
 }
 inline void to_json (nlohmann::json &json, const user_spot_create_req_t &value)
 {
@@ -1017,7 +997,8 @@ class relocation_actor_adapter_t final : public fw::actor_relocation_adapter_t<r
     {
         const auto length = static_cast<std::int32_t> (actor.application_state.size ());
         const auto version = static_cast<std::int32_t> (actor.state_version);
-        std::vector<std::byte> encoded (sizeof (std::int32_t) * 2 + actor.application_state.size ());
+        std::vector<std::byte> encoded (sizeof (std::int32_t) * 2
+                                        + actor.application_state.size ());
         write_le_int32 (encoded.data (), version);
         write_le_int32 (encoded.data () + sizeof (std::int32_t), length);
         for (std::size_t index = 0; index < actor.application_state.size (); index++) {
@@ -1124,8 +1105,8 @@ class relocation_entry_spot_t final : public fw::entry_spot_t<relocation_actor_t
                                      fw::message_context_t &,
                                      const begin_user_spot_join_req_t &request)
     {
-        user_spot_event ("user-spot-join-deferred|actor=" + actor.actor_id + "|spot="
-                         + request.target_spot_id);
+        user_spot_event ("user-spot-join-deferred|actor=" + actor.actor_id
+                         + "|spot=" + request.target_spot_id);
         actor.context ()
           .join_spot (request.target_spot_id, user_spot_join_req_t{request.marker})
           .timeout (std::chrono::seconds (30))
@@ -1188,8 +1169,8 @@ class relocation_user_spot_t final : public fw::spot_t<relocation_actor_t>
                  * packet; record a decode failure as evidence rather than
                  * swallowing it, but still admit so the lifecycle assertion
                  * can distinguish "payload shape" from "admission refused". */
-                user_spot_event ("user-spot-admission-decode-failed|actor="
-                                 + std::string (actor_id) + "|error=" + error.what ());
+                user_spot_event ("user-spot-admission-decode-failed|actor=" + std::string (actor_id)
+                                 + "|error=" + error.what ());
                 marker = "undecoded";
             }
         }
@@ -1202,9 +1183,8 @@ class relocation_user_spot_t final : public fw::spot_t<relocation_actor_t>
 
     fw::task_t<void> on_actor_joined (relocation_actor_t &actor) override
     {
-        user_spot_event ("user-spot-joined|actor=" + actor.actor_id + "|spot="
-                         + _context.spot_id () + "|nodeRid="
-                         + std::string (_context.node_rid ().value ()));
+        user_spot_event ("user-spot-joined|actor=" + actor.actor_id + "|spot=" + _context.spot_id ()
+                         + "|nodeRid=" + std::string (_context.node_rid ().value ()));
         g_user_spot_join_observer.complete ();
         co_return;
     }
@@ -1216,8 +1196,7 @@ class relocation_user_spot_t final : public fw::spot_t<relocation_actor_t>
                                  const user_spot_probe_req_t &request)
     {
         const auto node_rid = std::string (_context.node_rid ().value ());
-        user_spot_event ("user-spot-probe-served|nodeRid=" + node_rid + "|actor="
-                         + actor.actor_id);
+        user_spot_event ("user-spot-probe-served|nodeRid=" + node_rid + "|actor=" + actor.actor_id);
         return user_spot_probe_res_t{actor.actor_id, _context.spot_id (), node_rid,
                                      actor.state_version, request.marker};
     }
@@ -1280,24 +1259,23 @@ class user_spot_target_service_t final : public fw::hosted_service_t
         while (true) {
             auto created = spots.get_or_create (_spot_id, cross_lang_user_spot_type)
                              .in_mesh (_mesh_name)
-                             .creation_request (
-                               user_spot_create_req_t{"cross-language-user-spot"})
+                             .creation_request (user_spot_create_req_t{"cross-language-user-spot"})
                              .timeout (std::chrono::seconds (15))
                              .async ()
                              .result ();
             if (created) {
                 target_node_rid = std::string (created.value ().spot.node_rid ().value ());
-                state_name = created.value ().state == fw::spot_create_state_t::created
-                               ? "created"
-                               : created.value ().state == fw::spot_create_state_t::existing
-                                   ? "existing"
-                                   : "rejected";
+                state_name = created.value ().state == fw::spot_create_state_t::created ? "created"
+                             : created.value ().state == fw::spot_create_state_t::existing
+                               ? "existing"
+                               : "rejected";
                 break;
             }
             if (std::chrono::steady_clock::now () >= deadline) {
-                sink.append (std::string ("user-spot-target-error|kind=")
-                             + error_kind_wire_name (created.error_kind ()) + "|"
-                             + (created.error () ? created.error ()->what () : "spot create failed"));
+                sink.append (
+                  std::string ("user-spot-target-error|kind=")
+                  + error_kind_wire_name (created.error_kind ()) + "|"
+                  + (created.error () ? created.error ()->what () : "spot create failed"));
                 co_return;
             }
             std::this_thread::sleep_for (std::chrono::milliseconds (250));
@@ -1344,13 +1322,13 @@ class user_spot_target_service_t final : public fw::hosted_service_t
         while (!_stopping.load () && std::chrono::steady_clock::now () < deadline) {
             const auto snapshot = mesh_runtime.snapshot (_mesh_name);
             if (snapshot.ready_peer_count > 0) {
-                auto reply = routes
-                               .request_to_node (
-                                 _mesh_name, zlink::routing_id_t::from (_source_node_rid),
-                                 user_spot_discovery_probe_req_t{"reciprocal-discovery"})
-                               .timeout (std::chrono::seconds (2))
-                               .async<user_spot_discovery_probe_res_t> ()
-                               .result ();
+                auto reply =
+                  routes
+                    .request_to_node (_mesh_name, zlink::routing_id_t::from (_source_node_rid),
+                                      user_spot_discovery_probe_req_t{"reciprocal-discovery"})
+                    .timeout (std::chrono::seconds (2))
+                    .async<user_spot_discovery_probe_res_t> ()
+                    .result ();
                 if (reply && reply.value ().node_rid == _source_node_rid) {
                     sink.append ("user-spot-source-peer-ready|ready=true|peers="
                                  + std::to_string (snapshot.ready_peer_count));
@@ -1378,17 +1356,16 @@ class user_spot_target_service_t final : public fw::hosted_service_t
         const auto deadline = std::chrono::steady_clock::now () + std::chrono::seconds (90);
         std::string last_failure = "none";
         while (!_stopping.load () && std::chrono::steady_clock::now () < deadline) {
-            auto reply = actors
-                           .request (fw::actor_id_t (_actor_id),
-                                     user_spot_probe_req_t{"target-owner-probe"})
-                           .timeout (std::chrono::seconds (5))
-                           .async<user_spot_probe_res_t> ()
-                           .result ();
+            auto reply =
+              actors
+                .request (fw::actor_id_t (_actor_id), user_spot_probe_req_t{"target-owner-probe"})
+                .timeout (std::chrono::seconds (5))
+                .async<user_spot_probe_res_t> ()
+                .result ();
             if (reply && reply.value ().node_rid == target_node_rid) {
                 sink.append ("user-spot-probe|nodeRid=" + reply.value ().node_rid
-                             + "|targetRid=" + target_node_rid + "|actor="
-                             + reply.value ().actor_id + "|stateVersion="
-                             + std::to_string (reply.value ().state_version));
+                             + "|targetRid=" + target_node_rid + "|actor=" + reply.value ().actor_id
+                             + "|stateVersion=" + std::to_string (reply.value ().state_version));
                 return;
             }
             last_failure = reply ? "unexpected-owner:" + reply.value ().node_rid
@@ -1396,8 +1373,8 @@ class user_spot_target_service_t final : public fw::hosted_service_t
             std::this_thread::sleep_for (std::chrono::milliseconds (500));
         }
         if (!_stopping.load ()) {
-            sink.append ("user-spot-probe-timeout|targetRid=" + target_node_rid + "|failure="
-                         + last_failure);
+            sink.append ("user-spot-probe-timeout|targetRid=" + target_node_rid
+                         + "|failure=" + last_failure);
         }
     }
 
@@ -1502,12 +1479,13 @@ class user_spot_source_service_t final : public fw::hosted_service_t
                          + std::to_string (_placement_weight));
         }
 
-        auto created = actor_manager.get_or_create (fw::actor_id_t (_actor_id), cross_lang_actor_type)
-                         .in_mesh (_mesh_name)
-                         .creation_request (cross_lang_actor_create_req_t{7, 4})
-                         .timeout (std::chrono::seconds (15))
-                         .async ()
-                         .result ();
+        auto created =
+          actor_manager.get_or_create (fw::actor_id_t (_actor_id), cross_lang_actor_type)
+            .in_mesh (_mesh_name)
+            .creation_request (cross_lang_actor_create_req_t{7, 4})
+            .timeout (std::chrono::seconds (15))
+            .async ()
+            .result ();
         if (!created) {
             sink.append (std::string ("user-spot-source-error|kind=")
                          + error_kind_wire_name (created.error_kind ()) + "|"
@@ -1551,8 +1529,8 @@ class user_spot_source_service_t final : public fw::hosted_service_t
             return;
         }
         sink.append (std::string ("user-spot-join-request-reply|accepted=")
-                     + (reply.value ().accepted ? "true" : "false") + "|actor="
-                     + reply.value ().actor_id + "|spot=" + reply.value ().spot_id);
+                     + (reply.value ().accepted ? "true" : "false")
+                     + "|actor=" + reply.value ().actor_id + "|spot=" + reply.value ().spot_id);
     }
 
     std::string _mesh_name;
@@ -1570,12 +1548,12 @@ void configure_user_spot_stores (fw::zlink_framework_options_t &options)
 {
     const auto endpoint = require ("redis-endpoint");
     const auto prefix = option ("redis-key-prefix", "zlink-cross-user-spot-join");
-    options.add_location_store (std::make_shared<fw::redis::redis_location_store_t> (
-      fw::redis::redis_location_options_t{.connection_string = endpoint,
-                                          .key_prefix = prefix + ":location"}));
-    options.add_relocation_store (std::make_shared<fw::redis::redis_relocation_store_t> (
-      fw::redis::redis_relocation_options_t{.connection_string = endpoint,
-                                            .key_prefix = prefix + ":relocation"}));
+    options.add_location_store (
+      std::make_shared<fw::redis::redis_location_store_t> (fw::redis::redis_location_options_t{
+        .connection_string = endpoint, .key_prefix = prefix + ":location"}));
+    options.add_relocation_store (
+      std::make_shared<fw::redis::redis_relocation_store_t> (fw::redis::redis_relocation_options_t{
+        .connection_string = endpoint, .key_prefix = prefix + ":relocation"}));
 }
 
 int run_stream_connector ()
@@ -1644,12 +1622,12 @@ int run_stream_connector ()
         using reason_t = zlink::stream_connector::close_reason_t;
         const auto reason = *observed;
         sink.append (std::string ("connector-close|")
-                     + (reason == reason_t::server_drain           ? "server_drain"
-                        : reason == reason_t::idle_timeout         ? "idle_timeout"
-                        : reason == reason_t::heartbeat_timeout    ? "heartbeat_timeout"
-                        : reason == reason_t::client_close         ? "client_close"
-                        : reason == reason_t::protocol_error       ? "protocol_error"
-                                                                   : "transport_error"));
+                     + (reason == reason_t::server_drain        ? "server_drain"
+                        : reason == reason_t::idle_timeout      ? "idle_timeout"
+                        : reason == reason_t::heartbeat_timeout ? "heartbeat_timeout"
+                        : reason == reason_t::client_close      ? "client_close"
+                        : reason == reason_t::protocol_error    ? "protocol_error"
+                                                                : "transport_error"));
     }
     return 0;
 }
@@ -1693,8 +1671,7 @@ int main (int argc, char **argv)
                 const auto target = mode == "user-spot-target";
                 const auto mesh_name = require ("mesh-name");
                 g_user_spot_node_rid = require ("node-rid");
-                options.configure_dispatch ().message_flow (
-                  fw::message_flow_log_mode_t::normal);
+                options.configure_dispatch ().message_flow (fw::message_flow_log_mode_t::normal);
                 configure_user_spot_stores (options);
 
                 auto mesh = options.add_route_mesh (mesh_name);
@@ -1824,8 +1801,7 @@ int main (int argc, char **argv)
         }
         if (mode == "spot-route-client") {
             app.add_hosted_service (std::make_unique<spot_route_client_service_t> (
-              require ("channel-name"), require ("peer-rid"),
-              option ("value", "cpp-spot-route")));
+              require ("channel-name"), require ("peer-rid"), option ("value", "cpp-spot-route")));
         }
         if (mode == "user-spot-target") {
             /* Ready is written by the service itself, after the fixed User
@@ -1841,8 +1817,8 @@ int main (int argc, char **argv)
               option ("actor-id", "cross-lang-user-spot-actor"), option ("start-file"),
               std::stoi (option ("placement-weight", "100"))));
         }
-        if (mode == "channel-server" || mode == "channel-subscriber"
-            || mode == "stream-server" || mode == "spot-route-server") {
+        if (mode == "channel-server" || mode == "channel-subscriber" || mode == "stream-server"
+            || mode == "spot-route-server") {
             write_ready ();
         }
         return app.run (argc, argv);

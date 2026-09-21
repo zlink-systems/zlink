@@ -14,5 +14,4 @@ public interface ZLinkSpotNodeBuilder {
     ZLinkSpotNodeBuilder enablePubSub(String endpoint);
 
     ZLinkSpotNodeBuilder connectPeerPub(String endpoint);
-
 }

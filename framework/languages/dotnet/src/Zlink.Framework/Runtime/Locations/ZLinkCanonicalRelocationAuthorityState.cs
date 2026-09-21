@@ -20,7 +20,8 @@ internal sealed record ZLinkCanonicalRelocationAuthorityState(
     string CoordinatorNodeRid,
     ulong CoordinatorNodeGeneration,
     byte Phase,
-    long ApplicationVersion)
+    long ApplicationVersion
+)
 {
     internal ZLinkCanonicalRelocationAuthorityState(
         ulong relocationHigh,
@@ -41,7 +42,8 @@ internal sealed record ZLinkCanonicalRelocationAuthorityState(
         byte phase,
         string relocationReference,
         uint relocationChecksumCrc32c,
-        long applicationVersion)
+        long applicationVersion
+    )
         : this(
             relocationHigh,
             relocationLow,
@@ -59,7 +61,8 @@ internal sealed record ZLinkCanonicalRelocationAuthorityState(
             coordinatorNodeRid,
             coordinatorNodeGeneration,
             phase,
-            applicationVersion)
+            applicationVersion
+        )
     {
         RelocationReference = relocationReference;
         RelocationChecksumCrc32c = relocationChecksumCrc32c;
@@ -83,7 +86,8 @@ internal sealed record ZLinkCanonicalRelocationAuthorityProjection(
     string RelocationReference,
     uint RelocationChecksumCrc32c,
     ReadOnlyMemory<byte> SteadyAuthorityPayload,
-    ZLinkCanonicalRelocationAuthorityState State)
+    ZLinkCanonicalRelocationAuthorityState State
+)
 {
     internal ZLinkCanonicalRelocationAuthorityProjection(
         ulong relocationHigh,
@@ -96,7 +100,8 @@ internal sealed record ZLinkCanonicalRelocationAuthorityProjection(
         uint relocationChecksumCrc32c,
         long applicationVersion,
         ReadOnlyMemory<byte> steadyAuthorityPayload,
-        ZLinkCanonicalRelocationAuthorityState state)
+        ZLinkCanonicalRelocationAuthorityState state
+    )
         : this(
             relocationHigh,
             relocationLow,
@@ -108,9 +113,8 @@ internal sealed record ZLinkCanonicalRelocationAuthorityProjection(
             relocationReference,
             relocationChecksumCrc32c,
             steadyAuthorityPayload,
-            state)
-    {
-    }
+            state
+        ) { }
 
     internal ulong AggregateGeneration { get; init; }
 }
@@ -122,7 +126,8 @@ internal static class ZLinkCanonicalRelocationAuthorityStateCodec
 
     internal static bool TryRead(
         ReadOnlySpan<byte> authorityPayload,
-        out ZLinkCanonicalRelocationAuthorityProjection projection)
+        out ZLinkCanonicalRelocationAuthorityProjection projection
+    )
     {
         projection = null!;
         try
@@ -133,8 +138,10 @@ internal static class ZLinkCanonicalRelocationAuthorityStateCodec
             var flags = source.U16();
             var body = source.Bytes(source.U32AsInt()).ToArray();
             var checksumOffset = source.Offset;
-            if (source.U32() != ZLinkCrc32C.Compute(authorityPayload[..checksumOffset])
-                || !source.End)
+            if (
+                source.U32() != ZLinkCrc32C.Compute(authorityPayload[..checksumOffset])
+                || !source.End
+            )
                 return false;
             var bodyReader = new Reader(body);
             _ = bodyReader.U8();
@@ -148,12 +155,15 @@ internal static class ZLinkCanonicalRelocationAuthorityStateCodec
             var slotStart = bodyReader.Offset;
             var presence = bodyReader.U8();
             var slotBody = bodyReader.Bytes(bodyReader.U32AsInt());
-            if (presence != 1
+            if (
+                presence != 1
                 || !TryReadSlotBody(
                     slotBody,
                     expectedRootAggregateGeneration: null,
                     validateRootAgreement: false,
-                    out var state))
+                    out var state
+                )
+            )
                 return false;
             var slotEnd = bodyReader.Offset;
             using var steadyBody = new MemoryStream();
@@ -179,17 +189,22 @@ internal static class ZLinkCanonicalRelocationAuthorityStateCodec
                 state.ApplicationVersion,
                 state.RelocationReference,
                 state.RelocationChecksumCrc32c,
-                steady.ToArray(), state)
+                steady.ToArray(),
+                state
+            )
             {
-                AggregateGeneration = state.AggregateGeneration
+                AggregateGeneration = state.AggregateGeneration,
             };
             return true;
         }
-        catch (Exception error) when (error is IOException
-                                      or InvalidDataException
-                                      or OverflowException
-                                      or DecoderFallbackException
-                                      or ArgumentException)
+        catch (Exception error)
+            when (error
+                    is IOException
+                        or InvalidDataException
+                        or OverflowException
+                        or DecoderFallbackException
+                        or ArgumentException
+            )
         {
             return false;
         }
@@ -198,7 +213,8 @@ internal static class ZLinkCanonicalRelocationAuthorityStateCodec
     internal static bool TryReadSlot(
         ReadOnlySpan<byte> slot,
         ulong? expectedRootAggregateGeneration,
-        out ZLinkCanonicalRelocationAuthorityState state)
+        out ZLinkCanonicalRelocationAuthorityState state
+    )
     {
         state = null!;
         try
@@ -208,17 +224,21 @@ internal static class ZLinkCanonicalRelocationAuthorityStateCodec
                 return false;
             var body = reader.Bytes(reader.U32AsInt());
             return reader.End
-                   && TryReadSlotBody(
-                       body,
-                       expectedRootAggregateGeneration,
-                       validateRootAgreement: true,
-                       out state);
+                && TryReadSlotBody(
+                    body,
+                    expectedRootAggregateGeneration,
+                    validateRootAgreement: true,
+                    out state
+                );
         }
-        catch (Exception error) when (error is IOException
-                                      or InvalidDataException
-                                      or OverflowException
-                                      or DecoderFallbackException
-                                      or ArgumentException)
+        catch (Exception error)
+            when (error
+                    is IOException
+                        or InvalidDataException
+                        or OverflowException
+                        or DecoderFallbackException
+                        or ArgumentException
+            )
         {
             return false;
         }
@@ -228,7 +248,8 @@ internal static class ZLinkCanonicalRelocationAuthorityStateCodec
         ReadOnlySpan<byte> body,
         ulong? expectedRootAggregateGeneration,
         bool validateRootAgreement,
-        out ZLinkCanonicalRelocationAuthorityState state)
+        out ZLinkCanonicalRelocationAuthorityState state
+    )
     {
         state = null!;
         var relocation = new Reader(body);
@@ -274,19 +295,16 @@ internal static class ZLinkCanonicalRelocationAuthorityStateCodec
             coordinatorNodeRid,
             coordinatorNodeGeneration,
             phase,
-            applicationVersion)
+            applicationVersion
+        )
         {
             AggregateGeneration = aggregateGeneration,
-            CoordinatorExpectedAuthorityStoreVersion =
-                coordinatorExpectedStoreVersion,
+            CoordinatorExpectedAuthorityStoreVersion = coordinatorExpectedStoreVersion,
             RelocationReference = reference,
             RelocationChecksumCrc32c = checksum,
-            SourceCleanupState = sourceCleanupState
+            SourceCleanupState = sourceCleanupState,
         };
-        if (!IsValidState(
-                decoded,
-                expectedRootAggregateGeneration,
-                validateRootAgreement))
+        if (!IsValidState(decoded, expectedRootAggregateGeneration, validateRootAgreement))
             return false;
         state = decoded;
         return true;
@@ -295,29 +313,27 @@ internal static class ZLinkCanonicalRelocationAuthorityStateCodec
     internal static byte[] ReplaceRelocationState(
         ReadOnlySpan<byte> authorityPayload,
         ZLinkCanonicalRelocationAuthorityState state,
-        ZLinkRelocationEnvelope? root)
+        ZLinkRelocationEnvelope? root
+    )
     {
         if (root is not null)
         {
             Span<byte> relocationId = stackalloc byte[16];
-            BinaryPrimitives.WriteUInt64BigEndian(
-                relocationId[..8], state.RelocationHigh);
-            BinaryPrimitives.WriteUInt64BigEndian(
-                relocationId[8..], state.RelocationLow);
+            BinaryPrimitives.WriteUInt64BigEndian(relocationId[..8], state.RelocationHigh);
+            BinaryPrimitives.WriteUInt64BigEndian(relocationId[8..], state.RelocationLow);
             if (root.AggregateId != new Guid(relocationId, bigEndian: true))
                 throw new ArgumentException(
                     "Canonical authority relocation identity differs from its root.",
-                    nameof(root));
+                    nameof(root)
+                );
         }
         var source = new Reader(authorityPayload);
-        if (!source.Bytes(4).SequenceEqual(Magic)
-            || source.U8() != 1)
+        if (!source.Bytes(4).SequenceEqual(Magic) || source.U8() != 1)
             throw new InvalidDataException("The authority payload is not canonical ZLAU v1.");
         var flags = source.U16();
         var body = source.Bytes(source.U32AsInt()).ToArray();
         var checksumOffset = source.Offset;
-        if (source.U32() != ZLinkCrc32C.Compute(authorityPayload[..checksumOffset])
-            || !source.End)
+        if (source.U32() != ZLinkCrc32C.Compute(authorityPayload[..checksumOffset]) || !source.End)
             throw new InvalidDataException("The canonical authority checksum is invalid.");
 
         var bodyReader = new Reader(body);
@@ -354,22 +370,21 @@ internal static class ZLinkCanonicalRelocationAuthorityStateCodec
 
     internal static byte[] ReplaceSteadyAuthorityPayload(
         ReadOnlySpan<byte> authorityPayload,
-        ReadOnlySpan<byte> steadyAuthorityPayload)
+        ReadOnlySpan<byte> steadyAuthorityPayload
+    )
     {
         var original = ReadEnvelope(authorityPayload);
         var steady = ReadEnvelope(steadyAuthorityPayload);
         var originalSlot = ReadSlot(original.Body);
         var steadySlot = ReadSlot(steady.Body);
-        if (steadySlot.End - steadySlot.Start != 5
-            || steady.Body[steadySlot.Start] != 0)
+        if (steadySlot.End - steadySlot.Start != 5 || steady.Body[steadySlot.Start] != 0)
             throw new InvalidDataException(
-                "The replacement steady authority contains relocation state.");
+                "The replacement steady authority contains relocation state."
+            );
 
         using var body = new MemoryStream();
         body.Write(steady.Body.AsSpan(0, steadySlot.Start));
-        body.Write(original.Body.AsSpan(
-            originalSlot.Start,
-            originalSlot.End - originalSlot.Start));
+        body.Write(original.Body.AsSpan(originalSlot.Start, originalSlot.End - originalSlot.Start));
         body.Write(steady.Body.AsSpan(steadySlot.End));
         using var result = new MemoryStream();
         result.Write(Magic);
@@ -382,20 +397,16 @@ internal static class ZLinkCanonicalRelocationAuthorityStateCodec
         return result.ToArray();
     }
 
-    private static (ushort Flags, byte[] Body) ReadEnvelope(
-        ReadOnlySpan<byte> payload)
+    private static (ushort Flags, byte[] Body) ReadEnvelope(ReadOnlySpan<byte> payload)
     {
         var reader = new Reader(payload);
         if (!reader.Bytes(4).SequenceEqual(Magic) || reader.U8() != 1)
-            throw new InvalidDataException(
-                "The authority payload is not canonical ZLAU v1.");
+            throw new InvalidDataException("The authority payload is not canonical ZLAU v1.");
         var flags = reader.U16();
         var body = reader.Bytes(reader.U32AsInt()).ToArray();
         var checksumOffset = reader.Offset;
-        if (reader.U32() != ZLinkCrc32C.Compute(payload[..checksumOffset])
-            || !reader.End)
-            throw new InvalidDataException(
-                "The canonical authority checksum is invalid.");
+        if (reader.U32() != ZLinkCrc32C.Compute(payload[..checksumOffset]) || !reader.End)
+            throw new InvalidDataException("The canonical authority checksum is invalid.");
         return (flags, body);
     }
 
@@ -412,23 +423,21 @@ internal static class ZLinkCanonicalRelocationAuthorityStateCodec
         _ = reader.U64();
         var start = reader.Offset;
         if (reader.U8() > 1)
-            throw new InvalidDataException(
-                "The authority relocation presence flag is invalid.");
+            throw new InvalidDataException("The authority relocation presence flag is invalid.");
         _ = reader.Bytes(reader.U32AsInt());
         return (start, reader.Offset);
     }
 
     internal static byte[] EncodeSlot(
         ZLinkCanonicalRelocationAuthorityState value,
-        ulong? expectedRootAggregateGeneration)
+        ulong? expectedRootAggregateGeneration
+    )
     {
-        if (!IsValidState(
-                value,
-                expectedRootAggregateGeneration,
-                validateRootAgreement: true))
+        if (!IsValidState(value, expectedRootAggregateGeneration, validateRootAgreement: true))
             throw new ArgumentException(
                 "Canonical relocation state does not match the closed authority slot contract.",
-                nameof(value));
+                nameof(value)
+            );
         using var body = new MemoryStream();
         WriteU64(body, value.RelocationHigh);
         WriteU64(body, value.RelocationLow);
@@ -448,10 +457,7 @@ internal static class ZLinkCanonicalRelocationAuthorityStateCodec
         WriteU64(body, value.CoordinatorLeaseGeneration);
         WriteRid8(body, value.CoordinatorNodeRid, optional: false);
         WriteU64(body, value.CoordinatorNodeGeneration);
-        WriteText8(
-            body,
-            value.CoordinatorExpectedAuthorityStoreVersion,
-            optional: true);
+        WriteText8(body, value.CoordinatorExpectedAuthorityStoreVersion, optional: true);
         body.WriteByte(value.Phase);
         WriteI64(body, value.ApplicationVersion);
         body.WriteByte(value.SourceCleanupState);
@@ -466,11 +472,13 @@ internal static class ZLinkCanonicalRelocationAuthorityStateCodec
     private static bool IsValidState(
         ZLinkCanonicalRelocationAuthorityState value,
         ulong? expectedRootAggregateGeneration,
-        bool validateRootAgreement)
+        bool validateRootAgreement
+    )
     {
         const ulong maximumOrdinal = long.MaxValue;
         const ulong maximumIssuedAggregateGeneration = long.MaxValue - 1UL;
-        if (value.RelocationHigh == 0 && value.RelocationLow == 0
+        if (
+            value.RelocationHigh == 0 && value.RelocationLow == 0
             || value.AggregateGeneration > maximumIssuedAggregateGeneration
             || value.TargetAttemptGeneration > maximumOrdinal
             || value.SourceNodeGeneration is 0 or > maximumOrdinal
@@ -486,33 +494,38 @@ internal static class ZLinkCanonicalRelocationAuthorityStateCodec
             || string.IsNullOrEmpty(value.SourceNodeRid)
             || string.IsNullOrEmpty(value.SourceOwnerId)
             || string.IsNullOrEmpty(value.CoordinatorOwnerId)
-            || string.IsNullOrEmpty(value.CoordinatorNodeRid))
+            || string.IsNullOrEmpty(value.CoordinatorNodeRid)
+        )
             return false;
 
         if (value.Phase == 1)
         {
-            if (value.AggregateGeneration != 0
-                || validateRootAgreement
-                && expectedRootAggregateGeneration is not null)
+            if (
+                value.AggregateGeneration != 0
+                || validateRootAgreement && expectedRootAggregateGeneration is not null
+            )
                 return false;
         }
-        else if (value.AggregateGeneration == 0
-                 || validateRootAgreement
-                 && expectedRootAggregateGeneration != value.AggregateGeneration)
+        else if (
+            value.AggregateGeneration == 0
+            || validateRootAgreement && expectedRootAggregateGeneration != value.AggregateGeneration
+        )
         {
             return false;
         }
 
-        var targetEmpty = value.TargetAttemptGeneration == 0
-                          && value.TargetNodeRid.Length == 0
-                          && value.TargetNodeGeneration == 0
-                          && value.TargetOwnerId.Length == 0
-                          && value.TargetOwnerLeaseGeneration == 0;
-        var targetComplete = value.TargetAttemptGeneration != 0
-                             && value.TargetNodeRid.Length != 0
-                             && value.TargetNodeGeneration != 0
-                             && value.TargetOwnerId.Length != 0
-                             && value.TargetOwnerLeaseGeneration != 0;
+        var targetEmpty =
+            value.TargetAttemptGeneration == 0
+            && value.TargetNodeRid.Length == 0
+            && value.TargetNodeGeneration == 0
+            && value.TargetOwnerId.Length == 0
+            && value.TargetOwnerLeaseGeneration == 0;
+        var targetComplete =
+            value.TargetAttemptGeneration != 0
+            && value.TargetNodeRid.Length != 0
+            && value.TargetNodeGeneration != 0
+            && value.TargetOwnerId.Length != 0
+            && value.TargetOwnerLeaseGeneration != 0;
         return value.Phase is 1 or 2 ? targetEmpty : targetComplete;
     }
 
@@ -595,12 +608,19 @@ internal static class ZLinkCanonicalRelocationAuthorityStateCodec
         private int _offset;
         internal int Offset => _offset;
         internal bool End => _offset == _source.Length;
+
         internal byte U8() => Bytes(1)[0];
+
         internal ushort U16() => BinaryPrimitives.ReadUInt16BigEndian(Bytes(2));
+
         internal uint U32() => BinaryPrimitives.ReadUInt32BigEndian(Bytes(4));
+
         internal ulong U64() => BinaryPrimitives.ReadUInt64BigEndian(Bytes(8));
+
         internal long I64() => BinaryPrimitives.ReadInt64BigEndian(Bytes(8));
+
         internal int U32AsInt() => checked((int)U32());
+
         internal ReadOnlySpan<byte> Bytes(int count)
         {
             if (count < 0 || count > _source.Length - _offset)
@@ -609,6 +629,7 @@ internal static class ZLinkCanonicalRelocationAuthorityStateCodec
             _offset += count;
             return result;
         }
+
         internal string Text8()
         {
             var bytes = Bytes(U8());
@@ -616,6 +637,7 @@ internal static class ZLinkCanonicalRelocationAuthorityStateCodec
                 throw new InvalidDataException();
             return StrictUtf8.GetString(bytes);
         }
+
         internal string OptionalText8()
         {
             var length = U8();
@@ -626,6 +648,7 @@ internal static class ZLinkCanonicalRelocationAuthorityStateCodec
                 throw new InvalidDataException();
             return StrictUtf8.GetString(bytes);
         }
+
         internal string Text16()
         {
             var bytes = Bytes(U16());
@@ -633,6 +656,7 @@ internal static class ZLinkCanonicalRelocationAuthorityStateCodec
                 throw new InvalidDataException();
             return StrictUtf8.GetString(bytes);
         }
+
         internal string Rid8(bool required)
         {
             var bytes = Bytes(U8());

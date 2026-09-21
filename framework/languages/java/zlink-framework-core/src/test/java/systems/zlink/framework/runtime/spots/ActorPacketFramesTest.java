@@ -1,17 +1,14 @@
 package systems.zlink.framework.runtime.spots;
-import java.io.IOException;
 
-import com.fasterxml.jackson.databind.ObjectMapper;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
-import java.nio.charset.StandardCharsets;
-import java.util.EnumSet;
-import java.util.Map;
-import java.util.Optional;
+import com.fasterxml.jackson.databind.ObjectMapper;
+
 import org.junit.jupiter.api.Test;
+
 import systems.zlink.contracts.core.RoutingId;
 import systems.zlink.contracts.messaging.Message;
 import systems.zlink.framework.errors.ZLinkFrameworkErrorKind;
@@ -26,16 +23,23 @@ import systems.zlink.framework.runtime.streams.ZLinkStreamHeaderFlag;
 import systems.zlink.framework.streams.ZLinkStreamCodec;
 import systems.zlink.framework.streams.ZLinkStreamMessageKind;
 
+import java.io.IOException;
+import java.nio.charset.StandardCharsets;
+import java.util.EnumSet;
+import java.util.Map;
+import java.util.Optional;
+
 final class ActorPacketFramesTest {
     @Test
     void streamActorPacketHeaderKeepsMetadataAndCompressionFlagForForwarding() {
-        ZLinkStreamHeader request = new ZLinkStreamHeader(
-            ZLinkStreamMessageKind.REQUEST,
-            ZLinkStreamCodec.JSON,
-            EnumSet.of(ZLinkStreamHeaderFlag.PAYLOAD_COMPRESSED),
-            Optional.of(7L),
-            "ActorReq",
-            Map.of("trace-id", "trace-1"));
+        ZLinkStreamHeader request =
+                new ZLinkStreamHeader(
+                        ZLinkStreamMessageKind.REQUEST,
+                        ZLinkStreamCodec.JSON,
+                        EnumSet.of(ZLinkStreamHeaderFlag.PAYLOAD_COMPRESSED),
+                        Optional.of(7L),
+                        "ActorReq",
+                        Map.of("trace-id", "trace-1"));
         try (Message headerPart = Message.from(ZLinkStreamHeaderCodec.encode(request))) {
             ActorPacketFrames.Header decoded = ActorPacketFrames.decode(actorReceived(headerPart));
             ZLinkStreamHeader forwarded = decoded.toRequestHeader();
@@ -48,43 +52,47 @@ final class ActorPacketFramesTest {
 
     @Test
     void actorReplyDoesNotCopyMetadataOrClaimUnappliedCompression() {
-        ZLinkStreamHeader request = new ZLinkStreamHeader(
-            ZLinkStreamMessageKind.REQUEST,
-            ZLinkStreamCodec.JSON,
-            EnumSet.of(ZLinkStreamHeaderFlag.PAYLOAD_COMPRESSED),
-            Optional.of(7L),
-            "ActorReq",
-            Map.of("trace-id", "trace-1"));
+        ZLinkStreamHeader request =
+                new ZLinkStreamHeader(
+                        ZLinkStreamMessageKind.REQUEST,
+                        ZLinkStreamCodec.JSON,
+                        EnumSet.of(ZLinkStreamHeaderFlag.PAYLOAD_COMPRESSED),
+                        Optional.of(7L),
+                        "ActorReq",
+                        Map.of("trace-id", "trace-1"));
         try (Message headerPart = Message.from(ZLinkStreamHeaderCodec.encode(request));
-             Message payload = Message.from("reply".getBytes());
-             Message frame = ActorPacketFrames.encodeReply(
-                 ActorPacketFrames.decode(actorReceived(headerPart)),
-                 payload)) {
+                Message payload = Message.from("reply".getBytes());
+                Message frame =
+                        ActorPacketFrames.encodeReply(
+                                ActorPacketFrames.decode(actorReceived(headerPart)), payload)) {
             DecodedFrame decoded = decodeFrame(frame);
 
             assertEquals(ZLinkStreamMessageKind.RESPONSE, decoded.header().kind());
             assertEquals(Map.of(), decoded.header().metadata());
-            assertFalse(decoded.header().flags().contains(ZLinkStreamHeaderFlag.PAYLOAD_COMPRESSED));
+            assertFalse(
+                    decoded.header().flags().contains(ZLinkStreamHeaderFlag.PAYLOAD_COMPRESSED));
             assertEquals("reply", new String(decoded.body(), StandardCharsets.UTF_8));
         }
     }
 
     @Test
     void actorReplyCarriesTheDeclaredReplyCodecInsteadOfTheRequestCodec() {
-        ZLinkStreamHeader request = new ZLinkStreamHeader(
-            ZLinkStreamMessageKind.REQUEST,
-            ZLinkStreamCodec.JSON,
-            EnumSet.noneOf(ZLinkStreamHeaderFlag.class),
-            Optional.of(7L),
-            "ActorReq",
-            Map.of());
+        ZLinkStreamHeader request =
+                new ZLinkStreamHeader(
+                        ZLinkStreamMessageKind.REQUEST,
+                        ZLinkStreamCodec.JSON,
+                        EnumSet.noneOf(ZLinkStreamHeaderFlag.class),
+                        Optional.of(7L),
+                        "ActorReq",
+                        Map.of());
         try (Message headerPart = Message.from(ZLinkStreamHeaderCodec.encode(request));
-             Message payload = Message.from("reply".getBytes());
-             Message frame = ActorPacketFrames.encodeReply(
-                 ActorPacketFrames.decode(actorReceived(headerPart)),
-                 payload,
-                 "DeclaredReply",
-                 ZLinkStreamCodec.PROTOBUF)) {
+                Message payload = Message.from("reply".getBytes());
+                Message frame =
+                        ActorPacketFrames.encodeReply(
+                                ActorPacketFrames.decode(actorReceived(headerPart)),
+                                payload,
+                                "DeclaredReply",
+                                ZLinkStreamCodec.PROTOBUF)) {
             DecodedFrame decoded = decodeFrame(frame);
 
             assertEquals(ZLinkStreamCodec.PROTOBUF, decoded.header().codec());
@@ -94,19 +102,19 @@ final class ActorPacketFramesTest {
 
     @Test
     void routedActorReplyPreservesDeclaredCodecAcrossTheInternalRoute() {
-        ZLinkStreamHeader request = new ZLinkStreamHeader(
-            ZLinkStreamMessageKind.REQUEST,
-            ZLinkStreamCodec.JSON,
-            EnumSet.noneOf(ZLinkStreamHeaderFlag.class),
-            Optional.of(7L),
-            "ActorReq",
-            Map.of());
+        ZLinkStreamHeader request =
+                new ZLinkStreamHeader(
+                        ZLinkStreamMessageKind.REQUEST,
+                        ZLinkStreamCodec.JSON,
+                        EnumSet.noneOf(ZLinkStreamHeaderFlag.class),
+                        Optional.of(7L),
+                        "ActorReq",
+                        Map.of());
         try (Message payload = Message.from("reply".getBytes());
-             Message frame = ActorPacketFrames.encodeRoutedReply(
-                 request,
-                 new LocalActorReply(payload, ZLinkStreamCodec.PROTOBUF))) {
-            LocalActorReply decoded = ActorPacketFrames.decodeRoutedReply(
-                request, frame);
+                Message frame =
+                        ActorPacketFrames.encodeRoutedReply(
+                                request, new LocalActorReply(payload, ZLinkStreamCodec.PROTOBUF))) {
+            LocalActorReply decoded = ActorPacketFrames.decodeRoutedReply(request, frame);
             try (Message decodedPayload = decoded.payload()) {
                 assertEquals(ZLinkStreamCodec.PROTOBUF, decoded.codec());
                 assertEquals("reply", decodedPayload.toUtf8String());
@@ -116,34 +124,38 @@ final class ActorPacketFramesTest {
 
     @Test
     void routedActorReplyRejectsTheLegacyRawPayloadInsteadOfEchoingRequestCodec() {
-        ZLinkStreamHeader request = new ZLinkStreamHeader(
-            ZLinkStreamMessageKind.REQUEST,
-            ZLinkStreamCodec.JSON,
-            EnumSet.noneOf(ZLinkStreamHeaderFlag.class),
-            Optional.of(7L),
-            "ActorReq",
-            Map.of());
+        ZLinkStreamHeader request =
+                new ZLinkStreamHeader(
+                        ZLinkStreamMessageKind.REQUEST,
+                        ZLinkStreamCodec.JSON,
+                        EnumSet.noneOf(ZLinkStreamHeaderFlag.class),
+                        Optional.of(7L),
+                        "ActorReq",
+                        Map.of());
         try (Message rawReply = Message.from("reply".getBytes())) {
-            ZLinkFrameworkException failure = assertThrows(
-                ZLinkFrameworkException.class,
-                () -> ActorPacketFrames.decodeRoutedReply(request, rawReply));
+            ZLinkFrameworkException failure =
+                    assertThrows(
+                            ZLinkFrameworkException.class,
+                            () -> ActorPacketFrames.decodeRoutedReply(request, rawReply));
             assertEquals(ZLinkFrameworkErrorKind.PROTOCOL_ERROR, failure.kind());
         }
     }
 
     @Test
     void streamActorErrorUsesTheCommonJsonEnvelope() {
-        ZLinkStreamHeader request = new ZLinkStreamHeader(
-            ZLinkStreamMessageKind.REQUEST,
-            ZLinkStreamCodec.JSON,
-            EnumSet.noneOf(ZLinkStreamHeaderFlag.class),
-            Optional.of(7L),
-            "ActorReq",
-            Map.of());
+        ZLinkStreamHeader request =
+                new ZLinkStreamHeader(
+                        ZLinkStreamMessageKind.REQUEST,
+                        ZLinkStreamCodec.JSON,
+                        EnumSet.noneOf(ZLinkStreamHeaderFlag.class),
+                        Optional.of(7L),
+                        "ActorReq",
+                        Map.of());
         try (Message headerPart = Message.from(ZLinkStreamHeaderCodec.encode(request));
-             Message frame = ActorPacketFrames.encodeError(
-                 ActorPacketFrames.decode(actorReceived(headerPart)),
-                 new IllegalStateException("handler failed"))) {
+                Message frame =
+                        ActorPacketFrames.encodeError(
+                                ActorPacketFrames.decode(actorReceived(headerPart)),
+                                new IllegalStateException("handler failed"))) {
             DecodedFrame decoded = decodeFrame(frame);
 
             assertEquals(ZLinkStreamMessageKind.ERROR, decoded.header().kind());
@@ -160,19 +172,21 @@ final class ActorPacketFramesTest {
 
     @Test
     void streamActorFrameworkErrorUsesTheCommonWireCode() {
-        ZLinkStreamHeader request = new ZLinkStreamHeader(
-            ZLinkStreamMessageKind.REQUEST,
-            ZLinkStreamCodec.JSON,
-            EnumSet.noneOf(ZLinkStreamHeaderFlag.class),
-            Optional.of(7L),
-            "ActorReq",
-            Map.of());
+        ZLinkStreamHeader request =
+                new ZLinkStreamHeader(
+                        ZLinkStreamMessageKind.REQUEST,
+                        ZLinkStreamCodec.JSON,
+                        EnumSet.noneOf(ZLinkStreamHeaderFlag.class),
+                        Optional.of(7L),
+                        "ActorReq",
+                        Map.of());
         try (Message headerPart = Message.from(ZLinkStreamHeaderCodec.encode(request));
-             Message frame = ActorPacketFrames.encodeError(
-                 ActorPacketFrames.decode(actorReceived(headerPart)),
-                 new ZLinkFrameworkException(
-                     ZLinkFrameworkErrorKind.NOT_FOUND,
-                     "actor was not found"))) {
+                Message frame =
+                        ActorPacketFrames.encodeError(
+                                ActorPacketFrames.decode(actorReceived(headerPart)),
+                                new ZLinkFrameworkException(
+                                        ZLinkFrameworkErrorKind.NOT_FOUND,
+                                        "actor was not found"))) {
             DecodedFrame decoded = decodeFrame(frame);
 
             try {
@@ -187,25 +201,22 @@ final class ActorPacketFramesTest {
 
     private static ZLinkBackendActorReceived actorReceived(Message headerPart) {
         return new ZLinkBackendActorReceived(
-            new ZLinkBackendActorRef(RoutingId.from("actor-node"), "actor-a", 1),
-            RoutingId.from("session-node"),
-            RoutingId.from("session"),
-            Optional.empty(),
-            42,
-            0,
-            Message.from(headerPart),
-            true);
+                new ZLinkBackendActorRef(RoutingId.from("actor-node"), "actor-a", 1),
+                RoutingId.from("session-node"),
+                RoutingId.from("session"),
+                Optional.empty(),
+                42,
+                0,
+                Message.from(headerPart),
+                true);
     }
 
     private static DecodedFrame decodeFrame(Message frame) {
-        ZLinkStreamFrameCodec.DecodedFrame decoded = ZLinkStreamFrameCodec
-            .tryDecode(frame.toByteArray())
-            .orElseThrow();
+        ZLinkStreamFrameCodec.DecodedFrame decoded =
+                ZLinkStreamFrameCodec.tryDecode(frame.toByteArray()).orElseThrow();
         return new DecodedFrame(
-            ZLinkStreamHeaderCodec.decodeOrPlain(decoded.header()),
-            decoded.body());
+                ZLinkStreamHeaderCodec.decodeOrPlain(decoded.header()), decoded.body());
     }
 
-    private record DecodedFrame(ZLinkStreamHeader header, byte[] body) {
-    }
+    private record DecodedFrame(ZLinkStreamHeader header, byte[] body) {}
 }

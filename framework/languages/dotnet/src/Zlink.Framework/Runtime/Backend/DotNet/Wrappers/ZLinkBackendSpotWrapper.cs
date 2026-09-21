@@ -6,10 +6,10 @@ namespace Zlink.Framework.Runtime.Backend.DotNet.Wrappers;
 // Inbound route/subscribe/actor-join/lifecycle records are pulled from the pump's
 // per-spot queues (fed by the node DrainReady loop); outbound requests register
 // their reply correlation before managed submit.
-internal sealed class ZLinkBackendSpotWrapper :
-    IZLinkBackendSpot,
-    IZLinkBackendSpotMessageFollower,
-    IZLinkBackendAuthorityObserver
+internal sealed class ZLinkBackendSpotWrapper
+    : IZLinkBackendSpot,
+        IZLinkBackendSpotMessageFollower,
+        IZLinkBackendAuthorityObserver
 {
     private readonly IMeshNode _node;
     private readonly ISpot _spot;
@@ -22,7 +22,8 @@ internal sealed class ZLinkBackendSpotWrapper :
         ISpot spot,
         ZLinkMeshDispatchPump pump,
         ZLinkMeshCompletionTable completions,
-        ZLinkSpotSubscriptionTracker? subscriptions = null)
+        ZLinkSpotSubscriptionTracker? subscriptions = null
+    )
     {
         _node = node;
         _spot = spot;
@@ -47,13 +48,16 @@ internal sealed class ZLinkBackendSpotWrapper :
         ZLinkBackendActorRef actor,
         ulong targetNodeGeneration,
         ulong authorityOwnerGeneration,
-        ulong ownerLeaseGeneration)
+        ulong ownerLeaseGeneration
+    )
     {
-        RequireManagedNode().ObserveActorAuthority(
-            ToNativeActor(actor),
-            targetNodeGeneration,
-            authorityOwnerGeneration,
-            ownerLeaseGeneration);
+        RequireManagedNode()
+            .ObserveActorAuthority(
+                ToNativeActor(actor),
+                targetNodeGeneration,
+                authorityOwnerGeneration,
+                ownerLeaseGeneration
+            );
     }
 
     public void ObserveSpotAuthority(
@@ -62,21 +66,25 @@ internal sealed class ZLinkBackendSpotWrapper :
         ulong objectGeneration,
         ulong targetNodeGeneration,
         ulong authorityOwnerGeneration,
-        ulong ownerLeaseGeneration)
+        ulong ownerLeaseGeneration
+    )
     {
-        RequireManagedNode().ObserveSpotAuthority(
-            nodeRid,
-            spotId,
-            objectGeneration,
-            targetNodeGeneration,
-            authorityOwnerGeneration,
-            ownerLeaseGeneration);
+        RequireManagedNode()
+            .ObserveSpotAuthority(
+                nodeRid,
+                spotId,
+                objectGeneration,
+                targetNodeGeneration,
+                authorityOwnerGeneration,
+                ownerLeaseGeneration
+            );
     }
 
     private ZLinkManagedMeshNode RequireManagedNode() =>
         _node as ZLinkManagedMeshNode
         ?? throw new InvalidOperationException(
-            "Authority fencing requires the Framework managed MeshNode.");
+            "Authority fencing requires the Framework managed MeshNode."
+        );
 
     private ActorRef ToNativeActor(ZLinkBackendActorRef actor) =>
         actor.ToNative(RequireManagedNode().MeshName);
@@ -119,7 +127,12 @@ internal sealed class ZLinkBackendSpotWrapper :
         return _state.Routes.TryDequeue(out var route) ? route : null;
     }
 
-    public void OnDispatchEvent(Func<ZLinkBackendSpotDispatchInfo, (ValueTask Completion, Func<CancellationToken, ValueTask>? Drain)> handler)
+    public void OnDispatchEvent(
+        Func<
+            ZLinkBackendSpotDispatchInfo,
+            (ValueTask Completion, Func<CancellationToken, ValueTask>? Drain)
+        > handler
+    )
     {
         _pump.SetDispatchHandler(SpotId, handler);
     }
@@ -130,10 +143,10 @@ internal sealed class ZLinkBackendSpotWrapper :
         ZLinkBackendRequestCallback callback,
         SendFlags flags,
         TimeSpan? timeout,
-        ReadOnlyMemory<byte> metadata)
+        ReadOnlyMemory<byte> metadata
+    )
     {
-        return RequestToChannel(
-            channelName, new[] { message }, callback, flags, timeout, metadata);
+        return RequestToChannel(channelName, new[] { message }, callback, flags, timeout, metadata);
     }
 
     public bool RequestToChannel(
@@ -142,24 +155,36 @@ internal sealed class ZLinkBackendSpotWrapper :
         ZLinkBackendRequestCallback callback,
         SendFlags flags,
         TimeSpan? timeout,
-        ReadOnlyMemory<byte> metadata)
+        ReadOnlyMemory<byte> metadata
+    )
     {
         var submit = _spot.RequestToChannel(
-            channelName, parts, callback, timeout ?? default, flags,
-            metadata);
+            channelName,
+            parts,
+            callback,
+            timeout ?? default,
+            flags,
+            metadata
+        );
         return AcceptChannelRequestSubmit(submit, $"channel '{channelName}'");
     }
 
     public SubmitResult SendToChannel(
-        string channelName, Message message, SendFlags flags,
-        ReadOnlyMemory<byte> metadata)
+        string channelName,
+        Message message,
+        SendFlags flags,
+        ReadOnlyMemory<byte> metadata
+    )
     {
         return _spot.SendToChannel(channelName, new[] { message }, flags, metadata);
     }
 
     public SubmitResult SendToChannel(
-        string channelName, IReadOnlyList<Message> parts, SendFlags flags,
-        ReadOnlyMemory<byte> metadata)
+        string channelName,
+        IReadOnlyList<Message> parts,
+        SendFlags flags,
+        ReadOnlyMemory<byte> metadata
+    )
     {
         return _spot.SendToChannel(channelName, parts, flags, metadata);
     }
@@ -169,9 +194,17 @@ internal sealed class ZLinkBackendSpotWrapper :
         IReadOnlyList<Message> parts,
         SendFlags flags,
         CancellationToken cancellationToken,
-        ReadOnlyMemory<byte> metadata = default) =>
-        RequireManagedNode().SendToChannelDirectAsync(
-            SpotId, channelName, parts, flags, metadata, cancellationToken);
+        ReadOnlyMemory<byte> metadata = default
+    ) =>
+        RequireManagedNode()
+            .SendToChannelDirectAsync(
+                SpotId,
+                channelName,
+                parts,
+                flags,
+                metadata,
+                cancellationToken
+            );
 
     public ValueTask<ZLinkBackendRouteReceived> RequestToChannelAsync(
         string channelName,
@@ -179,38 +212,70 @@ internal sealed class ZLinkBackendSpotWrapper :
         SendFlags flags,
         TimeSpan timeout,
         CancellationToken cancellationToken,
-        ReadOnlyMemory<byte> metadata = default) =>
-        RequireManagedNode().RequestToChannelDirectAsync(
-            SpotId, channelName, parts, flags, metadata, timeout, cancellationToken);
+        ReadOnlyMemory<byte> metadata = default
+    ) =>
+        RequireManagedNode()
+            .RequestToChannelDirectAsync(
+                SpotId,
+                channelName,
+                parts,
+                flags,
+                metadata,
+                timeout,
+                cancellationToken
+            );
 
     public void Publish(
-        string channelName, string topic, Message message, SendFlags flags,
-        ReadOnlyMemory<byte> metadata)
+        string channelName,
+        string topic,
+        Message message,
+        SendFlags flags,
+        ReadOnlyMemory<byte> metadata
+    )
     {
         _spot.Publish(channelName, topic, new[] { message }, flags, metadata);
     }
 
     public void Publish(
-        string channelName, string topic, IReadOnlyList<Message> parts, SendFlags flags,
-        ReadOnlyMemory<byte> metadata)
+        string channelName,
+        string topic,
+        IReadOnlyList<Message> parts,
+        SendFlags flags,
+        ReadOnlyMemory<byte> metadata
+    )
     {
         _spot.Publish(channelName, topic, parts, flags, metadata);
     }
 
     public SubmitResult SendToSpot(
-        RoutingId targetRid, string spotId, ulong spotGeneration,
-        Message message, SendFlags flags, ReadOnlyMemory<byte> metadata)
+        RoutingId targetRid,
+        string spotId,
+        ulong spotGeneration,
+        Message message,
+        SendFlags flags,
+        ReadOnlyMemory<byte> metadata
+    )
     {
         return _spot.SendToSpot(
-            targetRid, spotId, spotGeneration, new[] { message }, flags, metadata);
+            targetRid,
+            spotId,
+            spotGeneration,
+            new[] { message },
+            flags,
+            metadata
+        );
     }
 
     public SubmitResult SendToSpot(
-        RoutingId targetRid, string spotId, ulong spotGeneration,
-        IReadOnlyList<Message> parts, SendFlags flags, ReadOnlyMemory<byte> metadata)
+        RoutingId targetRid,
+        string spotId,
+        ulong spotGeneration,
+        IReadOnlyList<Message> parts,
+        SendFlags flags,
+        ReadOnlyMemory<byte> metadata
+    )
     {
-        return _spot.SendToSpot(
-            targetRid, spotId, spotGeneration, parts, flags, metadata);
+        return _spot.SendToSpot(targetRid, spotId, spotGeneration, parts, flags, metadata);
     }
 
     public ValueTask SendToSpotAsync(
@@ -220,16 +285,19 @@ internal sealed class ZLinkBackendSpotWrapper :
         IReadOnlyList<Message> parts,
         SendFlags flags,
         CancellationToken cancellationToken,
-        ReadOnlyMemory<byte> metadata = default) =>
-        RequireManagedNode().SendToSpotDirectAsync(
-            SpotId,
-            targetRid,
-            spotId,
-            spotGeneration,
-            parts,
-            flags,
-            metadata,
-            cancellationToken);
+        ReadOnlyMemory<byte> metadata = default
+    ) =>
+        RequireManagedNode()
+            .SendToSpotDirectAsync(
+                SpotId,
+                targetRid,
+                spotId,
+                spotGeneration,
+                parts,
+                flags,
+                metadata,
+                cancellationToken
+            );
 
     public ValueTask<ZLinkBackendRouteReceived> RequestToSpotAsync(
         RoutingId targetRid,
@@ -239,17 +307,20 @@ internal sealed class ZLinkBackendSpotWrapper :
         SendFlags flags,
         TimeSpan timeout,
         CancellationToken cancellationToken,
-        ReadOnlyMemory<byte> metadata = default) =>
-        RequireManagedNode().RequestToSpotDirectAsync(
-            SpotId,
-            targetRid,
-            spotId,
-            spotGeneration,
-            parts,
-            flags,
-            metadata,
-            timeout,
-            cancellationToken);
+        ReadOnlyMemory<byte> metadata = default
+    ) =>
+        RequireManagedNode()
+            .RequestToSpotDirectAsync(
+                SpotId,
+                targetRid,
+                spotId,
+                spotGeneration,
+                parts,
+                flags,
+                metadata,
+                timeout,
+                cancellationToken
+            );
 
     public bool RequestToSpot(
         RoutingId targetRid,
@@ -259,11 +330,19 @@ internal sealed class ZLinkBackendSpotWrapper :
         ZLinkBackendRequestCallback callback,
         SendFlags flags,
         TimeSpan? timeout,
-        ReadOnlyMemory<byte> metadata)
+        ReadOnlyMemory<byte> metadata
+    )
     {
         return RequestToSpot(
-            targetRid, spotId, spotGeneration, new[] { message }, callback, flags,
-            timeout, metadata);
+            targetRid,
+            spotId,
+            spotGeneration,
+            new[] { message },
+            callback,
+            flags,
+            timeout,
+            metadata
+        );
     }
 
     public bool RequestToSpot(
@@ -274,21 +353,25 @@ internal sealed class ZLinkBackendSpotWrapper :
         ZLinkBackendRequestCallback callback,
         SendFlags flags,
         TimeSpan? timeout,
-        ReadOnlyMemory<byte> metadata)
+        ReadOnlyMemory<byte> metadata
+    )
     {
         var correlationId = _node.AllocateOperationId();
         var submit = _completions.RegisterRequestBeforeSubmit(
             correlationId,
             callback,
-            id => _spot.RequestToSpot(
-                targetRid,
-                spotId,
-                spotGeneration,
-                parts,
-                id,
-                timeout ?? default,
-                flags,
-                metadata));
+            id =>
+                _spot.RequestToSpot(
+                    targetRid,
+                    spotId,
+                    spotGeneration,
+                    parts,
+                    id,
+                    timeout ?? default,
+                    flags,
+                    metadata
+                )
+        );
         return AcceptRequestSubmit(submit, $"SPOT '{spotId}' on node '{targetRid}'");
     }
 
@@ -303,20 +386,23 @@ internal sealed class ZLinkBackendSpotWrapper :
         byte messageFollowHopCount,
         IReadOnlyList<Message> parts,
         ReadOnlyMemory<byte> metadata,
-        CancellationToken cancellationToken) =>
-        RequireManagedNode().MessageFollowSendToSpotAsync(
-            SpotId,
-            targetRid,
-            spotId,
-            spotGeneration,
-            operationId,
-            targetNodeGeneration,
-            authorityOwnerGeneration,
-            ownerLeaseGeneration,
-            messageFollowHopCount,
-            parts,
-            metadata,
-            cancellationToken);
+        CancellationToken cancellationToken
+    ) =>
+        RequireManagedNode()
+            .MessageFollowSendToSpotAsync(
+                SpotId,
+                targetRid,
+                spotId,
+                spotGeneration,
+                operationId,
+                targetNodeGeneration,
+                authorityOwnerGeneration,
+                ownerLeaseGeneration,
+                messageFollowHopCount,
+                parts,
+                metadata,
+                cancellationToken
+            );
 
     public bool MessageFollowRequestToSpot(
         RoutingId targetRid,
@@ -332,31 +418,37 @@ internal sealed class ZLinkBackendSpotWrapper :
         ZLinkBackendRequestCallback callback,
         SendFlags flags,
         TimeSpan? timeout,
-        ReadOnlyMemory<byte> metadata)
+        ReadOnlyMemory<byte> metadata
+    )
     {
         var correlationId = _node.AllocateOperationId();
         var submit = _completions.RegisterRequestBeforeSubmit(
             correlationId,
             callback,
-            id => RequireManagedNode().MessageFollowRequestToSpot(
-                SpotId,
-                targetRid,
-                spotId,
-                spotGeneration,
-                operationId,
-                targetNodeGeneration,
-                authorityOwnerGeneration,
-                ownerLeaseGeneration,
-                messageFollowHopCount,
-                deadlineUnixMs,
-                parts,
-                id,
-                timeout ?? default,
-                flags,
-                metadata));
+            id =>
+                RequireManagedNode()
+                    .MessageFollowRequestToSpot(
+                        SpotId,
+                        targetRid,
+                        spotId,
+                        spotGeneration,
+                        operationId,
+                        targetNodeGeneration,
+                        authorityOwnerGeneration,
+                        ownerLeaseGeneration,
+                        messageFollowHopCount,
+                        deadlineUnixMs,
+                        parts,
+                        id,
+                        timeout ?? default,
+                        flags,
+                        metadata
+                    )
+        );
         return AcceptRequestSubmit(
-                   submit,
-                   $"Message Follow for Spot '{spotId}' on node '{targetRid}'");
+            submit,
+            $"Message Follow for Spot '{spotId}' on node '{targetRid}'"
+        );
     }
 
     // Terminal admission failures (NotFound, InvalidState, ...) surface to the
@@ -368,27 +460,24 @@ internal sealed class ZLinkBackendSpotWrapper :
         {
             SubmitResult.Ok => true,
             SubmitResult.Backpressured => false,
-            SubmitResult.NotConnected =>
-                throw new ZlinkSubmitException(ZlinkSubmitException.ErrorCode.NotConnected),
-            _ => throw ZLinkSubmitFailureMapper.CreateException(submit, targetDescription)
+            SubmitResult.NotConnected => throw new ZlinkSubmitException(
+                ZlinkSubmitException.ErrorCode.NotConnected
+            ),
+            _ => throw ZLinkSubmitFailureMapper.CreateException(submit, targetDescription),
         };
     }
 
-    private static bool AcceptChannelRequestSubmit(
-        SubmitResult submit,
-        string targetDescription)
+    private static bool AcceptChannelRequestSubmit(SubmitResult submit, string targetDescription)
     {
         return submit switch
         {
             SubmitResult.Ok => true,
             SubmitResult.Backpressured => false,
-            SubmitResult.NotConnected =>
-                throw ZLinkSubmitFailureMapper.CreateChannelException(
-                    submit,
-                    targetDescription),
-            _ => throw ZLinkSubmitFailureMapper.CreateChannelException(
+            SubmitResult.NotConnected => throw ZLinkSubmitFailureMapper.CreateChannelException(
                 submit,
-                targetDescription)
+                targetDescription
+            ),
+            _ => throw ZLinkSubmitFailureMapper.CreateChannelException(submit, targetDescription),
         };
     }
 
@@ -403,7 +492,10 @@ internal sealed class ZLinkBackendSpotWrapper :
     }
 
     public void ReplyActorJoin(
-        ZLinkBackendActorJoinRequest request, int joinResultCode, Message reply)
+        ZLinkBackendActorJoinRequest request,
+        int joinResultCode,
+        Message reply
+    )
     {
         RequireMeshRequest(request).ReplyJoin(joinResultCode, new[] { reply });
     }
@@ -411,13 +503,15 @@ internal sealed class ZLinkBackendSpotWrapper :
     public void ReplyActorJoin(
         ZLinkBackendActorJoinRequest request,
         int joinResultCode,
-        IReadOnlyList<Message> parts)
+        IReadOnlyList<Message> parts
+    )
     {
         RequireMeshRequest(request).ReplyJoin(joinResultCode, parts);
     }
 
     private static ZLinkMeshActorJoinRequest RequireMeshRequest(
-        ZLinkBackendActorJoinRequest request) =>
+        ZLinkBackendActorJoinRequest request
+    ) =>
         request as ZLinkMeshActorJoinRequest
         ?? throw new InvalidOperationException("Expected a MeshNode actor join request.");
 

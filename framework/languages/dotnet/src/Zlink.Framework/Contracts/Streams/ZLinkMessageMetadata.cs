@@ -1,10 +1,9 @@
 namespace Zlink.Framework.Contracts.Streams;
 
-public sealed class ZLinkMessageMetadata(
-    IReadOnlyDictionary<string, string> values)
+public sealed class ZLinkMessageMetadata(IReadOnlyDictionary<string, string> values)
 {
-    public static ZLinkMessageMetadata Empty { get; } = new(
-        new Dictionary<string, string>(StringComparer.Ordinal));
+    public static ZLinkMessageMetadata Empty { get; } =
+        new(new Dictionary<string, string>(StringComparer.Ordinal));
 
     public IReadOnlyDictionary<string, string> Values { get; } = values;
 

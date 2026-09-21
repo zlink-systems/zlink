@@ -2,23 +2,17 @@ namespace Zlink.Framework.Contracts.Channels;
 
 public interface IZLinkRouteClient
 {
-    IZLinkSendCall SendToNode<TMessage>(
-        string meshName,
-        RoutingId targetNodeRid,
-        TMessage message);
+    IZLinkSendCall SendToNode<TMessage>(string meshName, RoutingId targetNodeRid, TMessage message);
 
     IZLinkRequestCall RequestToNode<TRequest>(
         string meshName,
         RoutingId targetNodeRid,
-        TRequest request);
+        TRequest request
+    );
 
-    IZLinkSendCall SendToChannel<TMessage>(
-        string channelName,
-        TMessage message);
+    IZLinkSendCall SendToChannel<TMessage>(string channelName, TMessage message);
 
-    IZLinkRequestCall RequestToChannel<TRequest>(
-        string channelName,
-        TRequest request);
+    IZLinkRequestCall RequestToChannel<TRequest>(string channelName, TRequest request);
 }
 
 public interface IZLinkRouteSendHandler<in TMessage>
@@ -26,7 +20,8 @@ public interface IZLinkRouteSendHandler<in TMessage>
     ValueTask HandleAsync(
         TMessage message,
         ZLinkRouteMessageContext context,
-        CancellationToken cancellationToken);
+        CancellationToken cancellationToken
+    );
 }
 
 public interface IZLinkRouteRequestHandler<in TRequest, TReply>
@@ -34,7 +29,8 @@ public interface IZLinkRouteRequestHandler<in TRequest, TReply>
     ValueTask<TReply> HandleAsync(
         TRequest request,
         ZLinkRouteMessageContext context,
-        CancellationToken cancellationToken);
+        CancellationToken cancellationToken
+    );
 }
 
 public sealed class ZLinkRouteMessageContext : IZLinkMessageContext
@@ -46,7 +42,8 @@ public sealed class ZLinkRouteMessageContext : IZLinkMessageContext
         string packetName,
         string? contentType,
         ZLinkMessageMetadata? metadata,
-        string? correlationId)
+        string? correlationId
+    )
     {
         MeshName = meshName;
         ChannelName = channelName;
@@ -82,7 +79,8 @@ public sealed class ZLinkPublishMessageContext : IZLinkMessageContext
         ZLinkMessageMetadata? metadata,
         string? correlationId,
         string topic,
-        string? source)
+        string? source
+    )
     {
         MeshName = meshName;
         ChannelName = channelName;

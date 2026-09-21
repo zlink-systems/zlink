@@ -8,7 +8,8 @@ internal static class ZLinkStreamReplyHeaders
         ZlinkStreamCodec codec,
         ZlinkStreamHeaderFlags flags,
         ZlinkStreamRequestSeq requestSeq,
-        ZlinkStreamMetadata metadata)
+        ZlinkStreamMetadata metadata
+    )
     {
         // Spec 27 §4/§7: the reply carries the request's correlation id, but
         // flow fields come from the ambient flow context at encode time
@@ -23,6 +24,7 @@ internal static class ZLinkStreamReplyHeaders
             metadata,
             requestHeader.CorrelationId,
             null,
-            null);
+            null
+        );
     }
 }

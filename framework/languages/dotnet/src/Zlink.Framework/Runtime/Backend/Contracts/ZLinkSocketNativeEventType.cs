@@ -17,5 +17,5 @@ internal enum ZLinkSocketNativeEventType
     ConnectionReady = 0x1000,
     HandshakeFailedProtocol = 0x2000,
     HandshakeFailedAuth = 0x4000,
-    PeerAdmissionChanged = 0x8000
+    PeerAdmissionChanged = 0x8000,
 }

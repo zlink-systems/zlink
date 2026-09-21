@@ -7,20 +7,20 @@ internal enum ZLinkDrainOwner
     None = 0,
     Relocation = 1,
     Shutdown = 2,
-    RelocationRollback = 3
+    RelocationRollback = 3,
 }
 
-internal readonly record struct ZLinkActorAdmissionSnapshot(
-    long Epoch,
-    int ActiveCount);
+internal readonly record struct ZLinkActorAdmissionSnapshot(long Epoch, int ActiveCount);
 
 internal readonly record struct ZLinkRelocationRollbackLeaseAcquisition(
     bool Acquired,
-    ZLinkRelocationRollbackLease? Lease);
+    ZLinkRelocationRollbackLease? Lease
+);
 
 internal readonly record struct ZLinkActorAdmissionResult(
     bool Accepted,
-    ZLinkDrainAdmissionGate.ActorAdmissionLease Lease);
+    ZLinkDrainAdmissionGate.ActorAdmissionLease Lease
+);
 
 internal sealed class ZLinkRelocationRollbackLease : IDisposable
 {
@@ -73,9 +73,10 @@ internal sealed class ZLinkDrainAdmissionGate
         {
             if (_draining != 0)
             {
-                if (owner == ZLinkDrainOwner.Shutdown
-                    && (_owner is ZLinkDrainOwner.Relocation
-                        or ZLinkDrainOwner.RelocationRollback))
+                if (
+                    owner == ZLinkDrainOwner.Shutdown
+                    && (_owner is ZLinkDrainOwner.Relocation or ZLinkDrainOwner.RelocationRollback)
+                )
                 {
                     var rollbackLease = _rollbackLease;
                     _rollbackLease = null;
@@ -126,7 +127,8 @@ internal sealed class ZLinkDrainAdmissionGate
         {
             if (_acceptedActorAdmissions != 0)
                 throw new InvalidOperationException(
-                    "The drain admission gate cannot reset while actor admissions are active.");
+                    "The drain admission gate cannot reset while actor admissions are active."
+                );
             _actorAdmissionsDrained = null;
             _sealed = 0;
             _draining = 0;
@@ -135,20 +137,25 @@ internal sealed class ZLinkDrainAdmissionGate
         });
     }
 
-    internal bool TryBeginRelocationFence(
-        Func<ZLinkActorAdmissionSnapshot, bool> commit)
+    internal bool TryBeginRelocationFence(Func<ZLinkActorAdmissionSnapshot, bool> commit)
     {
         ArgumentNullException.ThrowIfNull(commit);
         var prepared = RunState(() =>
         {
-            if (_draining != 0) return (Started: false, Snapshot: default(ZLinkActorAdmissionSnapshot));
+            if (_draining != 0)
+                return (Started: false, Snapshot: default(ZLinkActorAdmissionSnapshot));
             _draining = 1;
             _owner = ZLinkDrainOwner.Relocation;
-            return (Started: true, Snapshot: new ZLinkActorAdmissionSnapshot(
-                _actorAdmissionEpoch,
-                _acceptedActorAdmissions));
+            return (
+                Started: true,
+                Snapshot: new ZLinkActorAdmissionSnapshot(
+                    _actorAdmissionEpoch,
+                    _acceptedActorAdmissions
+                )
+            );
         });
-        if (!prepared.Started) return false;
+        if (!prepared.Started)
+            return false;
         var committed = false;
         try
         {
@@ -172,14 +179,13 @@ internal sealed class ZLinkDrainAdmissionGate
     internal bool TryReopenRelocationFence(Func<bool> reopen)
     {
         ArgumentNullException.ThrowIfNull(reopen);
-        if (!RunState(() => _owner == ZLinkDrainOwner.Relocation
-                            && _acceptedActorAdmissions == 0))
+        if (!RunState(() => _owner == ZLinkDrainOwner.Relocation && _acceptedActorAdmissions == 0))
             return false;
-        if (!reopen()) return false;
+        if (!reopen())
+            return false;
         return RunState(() =>
         {
-            if (_owner != ZLinkDrainOwner.Relocation
-                || _acceptedActorAdmissions != 0)
+            if (_owner != ZLinkDrainOwner.Relocation || _acceptedActorAdmissions != 0)
                 return false;
 
             _actorAdmissionsDrained = null;
@@ -191,17 +197,17 @@ internal sealed class ZLinkDrainAdmissionGate
     }
 
     internal ZLinkRelocationRollbackLeaseAcquisition TryAcquireRelocationRollbackLease(
-        Func<bool> acquire)
+        Func<bool> acquire
+    )
     {
         ArgumentNullException.ThrowIfNull(acquire);
-        if (!RunState(() => _owner == ZLinkDrainOwner.Relocation
-                            && _acceptedActorAdmissions == 0))
+        if (!RunState(() => _owner == ZLinkDrainOwner.Relocation && _acceptedActorAdmissions == 0))
             return new ZLinkRelocationRollbackLeaseAcquisition(false, null);
-        if (!acquire()) return new ZLinkRelocationRollbackLeaseAcquisition(false, null);
+        if (!acquire())
+            return new ZLinkRelocationRollbackLeaseAcquisition(false, null);
         return RunState(() =>
         {
-            if (_owner != ZLinkDrainOwner.Relocation
-                || _acceptedActorAdmissions != 0)
+            if (_owner != ZLinkDrainOwner.Relocation || _acceptedActorAdmissions != 0)
                 return new ZLinkRelocationRollbackLeaseAcquisition(false, null);
 
             var lease = new ZLinkRelocationRollbackLease();
@@ -213,7 +219,8 @@ internal sealed class ZLinkDrainAdmissionGate
 
     internal bool TryAcquireRelocationRollbackLease(
         Func<bool> acquire,
-        out ZLinkRelocationRollbackLease? lease)
+        out ZLinkRelocationRollbackLease? lease
+    )
     {
         var result = TryAcquireRelocationRollbackLease(acquire);
         lease = result.Lease;
@@ -222,22 +229,30 @@ internal sealed class ZLinkDrainAdmissionGate
 
     internal bool TryCompleteRelocationRollbackLease(
         ZLinkRelocationRollbackLease lease,
-        Func<bool> complete)
+        Func<bool> complete
+    )
     {
         ArgumentNullException.ThrowIfNull(lease);
         ArgumentNullException.ThrowIfNull(complete);
-        if (!RunState(() => _owner == ZLinkDrainOwner.RelocationRollback
-                            && ReferenceEquals(_rollbackLease, lease)
-                            && lease.IsCurrent
-                            && _acceptedActorAdmissions == 0))
+        if (
+            !RunState(() =>
+                _owner == ZLinkDrainOwner.RelocationRollback
+                && ReferenceEquals(_rollbackLease, lease)
+                && lease.IsCurrent
+                && _acceptedActorAdmissions == 0
+            )
+        )
             return false;
-        if (!complete()) return false;
+        if (!complete())
+            return false;
         var completed = RunState(() =>
         {
-            if (_owner != ZLinkDrainOwner.RelocationRollback
+            if (
+                _owner != ZLinkDrainOwner.RelocationRollback
                 || !ReferenceEquals(_rollbackLease, lease)
                 || !lease.IsCurrent
-                || _acceptedActorAdmissions != 0)
+                || _acceptedActorAdmissions != 0
+            )
                 return false;
 
             _rollbackLease = null;
@@ -247,7 +262,8 @@ internal sealed class ZLinkDrainAdmissionGate
             _owner = ZLinkDrainOwner.None;
             return true;
         });
-        if (completed) lease.Dispose();
+        if (completed)
+            lease.Dispose();
         return completed;
     }
 
@@ -276,9 +292,13 @@ internal sealed class ZLinkDrainAdmissionGate
     public Task WaitForAcceptedActorAdmissionsAsync(CancellationToken cancellationToken) =>
         RunState(() =>
         {
-            if (_acceptedActorAdmissions == 0) return Task.CompletedTask;
-            var pending = (_actorAdmissionsDrained ??= new TaskCompletionSource(
-                TaskCreationOptions.RunContinuationsAsynchronously)).Task;
+            if (_acceptedActorAdmissions == 0)
+                return Task.CompletedTask;
+            var pending = (
+                _actorAdmissionsDrained ??= new TaskCompletionSource(
+                    TaskCreationOptions.RunContinuationsAsynchronously
+                )
+            ).Task;
             return pending.WaitAsync(cancellationToken);
         });
 
@@ -288,7 +308,8 @@ internal sealed class ZLinkDrainAdmissionGate
             throw new ZLinkFrameworkException(
                 ZLinkFrameworkErrorKind.Rejected,
                 "The framework runtime is draining and does not accept new SPOT assignments.",
-                ZLinkRetryAdvice.DoNotRetry);
+                ZLinkRetryAdvice.DoNotRetry
+            );
     }
 
     public void RequireActorAdmission()
@@ -297,7 +318,8 @@ internal sealed class ZLinkDrainAdmissionGate
             throw new ZLinkFrameworkException(
                 ZLinkFrameworkErrorKind.Rejected,
                 "The framework runtime is draining and does not accept new actor assignments.",
-                ZLinkRetryAdvice.DoNotRetry);
+                ZLinkRetryAdvice.DoNotRetry
+            );
     }
 
     private void ExitActorAdmission()
@@ -321,17 +343,14 @@ internal sealed class ZLinkDrainAdmissionGate
     private ZLinkActorAdmissionSnapshot SnapshotActorAdmissionsOnLane() =>
         new(_actorAdmissionEpoch, _acceptedActorAdmissions);
 
-    private T RunState<T>(Func<T> operation) =>
-        AwaitStateLane(_lane.RunAsync(operation));
+    private T RunState<T>(Func<T> operation) => AwaitStateLane(_lane.RunAsync(operation));
 
-    private void RunState(Action operation) =>
-        AwaitStateLane(_lane.RunAsync(operation));
+    private void RunState(Action operation) => AwaitStateLane(_lane.RunAsync(operation));
 
     private static T AwaitStateLane<T>(ValueTask<T> operation) =>
         operation.GetAwaiter().GetResult();
 
-    private static void AwaitStateLane(ValueTask operation) =>
-        operation.GetAwaiter().GetResult();
+    private static void AwaitStateLane(ValueTask operation) => operation.GetAwaiter().GetResult();
 
     public sealed class ActorAdmissionLease(ZLinkDrainAdmissionGate? owner) : IDisposable
     {

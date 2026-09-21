@@ -31,19 +31,22 @@ public sealed class ZLinkRedisRelocationOptions
         {
             throw new ArgumentException(
                 "ZLinkRedisRelocationOptions.KeyPrefix is required.",
-                nameof(KeyPrefix));
+                nameof(KeyPrefix)
+            );
         }
 
         if (ConfigurationOptions is null && string.IsNullOrEmpty(ConnectionString))
         {
             throw new ArgumentException(
                 "ZLinkRedisRelocationOptions requires ConnectionString or ConfigurationOptions.",
-                nameof(ConnectionString));
+                nameof(ConnectionString)
+            );
         }
 
         if (OperationTimeout <= TimeSpan.Zero)
             throw new ArgumentOutOfRangeException(
                 nameof(OperationTimeout),
-                "OperationTimeout must be greater than zero.");
+                "OperationTimeout must be greater than zero."
+            );
     }
 }

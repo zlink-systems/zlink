@@ -9,8 +9,7 @@ import java.util.concurrent.atomic.AtomicLong;
 final class ZLinkStreamCorrelation {
     private static final AtomicLong COUNTER = new AtomicLong();
 
-    private ZLinkStreamCorrelation() {
-    }
+    private ZLinkStreamCorrelation() {}
 
     static String next() {
         return Long.toHexString(COUNTER.incrementAndGet());

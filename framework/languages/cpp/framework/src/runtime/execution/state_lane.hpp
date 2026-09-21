@@ -20,15 +20,12 @@ namespace zlink::framework::runtime
 
 namespace state_lane_internal
 {
-template<typename T> class boxed_future_t
+template <typename T> class boxed_future_t
 {
   public:
     using stored_t = std::unique_ptr<T>;
 
-    explicit boxed_future_t (std::future<stored_t> future)
-        : _future (std::move (future))
-    {
-    }
+    explicit boxed_future_t (std::future<stored_t> future) : _future (std::move (future)) {}
 
     boxed_future_t (boxed_future_t &&) noexcept = default;
     boxed_future_t &operator= (boxed_future_t &&) noexcept = default;
@@ -38,15 +35,14 @@ template<typename T> class boxed_future_t
     bool valid () const noexcept { return _future.valid (); }
     void wait () const { _future.wait (); }
 
-    template<typename Rep, typename Period>
+    template <typename Rep, typename Period>
     std::future_status wait_for (const std::chrono::duration<Rep, Period> &timeout) const
     {
         return _future.wait_for (timeout);
     }
 
-    template<typename Clock, typename Duration>
-    std::future_status
-    wait_until (const std::chrono::time_point<Clock, Duration> &deadline) const
+    template <typename Clock, typename Duration>
+    std::future_status wait_until (const std::chrono::time_point<Clock, Duration> &deadline) const
     {
         return _future.wait_until (deadline);
     }
@@ -61,31 +57,27 @@ template<typename T> class boxed_future_t
 // MSVC's promise implementation assigns the result into shared state. Box
 // only value types that cannot satisfy that implementation detail; all usual
 // results retain std::future and the allocation-free path.
-template<typename T>
+template <typename T>
 inline constexpr bool requires_boxed_result_v =
-  !std::is_void_v<T> && !std::is_reference_v<T>
-  && !std::is_move_assignable_v<T>;
+  !std::is_void_v<T> && !std::is_reference_v<T> && !std::is_move_assignable_v<T>;
 #else
-template<typename T> inline constexpr bool requires_boxed_result_v = false;
+template <typename T> inline constexpr bool requires_boxed_result_v = false;
 #endif
 
-template<typename T, bool Boxed = requires_boxed_result_v<T>> struct result_bridge_t
+template <typename T, bool Boxed = requires_boxed_result_v<T>> struct result_bridge_t
 {
     using stored_t = T;
     using future_t = std::future<T>;
 
-    static future_t make_future (std::future<stored_t> future)
-    {
-        return future;
-    }
+    static future_t make_future (std::future<stored_t> future) { return future; }
 
-    template<typename U> static decltype(auto) store (U &&value)
+    template <typename U> static decltype (auto) store (U &&value)
     {
         return std::forward<U> (value);
     }
 };
 
-template<typename T> struct result_bridge_t<T, true>
+template <typename T> struct result_bridge_t<T, true>
 {
     using stored_t = std::unique_ptr<T>;
     using future_t = boxed_future_t<T>;
@@ -95,7 +87,7 @@ template<typename T> struct result_bridge_t<T, true>
         return future_t (std::move (future));
     }
 
-    template<typename U> static stored_t store (U &&value)
+    template <typename U> static stored_t store (U &&value)
     {
         return std::make_unique<T> (std::forward<U> (value));
     }
@@ -114,10 +106,9 @@ class state_lane_t
     state_lane_t (const state_lane_t &) = delete;
     state_lane_t &operator= (const state_lane_t &) = delete;
 
-    template<typename Work>
-    auto run (Work &&work)
-      -> typename state_lane_internal::result_bridge_t<
-        std::invoke_result_t<std::decay_t<Work> &>>::future_t
+    template <typename Work>
+    auto run (Work &&work) -> typename state_lane_internal::result_bridge_t<
+                             std::invoke_result_t<std::decay_t<Work> &>>::future_t
     {
         using result_t = std::invoke_result_t<std::decay_t<Work> &>;
         using bridge_t = state_lane_internal::result_bridge_t<result_t>;
@@ -131,23 +122,22 @@ class state_lane_t
         auto completion = std::make_shared<std::promise<stored_t>> ();
         auto result = bridge_t::make_future (completion->get_future ());
         if (!enqueue (
-          [completion, work = std::forward<Work> (work)] () mutable {
-              try {
-                  if constexpr (std::is_void_v<result_t>) {
-                      std::invoke (work);
-                      completion->set_value ();
+              [completion, work = std::forward<Work> (work)] () mutable {
+                  try {
+                      if constexpr (std::is_void_v<result_t>) {
+                          std::invoke (work);
+                          completion->set_value ();
+                      } else {
+                          completion->set_value (bridge_t::store (std::invoke (work)));
+                      }
                   }
-                  else {
-                      completion->set_value (bridge_t::store (std::invoke (work)));
+                  catch (...) {
+                      completion->set_exception (std::current_exception ());
                   }
-              }
-              catch (...) {
-                  completion->set_exception (std::current_exception ());
-              }
-          },
-          [completion] (std::exception_ptr error) {
-              completion->set_exception (std::move (error));
-          })) {
+              },
+              [completion] (std::exception_ptr error) {
+                  completion->set_exception (std::move (error));
+              })) {
             throw std::runtime_error ("state lane is closed");
         }
         schedule_drain (true);
@@ -166,10 +156,7 @@ class state_lane_t
     // Stops admission and waits for the already accepted FIFO mailbox to
     // finish.  Repeated calls are safe.
     void close ();
-    bool closed () const noexcept
-    {
-        return _closed.load (std::memory_order_acquire);
-    }
+    bool closed () const noexcept { return _closed.load (std::memory_order_acquire); }
 
   private:
     struct mailbox_item_t
@@ -178,8 +165,7 @@ class state_lane_t
         std::function<void (std::exception_ptr)> abandon;
     };
 
-    bool enqueue (std::function<void ()> work,
-                  std::function<void (std::exception_ptr)> abandon);
+    bool enqueue (std::function<void ()> work, std::function<void (std::exception_ptr)> abandon);
     void schedule_drain (bool inline_drain);
     void drain_loop ();
     void abandon_pending (std::exception_ptr error) noexcept;

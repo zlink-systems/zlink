@@ -1,124 +1,99 @@
 package systems.zlink.framework.runtime.channels;
-import java.time.Instant;
-import java.util.Arrays;
-import java.util.UUID;
-import java.util.function.BiFunction;
-import java.util.function.LongConsumer;
-import java.util.function.LongSupplier;
+
+import systems.zlink.contracts.core.RoutingId;
+import systems.zlink.contracts.errors.ZlinkRecvException;
+import systems.zlink.contracts.errors.ZlinkRequestException;
+import systems.zlink.contracts.errors.ZlinkSubmitException;
+import systems.zlink.contracts.messaging.Message;
+import systems.zlink.contracts.sockets.SendFlags;
+import systems.zlink.framework.ZLinkHandlerFilter;
+import systems.zlink.framework.ZLinkMessageSerializer;
+import systems.zlink.framework.channels.ZLinkChannelRuntimeOptions;
+import systems.zlink.framework.channels.ZLinkClient;
+import systems.zlink.framework.channels.ZLinkClientServerChannelRuntimeOptions;
+import systems.zlink.framework.channels.ZLinkFanoutClient;
+import systems.zlink.framework.channels.ZLinkFanoutPublishCall;
+import systems.zlink.framework.channels.ZLinkRequestCall;
+import systems.zlink.framework.channels.ZLinkRouteClient;
+import systems.zlink.framework.channels.ZLinkRouteMeshChannelRuntimeOptions;
+import systems.zlink.framework.channels.ZLinkSendCall;
+import systems.zlink.framework.errors.ZLinkConfigurationException;
+import systems.zlink.framework.errors.ZLinkFrameworkErrorKind;
+import systems.zlink.framework.errors.ZLinkFrameworkException;
+import systems.zlink.framework.execution.ZLinkSerialExecutionQueue;
+import systems.zlink.framework.locations.ZLinkLocationRole;
 import systems.zlink.framework.monitoring.ZLinkClientServerRuntime;
 import systems.zlink.framework.monitoring.ZLinkFanoutRuntime;
 import systems.zlink.framework.monitoring.ZLinkListenerKind;
+import systems.zlink.framework.runtime.configuration.ZLinkFrameworkRegistration;
+import systems.zlink.framework.runtime.diagnostics.ZLinkDispatchErrorReporter;
+import systems.zlink.framework.runtime.handlers.ZLinkHandlerScanner;
+import systems.zlink.framework.runtime.handlers.ZLinkScannedHandlerCatalog;
+import systems.zlink.framework.runtime.host.ZLinkFrameworkRuntimeState;
+import systems.zlink.framework.runtime.internal.backend.*;
+import systems.zlink.framework.runtime.internal.backend.ZLinkBackendAdapterProvider;
+import systems.zlink.framework.runtime.internal.backend.ZLinkInternalSpotNode;
+import systems.zlink.framework.runtime.internal.channels.ZLinkClientServerRuntimeConfiguration;
+import systems.zlink.framework.runtime.internal.channels.ZLinkFanoutRuntimeConfiguration;
+import systems.zlink.framework.runtime.internal.configuration.ZLinkCodecRegistration;
+import systems.zlink.framework.runtime.internal.diagnostics.ZLinkDispatchErrorAction;
+import systems.zlink.framework.runtime.internal.diagnostics.ZLinkDispatchErrorReason;
+import systems.zlink.framework.runtime.internal.diagnostics.ZLinkDispatchErrorSurface;
+import systems.zlink.framework.runtime.internal.diagnostics.ZLinkDispatchMessageKind;
 import systems.zlink.framework.runtime.internal.diagnostics.ZLinkFlowContext;
+import systems.zlink.framework.runtime.internal.handlers.ZLinkHandlerActivator;
+import systems.zlink.framework.runtime.internal.handlers.ZLinkSuspendInvocationAdapter;
+import systems.zlink.framework.runtime.internal.locations.ZLinkAutoConnectType;
+import systems.zlink.framework.runtime.internal.locations.ZLinkClientServerServerDescriptor;
+import systems.zlink.framework.runtime.internal.monitoring.ZLinkRuntimeEventDispatcher;
+import systems.zlink.framework.runtime.internal.service.ZLinkClassicFanoutLiveness;
+import systems.zlink.framework.runtime.internal.service.ZLinkServiceOperationRegistry;
+import systems.zlink.framework.runtime.internal.spots.SpotTransportAddressResolver;
+import systems.zlink.framework.runtime.messaging.ZLinkApplicationMetadata;
+import systems.zlink.framework.runtime.messaging.ZLinkFrameworkErrorReply;
+import systems.zlink.framework.runtime.messaging.ZLinkPayloadEncoding;
 import systems.zlink.framework.spots.ZLinkSpotRequestCall;
 import systems.zlink.framework.spots.ZLinkSpotSendCall;
 
-import systems.zlink.framework.runtime.internal.backend.ZLinkBackendAdapterProvider;
-
-import systems.zlink.framework.runtime.internal.backend.ZLinkInternalSpotNode;
-import systems.zlink.framework.runtime.internal.service.ZLinkServiceOperationRegistry;
-
-import systems.zlink.framework.runtime.internal.backend.*;
-
-import com.fasterxml.jackson.databind.JsonNode;
-import com.fasterxml.jackson.databind.ObjectMapper;
-import java.lang.reflect.Method;
 import java.nio.charset.StandardCharsets;
 import java.time.Duration;
+import java.time.Instant;
 import java.util.ArrayList;
-import java.util.HashMap;
+import java.util.Arrays;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
-import java.util.Set;
+import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionException;
 import java.util.concurrent.CompletionStage;
-import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.Executor;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.RejectedExecutionException;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
-import java.util.concurrent.TimeoutException;
 import java.util.concurrent.atomic.AtomicBoolean;
-import java.util.concurrent.locks.LockSupport;
+import java.util.function.BiFunction;
+import java.util.function.LongConsumer;
+import java.util.function.LongSupplier;
 import java.util.function.Supplier;
 import java.util.logging.Level;
 import java.util.logging.Logger;
 import java.util.stream.Collectors;
-import systems.zlink.contracts.core.RoutingId;
-import systems.zlink.contracts.errors.ZlinkSubmitException;
-import systems.zlink.contracts.errors.ZlinkCloseException;
-import systems.zlink.contracts.errors.ZlinkRecvException;
-import systems.zlink.contracts.errors.ZlinkRequestException;
-import systems.zlink.contracts.errors.ZlinkSubmitException;
-import systems.zlink.contracts.messaging.Message;
-import systems.zlink.contracts.sockets.SendFlags;
-import systems.zlink.contracts.sockets.SubmitResult;
-import systems.zlink.framework.ZLinkMessageContext;
-import systems.zlink.framework.ZLinkHandlerFilter;
-import systems.zlink.framework.ZLinkMessageSerializer;
-import systems.zlink.framework.channels.ZLinkClient;
-import systems.zlink.framework.channels.ZLinkFanoutClient;
-import systems.zlink.framework.channels.ZLinkFanoutPublishCall;
-import systems.zlink.framework.channels.ZLinkChannelRuntimeOptions;
-import systems.zlink.framework.channels.ZLinkClientServerChannelRuntimeOptions;
-import systems.zlink.framework.channels.ZLinkRouteMeshChannelRuntimeOptions;
-import systems.zlink.framework.channels.ZLinkPublishCall;
-import systems.zlink.framework.channels.ZLinkPublishMessageContext;
-import systems.zlink.framework.channels.ZLinkRouteClient;
-import systems.zlink.framework.channels.ZLinkRequestCall;
-import systems.zlink.framework.channels.ZLinkRouteMessageContext;
-import systems.zlink.framework.channels.ZLinkSendCall;
-import systems.zlink.framework.channels.ZLinkSocketRuntimeOptions;
-import systems.zlink.framework.runtime.internal.diagnostics.ZLinkDispatchErrorAction;
-import systems.zlink.framework.runtime.internal.diagnostics.ZLinkDispatchErrorReason;
-import systems.zlink.framework.runtime.internal.diagnostics.ZLinkDispatchErrorSurface;
-import systems.zlink.framework.runtime.internal.diagnostics.ZLinkDispatchMessageKind;
-import systems.zlink.framework.runtime.internal.diagnostics.ZLinkMessageFlowEvent;
-import systems.zlink.framework.runtime.internal.diagnostics.ZLinkMessageFlowOutcome;
-import systems.zlink.framework.runtime.internal.diagnostics.ZLinkDispatchFailure;
-import systems.zlink.framework.errors.ZLinkConfigurationException;
-import systems.zlink.framework.errors.ZLinkFrameworkErrorKind;
-import systems.zlink.framework.errors.ZLinkFrameworkException;
-import systems.zlink.framework.execution.ZLinkSerialExecutionQueue;
-import systems.zlink.framework.runtime.internal.locations.ZLinkAutoConnectType;
-import systems.zlink.framework.locations.ZLinkLocationRole;
-import systems.zlink.framework.runtime.internal.locations.ZLinkClientServerServerDescriptor;
-import systems.zlink.framework.runtime.host.ZLinkFrameworkRuntimeState;
-import systems.zlink.framework.spots.SpotHandle;
-import systems.zlink.framework.runtime.internal.spots.SpotTransportAddressResolver;
-import systems.zlink.framework.runtime.internal.monitoring.ZLinkRuntimeEventDispatcher;
-import systems.zlink.framework.runtime.internal.configuration.ZLinkCodecRegistration;
-import systems.zlink.framework.runtime.configuration.ZLinkFrameworkRegistration;
-import systems.zlink.framework.runtime.diagnostics.ZLinkDispatchErrorReporter;
-import systems.zlink.framework.runtime.handlers.ZLinkHandlerScanner;
-import systems.zlink.framework.runtime.internal.handlers.ZLinkHandlerActivator;
-import systems.zlink.framework.runtime.handlers.ZLinkHandlerMethodInvoker;
-import systems.zlink.framework.runtime.handlers.ZLinkHandlerStages;
-import systems.zlink.framework.runtime.handlers.ZLinkScannedHandler;
-import systems.zlink.framework.runtime.handlers.ZLinkScannedHandlerCatalog;
-import systems.zlink.framework.runtime.handlers.ZLinkScannedHandlerKind;
-import systems.zlink.framework.runtime.handlers.ZLinkScannedHandlerSurface;
-import systems.zlink.framework.runtime.internal.handlers.ZLinkSuspendInvocationAdapter;
-import systems.zlink.framework.runtime.internal.channels.ZLinkClientServerRuntimeConfiguration;
-import systems.zlink.framework.runtime.internal.channels.ZLinkFanoutRuntimeConfiguration;
-import systems.zlink.framework.runtime.internal.service.ZLinkClassicFanoutLiveness;
-import systems.zlink.framework.runtime.messaging.ZLinkPayloadEncoding;
-import systems.zlink.framework.runtime.messaging.ZLinkMessagePayloads;
-import systems.zlink.framework.runtime.messaging.ZLinkFrameworkErrorReply;
-import systems.zlink.framework.runtime.messaging.ZLinkApplicationMetadata;
 
 public final class ZLinkChannelRuntime
-    implements ZLinkClient, ZLinkFanoutClient, ZLinkRouteClient, ZLinkChannelRuntimeOptions,
-        AutoCloseable {
+        implements ZLinkClient,
+                ZLinkFanoutClient,
+                ZLinkRouteClient,
+                ZLinkChannelRuntimeOptions,
+                AutoCloseable {
     private static final Logger LOGGER = Logger.getLogger(ZLinkChannelRuntime.class.getName());
     private static final String SPOT_ROUTE_BRIDGE_SEND_PACKET_NAME =
-        "__zlink.routed_spot.egress.send";
+            "__zlink.routed_spot.egress.send";
     private static final String SPOT_ROUTE_BRIDGE_REQUEST_PACKET_NAME =
-        "__zlink.routed_spot.egress.request";
+            "__zlink.routed_spot.egress.request";
     private final ZLinkBackendContext context;
     private final boolean ownsContext;
     private final ZLinkChannelSocketRegistry sockets;
@@ -150,38 +125,37 @@ public final class ZLinkChannelRuntime
     private ZLinkManualFanoutRuntime manualFanoutRuntime;
     private ZLinkClientServerLocationRuntime clientServerLocationRuntime;
     private volatile Supplier<ZLinkFrameworkRuntimeState> hostState =
-        () -> ZLinkFrameworkRuntimeState.SERVING;
+            () -> ZLinkFrameworkRuntimeState.SERVING;
     private final ZLinkClientServerRuntime clientServerRuntime;
     private final ZLinkFanoutRuntime fanoutRuntime;
     private Supplier<ZLinkInternalSpotNode> spotRouteBridgeOwner;
     private volatile Supplier<ZLinkInternalSpotNode> requestSourceMeshOwner;
     private final ScheduledExecutorService spotRouteBridgeDrainLoopExecutor =
-        Executors.newSingleThreadScheduledExecutor(task -> {
-            Thread thread = new Thread(task, "zlink-java-spot-route-bridge-drain");
-            thread.setDaemon(true);
-            return thread;
-        });
+            Executors.newSingleThreadScheduledExecutor(
+                    task -> {
+                        Thread thread = new Thread(task, "zlink-java-spot-route-bridge-drain");
+                        thread.setDaemon(true);
+                        return thread;
+                    });
     private final ScheduledExecutorService timeoutExecutor;
     // Provider/backend work can block without occupying the deadline thread.
     // Each periodic source below owns one admission bit, so this shared
     // virtual-thread lane receives at most one queued or running task from
     // that source regardless of timer frequency.
     private final ExecutorService infrastructureExecutor =
-        Executors.newThreadPerTaskExecutor(Thread.ofVirtual()
-            .name("zlink-java-channel-infrastructure-", 0)
-            .factory());
+            Executors.newThreadPerTaskExecutor(
+                    Thread.ofVirtual().name("zlink-java-channel-infrastructure-", 0).factory());
     private volatile boolean running = true;
 
     public record AutoConnectSurface(
-        ZLinkAutoConnectType type,
-        String meshName,
-        ZLinkLocationRole role,
-        RoutingId nodeRid,
-        String endpoint,
-        int weight,
-        ZLinkBackendConnectableSocket socket,
-        List<String> manualEndpoints) {
-    }
+            ZLinkAutoConnectType type,
+            String meshName,
+            ZLinkLocationRole role,
+            RoutingId nodeRid,
+            String endpoint,
+            int weight,
+            ZLinkBackendConnectableSocket socket,
+            List<String> manualEndpoints) {}
 
     @Override
     public ZLinkClientServerChannelRuntimeOptions clientServerChannel(String channelName) {
@@ -195,24 +169,19 @@ public final class ZLinkChannelRuntime
         return new DefaultRouteMeshChannelRuntimeOptions();
     }
 
-    public ZLinkClientServerRuntime
-        clientServerRuntime() {
+    public ZLinkClientServerRuntime clientServerRuntime() {
         return clientServerRuntime;
     }
 
-    public ZLinkFanoutRuntime
-        fanoutRuntime() {
+    public ZLinkFanoutRuntime fanoutRuntime() {
         return fanoutRuntime;
     }
 
-    public String listenerEndpoint(
-        ZLinkListenerKind kind,
-        String channelName) {
+    public String listenerEndpoint(ZLinkListenerKind kind, String channelName) {
         return sockets.listenerEndpoint(kind, channelName);
     }
 
-    public void setHostStateSupplier(
-        Supplier<ZLinkFrameworkRuntimeState> hostState) {
+    public void setHostStateSupplier(Supplier<ZLinkFrameworkRuntimeState> hostState) {
         this.hostState = Objects.requireNonNull(hostState, "hostState");
     }
 
@@ -225,8 +194,7 @@ public final class ZLinkChannelRuntime
             throw new ZLinkConfigurationException("channel is not configured: " + channelName);
         }
         if (registration.kind() != kind) {
-            throw new ZLinkConfigurationException(
-                "channel has incompatible kind: " + channelName);
+            throw new ZLinkConfigurationException("channel has incompatible kind: " + channelName);
         }
         return registration;
     }
@@ -242,14 +210,14 @@ public final class ZLinkChannelRuntime
         ZLinkBackendRouterSocket socket = sockets.server(channelName);
         if (socket == null) {
             throw new ZLinkConfigurationException(
-                "client/server channel has no server socket: " + channelName);
+                    "client/server channel has no server socket: " + channelName);
         }
         return socket;
     }
 
     int clientServerServerWeight(String channelName) {
         return sockets.clientServerServerWeight(
-            channelName, serverSocket(channelName).peerWeight());
+                channelName, serverSocket(channelName).peerWeight());
     }
 
     void setClientServerServerWeight(String channelName, int value) {
@@ -259,372 +227,377 @@ public final class ZLinkChannelRuntime
 
     static void validatePeerWeight(int value) {
         if (value < 0 || value > 10_000) {
-            throw new ZLinkConfigurationException(
-                "Weight must be in 0..10000.");
+            throw new ZLinkConfigurationException("Weight must be in 0..10000.");
         }
     }
 
     public ZLinkChannelRuntime(
-        ZLinkChannelBackendAdapter backend,
-        ZLinkFrameworkRegistration registration,
-        ZLinkMessageSerializer serializer) {
+            ZLinkChannelBackendAdapter backend,
+            ZLinkFrameworkRegistration registration,
+            ZLinkMessageSerializer serializer) {
         this(backend, registration, serializer, ZLinkHandlerActivator.reflection());
     }
 
     public ZLinkChannelRuntime(
-        ZLinkChannelBackendAdapter backend,
-        ZLinkFrameworkRegistration registration,
-        ZLinkMessageSerializer serializer,
-        ZLinkHandlerActivator handlerFactory) {
+            ZLinkChannelBackendAdapter backend,
+            ZLinkFrameworkRegistration registration,
+            ZLinkMessageSerializer serializer,
+            ZLinkHandlerActivator handlerFactory) {
         this(backend, null, null, registration, serializer, handlerFactory);
     }
 
     public ZLinkChannelRuntime(
-        ZLinkChannelBackendAdapter backend,
-        ZLinkFrameworkRegistration registration,
-        ZLinkMessageSerializer serializer,
-        ZLinkHandlerActivator handlerFactory,
-        BiFunction<
-            ZLinkBackendObject,
-            ZLinkBackendAdmissionKey,
+            ZLinkChannelBackendAdapter backend,
+            ZLinkFrameworkRegistration registration,
+            ZLinkMessageSerializer serializer,
+            ZLinkHandlerActivator handlerFactory,
             BiFunction<
-                Supplier<Boolean>,
-                Runnable,
-                CompletionStage<Void>>> admission) {
+                            ZLinkBackendObject,
+                            ZLinkBackendAdmissionKey,
+                            BiFunction<Supplier<Boolean>, Runnable, CompletionStage<Void>>>
+                    admission) {
         this(
-            backend,
-            backend.createContext(),
-            true,
-            null,
-            null,
-            registration,
-            serializer,
-            handlerFactory,
-            null,
-            admission);
+                backend,
+                backend.createContext(),
+                true,
+                null,
+                null,
+                registration,
+                serializer,
+                handlerFactory,
+                null,
+                admission);
     }
 
     public ZLinkChannelRuntime(
-        ZLinkChannelBackendAdapter backend,
-        ZLinkBackendAdapterProvider backendFactory,
-        ZLinkBackendAdapterOptions adapterOptions,
-        ZLinkFrameworkRegistration registration,
-        ZLinkMessageSerializer serializer,
-        ZLinkHandlerActivator handlerFactory) {
+            ZLinkChannelBackendAdapter backend,
+            ZLinkBackendAdapterProvider backendFactory,
+            ZLinkBackendAdapterOptions adapterOptions,
+            ZLinkFrameworkRegistration registration,
+            ZLinkMessageSerializer serializer,
+            ZLinkHandlerActivator handlerFactory) {
         this(
-            backend,
-            backend.createContext(),
-            true,
-            backendFactory,
-            adapterOptions,
-            registration,
-            serializer,
-            handlerFactory,
-            null);
+                backend,
+                backend.createContext(),
+                true,
+                backendFactory,
+                adapterOptions,
+                registration,
+                serializer,
+                handlerFactory,
+                null);
     }
 
     public ZLinkChannelRuntime(
-        ZLinkChannelBackendAdapter backend,
-        ZLinkBackendContext context,
-        ZLinkBackendAdapterProvider backendFactory,
-        ZLinkBackendAdapterOptions adapterOptions,
-        ZLinkFrameworkRegistration registration,
-        ZLinkMessageSerializer serializer,
-        ZLinkHandlerActivator handlerFactory) {
+            ZLinkChannelBackendAdapter backend,
+            ZLinkBackendContext context,
+            ZLinkBackendAdapterProvider backendFactory,
+            ZLinkBackendAdapterOptions adapterOptions,
+            ZLinkFrameworkRegistration registration,
+            ZLinkMessageSerializer serializer,
+            ZLinkHandlerActivator handlerFactory) {
         this(
-            backend,
-            context,
-            false,
-            backendFactory,
-            adapterOptions,
-            registration,
-            serializer,
-            handlerFactory,
-            null);
+                backend,
+                context,
+                false,
+                backendFactory,
+                adapterOptions,
+                registration,
+                serializer,
+                handlerFactory,
+                null);
     }
 
     public ZLinkChannelRuntime(
-        ZLinkChannelBackendAdapter backend,
-        ZLinkBackendContext context,
-        ZLinkBackendAdapterProvider backendFactory,
-        ZLinkBackendAdapterOptions adapterOptions,
-        ZLinkFrameworkRegistration registration,
-        ZLinkMessageSerializer serializer,
-        ZLinkHandlerActivator handlerFactory,
-        ZLinkRuntimeEventDispatcher eventDispatcher) {
+            ZLinkChannelBackendAdapter backend,
+            ZLinkBackendContext context,
+            ZLinkBackendAdapterProvider backendFactory,
+            ZLinkBackendAdapterOptions adapterOptions,
+            ZLinkFrameworkRegistration registration,
+            ZLinkMessageSerializer serializer,
+            ZLinkHandlerActivator handlerFactory,
+            ZLinkRuntimeEventDispatcher eventDispatcher) {
         this(
-            backend,
-            context,
-            false,
-            backendFactory,
-            adapterOptions,
-            registration,
-            serializer,
-            handlerFactory,
-            eventDispatcher,
-            (ignoredBackend, ignoredKey) -> (ignoredSubmission, ignoredCleanup) ->
-                CompletableFuture.failedFuture(new IllegalStateException(
-                    "one-way admission factory is required")));
+                backend,
+                context,
+                false,
+                backendFactory,
+                adapterOptions,
+                registration,
+                serializer,
+                handlerFactory,
+                eventDispatcher,
+                (ignoredBackend, ignoredKey) ->
+                        (ignoredSubmission, ignoredCleanup) ->
+                                CompletableFuture.failedFuture(
+                                        new IllegalStateException(
+                                                "one-way admission factory is required")));
     }
 
     public ZLinkChannelRuntime(
-        ZLinkChannelBackendAdapter backend,
-        ZLinkBackendContext context,
-        ZLinkBackendAdapterProvider backendFactory,
-        ZLinkBackendAdapterOptions adapterOptions,
-        ZLinkFrameworkRegistration registration,
-        ZLinkMessageSerializer serializer,
-        ZLinkHandlerActivator handlerFactory,
-        ZLinkRuntimeEventDispatcher eventDispatcher,
-        BiFunction<
-            ZLinkBackendObject,
-            ZLinkBackendAdmissionKey,
+            ZLinkChannelBackendAdapter backend,
+            ZLinkBackendContext context,
+            ZLinkBackendAdapterProvider backendFactory,
+            ZLinkBackendAdapterOptions adapterOptions,
+            ZLinkFrameworkRegistration registration,
+            ZLinkMessageSerializer serializer,
+            ZLinkHandlerActivator handlerFactory,
+            ZLinkRuntimeEventDispatcher eventDispatcher,
             BiFunction<
-                Supplier<Boolean>,
-                Runnable,
-                CompletionStage<Void>>> admission) {
+                            ZLinkBackendObject,
+                            ZLinkBackendAdmissionKey,
+                            BiFunction<Supplier<Boolean>, Runnable, CompletionStage<Void>>>
+                    admission) {
         this(
-            backend,
-            context,
-            false,
-            backendFactory,
-            adapterOptions,
-            registration,
-            serializer,
-            handlerFactory,
-            eventDispatcher,
-            admission);
+                backend,
+                context,
+                false,
+                backendFactory,
+                adapterOptions,
+                registration,
+                serializer,
+                handlerFactory,
+                eventDispatcher,
+                admission);
     }
 
     private ZLinkChannelRuntime(
-        ZLinkChannelBackendAdapter backend,
-        ZLinkBackendContext context,
-        boolean ownsContext,
-        ZLinkBackendAdapterProvider backendFactory,
-        ZLinkBackendAdapterOptions adapterOptions,
-        ZLinkFrameworkRegistration registration,
-        ZLinkMessageSerializer serializer,
-        ZLinkHandlerActivator handlerFactory,
-        ZLinkRuntimeEventDispatcher eventDispatcher) {
+            ZLinkChannelBackendAdapter backend,
+            ZLinkBackendContext context,
+            boolean ownsContext,
+            ZLinkBackendAdapterProvider backendFactory,
+            ZLinkBackendAdapterOptions adapterOptions,
+            ZLinkFrameworkRegistration registration,
+            ZLinkMessageSerializer serializer,
+            ZLinkHandlerActivator handlerFactory,
+            ZLinkRuntimeEventDispatcher eventDispatcher) {
         this(
-            backend,
-            context,
-            ownsContext,
-            backendFactory,
-            adapterOptions,
-            registration,
-            serializer,
-            handlerFactory,
-            eventDispatcher,
-            (ignoredBackend, ignoredKey) -> (ignoredSubmission, ignoredCleanup) ->
-                CompletableFuture.failedFuture(new IllegalStateException(
-                    "one-way admission factory is required")));
+                backend,
+                context,
+                ownsContext,
+                backendFactory,
+                adapterOptions,
+                registration,
+                serializer,
+                handlerFactory,
+                eventDispatcher,
+                (ignoredBackend, ignoredKey) ->
+                        (ignoredSubmission, ignoredCleanup) ->
+                                CompletableFuture.failedFuture(
+                                        new IllegalStateException(
+                                                "one-way admission factory is required")));
     }
 
     private ZLinkChannelRuntime(
-        ZLinkChannelBackendAdapter backend,
-        ZLinkBackendContext context,
-        boolean ownsContext,
-        ZLinkBackendAdapterProvider backendFactory,
-        ZLinkBackendAdapterOptions adapterOptions,
-        ZLinkFrameworkRegistration registration,
-        ZLinkMessageSerializer serializer,
-        ZLinkHandlerActivator handlerFactory,
-        ZLinkRuntimeEventDispatcher eventDispatcher,
-        BiFunction<
-            ZLinkBackendObject,
-            ZLinkBackendAdmissionKey,
+            ZLinkChannelBackendAdapter backend,
+            ZLinkBackendContext context,
+            boolean ownsContext,
+            ZLinkBackendAdapterProvider backendFactory,
+            ZLinkBackendAdapterOptions adapterOptions,
+            ZLinkFrameworkRegistration registration,
+            ZLinkMessageSerializer serializer,
+            ZLinkHandlerActivator handlerFactory,
+            ZLinkRuntimeEventDispatcher eventDispatcher,
             BiFunction<
-                Supplier<Boolean>,
-                Runnable,
-                CompletionStage<Void>>> admission) {
-        this(backend, context, ownsContext, backendFactory, adapterOptions,
-            registration, serializer, handlerFactory, eventDispatcher, admission,
-            System::nanoTime, java.util.concurrent.locks.LockSupport::parkNanos,
-            Executors.newSingleThreadScheduledExecutor(task -> {
-                Thread thread = new Thread(task, "zlink-java-channel-timeout");
-                thread.setDaemon(true);
-                return thread;
-            }));
+                            ZLinkBackendObject,
+                            ZLinkBackendAdmissionKey,
+                            BiFunction<Supplier<Boolean>, Runnable, CompletionStage<Void>>>
+                    admission) {
+        this(
+                backend,
+                context,
+                ownsContext,
+                backendFactory,
+                adapterOptions,
+                registration,
+                serializer,
+                handlerFactory,
+                eventDispatcher,
+                admission,
+                System::nanoTime,
+                java.util.concurrent.locks.LockSupport::parkNanos,
+                Executors.newSingleThreadScheduledExecutor(
+                        task -> {
+                            Thread thread = new Thread(task, "zlink-java-channel-timeout");
+                            thread.setDaemon(true);
+                            return thread;
+                        }));
     }
 
     ZLinkChannelRuntime(
-        ZLinkChannelBackendAdapter backend,
-        ZLinkBackendContext context,
-        boolean ownsContext,
-        ZLinkBackendAdapterProvider backendFactory,
-        ZLinkBackendAdapterOptions adapterOptions,
-        ZLinkFrameworkRegistration registration,
-        ZLinkMessageSerializer serializer,
-        ZLinkHandlerActivator handlerFactory,
-        ZLinkRuntimeEventDispatcher eventDispatcher,
-        BiFunction<
-            ZLinkBackendObject,
-            ZLinkBackendAdmissionKey,
+            ZLinkChannelBackendAdapter backend,
+            ZLinkBackendContext context,
+            boolean ownsContext,
+            ZLinkBackendAdapterProvider backendFactory,
+            ZLinkBackendAdapterOptions adapterOptions,
+            ZLinkFrameworkRegistration registration,
+            ZLinkMessageSerializer serializer,
+            ZLinkHandlerActivator handlerFactory,
+            ZLinkRuntimeEventDispatcher eventDispatcher,
             BiFunction<
-                Supplier<Boolean>,
-                Runnable,
-                CompletionStage<Void>>> admission,
-        LongSupplier nanoTime,
-        LongConsumer parkNanos,
-        ScheduledExecutorService timeoutExecutor) {
+                            ZLinkBackendObject,
+                            ZLinkBackendAdmissionKey,
+                            BiFunction<Supplier<Boolean>, Runnable, CompletionStage<Void>>>
+                    admission,
+            LongSupplier nanoTime,
+            LongConsumer parkNanos,
+            ScheduledExecutorService timeoutExecutor) {
         this.timeoutExecutor = timeoutExecutor;
-        this.sockets = new ZLinkChannelSocketRegistry(
-            registration.applicationJobQueue(), nanoTime, parkNanos);
-        this.clientServerRuntime = new ZLinkClientServerRuntimeView(
-            sockets,
-            () -> hostState.get());
-        this.fanoutRuntime = new ZLinkFanoutRuntimeView(
-            sockets,
-            () -> fanoutLocationRuntime,
-            () -> manualFanoutRuntime,
-            () -> hostState.get());
+        this.sockets =
+                new ZLinkChannelSocketRegistry(
+                        registration.applicationJobQueue(), nanoTime, parkNanos);
+        this.clientServerRuntime = new ZLinkClientServerRuntimeView(sockets, () -> hostState.get());
+        this.fanoutRuntime =
+                new ZLinkFanoutRuntimeView(
+                        sockets,
+                        () -> fanoutLocationRuntime,
+                        () -> manualFanoutRuntime,
+                        () -> hostState.get());
         this.serializer = Objects.requireNonNull(serializer, "serializer");
         this.replyDecoder = new ZLinkChannelReplyDecoder(this.serializer);
         this.codecs = Objects.requireNonNull(registration.codecs(), "codecs");
         this.handlerFactory = Objects.requireNonNull(handlerFactory, "handlerFactory");
         this.spotAddressResolver = resolveSpotAddressResolver(this.handlerFactory);
-        this.handlerExecutor = ZLinkFlowContext
-            .propagating(Objects.requireNonNull(registration.handlerExecutor(), "handlerExecutor"));
-        this.dispatchRegistry = new ZLinkChannelDispatchRegistry(
-            registration.serialExecutor());
+        this.handlerExecutor =
+                ZLinkFlowContext.propagating(
+                        Objects.requireNonNull(registration.handlerExecutor(), "handlerExecutor"));
+        this.dispatchRegistry = new ZLinkChannelDispatchRegistry(registration.serialExecutor());
         this.suspendHandlerInvokers = registration.suspendHandlerInvokers();
         this.filterTypes = List.copyOf(registration.filters());
-        this.channelHandlerInvoker = new ZLinkChannelHandlerInvoker(
-            this.serializer,
-            codecs,
-            this.handlerFactory,
-            this.handlerExecutor,
-            suspendHandlerInvokers,
-            filterTypes);
-        this.receiveLoops = new ZLinkChannelReceiveLoops(
-            () -> running,
-            registration.applicationJobQueue());
+        this.channelHandlerInvoker =
+                new ZLinkChannelHandlerInvoker(
+                        this.serializer,
+                        codecs,
+                        this.handlerFactory,
+                        this.handlerExecutor,
+                        suspendHandlerInvokers,
+                        filterTypes);
+        this.receiveLoops =
+                new ZLinkChannelReceiveLoops(() -> running, registration.applicationJobQueue());
         this.defaultRequestTimeout = registration.defaultRequestTimeout();
-        this.spotRouteBridgeDrainer = new ZLinkSpotRouteBridgeDrainer(
-            sockets.spotRouteBridges(),
-            spotRouteBridgeDrainLoopExecutor,
-            () -> running,
-            this::reportSpotRouteBridgeDrainFailure);
+        this.spotRouteBridgeDrainer =
+                new ZLinkSpotRouteBridgeDrainer(
+                        sockets.spotRouteBridges(),
+                        spotRouteBridgeDrainLoopExecutor,
+                        () -> running,
+                        this::reportSpotRouteBridgeDrainFailure);
         this.backendFactory = backendFactory;
         this.adapterOptions = adapterOptions;
         this.channelBackend = Objects.requireNonNull(backend, "backend");
-        this.dispatchErrors = new ZLinkDispatchErrorReporter(
-            registration.dispatchOptions(),
-            handlerFactory,
-            this.handlerExecutor,
-            eventDispatcher);
-        this.callRuntime = new ZLinkChannelCallRuntime(
-            dispatchErrors.flow(),
-            timeoutExecutor,
-            replyDecoder,
-            this::sendToSpotViaRouterChannel,
-            this::requestToSpotViaRouterChannel,
-            nanoTime);
+        this.dispatchErrors =
+                new ZLinkDispatchErrorReporter(
+                        registration.dispatchOptions(),
+                        handlerFactory,
+                        this.handlerExecutor,
+                        eventDispatcher);
+        this.callRuntime =
+                new ZLinkChannelCallRuntime(
+                        dispatchErrors.flow(),
+                        timeoutExecutor,
+                        replyDecoder,
+                        this::sendToSpotViaRouterChannel,
+                        this::requestToSpotViaRouterChannel,
+                        nanoTime);
         this.dispatchReporter = new ZLinkChannelDispatchReporter(dispatchErrors);
-        this.messageDispatcher = new ZLinkChannelMessageDispatcher(
-            dispatchRegistry,
-            channelHandlerInvoker,
-            dispatchReporter,
-            dispatchErrors.flow());
-        this.routeDispatcher = new ZLinkChannelRouteDispatcher(
-            sockets,
-            dispatchRegistry,
-            channelHandlerInvoker,
-            dispatchReporter,
-            dispatchErrors.flow(),
-            spotRouteBridgeDrainer,
-            this::resolveSpotRouteBridgeForDispatch);
+        this.messageDispatcher =
+                new ZLinkChannelMessageDispatcher(
+                        dispatchRegistry,
+                        channelHandlerInvoker,
+                        dispatchReporter,
+                        dispatchErrors.flow());
+        this.routeDispatcher =
+                new ZLinkChannelRouteDispatcher(
+                        sockets,
+                        dispatchRegistry,
+                        channelHandlerInvoker,
+                        dispatchReporter,
+                        dispatchErrors.flow(),
+                        spotRouteBridgeDrainer,
+                        this::resolveSpotRouteBridgeForDispatch);
         this.context = Objects.requireNonNull(context, "context");
         this.ownsContext = ownsContext;
         this.clientServerMonitoringBackend =
-            tryCreateClientServerMonitoringBackend(
-                backendFactory,
-                adapterOptions,
-                registration.channels());
+                tryCreateClientServerMonitoringBackend(
+                        backendFactory, adapterOptions, registration.channels());
         this.fanoutMonitoringBackend =
-            tryCreateFanoutMonitoringBackend(
-                backendFactory,
-                adapterOptions,
-                registration.channels());
-        this.fanoutApplicationTopics = registration.channels().stream()
-            .filter(channel -> channel.kind() == ChannelKind.FANOUT)
-            .collect(Collectors.toUnmodifiableMap(
-                ChannelRegistration::name,
-                ChannelRegistration::fanoutApplicationTopics));
+                tryCreateFanoutMonitoringBackend(
+                        backendFactory, adapterOptions, registration.channels());
+        this.fanoutApplicationTopics =
+                registration.channels().stream()
+                        .filter(channel -> channel.kind() == ChannelKind.FANOUT)
+                        .collect(
+                                Collectors.toUnmodifiableMap(
+                                        ChannelRegistration::name,
+                                        ChannelRegistration::fanoutApplicationTopics));
         ZLinkScannedHandlerCatalog handlerCatalog =
-            ZLinkHandlerScanner.scan(registration.handlerPackageMarkers());
-        ZLinkChannelHandlerCatalog channelHandlers =
-            new ZLinkChannelHandlerCatalog(handlerCatalog);
-        ZLinkChannelRuntimeConfigurator configurator = new ZLinkChannelRuntimeConfigurator(
-            backend,
-            this.context,
-            sockets,
-            dispatchRegistry,
-            channelHandlers,
-            this::startRequestLoop,
-            this::startRouteLoop,
-            this::startSubscribeLoop,
-            clientServerMonitoringBackend != null);
+                ZLinkHandlerScanner.scan(registration.handlerPackageMarkers());
+        ZLinkChannelHandlerCatalog channelHandlers = new ZLinkChannelHandlerCatalog(handlerCatalog);
+        ZLinkChannelRuntimeConfigurator configurator =
+                new ZLinkChannelRuntimeConfigurator(
+                        backend,
+                        this.context,
+                        sockets,
+                        dispatchRegistry,
+                        channelHandlers,
+                        this::startRequestLoop,
+                        this::startRouteLoop,
+                        this::startSubscribeLoop,
+                        clientServerMonitoringBackend != null);
         for (ChannelRegistration channel : registration.channels()) {
             sockets.registerChannel(channel);
             configurator.configure(channel);
         }
-        if (backendFactory == null
-            || clientServerMonitoringBackend == null) {
+        if (backendFactory == null || clientServerMonitoringBackend == null) {
             sockets.enableUnmanagedBackendClientMode();
             for (ChannelRegistration channel : registration.channels()) {
-                ZLinkBackendDealerSocket client =
-                    sockets.client(channel.name());
+                ZLinkBackendDealerSocket client = sockets.client(channel.name());
                 if (client != null) {
                     channel.clientConnections().attach(client);
                 }
             }
         }
         if (backendFactory != null) {
-            sockets.initializeClientServerServerDescriptors(
-                "runtime-" + UUID.randomUUID());
+            sockets.initializeClientServerServerDescriptors("runtime-" + UUID.randomUUID());
             if (clientServerMonitoringBackend != null) {
-                attachManualClientServerAdmissions(
-                    registration.channels());
+                attachManualClientServerAdmissions(registration.channels());
             }
-            attachProcessLocalClientServerAdmissions(
-                registration.channels());
+            attachProcessLocalClientServerAdmissions(registration.channels());
             scheduleInfrastructureAtFixedRate(
-                () -> sockets.tickClientServerLiveness(System.nanoTime()),
-                100,
-                100,
-                TimeUnit.MILLISECONDS);
+                    () -> sockets.tickClientServerLiveness(System.nanoTime()),
+                    100,
+                    100,
+                    TimeUnit.MILLISECONDS);
         }
         installClientServerLocationRuntime(handlerFactory);
         installManualFanoutRuntime(registration.channels());
         installFanoutLocationRuntime(handlerFactory);
-        List<String> fanoutPublishers = registration.channels().stream()
-            .filter(channel -> channel.kind() == ChannelKind.FANOUT
-                && channel.publisherEnabled())
-            .map(ChannelRegistration::name)
-            .toList();
+        List<String> fanoutPublishers =
+                registration.channels().stream()
+                        .filter(
+                                channel ->
+                                        channel.kind() == ChannelKind.FANOUT
+                                                && channel.publisherEnabled())
+                        .map(ChannelRegistration::name)
+                        .toList();
         if (!fanoutPublishers.isEmpty()) {
             scheduleInfrastructureAtFixedRate(
-                () -> publishFanoutBeacons(fanoutPublishers),
-                0,
-                ZLinkClassicFanoutLiveness.DEFAULT_BEACON_INTERVAL.toMillis(),
-                TimeUnit.MILLISECONDS);
+                    () -> publishFanoutBeacons(fanoutPublishers),
+                    0,
+                    ZLinkClassicFanoutLiveness.DEFAULT_BEACON_INTERVAL.toMillis(),
+                    TimeUnit.MILLISECONDS);
         }
     }
-
 
     public List<AutoConnectSurface> autoConnectSurfaces() {
         return sockets.autoConnectSurfaces();
     }
 
-    private void installClientServerLocationRuntime(
-        ZLinkHandlerActivator activator) {
+    private void installClientServerLocationRuntime(ZLinkHandlerActivator activator) {
         ZLinkClientServerRuntimeConfiguration configuration;
         try {
-            configuration = (ZLinkClientServerRuntimeConfiguration)
-                activator.create(
-                    ZLinkClientServerRuntimeConfiguration.class);
+            configuration =
+                    (ZLinkClientServerRuntimeConfiguration)
+                            activator.create(ZLinkClientServerRuntimeConfiguration.class);
         } catch (RuntimeException unavailable) {
             return;
         }
@@ -633,165 +606,168 @@ public final class ZLinkChannelRuntime
         }
         if (backendFactory == null || adapterOptions == null) {
             throw new ZLinkConfigurationException(
-                "automatic ClientServer discovery requires a backend provider");
+                    "automatic ClientServer discovery requires a backend provider");
         }
         ZLinkClientServerLocationRuntime runtime =
-            new ZLinkClientServerLocationRuntime(
-                configuration.store(),
-                configuration.owner(),
-                backendFactory,
-                context,
-                adapterOptions,
-                sockets,
-                timeoutExecutor,
-                infrastructureExecutor,
-                configuration.options().pollingInterval(),
-                1000);
+                new ZLinkClientServerLocationRuntime(
+                        configuration.store(),
+                        configuration.owner(),
+                        backendFactory,
+                        context,
+                        adapterOptions,
+                        sockets,
+                        timeoutExecutor,
+                        infrastructureExecutor,
+                        configuration.options().pollingInterval(),
+                        1000);
         clientServerLocationRuntime = runtime;
         List<AutoConnectSurface> surfaces = autoConnectSurfaces();
         configuration.install(
-            new ZLinkClientServerRuntimeConfiguration.Lifecycle() {
-                @Override
-                public CompletionStage<Void> start() {
-                    return runtime.start(surfaces);
-                }
+                new ZLinkClientServerRuntimeConfiguration.Lifecycle() {
+                    @Override
+                    public CompletionStage<Void> start() {
+                        return runtime.start(surfaces);
+                    }
 
-                @Override
-                public CompletionStage<Void> markDraining() {
-                    return runtime.markDraining();
-                }
+                    @Override
+                    public CompletionStage<Void> markDraining() {
+                        return runtime.markDraining();
+                    }
 
-                @Override
-                public CompletionStage<Void> stop() {
-                    return runtime.stop();
-                }
-            });
+                    @Override
+                    public CompletionStage<Void> stop() {
+                        return runtime.stop();
+                    }
+                });
     }
 
-    private static ZLinkMonitoringBackendAdapter
-        tryCreateClientServerMonitoringBackend(
+    private static ZLinkMonitoringBackendAdapter tryCreateClientServerMonitoringBackend(
             ZLinkBackendAdapterProvider backendFactory,
             ZLinkBackendAdapterOptions adapterOptions,
             List<ChannelRegistration> registrations) {
         if (backendFactory == null
-            || registrations.stream().noneMatch(
-                channel -> channel.kind() == ChannelKind.CLIENT_SERVER
-                    && channel.clientEnabled())) {
+                || registrations.stream()
+                        .noneMatch(
+                                channel ->
+                                        channel.kind() == ChannelKind.CLIENT_SERVER
+                                                && channel.clientEnabled())) {
             return null;
         }
         try {
-            return backendFactory.createMonitoringAdapter(
-                adapterOptions);
+            return backendFactory.createMonitoringAdapter(adapterOptions);
         } catch (UnsupportedOperationException unavailable) {
             return null;
         }
     }
 
-    private void installFanoutLocationRuntime(
-        ZLinkHandlerActivator activator) {
+    private void installFanoutLocationRuntime(ZLinkHandlerActivator activator) {
         ZLinkFanoutRuntimeConfiguration configuration;
         try {
-            configuration = (ZLinkFanoutRuntimeConfiguration)
-                activator.create(ZLinkFanoutRuntimeConfiguration.class);
+            configuration =
+                    (ZLinkFanoutRuntimeConfiguration)
+                            activator.create(ZLinkFanoutRuntimeConfiguration.class);
         } catch (RuntimeException unavailable) {
             return;
         }
         if (configuration == null || configuration.store() == null) {
             return;
         }
-        boolean hasAutomaticSubscriber = autoConnectSurfaces().stream()
-            .anyMatch(surface ->
-                surface.type() == ZLinkAutoConnectType.FANOUT
-                    && surface.role() == ZLinkLocationRole.SUB);
+        boolean hasAutomaticSubscriber =
+                autoConnectSurfaces().stream()
+                        .anyMatch(
+                                surface ->
+                                        surface.type() == ZLinkAutoConnectType.FANOUT
+                                                && surface.role() == ZLinkLocationRole.SUB);
         if (hasAutomaticSubscriber
-            && (backendFactory == null
-                || adapterOptions == null
-                || fanoutMonitoringBackend == null)) {
+                && (backendFactory == null
+                        || adapterOptions == null
+                        || fanoutMonitoringBackend == null)) {
             throw new ZLinkConfigurationException(
-                "automatic classic fanout discovery requires "
-                    + "a monitoring backend");
+                    "automatic classic fanout discovery requires " + "a monitoring backend");
         }
         ZLinkMonitoringBackendAdapter monitoring =
-            fanoutMonitoringBackend == null
-                ? socket -> {
-                    throw new UnsupportedOperationException(
-                        "fanout subscriber monitoring is unavailable");
-                }
-                : fanoutMonitoringBackend;
+                fanoutMonitoringBackend == null
+                        ? socket -> {
+                            throw new UnsupportedOperationException(
+                                    "fanout subscriber monitoring is unavailable");
+                        }
+                        : fanoutMonitoringBackend;
         ZLinkFanoutLocationRuntime runtime =
-            new ZLinkFanoutLocationRuntime(
-                configuration.store(),
-                configuration.owner(),
-                channelBackend,
-                monitoring,
-                context,
-                sockets,
-                timeoutExecutor,
-                infrastructureExecutor,
-                configuration.options().pollingInterval(),
-                1000,
-                messageDispatcher::dispatchPublish,
-                fanoutApplicationTopics);
+                new ZLinkFanoutLocationRuntime(
+                        configuration.store(),
+                        configuration.owner(),
+                        channelBackend,
+                        monitoring,
+                        context,
+                        sockets,
+                        timeoutExecutor,
+                        infrastructureExecutor,
+                        configuration.options().pollingInterval(),
+                        1000,
+                        messageDispatcher::dispatchPublish,
+                        fanoutApplicationTopics);
         fanoutLocationRuntime = runtime;
         List<AutoConnectSurface> surfaces = autoConnectSurfaces();
         configuration.install(
-            new ZLinkFanoutRuntimeConfiguration.Lifecycle() {
-                @Override
-                public CompletionStage<Void> start() {
-                    return runtime.start(surfaces);
-                }
+                new ZLinkFanoutRuntimeConfiguration.Lifecycle() {
+                    @Override
+                    public CompletionStage<Void> start() {
+                        return runtime.start(surfaces);
+                    }
 
-                @Override
-                public CompletionStage<Void> markDraining() {
-                    return runtime.markDraining();
-                }
+                    @Override
+                    public CompletionStage<Void> markDraining() {
+                        return runtime.markDraining();
+                    }
 
-                @Override
-                public CompletionStage<Void> stop() {
-                    return runtime.stop();
-                }
-            });
+                    @Override
+                    public CompletionStage<Void> stop() {
+                        return runtime.stop();
+                    }
+                });
     }
 
-    private static ZLinkMonitoringBackendAdapter
-        tryCreateFanoutMonitoringBackend(
+    private static ZLinkMonitoringBackendAdapter tryCreateFanoutMonitoringBackend(
             ZLinkBackendAdapterProvider backendFactory,
             ZLinkBackendAdapterOptions adapterOptions,
             List<ChannelRegistration> registrations) {
         if (backendFactory == null
-            || registrations.stream().noneMatch(
-                channel -> channel.kind() == ChannelKind.FANOUT
-                    && channel.subscriberEnabled())) {
+                || registrations.stream()
+                        .noneMatch(
+                                channel ->
+                                        channel.kind() == ChannelKind.FANOUT
+                                                && channel.subscriberEnabled())) {
             return null;
         }
         try {
-            return backendFactory.createMonitoringAdapter(
-                adapterOptions);
+            return backendFactory.createMonitoringAdapter(adapterOptions);
         } catch (UnsupportedOperationException unavailable) {
             return null;
         }
     }
 
-    private void installManualFanoutRuntime(
-        List<ChannelRegistration> registrations) {
-        List<ChannelRegistration> manualChannels = registrations.stream()
-            .filter(channel -> channel.kind() == ChannelKind.FANOUT
-                && channel.subscriberEnabled()
-                && !channel.automaticSubscriberEnabled())
-            .toList();
+    private void installManualFanoutRuntime(List<ChannelRegistration> registrations) {
+        List<ChannelRegistration> manualChannels =
+                registrations.stream()
+                        .filter(
+                                channel ->
+                                        channel.kind() == ChannelKind.FANOUT
+                                                && channel.subscriberEnabled()
+                                                && !channel.automaticSubscriberEnabled())
+                        .toList();
         if (manualChannels.isEmpty()) return;
-        ZLinkManualFanoutRuntime runtime = new ZLinkManualFanoutRuntime(
-            channelBackend,
-            fanoutMonitoringBackend,
-            context,
-            timeoutExecutor,
-            infrastructureExecutor,
-            messageDispatcher::dispatchPublish,
-            fanoutApplicationTopics);
+        ZLinkManualFanoutRuntime runtime =
+                new ZLinkManualFanoutRuntime(
+                        channelBackend,
+                        fanoutMonitoringBackend,
+                        context,
+                        timeoutExecutor,
+                        infrastructureExecutor,
+                        messageDispatcher::dispatchPublish,
+                        fanoutApplicationTopics);
         manualFanoutRuntime = runtime;
         for (ChannelRegistration channel : manualChannels) {
-            channel.subscriberConnections().attach(
-                runtime.connections(channel.name()));
+            channel.subscriberConnections().attach(runtime.connections(channel.name()));
         }
         runtime.start();
     }
@@ -805,119 +781,105 @@ public final class ZLinkChannelRuntime
             try (Message payload = Message.from(record.get(1))) {
                 publisher.publish(topic, List.of(payload), SendFlags.DONT_WAIT);
             } catch (RuntimeException failure) {
-                LOGGER.log(Level.WARNING,
-                    "classic fanout liveness beacon publish failed for "
-                        + channelName,
-                    failure);
+                LOGGER.log(
+                        Level.WARNING,
+                        "classic fanout liveness beacon publish failed for " + channelName,
+                        failure);
             }
         }
     }
 
-    private void attachManualClientServerAdmissions(
-        List<ChannelRegistration> registrations) {
+    private void attachManualClientServerAdmissions(List<ChannelRegistration> registrations) {
         for (ChannelRegistration registration : registrations) {
-            if (registration.kind() != ChannelKind.CLIENT_SERVER
-                || !registration.clientEnabled()) {
+            if (registration.kind() != ChannelKind.CLIENT_SERVER || !registration.clientEnabled()) {
                 continue;
             }
             String channelName = registration.name();
-            registration.clientConnections().attach(
-                new ZLinkBackendConnectableSocket() {
-                    @Override
-                    public String name() {
-                        return "clientServerAdmissionController";
-                    }
+            registration
+                    .clientConnections()
+                    .attach(
+                            new ZLinkBackendConnectableSocket() {
+                                @Override
+                                public String name() {
+                                    return "clientServerAdmissionController";
+                                }
 
-                    @Override
-                    public void bind(String endpoint) {
-                        throw new UnsupportedOperationException(
-                            "ClientServer client controller cannot bind");
-                    }
+                                @Override
+                                public void bind(String endpoint) {
+                                    throw new UnsupportedOperationException(
+                                            "ClientServer client controller cannot bind");
+                                }
 
-                    @Override
-                    public void connect(String endpoint) {
-                        openManualClientServerConnection(
-                            channelName, endpoint);
-                    }
+                                @Override
+                                public void connect(String endpoint) {
+                                    openManualClientServerConnection(channelName, endpoint);
+                                }
 
-                    @Override
-                    public void disconnect(String endpoint) {
-                        String connectionId =
-                            manualConnectionId(channelName, endpoint);
-                        sockets.removeClientServerConnection(connectionId);
-                    }
+                                @Override
+                                public void disconnect(String endpoint) {
+                                    String connectionId = manualConnectionId(channelName, endpoint);
+                                    sockets.removeClientServerConnection(connectionId);
+                                }
 
-                    @Override
-                    public void close() {
-                    }
-                });
+                                @Override
+                                public void close() {}
+                            });
         }
     }
 
-    private void attachProcessLocalClientServerAdmissions(
-        List<ChannelRegistration> registrations) {
+    private void attachProcessLocalClientServerAdmissions(List<ChannelRegistration> registrations) {
         for (ChannelRegistration registration : registrations) {
             if (registration.kind() != ChannelKind.CLIENT_SERVER
-                || !registration.clientEnabled()
-                || registration.serverBinds().isEmpty()) {
+                    || !registration.clientEnabled()
+                    || registration.serverBinds().isEmpty()) {
                 continue;
             }
             ZLinkClientServerServerDescriptor local =
-                sockets.clientServerServerDescriptor(registration.name());
+                    sockets.clientServerServerDescriptor(registration.name());
             if (local != null) {
                 // Local selection still traverses DEALER -> ROUTER admission.
-                openManualClientServerConnection(
-                    registration.name(), local.endpoint());
+                openManualClientServerConnection(registration.name(), local.endpoint());
             }
         }
     }
 
-    private void openManualClientServerConnection(
-        String channelName,
-        String endpoint) {
-        String connectionId =
-            manualConnectionId(channelName, endpoint);
-        ZLinkBackendDealerSocket dealer =
-            channelBackend.createDealerSocket(context);
+    private void openManualClientServerConnection(String channelName, String endpoint) {
+        String connectionId = manualConnectionId(channelName, endpoint);
+        ZLinkBackendDealerSocket dealer = channelBackend.createDealerSocket(context);
         dealer.setChannelName(channelName);
         ZLinkClientServerServerDescriptor pending =
-            new ZLinkClientServerServerDescriptor(
-                channelName,
-                RoutingId.from(UUID.randomUUID()),
-                1,
-                1,
-                endpoint,
-                0,
-                ZLinkFrameworkRuntimeState.PREPARING,
-                "default",
-                "manual",
-                1,
-                Instant.EPOCH);
+                new ZLinkClientServerServerDescriptor(
+                        channelName,
+                        RoutingId.from(UUID.randomUUID()),
+                        1,
+                        1,
+                        endpoint,
+                        0,
+                        ZLinkFrameworkRuntimeState.PREPARING,
+                        "default",
+                        "manual",
+                        1,
+                        Instant.EPOCH);
         try {
-            sockets.addClientServerConnection(
-                connectionId, pending, dealer);
+            sockets.addClientServerConnection(connectionId, pending, dealer);
             ZLinkBackendSocketMonitor monitor =
-                clientServerMonitoringBackend.openSocketMonitor(dealer);
+                    clientServerMonitoringBackend.openSocketMonitor(dealer);
             sockets.registerClientServerMonitor(connectionId, monitor);
             ZLinkSocketMonitorDrainLoop.start(
-                "zlink-client-server-monitor", monitor, event -> {
-                if (isConnectionReady(event.event())) {
-                    ZLinkChannelSocketRegistry.AdmissionFence fence =
-                        sockets.clientServerTransportReady(
-                            connectionId, dealer);
-                    if (fence != null) {
-                        requestManualClientServerAdmission(
-                            connectionId,
-                            channelName,
-                            endpoint,
-                            dealer,
-                            fence);
-                    }
-                } else if (isConnectionTerminated(event.event())) {
-                    sockets.clientServerTransportTerminated(
-                        connectionId, dealer);
-                }
-                });
+                    "zlink-client-server-monitor",
+                    monitor,
+                    event -> {
+                        if (isConnectionReady(event.event())) {
+                            ZLinkChannelSocketRegistry.AdmissionFence fence =
+                                    sockets.clientServerTransportReady(connectionId, dealer);
+                            if (fence != null) {
+                                requestManualClientServerAdmission(
+                                        connectionId, channelName, endpoint, dealer, fence);
+                            }
+                        } else if (isConnectionTerminated(event.event())) {
+                            sockets.clientServerTransportTerminated(connectionId, dealer);
+                        }
+                    });
             dealer.connect(endpoint);
         } catch (RuntimeException failure) {
             sockets.removeClientServerConnection(connectionId, dealer);
@@ -926,38 +888,41 @@ public final class ZLinkChannelRuntime
     }
 
     private void requestManualClientServerAdmission(
-        String connectionId,
-        String channelName,
-        String endpoint,
-        ZLinkBackendDealerSocket dealer,
-        ZLinkChannelSocketRegistry.AdmissionFence fence) {
+            String connectionId,
+            String channelName,
+            String endpoint,
+            ZLinkBackendDealerSocket dealer,
+            ZLinkChannelSocketRegistry.AdmissionFence fence) {
         if (!running) return;
-        byte[] hello = ZLinkClientServerServiceWire.encodeHello(
-            new ZLinkClientServerServiceWire.Hello(
-                channelName, "default", Integer.MAX_VALUE));
+        byte[] hello =
+                ZLinkClientServerServiceWire.encodeHello(
+                        new ZLinkClientServerServiceWire.Hello(
+                                channelName, "default", Integer.MAX_VALUE));
         try (Message message = Message.from(hello)) {
             dealer.request(List.of(message), defaultRequestTimeout(channelName))
-                .whenComplete((reply, failure) -> {
-                    if (failure != null) {
-                        if (sockets.retryTimedOutClientServerAdmission(
-                                connectionId, fence, failure,
-                                infrastructureExecutor,
-                                next -> requestManualClientServerAdmission(
-                                    connectionId, channelName, endpoint,
-                                    dealer, next))) {
-                            return;
-                        }
-                        sockets.clientServerTransportTerminated(
-                            connectionId, dealer);
-                        return;
-                    }
-                    completeManualClientServerAdmission(
-                        connectionId,
-                        channelName,
-                        endpoint,
-                        fence,
-                        reply);
-                });
+                    .whenComplete(
+                            (reply, failure) -> {
+                                if (failure != null) {
+                                    if (sockets.retryTimedOutClientServerAdmission(
+                                            connectionId,
+                                            fence,
+                                            failure,
+                                            infrastructureExecutor,
+                                            next ->
+                                                    requestManualClientServerAdmission(
+                                                            connectionId,
+                                                            channelName,
+                                                            endpoint,
+                                                            dealer,
+                                                            next))) {
+                                        return;
+                                    }
+                                    sockets.clientServerTransportTerminated(connectionId, dealer);
+                                    return;
+                                }
+                                completeManualClientServerAdmission(
+                                        connectionId, channelName, endpoint, fence, reply);
+                            });
         } catch (ZlinkSubmitException ignored) {
             // A monitor callback may race with draining or socket teardown.
             // Treat the failed admission request as a terminated candidate;
@@ -966,134 +931,125 @@ public final class ZLinkChannelRuntime
         }
     }
 
-    private static String manualConnectionId(
-        String channelName,
-        String endpoint) {
+    private static String manualConnectionId(String channelName, String endpoint) {
         return "manual\0" + channelName + '\0' + endpoint;
     }
 
     private void completeManualClientServerAdmission(
-        String connectionId,
-        String channelName,
-        String endpoint,
-        ZLinkChannelSocketRegistry.AdmissionFence fence,
-        ZLinkBackendReceived reply) {
+            String connectionId,
+            String channelName,
+            String endpoint,
+            ZLinkChannelSocketRegistry.AdmissionFence fence,
+            ZLinkBackendReceived reply) {
         try (reply) {
-            if (reply.result() != ZLinkBackendRequestResult.OK
-                || reply.parts().size() != 1) {
-                sockets.reconnectClientServerConnection(
-                    connectionId, fence.dealer());
+            if (reply.result() != ZLinkBackendRequestResult.OK || reply.parts().size() != 1) {
+                sockets.reconnectClientServerConnection(connectionId, fence.dealer());
                 return;
             }
             ZLinkClientServerServiceWire.Control control =
-                ZLinkClientServerServiceWire.decode(
-                    reply.parts().get(0).toByteArray());
+                    ZLinkClientServerServiceWire.decode(reply.parts().get(0).toByteArray());
             if (!(control instanceof ZLinkClientServerServiceWire.Admit admit)
-                || !admit.admission().channelName().equals(channelName)
-                || !admit.admission().securityIdentity().equals("default")) {
-                sockets.reconnectClientServerConnection(
-                    connectionId, fence.dealer());
+                    || !admit.admission().channelName().equals(channelName)
+                    || !admit.admission().securityIdentity().equals("default")) {
+                sockets.reconnectClientServerConnection(connectionId, fence.dealer());
                 return;
             }
-            ZLinkClientServerServiceWire.Admission value =
-                admit.admission();
+            ZLinkClientServerServiceWire.Admission value = admit.admission();
             ZLinkClientServerServerDescriptor descriptor =
-                new ZLinkClientServerServerDescriptor(
-                    value.channelName(),
-                    value.serverRid(),
-                    value.lifecycleGeneration(),
-                    value.descriptorRevision(),
-                    value.advertisedEndpoint(),
-                    value.weight(),
-                    value.state(),
-                    value.securityIdentity(),
-                    "manual",
-                    1,
-                    Instant.EPOCH);
-            sockets.admitClientServerConnection(
-                connectionId, descriptor, fence);
+                    new ZLinkClientServerServerDescriptor(
+                            value.channelName(),
+                            value.serverRid(),
+                            value.lifecycleGeneration(),
+                            value.descriptorRevision(),
+                            value.advertisedEndpoint(),
+                            value.weight(),
+                            value.state(),
+                            value.securityIdentity(),
+                            "manual",
+                            1,
+                            Instant.EPOCH);
+            sockets.admitClientServerConnection(connectionId, descriptor, fence);
         } catch (RuntimeException failure) {
-            sockets.reconnectClientServerConnection(
-                connectionId, fence.dealer());
+            sockets.reconnectClientServerConnection(connectionId, fence.dealer());
         }
     }
 
     private static boolean isConnectionReady(String event) {
-        return "CONNECTION_READY".equals(event)
-            || "ConnectionReady".equals(event);
+        return "CONNECTION_READY".equals(event) || "ConnectionReady".equals(event);
     }
 
     private static boolean isConnectionTerminated(String event) {
         return "DISCONNECTED".equals(event)
-            || "CLOSED".equals(event)
-            || "HANDSHAKE_FAILED_NO_DETAIL".equals(event)
-            || "HANDSHAKE_FAILED_PROTOCOL".equals(event)
-            || "HANDSHAKE_FAILED_AUTH".equals(event)
-            || "Disconnected".equals(event)
-            || "Closed".equals(event);
+                || "CLOSED".equals(event)
+                || "HANDSHAKE_FAILED_NO_DETAIL".equals(event)
+                || "HANDSHAKE_FAILED_PROTOCOL".equals(event)
+                || "HANDSHAKE_FAILED_AUTH".equals(event)
+                || "Disconnected".equals(event)
+                || "Closed".equals(event);
     }
 
     @Override
     public ZLinkSendCall sendToChannel(String channelName, Object message) {
         rejectAfterRelocationReady("Channel send");
-        ZLinkPayloadEncoding.EncodedPayload encoded =
-            encodePayload(message);
+        ZLinkPayloadEncoding.EncodedPayload encoded = encodePayload(message);
         return new ChannelSendCall(
-            callRuntime, channelName, sockets, defaultRequestTimeout,
-            encoded.payload(), Optional.of(encoded.packetName()),
-            encoded.contentType(), null);
+                callRuntime,
+                channelName,
+                sockets,
+                defaultRequestTimeout,
+                encoded.payload(),
+                Optional.of(encoded.packetName()),
+                encoded.contentType(),
+                null);
     }
 
     private ZLinkPayloadEncoding.EncodedPayload encodePayload(Object message) {
         Class<?> payloadType = ZLinkPayloadEncoding.declaredType(message);
-        return ZLinkPayloadEncoding.encode(
-            serializer,
-            message,
-            codecs.contentTypeFor(payloadType));
+        return ZLinkPayloadEncoding.encode(serializer, message, codecs.contentTypeFor(payloadType));
     }
 
     @Override
     public ZLinkRequestCall requestToChannel(String channelName, Object message) {
         rejectAfterRelocationReady("Channel request");
-        ZLinkPayloadEncoding.EncodedPayload encoded =
-            encodePayload(message);
+        ZLinkPayloadEncoding.EncodedPayload encoded = encodePayload(message);
         return new ChannelRequestCall(
-            callRuntime, channelName, sockets, defaultRequestTimeout,
-            encoded.payload(), Optional.of(encoded.packetName()), null,
-            encoded.contentType(), null);
+                callRuntime,
+                channelName,
+                sockets,
+                defaultRequestTimeout,
+                encoded.payload(),
+                Optional.of(encoded.packetName()),
+                null,
+                encoded.contentType(),
+                null);
     }
 
     @Override
     public ZLinkFanoutPublishCall publish(String channelName, Object message) {
         rejectAfterRelocationReady("Channel publish");
-        ZLinkPayloadEncoding.EncodedPayload encoded =
-            encodePayload(message);
+        ZLinkPayloadEncoding.EncodedPayload encoded = encodePayload(message);
         requireApplicationFanoutTopic(encoded.packetName());
         return new PublishCall(
-            callRuntime,
-            requirePublisher(channelName),
-            encoded.packetName(),
-            encoded.payload(),
-            Optional.of(encoded.packetName()),
-            encoded.contentType());
+                callRuntime,
+                requirePublisher(channelName),
+                encoded.packetName(),
+                encoded.payload(),
+                Optional.of(encoded.packetName()),
+                encoded.contentType());
     }
 
     @Override
-    public ZLinkFanoutPublishCall publish(
-        String channelName,
-        String topic,
-        Object message) {
+    public ZLinkFanoutPublishCall publish(String channelName, String topic, Object message) {
         rejectAfterRelocationReady("Channel publish");
         requireApplicationFanoutTopic(topic);
-        ZLinkPayloadEncoding.EncodedPayload encoded =
-            encodePayload(message);
+        ZLinkPayloadEncoding.EncodedPayload encoded = encodePayload(message);
         return new PublishCall(
-            callRuntime,
-            requirePublisher(channelName),
-            topic,
-            encoded.payload(),
-            Optional.of(encoded.packetName()),
-            encoded.contentType());
+                callRuntime,
+                requirePublisher(channelName),
+                topic,
+                encoded.payload(),
+                Optional.of(encoded.packetName()),
+                encoded.contentType());
     }
 
     static void requireApplicationFanoutTopic(String topic) {
@@ -1104,7 +1060,7 @@ public final class ZLinkChannelRuntime
         if (ZLinkClassicFanoutLiveness.startsWithReservedTopic(
                 topic.getBytes(StandardCharsets.UTF_8))) {
             throw new ZLinkConfigurationException(
-                "fanout topic is reserved for transport liveness");
+                    "fanout topic is reserved for transport liveness");
         }
     }
 
@@ -1113,83 +1069,89 @@ public final class ZLinkChannelRuntime
             char value = topic.charAt(index);
             if (Character.isHighSurrogate(value)) {
                 if (index + 1 >= topic.length()
-                    || !Character.isLowSurrogate(topic.charAt(index + 1))) {
-                    throw new ZLinkConfigurationException(
-                        "fanout topic must be valid Unicode");
+                        || !Character.isLowSurrogate(topic.charAt(index + 1))) {
+                    throw new ZLinkConfigurationException("fanout topic must be valid Unicode");
                 }
                 index++;
             } else if (Character.isLowSurrogate(value)) {
-                throw new ZLinkConfigurationException(
-                    "fanout topic must be valid Unicode");
+                throw new ZLinkConfigurationException("fanout topic must be valid Unicode");
             }
         }
     }
 
     private static void rejectAfterRelocationReady(String operation) {
-        systems.zlink.framework.runtime.internal.handlers
-            .ZLinkSuspendInvocationContext.rejectAfterRelocationReady(
-                operation);
+        systems.zlink.framework.runtime.internal.handlers.ZLinkSuspendInvocationContext
+                .rejectAfterRelocationReady(operation);
     }
 
     @Override
     public ZLinkSendCall sendToNode(String meshName, RoutingId target, Object message) {
-        ZLinkPayloadEncoding.EncodedPayload encoded =
-            encodePayload(message);
+        ZLinkPayloadEncoding.EncodedPayload encoded = encodePayload(message);
         return new RouteSendCall(
-            callRuntime, meshName, sockets, target, encoded.payload(),
-            Optional.of(encoded.packetName()), encoded.contentType(), null);
+                callRuntime,
+                meshName,
+                sockets,
+                target,
+                encoded.payload(),
+                Optional.of(encoded.packetName()),
+                encoded.contentType(),
+                null);
     }
 
     @Override
-    public ZLinkSpotSendCall sendToSpot(
-        String spotId,
-        Object message) {
+    public ZLinkSpotSendCall sendToSpot(String spotId, Object message) {
         Objects.requireNonNull(spotId, "spotId");
-        ZLinkPayloadEncoding.EncodedPayload encoded =
-            encodePayload(message);
+        ZLinkPayloadEncoding.EncodedPayload encoded = encodePayload(message);
         return new RouteSpotSendCall(
-            callRuntime,
-            null,
-            spotAddressResolver,
-            () -> instanceSpotCallRuntime,
-            spotId,
-            encoded.payload(),
-            Optional.of(encoded.packetName()),
-            encoded.contentType(),
-            false, null, null,
-            ZLinkApplicationMetadata.empty());
+                callRuntime,
+                null,
+                spotAddressResolver,
+                () -> instanceSpotCallRuntime,
+                spotId,
+                encoded.payload(),
+                Optional.of(encoded.packetName()),
+                encoded.contentType(),
+                false,
+                null,
+                null,
+                ZLinkApplicationMetadata.empty());
     }
 
     @Override
     public ZLinkRequestCall requestToNode(String meshName, RoutingId target, Object message) {
-        ZLinkPayloadEncoding.EncodedPayload encoded =
-            encodePayload(message);
+        ZLinkPayloadEncoding.EncodedPayload encoded = encodePayload(message);
         return new RouteRequestCall(
-            callRuntime, meshName, sockets, defaultRequestTimeout, target,
-            encoded.payload(), Optional.of(encoded.packetName()), null,
-            encoded.contentType(), null);
+                callRuntime,
+                meshName,
+                sockets,
+                defaultRequestTimeout,
+                target,
+                encoded.payload(),
+                Optional.of(encoded.packetName()),
+                null,
+                encoded.contentType(),
+                null);
     }
 
     @Override
-    public ZLinkSpotRequestCall requestToSpot(
-        String spotId,
-        Object message) {
+    public ZLinkSpotRequestCall requestToSpot(String spotId, Object message) {
         Objects.requireNonNull(spotId, "spotId");
-        ZLinkPayloadEncoding.EncodedPayload encoded =
-            encodePayload(message);
+        ZLinkPayloadEncoding.EncodedPayload encoded = encodePayload(message);
         return new RouteSpotRequestCall(
-            callRuntime,
-            null,
-            requestSourceMeshName(),
-            spotAddressResolver,
-            () -> instanceSpotCallRuntime,
-            spotId,
-            encoded.payload(),
-            Optional.of(encoded.packetName()),
-            Duration.ofSeconds(1),
-            encoded.contentType(),
-            false, null, null,
-            ZLinkApplicationMetadata.empty());
+                callRuntime,
+                null,
+                requestSourceMeshName(),
+                spotAddressResolver,
+                () -> instanceSpotCallRuntime,
+                spotId,
+                encoded.payload(),
+                Optional.of(encoded.packetName()),
+                Duration.ofSeconds(1),
+                encoded.contentType(),
+                false,
+                null,
+                null,
+                ZLinkApplicationMetadata.empty());
     }
 
     private String requestSourceMeshName() {
@@ -1198,33 +1160,29 @@ public final class ZLinkChannelRuntime
         return owner == null ? null : owner.name();
     }
 
-    private volatile systems.zlink.framework.runtime.internal.spots
-        .ZLinkInstanceSpotCallRuntime instanceSpotCallRuntime;
+    private volatile systems.zlink.framework.runtime.internal.spots.ZLinkInstanceSpotCallRuntime
+            instanceSpotCallRuntime;
 
     public void registerInstanceSpotCallRuntime(
-        systems.zlink.framework.runtime.internal.spots
-            .ZLinkInstanceSpotCallRuntime runtime) {
-        instanceSpotCallRuntime = Objects.requireNonNull(
-            runtime, "runtime");
+            systems.zlink.framework.runtime.internal.spots.ZLinkInstanceSpotCallRuntime runtime) {
+        instanceSpotCallRuntime = Objects.requireNonNull(runtime, "runtime");
     }
 
     private static SpotTransportAddressResolver resolveSpotAddressResolver(
-        ZLinkHandlerActivator handlerFactory) {
+            ZLinkHandlerActivator handlerFactory) {
         try {
-            return (SpotTransportAddressResolver) handlerFactory.create(
-                SpotTransportAddressResolver.class);
+            return (SpotTransportAddressResolver)
+                    handlerFactory.create(SpotTransportAddressResolver.class);
         } catch (RuntimeException ignored) {
             return null;
         }
     }
 
-    public void registerSpotRouteBridgeOwner(
-        Supplier<ZLinkInternalSpotNode> owner) {
+    public void registerSpotRouteBridgeOwner(Supplier<ZLinkInternalSpotNode> owner) {
         this.spotRouteBridgeOwner = Objects.requireNonNull(owner, "owner");
     }
 
-    public void registerRequestSourceMeshOwner(
-        Supplier<ZLinkInternalSpotNode> owner) {
+    public void registerRequestSourceMeshOwner(Supplier<ZLinkInternalSpotNode> owner) {
         this.requestSourceMeshOwner = Objects.requireNonNull(owner, "owner");
     }
 
@@ -1232,9 +1190,7 @@ public final class ZLinkChannelRuntime
         spotRouteBridgeDrainer.setDispatchDrainer(Objects.requireNonNull(drainer, "drainer"));
     }
 
-    public boolean attachSpotRouteBridgeToServer(
-        String channelName,
-        ZLinkInternalSpotNode node) {
+    public boolean attachSpotRouteBridgeToServer(String channelName, ZLinkInternalSpotNode node) {
         ZLinkBackendRouterSocket router = sockets.server(channelName);
         if (router == null) {
             router = sockets.routeRouter(channelName);
@@ -1243,17 +1199,13 @@ public final class ZLinkChannelRuntime
             return false;
         }
         ZLinkBackendSpotRouteBridge bridge = node.createRouteBridge();
-        bridge.attachRouterChannel(
-            channelName,
-            router);
+        bridge.attachRouterChannel(channelName, router);
         sockets.registerSpotRouteBridge(channelName, bridge);
         spotRouteBridgeDrainer.start();
         return true;
     }
 
-    public void registerSpotRouterNode(
-        String routerChannelId,
-        ZLinkInternalSpotNode node) {
+    public void registerSpotRouterNode(String routerChannelId, ZLinkInternalSpotNode node) {
         String channelId = requireRouterChannelId(routerChannelId);
         sockets.registerSpotRouterNode(channelId, Objects.requireNonNull(node, "node"));
     }
@@ -1267,202 +1219,241 @@ public final class ZLinkChannelRuntime
     }
 
     private Duration effectiveRouteTimeout(Duration timeout) {
-        return timeout == null || timeout.isZero()
-            ? defaultRequestTimeout
-            : timeout;
+        return timeout == null || timeout.isZero() ? defaultRequestTimeout : timeout;
     }
 
     public void registerRouteInternalRequestHandler(
-        String packetName,
-        RouteInternalRequestHandler handler) {
+            String packetName, RouteInternalRequestHandler handler) {
         if (packetName == null || packetName.isBlank()) {
             throw new ZLinkConfigurationException("internal route packet name is required");
         }
         dispatchRegistry.registerInternalRequest(
-            packetName,
-            Objects.requireNonNull(handler, "handler"));
+                packetName, Objects.requireNonNull(handler, "handler"));
     }
 
     /** Sends one framework-internal request without exposing its packet as a public codec type. */
     public CompletionStage<Message> requestInternalToNode(
-        String channelName,
-        RoutingId target,
-        String packetName,
-        Message payload,
-        Duration timeout) {
+            String channelName,
+            RoutingId target,
+            String packetName,
+            Message payload,
+            Duration timeout) {
         CompletableFuture<Message> result = new CompletableFuture<>();
         Duration effectiveTimeout = effectiveRouteTimeout(timeout);
-        List<Message> requestParts = ZLinkChannelCallRuntime.parts(
-            Optional.of(packetName), payload);
-        callRuntime.requestRoute(
-                systems.zlink.framework.runtime.internal.service.ZLinkServiceOperationIds.next(),
-                requireRouteRouter(channelName),
-                target,
-                requestParts,
-                effectiveTimeout)
-            .whenComplete((reply, failure) -> {
-                requestParts.forEach(Message::close);
-                if (failure != null) {
-                    result.completeExceptionally(
-                        ZLinkChannelCallRuntime.requestFailure(failure));
-                    return;
-                }
-                if (result.isDone()) {
-                    reply.close();
-                    return;
-                }
-                    try {
-                        if (reply.result() != ZLinkBackendRequestResult.OK) {
-                            result.completeExceptionally(new ZLinkFrameworkException(
-                                reply.result().toFrameworkErrorKind(reply.failureCode()),
-                                "internal route request failed: " + reply.result()));
-                        } else if (reply.parts().isEmpty()) {
-                            result.completeExceptionally(new ZLinkFrameworkException(
-                                ZLinkFrameworkErrorKind.PROTOCOL_ERROR,
-                                "internal route request reply was empty: " + packetName));
-                        } else {
-                            result.complete(Message.from(reply.parts().get(0)));
-                        }
-                    } catch (RuntimeException error) {
-                        result.completeExceptionally(error);
-                    } finally {
-                        reply.close();
-                    }
-            });
+        List<Message> requestParts =
+                ZLinkChannelCallRuntime.parts(Optional.of(packetName), payload);
+        callRuntime
+                .requestRoute(
+                        systems.zlink.framework.runtime.internal.service.ZLinkServiceOperationIds
+                                .next(),
+                        requireRouteRouter(channelName),
+                        target,
+                        requestParts,
+                        effectiveTimeout)
+                .whenComplete(
+                        (reply, failure) -> {
+                            requestParts.forEach(Message::close);
+                            if (failure != null) {
+                                result.completeExceptionally(
+                                        ZLinkChannelCallRuntime.requestFailure(failure));
+                                return;
+                            }
+                            if (result.isDone()) {
+                                reply.close();
+                                return;
+                            }
+                            try {
+                                if (reply.result() != ZLinkBackendRequestResult.OK) {
+                                    result.completeExceptionally(
+                                            new ZLinkFrameworkException(
+                                                    reply.result()
+                                                            .toFrameworkErrorKind(
+                                                                    reply.failureCode()),
+                                                    "internal route request failed: "
+                                                            + reply.result()));
+                                } else if (reply.parts().isEmpty()) {
+                                    result.completeExceptionally(
+                                            new ZLinkFrameworkException(
+                                                    ZLinkFrameworkErrorKind.PROTOCOL_ERROR,
+                                                    "internal route request reply was empty: "
+                                                            + packetName));
+                                } else {
+                                    result.complete(Message.from(reply.parts().get(0)));
+                                }
+                            } catch (RuntimeException error) {
+                                result.completeExceptionally(error);
+                            } finally {
+                                reply.close();
+                            }
+                        });
         return ZLinkSerialExecutionQueue.manageCurrent(result);
     }
 
     public CompletionStage<Void> sendToSpotViaRouterChannel(
-        String routerChannelId,
-        RoutingId targetNodeRid,
-        String targetSpotId,
-        List<Message> spotParts) {
+            String routerChannelId,
+            RoutingId targetNodeRid,
+            String targetSpotId,
+            List<Message> spotParts) {
         return sendToSpotViaRouterChannel(
-            routerChannelId, targetNodeRid, targetSpotId, 0L, spotParts);
+                routerChannelId, targetNodeRid, targetSpotId, 0L, spotParts);
     }
 
     public CompletionStage<Void> sendToSpotViaRouterChannel(
-        String routerChannelId,
-        RoutingId targetNodeRid,
-        String targetSpotId,
-        long targetSpotGeneration,
-        List<Message> spotParts) {
+            String routerChannelId,
+            RoutingId targetNodeRid,
+            String targetSpotId,
+            long targetSpotGeneration,
+            List<Message> spotParts) {
         return sendToSpotViaRouterChannel(
-            routerChannelId,
-            targetNodeRid,
-            targetSpotId,
-            targetSpotGeneration,
-            0L,
-            0L,
-            spotParts);
+                routerChannelId,
+                targetNodeRid,
+                targetSpotId,
+                targetSpotGeneration,
+                0L,
+                0L,
+                spotParts);
     }
 
     private CompletionStage<Void> sendToSpotViaRouterChannel(
-        String routerChannelId,
-        RoutingId targetNodeRid,
-        String targetSpotId,
-        long targetSpotGeneration,
-        long authorityOwnerGeneration,
-        long ownerLeaseGeneration,
-        List<Message> spotParts) {
+            String routerChannelId,
+            RoutingId targetNodeRid,
+            String targetSpotId,
+            long targetSpotGeneration,
+            long authorityOwnerGeneration,
+            long ownerLeaseGeneration,
+            List<Message> spotParts) {
         return sockets.submitToSpot(
-            routerChannelId, targetNodeRid, spotRouteBridgeOwner, null, defaultRequestTimeout,
-            (bridge, resolvedTimeout) -> {
-                Duration timeout = effectiveRouteTimeout(resolvedTimeout);
-                spotRouteBridgeDrainer.start();
-                return callRuntime.submit(timeout, () -> {
-                    CompletableFuture<Void> result = new CompletableFuture<>();
-                    ZLinkSpotRouteBridgeDispatcher.submitSend(
-                        bridge, routerChannelId, targetNodeRid, targetSpotId,
-                        copyMessages(spotParts), result);
-                    return result;
-                }, ignored -> { });
-            },
-            (node, resolvedTimeout) -> {
-                Duration timeout = effectiveRouteTimeout(resolvedTimeout);
-                return callRuntime.submit(timeout, () -> ZLinkSpotRouterNodeDispatcher.send(
-                    routerChannelId, node, targetNodeRid, targetSpotId,
-                    targetSpotGeneration, authorityOwnerGeneration, ownerLeaseGeneration,
-                    spotParts, timeout), ignored -> { });
-            });
+                routerChannelId,
+                targetNodeRid,
+                spotRouteBridgeOwner,
+                null,
+                defaultRequestTimeout,
+                (bridge, resolvedTimeout) -> {
+                    Duration timeout = effectiveRouteTimeout(resolvedTimeout);
+                    spotRouteBridgeDrainer.start();
+                    return callRuntime.submit(
+                            timeout,
+                            () -> {
+                                CompletableFuture<Void> result = new CompletableFuture<>();
+                                ZLinkSpotRouteBridgeDispatcher.submitSend(
+                                        bridge,
+                                        routerChannelId,
+                                        targetNodeRid,
+                                        targetSpotId,
+                                        copyMessages(spotParts),
+                                        result);
+                                return result;
+                            },
+                            ignored -> {});
+                },
+                (node, resolvedTimeout) -> {
+                    Duration timeout = effectiveRouteTimeout(resolvedTimeout);
+                    return callRuntime.submit(
+                            timeout,
+                            () ->
+                                    ZLinkSpotRouterNodeDispatcher.send(
+                                            routerChannelId,
+                                            node,
+                                            targetNodeRid,
+                                            targetSpotId,
+                                            targetSpotGeneration,
+                                            authorityOwnerGeneration,
+                                            ownerLeaseGeneration,
+                                            spotParts,
+                                            timeout),
+                            ignored -> {});
+                });
     }
 
     public CompletionStage<List<Message>> requestToSpotViaRouterChannel(
-        String routerChannelId,
-        RoutingId targetNodeRid,
-        String targetSpotId,
-        List<Message> spotParts,
-        Duration timeout) {
+            String routerChannelId,
+            RoutingId targetNodeRid,
+            String targetSpotId,
+            List<Message> spotParts,
+            Duration timeout) {
         return requestToSpotViaRouterChannel(
-            routerChannelId,
-            targetNodeRid,
-            targetSpotId,
-            0L,
-            spotParts,
-            timeout);
+                routerChannelId, targetNodeRid, targetSpotId, 0L, spotParts, timeout);
     }
 
     public CompletionStage<List<Message>> requestToSpotViaRouterChannel(
-        String routerChannelId,
-        RoutingId targetNodeRid,
-        String targetSpotId,
-        long targetSpotGeneration,
-        List<Message> spotParts,
-        Duration timeout) {
+            String routerChannelId,
+            RoutingId targetNodeRid,
+            String targetSpotId,
+            long targetSpotGeneration,
+            List<Message> spotParts,
+            Duration timeout) {
         return callRuntime.requestToSpot(
-            routerChannelId,
-            targetNodeRid,
-            targetSpotId,
-            targetSpotGeneration,
-            0L,
-            0L,
-            spotParts,
-            timeout);
+                routerChannelId,
+                targetNodeRid,
+                targetSpotId,
+                targetSpotGeneration,
+                0L,
+                0L,
+                spotParts,
+                timeout);
     }
 
     private CompletionStage<List<Message>> requestToSpotViaRouterChannel(
-        String routerChannelId,
-        RoutingId targetNodeRid,
-        String targetSpotId,
-        long targetSpotGeneration,
-        long authorityOwnerGeneration,
-        long ownerLeaseGeneration,
-        List<Message> spotParts,
-        Duration timeout,
-        ZLinkServiceOperationRegistry operations,
-        UUID operationId) {
+            String routerChannelId,
+            RoutingId targetNodeRid,
+            String targetSpotId,
+            long targetSpotGeneration,
+            long authorityOwnerGeneration,
+            long ownerLeaseGeneration,
+            List<Message> spotParts,
+            Duration timeout,
+            ZLinkServiceOperationRegistry operations,
+            UUID operationId) {
         Objects.requireNonNull(timeout, "timeout");
         return sockets.submitToSpot(
-            routerChannelId, targetNodeRid, spotRouteBridgeOwner, timeout, defaultRequestTimeout,
-            (bridge, effectiveTimeout) -> {
-                spotRouteBridgeDrainer.start();
-                return operations.submit(operationId, effectiveTimeout, () -> {
-                    CompletableFuture<List<Message>> result = new CompletableFuture<>();
-                    ZLinkSpotRouteBridgeDispatcher.submitRequest(
-                        bridge, routerChannelId, targetNodeRid, targetSpotId,
-                        copyMessages(spotParts), effectiveTimeout, result);
-                    return result;
-                }, Message::closeAll);
-            },
-            (node, effectiveTimeout) -> {
-                return ZLinkSpotRouterNodeDispatcher.request(
-                    routerChannelId, node, targetNodeRid, targetSpotId,
-                    targetSpotGeneration, authorityOwnerGeneration, ownerLeaseGeneration,
-                    spotParts, effectiveTimeout, operations, operationId);
-            });
+                routerChannelId,
+                targetNodeRid,
+                spotRouteBridgeOwner,
+                timeout,
+                defaultRequestTimeout,
+                (bridge, effectiveTimeout) -> {
+                    spotRouteBridgeDrainer.start();
+                    return operations.submit(
+                            operationId,
+                            effectiveTimeout,
+                            () -> {
+                                CompletableFuture<List<Message>> result = new CompletableFuture<>();
+                                ZLinkSpotRouteBridgeDispatcher.submitRequest(
+                                        bridge,
+                                        routerChannelId,
+                                        targetNodeRid,
+                                        targetSpotId,
+                                        copyMessages(spotParts),
+                                        effectiveTimeout,
+                                        result);
+                                return result;
+                            },
+                            Message::closeAll);
+                },
+                (node, effectiveTimeout) -> {
+                    return ZLinkSpotRouterNodeDispatcher.request(
+                            routerChannelId,
+                            node,
+                            targetNodeRid,
+                            targetSpotId,
+                            targetSpotGeneration,
+                            authorityOwnerGeneration,
+                            ownerLeaseGeneration,
+                            spotParts,
+                            effectiveTimeout,
+                            operations,
+                            operationId);
+                });
     }
-
 
     @Override
     public void close() {
         beginClose();
-        CompletionStage<Void> clientServerStop =
-            CompletableFuture.completedFuture(null);
+        CompletionStage<Void> clientServerStop = CompletableFuture.completedFuture(null);
         if (clientServerLocationRuntime != null) {
             clientServerStop = clientServerLocationRuntime.stop();
         }
-        CompletionStage<Void> fanoutStop =
-            CompletableFuture.completedFuture(null);
+        CompletionStage<Void> fanoutStop = CompletableFuture.completedFuture(null);
         if (fanoutLocationRuntime != null) {
             fanoutStop = fanoutLocationRuntime.stop();
         }
@@ -1472,8 +1463,7 @@ public final class ZLinkChannelRuntime
         timeoutExecutor.shutdownNow();
         receiveLoops.close();
         spotRouteBridgeDrainLoopExecutor.shutdownNow();
-        awaitInfrastructureSettlement(
-            "ClientServer location", clientServerStop);
+        awaitInfrastructureSettlement("ClientServer location", clientServerStop);
         awaitInfrastructureSettlement("fanout location", fanoutStop);
         infrastructureExecutor.shutdown();
         receiveLoops.awaitTermination();
@@ -1488,15 +1478,14 @@ public final class ZLinkChannelRuntime
     }
 
     private static void awaitInfrastructureSettlement(
-        String owner,
-        CompletionStage<Void> settlement) {
+            String owner, CompletionStage<Void> settlement) {
         try {
             settlement.toCompletableFuture().join();
         } catch (CompletionException failure) {
             LOGGER.log(
-                Level.WARNING,
-                owner + " cleanup failed while closing the channel runtime",
-                failure.getCause());
+                    Level.WARNING,
+                    owner + " cleanup failed while closing the channel runtime",
+                    failure.getCause());
         }
     }
 
@@ -1510,34 +1499,27 @@ public final class ZLinkChannelRuntime
     }
 
     private void scheduleInfrastructureAtFixedRate(
-        Runnable task,
-        long initialDelay,
-        long period,
-        TimeUnit unit) {
+            Runnable task, long initialDelay, long period, TimeUnit unit) {
         AtomicBoolean admitted = new AtomicBoolean();
         timeoutExecutor.scheduleAtFixedRate(
-            () -> signalInfrastructure(admitted, task),
-            initialDelay,
-            period,
-            unit);
+                () -> signalInfrastructure(admitted, task), initialDelay, period, unit);
     }
 
-    private void signalInfrastructure(
-        AtomicBoolean admitted,
-        Runnable task) {
+    private void signalInfrastructure(AtomicBoolean admitted, Runnable task) {
         if (!running || !admitted.compareAndSet(false, true)) {
             return;
         }
         try {
-            infrastructureExecutor.execute(() -> {
-                try {
-                    if (running) {
-                        task.run();
-                    }
-                } finally {
-                    admitted.set(false);
-                }
-            });
+            infrastructureExecutor.execute(
+                    () -> {
+                        try {
+                            if (running) {
+                                task.run();
+                            }
+                        } finally {
+                            admitted.set(false);
+                        }
+                    });
         } catch (RejectedExecutionException closing) {
             admitted.set(false);
             if (running) {
@@ -1557,7 +1539,8 @@ public final class ZLinkChannelRuntime
     private ZLinkBackendDealerSocket requireClient(String channelName) {
         ZLinkBackendDealerSocket client = sockets.client(channelName);
         if (client == null) {
-            throw new ZLinkConfigurationException("channel client is not configured: " + channelName);
+            throw new ZLinkConfigurationException(
+                    "channel client is not configured: " + channelName);
         }
         return client;
     }
@@ -1567,21 +1550,21 @@ public final class ZLinkChannelRuntime
         if (existing != null) {
             return existing;
         }
-        ZLinkBackendSpotRouteBridge bridge = sockets.requireSpotRouteBridge(
-            channelName, spotRouteBridgeOwner);
+        ZLinkBackendSpotRouteBridge bridge =
+                sockets.requireSpotRouteBridge(channelName, spotRouteBridgeOwner);
         spotRouteBridgeDrainer.start();
         return bridge;
     }
 
-    private ZLinkBackendSpotRouteBridge resolveSpotRouteBridgeForDispatch(
-        String channelName) {
+    private ZLinkBackendSpotRouteBridge resolveSpotRouteBridgeForDispatch(String channelName) {
         return spotRouteBridgeOwner == null ? null : requireSpotRouteBridge(channelName);
     }
 
     private ZLinkBackendPublisherSocket requirePublisher(String channelName) {
         ZLinkBackendPublisherSocket publisher = sockets.publisher(channelName);
         if (publisher == null) {
-            throw new ZLinkConfigurationException("fanout publisher is not configured: " + channelName);
+            throw new ZLinkConfigurationException(
+                    "fanout publisher is not configured: " + channelName);
         }
         return publisher;
     }
@@ -1589,7 +1572,8 @@ public final class ZLinkChannelRuntime
     private ZLinkBackendRouterSocket requireRouteRouter(String channelName) {
         ZLinkBackendRouterSocket router = sockets.routeRouter(channelName);
         if (router == null) {
-            throw new ZLinkConfigurationException("route mesh channel is not configured: " + channelName);
+            throw new ZLinkConfigurationException(
+                    "route mesh channel is not configured: " + channelName);
         }
         return router;
     }
@@ -1609,26 +1593,24 @@ public final class ZLinkChannelRuntime
 
     private void startRequestLoop(String channelName, ZLinkBackendRouterSocket router) {
         receiveLoops.startRequest(
-            router,
-            received -> {
-                if (sockets.tryHandleClientServerControl(
-                    channelName, router, received)) {
-                    return;
-                }
-                if (routeDispatcher.dispatchBridgePacket(channelName, received)) {
-                    received.close();
-                } else {
-                    messageDispatcher.dispatchRequest(channelName, router, received);
-                }
-            },
-            error -> reportReceiveFailure(
-                ZLinkDispatchErrorSurface.CHANNEL,
-                ZLinkDispatchMessageKind.REQUEST,
-                channelName,
-                error));
+                router,
+                received -> {
+                    if (sockets.tryHandleClientServerControl(channelName, router, received)) {
+                        return;
+                    }
+                    if (routeDispatcher.dispatchBridgePacket(channelName, received)) {
+                        received.close();
+                    } else {
+                        messageDispatcher.dispatchRequest(channelName, router, received);
+                    }
+                },
+                error ->
+                        reportReceiveFailure(
+                                ZLinkDispatchErrorSurface.CHANNEL,
+                                ZLinkDispatchMessageKind.REQUEST,
+                                channelName,
+                                error));
     }
-
-
 
     public boolean dispatchSpotRouteBridgePacket(ZLinkBackendReceived received) {
         return routeDispatcher.dispatchBridgePacket(received);
@@ -1640,12 +1622,10 @@ public final class ZLinkChannelRuntime
         }
         String packetName = parts.get(0).toUtf8String();
         return SPOT_ROUTE_BRIDGE_SEND_PACKET_NAME.equals(packetName)
-            || SPOT_ROUTE_BRIDGE_REQUEST_PACKET_NAME.equals(packetName);
+                || SPOT_ROUTE_BRIDGE_REQUEST_PACKET_NAME.equals(packetName);
     }
 
-    static boolean sameMessageParts(
-        List<byte[]> expected,
-        List<Message> actual) {
+    static boolean sameMessageParts(List<byte[]> expected, List<Message> actual) {
         if (expected.size() != actual.size()) {
             return false;
         }
@@ -1657,9 +1637,7 @@ public final class ZLinkChannelRuntime
         return true;
     }
 
-    static boolean sameFirstMessagePart(
-        List<byte[]> expected,
-        List<Message> actual) {
+    static boolean sameFirstMessagePart(List<byte[]> expected, List<Message> actual) {
         if (expected.isEmpty() || actual.isEmpty()) {
             return false;
         }
@@ -1678,53 +1656,50 @@ public final class ZLinkChannelRuntime
         return ZLinkFrameworkErrorReply.message(parts);
     }
 
-    static ZLinkFrameworkErrorKind frameworkErrorReplyKind(
-        List<Message> parts) {
+    static ZLinkFrameworkErrorKind frameworkErrorReplyKind(List<Message> parts) {
         return ZLinkFrameworkErrorReply.kind(parts);
     }
 
-    static java.util.Map<String, String> frameworkErrorReplyMetadata(
-        List<Message> parts) {
+    static java.util.Map<String, String> frameworkErrorReplyMetadata(List<Message> parts) {
         return ZLinkFrameworkErrorReply.metadata(parts);
     }
 
     private void startRouteLoop(String channelName, ZLinkBackendRouterSocket router) {
         receiveLoops.startRoute(
-            router,
-            () -> sockets.routeSocketLock(channelName, this),
-            () -> spotRouteBridgeDrainer.drainNow(channelName),
-            received -> routeDispatcher.dispatch(channelName, router, received),
-            error -> reportReceiveFailure(
+                router,
+                () -> sockets.routeSocketLock(channelName, this),
+                () -> spotRouteBridgeDrainer.drainNow(channelName),
+                received -> routeDispatcher.dispatch(channelName, router, received),
+                error ->
+                        reportReceiveFailure(
+                                ZLinkDispatchErrorSurface.ROUTE_MESH_CHANNEL,
+                                ZLinkDispatchMessageKind.REQUEST,
+                                channelName,
+                                error));
+    }
+
+    private void reportSpotRouteBridgeDrainFailure(String channelName, Throwable error) {
+        reportReceiveFailure(
                 ZLinkDispatchErrorSurface.ROUTE_MESH_CHANNEL,
                 ZLinkDispatchMessageKind.REQUEST,
                 channelName,
-                error));
-    }
-
-    private void reportSpotRouteBridgeDrainFailure(
-        String channelName,
-        Throwable error) {
-        reportReceiveFailure(
-            ZLinkDispatchErrorSurface.ROUTE_MESH_CHANNEL,
-            ZLinkDispatchMessageKind.REQUEST,
-            channelName,
-            error);
+                error);
     }
 
     private void reportReceiveFailure(
-        ZLinkDispatchErrorSurface surface,
-        ZLinkDispatchMessageKind messageKind,
-        String channelName,
-        Throwable error) {
+            ZLinkDispatchErrorSurface surface,
+            ZLinkDispatchMessageKind messageKind,
+            String channelName,
+            Throwable error) {
         dispatchReporter.report(
-            surface,
-            messageKind,
-            ZLinkDispatchErrorReason.INVALID_FRAME,
-            ZLinkDispatchErrorAction.DROP,
-            null,
-            channelName,
-            null,
-            error);
+                surface,
+                messageKind,
+                ZLinkDispatchErrorReason.INVALID_FRAME,
+                ZLinkDispatchErrorAction.DROP,
+                null,
+                channelName,
+                null,
+                error);
     }
 
     static boolean isNoDataReceive(Throwable error) {
@@ -1738,35 +1713,29 @@ public final class ZLinkChannelRuntime
         return false;
     }
 
-
-    private void startSubscribeLoop(
-        String channelName,
-        ZLinkBackendSubscriberSocket subscriber) {
+    private void startSubscribeLoop(String channelName, ZLinkBackendSubscriberSocket subscriber) {
         receiveLoops.startSubscribe(
-            subscriber,
-            received -> messageDispatcher.dispatchPublish(channelName, received),
-            error -> reportReceiveFailure(
-                ZLinkDispatchErrorSurface.CHANNEL,
-                ZLinkDispatchMessageKind.PUBLISH,
-                channelName,
-                error));
+                subscriber,
+                received -> messageDispatcher.dispatchPublish(channelName, received),
+                error ->
+                        reportReceiveFailure(
+                                ZLinkDispatchErrorSurface.CHANNEL,
+                                ZLinkDispatchMessageKind.PUBLISH,
+                                channelName,
+                                error));
     }
-
-
-
-
-
 
     static String requestErrorSummary(Throwable error) {
         Throwable current = error;
         while (current != null) {
             if (current instanceof ZlinkRequestException request) {
-                return "request result=" + request.getResult()
-                    + ", errno=" + request.getNativeErrno();
+                return "request result="
+                        + request.getResult()
+                        + ", errno="
+                        + request.getNativeErrno();
             }
             if (current instanceof ZlinkSubmitException submit) {
-                return "submit result=" + submit.getResult()
-                    + ", errno=" + submit.getNativeErrno();
+                return "submit result=" + submit.getResult() + ", errno=" + submit.getNativeErrno();
             }
             current = current.getCause();
         }

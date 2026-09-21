@@ -19,12 +19,16 @@ public sealed partial class StreamConnectorTests
             ZlinkStreamHeaderFlags.HasRequestSeq,
             pending.RequestSeq,
             "legacy.response.name",
-            ZlinkStreamMetadata.Empty);
+            ZlinkStreamMetadata.Empty
+        );
 
-        Assert.True(requests.TryComplete(
-            header,
-            new ZlinkStreamFrame(ReadOnlyMemory<byte>.Empty, ReadOnlyMemory<byte>.Empty),
-            _ => new ZlinkStreamError(ZlinkStreamErrorCode.RemoteError, "unused")));
+        Assert.True(
+            requests.TryComplete(
+                header,
+                new ZlinkStreamFrame(ReadOnlyMemory<byte>.Empty, ReadOnlyMemory<byte>.Empty),
+                _ => new ZlinkStreamError(ZlinkStreamErrorCode.RemoteError, "unused")
+            )
+        );
 
         var completion = await requests.WaitAsync(pending, CancellationToken.None);
         Assert.Equal(pending.RequestSeq, completion.Header.RequestSeq);
@@ -44,12 +48,15 @@ public sealed partial class StreamConnectorTests
             ZlinkStreamHeaderFlags.HasRequestSeq,
             new ZlinkStreamRequestSeq(7),
             string.Empty,
-            ZlinkStreamMetadata.Empty);
+            ZlinkStreamMetadata.Empty
+        );
 
         var decoded = codec.Decode(codec.Encode(header));
 
         Assert.Equal(string.Empty, decoded.Name);
-        Assert.Throws<ZlinkStreamException>(() => codec.Encode(header with { Name = "forbidden.reply.name" }));
+        Assert.Throws<ZlinkStreamException>(() =>
+            codec.Encode(header with { Name = "forbidden.reply.name" })
+        );
 
         var encoded = codec.Encode(header).ToArray();
         var legacy = new byte[encoded.Length + 6];
@@ -74,17 +81,18 @@ public sealed partial class StreamConnectorTests
             await Task.Delay(TimeSpan.FromMilliseconds(200));
         });
 
-        await using var connector = ZlinkStreamConnectorFactory.Create(new ZlinkStreamConnectorOptions
-        {
-            Endpoint = new Uri($"tcp://127.0.0.1:{endpoint.Port}"),
-            RequestTimeout = TimeSpan.FromMilliseconds(50)
-        });
+        await using var connector = ZlinkStreamConnectorFactory.Create(
+            new ZlinkStreamConnectorOptions
+            {
+                Endpoint = new Uri($"tcp://127.0.0.1:{endpoint.Port}"),
+                RequestTimeout = TimeSpan.FromMilliseconds(50),
+            }
+        );
         await connector.Connect.Async();
 
         var exception = await Assert.ThrowsAsync<ZlinkStreamException>(async () =>
-            await connector.Request(new Ping("hello"))
-                .PacketName("ping")
-                .Async<Pong>());
+            await connector.Request(new Ping("hello")).PacketName("ping").Async<Pong>()
+        );
 
         Assert.Equal(ZlinkStreamErrorCode.RequestTimeout, exception.Error.Code);
         await server;
@@ -93,15 +101,16 @@ public sealed partial class StreamConnectorTests
     [Fact]
     public async Task DisconnectedSendFailsBeforeTransportWrite()
     {
-        await using var connector = ZlinkStreamConnectorFactory.Create(new ZlinkStreamConnectorOptions
-        {
-            Endpoint = new Uri("tcp://127.0.0.1:1")
-        });
+        await using var connector = ZlinkStreamConnectorFactory.Create(
+            new ZlinkStreamConnectorOptions { Endpoint = new Uri("tcp://127.0.0.1:1") }
+        );
 
         var exception = Assert.Throws<ZlinkStreamException>(() =>
-            connector.Send(new ZlinkStreamEncodedPayload(ZlinkStreamCodec.Raw, "b"u8.ToArray()))
+            connector
+                .Send(new ZlinkStreamEncodedPayload(ZlinkStreamCodec.Raw, "b"u8.ToArray()))
                 .PacketName("h")
-                .Async());
+                .Async()
+        );
 
         Assert.Equal(ZlinkStreamErrorCode.Disconnected, exception.Error.Code);
     }
@@ -109,16 +118,20 @@ public sealed partial class StreamConnectorTests
     [Fact]
     public async Task SendPayloadLimitIsEnforcedBeforeTransportWrite()
     {
-        await using var connector = ZlinkStreamConnectorFactory.Create(new ZlinkStreamConnectorOptions
-        {
-            Endpoint = new Uri("tcp://127.0.0.1:1"),
-            MaxSendPayloadSize = 1
-        });
+        await using var connector = ZlinkStreamConnectorFactory.Create(
+            new ZlinkStreamConnectorOptions
+            {
+                Endpoint = new Uri("tcp://127.0.0.1:1"),
+                MaxSendPayloadSize = 1,
+            }
+        );
 
         var exception = Assert.Throws<ZlinkStreamException>(() =>
-            connector.Send(new ZlinkStreamEncodedPayload(ZlinkStreamCodec.Raw, "bb"u8.ToArray()))
+            connector
+                .Send(new ZlinkStreamEncodedPayload(ZlinkStreamCodec.Raw, "bb"u8.ToArray()))
                 .PacketName("h")
-                .Async());
+                .Async()
+        );
 
         Assert.Equal(ZlinkStreamErrorCode.ValidationFailed, exception.Error.Code);
     }
@@ -129,31 +142,34 @@ public sealed partial class StreamConnectorTests
         var options = new ZlinkStreamConnectorOptions
         {
             Endpoint = new Uri("tcp://127.0.0.1:1"),
-            MaxSendPayloadSize = 64
+            MaxSendPayloadSize = 64,
         };
         var sender = new ZlinkStreamFrameSender(
             options,
             new ZlinkStreamHeaderCodec(),
             new ZlinkStreamLz4CompressionCodec(),
             new SemaphoreSlim(1, 1),
-            static () => null);
+            static () => null
+        );
 
         var frame = sender.BuildOutboundFrame(
             ZlinkStreamMessageKind.Send,
             "compressed",
             new ZlinkStreamEncodedPayload(
                 ZlinkStreamCodec.Raw,
-                Enumerable.Repeat((byte)'A', 1024).ToArray()),
+                Enumerable.Repeat((byte)'A', 1024).ToArray()
+            ),
             ZlinkStreamMetadata.Empty,
             compress: true,
-            requestSeq: null);
+            requestSeq: null
+        );
 
         Assert.True(frame.PayloadBytes.Length <= options.MaxSendPayloadSize);
         Assert.True(
             new ZlinkStreamHeaderCodec()
                 .Decode(frame.HeaderBytes)
-                .Flags
-                .HasFlag(ZlinkStreamHeaderFlags.PayloadCompressed));
+                .Flags.HasFlag(ZlinkStreamHeaderFlags.PayloadCompressed)
+        );
     }
 
     [Fact]
@@ -163,22 +179,26 @@ public sealed partial class StreamConnectorTests
         {
             Endpoint = new Uri("tcp://127.0.0.1:1"),
             MaxSendPayloadSize = 1,
-            CompressionCodec = new ExpandingCompressionCodec()
+            CompressionCodec = new ExpandingCompressionCodec(),
         };
         var sender = new ZlinkStreamFrameSender(
             options,
             new ZlinkStreamHeaderCodec(),
             options.CompressionCodec,
             new SemaphoreSlim(1, 1),
-            static () => null);
+            static () => null
+        );
 
-        var exception = Assert.Throws<ZlinkStreamException>(() => sender.BuildOutboundFrame(
-            ZlinkStreamMessageKind.Send,
-            "expanded",
-            new ZlinkStreamEncodedPayload(ZlinkStreamCodec.Raw, new byte[] { 1 }),
-            ZlinkStreamMetadata.Empty,
-            compress: true,
-            requestSeq: null));
+        var exception = Assert.Throws<ZlinkStreamException>(() =>
+            sender.BuildOutboundFrame(
+                ZlinkStreamMessageKind.Send,
+                "expanded",
+                new ZlinkStreamEncodedPayload(ZlinkStreamCodec.Raw, new byte[] { 1 }),
+                ZlinkStreamMetadata.Empty,
+                compress: true,
+                requestSeq: null
+            )
+        );
 
         Assert.Equal(ZlinkStreamErrorCode.ValidationFailed, exception.Error.Code);
     }
@@ -186,16 +206,20 @@ public sealed partial class StreamConnectorTests
     [Fact]
     public async Task RequestPayloadLimitIsEnforcedBeforeTransportWrite()
     {
-        await using var connector = ZlinkStreamConnectorFactory.Create(new ZlinkStreamConnectorOptions
-        {
-            Endpoint = new Uri("tcp://127.0.0.1:1"),
-            MaxSendPayloadSize = 1
-        });
+        await using var connector = ZlinkStreamConnectorFactory.Create(
+            new ZlinkStreamConnectorOptions
+            {
+                Endpoint = new Uri("tcp://127.0.0.1:1"),
+                MaxSendPayloadSize = 1,
+            }
+        );
 
         var exception = await Assert.ThrowsAsync<ZlinkStreamException>(async () =>
-            await connector.Request(new ZlinkStreamEncodedPayload(ZlinkStreamCodec.Raw, "bb"u8.ToArray()))
+            await connector
+                .Request(new ZlinkStreamEncodedPayload(ZlinkStreamCodec.Raw, "bb"u8.ToArray()))
                 .PacketName("h")
-                .Async());
+                .Async()
+        );
 
         Assert.Equal(ZlinkStreamErrorCode.ValidationFailed, exception.Error.Code);
     }
@@ -204,11 +228,14 @@ public sealed partial class StreamConnectorTests
     public async Task ReceivePayloadLimitMustBePositive()
     {
         var exception = Assert.Throws<ZlinkStreamException>(() =>
-            ZlinkStreamConnectorFactory.Create(new ZlinkStreamConnectorOptions
-            {
-                Endpoint = new Uri("tcp://127.0.0.1:1"),
-                MaxReceivePayloadSize = 0
-            }));
+            ZlinkStreamConnectorFactory.Create(
+                new ZlinkStreamConnectorOptions
+                {
+                    Endpoint = new Uri("tcp://127.0.0.1:1"),
+                    MaxReceivePayloadSize = 0,
+                }
+            )
+        );
 
         Assert.Equal(ZlinkStreamErrorCode.ValidationFailed, exception.Error.Code);
         await Task.CompletedTask;
@@ -223,7 +250,8 @@ public sealed partial class StreamConnectorTests
 
         public ReadOnlyMemory<byte> Decompress(
             ReadOnlyMemory<byte> payload,
-            int maxDecompressedPayloadSize)
+            int maxDecompressedPayloadSize
+        )
         {
             return payload;
         }
@@ -238,13 +266,14 @@ public sealed partial class StreamConnectorTests
             "MaxPendingDispatchCallbacks" => new ZlinkStreamConnectorOptions
             {
                 Endpoint = new Uri("tcp://127.0.0.1:1"),
-                MaxPendingDispatchCallbacks = 0
+                MaxPendingDispatchCallbacks = 0,
             },
-            _ => throw new ArgumentOutOfRangeException(nameof(optionName), optionName, null)
+            _ => throw new ArgumentOutOfRangeException(nameof(optionName), optionName, null),
         };
 
         var exception = Assert.Throws<ZlinkStreamException>(() =>
-            ZlinkStreamConnectorFactory.Create(options));
+            ZlinkStreamConnectorFactory.Create(options)
+        );
 
         Assert.Equal(ZlinkStreamErrorCode.ValidationFailed, exception.Error.Code);
         await Task.CompletedTask;
@@ -263,24 +292,31 @@ public sealed partial class StreamConnectorTests
             await WritePacketAsync(stream, "invalid-header"u8.ToArray(), "payload"u8.ToArray());
         });
 
-        await using var connector = ZlinkStreamConnectorFactory.Create(new ZlinkStreamConnectorOptions
-        {
-            Endpoint = new Uri($"tcp://127.0.0.1:{endpoint.Port}")
-        });
-        var errorReceived =
-            new TaskCompletionSource<ZlinkStreamError>(TaskCreationOptions.RunContinuationsAsynchronously);
-        _ = connector.OnErrorReceived((error, _) =>
-        {
-            if (error.Code == ZlinkStreamErrorCode.FrameDecodeFailed) errorReceived.TrySetResult(error);
+        await using var connector = ZlinkStreamConnectorFactory.Create(
+            new ZlinkStreamConnectorOptions
+            {
+                Endpoint = new Uri($"tcp://127.0.0.1:{endpoint.Port}"),
+            }
+        );
+        var errorReceived = new TaskCompletionSource<ZlinkStreamError>(
+            TaskCreationOptions.RunContinuationsAsynchronously
+        );
+        _ = connector.OnErrorReceived(
+            (error, _) =>
+            {
+                if (error.Code == ZlinkStreamErrorCode.FrameDecodeFailed)
+                    errorReceived.TrySetResult(error);
 
-            return ValueTask.CompletedTask;
-        });
+                return ValueTask.CompletedTask;
+            }
+        );
 
         await connector.Connect.Async();
         await DispatchUntilAsync(
             connector,
             () => errorReceived.Task.IsCompleted,
-            TimeSpan.FromSeconds(5));
+            TimeSpan.FromSeconds(5)
+        );
         var error = await errorReceived.Task;
 
         Assert.Equal(ZlinkStreamErrorCode.FrameDecodeFailed, error.Code);

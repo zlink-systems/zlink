@@ -56,8 +56,7 @@ struct store_version_condition_t
     store_version_t expected;
 };
 
-using store_condition_t =
-  std::variant<store_missing_condition_t, store_version_condition_t>;
+using store_condition_t = std::variant<store_missing_condition_t, store_version_condition_t>;
 
 struct store_put_t
 {
@@ -96,8 +95,7 @@ struct store_write_conflict_t
     std::chrono::system_clock::time_point store_now{};
 };
 
-using store_write_result_t =
-  std::variant<store_write_applied_t, store_write_conflict_t>;
+using store_write_result_t = std::variant<store_write_applied_t, store_write_conflict_t>;
 
 struct store_scan_cursor_t
 {
@@ -128,8 +126,7 @@ struct store_scan_expired_t
 {
 };
 
-using store_scan_result_t =
-  std::variant<store_scan_page_t, store_scan_expired_t>;
+using store_scan_result_t = std::variant<store_scan_page_t, store_scan_expired_t>;
 
 class location_store_t
 {
@@ -137,10 +134,8 @@ class location_store_t
     virtual ~location_store_t () = default;
 
     virtual task_t<store_read_result_t> read (store_key_t key) = 0;
-    virtual task_t<store_write_result_t> write (
-      store_write_request_t request) = 0;
-    virtual task_t<store_scan_result_t> scan (
-      store_scan_request_t request) = 0;
+    virtual task_t<store_write_result_t> write (store_write_request_t request) = 0;
+    virtual task_t<store_scan_result_t> scan (store_scan_request_t request) = 0;
 };
 
 struct blob_reference_t
@@ -165,8 +160,7 @@ struct blob_conflict_t
     std::chrono::system_clock::time_point store_now{};
 };
 
-using blob_put_result_t =
-  std::variant<blob_stored_t, blob_already_stored_t, blob_conflict_t>;
+using blob_put_result_t = std::variant<blob_stored_t, blob_already_stored_t, blob_conflict_t>;
 
 struct blob_missing_t
 {
@@ -195,15 +189,12 @@ class relocation_store_t
   public:
     virtual ~relocation_store_t () = default;
 
-    virtual task_t<blob_put_result_t> put (
-      blob_reference_t reference,
-      std::span<const std::byte> payload,
-      std::chrono::milliseconds retention) = 0;
-    virtual task_t<blob_read_result_t> read (
-      blob_reference_t reference) = 0;
-    virtual task_t<blob_renew_result_t> renew (
-      blob_reference_t reference,
-      std::chrono::milliseconds retention) = 0;
+    virtual task_t<blob_put_result_t> put (blob_reference_t reference,
+                                           std::span<const std::byte> payload,
+                                           std::chrono::milliseconds retention) = 0;
+    virtual task_t<blob_read_result_t> read (blob_reference_t reference) = 0;
+    virtual task_t<blob_renew_result_t> renew (blob_reference_t reference,
+                                               std::chrono::milliseconds retention) = 0;
     virtual task_t<void> erase (blob_reference_t reference) = 0;
 };
 

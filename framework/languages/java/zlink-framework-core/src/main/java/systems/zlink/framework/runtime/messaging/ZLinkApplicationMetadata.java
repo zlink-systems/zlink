@@ -10,16 +10,12 @@ import java.util.LinkedHashMap;
 import java.util.Map;
 import java.util.Objects;
 
-/**
- * Immutable framework representation of the canonical Core application
- * metadata frame.
- */
+/** Immutable framework representation of the canonical Core application metadata frame. */
 public final class ZLinkApplicationMetadata {
     private static final int VERSION = 1;
     private static final int MAX_ENCODED_SIZE = 1024;
     private static final byte[] EMPTY_ENCODED = new byte[0];
-    private static final ZLinkApplicationMetadata EMPTY =
-        new ZLinkApplicationMetadata(Map.of());
+    private static final ZLinkApplicationMetadata EMPTY = new ZLinkApplicationMetadata(Map.of());
 
     private final Map<String, String> values;
 
@@ -37,10 +33,10 @@ public final class ZLinkApplicationMetadata {
             return EMPTY;
         }
         LinkedHashMap<String, String> copy = new LinkedHashMap<>();
-        metadata.forEach((key, value) ->
-            copy.put(requireKey(key), Objects.requireNonNull(value, "metadata value")));
-        return new ZLinkApplicationMetadata(
-            Collections.unmodifiableMap(copy));
+        metadata.forEach(
+                (key, value) ->
+                        copy.put(requireKey(key), Objects.requireNonNull(value, "metadata value")));
+        return new ZLinkApplicationMetadata(Collections.unmodifiableMap(copy));
     }
 
     public ZLinkApplicationMetadata with(String key, String value) {
@@ -55,8 +51,9 @@ public final class ZLinkApplicationMetadata {
             return this;
         }
         LinkedHashMap<String, String> copy = new LinkedHashMap<>(values);
-        metadata.forEach((key, value) ->
-            copy.put(requireKey(key), Objects.requireNonNull(value, "metadata value")));
+        metadata.forEach(
+                (key, value) ->
+                        copy.put(requireKey(key), Objects.requireNonNull(value, "metadata value")));
         return new ZLinkApplicationMetadata(Collections.unmodifiableMap(copy));
     }
 
@@ -80,12 +77,11 @@ public final class ZLinkApplicationMetadata {
             byte[] key = utf8(entry.getKey(), "key");
             byte[] value = utf8(entry.getValue(), "value");
             if (key.length == 0 || key.length > 255) {
-                throw invalid(
-                    "application metadata key must encode to 1..255 UTF-8 bytes");
+                throw invalid("application metadata key must encode to 1..255 UTF-8 bytes");
             }
             if (value.length > 65535) {
                 throw invalid(
-                    "application metadata value must encode to at most 65535 UTF-8 bytes");
+                        "application metadata value must encode to at most 65535 UTF-8 bytes");
             }
             output.write(key.length);
             output.writeBytes(key);
@@ -129,8 +125,7 @@ public final class ZLinkApplicationMetadata {
             if (offset + 2 > encoded.length) {
                 throw invalid("application metadata value length is truncated");
             }
-            int valueLength =
-                ((encoded[offset] & 0xff) << 8) | (encoded[offset + 1] & 0xff);
+            int valueLength = ((encoded[offset] & 0xff) << 8) | (encoded[offset + 1] & 0xff);
             offset += 2;
             if (offset + valueLength > encoded.length) {
                 throw invalid("application metadata value is truncated");
@@ -162,26 +157,21 @@ public final class ZLinkApplicationMetadata {
         return value.getBytes(StandardCharsets.UTF_8);
     }
 
-    private static String decodeUtf8(
-        byte[] encoded,
-        int offset,
-        int length,
-        String field) {
+    private static String decodeUtf8(byte[] encoded, int offset, int length, String field) {
         try {
-            String value = StandardCharsets.UTF_8.newDecoder()
-                .onMalformedInput(CodingErrorAction.REPORT)
-                .onUnmappableCharacter(CodingErrorAction.REPORT)
-                .decode(ByteBuffer.wrap(encoded, offset, length))
-                .toString();
+            String value =
+                    StandardCharsets.UTF_8
+                            .newDecoder()
+                            .onMalformedInput(CodingErrorAction.REPORT)
+                            .onUnmappableCharacter(CodingErrorAction.REPORT)
+                            .decode(ByteBuffer.wrap(encoded, offset, length))
+                            .toString();
             if (value.indexOf('\0') >= 0) {
-                throw invalid(
-                    "application metadata " + field + " must not contain NUL");
+                throw invalid("application metadata " + field + " must not contain NUL");
             }
             return value;
         } catch (CharacterCodingException error) {
-            throw invalid(
-                "application metadata " + field + " is not valid UTF-8",
-                error);
+            throw invalid("application metadata " + field + " is not valid UTF-8", error);
         }
     }
 
@@ -189,9 +179,7 @@ public final class ZLinkApplicationMetadata {
         return new IllegalArgumentException(message);
     }
 
-    private static IllegalArgumentException invalid(
-        String message,
-        Throwable cause) {
+    private static IllegalArgumentException invalid(String message, Throwable cause) {
         return new IllegalArgumentException(message, cause);
     }
 }

@@ -6,9 +6,7 @@ internal static class ZLinkStreamFrameCodec
 {
     internal const int PrefixSize = ZlinkStreamFrameCodec.PrefixSize;
 
-    public static byte[] Encode(
-        ReadOnlySpan<byte> header,
-        ReadOnlySpan<byte> payload)
+    public static byte[] Encode(ReadOnlySpan<byte> header, ReadOnlySpan<byte> payload)
     {
         return ZlinkStreamFrameCodec.Encode(header, payload);
     }
@@ -16,7 +14,8 @@ internal static class ZLinkStreamFrameCodec
     public static bool TryDecode(
         ReadOnlySpan<byte> frame,
         out ReadOnlySpan<byte> header,
-        out ReadOnlySpan<byte> payload)
+        out ReadOnlySpan<byte> payload
+    )
     {
         return ZlinkStreamFrameCodec.TryDecode(frame, out header, out payload);
     }

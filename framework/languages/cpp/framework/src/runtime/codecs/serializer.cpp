@@ -26,18 +26,15 @@ struct serializer_descriptor_t
 class serializer_registry_state_t
 {
   public:
-    using resolved_serializer_cache_t =
-      std::map<std::type_index, std::shared_ptr<const void>>;
+    using resolved_serializer_cache_t = std::map<std::type_index, std::shared_ptr<const void>>;
 
     std::map<std::type_index, serializer_descriptor_t> serializers;
     std::map<std::string, std::set<std::type_index>> types_by_content_type;
     std::shared_ptr<const resolved_serializer_cache_t> resolved_serializers =
       std::make_shared<const resolved_serializer_cache_t> ();
     runtime::offload_executor_t resolved_serializers_lane_executor;
-    runtime::state_lane_t resolved_serializers_lane{
-      resolved_serializers_lane_executor};
-    std::atomic_size_t resolved_serializer_cache_capacity{
-      serializer_send_type_cache_capacity};
+    runtime::state_lane_t resolved_serializers_lane{resolved_serializers_lane_executor};
+    std::atomic_size_t resolved_serializer_cache_capacity{serializer_send_type_cache_capacity};
     std::atomic_bool frozen{false};
     std::size_t next_registration = 1;
 };
@@ -52,27 +49,22 @@ namespace
 
 bool is_media_type_token_character (unsigned char value) noexcept
 {
-    if ((value >= '0' && value <= '9')
-        || (value >= 'A' && value <= 'Z')
+    if ((value >= '0' && value <= '9') || (value >= 'A' && value <= 'Z')
         || (value >= 'a' && value <= 'z'))
         return true;
     constexpr std::string_view punctuation = "!#$%&'*+-.^_`|~";
-    return punctuation.find (static_cast<char> (value))
-           != std::string_view::npos;
+    return punctuation.find (static_cast<char> (value)) != std::string_view::npos;
 }
 
 std::string normalize_content_type (std::string_view input)
 {
-    while (!input.empty ()
-           && (input.front () == ' ' || input.front () == '\t'))
+    while (!input.empty () && (input.front () == ' ' || input.front () == '\t'))
         input.remove_prefix (1);
-    while (!input.empty ()
-           && (input.back () == ' ' || input.back () == '\t'))
+    while (!input.empty () && (input.back () == ' ' || input.back () == '\t'))
         input.remove_suffix (1);
 
     const auto slash = input.find ('/');
-    if (slash == std::string_view::npos || slash == 0
-        || slash + 1 == input.size ()
+    if (slash == std::string_view::npos || slash == 0 || slash + 1 == input.size ()
         || input.find ('/', slash + 1) != std::string_view::npos) {
         throw framework_exception_t (
           framework_error_kind_t::protocol_error,
@@ -92,10 +84,8 @@ std::string normalize_content_type (std::string_view input)
               framework_error_kind_t::protocol_error,
               "codec content type must be a parameter-free ASCII type/subtype");
         }
-        normalized.push_back (
-          value >= 'A' && value <= 'Z'
-            ? static_cast<char> (value + ('a' - 'A'))
-            : static_cast<char> (value));
+        normalized.push_back (value >= 'A' && value <= 'Z' ? static_cast<char> (value + ('a' - 'A'))
+                                                           : static_cast<char> (value));
     }
     return normalized;
 }
@@ -121,18 +111,15 @@ serializer_registry_t &serializer_registry_t::add_erased (std::type_index type,
                                                           std::optional<std::size_t> registration)
 {
     if (_state->frozen.load (std::memory_order_acquire)) {
-        throw framework_exception_t (
-          framework_error_kind_t::invalid_operation,
-          "codec registry is immutable after runtime startup");
+        throw framework_exception_t (framework_error_kind_t::invalid_operation,
+                                     "codec registry is immutable after runtime startup");
     }
     auto normalized = normalize_content_type (content_type);
-    const auto registration_id = registration ? *registration
-                                              : begin_registration ();
+    const auto registration_id = registration ? *registration : begin_registration ();
 
     if (const auto existing = _state->serializers.find (type);
         existing != _state->serializers.end ()) {
-        const auto indexed = _state->types_by_content_type.find (
-          existing->second.content_type);
+        const auto indexed = _state->types_by_content_type.find (existing->second.content_type);
         if (indexed != _state->types_by_content_type.end ()) {
             indexed->second.erase (type);
             if (indexed->second.empty ())
@@ -144,8 +131,7 @@ serializer_registry_t &serializer_registry_t::add_erased (std::type_index type,
     if (const auto existing = _state->types_by_content_type.find (normalized);
         existing != _state->types_by_content_type.end ()) {
         const auto first = _state->serializers.find (*existing->second.begin ());
-        if (first != _state->serializers.end ()
-            && first->second.registration != registration_id) {
+        if (first != _state->serializers.end () && first->second.registration != registration_id) {
             const auto replaced_types = existing->second;
             _state->types_by_content_type.erase (existing);
             for (const auto &replaced_type : replaced_types) {
@@ -156,10 +142,8 @@ serializer_registry_t &serializer_registry_t::add_erased (std::type_index type,
     }
 
     _state->serializers.insert_or_assign (
-      type,
-      detail::serializer_descriptor_t{
-        std::move (serialize), std::move (deserialize), normalized,
-        registration_id});
+      type, detail::serializer_descriptor_t{std::move (serialize), std::move (deserialize),
+                                            normalized, registration_id});
     _state->types_by_content_type[normalized].insert (type);
     invalidate_cached_serializer (type);
     return *this;
@@ -167,11 +151,9 @@ serializer_registry_t &serializer_registry_t::add_erased (std::type_index type,
 
 std::size_t serializer_registry_t::begin_registration ()
 {
-    if (_state->next_registration
-        == std::numeric_limits<std::size_t>::max ()) {
-        throw framework_exception_t (
-          framework_error_kind_t::internal_failure,
-          "codec registration identity is exhausted");
+    if (_state->next_registration == std::numeric_limits<std::size_t>::max ()) {
+        throw framework_exception_t (framework_error_kind_t::internal_failure,
+                                     "codec registration identity is exhausted");
     }
     return _state->next_registration++;
 }
@@ -179,65 +161,65 @@ std::size_t serializer_registry_t::begin_registration ()
 std::shared_ptr<const void>
 serializer_registry_t::cached_serializer (std::type_index type) const noexcept
 {
-    const auto cache = std::atomic_load_explicit (
-      &_state->resolved_serializers, std::memory_order_acquire);
+    const auto cache =
+      std::atomic_load_explicit (&_state->resolved_serializers, std::memory_order_acquire);
     const auto found = cache->find (type);
     return found == cache->end () ? nullptr : found->second;
 }
 
 std::shared_ptr<const void>
-serializer_registry_t::cache_serializer (
-  std::type_index type,
-  std::shared_ptr<const void> serializer) const
+serializer_registry_t::cache_serializer (std::type_index type,
+                                         std::shared_ptr<const void> serializer) const
 {
-    return _state->resolved_serializers_lane.run ([&] {
-    const auto current = std::atomic_load_explicit (
-      &_state->resolved_serializers, std::memory_order_acquire);
-    if (const auto found = current->find (type); found != current->end ())
-        return found->second;
+    return _state->resolved_serializers_lane
+      .run ([&] {
+          const auto current =
+            std::atomic_load_explicit (&_state->resolved_serializers, std::memory_order_acquire);
+          if (const auto found = current->find (type); found != current->end ())
+              return found->second;
 
-    if (current->size ()
-        >= _state->resolved_serializer_cache_capacity.load (
-          std::memory_order_acquire))
-        return serializer;
+          if (current->size ()
+              >= _state->resolved_serializer_cache_capacity.load (std::memory_order_acquire))
+              return serializer;
 
-    auto next = std::make_shared<detail::serializer_registry_state_t::
-                                    resolved_serializer_cache_t> (*current);
-    next->emplace (type, std::move (serializer));
-    const auto resolved = next->at (type);
-    std::shared_ptr<const detail::serializer_registry_state_t::
-                      resolved_serializer_cache_t> published = std::move (next);
-    std::atomic_store_explicit (&_state->resolved_serializers,
-                                published,
-                                std::memory_order_release);
-    return resolved;
-    }).get ();
+          auto next =
+            std::make_shared<detail::serializer_registry_state_t::resolved_serializer_cache_t> (
+              *current);
+          next->emplace (type, std::move (serializer));
+          const auto resolved = next->at (type);
+          std::shared_ptr<const detail::serializer_registry_state_t::resolved_serializer_cache_t>
+            published = std::move (next);
+          std::atomic_store_explicit (&_state->resolved_serializers, published,
+                                      std::memory_order_release);
+          return resolved;
+      })
+      .get ();
 }
 
-void serializer_registry_t::invalidate_cached_serializer (
-  std::type_index type) noexcept
+void serializer_registry_t::invalidate_cached_serializer (std::type_index type) noexcept
 {
-    _state->resolved_serializers_lane.run ([&] {
-    const auto current = std::atomic_load_explicit (
-      &_state->resolved_serializers, std::memory_order_acquire);
-    if (current->find (type) == current->end ())
-        return;
-    auto next = std::make_shared<detail::serializer_registry_state_t::
-                                    resolved_serializer_cache_t> (*current);
-    next->erase (type);
-    std::shared_ptr<const detail::serializer_registry_state_t::
-                      resolved_serializer_cache_t> published = std::move (next);
-    std::atomic_store_explicit (&_state->resolved_serializers,
-                                published,
-                                std::memory_order_release);
-    }).get ();
+    _state->resolved_serializers_lane
+      .run ([&] {
+          const auto current =
+            std::atomic_load_explicit (&_state->resolved_serializers, std::memory_order_acquire);
+          if (current->find (type) == current->end ())
+              return;
+          auto next =
+            std::make_shared<detail::serializer_registry_state_t::resolved_serializer_cache_t> (
+              *current);
+          next->erase (type);
+          std::shared_ptr<const detail::serializer_registry_state_t::resolved_serializer_cache_t>
+            published = std::move (next);
+          std::atomic_store_explicit (&_state->resolved_serializers, published,
+                                      std::memory_order_release);
+      })
+      .get ();
 }
 
 void serializer_registry_t::set_resolved_serializer_cache_capacity_for_tests (
   std::size_t capacity) noexcept
 {
-    _state->resolved_serializer_cache_capacity.store (
-      capacity, std::memory_order_release);
+    _state->resolved_serializer_cache_capacity.store (capacity, std::memory_order_release);
 }
 
 void serializer_registry_t::freeze () noexcept
@@ -251,9 +233,8 @@ serializer_registry_t::erased_serializer (std::type_index type) const
     const auto found = _state->serializers.find (type);
     if (found == _state->serializers.end ())
         return std::nullopt;
-    return erased_serializer_t{
-      found->second.serialize, found->second.deserialize,
-      found->second.content_type};
+    return erased_serializer_t{found->second.serialize, found->second.deserialize,
+                               found->second.content_type};
 }
 
 encoded_payload_t serializer_registry_t::serialize (std::type_index type, const void *value) const
@@ -297,10 +278,9 @@ void serializer_registry_t::deserialize (std::type_index type,
         throw;
     }
     catch (...) {
-        throw detail::make_origin_exception (
-          framework_error_kind_t::protocol_error,
-          detail::failure_origin_t::payload_decode,
-          "payload deserialization failed");
+        throw detail::make_origin_exception (framework_error_kind_t::protocol_error,
+                                             detail::failure_origin_t::payload_decode,
+                                             "payload deserialization failed");
     }
 }
 

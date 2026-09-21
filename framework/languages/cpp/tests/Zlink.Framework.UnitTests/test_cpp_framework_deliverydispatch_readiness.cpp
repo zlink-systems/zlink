@@ -21,7 +21,8 @@ class observed_mesh_t final : public route_mesh_runtime_t
     mesh_node_snapshot_t snapshot (std::string) const override { return {}; }
     bool is_ready (std::string) const override { return false; }
     std::unique_ptr<mesh_runtime_observation_t> observe (
-      std::string, std::size_t,
+      std::string,
+      std::size_t,
       std::function<void (const observed_status_t<mesh_node_snapshot_t> &)> observer) override
     {
         observers.push_back (std::move (observer));
@@ -73,17 +74,16 @@ int main ()
         auto mesh = std::make_shared<observed_mesh_t> ();
         auto &runtime = *mesh;
         registrations.add_factory<route_mesh_runtime_t> (
-          [mesh] (service_provider_t &) -> std::shared_ptr<route_mesh_runtime_t> {
-              return mesh;
-          }, service_lifetime_t::singleton);
+          [mesh] (service_provider_t &) -> std::shared_ptr<route_mesh_runtime_t> { return mesh; },
+          service_lifetime_t::singleton);
         auto services = registrations.build_provider ();
         route_readiness_service_t route (
           "dispatch", "delivery-couriers",
           std::vector<std::string>{"courier-node-1", "courier-node-2"});
-        actor_route_readiness_service_t first (
-          "delivery-couriers", "courier-node-1", "courier-node-1");
-        actor_route_readiness_service_t second (
-          "delivery-couriers", "courier-node-2", "courier-node-2");
+        actor_route_readiness_service_t first ("delivery-couriers", "courier-node-1",
+                                               "courier-node-1");
+        actor_route_readiness_service_t second ("delivery-couriers", "courier-node-2",
+                                                "courier-node-2");
         std::string output;
         bool premature_evidence = false;
         {
@@ -97,18 +97,17 @@ int main ()
 
             observed_status_t<mesh_node_snapshot_t> ready;
             ready.status.is_ready = true;
-            ready.status.peers = {
-              {.node_rid = zlink::routing_id_t::from ("courier-node-1"),
-               .state = peer_state_t::ready},
-              {.node_rid = zlink::routing_id_t::from ("courier-node-2"),
-               .state = peer_state_t::ready}};
+            ready.status.peers = {{.node_rid = zlink::routing_id_t::from ("courier-node-1"),
+                                   .state = peer_state_t::ready},
+                                  {.node_rid = zlink::routing_id_t::from ("courier-node-2"),
+                                   .state = peer_state_t::ready}};
             std::barrier start (3);
             std::array<std::thread, 3> writers;
             for (std::size_t index = 0; index < writers.size (); ++index) {
                 writers[index] = std::thread ([&, index] {
                     start.arrive_and_wait ();
-                    runtime.observers[index] (ready);
-                    runtime.observers[index] (ready);
+                    runtime.observers[index](ready);
+                    runtime.observers[index](ready);
                 });
             }
             for (auto &writer : writers)

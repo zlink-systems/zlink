@@ -2,9 +2,7 @@ package systems.zlink.framework.spots;
 
 import systems.zlink.framework.messaging.ZLinkMessage;
 
-public record ZLinkSpotActorJoinResult(
-    boolean accepted,
-    ZLinkMessage reply) {
+public record ZLinkSpotActorJoinResult(boolean accepted, ZLinkMessage reply) {
     public static ZLinkSpotActorJoinResult accept() {
         return from(ZLinkSpotAcceptRejectResult.accept());
     }

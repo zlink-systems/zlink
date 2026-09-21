@@ -10,7 +10,8 @@ internal sealed record ZLinkFrameworkRuntimeComponents(
     ZLinkSpotRuntimeManager Spots,
     ZLinkFrameworkComponentStateFactory StateFactory,
     ZLinkActorSessionManager ActorSessionManager,
-    ZLinkFrameworkActorFacade Actors);
+    ZLinkFrameworkActorFacade Actors
+);
 
 internal static class ZLinkFrameworkRuntimeComponentFactory
 {
@@ -24,15 +25,17 @@ internal static class ZLinkFrameworkRuntimeComponentFactory
         ZLinkHandlerDispatcher dispatcher,
         Func<ZLinkFrameworkComponentState> getOrStartState,
         Func<IZLinkBackendSpotNode?> getActorSpotNode,
-        Func<string, ZLinkActivationConcurrencyAdmission?>? getActivationAdmission = null)
+        Func<string, ZLinkActivationConcurrencyAdmission?>? getActivationAdmission = null
+    )
     {
         var loggerFactory = services.GetService<ILoggerFactory>();
-        var channelLogger = loggerFactory?.CreateLogger("Zlink.Framework.ClientServer")
-                            ?? NullLogger.Instance;
+        var channelLogger =
+            loggerFactory?.CreateLogger("Zlink.Framework.ClientServer") ?? NullLogger.Instance;
         var channelDispatchErrors = new ZLinkDispatchErrorReporter(
             registration.DispatchOptions,
             ZLinkMessageFlowTracer.CreateLogger(loggerFactory, channelLogger),
-            runtime);
+            runtime
+        );
         IReadOnlySet<string> ResolveHandlerGroups(string channelName) =>
             registration.Channels.TryGetValue(channelName, out var channel)
                 ? channel.HandlerGroups
@@ -47,7 +50,8 @@ internal static class ZLinkFrameworkRuntimeComponentFactory
                     dispatcher,
                     registration,
                     runtime,
-                    loggerFactory?.CreateLogger<ZLinkFanoutPacketDispatcher>()),
+                    loggerFactory?.CreateLogger<ZLinkFanoutPacketDispatcher>()
+                ),
                 new ZLinkClientServerDispatcher(
                     new ZLinkChannelCommandDispatchPipeline(
                         null,
@@ -55,41 +59,49 @@ internal static class ZLinkFrameworkRuntimeComponentFactory
                         dispatcher,
                         ResolveHandlerGroups,
                         channelDispatchErrors,
-                        registration.Codecs),
+                        registration.Codecs
+                    ),
                     new ZLinkChannelRequestDispatchPipeline(
                         null,
                         handlerRegistry,
                         dispatcher,
                         ResolveHandlerGroups,
                         registration.Codecs,
-                        channelDispatchErrors),
+                        channelDispatchErrors
+                    ),
                     registration.Codecs,
                     () => channelDispatchErrors.Flow.CaptureEnabled,
-                    channelDispatchErrors)),
+                    channelDispatchErrors
+                )
+            ),
             services.GetService<ZLinkFanoutRuntimeService>()
-            ?? new ZLinkFanoutRuntimeService(registration),
-            () => runtime.Flow);
+                ?? new ZLinkFanoutRuntimeService(registration),
+            () => runtime.Flow
+        );
         var streams = new ZLinkStreamRuntimeManager(services, backendAdapterFactory, registration);
         var spots = new ZLinkSpotRuntimeManager(
             services,
             runtime,
             registration,
             locationLifecycle,
-            services.GetService<ZLinkOwnerLeaseTracker>());
+            services.GetService<ZLinkOwnerLeaseTracker>()
+        );
         var stateFactory = new ZLinkFrameworkComponentStateFactory(
             runtime,
             backendAdapterFactory,
             registration,
             channels,
             streams,
-            spots);
+            spots
+        );
         var actorSessionManager = new ZLinkActorSessionManager(
             runtime,
             services,
             getActorSpotNode,
             locationLifecycle,
             new ZLinkBoundSessionService(runtime),
-            getActivationAdmission);
+            getActivationAdmission
+        );
         var actors = new ZLinkFrameworkActorFacade(
             runtime,
             registration,
@@ -97,13 +109,15 @@ internal static class ZLinkFrameworkRuntimeComponentFactory
             spots,
             actorSessionManager,
             getOrStartState,
-            getActorSpotNode);
+            getActorSpotNode
+        );
         return new ZLinkFrameworkRuntimeComponents(
             channels,
             streams,
             spots,
             stateFactory,
             actorSessionManager,
-            actors);
+            actors
+        );
     }
 }

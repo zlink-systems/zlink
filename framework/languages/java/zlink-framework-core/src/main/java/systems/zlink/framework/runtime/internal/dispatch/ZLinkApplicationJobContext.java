@@ -4,21 +4,19 @@ import java.util.Objects;
 import java.util.Optional;
 
 /**
- * Carries one host queue reservation across Framework-owned serial and executor
- * boundaries. The context is an ownership carrier only; all admission and
- * accounting policy remains in {@link ZLinkApplicationJobQueue}.
+ * Carries one host queue reservation across Framework-owned serial and executor boundaries. The
+ * context is an ownership carrier only; all admission and accounting policy remains in {@link
+ * ZLinkApplicationJobQueue}.
  */
 public final class ZLinkApplicationJobContext {
     private static final ThreadLocal<State> CURRENT = new ThreadLocal<>();
 
-    private ZLinkApplicationJobContext() {
-    }
+    private ZLinkApplicationJobContext() {}
 
     /** Enters the receive/claim reservation scope. */
     public static Scope enter(ZLinkApplicationJobQueue.Permit permit) {
-        return enter(new State(
-            Objects.requireNonNull(permit, "permit"),
-            new QueuedOwnership(permit)));
+        return enter(
+                new State(Objects.requireNonNull(permit, "permit"), new QueuedOwnership(permit)));
     }
 
     /** Returns the reservation currently carried by this Framework turn. */
@@ -28,9 +26,9 @@ public final class ZLinkApplicationJobContext {
     }
 
     /**
-     * Returns whether the current ingress reservation has not yet crossed a
-     * Framework queue boundary. A queued handler keeps its permit in this
-     * context after handler entry, but cannot transfer it to a second job.
+     * Returns whether the current ingress reservation has not yet crossed a Framework queue
+     * boundary. A queued handler keeps its permit in this context after handler entry, but cannot
+     * transfer it to a second job.
      */
     public static boolean hasTransferableQueuedOwnership() {
         State state = CURRENT.get();
@@ -38,9 +36,9 @@ public final class ZLinkApplicationJobContext {
     }
 
     /**
-     * Transfers the current receive reservation to exactly one queued job.
-     * Repeated queue captures in the same ingress scope cannot duplicate a
-     * permit; fan-out must acquire one distinct permit for each job.
+     * Transfers the current receive reservation to exactly one queued job. Repeated queue captures
+     * in the same ingress scope cannot duplicate a permit; fan-out must acquire one distinct permit
+     * for each job.
      */
     public static QueuedOwnership transferToQueuedJob() {
         State state = CURRENT.get();
@@ -53,16 +51,12 @@ public final class ZLinkApplicationJobContext {
 
     /** Re-enters a permit already owned by a queued Framework job. */
     public static Scope enterQueued(QueuedOwnership ownership) {
-        return ownership == null
-            ? () -> { }
-            : enter(new State(ownership.permit, ownership));
+        return ownership == null ? () -> {} : enter(new State(ownership.permit, ownership));
     }
 
     /** Test/direct-invocation bridge for a permit already marked queued. */
     public static Scope enterQueued(ZLinkApplicationJobQueue.Permit permit) {
-        return permit == null
-            ? () -> { }
-            : enter(new State(permit, new QueuedOwnership(permit)));
+        return permit == null ? () -> {} : enter(new State(permit, new QueuedOwnership(permit)));
     }
 
     /** Returns capacity immediately before the first application instruction. */
@@ -129,9 +123,7 @@ public final class ZLinkApplicationJobContext {
         private final ZLinkApplicationJobQueue.Permit permit;
         private final QueuedOwnership ownership;
 
-        private State(
-            ZLinkApplicationJobQueue.Permit permit,
-            QueuedOwnership ownership) {
+        private State(ZLinkApplicationJobQueue.Permit permit, QueuedOwnership ownership) {
             this.permit = permit;
             this.ownership = ownership;
         }

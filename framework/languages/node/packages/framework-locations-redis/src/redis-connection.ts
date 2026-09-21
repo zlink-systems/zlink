@@ -1,9 +1,6 @@
 import { createClient, RESP_TYPES } from 'redis';
 import type { RedisClientType } from 'redis';
-import type {
-  ZLinkRedisLocationOptions,
-  ZLinkRedisRelocationOptions
-} from './redis-options';
+import type { ZLinkRedisLocationOptions, ZLinkRedisRelocationOptions } from './redis-options';
 
 export type RedisCommandValue = string | Buffer;
 export type RedisCommandClient = Pick<
@@ -56,10 +53,7 @@ export class RedisConnection {
     args: readonly RedisCommandValue[],
     signal?: AbortSignal
   ): Promise<unknown> {
-    return await this.command(
-      ['EVAL', script, String(keys.length), ...keys, ...args],
-      signal
-    );
+    return await this.command(['EVAL', script, String(keys.length), ...keys, ...args], signal);
   }
 
   async dispose(): Promise<void> {
@@ -110,9 +104,7 @@ function isClientReady(client: RedisCommandClient): boolean {
   return client.isReady === true;
 }
 
-function requireOptions(
-  options: ZLinkRedisLocationOptions | ZLinkRedisRelocationOptions
-): void {
+function requireOptions(options: ZLinkRedisLocationOptions | ZLinkRedisRelocationOptions): void {
   if (options.keyPrefix.length === 0) {
     throw new Error('Redis Store keyPrefix is required.');
   }
@@ -120,16 +112,15 @@ function requireOptions(
     throw new Error('Redis Store keyPrefix must not contain hash-tag braces.');
   }
   if (
-    options.client === undefined
-    && options.url === undefined
-    && options.clientOptions === undefined
+    options.client === undefined &&
+    options.url === undefined &&
+    options.clientOptions === undefined
   ) {
     throw new Error('Redis Store requires url, clientOptions, or client.');
   }
   if (
-    options.operationTimeoutMs !== undefined
-    && (!Number.isSafeInteger(options.operationTimeoutMs)
-      || options.operationTimeoutMs < 1)
+    options.operationTimeoutMs !== undefined &&
+    (!Number.isSafeInteger(options.operationTimeoutMs) || options.operationTimeoutMs < 1)
   ) {
     throw new RangeError('Redis Store operationTimeoutMs must be a positive safe integer.');
   }
@@ -154,21 +145,19 @@ async function waitForOperation<T>(
       cleanup();
       action();
     };
-    const onAbort = () => settle(
-      () => reject(signal?.reason ?? new Error('Redis Store operation aborted.'))
-    );
+    const onAbort = () =>
+      settle(() => reject(signal?.reason ?? new Error('Redis Store operation aborted.')));
     signal?.addEventListener('abort', onAbort, { once: true });
     if (timeoutMs !== undefined) {
       timeout = setTimeout(
-        () => settle(() =>
-          reject(new Error(`Redis Store operation timed out after ${timeoutMs} ms.`))
-        ),
+        () =>
+          settle(() => reject(new Error(`Redis Store operation timed out after ${timeoutMs} ms.`))),
         timeoutMs
       );
     }
     operation.then(
-      value => settle(() => resolve(value)),
-      error => settle(() => reject(error))
+      (value) => settle(() => resolve(value)),
+      (error) => settle(() => reject(error))
     );
   });
 }

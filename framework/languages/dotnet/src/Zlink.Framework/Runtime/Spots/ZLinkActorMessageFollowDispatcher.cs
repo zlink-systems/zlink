@@ -5,11 +5,10 @@ internal static class ZLinkActorMessageFollowDispatcher
     internal static bool CanFollow(
         ZLinkActorRuntimeState actorState,
         ZLinkBackendActorRef frameActor,
-        ZLinkBackendActorRouteContext routeContext)
+        ZLinkBackendActorRouteContext routeContext
+    )
     {
-        var resolution = actorState.Handoff.RouteFrame(
-            actorState.NativeActorRef,
-            frameActor);
+        var resolution = actorState.Handoff.RouteFrame(actorState.NativeActorRef, frameActor);
         var route = resolution.Route;
         var messageFollowRoute = resolution.MessageFollowRoute;
         if (route != ZLinkActorFrameRoute.MessageFollow)
@@ -40,11 +39,10 @@ internal static class ZLinkActorMessageFollowDispatcher
         ulong sourceNodeGeneration = 0,
         ZLinkServiceWireCodec.RequestSourceFence? requestSource = null,
         Func<IReadOnlyList<Message>, SubmitResult>? directReply = null,
-        ReadOnlyMemory<byte> applicationMetadata = default)
+        ReadOnlyMemory<byte> applicationMetadata = default
+    )
     {
-        var resolution = actorState.Handoff.RouteFrame(
-            actorState.NativeActorRef,
-            frameActor);
+        var resolution = actorState.Handoff.RouteFrame(actorState.NativeActorRef, frameActor);
         return TryFollow(
             runtime,
             actorState,
@@ -60,7 +58,8 @@ internal static class ZLinkActorMessageFollowDispatcher
             sourceNodeGeneration,
             requestSource,
             directReply,
-            applicationMetadata);
+            applicationMetadata
+        );
     }
 
     internal static bool TryFollow(
@@ -78,7 +77,8 @@ internal static class ZLinkActorMessageFollowDispatcher
         ulong sourceNodeGeneration = 0,
         ZLinkServiceWireCodec.RequestSourceFence? requestSource = null,
         Func<IReadOnlyList<Message>, SubmitResult>? directReply = null,
-        ReadOnlyMemory<byte> applicationMetadata = default)
+        ReadOnlyMemory<byte> applicationMetadata = default
+    )
     {
         var route = resolution.Route;
         var messageFollowRoute = resolution.MessageFollowRoute;
@@ -87,14 +87,15 @@ internal static class ZLinkActorMessageFollowDispatcher
             var currentActor = actorState.NativeActorRef;
             ZLinkFrameworkDebugLog.SpotDiscovery(
                 $"actor_frame_route actor={frameActor.ActorId} route={route} "
-                + $"frame_node={frameActor.NodeRid} frame_generation={frameActor.Generation} "
-                + $"current_node={currentActor?.NodeRid} "
-                + $"current_generation={currentActor?.Generation} "
-                + $"direct={routeContext.IsDirectRoute} "
-                + $"hop={routeContext.MessageFollowHopCount} "
-                + $"target_node_generation={routeContext.TargetNodeGeneration} "
-                + $"authority_generation={routeContext.AuthorityOwnerGeneration} "
-                + $"owner_lease={routeContext.OwnerLeaseGeneration}");
+                    + $"frame_node={frameActor.NodeRid} frame_generation={frameActor.Generation} "
+                    + $"current_node={currentActor?.NodeRid} "
+                    + $"current_generation={currentActor?.Generation} "
+                    + $"direct={routeContext.IsDirectRoute} "
+                    + $"hop={routeContext.MessageFollowHopCount} "
+                    + $"target_node_generation={routeContext.TargetNodeGeneration} "
+                    + $"authority_generation={routeContext.AuthorityOwnerGeneration} "
+                    + $"owner_lease={routeContext.OwnerLeaseGeneration}"
+            );
         }
         if (route == ZLinkActorFrameRoute.MessageFollow)
         {
@@ -111,18 +112,20 @@ internal static class ZLinkActorMessageFollowDispatcher
                 sourceNodeGeneration,
                 requestSource,
                 directReply,
-                applicationMetadata);
+                applicationMetadata
+            );
         }
-        if (route is ZLinkActorFrameRoute.Stale
-            or ZLinkActorFrameRoute.MessageFollowExpired)
+        if (route is ZLinkActorFrameRoute.Stale or ZLinkActorFrameRoute.MessageFollowExpired)
         {
             runtime.LogActorHandoff(
                 route == ZLinkActorFrameRoute.MessageFollowExpired
                     ? "message_follow_expired"
-                    : "message_follow_rejected");
+                    : "message_follow_rejected"
+            );
             throw new ZLinkFrameworkException(
                 ZLinkFrameworkErrorKind.Unavailable,
-                $"Actor ref '{frameActor.ActorId}' generation '{frameActor.Generation}' is stale.");
+                $"Actor ref '{frameActor.ActorId}' generation '{frameActor.Generation}' is stale."
+            );
         }
 
         if (route == ZLinkActorFrameRoute.MessageFollow)
@@ -135,7 +138,8 @@ internal static class ZLinkActorMessageFollowDispatcher
 
     private static void ValidateMessageFollowRoute(
         ZLinkActorMessageFollowRoute messageFollowRoute,
-        ZLinkBackendActorRouteContext route)
+        ZLinkBackendActorRouteContext route
+    )
     {
         if (!messageFollowRoute.Lease.IsCommitted)
             throw Stale(messageFollowRoute, "the source-to-target route is not committed");
@@ -143,19 +147,23 @@ internal static class ZLinkActorMessageFollowDispatcher
             return;
         if (route.MessageFollowHopCount >= 8)
             throw Stale(messageFollowRoute, "the Message Follow chain reached the 8-hop limit");
-        if (route.TargetNodeGeneration != messageFollowRoute.SourceNodeGeneration
-            || route.AuthorityOwnerGeneration
-               != messageFollowRoute.SourceAuthorityOwnerGeneration
-            || route.OwnerLeaseGeneration
-               != messageFollowRoute.SourceOwnerLeaseGeneration)
-            throw Stale(messageFollowRoute, "the incoming route fence does not match the committed source");
+        if (
+            route.TargetNodeGeneration != messageFollowRoute.SourceNodeGeneration
+            || route.AuthorityOwnerGeneration != messageFollowRoute.SourceAuthorityOwnerGeneration
+            || route.OwnerLeaseGeneration != messageFollowRoute.SourceOwnerLeaseGeneration
+        )
+            throw Stale(
+                messageFollowRoute,
+                "the incoming route fence does not match the committed source"
+            );
     }
 
     private static ZLinkFrameworkException Stale(
         ZLinkActorMessageFollowRoute messageFollowRoute,
-        string reason) =>
+        string reason
+    ) =>
         new(
             ZLinkFrameworkErrorKind.Unavailable,
-            $"Actor ref '{messageFollowRoute.SourceActor.ActorId}' cannot use Message Follow because {reason}.");
-
+            $"Actor ref '{messageFollowRoute.SourceActor.ActorId}' cannot use Message Follow because {reason}."
+        );
 }

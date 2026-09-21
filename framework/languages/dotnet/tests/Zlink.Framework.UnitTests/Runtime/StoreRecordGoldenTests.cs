@@ -26,7 +26,8 @@ public sealed class StoreRecordGoldenTests
     {
         var fixturePath = Path.Combine(
             Common.FrameworkTestEnvironment.GetRepoRoot(),
-            "framework/runtime/protocol/golden/store-record-v1.json");
+            "framework/runtime/protocol/golden/store-record-v1.json"
+        );
         using var fixture = JsonDocument.Parse(File.ReadAllText(fixturePath));
         var root = fixture.RootElement;
         var prefix = root.GetProperty("prefixExample").GetString()!;
@@ -39,11 +40,14 @@ public sealed class StoreRecordGoldenTests
             Assert.Equal(key.GetProperty("sha256Hex").GetString(), sha256Hex);
             Assert.Equal(
                 $"{prefix}:{namespaceTag}:{sha256Hex}",
-                key.GetProperty("redisKey").GetString());
+                key.GetProperty("redisKey").GetString()
+            );
         }
 
         var relocationBlob = root.GetProperty("relocationBlob");
-        var relocationBytes = Convert.FromHexString(relocationBlob.GetProperty("rawBytesHex").GetString()!);
+        var relocationBytes = Convert.FromHexString(
+            relocationBlob.GetProperty("rawBytesHex").GetString()!
+        );
         Assert.True(relocationBytes.Length > 0);
         // zlink-location-v3 and zlink-relocation-v1 are Redis Cluster hashtags
         // ({...}) so a multi-key EVAL script (record + sequence counter +
@@ -52,10 +56,15 @@ public sealed class StoreRecordGoldenTests
         // different slots.
         Assert.Equal(
             $"{prefix}:{{zlink-relocation-v1}}:blob:{relocationBlob.GetProperty("reference").GetString()}",
-            relocationBlob.GetProperty("redisKey").GetString());
+            relocationBlob.GetProperty("redisKey").GetString()
+        );
         Assert.Equal("{zlink-location-v3}:opaque", namespaceTag);
 
-        foreach (var vector in root.GetProperty("valueVectors").GetProperty("genericOpaqueRecord").EnumerateArray())
+        foreach (
+            var vector in root.GetProperty("valueVectors")
+                .GetProperty("genericOpaqueRecord")
+                .EnumerateArray()
+        )
         {
             var name = vector.GetProperty("name").GetString()!;
             var full = Convert.FromHexString(vector.GetProperty("fullValueHex").GetString()!);
@@ -64,23 +73,37 @@ public sealed class StoreRecordGoldenTests
             var decoded = DecodeOpaqueMember(full, ref offset);
             Assert.Equal(full.Length, offset);
 
-            var expectedOriginalKey = vector.GetProperty("originalKey").GetString()!.Replace("\\u0000", "\0");
+            var expectedOriginalKey = vector
+                .GetProperty("originalKey")
+                .GetString()!
+                .Replace("\\u0000", "\0");
             Assert.Equal(expectedOriginalKey, decoded.OriginalKey);
-            Assert.Equal(vector.GetProperty("jsonBytesHex").GetString(), Convert.ToHexString(decoded.RawBytes).ToLowerInvariant());
+            Assert.Equal(
+                vector.GetProperty("jsonBytesHex").GetString(),
+                Convert.ToHexString(decoded.RawBytes).ToLowerInvariant()
+            );
             Assert.Equal(vector.GetProperty("version").GetString(), decoded.Version);
-            Assert.Equal(vector.GetProperty("expiresAtMs").GetString(), decoded.ExpiresAtMs.ToString());
+            Assert.Equal(
+                vector.GetProperty("expiresAtMs").GetString(),
+                decoded.ExpiresAtMs.ToString()
+            );
             Assert.Equal(vector.GetProperty("tombstone").GetBoolean(), decoded.Tombstone);
 
-            var member = Convert.FromHexString(vector.GetProperty("cmsgpackMemberHex").GetString()!);
+            var member = Convert.FromHexString(
+                vector.GetProperty("cmsgpackMemberHex").GetString()!
+            );
             Assert.Equal(member, full[1..]);
 
             if (!vector.GetProperty("tombstone").GetBoolean())
             {
                 using var parsed = JsonDocument.Parse(decoded.RawBytes);
-                using var expectedDoc = JsonDocument.Parse(vector.GetProperty("decoded").GetRawText());
+                using var expectedDoc = JsonDocument.Parse(
+                    vector.GetProperty("decoded").GetRawText()
+                );
                 Assert.Equal(
                     JsonSerializer.Serialize(expectedDoc.RootElement),
-                    JsonSerializer.Serialize(parsed.RootElement));
+                    JsonSerializer.Serialize(parsed.RootElement)
+                );
             }
             else
             {
@@ -102,7 +125,8 @@ public sealed class StoreRecordGoldenTests
     {
         var fixturePath = Path.Combine(
             Common.FrameworkTestEnvironment.GetRepoRoot(),
-            "framework/runtime/protocol/golden/store-record-v1.json");
+            "framework/runtime/protocol/golden/store-record-v1.json"
+        );
         using var fixture = JsonDocument.Parse(File.ReadAllText(fixturePath));
         var creation = fixture.RootElement.GetProperty("creationContentReference");
 
@@ -115,12 +139,15 @@ public sealed class StoreRecordGoldenTests
                     item.GetProperty("reference").GetString()!,
                     Convert.FromHexString(item.GetProperty("requestSha256").GetString()!),
                     item.GetProperty("requestEncodedSize").GetInt32(),
-                    out var payload),
-                item.GetProperty("name").GetString());
+                    out var payload
+                ),
+                item.GetProperty("name").GetString()
+            );
             Assert.Equal(expected, payload);
             Assert.Equal(
                 item.GetProperty("reference").GetString(),
-                Zlink.Framework.Runtime.Spots.ZLinkInlineCreationIntentCodec.Encode(expected));
+                Zlink.Framework.Runtime.Spots.ZLinkInlineCreationIntentCodec.Encode(expected)
+            );
             accepted++;
         }
         Assert.True(accepted > 0);
@@ -133,8 +160,10 @@ public sealed class StoreRecordGoldenTests
                     item.GetProperty("reference").GetString()!,
                     Convert.FromHexString(item.GetProperty("requestSha256").GetString()!),
                     item.GetProperty("requestEncodedSize").GetInt32(),
-                    out _),
-                item.GetProperty("name").GetString());
+                    out _
+                ),
+                item.GetProperty("name").GetString()
+            );
             rejected++;
         }
         Assert.True(rejected > 0);
@@ -157,60 +186,67 @@ public sealed class StoreRecordGoldenTests
     {
         var fixturePath = Path.Combine(
             Common.FrameworkTestEnvironment.GetRepoRoot(),
-            "framework/runtime/protocol/golden/store-record-v1.json");
+            "framework/runtime/protocol/golden/store-record-v1.json"
+        );
         using var fixture = JsonDocument.Parse(File.ReadAllText(fixturePath));
         var root = fixture.RootElement;
-        var byRecord = root.GetProperty("keyDerivation").EnumerateArray()
-            .ToDictionary(
-                entry => entry.GetProperty("record").GetString()!,
-                entry => entry);
+        var byRecord = root.GetProperty("keyDerivation")
+            .EnumerateArray()
+            .ToDictionary(entry => entry.GetProperty("record").GetString()!, entry => entry);
 
         AssertPreimage(
             byRecord["mesh-node-descriptor"],
-            ZLinkProviderLocationRepository.MeshKey(
-                "main",
-                RoutingId.FromHex("01020304")).Value);
+            ZLinkProviderLocationRepository.MeshKey("main", RoutingId.FromHex("01020304")).Value
+        );
         AssertPreimage(
             byRecord["owner-lease"],
-            ZLinkProviderLocationRepository.OwnerKey("owner-a").Value);
+            ZLinkProviderLocationRepository.OwnerKey("owner-a").Value
+        );
         AssertPreimage(
             byRecord["client-server-descriptor"],
-            ZLinkProviderLocationRepository.ClientServerKey(
-                "chat-channel",
-                RoutingId.FromHex("01020304")).Value);
+            ZLinkProviderLocationRepository
+                .ClientServerKey("chat-channel", RoutingId.FromHex("01020304"))
+                .Value
+        );
         AssertPreimage(
             byRecord["fanout-publisher-descriptor"],
-            ZLinkProviderLocationRepository.FanoutKey(
-                "chat-channel",
-                RoutingId.FromHex("01020304")).Value);
+            ZLinkProviderLocationRepository
+                .FanoutKey("chat-channel", RoutingId.FromHex("01020304"))
+                .Value
+        );
         AssertPreimage(
             byRecord["authority-actor"],
-            ZLinkProviderLocationRepository.AuthorityMetaKey(
-                ZLinkAuthorityKeyCodec.EncodeActor("user:42")).Value);
+            ZLinkProviderLocationRepository
+                .AuthorityMetaKey(ZLinkAuthorityKeyCodec.EncodeActor("user:42"))
+                .Value
+        );
         AssertPreimage(
             byRecord["authority-spot"],
-            ZLinkProviderLocationRepository.AuthorityMetaKey(
-                ZLinkAuthorityKeyCodec.EncodeSpot("room:1")).Value);
+            ZLinkProviderLocationRepository
+                .AuthorityMetaKey(ZLinkAuthorityKeyCodec.EncodeSpot("room:1"))
+                .Value
+        );
         AssertPreimage(
             byRecord["creation-terminal"],
-            ZLinkProviderLocationRepository.TerminalKey(
-                new ZLinkCreationOperationId(
-                    RoutingId.FromHex("01020304"),
-                    7,
-                    0x2a,
-                    1)).Value);
+            ZLinkProviderLocationRepository
+                .TerminalKey(
+                    new ZLinkCreationOperationId(RoutingId.FromHex("01020304"), 7, 0x2a, 1)
+                )
+                .Value
+        );
 
         var ownerLeaseValueVector = root.GetProperty("valueVectors")
-            .GetProperty("genericOpaqueRecord").EnumerateArray()
-            .Single(vector =>
-                vector.GetProperty("name").GetString() == "ownerLease-expired");
-        var producedJson =
-            ZLinkProviderLocationRepository.EncodeOwnerLeaseRecordForGoldenTest(
-                "owner-a",
-                5);
+            .GetProperty("genericOpaqueRecord")
+            .EnumerateArray()
+            .Single(vector => vector.GetProperty("name").GetString() == "ownerLease-expired");
+        var producedJson = ZLinkProviderLocationRepository.EncodeOwnerLeaseRecordForGoldenTest(
+            "owner-a",
+            5
+        );
         Assert.Equal(
             ownerLeaseValueVector.GetProperty("jsonBytesHex").GetString(),
-            Convert.ToHexString(producedJson).ToLowerInvariant());
+            Convert.ToHexString(producedJson).ToLowerInvariant()
+        );
     }
 
     private static void AssertPreimage(JsonElement vector, string producedKeyValue)
@@ -218,19 +254,25 @@ public sealed class StoreRecordGoldenTests
         var producedPreimage = Encoding.UTF8.GetBytes(producedKeyValue);
         Assert.Equal(
             vector.GetProperty("preimageHex").GetString(),
-            Convert.ToHexString(producedPreimage).ToLowerInvariant());
-        var sha256Hex = Convert.ToHexString(SHA256.HashData(producedPreimage))
-            .ToLowerInvariant();
+            Convert.ToHexString(producedPreimage).ToLowerInvariant()
+        );
+        var sha256Hex = Convert.ToHexString(SHA256.HashData(producedPreimage)).ToLowerInvariant();
         Assert.Equal(vector.GetProperty("sha256Hex").GetString(), sha256Hex);
     }
 
     private readonly record struct OpaqueMember(
-        string OriginalKey, byte[] RawBytes, string Version, ulong ExpiresAtMs, bool Tombstone);
+        string OriginalKey,
+        byte[] RawBytes,
+        string Version,
+        ulong ExpiresAtMs,
+        bool Tombstone
+    );
 
     private static OpaqueMember DecodeOpaqueMember(byte[] bytes, ref int offset)
     {
         var count = ReadArrayHead(bytes, ref offset);
-        if (count != 5) throw new InvalidDataException($"invalid opaque member arity: {count}");
+        if (count != 5)
+            throw new InvalidDataException($"invalid opaque member arity: {count}");
         var originalKey = Encoding.UTF8.GetString(ReadStr(bytes, ref offset));
         var rawBytes = ReadStr(bytes, ref offset);
         var version = Encoding.UTF8.GetString(ReadStr(bytes, ref offset));
@@ -244,7 +286,8 @@ public sealed class StoreRecordGoldenTests
     private static int ReadArrayHead(byte[] bytes, ref int offset)
     {
         var tag = NextByte(bytes, ref offset);
-        if ((tag & 0xf0) == 0x90) return tag & 0x0f;
+        if ((tag & 0xf0) == 0x90)
+            return tag & 0x0f;
         if (tag == 0xdc)
         {
             return (NextByte(bytes, ref offset) << 8) | NextByte(bytes, ref offset);
@@ -252,7 +295,8 @@ public sealed class StoreRecordGoldenTests
         if (tag == 0xdd)
         {
             var v = 0;
-            for (var i = 0; i < 4; i++) v = (v << 8) | NextByte(bytes, ref offset);
+            for (var i = 0; i < 4; i++)
+                v = (v << 8) | NextByte(bytes, ref offset);
             return v;
         }
         throw new InvalidDataException($"invalid msgpack array tag: {tag}");
@@ -277,7 +321,8 @@ public sealed class StoreRecordGoldenTests
         else if (tag == 0xdb)
         {
             length = 0;
-            for (var i = 0; i < 4; i++) length = (length << 8) | NextByte(bytes, ref offset);
+            for (var i = 0; i < 4; i++)
+                length = (length << 8) | NextByte(bytes, ref offset);
         }
         else
         {
@@ -291,19 +336,24 @@ public sealed class StoreRecordGoldenTests
     private static ulong ReadUint(byte[] bytes, ref int offset)
     {
         var tag = NextByte(bytes, ref offset);
-        if ((tag & 0x80) == 0) return tag;
-        if (tag == 0xcc) return NextByte(bytes, ref offset);
-        if (tag == 0xcd) return (ulong)((NextByte(bytes, ref offset) << 8) | NextByte(bytes, ref offset));
+        if ((tag & 0x80) == 0)
+            return tag;
+        if (tag == 0xcc)
+            return NextByte(bytes, ref offset);
+        if (tag == 0xcd)
+            return (ulong)((NextByte(bytes, ref offset) << 8) | NextByte(bytes, ref offset));
         if (tag == 0xce)
         {
             ulong v = 0;
-            for (var i = 0; i < 4; i++) v = (v << 8) | NextByte(bytes, ref offset);
+            for (var i = 0; i < 4; i++)
+                v = (v << 8) | NextByte(bytes, ref offset);
             return v;
         }
         if (tag == 0xcf)
         {
             ulong v = 0;
-            for (var i = 0; i < 8; i++) v = (v << 8) | NextByte(bytes, ref offset);
+            for (var i = 0; i < 8; i++)
+                v = (v << 8) | NextByte(bytes, ref offset);
             return v;
         }
         throw new InvalidDataException($"invalid msgpack uint tag: {tag}");
@@ -312,8 +362,10 @@ public sealed class StoreRecordGoldenTests
     private static bool ReadBool(byte[] bytes, ref int offset)
     {
         var tag = NextByte(bytes, ref offset);
-        if (tag == 0xc2) return false;
-        if (tag == 0xc3) return true;
+        if (tag == 0xc2)
+            return false;
+        if (tag == 0xc3)
+            return true;
         throw new InvalidDataException($"invalid msgpack bool tag: {tag}");
     }
 }

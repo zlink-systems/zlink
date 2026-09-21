@@ -15,24 +15,33 @@ internal sealed class ResponseBodyReader(HttpClientOptions options)
     public async ValueTask StreamToSinkAsync(
         HttpResponseMessage response,
         Action<ReadOnlyMemory<byte>> sink,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken
+    )
     {
-        await using var stream = await response.Content.ReadAsStreamAsync(cancellationToken).ConfigureAwait(false);
+        await using var stream = await response
+            .Content.ReadAsStreamAsync(cancellationToken)
+            .ConfigureAwait(false);
         var buffer = new byte[16384];
         long total = 0;
         int read;
         while ((read = await stream.ReadAsync(buffer, cancellationToken).ConfigureAwait(false)) > 0)
         {
             total += read;
-            if (total > options.MaxResponseBodySize) throw RequestError("HTTP response exceeded the maximum body size");
+            if (total > options.MaxResponseBodySize)
+                throw RequestError("HTTP response exceeded the maximum body size");
 
             sink(new ReadOnlyMemory<byte>(buffer, 0, read));
         }
     }
 
-    public async ValueTask<byte[]> ReadBufferedAsync(HttpResponseMessage response, CancellationToken cancellationToken)
+    public async ValueTask<byte[]> ReadBufferedAsync(
+        HttpResponseMessage response,
+        CancellationToken cancellationToken
+    )
     {
-        await using var stream = await response.Content.ReadAsStreamAsync(cancellationToken).ConfigureAwait(false);
+        await using var stream = await response
+            .Content.ReadAsStreamAsync(cancellationToken)
+            .ConfigureAwait(false);
         using var output = new MemoryStream();
         var buffer = new byte[16384];
         int read;
@@ -49,18 +58,25 @@ internal sealed class ResponseBodyReader(HttpClientOptions options)
 
     public (byte[] Body, IReadOnlyDictionary<string, string> Headers) Decompress(
         byte[] bytes,
-        IReadOnlyDictionary<string, string> headers)
+        IReadOnlyDictionary<string, string> headers
+    )
     {
         var encoding = HttpHeaderLookup.Find(headers, "content-encoding");
         // An empty body (HEAD / 204 / 304) carries no payload to decode even with Content-Encoding.
-        if (encoding is null || bytes.Length == 0) return (bytes, headers);
+        if (encoding is null || bytes.Length == 0)
+            return (bytes, headers);
 
         if (encoding.Equals("gzip", StringComparison.OrdinalIgnoreCase))
-            return (ResponseCompression.Gunzip(bytes, options.MaxResponseBodySize), StripEncodingHeaders(headers));
+            return (
+                ResponseCompression.Gunzip(bytes, options.MaxResponseBodySize),
+                StripEncodingHeaders(headers)
+            );
 
         if (encoding.Equals("deflate", StringComparison.OrdinalIgnoreCase))
-            return (ResponseCompression.InflateDeflate(bytes, options.MaxResponseBodySize),
-                StripEncodingHeaders(headers));
+            return (
+                ResponseCompression.InflateDeflate(bytes, options.MaxResponseBodySize),
+                StripEncodingHeaders(headers)
+            );
 
         return (bytes, headers);
     }
@@ -77,14 +93,19 @@ internal sealed class ResponseBodyReader(HttpClientOptions options)
         return headers;
     }
 
-    private static IEnumerable<(string Name, IEnumerable<string> Values)> EnumerateHeaders(HttpHeaders headers)
+    private static IEnumerable<(string Name, IEnumerable<string> Values)> EnumerateHeaders(
+        HttpHeaders headers
+    )
     {
-        foreach (var header in headers) yield return (header.Key, header.Value);
+        foreach (var header in headers)
+            yield return (header.Key, header.Value);
     }
 
     // After decoding, drop Content-Encoding and the now-stale Content-Length (it described the
     // compressed body, not the decoded one).
-    private static IReadOnlyDictionary<string, string> StripEncodingHeaders(IReadOnlyDictionary<string, string> headers)
+    private static IReadOnlyDictionary<string, string> StripEncodingHeaders(
+        IReadOnlyDictionary<string, string> headers
+    )
     {
         return HttpHeaderLookup.Without(headers, "content-encoding", "content-length");
     }
@@ -94,6 +115,7 @@ internal sealed class ResponseBodyReader(HttpClientOptions options)
         return new ZLinkFrameworkException(
             ZLinkFrameworkErrorKind.Rejected,
             message,
-            ZLinkRetryAdvice.DoNotRetry);
+            ZLinkRetryAdvice.DoNotRetry
+        );
     }
 }

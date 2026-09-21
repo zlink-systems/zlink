@@ -1,13 +1,13 @@
 package systems.zlink.framework.runtime.diagnostics;
 
-import java.util.concurrent.Executor;
-import java.util.concurrent.atomic.AtomicLong;
+import systems.zlink.framework.runtime.configuration.ZLinkDispatchOptionsRegistration;
 import systems.zlink.framework.runtime.internal.diagnostics.ZLinkDispatchFailure;
 import systems.zlink.framework.runtime.internal.diagnostics.ZLinkMessageFlowEvent;
-import systems.zlink.framework.runtime.internal.diagnostics.ZLinkMessageFlowOutcome;
-import systems.zlink.framework.runtime.internal.monitoring.ZLinkRuntimeEventDispatcher;
-import systems.zlink.framework.runtime.configuration.ZLinkDispatchOptionsRegistration;
 import systems.zlink.framework.runtime.internal.handlers.ZLinkHandlerActivator;
+import systems.zlink.framework.runtime.internal.monitoring.ZLinkRuntimeEventDispatcher;
+
+import java.util.concurrent.Executor;
+import java.util.concurrent.atomic.AtomicLong;
 
 public final class ZLinkDispatchErrorReporter {
     private final AtomicLong reportedCount = new AtomicLong();
@@ -17,17 +17,17 @@ public final class ZLinkDispatchErrorReporter {
     private final ZLinkMessageFlowTracer flow;
 
     public ZLinkDispatchErrorReporter(
-        ZLinkDispatchOptionsRegistration options,
-        ZLinkHandlerActivator handlerFactory,
-        Executor executor) {
+            ZLinkDispatchOptionsRegistration options,
+            ZLinkHandlerActivator handlerFactory,
+            Executor executor) {
         this(options, handlerFactory, executor, null);
     }
 
     public ZLinkDispatchErrorReporter(
-        ZLinkDispatchOptionsRegistration options,
-        ZLinkHandlerActivator handlerFactory,
-        Executor executor,
-        ZLinkRuntimeEventDispatcher eventDispatcher) {
+            ZLinkDispatchOptionsRegistration options,
+            ZLinkHandlerActivator handlerFactory,
+            Executor executor,
+            ZLinkRuntimeEventDispatcher eventDispatcher) {
         this.flow = new ZLinkMessageFlowTracer(options, handlerFactory, executor, eventDispatcher);
     }
 
@@ -41,24 +41,24 @@ public final class ZLinkDispatchErrorReporter {
             return;
         }
         reportedCount.incrementAndGet();
-        tracePoint.trace(ZLinkMessageFlowEvent.dispatchError(
-            error.surface(),
-            error.messageKind(),
-            error.packetName(),
-            error.channelName(),
-            error.topic(),
-            error.correlationId(),
-            error.sourceRid(),
-            error.spotId(),
-            error.actorId(),
-            error.reason(),
-            error.action(),
-            error.errorType(),
-            error.errorMessage()));
+        tracePoint.trace(
+                ZLinkMessageFlowEvent.dispatchError(
+                        error.surface(),
+                        error.messageKind(),
+                        error.packetName(),
+                        error.channelName(),
+                        error.topic(),
+                        error.correlationId(),
+                        error.sourceRid(),
+                        error.spotId(),
+                        error.actorId(),
+                        error.reason(),
+                        error.action(),
+                        error.errorType(),
+                        error.errorMessage()));
     }
 
     public long reportedCount() {
         return reportedCount.get();
     }
-
 }

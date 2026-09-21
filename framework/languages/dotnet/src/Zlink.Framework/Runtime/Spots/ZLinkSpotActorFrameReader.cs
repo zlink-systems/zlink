@@ -16,7 +16,8 @@ internal sealed class ZLinkSpotActorFrame(
     ZLinkServiceWireCodec.RequestSourceFence? requestSource = null,
     Func<IReadOnlyList<Message>, SubmitResult>? directReply = null,
     ReadOnlyMemory<byte> applicationMetadata = default,
-    long? handoffArrivalIndex = null) : IDisposable
+    long? handoffArrivalIndex = null
+) : IDisposable
 {
     private Message? _body = body;
 
@@ -36,14 +37,12 @@ internal sealed class ZLinkSpotActorFrame(
 
     public ulong SourceNodeGeneration { get; } = sourceNodeGeneration;
 
-    public ZLinkServiceWireCodec.RequestSourceFence? RequestSource { get; } =
-        requestSource;
+    public ZLinkServiceWireCodec.RequestSourceFence? RequestSource { get; } = requestSource;
 
     public Func<IReadOnlyList<Message>, SubmitResult>? DirectReply { get; private set; } =
         directReply;
 
-    public ReadOnlyMemory<byte> ApplicationMetadata { get; } =
-        applicationMetadata;
+    public ReadOnlyMemory<byte> ApplicationMetadata { get; } = applicationMetadata;
 
     // A restored handoff frame must acknowledge the exact journal entry that
     // produced it. Live ingress frames do not have this identity.
@@ -57,27 +56,28 @@ internal sealed class ZLinkSpotActorFrame(
     {
         if (replyRouteId == 0 || RelocationReplyRouteId != 0)
             throw new InvalidOperationException(
-                "The Actor frame relocation reply route is invalid.");
+                "The Actor frame relocation reply route is invalid."
+            );
         RelocationReplyRouteId = replyRouteId;
         RouteContext = RouteContext with { ReplyRequestId = replyRouteId };
     }
 
     internal void BindRelocationReplyCapability(
         string replyCapability,
-        Func<IReadOnlyList<Message>, SubmitResult> directReply)
+        Func<IReadOnlyList<Message>, SubmitResult> directReply
+    )
     {
-        if (string.IsNullOrWhiteSpace(replyCapability)
-            || RouteContext.ReplyCapability is not null)
+        if (string.IsNullOrWhiteSpace(replyCapability) || RouteContext.ReplyCapability is not null)
             throw new InvalidOperationException(
-                "The Actor frame relocation reply capability is invalid.");
+                "The Actor frame relocation reply capability is invalid."
+            );
         RouteContext = RouteContext with { ReplyCapability = replyCapability };
         DirectReply = directReply;
     }
 
     public ZlinkStreamHeader Header { get; } = header;
 
-    public Message Body => _body
-                           ?? throw new ObjectDisposedException(nameof(ZLinkSpotActorFrame));
+    public Message Body => _body ?? throw new ObjectDisposedException(nameof(ZLinkSpotActorFrame));
 
     public void Dispose()
     {
@@ -88,7 +88,8 @@ internal sealed class ZLinkSpotActorFrame(
 internal sealed class ZLinkSpotActorFrameBatch(
     IReadOnlyList<ZLinkSpotActorFrame> frames,
     Action? completion = null,
-    IDisposable? payloadOwner = null) : IDisposable
+    IDisposable? payloadOwner = null
+) : IDisposable
 {
     private int _disposed;
 
@@ -105,10 +106,7 @@ internal sealed class ZLinkSpotActorFrameBatch(
         {
             long bytes = 0;
             foreach (var frame in frames)
-                bytes = checked(
-                    bytes
-                    + frame.Body.Size
-                    + frame.ApplicationMetadata.Length);
+                bytes = checked(bytes + frame.Body.Size + frame.ApplicationMetadata.Length);
             return bytes;
         }
     }
@@ -118,11 +116,13 @@ internal sealed class ZLinkSpotActorFrameBatch(
 
     public void Dispose()
     {
-        if (Interlocked.Exchange(ref _disposed, 1) != 0) return;
+        if (Interlocked.Exchange(ref _disposed, 1) != 0)
+            return;
 
         try
         {
-            foreach (var frame in frames) frame.Dispose();
+            foreach (var frame in frames)
+                frame.Dispose();
         }
         finally
         {
@@ -145,14 +145,16 @@ internal static class ZLinkSpotActorFrameReader
         ref int index,
         ZLinkBackendActorPart headerPart,
         bool captureFlow,
-        out ZLinkSpotActorFrame frame)
+        out ZLinkSpotActorFrame frame
+    )
     {
         ZlinkStreamHeader header;
         try
         {
             header = ZLinkStreamProtocolDefaults.DecodeHeader(
                 headerPart.Message.AsReadOnlyMemory(),
-                captureFlow);
+                captureFlow
+            );
         }
         catch
         {
@@ -185,18 +187,22 @@ internal static class ZLinkSpotActorFrameReader
             headerPart.SourceNodeGeneration,
             headerPart.RequestSource,
             headerPart.DirectReply,
-            headerPart.ApplicationMetadata);
+            headerPart.ApplicationMetadata
+        );
         return true;
     }
 
     private static Message? TakeBodyPart(
         IReadOnlyList<ZLinkBackendActorPart> parts,
         ref int index,
-        bool hasBody)
+        bool hasBody
+    )
     {
-        if (!hasBody) return Message.From(ReadOnlySpan<byte>.Empty);
+        if (!hasBody)
+            return Message.From(ReadOnlySpan<byte>.Empty);
 
-        if (index >= parts.Count) return null;
+        if (index >= parts.Count)
+            return null;
 
         return parts[index++].Message;
     }
@@ -204,7 +210,8 @@ internal static class ZLinkSpotActorFrameReader
     private static void DisposeContinuationParts(
         IReadOnlyList<ZLinkBackendActorPart> parts,
         ref int index,
-        bool hasMore)
+        bool hasMore
+    )
     {
         while (hasMore && index < parts.Count)
         {

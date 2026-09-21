@@ -11,10 +11,7 @@ export {
   type ZLinkSpotPublisherClientTransport
 } from './channel-transports';
 export { DefaultZLinkChannelRuntimeOptions } from './channel-socket-options';
-export {
-  ZLinkDispatchErrorReporter,
-  type ZLinkDispatchErrorSink
-} from './dispatch-error-reporter';
+export { ZLinkDispatchErrorReporter, type ZLinkDispatchErrorSink } from './dispatch-error-reporter';
 export { ZLinkRouteDisconnectedError } from './route-disconnected-error';
 export {
   DefaultZLinkChannelClient,

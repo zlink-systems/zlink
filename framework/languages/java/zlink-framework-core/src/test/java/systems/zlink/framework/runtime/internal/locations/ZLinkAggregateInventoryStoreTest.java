@@ -4,104 +4,126 @@ import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
-import java.util.ArrayList;
-import java.util.List;
-import java.util.UUID;
 import org.junit.jupiter.api.Test;
+
 import systems.zlink.contracts.core.RoutingId;
 import systems.zlink.framework.locationprovider.ZLinkStoreScanPageResult;
 import systems.zlink.framework.locationprovider.ZLinkStoreScanRequest;
 import systems.zlink.framework.runtime.locations.ZLinkInMemoryProviderLocationStore;
 
+import java.util.ArrayList;
+import java.util.List;
+import java.util.UUID;
+
 final class ZLinkAggregateInventoryStoreTest {
     @Test
     void highBitDescriptorLifecycleTokenIsAcceptedByStoreRequests() {
         long highBit = Long.MIN_VALUE;
-        var descriptor = new ZLinkMeshNodeDescriptorKey(
-            "game", RoutingId.from("node-b"));
+        var descriptor = new ZLinkMeshNodeDescriptorKey("game", RoutingId.from("node-b"));
         var owner = new ZLinkLocationOwnerToken("owner-b", 1);
         assertEquals(
-            highBit,
-            new ZLinkObjectReservation(
-                "authority", "store", 1, 1, "reservation", descriptor,
-                highBit, owner).targetDescriptorLifecycleGeneration());
+                highBit,
+                new ZLinkObjectReservation(
+                                "authority",
+                                "store",
+                                1,
+                                1,
+                                "reservation",
+                                descriptor,
+                                highBit,
+                                owner)
+                        .targetDescriptorLifecycleGeneration());
         assertEquals(
-            highBit,
-            new ZLinkAggregatePrepareRequest(
-                UUID.randomUUID(), 1,
-                List.of(new ZLinkAggregateParticipant(
-                    "authority", 1, 1, "store",
-                    ZLinkAuthorityGenerationTransition.NEW_OWNER,
-                    new byte[0], new byte[0])),
-                new byte[32], descriptor, highBit,
-                ZLinkPlacementCapacityBundle.actor(1), owner)
-                .targetDescriptorLifecycleGeneration());
+                highBit,
+                new ZLinkAggregatePrepareRequest(
+                                UUID.randomUUID(),
+                                1,
+                                List.of(
+                                        new ZLinkAggregateParticipant(
+                                                "authority",
+                                                1,
+                                                1,
+                                                "store",
+                                                ZLinkAuthorityGenerationTransition.NEW_OWNER,
+                                                new byte[0],
+                                                new byte[0])),
+                                new byte[32],
+                                descriptor,
+                                highBit,
+                                ZLinkPlacementCapacityBundle.actor(1),
+                                owner)
+                        .targetDescriptorLifecycleGeneration());
         assertEquals(
-            highBit,
-            new ZLinkAggregateRelocationCoordinator.Request(
-                UUID.randomUUID(), 1, 2,
-                List.of(new ZLinkAggregateRelocationCoordinator.Participant(
-                    "authority", systems.zlink.framework.locations
-                        .ZLinkPlacementObjectKind.ACTOR,
-                    1, 1, "store",
-                    ZLinkAuthorityGenerationTransition.NEW_OWNER,
-                    new byte[0], new byte[0])),
-                new byte[] {1}, descriptor, highBit,
-                ZLinkPlacementCapacityBundle.actor(1), owner, "store")
-                .targetDescriptorLifecycleGeneration());
+                highBit,
+                new ZLinkAggregateRelocationCoordinator.Request(
+                                UUID.randomUUID(),
+                                1,
+                                2,
+                                List.of(
+                                        new ZLinkAggregateRelocationCoordinator.Participant(
+                                                "authority",
+                                                systems.zlink.framework.locations
+                                                        .ZLinkPlacementObjectKind.ACTOR,
+                                                1,
+                                                1,
+                                                "store",
+                                                ZLinkAuthorityGenerationTransition.NEW_OWNER,
+                                                new byte[0],
+                                                new byte[0])),
+                                new byte[] {1},
+                                descriptor,
+                                highBit,
+                                ZLinkPlacementCapacityBundle.actor(1),
+                                owner,
+                                "store")
+                        .targetDescriptorLifecycleGeneration());
     }
 
     @Test
     void storesAndReadsInventoryAcrossTheLeafPageBound() {
         List<ZLinkAggregateParticipant> participants = new ArrayList<>();
         for (int index = 0; index < 2_050; index++) {
-            participants.add(new ZLinkAggregateParticipant(
-                String.format("authority:%04d", index),
-                index + 1L,
-                index + 2L,
-                "version-" + index,
-                ZLinkAuthorityGenerationTransition.NEW_OWNER,
-                new byte[] {(byte) index, 1, 2},
-                new byte[] {(byte) index, 3}));
+            participants.add(
+                    new ZLinkAggregateParticipant(
+                            String.format("authority:%04d", index),
+                            index + 1L,
+                            index + 2L,
+                            "version-" + index,
+                            ZLinkAuthorityGenerationTransition.NEW_OWNER,
+                            new byte[] {(byte) index, 1, 2},
+                            new byte[] {(byte) index, 3}));
         }
-        var request = new ZLinkAggregatePrepareRequest(
-            UUID.randomUUID(),
-            1,
-            participants,
-            new byte[32],
-            new ZLinkMeshNodeDescriptorKey("game", RoutingId.from("node-b")),
-            1,
-            ZLinkPlacementCapacityBundle.actor(2_050),
-            new ZLinkLocationOwnerToken("owner-b", 1));
-        var fence = new ZLinkAggregateFence(
-            request.aggregateId(),
-            request.aggregateGeneration());
-        var store = new ZLinkAggregateInventoryStore(
-            new ZLinkInMemoryProviderLocationStore());
+        var request =
+                new ZLinkAggregatePrepareRequest(
+                        UUID.randomUUID(),
+                        1,
+                        participants,
+                        new byte[32],
+                        new ZLinkMeshNodeDescriptorKey("game", RoutingId.from("node-b")),
+                        1,
+                        ZLinkPlacementCapacityBundle.actor(2_050),
+                        new ZLinkLocationOwnerToken("owner-b", 1));
+        var fence = new ZLinkAggregateFence(request.aggregateId(), request.aggregateGeneration());
+        var store = new ZLinkAggregateInventoryStore(new ZLinkInMemoryProviderLocationStore());
 
         store.store(request, () -> false).toCompletableFuture().join();
-        List<ZLinkAggregateParticipant> loaded = store.load(
-                fence,
-                participants.size(),
-                request.inventoryDigest(),
-                () -> false)
-            .toCompletableFuture()
-            .join();
+        List<ZLinkAggregateParticipant> loaded =
+                store.load(fence, participants.size(), request.inventoryDigest(), () -> false)
+                        .toCompletableFuture()
+                        .join();
 
         assertEquals(participants.size(), loaded.size());
         for (int index = 0; index < participants.size(); index++) {
+            assertEquals(participants.get(index).authorityKey(), loaded.get(index).authorityKey());
             assertEquals(
-                participants.get(index).authorityKey(),
-                loaded.get(index).authorityKey());
-            assertEquals(
-                participants.get(index).expectedStoreVersion(),
-                loaded.get(index).expectedStoreVersion());
+                    participants.get(index).expectedStoreVersion(),
+                    loaded.get(index).expectedStoreVersion());
             assertArrayEquals(
-                participants.get(index).authorityPayload(),
-                loaded.get(index).authorityPayload());
+                    participants.get(index).authorityPayload(),
+                    loaded.get(index).authorityPayload());
             assertArrayEquals(
-                participants.get(index).membershipMutation(),
-                loaded.get(index).membershipMutation());
+                    participants.get(index).membershipMutation(),
+                    loaded.get(index).membershipMutation());
         }
     }
 
@@ -109,27 +131,27 @@ final class ZLinkAggregateInventoryStoreTest {
     void deletesAllInventoryValuesAcrossMultipleProviderPages() {
         List<ZLinkAggregateParticipant> participants = new ArrayList<>();
         for (int index = 0; index < 1_001; index++) {
-            participants.add(new ZLinkAggregateParticipant(
-                "authority:%04d".formatted(index),
-                index + 1L,
-                index + 2L,
-                "version-" + index,
-                ZLinkAuthorityGenerationTransition.NEW_OWNER,
-                new byte[] {(byte) index, 1},
-                new byte[] {(byte) index, 2}));
+            participants.add(
+                    new ZLinkAggregateParticipant(
+                            "authority:%04d".formatted(index),
+                            index + 1L,
+                            index + 2L,
+                            "version-" + index,
+                            ZLinkAuthorityGenerationTransition.NEW_OWNER,
+                            new byte[] {(byte) index, 1},
+                            new byte[] {(byte) index, 2}));
         }
-        var request = new ZLinkAggregatePrepareRequest(
-            UUID.randomUUID(),
-            2,
-            participants,
-            new byte[32],
-            new ZLinkMeshNodeDescriptorKey("game", RoutingId.from("node-b")),
-            1,
-            ZLinkPlacementCapacityBundle.actor(1_001),
-            new ZLinkLocationOwnerToken("owner-b", 1));
-        var fence = new ZLinkAggregateFence(
-            request.aggregateId(),
-            request.aggregateGeneration());
+        var request =
+                new ZLinkAggregatePrepareRequest(
+                        UUID.randomUUID(),
+                        2,
+                        participants,
+                        new byte[32],
+                        new ZLinkMeshNodeDescriptorKey("game", RoutingId.from("node-b")),
+                        1,
+                        ZLinkPlacementCapacityBundle.actor(1_001),
+                        new ZLinkLocationOwnerToken("owner-b", 1));
+        var fence = new ZLinkAggregateFence(request.aggregateId(), request.aggregateGeneration());
         var provider = new ZLinkInMemoryProviderLocationStore();
         var store = new ZLinkAggregateInventoryStore(provider);
 
@@ -137,15 +159,20 @@ final class ZLinkAggregateInventoryStoreTest {
         store.delete(fence, () -> false).toCompletableFuture().join();
         store.delete(fence, () -> false).toCompletableFuture().join();
 
-        var remaining = (ZLinkStoreScanPageResult) provider.scan(
-                new ZLinkStoreScanRequest(
-                    "zlink:v11:aggregate-inventory:" + fence.aggregateId()
-                        + ":" + fence.aggregateGeneration() + ":",
-                    null,
-                    1_000),
-                () -> false)
-            .toCompletableFuture()
-            .join();
+        var remaining =
+                (ZLinkStoreScanPageResult)
+                        provider.scan(
+                                        new ZLinkStoreScanRequest(
+                                                "zlink:v11:aggregate-inventory:"
+                                                        + fence.aggregateId()
+                                                        + ":"
+                                                        + fence.aggregateGeneration()
+                                                        + ":",
+                                                null,
+                                                1_000),
+                                        () -> false)
+                                .toCompletableFuture()
+                                .join();
         assertTrue(remaining.value().items().isEmpty());
     }
 }

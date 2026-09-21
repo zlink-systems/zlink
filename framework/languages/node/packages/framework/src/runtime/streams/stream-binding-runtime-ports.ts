@@ -6,15 +6,21 @@ import type { ZLinkBoundSessionResponseTarget } from './bound-session-response-t
 
 export interface ZLinkStreamActorLookupPort {
   find(actorId: string): Promise<DefaultZLinkSessionActor | undefined>;
-  authorityFence(actorId: string): Promise<{
-    readonly authorityOwnerGeneration: bigint;
-    readonly ownerLeaseGeneration: bigint;
-  } | undefined>;
-  sessionRouteFence(actorId: string): Promise<{
-    readonly actor: ActorRef;
-    readonly sessionRid: ActorRef['nodeRid'];
-    readonly bindingGeneration: bigint;
-  } | undefined>;
+  authorityFence(actorId: string): Promise<
+    | {
+        readonly authorityOwnerGeneration: bigint;
+        readonly ownerLeaseGeneration: bigint;
+      }
+    | undefined
+  >;
+  sessionRouteFence(actorId: string): Promise<
+    | {
+        readonly actor: ActorRef;
+        readonly sessionRid: ActorRef['nodeRid'];
+        readonly bindingGeneration: bigint;
+      }
+    | undefined
+  >;
 }
 
 export interface ZLinkStreamActorLifecyclePort {
@@ -48,13 +54,22 @@ export interface ZLinkActorRouteCommitOptions {
 }
 
 export interface ZLinkBoundSessionResponsePort {
-  captureBoundSessionResponseTarget(actor: ZLinkSessionActor): Promise<ZLinkBoundSessionResponseTarget | undefined>;
+  captureBoundSessionResponseTarget(
+    actor: ZLinkSessionActor
+  ): Promise<ZLinkBoundSessionResponseTarget | undefined>;
   sendLocalBoundSessionResponse(
-    actorId: string, packetName: string, requestSeq: bigint, message: unknown,
-    metadata: ReadonlyMap<string, string>, compressPayload: boolean
+    actorId: string,
+    packetName: string,
+    requestSeq: bigint,
+    message: unknown,
+    metadata: ReadonlyMap<string, string>,
+    compressPayload: boolean
   ): Promise<boolean>;
   sendLocalBoundSessionError(
-    actorId: string, packetName: string, requestSeq: bigint, error: unknown,
+    actorId: string,
+    packetName: string,
+    requestSeq: bigint,
+    error: unknown,
     metadata: ReadonlyMap<string, string>
   ): Promise<boolean>;
 }
@@ -62,45 +77,80 @@ export interface ZLinkBoundSessionResponsePort {
 export interface ZLinkRemoteBoundSessionPort extends ZLinkStreamActorLifecyclePort {
   disconnectBoundSession(actorId: string, signal?: AbortSignal): Promise<void>;
   sendLocalBoundSession(
-    actorId: string, message: unknown, packetName: string | undefined,
+    actorId: string,
+    message: unknown,
+    packetName: string | undefined,
     metadata: ReadonlyMap<string, string>
   ): Promise<boolean>;
   sendLocalBoundSessionResponse(
-    actorId: string, packetName: string, requestSeq: bigint, message: unknown,
-    metadata: ReadonlyMap<string, string>, compressPayload: boolean
+    actorId: string,
+    packetName: string,
+    requestSeq: bigint,
+    message: unknown,
+    metadata: ReadonlyMap<string, string>,
+    compressPayload: boolean
   ): Promise<boolean>;
   sendLocalBoundSessionError(
-    actorId: string, packetName: string, requestSeq: bigint, error: unknown,
+    actorId: string,
+    packetName: string,
+    requestSeq: bigint,
+    error: unknown,
     metadata: ReadonlyMap<string, string>
   ): Promise<boolean>;
   sendNativeBoundSessionResponse(
-    node: ZLinkBackendActorSessionNode, actorRef: ActorRef, packetName: string, requestSeq: bigint,
-    message: unknown, metadata: ReadonlyMap<string, string>, compressPayload: boolean,
+    node: ZLinkBackendActorSessionNode,
+    actorRef: ActorRef,
+    packetName: string,
+    requestSeq: bigint,
+    message: unknown,
+    metadata: ReadonlyMap<string, string>,
+    compressPayload: boolean,
     signal?: AbortSignal
   ): Promise<void>;
   sendNativeBoundSessionError(
-    node: ZLinkBackendActorSessionNode, actorRef: ActorRef, packetName: string, requestSeq: bigint,
-    error: unknown, metadata: ReadonlyMap<string, string>, signal?: AbortSignal
+    node: ZLinkBackendActorSessionNode,
+    actorRef: ActorRef,
+    packetName: string,
+    requestSeq: bigint,
+    error: unknown,
+    metadata: ReadonlyMap<string, string>,
+    signal?: AbortSignal
   ): Promise<void>;
 }
 
 export interface ZLinkNativeFallbackBoundSessionPort {
-  disconnectNativeBoundSession(node: ZLinkBackendActorSessionNode, actorRef: ActorRef, signal?: AbortSignal): Promise<void>;
+  disconnectNativeBoundSession(
+    node: ZLinkBackendActorSessionNode,
+    actorRef: ActorRef,
+    signal?: AbortSignal
+  ): Promise<void>;
   disconnectBoundSession(actorId: string, signal?: AbortSignal): Promise<void>;
   sendLocalBoundSession(
-    actorId: string, message: unknown, packetName: string | undefined,
+    actorId: string,
+    message: unknown,
+    packetName: string | undefined,
     metadata: ReadonlyMap<string, string>
   ): Promise<boolean>;
   submitLocalBoundSession(
-    actorId: string, message: unknown, packetName: string | undefined,
-    metadata: ReadonlyMap<string, string>, signal?: AbortSignal
+    actorId: string,
+    message: unknown,
+    packetName: string | undefined,
+    metadata: ReadonlyMap<string, string>,
+    signal?: AbortSignal
   ): Promise<ZLinkSubmitResult>;
   sendNativeBoundSession(
-    node: ZLinkBackendActorSessionNode, actorRef: ActorRef, message: unknown, packetName: string | undefined,
-    metadata: ReadonlyMap<string, string>, signal?: AbortSignal
+    node: ZLinkBackendActorSessionNode,
+    actorRef: ActorRef,
+    message: unknown,
+    packetName: string | undefined,
+    metadata: ReadonlyMap<string, string>,
+    signal?: AbortSignal
   ): Promise<ZLinkSubmitResult>;
   sendBoundSession(
-    actorId: string, message: unknown, packetName: string | undefined,
-    metadata: ReadonlyMap<string, string>, signal?: AbortSignal
+    actorId: string,
+    message: unknown,
+    packetName: string | undefined,
+    metadata: ReadonlyMap<string, string>,
+    signal?: AbortSignal
   ): Promise<ZLinkSubmitResult>;
 }

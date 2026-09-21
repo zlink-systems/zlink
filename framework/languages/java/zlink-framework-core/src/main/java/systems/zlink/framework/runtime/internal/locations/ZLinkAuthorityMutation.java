@@ -1,5 +1,4 @@
 package systems.zlink.framework.runtime.internal.locations;
 
 public sealed interface ZLinkAuthorityMutation
-    permits ZLinkAuthorityPut, ZLinkAuthorityRestore, ZLinkAuthorityDelete {
-}
+        permits ZLinkAuthorityPut, ZLinkAuthorityRestore, ZLinkAuthorityDelete {}

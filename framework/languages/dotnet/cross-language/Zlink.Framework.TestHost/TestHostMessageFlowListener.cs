@@ -18,7 +18,7 @@ internal sealed class TestHostMessageFlowListener : IDisposable
             ShouldListenTo = static source => source.Name == ActivitySourceName,
             Sample = static (ref ActivityCreationOptions<ActivityContext> _) =>
                 ActivitySamplingResult.AllData,
-            ActivityStopped = Capture
+            ActivityStopped = Capture,
         };
         ActivitySource.AddActivityListener(_listener);
     }
@@ -40,7 +40,8 @@ internal sealed class TestHostMessageFlowListener : IDisposable
             + $" started={activity.StartTimeUtc:O}"
             + $" duration_ticks={activity.Duration.Ticks}"
             + $" tags={System.Text.Json.JsonSerializer.Serialize(activity.TagObjects.ToDictionary(tag => tag.Key, tag => tag.Value))}";
-        lock (_fileGate) File.AppendAllText(_filePath, line + Environment.NewLine);
+        lock (_fileGate)
+            File.AppendAllText(_filePath, line + Environment.NewLine);
     }
 
     private static string? Tag(Activity activity, string name) =>

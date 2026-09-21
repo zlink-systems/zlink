@@ -35,15 +35,13 @@ public sealed class SpotIdContractTests
         const string spotId = "room-\uac00";
         Assert.Equal(
             spotId,
-            ZLinkSpotId.FromNativeRoutingId(
-                ZLinkSpotId.ToNativeRoutingId(spotId)));
+            ZLinkSpotId.FromNativeRoutingId(ZLinkSpotId.ToNativeRoutingId(spotId))
+        );
 
         Assert.Equal(
             string.Empty,
-            ZLinkSpotId.FromNativeRoutingId(
-                RoutingId.From(new byte[] { 0xc3, 0x28 })));
-        Assert.Equal(
-            8,
-            Encoding.UTF8.GetByteCount(spotId));
+            ZLinkSpotId.FromNativeRoutingId(RoutingId.From(new byte[] { 0xc3, 0x28 }))
+        );
+        Assert.Equal(8, Encoding.UTF8.GetByteCount(spotId));
     }
 }

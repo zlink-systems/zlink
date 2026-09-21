@@ -56,9 +56,9 @@ bool verify_independent_scoped_cache (std::index_sequence<Indices...>)
     auto provider = registrations.build_provider ();
     auto first = zlink::framework::detail::service_scope_t::create (provider);
     auto second = zlink::framework::detail::service_scope_t::create (provider);
-    const bool isolated =
-      ((&first.get_required<indexed_scoped_t<Indices>> ()
-          != &second.get_required<indexed_scoped_t<Indices>> ()) && ...);
+    const bool isolated = ((&first.get_required<indexed_scoped_t<Indices>> ()
+                            != &second.get_required<indexed_scoped_t<Indices>> ())
+                           && ...);
     const std::array<const void *, sizeof...(Indices)> retained{
       &second.get_required<indexed_scoped_t<Indices>> ()...};
     first.close ();
@@ -66,8 +66,7 @@ bool verify_independent_scoped_cache (std::index_sequence<Indices...>)
     const bool stable =
       ((retained[Indices] == &second.get_required<indexed_scoped_t<Indices>> ()) && ...);
     second.close ();
-    return isolated && released && stable
-           && ((indexed_scoped_t<Indices>::destroyed == 2) && ...);
+    return isolated && released && stable && ((indexed_scoped_t<Indices>::destroyed == 2) && ...);
 }
 
 struct logger_dependent_t
@@ -269,8 +268,8 @@ int main ()
         (void) provider.get_required<singleton_t> ();
     }
     catch (const zlink::framework::framework_exception_t &error) {
-        shutdown_resolve_failed =
-          zlink::framework::detail::boundary_state (error) == zlink::framework::detail::boundary_error_t::shutdown;
+        shutdown_resolve_failed = zlink::framework::detail::boundary_state (error)
+                                  == zlink::framework::detail::boundary_error_t::shutdown;
     }
     if (!shutdown_resolve_failed) {
         return 10;

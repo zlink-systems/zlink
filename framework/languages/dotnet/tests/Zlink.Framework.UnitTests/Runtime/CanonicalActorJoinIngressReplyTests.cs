@@ -1,7 +1,7 @@
-using Systems.Zlink.Framework.Runtime.Protocol;
 using System.Diagnostics;
 using System.Net;
 using System.Net.Sockets;
+using Systems.Zlink.Framework.Runtime.Protocol;
 using Zlink.Framework.Runtime.Backend.Contracts;
 
 namespace Zlink.Framework.UnitTests;
@@ -12,7 +12,8 @@ public sealed class CanonicalActorJoinIngressReplyTests
     [InlineData(false)]
     [InlineData(true)]
     public async Task ManagedSource_Command28Request_ConsumesCommand20TailAndApplicationReply(
-        bool targetDialsSource)
+        bool targetDialsSource
+    )
     {
         await using var context = Systems.Zlink.Zlink.CreateContext();
         await using var source = new ZLinkManagedMeshNode(context, "mesh");
@@ -33,9 +34,7 @@ public sealed class CanonicalActorJoinIngressReplyTests
             target.ConnectPeer(sourceEndpoint, sourceRid);
         else
             source.ConnectPeer(targetEndpoint, targetRid);
-        var targetSpot = (ZLinkManagedSpot)target.GetOrCreateSpot(
-            targetSpotId,
-            out var created);
+        var targetSpot = (ZLinkManagedSpot)target.GetOrCreateSpot(targetSpotId, out var created);
         Assert.True(created);
         source.ObserveSpotAuthority(
             targetRid,
@@ -43,13 +42,14 @@ public sealed class CanonicalActorJoinIngressReplyTests
             targetSpot.LifecycleGeneration,
             target.Status().LifecycleGeneration,
             targetSpot.AuthorityOwnerGeneration,
-            ownerLeaseGeneration: 7);
+            ownerLeaseGeneration: 7
+        );
         target.Start();
         source.Start();
 
         await WaitUntilAsync(() =>
-            source.Status().AdmittedPeerCount == 1
-            && target.Status().AdmittedPeerCount == 1);
+            source.Status().AdmittedPeerCount == 1 && target.Status().AdmittedPeerCount == 1
+        );
 
         var operationId = source.AllocateOperationId();
         var request = new ZLinkBackendCanonicalActorJoinRequest(
@@ -66,14 +66,13 @@ public sealed class CanonicalActorJoinIngressReplyTests
             TargetOwnerLeaseGeneration: 7,
             "ZLinkFrameworkActorJoinRequest",
             "application/json",
-            "{\"request\":true}"u8.ToArray());
+            "{\"request\":true}"u8.ToArray()
+        );
 
         Assert.Equal(
             SubmitResult.Ok,
-            source.TryRequestCanonicalActorJoin(
-                request,
-                operationId,
-                TimeSpan.FromSeconds(2)));
+            source.TryRequestCanonicalActorJoin(request, operationId, TimeSpan.FromSeconds(2))
+        );
 
         // The target queues command 28 only when Core delivered a Request with
         // a request sequence. A one-way command 28 is rejected before this
@@ -83,45 +82,42 @@ public sealed class CanonicalActorJoinIngressReplyTests
             ZLinkApplicationPayloadEnvelopeCodec.Encode(
                 "ActorJoinReply",
                 "application/json",
-                "{\"accepted\":true}"u8));
+                "{\"accepted\":true}"u8
+            )
+        );
         Assert.Equal(
             SubmitResult.Ok,
-            ingress.ReplyJoin(
-                ActorJoinResult.Accepted,
-                [applicationReply]));
+            ingress.ReplyJoin(ActorJoinResult.Accepted, [applicationReply])
+        );
 
-        var (completion, replyParts) = await ReceiveCompletionAsync(
-            source,
-            operationId);
+        var (completion, replyParts) = await ReceiveCompletionAsync(source, operationId);
         try
         {
             Assert.Equal(MeshRecordKind.Completion, completion.Kind);
             Assert.Equal(MeshOperationKind.ActorJoin, completion.OperationKind);
             Assert.Equal((int)RequestResult.Ok, completion.TerminalResult);
             Assert.Equal(0, completion.FailureErrno);
-            var join = Assert.IsType<ActorJoinCompletion>(
-                completion.JoinCompletion);
+            var join = Assert.IsType<ActorJoinCompletion>(completion.JoinCompletion);
             Assert.Equal(ActorJoinResult.Accepted, join.JoinResult);
             Assert.Equal(targetRid, join.Actor.NodeRid);
             Assert.Equal(targetSpotId, join.Location.SpotId);
+            Assert.Equal(targetSpot.LifecycleGeneration, join.Location.SpotGeneration);
             Assert.Equal(
-                targetSpot.LifecycleGeneration,
-                join.Location.SpotGeneration);
-            Assert.Equal(
-                checked((uint)ZLinkRemoteActorJoinPackets
-                    .ConservativeReceiveChunkLimitBytes),
-                join.ReceiveChunkLimitBytes);
+                checked((uint)ZLinkRemoteActorJoinPackets.ConservativeReceiveChunkLimitBytes),
+                join.ReceiveChunkLimitBytes
+            );
             Assert.Equal("application/json", join.ReplyContentType);
 
             var applicationFrame = Assert.Single(replyParts);
-            Assert.True(ZLinkApplicationPayloadEnvelopeCodec.TryDecode(
-                applicationFrame.AsReadOnlyMemory(),
-                out var application));
+            Assert.True(
+                ZLinkApplicationPayloadEnvelopeCodec.TryDecode(
+                    applicationFrame.AsReadOnlyMemory(),
+                    out var application
+                )
+            );
             Assert.Equal("ActorJoinReply", application.PacketName);
             Assert.Equal("application/json", application.ContentType);
-            Assert.Equal(
-                "{\"accepted\":true}"u8.ToArray(),
-                application.Payload.ToArray());
+            Assert.Equal("{\"accepted\":true}"u8.ToArray(), application.Payload.ToArray());
             Assert.Equal(0UL, targetMonitor.Status().ProtocolErrors);
         }
         finally
@@ -148,7 +144,8 @@ public sealed class CanonicalActorJoinIngressReplyTests
                 reply.Submit();
                 Interlocked.Increment(ref replySubmits);
                 return SubmitResult.Ok;
-            });
+            }
+        );
         var suffix = Guid.NewGuid().ToString("N");
         var sourceRid = RoutingId.From($"actor-join-source-{suffix}");
         var targetRid = RoutingId.From($"actor-join-target-{suffix}");
@@ -161,9 +158,7 @@ public sealed class CanonicalActorJoinIngressReplyTests
         target.SetRoutingId(targetRid);
         target.SetBind(targetEndpoint);
         target.ConnectPeer(sourceEndpoint, sourceRid);
-        var targetSpot = (ZLinkManagedSpot)target.GetOrCreateSpot(
-            targetSpotId,
-            out var created);
+        var targetSpot = (ZLinkManagedSpot)target.GetOrCreateSpot(targetSpotId, out var created);
         Assert.True(created);
         source.ObserveSpotAuthority(
             targetRid,
@@ -171,13 +166,14 @@ public sealed class CanonicalActorJoinIngressReplyTests
             targetSpot.LifecycleGeneration,
             target.Status().LifecycleGeneration,
             targetSpot.AuthorityOwnerGeneration,
-            ownerLeaseGeneration: 7);
+            ownerLeaseGeneration: 7
+        );
         source.Start();
         target.Start();
 
         await WaitUntilAsync(() =>
-            source.Status().AdmittedPeerCount == 1
-            && target.Status().AdmittedPeerCount == 1);
+            source.Status().AdmittedPeerCount == 1 && target.Status().AdmittedPeerCount == 1
+        );
 
         var operationId = source.AllocateOperationId();
         var request = new ZLinkBackendCanonicalActorJoinRequest(
@@ -194,16 +190,14 @@ public sealed class CanonicalActorJoinIngressReplyTests
             TargetOwnerLeaseGeneration: 7,
             "ZLinkFrameworkActorJoinRequest",
             "application/json",
-            "{}"u8.ToArray());
+            "{}"u8.ToArray()
+        );
 
-        var admissionDeadline = DateTimeOffset.UtcNow.AddSeconds(8)
-            .ToUnixTimeMilliseconds();
+        var admissionDeadline = DateTimeOffset.UtcNow.AddSeconds(8).ToUnixTimeMilliseconds();
         Assert.Equal(
             SubmitResult.Ok,
-            source.TryRequestCanonicalActorJoin(
-                request,
-                operationId,
-                TimeSpan.FromSeconds(8)));
+            source.TryRequestCanonicalActorJoin(request, operationId, TimeSpan.FromSeconds(8))
+        );
 
         var firstIngress = await ReceiveActorJoinAsync(target);
         Assert.Equal(new MeshOperationId(0, operationId.Low), firstIngress.OperationId);
@@ -223,35 +217,38 @@ public sealed class CanonicalActorJoinIngressReplyTests
                         request.Actor.ActorId,
                         request.Actor.Generation,
                         request.ActorNodeGeneration,
-                        ingress.OperationId.Low),
-                    admissionDeadline),
+                        ingress.OperationId.Low
+                    ),
+                    admissionDeadline
+                ),
                 targetSpotId,
                 _ =>
                 {
                     Interlocked.Increment(ref executions);
-                    return ValueTask.FromResult(new ZLinkRemoteActorAdmissionReply(
-                        false,
-                        "application/json",
-                        "{\"reason\":\"ZoneMaintenance\"}"u8.ToArray(),
-                        admissionDeadline));
+                    return ValueTask.FromResult(
+                        new ZLinkRemoteActorAdmissionReply(
+                            false,
+                            "application/json",
+                            "{\"reason\":\"ZoneMaintenance\"}"u8.ToArray(),
+                            admissionDeadline
+                        )
+                    );
                 },
-                CancellationToken.None);
+                CancellationToken.None
+            );
         var firstDecision = await AdmitAsync(firstIngress);
         using var firstReply = Message.From(firstDecision.Reply);
         Assert.Equal(
             SubmitResult.Ok,
-            firstIngress.ReplyJoin(
-                ActorJoinResult.Rejected,
-                [firstReply]));
+            firstIngress.ReplyJoin(ActorJoinResult.Rejected, [firstReply])
+        );
 
         // The lower source RID's outbound direction wins reciprocal HANDOVER.
         // Core ends the admitted attempt with NOT_CONNECTED, so the sender can
         // replay inside the original deadline without an artificial attempt cut.
         source.ConnectPeer(targetEndpoint, targetRid);
 
-        var retryIngress = await ReceiveActorJoinAsync(
-            target,
-            TimeSpan.FromSeconds(7));
+        var retryIngress = await ReceiveActorJoinAsync(target, TimeSpan.FromSeconds(7));
         Assert.Equal(firstIngress.OperationId, retryIngress.OperationId);
         var retryDecision = await AdmitAsync(retryIngress);
         Assert.Same(firstDecision, retryDecision);
@@ -259,24 +256,21 @@ public sealed class CanonicalActorJoinIngressReplyTests
         using var retryReply = Message.From(retryDecision.Reply);
         Assert.Equal(
             SubmitResult.Ok,
-            retryIngress.ReplyJoin(
-                ActorJoinResult.Rejected,
-                [retryReply]));
+            retryIngress.ReplyJoin(ActorJoinResult.Rejected, [retryReply])
+        );
 
-        var (completion, replyParts) = await ReceiveCompletionAsync(
-            source,
-            operationId);
+        var (completion, replyParts) = await ReceiveCompletionAsync(source, operationId);
         try
         {
             Assert.Equal(operationId, completion.OperationId);
             Assert.Equal((int)RequestResult.Ok, completion.TerminalResult);
-            var join = Assert.IsType<ActorJoinCompletion>(
-                completion.JoinCompletion);
+            var join = Assert.IsType<ActorJoinCompletion>(completion.JoinCompletion);
             Assert.Equal(ActorJoinResult.Rejected, join.JoinResult);
             var applicationReply = Assert.Single(replyParts);
             Assert.Equal(
                 "{\"reason\":\"ZoneMaintenance\"}"u8.ToArray(),
-                applicationReply.AsReadOnlyMemory().ToArray());
+                applicationReply.AsReadOnlyMemory().ToArray()
+            );
             Assert.Equal(1, Volatile.Read(ref replySubmits));
         }
         finally
@@ -310,15 +304,19 @@ public sealed class CanonicalActorJoinIngressReplyTests
         using var sourceCompletionOwner = new TestCompletionPollerDriver(source);
         source.SetRoutingId(sourceRid);
         source.Connect(targetEndpoint);
-        using (var hello = Message.From(
-                   ZLinkServiceWireCodec.EncodeRouteAdmission(
-                       ServiceWireConstants.Command.Hello,
-                       "mesh",
-                       sourceEndpoint,
-                       lifecycleGeneration: 1,
-                       descriptorRevision: 1,
-                       new Dictionary<string, uint>(StringComparer.Ordinal),
-                       objectRole: (byte)ZLinkMeshNodeObjectRole.Server)))
+        using (
+            var hello = Message.From(
+                ZLinkServiceWireCodec.EncodeRouteAdmission(
+                    ServiceWireConstants.Command.Hello,
+                    "mesh",
+                    sourceEndpoint,
+                    lifecycleGeneration: 1,
+                    descriptorRevision: 1,
+                    new Dictionary<string, uint>(StringComparer.Ordinal),
+                    objectRole: (byte)ZLinkMeshNodeObjectRole.Server
+                )
+            )
+        )
             await source.Send().Message(hello).Async(CancellationToken.None).Admitted;
 
         await WaitUntilAsync(() => target.Status().AdmittedPeerCount == 1);
@@ -330,38 +328,41 @@ public sealed class CanonicalActorJoinIngressReplyTests
             targetRid,
             target.Status().LifecycleGeneration,
             targetSpotId,
-            targetSpot.LifecycleGeneration);
+            targetSpot.LifecycleGeneration
+        );
         var acceptedReplyTask = SendRequestAsync(source, acceptedRequest);
         var acceptedIngress = await ReceiveActorJoinAsync(target);
         Assert.Equal(
             SubmitResult.Ok,
-            acceptedIngress.ReplyJoin(
-                ActorJoinResult.Accepted,
-                Array.Empty<Message>()));
+            acceptedIngress.ReplyJoin(ActorJoinResult.Accepted, Array.Empty<Message>())
+        );
         Assert.Equal(
             SubmitResult.InvalidState,
             acceptedIngress.ReplyTerminal(
                 RequestResult.InternalError,
-                (uint)ServiceWireConstants.FrameworkErrorCode.RequestFailed));
+                (uint)ServiceWireConstants.FrameworkErrorCode.RequestFailed
+            )
+        );
 
-        var acceptedReply = await acceptedReplyTask.WaitAsync(
-            TimeSpan.FromSeconds(2));
+        var acceptedReply = await acceptedReplyTask.WaitAsync(TimeSpan.FromSeconds(2));
         try
         {
             var reply = DecodeReply(acceptedReply, acceptedRequest.Correlation);
-            Assert.True(ZLinkServiceWireCodec.TryDecodeActorJoinReply(
-                reply,
-                out var completion,
-                out var error));
+            Assert.True(
+                ZLinkServiceWireCodec.TryDecodeActorJoinReply(
+                    reply,
+                    out var completion,
+                    out var error
+                )
+            );
             Assert.Equal(ZLinkServiceWireCodec.DecodeError.None, error);
             Assert.Equal(ActorJoinResult.Accepted, completion!.JoinResult);
             Assert.Equal(targetSpotId, completion.Spot!.Value.SpotId);
-            Assert.Equal(targetSpot.LifecycleGeneration,
-                completion.Spot.Value.SpotGeneration);
+            Assert.Equal(targetSpot.LifecycleGeneration, completion.Spot.Value.SpotGeneration);
             Assert.Equal(
-                checked((uint)ZLinkRemoteActorJoinPackets
-                    .ConservativeReceiveChunkLimitBytes),
-                completion.ReceiveChunkLimitBytes);
+                checked((uint)ZLinkRemoteActorJoinPackets.ConservativeReceiveChunkLimitBytes),
+                completion.ReceiveChunkLimitBytes
+            );
         }
         finally
         {
@@ -375,12 +376,13 @@ public sealed class CanonicalActorJoinIngressReplyTests
             SubmitResult.Ok,
             errorIngress.ReplyTerminal(
                 RequestResult.InternalError,
-                (uint)ServiceWireConstants.FrameworkErrorCode.RequestFailed));
+                (uint)ServiceWireConstants.FrameworkErrorCode.RequestFailed
+            )
+        );
         Assert.Equal(
             SubmitResult.InvalidState,
-            errorIngress.ReplyJoin(
-                ActorJoinResult.Accepted,
-                Array.Empty<Message>()));
+            errorIngress.ReplyJoin(ActorJoinResult.Accepted, Array.Empty<Message>())
+        );
 
         var errorReply = await errorReplyTask.WaitAsync(TimeSpan.FromSeconds(2));
         try
@@ -389,7 +391,8 @@ public sealed class CanonicalActorJoinIngressReplyTests
             Assert.Equal((int)RequestResult.InternalError, reply.TerminalResult);
             Assert.Equal(
                 (uint)ServiceWireConstants.FrameworkErrorCode.RequestFailed,
-                reply.FailureCode);
+                reply.FailureCode
+            );
             Assert.Empty(reply.Tail);
         }
         finally
@@ -400,8 +403,7 @@ public sealed class CanonicalActorJoinIngressReplyTests
         var rejectedRequest = acceptedRequest with
         {
             Correlation = 43,
-            TargetNodeGeneration = checked(
-                target.Status().LifecycleGeneration + 1)
+            TargetNodeGeneration = checked(target.Status().LifecycleGeneration + 1),
         };
         var rejectedReply = await SendRequestAsync(source, rejectedRequest)
             .WaitAsync(TimeSpan.FromSeconds(2));
@@ -411,7 +413,8 @@ public sealed class CanonicalActorJoinIngressReplyTests
             Assert.Equal((int)RequestResult.ProtocolError, reply.TerminalResult);
             Assert.Equal(
                 (uint)ServiceWireConstants.FrameworkErrorCode.RequestProtocolError,
-                reply.FailureCode);
+                reply.FailureCode
+            );
             Assert.Empty(reply.Tail);
         }
         finally
@@ -421,19 +424,27 @@ public sealed class CanonicalActorJoinIngressReplyTests
 
         var protocolErrors = monitor.Status().ProtocolErrors;
         var oneWayRequest = acceptedRequest with { Correlation = 44 };
-        using (var head = Message.From(
-                   ZLinkMeshRecordAdapters.EncodeCanonicalActorJoinHead(oneWayRequest)))
-        using (var payload = Message.From(
-                   ZLinkApplicationPayloadEnvelopeCodec.Encode(
-                       "ZLinkFrameworkActorJoinRequest",
-                       "application/json",
-                       "{}"u8)))
-            await source.Send()
+        using (
+            var head = Message.From(
+                ZLinkMeshRecordAdapters.EncodeCanonicalActorJoinHead(oneWayRequest)
+            )
+        )
+        using (
+            var payload = Message.From(
+                ZLinkApplicationPayloadEnvelopeCodec.Encode(
+                    "ZLinkFrameworkActorJoinRequest",
+                    "application/json",
+                    "{}"u8
+                )
+            )
+        )
+            await source
+                .Send()
                 .Message(head)
                 .Message(payload)
-                .Async(CancellationToken.None).Admitted;
-        await WaitUntilAsync(() =>
-            monitor.Status().ProtocolErrors > protocolErrors);
+                .Async(CancellationToken.None)
+                .Admitted;
+        await WaitUntilAsync(() => monitor.Status().ProtocolErrors > protocolErrors);
         Assert.Equal(0UL, target.Status().PendingApplicationMessages);
     }
 
@@ -456,15 +467,15 @@ public sealed class CanonicalActorJoinIngressReplyTests
             runtime.TargetRid,
             runtime.Target.Status().LifecycleGeneration,
             runtime.TargetSpotId,
-            runtime.TargetSpotGeneration);
+            runtime.TargetSpotGeneration
+        );
 
         var replyTask = SendRequestAsync(runtime.Source, request);
         var ingress = await ReceiveActorJoinAsync(runtime.Target);
         Assert.Equal(
             SubmitResult.Backpressured,
-            ingress.ReplyJoin(
-                ActorJoinResult.Accepted,
-                Array.Empty<Message>()));
+            ingress.ReplyJoin(ActorJoinResult.Accepted, Array.Empty<Message>())
+        );
 
         var parts = await replyTask.WaitAsync(TimeSpan.FromSeconds(2));
         try
@@ -472,10 +483,13 @@ public sealed class CanonicalActorJoinIngressReplyTests
             Assert.Equal(2, Volatile.Read(ref attempts));
             Assert.Equal(1, Volatile.Read(ref wireSubmits));
             var reply = DecodeReply(parts, request.Correlation);
-            Assert.True(ZLinkServiceWireCodec.TryDecodeActorJoinReply(
-                reply,
-                out var completion,
-                out var error));
+            Assert.True(
+                ZLinkServiceWireCodec.TryDecodeActorJoinReply(
+                    reply,
+                    out var completion,
+                    out var error
+                )
+            );
             Assert.Equal(ZLinkServiceWireCodec.DecodeError.None, error);
             Assert.Equal(ActorJoinResult.Accepted, completion!.JoinResult);
         }
@@ -502,24 +516,26 @@ public sealed class CanonicalActorJoinIngressReplyTests
             runtime.TargetRid,
             runtime.Target.Status().LifecycleGeneration,
             runtime.TargetSpotId,
-            runtime.TargetSpotGeneration);
+            runtime.TargetSpotGeneration
+        );
 
         _ = SendRequestAsync(runtime.Source, request);
         var ingress = await ReceiveActorJoinAsync(runtime.Target);
         Assert.Equal(
             SubmitResult.Backpressured,
-            ingress.ReplyJoin(
-                ActorJoinResult.Accepted,
-                Array.Empty<Message>()));
+            ingress.ReplyJoin(ActorJoinResult.Accepted, Array.Empty<Message>())
+        );
 
         await WaitUntilAsync(() =>
-            Volatile.Read(ref attempts) == 2
-            && monitor.Status().ProtocolErrors != 0);
+            Volatile.Read(ref attempts) == 2 && monitor.Status().ProtocolErrors != 0
+        );
         Assert.Equal(
             SubmitResult.InvalidState,
             ingress.ReplyTerminal(
                 RequestResult.InternalError,
-                (uint)ServiceWireConstants.FrameworkErrorCode.RequestFailed));
+                (uint)ServiceWireConstants.FrameworkErrorCode.RequestFailed
+            )
+        );
         Assert.Equal(2, Volatile.Read(ref attempts));
     }
 
@@ -542,7 +558,8 @@ public sealed class CanonicalActorJoinIngressReplyTests
             runtime.TargetRid,
             runtime.Target.Status().LifecycleGeneration,
             runtime.TargetSpotId,
-            runtime.TargetSpotGeneration);
+            runtime.TargetSpotGeneration
+        );
         _ = SendRequestAsync(runtime.Source, staleRequest);
         var staleIngress = await ReceiveActorJoinAsync(runtime.Target);
         var pendingRequest = staleRequest with { Correlation = 55 };
@@ -553,12 +570,13 @@ public sealed class CanonicalActorJoinIngressReplyTests
             SubmitResult.Backpressured,
             pendingIngress.ReplyTerminal(
                 RequestResult.InternalError,
-                (uint)ServiceWireConstants.FrameworkErrorCode.RequestFailed));
+                (uint)ServiceWireConstants.FrameworkErrorCode.RequestFailed
+            )
+        );
 
         await runtime.DisconnectSourceAsync();
         var attemptsBeforeCoreTerminal = Volatile.Read(ref attempts);
-        await WaitUntilAsync(() =>
-            Volatile.Read(ref attempts) > attemptsBeforeCoreTerminal);
+        await WaitUntilAsync(() => Volatile.Read(ref attempts) > attemptsBeforeCoreTerminal);
         Assert.Equal(0UL, monitor.Status().ProtocolErrors);
         Volatile.Write(ref coreTerminal, 1);
         await WaitUntilAsync(() => monitor.Status().ProtocolErrors != 0);
@@ -568,15 +586,16 @@ public sealed class CanonicalActorJoinIngressReplyTests
             SubmitResult.Terminated,
             staleIngress.ReplyTerminal(
                 RequestResult.InternalError,
-                (uint)ServiceWireConstants.FrameworkErrorCode.RequestFailed));
+                (uint)ServiceWireConstants.FrameworkErrorCode.RequestFailed
+            )
+        );
         Assert.Equal(attemptsAtDiscard + 1, Volatile.Read(ref attempts));
         await Task.Delay(150);
         Assert.Equal(attemptsAtDiscard + 1, Volatile.Read(ref attempts));
         Assert.Equal(
             SubmitResult.InvalidState,
-            pendingIngress.ReplyJoin(
-                ActorJoinResult.Accepted,
-                Array.Empty<Message>()));
+            pendingIngress.ReplyJoin(ActorJoinResult.Accepted, Array.Empty<Message>())
+        );
     }
 
     [Fact]
@@ -601,7 +620,8 @@ public sealed class CanonicalActorJoinIngressReplyTests
             runtime.TargetRid,
             runtime.Target.Status().LifecycleGeneration,
             runtime.TargetSpotId,
-            runtime.TargetSpotGeneration);
+            runtime.TargetSpotGeneration
+        );
 
         _ = SendRequestAsync(runtime.Source, staleRequest);
         var staleIngress = await ReceiveActorJoinAsync(runtime.Target);
@@ -609,12 +629,13 @@ public sealed class CanonicalActorJoinIngressReplyTests
             SubmitResult.Backpressured,
             staleIngress.ReplyTerminal(
                 RequestResult.InternalError,
-                (uint)ServiceWireConstants.FrameworkErrorCode.RequestFailed));
+                (uint)ServiceWireConstants.FrameworkErrorCode.RequestFailed
+            )
+        );
 
         var protocolErrors = monitor.Status().ProtocolErrors;
         await runtime.HandoverAsync();
-        await WaitUntilAsync(() =>
-            Volatile.Read(ref attempts) > 1);
+        await WaitUntilAsync(() => Volatile.Read(ref attempts) > 1);
         Assert.Equal(protocolErrors, monitor.Status().ProtocolErrors);
         Assert.Equal(1UL, runtime.Target.Status().AdmittedPeerCount);
 
@@ -631,8 +652,7 @@ public sealed class CanonicalActorJoinIngressReplyTests
         Assert.Equal(protocolErrors, monitor.Status().ProtocolErrors);
         Assert.Equal(1UL, runtime.Target.Status().AdmittedPeerCount);
         Volatile.Write(ref submitMode, 1);
-        await WaitUntilAsync(() =>
-            monitor.Status().ProtocolErrors > protocolErrors);
+        await WaitUntilAsync(() => monitor.Status().ProtocolErrors > protocolErrors);
         var attemptsAfterDisconnect = Volatile.Read(ref attempts);
         await Task.Delay(150);
         Assert.Equal(attemptsAfterDisconnect, Volatile.Read(ref attempts));
@@ -644,19 +664,20 @@ public sealed class CanonicalActorJoinIngressReplyTests
         var replacementIngress = await ReceiveActorJoinAsync(runtime.Target);
         Assert.Equal(
             SubmitResult.Ok,
-            replacementIngress.ReplyJoin(
-                ActorJoinResult.Accepted,
-                Array.Empty<Message>()));
+            replacementIngress.ReplyJoin(ActorJoinResult.Accepted, Array.Empty<Message>())
+        );
 
-        var replacementReply = await replacementReplyTask.WaitAsync(
-            TimeSpan.FromSeconds(2));
+        var replacementReply = await replacementReplyTask.WaitAsync(TimeSpan.FromSeconds(2));
         try
         {
             var reply = DecodeReply(replacementReply, replacementRequest.Correlation);
-            Assert.True(ZLinkServiceWireCodec.TryDecodeActorJoinReply(
-                reply,
-                out var completion,
-                out var error));
+            Assert.True(
+                ZLinkServiceWireCodec.TryDecodeActorJoinReply(
+                    reply,
+                    out var completion,
+                    out var error
+                )
+            );
             Assert.Equal(ZLinkServiceWireCodec.DecodeError.None, error);
             Assert.Equal(ActorJoinResult.Accepted, completion!.JoinResult);
         }
@@ -669,23 +690,20 @@ public sealed class CanonicalActorJoinIngressReplyTests
     [Fact]
     public async Task CanonicalActorJoinRequest_IdempotentHelloThenDisconnect_RemovesAdmittedPeerPromptly()
     {
-        await using var runtime = await ConnectedRuntime.CreateAsync(_ =>
-            SubmitResult.Ok);
+        await using var runtime = await ConnectedRuntime.CreateAsync(_ => SubmitResult.Ok);
 
         Assert.Equal(1UL, runtime.Target.Status().AdmittedPeerCount);
         await runtime.SendIdempotentHelloAsync();
         Assert.Equal(1UL, runtime.Target.Status().AdmittedPeerCount);
 
         await runtime.DisconnectSourceAsync();
-        await WaitUntilAsync(() =>
-            runtime.Target.Status().AdmittedPeerCount == 0);
+        await WaitUntilAsync(() => runtime.Target.Status().AdmittedPeerCount == 0);
     }
 
     [Fact]
     public async Task RouteAdmission_PriorHelloThenExactDisconnect_DoesNotReplaceCurrentPeer()
     {
-        await using var runtime = await ConnectedRuntime.CreateAsync(_ =>
-            SubmitResult.Ok);
+        await using var runtime = await ConnectedRuntime.CreateAsync(_ => SubmitResult.Ok);
 
         for (var iteration = 0; iteration < 6; iteration++)
         {
@@ -710,21 +728,22 @@ public sealed class CanonicalActorJoinIngressReplyTests
             await Assert.ThrowsAsync<TimeoutException>(() =>
                 runtime.HandoverAsync(
                     admitReplacement: static (_, _) =>
-                        Task.FromException<Received>(new TimeoutException(
-                            "Route admission reply was not received."))));
+                        Task.FromException<Received>(
+                            new TimeoutException("Route admission reply was not received.")
+                        )
+                )
+            );
         }
         finally
         {
-            await runtime.DisposeAsync().AsTask().WaitAsync(
-                TimeSpan.FromSeconds(10));
+            await runtime.DisposeAsync().AsTask().WaitAsync(TimeSpan.FromSeconds(10));
         }
     }
 
     [Fact]
     public async Task RouteAdmission_HandoverStartsFreshLivenessDeadline()
     {
-        await using var runtime = await ConnectedRuntime.CreateAsync(_ =>
-            SubmitResult.Ok);
+        await using var runtime = await ConnectedRuntime.CreateAsync(_ => SubmitResult.Ok);
 
         await Task.Delay(ZLinkServiceLiveness.PeerTimeout - TimeSpan.FromSeconds(2));
         await runtime.HandoverAsync();
@@ -747,33 +766,32 @@ public sealed class CanonicalActorJoinIngressReplyTests
         var endpoint = AllocateTcpEndpoint();
         router.Bind(endpoint);
         using var monitor = router.MonitorOpen(
-            SocketEvent.ConnectionReady | SocketEvent.Disconnected);
+            SocketEvent.ConnectionReady | SocketEvent.Disconnected
+        );
 
         await using var first = context.CreateDealerSocket();
         first.SetRoutingId(sourceRid);
         first.Connect(endpoint);
-        var firstReady = await ReceiveMonitorEventAsync(
-            monitor,
-            MonitorEventType.ConnectionReady);
+        var firstReady = await ReceiveMonitorEventAsync(monitor, MonitorEventType.ConnectionReady);
 
         await using var replacement = context.CreateDealerSocket();
         replacement.SetRoutingId(sourceRid);
         replacement.Connect(endpoint);
         var replacementReady = await ReceiveMonitorEventAsync(
             monitor,
-            MonitorEventType.ConnectionReady);
+            MonitorEventType.ConnectionReady
+        );
 
         Assert.Equal(sourceRid, firstReady.RoutingId);
         Assert.Equal(sourceRid, replacementReady.RoutingId);
         Assert.NotEqual(0UL, firstReady.ConnectionId);
         Assert.NotEqual(
             (firstReady.ConnectionId, firstReady.TransportLane),
-            (replacementReady.ConnectionId, replacementReady.TransportLane));
+            (replacementReady.ConnectionId, replacementReady.TransportLane)
+        );
 
         await first.DisposeAsync();
-        var disconnected = await ReceiveMonitorEventAsync(
-            monitor,
-            MonitorEventType.Disconnected);
+        var disconnected = await ReceiveMonitorEventAsync(monitor, MonitorEventType.Disconnected);
         Assert.Equal(firstReady.ConnectionId, disconnected.ConnectionId);
         Assert.Equal(firstReady.TransportLane, disconnected.TransportLane);
     }
@@ -799,7 +817,8 @@ public sealed class CanonicalActorJoinIngressReplyTests
             targetGeneration,
             "target-owner",
             79,
-            1);
+            1
+        );
         var operation = new ActorCreateOperation(
             correlation,
             new MeshOperationId(83, 89),
@@ -808,9 +827,8 @@ public sealed class CanonicalActorJoinIngressReplyTests
             "remote-actor",
             "Sample.RemoteActor",
             reservation,
-            checked((ulong)DateTimeOffset.UtcNow
-                .AddSeconds(5)
-                .ToUnixTimeMilliseconds()));
+            checked((ulong)DateTimeOffset.UtcNow.AddSeconds(5).ToUnixTimeMilliseconds())
+        );
 
         var replyTask = SendActorCreateRequestAsync(runtime.Source, operation);
         await operationTarget.Started.WaitAsync(TimeSpan.FromSeconds(2));
@@ -819,19 +837,23 @@ public sealed class CanonicalActorJoinIngressReplyTests
         // request's captured Core reply operation remains the exact route for
         // the terminal and must get its first submit attempt after the commit.
         await runtime.HandoverAsync();
-        operationTarget.Complete(new ActorCreateOperationTerminal(
-            RequestResult.Ok,
-            ServiceWireConstants.FrameworkErrorCode.None,
-            new ActorCreateCompletion(
-                ActorCreateResult.Created,
-                new ActorRef(
-                    operation.ActorId,
-                    reservation.ObjectGeneration,
-                    "mesh",
-                    runtime.TargetRid))));
+        operationTarget.Complete(
+            new ActorCreateOperationTerminal(
+                RequestResult.Ok,
+                ServiceWireConstants.FrameworkErrorCode.None,
+                new ActorCreateCompletion(
+                    ActorCreateResult.Created,
+                    new ActorRef(
+                        operation.ActorId,
+                        reservation.ObjectGeneration,
+                        "mesh",
+                        runtime.TargetRid
+                    )
+                )
+            )
+        );
 
-        var timeout = await Assert.ThrowsAsync<ZlinkRequestException>(
-            () => replyTask);
+        var timeout = await Assert.ThrowsAsync<ZlinkRequestException>(() => replyTask);
         Assert.Equal(ZlinkRequestException.ErrorCode.TimedOut, timeout.Result);
 
         var replay = SendActorCreateRequestAsync(runtime.Source, operation);
@@ -839,11 +861,14 @@ public sealed class CanonicalActorJoinIngressReplyTests
         try
         {
             var reply = DecodeReply(parts, correlation);
-            Assert.True(ZLinkServiceWireCodec.TryDecodeActorCreateReply(
-                reply,
-                "mesh",
-                out var completion,
-                out var error));
+            Assert.True(
+                ZLinkServiceWireCodec.TryDecodeActorCreateReply(
+                    reply,
+                    "mesh",
+                    out var completion,
+                    out var error
+                )
+            );
             Assert.Equal(ZLinkServiceWireCodec.DecodeError.None, error);
             Assert.Equal(ActorCreateResult.Created, completion!.Result);
             Assert.Equal("remote-actor", completion.Actor.ActorId);
@@ -865,7 +890,8 @@ public sealed class CanonicalActorJoinIngressReplyTests
                 Interlocked.Increment(ref attempts);
                 return SubmitResult.Backpressured;
             },
-            time);
+            time
+        );
         await using var monitor = runtime.Target.OpenMonitor();
         var request = CreateRequest(
             correlation: 55,
@@ -873,7 +899,8 @@ public sealed class CanonicalActorJoinIngressReplyTests
             runtime.TargetRid,
             runtime.Target.Status().LifecycleGeneration,
             runtime.TargetSpotId,
-            runtime.TargetSpotGeneration);
+            runtime.TargetSpotGeneration
+        );
 
         _ = SendRequestAsync(runtime.Source, request);
         var ingress = await ReceiveActorJoinAsync(runtime.Target);
@@ -881,7 +908,9 @@ public sealed class CanonicalActorJoinIngressReplyTests
             SubmitResult.Backpressured,
             ingress.ReplyTerminal(
                 RequestResult.InternalError,
-                (uint)ServiceWireConstants.FrameworkErrorCode.RequestFailed));
+                (uint)ServiceWireConstants.FrameworkErrorCode.RequestFailed
+            )
+        );
 
         time.Advance(TimeSpan.FromSeconds(6));
         await WaitUntilAsync(() => monitor.Status().ProtocolErrors != 0);
@@ -890,9 +919,8 @@ public sealed class CanonicalActorJoinIngressReplyTests
         Assert.Equal(expiredAttempts, Volatile.Read(ref attempts));
         Assert.Equal(
             SubmitResult.InvalidState,
-            ingress.ReplyJoin(
-                ActorJoinResult.Accepted,
-                Array.Empty<Message>()));
+            ingress.ReplyJoin(ActorJoinResult.Accepted, Array.Empty<Message>())
+        );
     }
 
     [Fact]
@@ -911,24 +939,23 @@ public sealed class CanonicalActorJoinIngressReplyTests
             runtime.TargetRid,
             runtime.Target.Status().LifecycleGeneration,
             runtime.TargetSpotId,
-            runtime.TargetSpotGeneration);
+            runtime.TargetSpotGeneration
+        );
         var replyTask = SendRequestAsync(runtime.Source, request);
         var ingress = await ReceiveActorJoinAsync(runtime.Target);
-        var start = new TaskCompletionSource(
-            TaskCreationOptions.RunContinuationsAsynchronously);
+        var start = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var accepted = Task.Run(async () =>
         {
             await start.Task;
-            return ingress.ReplyJoin(
-                ActorJoinResult.Accepted,
-                Array.Empty<Message>());
+            return ingress.ReplyJoin(ActorJoinResult.Accepted, Array.Empty<Message>());
         });
         var error = Task.Run(async () =>
         {
             await start.Task;
             return ingress.ReplyTerminal(
                 RequestResult.InternalError,
-                (uint)ServiceWireConstants.FrameworkErrorCode.RequestFailed);
+                (uint)ServiceWireConstants.FrameworkErrorCode.RequestFailed
+            );
         });
 
         start.SetResult();
@@ -945,21 +972,23 @@ public sealed class CanonicalActorJoinIngressReplyTests
             var reply = DecodeReply(parts, request.Correlation);
             if (acceptedResult == SubmitResult.Ok)
             {
-                Assert.True(ZLinkServiceWireCodec.TryDecodeActorJoinReply(
-                    reply,
-                    out var completion,
-                    out var decodeError));
+                Assert.True(
+                    ZLinkServiceWireCodec.TryDecodeActorJoinReply(
+                        reply,
+                        out var completion,
+                        out var decodeError
+                    )
+                );
                 Assert.Equal(ZLinkServiceWireCodec.DecodeError.None, decodeError);
                 Assert.Equal(ActorJoinResult.Accepted, completion!.JoinResult);
             }
             else
             {
-                Assert.Equal(
-                    (int)RequestResult.InternalError,
-                    reply.TerminalResult);
+                Assert.Equal((int)RequestResult.InternalError, reply.TerminalResult);
                 Assert.Equal(
                     (uint)ServiceWireConstants.FrameworkErrorCode.RequestFailed,
-                    reply.FailureCode);
+                    reply.FailureCode
+                );
             }
         }
         finally
@@ -974,59 +1003,74 @@ public sealed class CanonicalActorJoinIngressReplyTests
         RoutingId targetRid,
         ulong targetNodeGeneration,
         string targetSpotId,
-        ulong targetSpotGeneration) => new(
-        correlation,
-        new ActorRef("actor-1", 7, "mesh", sourceRid),
-        ActorNodeGeneration: 1,
-        ActorAuthorityOwnerGeneration: 3,
-        ActorOwnerLeaseGeneration: 5,
-        Entry: false,
-        targetSpotId,
-        targetSpotGeneration,
-        targetRid,
-        targetNodeGeneration,
-        TargetAuthorityOwnerGeneration: 4,
-        TargetOwnerLeaseGeneration: 6);
+        ulong targetSpotGeneration
+    ) =>
+        new(
+            correlation,
+            new ActorRef("actor-1", 7, "mesh", sourceRid),
+            ActorNodeGeneration: 1,
+            ActorAuthorityOwnerGeneration: 3,
+            ActorOwnerLeaseGeneration: 5,
+            Entry: false,
+            targetSpotId,
+            targetSpotGeneration,
+            targetRid,
+            targetNodeGeneration,
+            TargetAuthorityOwnerGeneration: 4,
+            TargetOwnerLeaseGeneration: 6
+        );
 
     private static Task<IReadOnlyList<Message>> SendRequestAsync(
         IDealerSocket source,
-        ActorJoinRequest request)
+        ActorJoinRequest request
+    )
     {
         using var head = Message.From(
-            ZLinkMeshRecordAdapters.EncodeCanonicalActorJoinHead(request));
+            ZLinkMeshRecordAdapters.EncodeCanonicalActorJoinHead(request)
+        );
         using var payload = Message.From(
             ZLinkApplicationPayloadEnvelopeCodec.Encode(
                 "ZLinkFrameworkActorJoinRequest",
                 "application/json",
-                "{}"u8));
-        return source.Request()
+                "{}"u8
+            )
+        );
+        return source
+            .Request()
             .Message(head)
             .Message(payload)
             .Timeout(TimeSpan.FromSeconds(2))
-            .Async(CancellationToken.None).Reply;
+            .Async(CancellationToken.None)
+            .Reply;
     }
 
     private static Task<IReadOnlyList<Message>> SendActorCreateRequestAsync(
         IDealerSocket source,
-        ActorCreateOperation operation)
+        ActorCreateOperation operation
+    )
     {
-        using var head = Message.From(
-            ZLinkServiceWireCodec.EncodeActorCreate(operation));
-        return source.Request()
+        using var head = Message.From(ZLinkServiceWireCodec.EncodeActorCreate(operation));
+        return source
+            .Request()
             .Message(head)
             .Timeout(TimeSpan.FromSeconds(2))
-            .Async(CancellationToken.None).Reply;
+            .Async(CancellationToken.None)
+            .Reply;
     }
 
     private static ZLinkServiceWireCodec.ReplyRecord DecodeReply(
         IReadOnlyList<Message> parts,
-        ulong correlation)
+        ulong correlation
+    )
     {
         Assert.Single(parts);
-        Assert.True(ZLinkServiceWireCodec.TryDecodeReply(
-            parts[0].AsReadOnlyMemory().Span,
-            out var reply,
-            out var error));
+        Assert.True(
+            ZLinkServiceWireCodec.TryDecodeReply(
+                parts[0].AsReadOnlyMemory().Span,
+                out var reply,
+                out var error
+            )
+        );
         Assert.Equal(ZLinkServiceWireCodec.DecodeError.None, error);
         Assert.Equal(correlation, reply.Correlation);
         return reply;
@@ -1034,26 +1078,22 @@ public sealed class CanonicalActorJoinIngressReplyTests
 
     private static async Task<MeshReceiveRecord> ReceiveActorJoinAsync(
         ZLinkManagedMeshNode target,
-        TimeSpan? timeout = null)
+        TimeSpan? timeout = null
+    )
     {
         var deadlineTimeout = timeout ?? TimeSpan.FromSeconds(2);
         var deadlineStarted = Stopwatch.GetTimestamp();
         while (Stopwatch.GetElapsedTime(deadlineStarted) < deadlineTimeout)
         {
             using var ready = new MeshReadyBatch();
-            target.DrainReady(
-                MeshReadyDomains.Application,
-                ready,
-                RecvFlags.DontWait);
+            target.DrainReady(MeshReadyDomains.Application, ready, RecvFlags.DontWait);
             for (var index = 0; index < ready.Count; index++)
             {
                 using var claim = ready.TakeClaim(index);
                 using var received = new MeshReceiveBatch();
                 while (claim.Receive(received, RecvFlags.DontWait))
                 {
-                    for (var recordIndex = 0;
-                         recordIndex < received.Count;
-                         recordIndex++)
+                    for (var recordIndex = 0; recordIndex < received.Count; recordIndex++)
                     {
                         var record = received[recordIndex];
                         if (record.OperationKind == MeshOperationKind.ActorJoin)
@@ -1069,32 +1109,28 @@ public sealed class CanonicalActorJoinIngressReplyTests
 
     private static async Task<(
         MeshReceiveRecord Record,
-        IReadOnlyList<Message> Parts)> ReceiveCompletionAsync(
-            ZLinkManagedMeshNode source,
-            MeshOperationId operationId)
+        IReadOnlyList<Message> Parts
+    )> ReceiveCompletionAsync(ZLinkManagedMeshNode source, MeshOperationId operationId)
     {
         var deadlineTimeout = TimeSpan.FromSeconds(2);
         var deadlineStarted = Stopwatch.GetTimestamp();
         while (Stopwatch.GetElapsedTime(deadlineStarted) < deadlineTimeout)
         {
             using var ready = new MeshReadyBatch();
-            source.DrainReady(
-                MeshReadyDomains.Infrastructure,
-                ready,
-                RecvFlags.DontWait);
+            source.DrainReady(MeshReadyDomains.Infrastructure, ready, RecvFlags.DontWait);
             for (var index = 0; index < ready.Count; index++)
             {
                 using var claim = ready.TakeClaim(index);
                 using var received = new MeshReceiveBatch();
                 while (claim.Receive(received, RecvFlags.DontWait))
                 {
-                    for (var recordIndex = 0;
-                         recordIndex < received.Count;
-                         recordIndex++)
+                    for (var recordIndex = 0; recordIndex < received.Count; recordIndex++)
                     {
                         var record = received[recordIndex];
-                        if (record.Kind == MeshRecordKind.Completion
-                            && record.OperationId == operationId)
+                        if (
+                            record.Kind == MeshRecordKind.Completion
+                            && record.OperationId == operationId
+                        )
                             return (record, received.RetainMessage(recordIndex));
                     }
                     received.Reset();
@@ -1133,7 +1169,8 @@ public sealed class CanonicalActorJoinIngressReplyTests
 
     private static async Task<MonitorEvent> ReceiveMonitorEventAsync(
         ISocketMonitor monitor,
-        MonitorEventType expected)
+        MonitorEventType expected
+    )
     {
         var deadlineTimeout = TimeSpan.FromSeconds(2);
         var deadlineStarted = Stopwatch.GetTimestamp();
@@ -1147,9 +1184,7 @@ public sealed class CanonicalActorJoinIngressReplyTests
         throw new TimeoutException($"Monitor event '{expected}' was not received.");
     }
 
-    private static async Task SendHelloAsync(
-        IDealerSocket source,
-        string sourceEndpoint)
+    private static async Task SendHelloAsync(IDealerSocket source, string sourceEndpoint)
     {
         var deadlineTimeout = TimeSpan.FromSeconds(2);
         var deadlineStarted = Stopwatch.GetTimestamp();
@@ -1165,11 +1200,14 @@ public sealed class CanonicalActorJoinIngressReplyTests
                         lifecycleGeneration: 1,
                         descriptorRevision: 1,
                         new Dictionary<string, uint>(StringComparer.Ordinal),
-                        objectRole: (byte)ZLinkMeshNodeObjectRole.Server));
+                        objectRole: (byte)ZLinkMeshNodeObjectRole.Server
+                    )
+                );
                 await source.Send().Message(hello).Async(CancellationToken.None).Admitted;
                 return;
             }
-            catch (ZlinkSubmitException) when (Stopwatch.GetElapsedTime(deadlineStarted) < deadlineTimeout)
+            catch (ZlinkSubmitException)
+                when (Stopwatch.GetElapsedTime(deadlineStarted) < deadlineTimeout)
             {
                 await Task.Delay(10);
             }
@@ -1197,7 +1235,8 @@ public sealed class CanonicalActorJoinIngressReplyTests
             ulong targetSpotGeneration,
             string targetEndpoint,
             string sourceEndpoint,
-            TestCompletionPollerDriver sourceCompletionOwner)
+            TestCompletionPollerDriver sourceCompletionOwner
+        )
         {
             Context = context;
             Target = target;
@@ -1243,14 +1282,16 @@ public sealed class CanonicalActorJoinIngressReplyTests
             replacement.SetRoutingId(SourceRid);
             replacement.Connect(TargetEndpoint);
             await WaitUntilAsync(() =>
-                ConnectionMonitor.ReadyAppliedCount >= _createdSources.Count);
+                ConnectionMonitor.ReadyAppliedCount >= _createdSources.Count
+            );
             Source = replacement;
             await SendHelloAsync(replacement, SourceEndpoint);
             using var admission = await ReceiveAsync(replacement);
         }
 
         internal async Task HandoverAsync(
-            Func<IDealerSocket, string, Task<Received>>? admitReplacement = null)
+            Func<IDealerSocket, string, Task<Received>>? admitReplacement = null
+        )
         {
             var replacement = Context.CreateDealerSocket();
             _createdSources.Add(replacement);
@@ -1258,7 +1299,8 @@ public sealed class CanonicalActorJoinIngressReplyTests
             replacement.SetRoutingId(SourceRid);
             replacement.Connect(TargetEndpoint);
             await WaitUntilAsync(() =>
-                ConnectionMonitor.ReadyAppliedCount >= _createdSources.Count);
+                ConnectionMonitor.ReadyAppliedCount >= _createdSources.Count
+            );
             if (admitReplacement is null)
             {
                 await SendHelloAsync(replacement, SourceEndpoint);
@@ -1266,9 +1308,7 @@ public sealed class CanonicalActorJoinIngressReplyTests
             }
             else
             {
-                using var admission = await admitReplacement(
-                    replacement,
-                    SourceEndpoint);
+                using var admission = await admitReplacement(replacement, SourceEndpoint);
             }
             PriorSource = Source;
             Source = replacement;
@@ -1306,7 +1346,8 @@ public sealed class CanonicalActorJoinIngressReplyTests
 
         internal static async Task<ConnectedRuntime> CreateAsync(
             Func<ReplySubmitOperation, SubmitResult> submit,
-            TimeProvider? deadlineTimeProvider = null)
+            TimeProvider? deadlineTimeProvider = null
+        )
         {
             var context = Systems.Zlink.Zlink.CreateContext();
             AppliedConnectionReadyMonitor? connectionMonitor = null;
@@ -1316,7 +1357,8 @@ public sealed class CanonicalActorJoinIngressReplyTests
                 deadlineTimeProvider: deadlineTimeProvider,
                 nativeTerminalReplySubmitOverride: submit,
                 decorateSocketMonitor: monitor =>
-                    connectionMonitor = new AppliedConnectionReadyMonitor(monitor));
+                    connectionMonitor = new AppliedConnectionReadyMonitor(monitor)
+            );
             var suffix = Guid.NewGuid().ToString("N");
             var sourceRid = RoutingId.From($"actor-join-source-{suffix}");
             var targetRid = RoutingId.From($"actor-join-target-{suffix}");
@@ -1327,9 +1369,7 @@ public sealed class CanonicalActorJoinIngressReplyTests
             target.SetRoutingId(targetRid);
             target.SetObjectRole(ZLinkMeshNodeObjectRole.Client);
             target.SetBind(targetEndpoint);
-            var targetSpot = target.GetOrCreateSpot(
-                targetSpotId,
-                out var created);
+            var targetSpot = target.GetOrCreateSpot(targetSpotId, out var created);
             Assert.True(created);
             target.Start();
 
@@ -1337,12 +1377,10 @@ public sealed class CanonicalActorJoinIngressReplyTests
             var sourceCompletionOwner = new TestCompletionPollerDriver(source);
             source.SetRoutingId(sourceRid);
             source.Connect(targetEndpoint);
-            await WaitUntilAsync(() =>
-                connectionMonitor!.ReadyAppliedCount >= 1);
+            await WaitUntilAsync(() => connectionMonitor!.ReadyAppliedCount >= 1);
             await SendHelloAsync(source, sourceEndpoint);
 
-            await WaitUntilAsync(() =>
-                target.Status().AdmittedPeerCount == 1);
+            await WaitUntilAsync(() => target.Status().AdmittedPeerCount == 1);
             using var admission = await ReceiveAsync(source);
             return new ConnectedRuntime(
                 context,
@@ -1355,7 +1393,8 @@ public sealed class CanonicalActorJoinIngressReplyTests
                 targetSpot.LifecycleGeneration,
                 targetEndpoint,
                 sourceEndpoint,
-                sourceCompletionOwner);
+                sourceCompletionOwner
+            );
         }
 
         public async ValueTask DisposeAsync()
@@ -1386,31 +1425,38 @@ public sealed class CanonicalActorJoinIngressReplyTests
             }
 
             var value = inner.Recv(flags);
-            if (value?.Event == MonitorEventType.ConnectionReady
-                && (value.Flags & MonitorEventFlags.ConnectionReadyEdge) != 0)
+            if (
+                value?.Event == MonitorEventType.ConnectionReady
+                && (value.Flags & MonitorEventFlags.ConnectionReadyEdge) != 0
+            )
                 _readyDelivered = true;
             return value;
         }
 
         public MonitorStatus Status() => inner.Status();
+
         public void Close() => inner.Close();
+
         public void Dispose() => inner.Dispose();
+
         public ValueTask DisposeAsync() => inner.DisposeAsync();
     }
 
-    private sealed class DeferredActorCreateOperationTarget
-        : IActorCreateOperationTarget
+    private sealed class DeferredActorCreateOperationTarget : IActorCreateOperationTarget
     {
         private readonly TaskCompletionSource _started = new(
-            TaskCreationOptions.RunContinuationsAsynchronously);
-        private readonly TaskCompletionSource<ActorCreateOperationTerminal> _terminal =
-            new(TaskCreationOptions.RunContinuationsAsynchronously);
+            TaskCreationOptions.RunContinuationsAsynchronously
+        );
+        private readonly TaskCompletionSource<ActorCreateOperationTerminal> _terminal = new(
+            TaskCreationOptions.RunContinuationsAsynchronously
+        );
 
         internal Task Started => _started.Task;
 
         public async ValueTask<ActorCreateOperationTerminal> CreateAsync(
             ActorCreateOperation operation,
-            CancellationToken cancellationToken)
+            CancellationToken cancellationToken
+        )
         {
             _ = operation;
             _started.TrySetResult();

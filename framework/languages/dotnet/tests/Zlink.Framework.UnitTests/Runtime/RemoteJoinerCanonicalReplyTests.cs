@@ -25,15 +25,18 @@ public sealed class RemoteJoinerCanonicalReplyTests
                 JoinEpoch: 1,
                 Flags: 0,
                 JoinedSpotGeneration: 1,
-                ReplyContentType: "application/json"),
-            [raw]);
+                ReplyContentType: "application/json"
+            ),
+            [raw]
+        );
 
         var admission = await ZLinkActorRemoteJoiner.TryRequestCanonicalAdmissionAsync(
             transport,
             CanonicalRequest(),
             predictedPayloadBytes: 0,
             timeout: TimeSpan.FromSeconds(2),
-            CancellationToken.None);
+            CancellationToken.None
+        );
 
         var reply = Assert.NotNull(admission).Reply;
         // Inner: the actual application content type, still usable to
@@ -43,7 +46,8 @@ public sealed class RemoteJoinerCanonicalReplyTests
         // fences as a literal wire-format invariant.
         Assert.Equal(
             ServiceWireConstants.FrameworkMultipartContentType,
-            reply.RecoveryReplyContentType);
+            reply.RecoveryReplyContentType
+        );
     }
 
     [Fact]
@@ -56,39 +60,44 @@ public sealed class RemoteJoinerCanonicalReplyTests
         var reply = ZLinkRemoteActorJoinPackets.CreateAdmissionReply(
             accepted: true,
             reply: null,
-            new ZLinkCodecRegistryBuilder());
+            new ZLinkCodecRegistryBuilder()
+        );
 
         Assert.Null(reply.RecoveryReplyContentType);
     }
 
-    private static ZLinkBackendCanonicalActorJoinRequest CanonicalRequest() => new(
-        new ZLinkBackendActorRef(RoutingId.From("source"), "actor-1", 1),
-        ActorNodeGeneration: 1,
-        ActorAuthorityOwnerGeneration: 1,
-        ActorOwnerLeaseGeneration: 1,
-        Entry: false,
-        RoutingId.From("target"),
-        TargetSpotId: "spot",
-        TargetSpotGeneration: 1,
-        TargetNodeGeneration: 1,
-        TargetAuthorityOwnerGeneration: 1,
-        TargetOwnerLeaseGeneration: 1,
-        PacketName: "ZLinkFrameworkActorJoinRequest",
-        ContentType: "application/json",
-        ApplicationPayload: ReadOnlyMemory<byte>.Empty);
+    private static ZLinkBackendCanonicalActorJoinRequest CanonicalRequest() =>
+        new(
+            new ZLinkBackendActorRef(RoutingId.From("source"), "actor-1", 1),
+            ActorNodeGeneration: 1,
+            ActorAuthorityOwnerGeneration: 1,
+            ActorOwnerLeaseGeneration: 1,
+            Entry: false,
+            RoutingId.From("target"),
+            TargetSpotId: "spot",
+            TargetSpotGeneration: 1,
+            TargetNodeGeneration: 1,
+            TargetAuthorityOwnerGeneration: 1,
+            TargetOwnerLeaseGeneration: 1,
+            PacketName: "ZLinkFrameworkActorJoinRequest",
+            ContentType: "application/json",
+            ApplicationPayload: ReadOnlyMemory<byte>.Empty
+        );
 
     private sealed class FakeCanonicalActorJoinTransport(
         ZLinkBackendActorJoinResult result,
-        IReadOnlyList<Message> replyParts) : IZLinkBackendCanonicalActorJoin
+        IReadOnlyList<Message> replyParts
+    ) : IZLinkBackendCanonicalActorJoin
     {
-        public bool CanRequestCanonicalActorJoin(
-            ZLinkBackendCanonicalActorJoinRequest request) => true;
+        public bool CanRequestCanonicalActorJoin(ZLinkBackendCanonicalActorJoinRequest request) =>
+            true;
 
         public bool RequestCanonicalActorJoin(
             ZLinkBackendCanonicalActorJoinRequest request,
             ActorJoinCallback callback,
             TimeSpan? timeout,
-            out ulong correlation)
+            out ulong correlation
+        )
         {
             correlation = 1;
             callback(result, replyParts);
@@ -101,7 +110,8 @@ public sealed class RemoteJoinerCanonicalReplyTests
     {
         var application = ZLinkActorRemoteJoiner.DecodeCanonicalApplicationReply(
             JoinResult("application/x-protobuf"),
-            Array.Empty<Message>());
+            Array.Empty<Message>()
+        );
 
         Assert.Equal("application/x-protobuf", application.ContentType);
         Assert.Empty(application.Payload.ToArray());
@@ -114,7 +124,8 @@ public sealed class RemoteJoinerCanonicalReplyTests
 
         var application = ZLinkActorRemoteJoiner.DecodeCanonicalApplicationReply(
             JoinResult("application/x-protobuf"),
-            [raw]);
+            [raw]
+        );
 
         Assert.Equal("application/x-protobuf", application.ContentType);
         Assert.Equal(new byte[] { 0x08, 0x96, 0x01 }, application.Payload.ToArray());
@@ -132,25 +143,28 @@ public sealed class RemoteJoinerCanonicalReplyTests
             ZLinkApplicationPayloadEnvelopeCodec.Encode(
                 "ActorJoinReply",
                 "application/json",
-                "{\"accepted\":true}"u8));
+                "{\"accepted\":true}"u8
+            )
+        );
 
         var application = ZLinkActorRemoteJoiner.DecodeCanonicalApplicationReply(
             JoinResult("application/x-protobuf"),
-            [envelopeShaped]);
+            [envelopeShaped]
+        );
 
         Assert.Equal("application/x-protobuf", application.ContentType);
-        Assert.Equal(
-            envelopeShaped.AsReadOnlyMemory().ToArray(),
-            application.Payload.ToArray());
+        Assert.Equal(envelopeShaped.AsReadOnlyMemory().ToArray(), application.Payload.ToArray());
     }
 
-    private static ZLinkBackendActorJoinResult JoinResult(string replyContentType) => new(
-        RequestResult.Ok,
-        JoinResultCode: 0,
-        new ZLinkBackendActorRef(RoutingId.From("target"), "actor", 1),
-        JoinedSpotId: "spot",
-        JoinEpoch: 1,
-        Flags: 0,
-        JoinedSpotGeneration: 1,
-        ReplyContentType: replyContentType);
+    private static ZLinkBackendActorJoinResult JoinResult(string replyContentType) =>
+        new(
+            RequestResult.Ok,
+            JoinResultCode: 0,
+            new ZLinkBackendActorRef(RoutingId.From("target"), "actor", 1),
+            JoinedSpotId: "spot",
+            JoinEpoch: 1,
+            Flags: 0,
+            JoinedSpotGeneration: 1,
+            ReplyContentType: replyContentType
+        );
 }

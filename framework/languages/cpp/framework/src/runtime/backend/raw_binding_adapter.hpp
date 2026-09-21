@@ -15,14 +15,10 @@ namespace zlink::framework::detail::backend
 // A successful binding receive owns native parts until close(). This guard
 // pairs that terminal release with the receive even when ownership transfer or
 // metadata validation throws.
-template <typename TReceived>
-class binding_received_release_t final
+template <typename TReceived> class binding_received_release_t final
 {
   public:
-    explicit binding_received_release_t (TReceived &received) noexcept :
-        _received (&received)
-    {
-    }
+    explicit binding_received_release_t (TReceived &received) noexcept : _received (&received) {}
 
     binding_received_release_t (const binding_received_release_t &) = delete;
     binding_received_release_t &operator= (const binding_received_release_t &) = delete;
@@ -43,8 +39,7 @@ class binding_received_release_t final
 // The C++ binding receive API retains its native message storage. This is the
 // single binding-facing ownership boundary: it copies each part once into the
 // Framework-owned representation before the binding receive envelope closes.
-inline raw_message_t copy_binding_parts (
-  const std::vector<zlink::message_t> &parts)
+inline raw_message_t copy_binding_parts (const std::vector<zlink::message_t> &parts)
 {
     raw_message_t result;
     result.reserve (parts.size ());
@@ -54,8 +49,8 @@ inline raw_message_t copy_binding_parts (
     return result;
 }
 
-inline std::vector<zlink::message_t> copy_binding_messages (
-  const std::vector<zlink::message_t> &parts)
+inline std::vector<zlink::message_t>
+copy_binding_messages (const std::vector<zlink::message_t> &parts)
 {
     std::vector<zlink::message_t> result;
     result.reserve (parts.size ());
@@ -65,8 +60,7 @@ inline std::vector<zlink::message_t> copy_binding_messages (
     return result;
 }
 
-inline std::vector<zlink::message_t> materialize_binding_parts (
-  raw_message_t parts)
+inline std::vector<zlink::message_t> materialize_binding_parts (raw_message_t parts)
 {
     std::vector<zlink::message_t> result;
     result.reserve (parts.size ());
@@ -74,8 +68,7 @@ inline std::vector<zlink::message_t> materialize_binding_parts (
         auto storage = std::make_unique<raw_bytes_t> (std::move (part));
         auto message = zlink::advanced::external_message_t::from (
           std::span<std::uint8_t> (*storage),
-          [] (void *, void *hint) { delete static_cast<raw_bytes_t *> (hint); },
-          storage.get ());
+          [] (void *, void *hint) { delete static_cast<raw_bytes_t *> (hint); }, storage.get ());
         if (!message.valid ())
             throw std::bad_alloc ();
         storage.release ();
@@ -84,8 +77,7 @@ inline std::vector<zlink::message_t> materialize_binding_parts (
     return result;
 }
 
-inline raw_request_result_t map_binding_request_result (
-  zlink::request_result_t result) noexcept
+inline raw_request_result_t map_binding_request_result (zlink::request_result_t result) noexcept
 {
     switch (result) {
         case zlink::request_result_t::ok:
@@ -107,17 +99,15 @@ inline raw_request_result_t map_binding_request_result (
 // submit failure can be a transient route absence. Request completions use the
 // typed mapping above. A submit completion with ENOENT means disconnect_rid
 // retired an already-issued WRITABLE token and must not be replayed.
-inline bool transient_route_failure (
-  zlink::submit_result_t result,
-  int error,
-  raw_request_failure_phase_t phase) noexcept
+inline bool transient_route_failure (zlink::submit_result_t result,
+                                     int error,
+                                     raw_request_failure_phase_t phase) noexcept
 {
     if (phase != raw_request_failure_phase_t::initial_admission)
         return false;
     if (result == zlink::submit_result_t::not_connected)
         return error == ENOTCONN || error == EHOSTUNREACH;
-    return result == zlink::submit_result_t::not_admitted
-           && error == ECONNREFUSED;
+    return result == zlink::submit_result_t::not_admitted && error == ECONNREFUSED;
 }
 
 } // namespace zlink::framework::detail::backend

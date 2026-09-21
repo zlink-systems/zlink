@@ -27,10 +27,12 @@ class KotlinActorCreationCallOwnershipTest {
     @ValueSource(booleans = [false, true])
     fun duplicateOptionsPreserveJavaErrorAndOriginalValues(getOrCreate: Boolean) = runBlocking {
         val fixture = Fixture()
-        val call = fixture.call(getOrCreate)
-            .inMesh("mesh-a")
-            .request("first")
-            .timeout(Duration.ofSeconds(2))
+        val call =
+            fixture
+                .call(getOrCreate)
+                .inMesh("mesh-a")
+                .request("first")
+                .timeout(Duration.ofSeconds(2))
 
         assertInvalidOperation { call.inMesh("other-mesh") }
         assertInvalidOperation { call.request("second") }
@@ -101,10 +103,11 @@ class KotlinActorCreationCallOwnershipTest {
 
     private class Fixture {
         val completion = CompletableFuture<ZLinkActorCreateResult>()
-        val result = ZLinkActorCreateResult.Created(
-            ActorRef("actor-a", 1, "mesh-a", RoutingId.from("node-a")),
-            ZLinkMessage.empty(),
-        )
+        val result =
+            ZLinkActorCreateResult.Created(
+                ActorRef("actor-a", 1, "mesh-a", RoutingId.from("node-a")),
+                ZLinkMessage.empty(),
+            )
         var submissions = 0
         var request: ZLinkMessage? = null
         var timeout: Duration? = null
@@ -112,19 +115,24 @@ class KotlinActorCreationCallOwnershipTest {
         private val runtime: ZLinkActorRuntime
 
         init {
-            val node = Proxy.newProxyInstance(
-                ZLinkInternalSpotNode::class.java.classLoader,
-                arrayOf(ZLinkInternalSpotNode::class.java),
-            ) { _, method, _ ->
-                if (method.name == "routingId") {
-                    RoutingId.from("node-a")
-                } else {
-                    throw AssertionError("unexpected backend call: $method")
-                }
-            } as ZLinkInternalSpotNode
-            runtime = ZLinkActorRuntime(
-                node, emptyMap(), Duration.ofSeconds(5), ZLinkJsonMessageSerializer(),
-            )
+            val node =
+                Proxy.newProxyInstance(
+                    ZLinkInternalSpotNode::class.java.classLoader,
+                    arrayOf(ZLinkInternalSpotNode::class.java),
+                ) { _, method, _ ->
+                    if (method.name == "routingId") {
+                        RoutingId.from("node-a")
+                    } else {
+                        throw AssertionError("unexpected backend call: $method")
+                    }
+                } as ZLinkInternalSpotNode
+            runtime =
+                ZLinkActorRuntime(
+                    node,
+                    emptyMap(),
+                    Duration.ofSeconds(5),
+                    ZLinkJsonMessageSerializer(),
+                )
             runtime.setMeshName("mesh-a")
             runtime.setCreationSubmitter { id, type, message, get, deadline ->
                 assertEquals("actor-a", id)

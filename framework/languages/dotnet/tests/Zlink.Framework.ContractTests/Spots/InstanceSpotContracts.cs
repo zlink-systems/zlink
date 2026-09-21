@@ -20,7 +20,8 @@ public sealed class InstanceSpotContracts
     [ContractExample(
         typeof(IZLinkInstanceSpot),
         typeof(IZLinkInstanceSpotContext),
-        typeof(IZLinkInstanceSpotHandlerRegistry))]
+        typeof(IZLinkInstanceSpotHandlerRegistry)
+    )]
     public async Task Instance_spot_registers_direct_packets_and_timers_but_never_actor_membership()
     {
         // A per-region leaderboard: one live instance per region, addressed
@@ -38,13 +39,11 @@ public sealed class InstanceSpotContracts
 
         // Outbound is the same Spot outbound every Spot kind gets, so an
         // Instance Spot can answer a channel and address another instance.
-        await context.Outbound
-            .SendToChannel("analytics", new ScorePosted("player-8821", 1901))
+        await context
+            .Outbound.SendToChannel("analytics", new ScorePosted("player-8821", 1901))
             .Async();
-        await context.Outbound
-            .SendToSpot(
-                "leaderboard-us-east",
-                new ScorePosted("player-8821", 1901))
+        await context
+            .Outbound.SendToSpot("leaderboard-us-east", new ScorePosted("player-8821", 1901))
             .InstanceSpot("leaderboard")
             .InMesh("play")
             .Async();
@@ -55,8 +54,10 @@ public sealed class InstanceSpotContracts
         await spot.OnClosingAsync(
             new ZLinkSpotClosingContext(
                 ZLinkSpotCloseReason.ExplicitClose,
-                DateTimeOffset.UtcNow.AddSeconds(3)),
-            CancellationToken.None);
+                DateTimeOffset.UtcNow.AddSeconds(3)
+            ),
+            CancellationToken.None
+        );
         Assert.True(context.Closed);
 
         // Actor-free by contract: no membership callbacks on the lifecycle and
@@ -73,13 +74,15 @@ public sealed class InstanceSpotContracts
             typeof(IZLinkInstanceSpotHandlerRegistry)
                 .GetMethods()
                 .Select(method => method.Name)
-                .ToArray());
+                .ToArray()
+        );
     }
 
     [Fact]
     [ContractExample(
         typeof(IZLinkSpotRelocationAdapter<>),
-        typeof(IZLinkInstanceSpotFactoryBuilder<>))]
+        typeof(IZLinkInstanceSpotFactoryBuilder<>)
+    )]
     public async Task Spot_relocation_adapter_round_trips_only_application_state()
     {
         // PreserveStateWith<TAdapter>() selects the adapter that carries
@@ -106,20 +109,23 @@ public sealed class InstanceSpotContracts
         var methods = typeof(IZLinkSpotRelocationAdapter<LeaderboardSpot>).GetMethods();
         Assert.Equal(
             typeof(ValueTask<byte[]>),
-            methods.Single(method => method.Name == "CaptureAsync").ReturnType);
+            methods.Single(method => method.Name == "CaptureAsync").ReturnType
+        );
         Assert.Equal(
             [typeof(LeaderboardSpot), typeof(ReadOnlyMemory<byte>), typeof(CancellationToken)],
             methods
                 .Single(method => method.Name == "RestoreAsync")
                 .GetParameters()
-                .Select(parameter => parameter.ParameterType));
+                .Select(parameter => parameter.ParameterType)
+        );
     }
 
     [Fact]
     [ContractExample(
         typeof(IZLinkSpotCreateCall),
         typeof(IZLinkSpotGetOrCreateCall),
-        typeof(IZLinkSpotManager))]
+        typeof(IZLinkSpotManager)
+    )]
     public async Task Spot_manager_create_issues_an_id_and_get_or_create_returns_the_existing_one()
     {
         var manager = new ExampleSpotManager();
@@ -148,9 +154,7 @@ public sealed class InstanceSpotContracts
             .Request(ZLinkMessage.From(new OpenBattle("social", 40)))
             .Timeout(TimeSpan.FromSeconds(5))
             .Async();
-        var second = await manager
-            .GetOrCreate("guild-hall-4471", "guild-hall")
-            .Async();
+        var second = await manager.GetOrCreate("guild-hall-4471", "guild-hall").Async();
 
         Assert.Equal(ZLinkSpotCreateState.Created, first.State);
         Assert.Equal(ZLinkSpotCreateState.Existing, second.State);
@@ -161,7 +165,8 @@ public sealed class InstanceSpotContracts
         // a silent replacement.
         Assert.Equal(
             ZLinkSpotCreateState.Rejected,
-            (await manager.GetOrCreate("guild-hall-4471", "battle-room").Async()).State);
+            (await manager.GetOrCreate("guild-hall-4471", "battle-room").Async()).State
+        );
 
         Assert.Equal(second.Spot, await manager.FindAsync("guild-hall-4471"));
         Assert.True(await manager.CloseAsync(second.Spot));
@@ -174,7 +179,8 @@ public sealed class InstanceSpotContracts
         // explicit InstanceSpot marker on a Spot message call.
         Assert.Equal(
             new[] { "CloseAsync", "Create", "FindAsync", "GetOrCreate" },
-            typeof(IZLinkSpotManager).GetMethods().Select(method => method.Name).Order().ToArray());
+            typeof(IZLinkSpotManager).GetMethods().Select(method => method.Name).Order().ToArray()
+        );
     }
 
     private sealed record ScorePosted(string ActorId, int Rating);
@@ -196,7 +202,8 @@ public sealed class InstanceSpotContracts
             await Context.AddTimer<FlushHandler>(
                 "flush",
                 TimeSpan.FromSeconds(30),
-                cancellationToken: cancellationToken);
+                cancellationToken: cancellationToken
+            );
         }
     }
 
@@ -205,7 +212,8 @@ public sealed class InstanceSpotContracts
         public ValueTask HandleAsync(
             LeaderboardSpot spot,
             ScorePosted message,
-            CancellationToken cancellationToken)
+            CancellationToken cancellationToken
+        )
         {
             spot.Post(message.ActorId, message.Rating);
             return ValueTask.CompletedTask;
@@ -217,21 +225,22 @@ public sealed class InstanceSpotContracts
         public ValueTask HandleAsync(
             LeaderboardSpot spot,
             ZLinkTimerTick tick,
-            CancellationToken cancellationToken) => ValueTask.CompletedTask;
+            CancellationToken cancellationToken
+        ) => ValueTask.CompletedTask;
     }
 
     private sealed class LeaderboardRelocationAdapter : IZLinkSpotRelocationAdapter<LeaderboardSpot>
     {
         public ValueTask<byte[]> CaptureAsync(
             LeaderboardSpot spot,
-            CancellationToken cancellationToken) =>
-            ValueTask.FromResult(
-                Encoding.UTF8.GetBytes(JsonSerializer.Serialize(spot.Scores)));
+            CancellationToken cancellationToken
+        ) => ValueTask.FromResult(Encoding.UTF8.GetBytes(JsonSerializer.Serialize(spot.Scores)));
 
         public ValueTask RestoreAsync(
             LeaderboardSpot spot,
             ReadOnlyMemory<byte> payload,
-            CancellationToken cancellationToken)
+            CancellationToken cancellationToken
+        )
         {
             var scores = JsonSerializer.Deserialize<Dictionary<string, int>>(payload.Span)!;
             foreach (var (actorId, rating) in scores)
@@ -242,28 +251,31 @@ public sealed class InstanceSpotContracts
 
     private sealed class ExampleSpotManager : IZLinkSpotManager
     {
-        private readonly Dictionary<string, (SpotRef Spot, string SpotType)> _spots =
-            new(StringComparer.Ordinal);
+        private readonly Dictionary<string, (SpotRef Spot, string SpotType)> _spots = new(
+            StringComparer.Ordinal
+        );
 
         private int _issuedIds;
 
         public int FactoryRuns { get; private set; }
 
-        public IZLinkSpotCreateCall Create(string spotType) =>
-            new SpotCreateCall(this, spotType);
+        public IZLinkSpotCreateCall Create(string spotType) => new SpotCreateCall(this, spotType);
 
         public IZLinkSpotGetOrCreateCall GetOrCreate(string spotId, string spotType) =>
             new SpotGetOrCreateCall(this, spotId, spotType);
 
         public ValueTask<SpotRef?> FindAsync(
             string spotId,
-            CancellationToken cancellationToken = default) =>
+            CancellationToken cancellationToken = default
+        ) =>
             ValueTask.FromResult<SpotRef?>(
-                _spots.TryGetValue(spotId, out var entry) ? entry.Spot : null);
+                _spots.TryGetValue(spotId, out var entry) ? entry.Spot : null
+            );
 
         public ValueTask<bool> CloseAsync(
             SpotRef spot,
-            CancellationToken cancellationToken = default)
+            CancellationToken cancellationToken = default
+        )
         {
             if (!_spots.TryGetValue(spot.SpotId, out var entry) || entry.Spot != spot)
                 return ValueTask.FromResult(false);
@@ -277,14 +289,12 @@ public sealed class InstanceSpotContracts
             if (spotId is not null && _spots.TryGetValue(spotId, out var existing))
             {
                 return string.Equals(existing.SpotType, spotType, StringComparison.Ordinal)
-                    ? new ZLinkSpotCreateResult(
-                        existing.Spot,
-                        ZLinkSpotCreateState.Existing,
-                        null)
+                    ? new ZLinkSpotCreateResult(existing.Spot, ZLinkSpotCreateState.Existing, null)
                     : new ZLinkSpotCreateResult(
                         default,
                         ZLinkSpotCreateState.Rejected,
-                        ZLinkMessage.From("SpotTypeMismatch"));
+                        ZLinkMessage.From("SpotTypeMismatch")
+                    );
             }
 
             FactoryRuns++;
@@ -313,18 +323,19 @@ public sealed class InstanceSpotContracts
             public IZLinkSpotCreateCall Timeout(TimeSpan timeout) => this;
 
             public ValueTask<ZLinkSpotCreateResult> Async(
-                CancellationToken cancellationToken = default) =>
-                ValueTask.FromResult(manager.Submit(spotId: null, spotType, _meshName));
+                CancellationToken cancellationToken = default
+            ) => ValueTask.FromResult(manager.Submit(spotId: null, spotType, _meshName));
 
             public ValueTask<ZLinkSpotCreateResult> Yield(
-                CancellationToken cancellationToken = default) =>
-                ValueTask.FromResult(manager.Submit(spotId: null, spotType, _meshName));
+                CancellationToken cancellationToken = default
+            ) => ValueTask.FromResult(manager.Submit(spotId: null, spotType, _meshName));
         }
 
         private sealed class SpotGetOrCreateCall(
             ExampleSpotManager manager,
             string spotId,
-            string spotType) : IZLinkSpotGetOrCreateCall
+            string spotType
+        ) : IZLinkSpotGetOrCreateCall
         {
             private string _meshName = "play";
 
@@ -342,12 +353,12 @@ public sealed class InstanceSpotContracts
             public IZLinkSpotGetOrCreateCall Timeout(TimeSpan timeout) => this;
 
             public ValueTask<ZLinkSpotCreateResult> Async(
-                CancellationToken cancellationToken = default) =>
-                ValueTask.FromResult(manager.Submit(spotId, spotType, _meshName));
+                CancellationToken cancellationToken = default
+            ) => ValueTask.FromResult(manager.Submit(spotId, spotType, _meshName));
 
             public ValueTask<ZLinkSpotCreateResult> Yield(
-                CancellationToken cancellationToken = default) =>
-                ValueTask.FromResult(manager.Submit(spotId, spotType, _meshName));
+                CancellationToken cancellationToken = default
+            ) => ValueTask.FromResult(manager.Submit(spotId, spotType, _meshName));
         }
     }
 
@@ -381,7 +392,8 @@ public sealed class InstanceSpotContracts
             string name,
             TimeSpan period,
             ZLinkTimerOptions? options = null,
-            CancellationToken cancellationToken = default)
+            CancellationToken cancellationToken = default
+        )
             where THandler : class
         {
             Timers.Add(name);
@@ -389,11 +401,12 @@ public sealed class InstanceSpotContracts
         }
 
         public IZLinkWorkerCall<TResult> RunCpuWorker<TResult>(
-            Func<CancellationToken, TResult> work) => new ExampleWorkerCall<TResult>(work);
+            Func<CancellationToken, TResult> work
+        ) => new ExampleWorkerCall<TResult>(work);
 
         public IZLinkWorkerCall<TResult> RunIoWorker<TResult>(
-            Func<CancellationToken, ValueTask<TResult>> work) =>
-            new ExampleWorkerCall<TResult>(token => work(token).AsTask().GetAwaiter().GetResult());
+            Func<CancellationToken, ValueTask<TResult>> work
+        ) => new ExampleWorkerCall<TResult>(token => work(token).AsTask().GetAwaiter().GetResult());
     }
 
     private sealed class ExampleInstanceSpotHandlerRegistry : IZLinkInstanceSpotHandlerRegistry
@@ -417,8 +430,11 @@ public sealed class InstanceSpotContracts
         public IZLinkSpotRequestCall RequestToSpot<TRequest>(string spotId, TRequest request) =>
             new ExampleSpotRequestCall();
 
-        public IZLinkPublishCall Publish<TEvent>(string channelName, string topic, TEvent message) =>
-            new ExamplePublishCall();
+        public IZLinkPublishCall Publish<TEvent>(
+            string channelName,
+            string topic,
+            TEvent message
+        ) => new ExamplePublishCall();
 
         public IZLinkSendCall SendToChannel<TMessage>(string channelName, TMessage message) =>
             new ExampleSendCall();
@@ -430,10 +446,15 @@ public sealed class InstanceSpotContracts
     private sealed class ExampleSpotSendCall : IZLinkSpotSendCall
     {
         public IZLinkSpotSendCall InstanceSpot() => this;
+
         public IZLinkSpotSendCall InstanceSpot(string instanceSpotType) => this;
+
         public IZLinkSpotSendCall InMesh(string meshName) => this;
+
         public IZLinkSpotSendCall Metadata(string key, string value) => this;
+
         public IZLinkSpotSendCall Metadata(ZLinkMessageMetadata metadata) => this;
+
         public ValueTask Async(CancellationToken cancellationToken = default) =>
             ValueTask.CompletedTask;
     }
@@ -441,13 +462,20 @@ public sealed class InstanceSpotContracts
     private sealed class ExampleSpotRequestCall : IZLinkSpotRequestCall
     {
         public IZLinkSpotRequestCall InstanceSpot() => this;
+
         public IZLinkSpotRequestCall InstanceSpot(string instanceSpotType) => this;
+
         public IZLinkSpotRequestCall InMesh(string meshName) => this;
+
         public IZLinkSpotRequestCall Metadata(string key, string value) => this;
+
         public IZLinkSpotRequestCall Metadata(ZLinkMessageMetadata metadata) => this;
+
         public IZLinkSpotRequestCall Timeout(TimeSpan timeout) => this;
+
         public ValueTask<TReply> Async<TReply>(CancellationToken cancellationToken = default) =>
             ValueTask.FromResult<TReply>(default!);
+
         public ValueTask<TReply> Yield<TReply>(CancellationToken cancellationToken = default) =>
             ValueTask.FromResult<TReply>(default!);
     }
@@ -507,7 +535,8 @@ public sealed class InstanceSpotContracts
     private sealed class ExampleWorkerCall<TResult>(Func<CancellationToken, TResult> work)
         : IZLinkWorkerCall<TResult>
     {
-        public void Submit(CancellationToken cancellationToken = default) => _ = work(cancellationToken);
+        public void Submit(CancellationToken cancellationToken = default) =>
+            _ = work(cancellationToken);
 
         public IZLinkWorkerCall<TResult> Timeout(TimeSpan timeout) => this;
 

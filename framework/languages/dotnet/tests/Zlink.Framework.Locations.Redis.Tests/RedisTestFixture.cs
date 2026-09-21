@@ -28,7 +28,7 @@ public sealed class RedisTestFixture : IAsyncLifetime
         [
             Environment.GetEnvironmentVariable("ZLINK_REDIS_TEST_ENDPOINT"),
             "127.0.0.1:16379",
-            "127.0.0.1:6379"
+            "127.0.0.1:6379",
         ];
         foreach (var endpoint in candidates)
         {
@@ -88,31 +88,31 @@ public sealed class RedisTestFixture : IAsyncLifetime
 
     /// <summary>Creates a store over an isolated key prefix so tests cannot
     /// observe each other's rows.</summary>
-    public ZLinkRedisLocationStore CreateStore() =>
-        CreateStore(out _);
+    public ZLinkRedisLocationStore CreateStore() => CreateStore(out _);
 
     public ZLinkRedisLocationStore CreateStore(out string keyPrefix)
     {
         keyPrefix = $"{RunKeyPrefix}:{Interlocked.Increment(ref _storeIndex)}";
-        return new ZLinkRedisLocationStore(new ZLinkRedisLocationOptions
-        {
-            ConnectionString = ConnectionString,
-            KeyPrefix = keyPrefix
-        });
+        return new ZLinkRedisLocationStore(
+            new ZLinkRedisLocationOptions
+            {
+                ConnectionString = ConnectionString,
+                KeyPrefix = keyPrefix,
+            }
+        );
     }
 
     public ZLinkRedisRelocationStore CreateRelocationStore()
     {
-        var keyPrefix =
-            $"{RunKeyPrefix}:{Interlocked.Increment(ref _storeIndex)}";
+        var keyPrefix = $"{RunKeyPrefix}:{Interlocked.Increment(ref _storeIndex)}";
         return new ZLinkRedisRelocationStore(
             new ZLinkRedisRelocationOptions
             {
                 ConnectionString = ConnectionString,
-                KeyPrefix = keyPrefix
-            });
+                KeyPrefix = keyPrefix,
+            }
+        );
     }
-
 }
 
 [CollectionDefinition(Name)]

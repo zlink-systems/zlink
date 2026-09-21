@@ -1,5 +1,4 @@
 package systems.zlink.framework.runtime.actors;
-import java.util.concurrent.CompletionStage;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
@@ -7,25 +6,30 @@ import static org.junit.jupiter.api.Assertions.assertNotEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
-import java.util.concurrent.CompletableFuture;
-import java.util.concurrent.CompletionException;
 import org.junit.jupiter.api.Test;
+
 import systems.zlink.contracts.core.RoutingId;
 import systems.zlink.framework.actors.ZLinkBoundSession;
 import systems.zlink.framework.actors.ZLinkBoundSessionSendCall;
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendActorRef;
 
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CompletionException;
+import java.util.concurrent.CompletionStage;
+
 final class ZLinkActorContextStateRelocationTest {
     @Test
     void deferredJoinClaimBelongsToActorIncarnationRatherThanGlobalActorId() {
-        var source = new ZLinkActorContextState(
-            new ZLinkBackendActorRef(RoutingId.from("source"), "actor-a", 7),
-            "mesh",
-            "entry-source");
-        var target = new ZLinkActorContextState(
-            new ZLinkBackendActorRef(RoutingId.from("target"), "actor-a", 8),
-            "mesh",
-            "entry-target");
+        var source =
+                new ZLinkActorContextState(
+                        new ZLinkBackendActorRef(RoutingId.from("source"), "actor-a", 7),
+                        "mesh",
+                        "entry-source");
+        var target =
+                new ZLinkActorContextState(
+                        new ZLinkBackendActorRef(RoutingId.from("target"), "actor-a", 8),
+                        "mesh",
+                        "entry-target");
         Object first = new Object();
         Object second = new Object();
         Object replacement = new Object();
@@ -47,13 +51,11 @@ final class ZLinkActorContextStateRelocationTest {
         RoutingId actorNode = RoutingId.from("actor-node");
         RoutingId sessionOwner = RoutingId.from("session-owner");
         RoutingId session = RoutingId.from("session-a");
-        var state = new ZLinkActorContextState(
-            new ZLinkBackendActorRef(actorNode, "actor-a", 7),
-            "mesh",
-            "entry-a");
+        var state =
+                new ZLinkActorContextState(
+                        new ZLinkBackendActorRef(actorNode, "actor-a", 7), "mesh", "entry-a");
 
-        long binding = state.bindSession(
-            new TestBoundSession(), sessionOwner, session);
+        long binding = state.bindSession(new TestBoundSession(), sessionOwner, session);
         var initial = state.boundSessionSourceSnapshot();
         assertEquals(binding, initial.bindingGeneration());
         assertEquals(0, initial.sessionSequence());
@@ -72,18 +74,13 @@ final class ZLinkActorContextStateRelocationTest {
         RoutingId actorNode = RoutingId.from("actor-node");
         RoutingId sessionOwner = RoutingId.from("session-owner");
         RoutingId session = RoutingId.from("session-a");
-        var state = new ZLinkActorContextState(
-            new ZLinkBackendActorRef(actorNode, "actor-a", 7),
-            "mesh",
-            "entry-a");
+        var state =
+                new ZLinkActorContextState(
+                        new ZLinkBackendActorRef(actorNode, "actor-a", 7), "mesh", "entry-a");
 
         state.bindSession(new TestBoundSession(), sessionOwner, session);
-        long localBindingToken = state.bindSession(
-            new TestBoundSession(),
-            sessionOwner,
-            session,
-            41,
-            9);
+        long localBindingToken =
+                state.bindSession(new TestBoundSession(), sessionOwner, session, 41, 9);
 
         var imported = state.boundSessionSourceSnapshot();
         assertEquals(41, imported.bindingGeneration());
@@ -95,12 +92,12 @@ final class ZLinkActorContextStateRelocationTest {
 
     @Test
     void failedMoveClearsMovingStateAndCompletesTheMoveStageExceptionally() {
-        var state = new ZLinkActorContextState(
-            new ZLinkBackendActorRef(RoutingId.from("source"), "actor-a", 7),
-            "mesh",
-            "entry-a");
-        IllegalStateException failure =
-            new IllegalStateException("join callback failed");
+        var state =
+                new ZLinkActorContextState(
+                        new ZLinkBackendActorRef(RoutingId.from("source"), "actor-a", 7),
+                        "mesh",
+                        "entry-a");
+        IllegalStateException failure = new IllegalStateException("join callback failed");
 
         state.beginMove();
         assertTrue(state.moving());
@@ -108,18 +105,21 @@ final class ZLinkActorContextStateRelocationTest {
         state.failMove(failure);
 
         assertFalse(state.moving());
-        CompletionException terminal = assertThrows(
-            CompletionException.class,
-            () -> state.moveCompletion().toCompletableFuture().join());
+        CompletionException terminal =
+                assertThrows(
+                        CompletionException.class,
+                        () -> state.moveCompletion().toCompletableFuture().join());
         assertEquals(failure, terminal.getCause());
     }
 
     private static final class TestBoundSession implements ZLinkBoundSession {
-        @Override public ZLinkBoundSessionSendCall send(Object message) {
+        @Override
+        public ZLinkBoundSessionSendCall send(Object message) {
             throw new UnsupportedOperationException();
         }
 
-        @Override public CompletionStage<Void> disconnect() {
+        @Override
+        public CompletionStage<Void> disconnect() {
             return CompletableFuture.completedFuture(null);
         }
     }

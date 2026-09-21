@@ -10,16 +10,20 @@ public sealed class MeshMailboxReadinessTests
     [Fact]
     public void AdmittedClaimKeepsItsOriginalPrefixWhenUnadmittedRecordsArrive()
     {
-        using var queue = new ZLinkApplicationJobQueue(new(
-            ZLinkApplicationJobQueueProfile.Balanced, 2, 1, 2));
+        using var queue = new ZLinkApplicationJobQueue(
+            new(ZLinkApplicationJobQueueProfile.Balanced, 2, 1, 2)
+        );
         var mailbox = new ZLinkMeshNodeOwnedMailbox(_ => { }, _ => { });
         try
         {
             Assert.True(queue.TryAcquire(out var admission));
             Assert.NotNull(admission);
             admission.MarkQueued();
-            Assert.True(mailbox.TryEnqueue(
-                NewRecord(new ZLinkApplicationJobQueueRecordOwner(null, admission))));
+            Assert.True(
+                mailbox.TryEnqueue(
+                    NewRecord(new ZLinkApplicationJobQueueRecordOwner(null, admission))
+                )
+            );
             Assert.True(mailbox.TryClaim(true, true, out var available, out var admitted));
             Assert.Equal(1, available);
             Assert.True(admitted);
@@ -103,13 +107,16 @@ public sealed class MeshMailboxReadinessTests
                     {
                         consumerStarted.Set();
                         using var batch = new MeshReceiveBatch();
-                        Assert.True(mailbox!.TryClaim(false, true, out var claimedCount, out var admitted));
+                        Assert.True(
+                            mailbox!.TryClaim(false, true, out var claimedCount, out var admitted)
+                        );
                         Assert.True(mailbox!.Drain(batch, 64));
                     });
                 Assert.True(consumerStarted.Wait(TimeSpan.FromSeconds(3)));
                 transitions.Enqueue(Interlocked.Increment(ref count));
             },
-            _ => transitions.Enqueue(Interlocked.Decrement(ref count)));
+            _ => transitions.Enqueue(Interlocked.Decrement(ref count))
+        );
 
         Assert.True(mailbox.TryEnqueue(NewRecord()));
         await consumer!.WaitAsync(TimeSpan.FromSeconds(3));
@@ -131,7 +138,8 @@ public sealed class MeshMailboxReadinessTests
             {
                 Assert.NotNull(ZLinkStateLane.Current);
                 Interlocked.Decrement(ref count);
-            });
+            }
+        );
         Assert.True(mailbox.TryEnqueue(NewRecord(payload)));
         // The mailbox has no bound of its own, so a further record is accepted too.
         Assert.True(mailbox.TryEnqueue(NewRecord()));
@@ -148,8 +156,7 @@ public sealed class MeshMailboxReadinessTests
     [Theory]
     [InlineData(false)]
     [InlineData(true)]
-    public async Task ReadinessRearmsForResidueAndDoesNotSignalAnEmptyNode(
-        bool installAfterEnqueue)
+    public async Task ReadinessRearmsForResidueAndDoesNotSignalAnEmptyNode(bool installAfterEnqueue)
     {
         await using var context = Systems.Zlink.Zlink.CreateContext();
         await using var node = new ZLinkManagedMeshNode(context, "mesh");
@@ -219,8 +226,12 @@ public sealed class MeshMailboxReadinessTests
     }
 
     private static ZLinkMeshQueuedRecord NewRecord(IDisposable? payloadOwner = null) =>
-        new(MeshReceiveRecord.CompletionFailure(default, RequestResult.Ok), [],
-            applicationPayloadBytes: 0, payloadOwner: payloadOwner);
+        new(
+            MeshReceiveRecord.CompletionFailure(default, RequestResult.Ok),
+            [],
+            applicationPayloadBytes: 0,
+            payloadOwner: payloadOwner
+        );
 
     private static int Drain(ZLinkManagedMeshNode node)
     {

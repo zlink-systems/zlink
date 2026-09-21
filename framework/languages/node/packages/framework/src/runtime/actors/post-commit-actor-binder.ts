@@ -24,12 +24,14 @@ export class ZLinkPostCommitActorBinder {
     const existing = this.tasks.get(actorRef.actorId);
     if (existing !== undefined) return existing;
     let task!: Promise<void>;
-    task = this.run(actorRef.actorId)
-      .finally(async () => await this.lane.run(() => {
-        if (this.tasks.get(actorRef.actorId) === task) {
-          this.tasks.delete(actorRef.actorId);
-        }
-      }));
+    task = this.run(actorRef.actorId).finally(
+      async () =>
+        await this.lane.run(() => {
+          if (this.tasks.get(actorRef.actorId) === task) {
+            this.tasks.delete(actorRef.actorId);
+          }
+        })
+    );
     this.tasks.set(actorRef.actorId, task);
     return task;
   }
@@ -51,15 +53,13 @@ export class ZLinkPostCommitActorBinder {
         retryDelay.reset();
       } catch (error) {
         this.options.reportError?.(error);
-        if (!await retryDelay.wait(signal)) return;
+        if (!(await retryDelay.wait(signal))) return;
       }
     }
   }
 
   private signal(): AbortSignal | undefined {
-    return typeof this.options.signal === 'function'
-      ? this.options.signal()
-      : this.options.signal;
+    return typeof this.options.signal === 'function' ? this.options.signal() : this.options.signal;
   }
 
   private completeBindCore(actorId: string, actorRef: ActorRef): boolean {

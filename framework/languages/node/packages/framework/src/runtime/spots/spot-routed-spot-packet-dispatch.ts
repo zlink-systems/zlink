@@ -84,7 +84,7 @@ export class ZLinkRoutedSpotPacketDispatch {
     request: unknown,
     context: ZLinkRoutedSpotPacketContext
   ): Promise<TReply> {
-    return await this.dispatch(spotId, packetName, () => request, context, true) as TReply;
+    return (await this.dispatch(spotId, packetName, () => request, context, true)) as TReply;
   }
 
   async requestEncoded<TReply>(
@@ -93,7 +93,7 @@ export class ZLinkRoutedSpotPacketDispatch {
     decodePayload: () => unknown,
     context: ZLinkRoutedSpotPacketContext
   ): Promise<TReply> {
-    return await this.dispatch(spotId, packetName, decodePayload, context, true) as TReply;
+    return (await this.dispatch(spotId, packetName, decodePayload, context, true)) as TReply;
   }
 
   private async dispatch(
@@ -112,10 +112,13 @@ export class ZLinkRoutedSpotPacketDispatch {
       throw new ZLinkConfigurationException(`Spot '${spotId}' is not active.`);
     }
 
-    const registrations = activation.handlers.snapshot().filter((registration) =>
-      registration.kind === 'packet' &&
-      (registration.packetName ?? registration.handlerType.name) === (packetName ?? '')
-    );
+    const registrations = activation.handlers
+      .snapshot()
+      .filter(
+        (registration) =>
+          registration.kind === 'packet' &&
+          (registration.packetName ?? registration.handlerType.name) === (packetName ?? '')
+      );
     if (registrations.length === 0) {
       this.reportMissing(spotId, packetName, context, returnResponse);
       if (!returnResponse) {
@@ -128,16 +131,18 @@ export class ZLinkRoutedSpotPacketDispatch {
     let detached = false;
     let resolveFirstHandlerTurn: (() => void) | undefined;
     let rejectFirstHandlerTurn: ((error: unknown) => void) | undefined;
-    const firstHandlerTurn = context.awaitFirstHandlerTurn === true
-      ? new Promise<void>((resolve, reject) => {
-        resolveFirstHandlerTurn = resolve;
-        rejectFirstHandlerTurn = reject;
-      })
-      : undefined;
+    const firstHandlerTurn =
+      context.awaitFirstHandlerTurn === true
+        ? new Promise<void>((resolve, reject) => {
+            resolveFirstHandlerTurn = resolve;
+            rejectFirstHandlerTurn = reject;
+          })
+        : undefined;
     void firstHandlerTurn?.catch(() => undefined);
-    const applicationClaim = activation.meshName === undefined
-      ? undefined
-      : this.options.claimApplicationWork?.(activation.meshName);
+    const applicationClaim =
+      activation.meshName === undefined
+        ? undefined
+        : this.options.claimApplicationWork?.(activation.meshName);
     const runHandler = async () => {
       try {
         // Decode only after the Spot has acquired both application admission
@@ -147,8 +152,8 @@ export class ZLinkRoutedSpotPacketDispatch {
           const handler = await resolveLifecycleHandler(
             activation.spot,
             registration.handlerType as Type<
-              ZLinkSpotPacketHandler<ZLinkSpot, unknown> |
-              ZLinkSpotRequestHandler<ZLinkSpot, unknown, unknown>
+              | ZLinkSpotPacketHandler<ZLinkSpot, unknown>
+              | ZLinkSpotRequestHandler<ZLinkSpot, unknown, unknown>
             >,
             this.options.providerResolver
           );
@@ -217,16 +222,18 @@ export class ZLinkRoutedSpotPacketDispatch {
     returnResponse: boolean,
     error: unknown
   ): void {
-    const frameworkErrorKind = error instanceof ZLinkFrameworkException
-      ? internalFrameworkErrorKind(error)
-      : undefined;
+    const frameworkErrorKind =
+      error instanceof ZLinkFrameworkException ? internalFrameworkErrorKind(error) : undefined;
     this.options.dispatchErrors?.report({
       surface: ZLinkDispatchErrorSurface.SpotRoute,
-      messageKind: returnResponse ? ZLinkDispatchMessageKind.Request : ZLinkDispatchMessageKind.Send,
-      reason: frameworkErrorKind === ZLinkFrameworkInternalErrorKind.WorkerQueueFull
-        || frameworkErrorKind === ZLinkFrameworkInternalErrorKind.DeadlineExceeded
-        ? ZLinkDispatchErrorReason.Backpressure
-        : ZLinkDispatchErrorReason.HandlerException,
+      messageKind: returnResponse
+        ? ZLinkDispatchMessageKind.Request
+        : ZLinkDispatchMessageKind.Send,
+      reason:
+        frameworkErrorKind === ZLinkFrameworkInternalErrorKind.WorkerQueueFull ||
+        frameworkErrorKind === ZLinkFrameworkInternalErrorKind.DeadlineExceeded
+          ? ZLinkDispatchErrorReason.Backpressure
+          : ZLinkDispatchErrorReason.HandlerException,
       action: returnResponse ? ZLinkDispatchErrorAction.FailCaller : ZLinkDispatchErrorAction.Drop,
       packetName,
       channelName: context.channelName,
@@ -243,7 +250,9 @@ export class ZLinkRoutedSpotPacketDispatch {
   ): void {
     this.options.dispatchErrors?.report({
       surface: ZLinkDispatchErrorSurface.SpotRoute,
-      messageKind: returnResponse ? ZLinkDispatchMessageKind.Request : ZLinkDispatchMessageKind.Send,
+      messageKind: returnResponse
+        ? ZLinkDispatchMessageKind.Request
+        : ZLinkDispatchMessageKind.Send,
       reason: ZLinkDispatchErrorReason.HandlerMissing,
       action: returnResponse ? ZLinkDispatchErrorAction.FailCaller : ZLinkDispatchErrorAction.Drop,
       packetName,

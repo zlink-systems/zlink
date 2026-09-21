@@ -1,9 +1,6 @@
 package systems.zlink.stream.connector;
 
-public record ZLinkStreamError(
-    ZLinkStreamErrorCode code,
-    String message,
-    Throwable exception) {
+public record ZLinkStreamError(ZLinkStreamErrorCode code, String message, Throwable exception) {
     public ZLinkStreamError {
         if (code == null) {
             throw new IllegalArgumentException("code is required");
@@ -13,9 +10,7 @@ public record ZLinkStreamError(
         }
     }
 
-    public ZLinkStreamError(
-        ZLinkStreamErrorCode code,
-        String message) {
+    public ZLinkStreamError(ZLinkStreamErrorCode code, String message) {
         this(code, message, null);
     }
 }

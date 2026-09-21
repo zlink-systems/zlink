@@ -1,6 +1,4 @@
-import type {
-  ApplicationJobRecordLease
-} from '../application-jobs/application-ingress-record-owner';
+import type { ApplicationJobRecordLease } from '../application-jobs/application-ingress-record-owner';
 
 export type ServiceMailboxDomain = 'application' | 'infrastructure';
 
@@ -59,12 +57,15 @@ interface DomainState {
 export class ServiceMailbox {
   private readonly application: DomainState;
   private readonly infrastructure: DomainState;
-  private readonly relocationSeals = new Map<string, {
-    readonly serial: bigint;
-    readonly captured: ServiceMailboxRecord[];
-    readonly held: ServiceMailboxRecord[];
-    heldBytes: number;
-  }>();
+  private readonly relocationSeals = new Map<
+    string,
+    {
+      readonly serial: bigint;
+      readonly captured: ServiceMailboxRecord[];
+      readonly held: ServiceMailboxRecord[];
+      heldBytes: number;
+    }
+  >();
   private readonly relocatedOwners = new Set<string>();
   private nextClaimSerial = 1n;
   private nextRelocationSerial = 1n;
@@ -154,10 +155,7 @@ export class ServiceMailbox {
     }
   }
 
-  release(
-    claim: ServiceMailboxClaim,
-    remaining: readonly ServiceMailboxRecord[] = []
-  ): boolean {
+  release(claim: ServiceMailboxClaim, remaining: readonly ServiceMailboxRecord[] = []): boolean {
     const target = this.domain(claim.domain);
     const queue = target.owners.get(claim.owner);
     if (queue === undefined || !queue.claimed || queue.claimSerial !== claim.serial) return false;
@@ -217,7 +215,9 @@ export class ServiceMailbox {
     return true;
   }
 
-  commitRelocation(seal: ServiceMailboxRelocationSeal): readonly ServiceMailboxRecord[] | undefined {
+  commitRelocation(
+    seal: ServiceMailboxRelocationSeal
+  ): readonly ServiceMailboxRecord[] | undefined {
     const current = this.relocationSeals.get(seal.owner);
     if (current === undefined || current.serial !== seal.serial) return undefined;
     this.relocationSeals.delete(seal.owner);

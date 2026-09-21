@@ -66,11 +66,11 @@ struct operation_completion_item_t
 
     void finish_metrics (operation_terminal_t terminal) noexcept
     {
-        const auto outcome = terminal == operation_terminal_t::completed ? "completed"
-                           : terminal == operation_terminal_t::timed_out ? "timed_out"
-                           : terminal == operation_terminal_t::cancelled ? "cancelled"
-                           : terminal == operation_terminal_t::shutdown ? "shutdown"
-                           : "failed";
+        const auto outcome = terminal == operation_terminal_t::completed   ? "completed"
+                             : terminal == operation_terminal_t::timed_out ? "timed_out"
+                             : terminal == operation_terminal_t::cancelled ? "cancelled"
+                             : terminal == operation_terminal_t::shutdown  ? "shutdown"
+                                                                           : "failed";
         request_metric.complete (outcome);
     }
 
@@ -136,12 +136,11 @@ class operation_completion_dispatcher_t
         _worker.join ();
     }
 
-    std::unique_ptr<operation_completion_item_t> create_completion_item (
-      operation_registry_t::callback_t callback,
-      const std::shared_ptr<operation_registry_drain_state_t> &drain_state)
+    std::unique_ptr<operation_completion_item_t>
+    create_completion_item (operation_registry_t::callback_t callback,
+                            const std::shared_ptr<operation_registry_drain_state_t> &drain_state)
     {
-        return std::make_unique<operation_completion_item_t> (
-          std::move (callback), drain_state);
+        return std::make_unique<operation_completion_item_t> (std::move (callback), drain_state);
     }
 
     void post (std::unique_ptr<operation_completion_item_t> completion,
@@ -150,8 +149,8 @@ class operation_completion_dispatcher_t
                std::optional<operation_terminal_t> request_terminal = {}) noexcept
     {
         operation_completion_chain_t completions;
-        completions.append (
-          std::move (completion), terminal, std::move (payload), request_terminal);
+        completions.append (std::move (completion), terminal, std::move (payload),
+                            request_terminal);
         post_chain (std::move (completions));
     }
 
@@ -195,9 +194,7 @@ class operation_completion_dispatcher_t
             std::unique_ptr<operation_completion_item_t> completion;
             {
                 std::unique_lock lock (state->mutex);
-                state->ready.wait (lock, [&] {
-                    return state->stopping || state->head;
-                });
+                state->ready.wait (lock, [&] { return state->stopping || state->head; });
                 if (!state->head) {
                     if (state->stopping)
                         return;
@@ -209,9 +206,7 @@ class operation_completion_dispatcher_t
                     state->tail = nullptr;
             }
             try {
-                completion->callback (
-                  completion->terminal,
-                  std::move (completion->payload));
+                completion->callback (completion->terminal, std::move (completion->payload));
             }
             catch (...) {
                 // One consumer must not prevent later terminal callbacks
@@ -229,13 +224,11 @@ class operation_completion_dispatcher_t
 namespace
 {
 
-std::shared_ptr<operation_completion_dispatcher_t>
-shared_completion_dispatcher ()
+std::shared_ptr<operation_completion_dispatcher_t> shared_completion_dispatcher ()
 {
     // One process-lifetime dispatcher prevents owners that are stopped and
     // recreated from temporarily running separate completion lanes.
-    static auto dispatcher =
-      std::make_shared<operation_completion_dispatcher_t> ();
+    static auto dispatcher = std::make_shared<operation_completion_dispatcher_t> ();
     return dispatcher;
 }
 
@@ -254,15 +247,13 @@ operation_registry_t::~operation_registry_t () noexcept
 
 namespace
 {
-void notify (
-             const std::shared_ptr<operation_completion_dispatcher_t> &dispatcher,
+void notify (const std::shared_ptr<operation_completion_dispatcher_t> &dispatcher,
              std::unique_ptr<operation_completion_item_t> completion,
              operation_terminal_t terminal,
              std::vector<std::uint8_t> payload,
              std::optional<operation_terminal_t> request_terminal = {}) noexcept
 {
-    dispatcher->post (
-      std::move (completion), terminal, std::move (payload), request_terminal);
+    dispatcher->post (std::move (completion), terminal, std::move (payload), request_terminal);
 }
 }
 
@@ -282,13 +273,13 @@ bool operation_registry_t::register_operation (call_id_t id,
     if (_closed || _pending.contains (id)) {
         return false;
     }
-    const auto inserted = _pending.emplace (
-      id, pending_t{deadline, {}, std::move (target_routing_id)});
+    const auto inserted =
+      _pending.emplace (id, pending_t{deadline, {}, std::move (target_routing_id)});
     if (!inserted.second)
         return false;
     try {
-        auto completion = _completion_dispatcher->create_completion_item (
-          std::move (callback), _drain_state);
+        auto completion =
+          _completion_dispatcher->create_completion_item (std::move (callback), _drain_state);
         completion->request_metric = std::move (request_metric);
         completion->request_metric.start ();
         inserted.first->second.completion = std::move (completion);
@@ -300,9 +291,8 @@ bool operation_registry_t::register_operation (call_id_t id,
     }
 }
 
-bool operation_registry_t::take (
-  const call_id_t &id,
-  std::unique_ptr<operation_completion_item_t> &completion)
+bool operation_registry_t::take (const call_id_t &id,
+                                 std::unique_ptr<operation_completion_item_t> &completion)
 {
     std::lock_guard lock (_mutex);
     const auto found = _pending.find (id);
@@ -314,8 +304,7 @@ bool operation_registry_t::take (
     return true;
 }
 
-bool operation_registry_t::complete (const call_id_t &id,
-                                     std::vector<std::uint8_t> payload)
+bool operation_registry_t::complete (const call_id_t &id, std::vector<std::uint8_t> payload)
 {
     return complete (id, std::move (payload), {});
 }
@@ -339,8 +328,8 @@ bool operation_registry_t::complete (const call_id_t &id,
                 operation_terminal_t::transport_failed, {});
         return true;
     }
-    notify (_completion_dispatcher, std::move (completion),
-            operation_terminal_t::completed, std::move (payload), request_terminal);
+    notify (_completion_dispatcher, std::move (completion), operation_terminal_t::completed,
+            std::move (payload), request_terminal);
     return true;
 }
 
@@ -350,25 +339,22 @@ bool operation_registry_t::cancel (const call_id_t &id)
     if (!take (id, completion)) {
         return false;
     }
-    notify (_completion_dispatcher, std::move (completion),
-            operation_terminal_t::cancelled, {});
+    notify (_completion_dispatcher, std::move (completion), operation_terminal_t::cancelled, {});
     return true;
 }
 
-bool operation_registry_t::fail (
-  const call_id_t &id,
-  operation_terminal_t terminal,
-  std::vector<std::uint8_t> payload)
+bool operation_registry_t::fail (const call_id_t &id,
+                                 operation_terminal_t terminal,
+                                 std::vector<std::uint8_t> payload)
 {
     return fail (id, terminal, std::move (payload), {});
 }
 
-bool operation_registry_t::fail (
-  const call_id_t &id,
-  operation_terminal_t terminal,
-  std::vector<std::uint8_t> payload,
-  before_dispatch_t before_dispatch,
-  std::optional<operation_terminal_t> request_terminal)
+bool operation_registry_t::fail (const call_id_t &id,
+                                 operation_terminal_t terminal,
+                                 std::vector<std::uint8_t> payload,
+                                 before_dispatch_t before_dispatch,
+                                 std::optional<operation_terminal_t> request_terminal)
 {
     if (terminal == operation_terminal_t::completed) {
         throw std::invalid_argument ("failure terminal cannot be completed");
@@ -386,8 +372,8 @@ bool operation_registry_t::fail (
         request_terminal.reset ();
         payload.clear ();
     }
-    notify (_completion_dispatcher, std::move (completion), terminal,
-            std::move (payload), request_terminal);
+    notify (_completion_dispatcher, std::move (completion), terminal, std::move (payload),
+            request_terminal);
     return true;
 }
 
@@ -406,9 +392,8 @@ bool operation_registry_t::contains (const call_id_t &id) const
     return _pending.contains (id);
 }
 
-std::size_t operation_registry_t::fail_target (
-  const std::vector<std::uint8_t> &target_routing_id,
-  operation_terminal_t terminal)
+std::size_t operation_registry_t::fail_target (const std::vector<std::uint8_t> &target_routing_id,
+                                               operation_terminal_t terminal)
 {
     if (target_routing_id.empty () || terminal == operation_terminal_t::completed)
         throw std::invalid_argument ("target failure requires a target and failure terminal");
@@ -439,9 +424,8 @@ std::size_t operation_registry_t::expire (clock_t::time_point now)
                 ++entry;
                 continue;
             }
-            completions.append (
-              std::move (entry->second.completion),
-              operation_terminal_t::timed_out);
+            completions.append (std::move (entry->second.completion),
+                                operation_terminal_t::timed_out);
             entry = _pending.erase (entry);
         }
     }
@@ -472,9 +456,7 @@ std::size_t operation_registry_t::shutdown ()
             _closed = true;
             for (auto &[id, pending] : _pending) {
                 static_cast<void> (id);
-                completions.append (
-                  std::move (pending.completion),
-                  operation_terminal_t::shutdown);
+                completions.append (std::move (pending.completion), operation_terminal_t::shutdown);
             }
             _pending.clear ();
             stopped = completions.size;

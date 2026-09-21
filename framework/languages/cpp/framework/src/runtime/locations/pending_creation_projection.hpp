@@ -20,19 +20,16 @@ namespace zlink::framework::runtime
 // integrity, so the reference carries no checksum segment of its own.
 inline constexpr std::string_view inline_creation_content_prefix = "inline-v1:";
 
-inline std::string encode_inline_creation_content (
-  const std::vector<std::byte> &payload)
+inline std::string encode_inline_creation_content (const std::vector<std::byte> &payload)
 {
     constexpr std::string_view alphabet =
       "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_";
     std::string result{inline_creation_content_prefix};
-    result.reserve (
-      result.size () + (payload.size () * 4u + 2u) / 3u);
+    result.reserve (result.size () + (payload.size () * 4u + 2u) / 3u);
     std::uint32_t accumulator = 0;
     unsigned bits = 0;
     for (const auto value : payload) {
-        accumulator =
-          (accumulator << 8u) | std::to_integer<std::uint8_t> (value);
+        accumulator = (accumulator << 8u) | std::to_integer<std::uint8_t> (value);
         bits += 8;
         while (bits >= 6) {
             bits -= 6;
@@ -55,8 +52,7 @@ decode_inline_creation_content (std::string_view reference,
 {
     if (!reference.starts_with (inline_creation_content_prefix))
         return std::nullopt;
-    const auto encoded =
-      reference.substr (inline_creation_content_prefix.size ());
+    const auto encoded = reference.substr (inline_creation_content_prefix.size ());
     if (encoded.size () % 4u == 1u)
         return std::nullopt;
     std::vector<std::byte> payload;
@@ -81,8 +77,7 @@ decode_inline_creation_content (std::string_view reference,
         bits += 6;
         if (bits >= 8) {
             bits -= 8;
-            payload.push_back (static_cast<std::byte> (
-              (accumulator >> bits) & 0xffu));
+            payload.push_back (static_cast<std::byte> ((accumulator >> bits) & 0xffu));
         }
     }
     if (payload.size () != expected_encoded_size)

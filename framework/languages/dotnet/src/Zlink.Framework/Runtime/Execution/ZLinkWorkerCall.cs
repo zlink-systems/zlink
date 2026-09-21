@@ -9,7 +9,8 @@ namespace Zlink.Framework.Runtime.Execution;
 internal sealed class ZLinkWorkerCall<TResult>(
     ZLinkWorkerPool pool,
     Func<CancellationToken, TResult> work,
-    IZLinkRuntimeFailureReporter errorSink) : IZLinkWorkerCall<TResult>
+    IZLinkRuntimeFailureReporter errorSink
+) : IZLinkWorkerCall<TResult>
 {
     private readonly ZLinkSerialTurn? _turn = ZLinkSerialTurn.Current;
     private int _terminated;
@@ -35,7 +36,8 @@ internal sealed class ZLinkWorkerCall<TResult>(
         ZLinkUnawaitedSubmit.Observe(
             ObserveAsync(cancellationToken),
             "CPU worker submit",
-            errorSink);
+            errorSink
+        );
     }
 
     public ValueTask<TResult> Yield(CancellationToken cancellationToken = default)
@@ -45,19 +47,22 @@ internal sealed class ZLinkWorkerCall<TResult>(
         if (!ReferenceEquals(turn, _turn))
             throw new ZLinkFrameworkException(
                 ZLinkFrameworkErrorKind.InvalidOperation,
-                "CPU worker Yield must execute in the callback turn that created the call.");
+                "CPU worker Yield must execute in the callback turn that created the call."
+            );
         return turn.YieldFrameworkCallAsync(ExecuteAsync, cancellationToken);
     }
 
     private ValueTask<TResult> ExecuteAsync(CancellationToken cancellationToken)
     {
         var completion = new TaskCompletionSource<TResult>(
-            TaskCreationOptions.RunContinuationsAsynchronously);
+            TaskCreationOptions.RunContinuationsAsynchronously
+        );
         Start(
             result => completion.TrySetResult(result),
             error => completion.TrySetException(error),
             token => completion.TrySetCanceled(token),
-            cancellationToken);
+            cancellationToken
+        );
         return new ValueTask<TResult>(completion.Task);
     }
 
@@ -70,7 +75,8 @@ internal sealed class ZLinkWorkerCall<TResult>(
         Action<TResult> complete,
         Action<Exception> fail,
         Action<CancellationToken> cancel,
-        CancellationToken callerToken)
+        CancellationToken callerToken
+    )
     {
         var execution = new Execution(work, complete, fail, cancel, _timeout);
         execution.Start(pool, callerToken);
@@ -80,7 +86,8 @@ internal sealed class ZLinkWorkerCall<TResult>(
     {
         if (Interlocked.Exchange(ref _terminated, 1) != 0)
             throw new InvalidOperationException(
-                "CPU worker call already has a terminator. Call Async or Yield once.");
+                "CPU worker call already has a terminator. Call Async or Yield once."
+            );
     }
 
     private sealed class Execution(
@@ -88,7 +95,8 @@ internal sealed class ZLinkWorkerCall<TResult>(
         Action<TResult> complete,
         Action<Exception> fail,
         Action<CancellationToken> cancel,
-        TimeSpan? timeout)
+        TimeSpan? timeout
+    )
     {
         private readonly ZLinkStateLane _lane = new();
         private readonly Action<CancellationToken> _cancel = cancel;
@@ -126,7 +134,8 @@ internal sealed class ZLinkWorkerCall<TResult>(
         {
             _workTokenSource = CancellationTokenSource.CreateLinkedTokenSource(
                 pool.ShutdownToken,
-                callerToken);
+                callerToken
+            );
             if (timeout is { } timeoutValue)
             {
                 _timeoutSource = new CancellationTokenSource(timeoutValue);
@@ -142,21 +151,22 @@ internal sealed class ZLinkWorkerCall<TResult>(
                         var execution = (Execution)state!;
                         execution.CancelBeforeOrAfterAdmission(execution._callerToken);
                     },
-                    this);
+                    this
+                );
             }
         }
 
-        private bool TrySubmit(
-            ZLinkWorkerPool pool,
-            out ZLinkWorkerSubmitResult submitResult)
+        private bool TrySubmit(ZLinkWorkerPool pool, out ZLinkWorkerSubmitResult submitResult)
         {
-            var result = AwaitStateLane(_lane.RunAsync(() =>
-            {
-                if (Volatile.Read(ref _settled) != 0)
-                    return (Submitted: false, Result: default(ZLinkWorkerSubmitResult));
+            var result = AwaitStateLane(
+                _lane.RunAsync(() =>
+                {
+                    if (Volatile.Read(ref _settled) != 0)
+                        return (Submitted: false, Result: default(ZLinkWorkerSubmitResult));
 
-                return (Submitted: true, Result: pool.TrySubmit(Run, FailStopped));
-            }));
+                    return (Submitted: true, Result: pool.TrySubmit(Run, FailStopped));
+                })
+            );
             submitResult = result.Result;
             return result.Submitted;
         }
@@ -170,20 +180,26 @@ internal sealed class ZLinkWorkerCall<TResult>(
                     ? null
                     : CancellationTokenSource.CreateLinkedTokenSource(
                         _workTokenSource!.Token,
-                        _timeoutSource.Token);
+                        _timeoutSource.Token
+                    );
                 var result = work(linked?.Token ?? _workTokenSource!.Token);
                 TrySettle(static (self, state) => self._complete((TResult)state!), this, result);
             }
             catch (Exception ex)
             {
-                TrySettle(static (self, state) => self._fail(
-                        new ZLinkFrameworkException(
-                            ZLinkFrameworkErrorKind.InternalFailure,
-                            "Worker call failed.",
-                            ZLinkRetryAdvice.DoNotRetry,
-                            (Exception)state!)),
+                TrySettle(
+                    static (self, state) =>
+                        self._fail(
+                            new ZLinkFrameworkException(
+                                ZLinkFrameworkErrorKind.InternalFailure,
+                                "Worker call failed.",
+                                ZLinkRetryAdvice.DoNotRetry,
+                                (Exception)state!
+                            )
+                        ),
                     this,
-                    ex);
+                    ex
+                );
             }
             finally
             {
@@ -193,28 +209,42 @@ internal sealed class ZLinkWorkerCall<TResult>(
 
         public void FailStopped()
         {
-            TrySettle(static (self, _) => self._fail(
-                    new OperationCanceledException(
-                        "Worker call was canceled because the framework runtime stopped.")),
-                this);
+            TrySettle(
+                static (self, _) =>
+                    self._fail(
+                        new OperationCanceledException(
+                            "Worker call was canceled because the framework runtime stopped."
+                        )
+                    ),
+                this
+            );
             Cleanup();
         }
 
         private void FailTimedOut()
         {
-            AwaitStateLane(_lane.RunAsync(() =>
-                TrySettle(static (self, _) => self._fail(
-                    new ZLinkFrameworkException(
-                        ZLinkFrameworkErrorKind.DeadlineExceeded,
-                        "Worker call timed out.",
-                        ZLinkRetryAdvice.DoNotRetry)),
-                    this)));
+            AwaitStateLane(
+                _lane.RunAsync(() =>
+                    TrySettle(
+                        static (self, _) =>
+                            self._fail(
+                                new ZLinkFrameworkException(
+                                    ZLinkFrameworkErrorKind.DeadlineExceeded,
+                                    "Worker call timed out.",
+                                    ZLinkRetryAdvice.DoNotRetry
+                                )
+                            ),
+                        this
+                    )
+                )
+            );
         }
 
         private void TrySettle(
             Action<Execution, object?> settle,
             Execution self,
-            object? state = null)
+            object? state = null
+        )
         {
             if (Interlocked.Exchange(ref _settled, 1) != 0)
                 // Late completion after timeout/cancellation: drop the result.
@@ -233,11 +263,15 @@ internal sealed class ZLinkWorkerCall<TResult>(
 
         private void CancelBeforeOrAfterAdmission(CancellationToken cancellationToken)
         {
-            AwaitStateLane(_lane.RunAsync(() =>
-                TrySettle(
-                    static (self, state) => self._cancel((CancellationToken)state!),
-                    this,
-                cancellationToken)));
+            AwaitStateLane(
+                _lane.RunAsync(() =>
+                    TrySettle(
+                        static (self, state) => self._cancel((CancellationToken)state!),
+                        this,
+                        cancellationToken
+                    )
+                )
+            );
         }
 
         private static T AwaitStateLane<T>(ValueTask<T> operation) =>

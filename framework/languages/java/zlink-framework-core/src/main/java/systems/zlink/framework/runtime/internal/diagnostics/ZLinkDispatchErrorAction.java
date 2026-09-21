@@ -13,7 +13,11 @@ public enum ZLinkDispatchErrorAction {
         this.traceName = traceName;
     }
 
-    public int value() { return value; }
+    public int value() {
+        return value;
+    }
 
-    public String traceName() { return traceName; }
+    public String traceName() {
+        return traceName;
+    }
 }

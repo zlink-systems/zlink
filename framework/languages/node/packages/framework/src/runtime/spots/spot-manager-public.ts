@@ -1,4 +1,9 @@
-import { ZLinkFrameworkInternalErrorKind, createInternalFrameworkException, internalFrameworkErrorKind, wireReplyFailureException  } from '../framework-errors-internal';
+import {
+  ZLinkFrameworkInternalErrorKind,
+  createInternalFrameworkException,
+  internalFrameworkErrorKind,
+  wireReplyFailureException
+} from '../framework-errors-internal';
 import { randomUUID } from 'node:crypto';
 import {
   ZLinkFrameworkException,
@@ -16,23 +21,14 @@ import {
 import type { ZLinkMessageSerializer } from '../../contracts';
 import type { ZLinkObjectFactoryRegistration } from '../../contracts/Configuration/RegistrationTypes';
 import { ZLinkConfigurationException } from '../configuration';
-import type {
-  ZLinkUserSpotCreationCoordinator
-} from '../host/user-spot-creation-coordinator';
+import type { ZLinkUserSpotCreationCoordinator } from '../host/user-spot-creation-coordinator';
 import type { ZLinkSpotRouteResolver } from './spot-routing-internal';
 import type { DefaultZLinkSpotManager } from './index';
 import { encodeFrameworkCreationPayload } from '../messaging/creation-payload-codec';
-import type {
-  ServiceUserSpotCloseRecord
-} from '../foundation/service-stateful-wire-codec';
-import type {
-  ServiceUserSpotOperationResult
-} from '../foundation/service-stateful-runtime';
+import type { ServiceUserSpotCloseRecord } from '../foundation/service-stateful-wire-codec';
+import type { ServiceUserSpotOperationResult } from '../foundation/service-stateful-runtime';
 import type { ZLinkAuthoritySnapshot } from '../locations/internal-location-contracts';
-import {
-  captureZLinkSpotSerialTurn,
-  requireZLinkYieldTurn
-} from '../execution';
+import { captureZLinkSpotSerialTurn, requireZLinkYieldTurn } from '../execution';
 
 export interface ZLinkPublicSpotManagerOptions {
   readonly local: DefaultZLinkSpotManager;
@@ -88,8 +84,8 @@ export class ZLinkPublicSpotManager implements ZLinkSpotManager {
       };
     } catch (error) {
       if (
-        error instanceof ZLinkFrameworkException
-        && internalFrameworkErrorKind(error) === ZLinkFrameworkInternalErrorKind.SpotRouteNotFound
+        error instanceof ZLinkFrameworkException &&
+        internalFrameworkErrorKind(error) === ZLinkFrameworkInternalErrorKind.SpotRouteNotFound
       ) {
         return undefined;
       }
@@ -138,10 +134,7 @@ export class ZLinkPublicSpotManager implements ZLinkSpotManager {
       },
       timeoutMs
     );
-    if (
-      result.terminalResult !== 0
-      || result.tail?.kind !== 'userSpotClose'
-    ) {
+    if (result.terminalResult !== 0 || result.tail?.kind !== 'userSpotClose') {
       const message = `Remote User Spot close failed. terminalResult=${result.terminalResult}, failureCode=${result.failureCode}.`;
       //  Route the close terminal through the shared ownership-aware translator
       //  (spec 32-framework-error-model:81-118, 99-108) instead of an ad-hoc
@@ -193,22 +186,10 @@ export class ZLinkPublicSpotManager implements ZLinkSpotManager {
         state.timeoutMs = timeoutMs;
         return call;
       },
-      submit: (signal) => this.submit(
-        spotId,
-        stableType,
-        generatedIdentity,
-        state,
-        signal
-      ),
+      submit: (signal) => this.submit(spotId, stableType, generatedIdentity, state, signal),
       yield: (signal) => {
         const yieldTurn = requireZLinkYieldTurn(turn);
-        const pending = this.submit(
-          spotId,
-          stableType,
-          generatedIdentity,
-          state,
-          signal
-        );
+        const pending = this.submit(spotId, stableType, generatedIdentity, state, signal);
         return yieldTurn.yieldPromise(pending);
       }
     };
@@ -243,54 +224,53 @@ export class ZLinkPublicSpotManager implements ZLinkSpotManager {
         true
       );
     }
-    const coordinated = await this.options.coordinator.getOrCreate({
-      meshName: state.meshName,
-      spotId,
-      stableType,
-      requestPayload: requestBytes,
-      timeoutMs: Math.ceil(remainingMs),
-      signal,
-      generatedIdentity
-    }, async (target, authority, deadlineSignal) => {
-          const selected = selectFactory(this.options.factories, stableType, target.meshName);
-          this.options.local.beginUserSpotPublication(target.meshName, spotId);
-          try {
-            const result = await this.options.local.getOrCreateWithAuthority(
-              target.meshName,
-              selected.registration.implementation as Type<ZLinkSpot>,
-              spotId,
-              state.request,
-              {
-                stableType,
-                objectGeneration: authority.objectGeneration,
-                authorityOwnerGeneration: authority.authorityOwnerGeneration
-              },
-              deadlineSignal
-            );
-            return {
-              ...result,
-              publication: {
-                publish: () => this.options.local.publishUserSpot(
-                  target.meshName,
-                  spotId
-                ),
-                abort: () => this.options.local.abortUserSpotPublication(
-                  target.meshName,
-                  spotId
-                )
-              }
-            };
-          } catch (error) {
-            this.options.local.abortUserSpotPublication(target.meshName, spotId);
-            throw error;
-          }
-        }, async (cleanupSignal) => {
-          const meshName = state.meshName ?? [...this.options.factories]
-            .find(([, byType]) => byType.has(stableType))?.[0];
-          if (meshName !== undefined) {
-            await this.options.local.close(meshName, spotId, cleanupSignal);
-          }
-        });
+    const coordinated = await this.options.coordinator.getOrCreate(
+      {
+        meshName: state.meshName,
+        spotId,
+        stableType,
+        requestPayload: requestBytes,
+        timeoutMs: Math.ceil(remainingMs),
+        signal,
+        generatedIdentity
+      },
+      async (target, authority, deadlineSignal) => {
+        const selected = selectFactory(this.options.factories, stableType, target.meshName);
+        this.options.local.beginUserSpotPublication(target.meshName, spotId);
+        try {
+          const result = await this.options.local.getOrCreateWithAuthority(
+            target.meshName,
+            selected.registration.implementation as Type<ZLinkSpot>,
+            spotId,
+            state.request,
+            {
+              stableType,
+              objectGeneration: authority.objectGeneration,
+              authorityOwnerGeneration: authority.authorityOwnerGeneration
+            },
+            deadlineSignal
+          );
+          return {
+            ...result,
+            publication: {
+              publish: () => this.options.local.publishUserSpot(target.meshName, spotId),
+              abort: () => this.options.local.abortUserSpotPublication(target.meshName, spotId)
+            }
+          };
+        } catch (error) {
+          this.options.local.abortUserSpotPublication(target.meshName, spotId);
+          throw error;
+        }
+      },
+      async (cleanupSignal) => {
+        const meshName =
+          state.meshName ??
+          [...this.options.factories].find(([, byType]) => byType.has(stableType))?.[0];
+        if (meshName !== undefined) {
+          await this.options.local.close(meshName, spotId, cleanupSignal);
+        }
+      }
+    );
     this.options.resolver()?.invalidate?.(spotId);
     return coordinated.result;
   }

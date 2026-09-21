@@ -10,10 +10,11 @@ import systems.zlink.framework.configuration.ZLinkFrameworkOptions
  *     messageFlow(ZLinkMessageFlowLogMode.NORMAL)
  * }
  * ```
+ *
  * The underlying tracing runtime is the shared Java core, so this is purely ergonomic.
  */
 inline fun ZLinkFrameworkOptions.configureDispatch(
-    block: ZLinkDispatchOptions.() -> Unit,
+    block: ZLinkDispatchOptions.() -> Unit
 ): ZLinkDispatchOptions {
     val dispatch = configureDispatch()
     dispatch.block()

@@ -7,16 +7,16 @@ internal static class ZLinkFrameworkDebugLog
     //  The environment is read once. A debug switch cannot change while the
     //  process runs, and re-reading it turned every call into a lookup that
     //  allocated a string just to be compared and thrown away.
-    internal static readonly bool SpotDiscoveryEnabled =
-        IsEnabled("ZLINK_DEBUG_FRAMEWORK_SPOT_DISCOVERY");
-    private static readonly bool StartupEnabled =
-        IsEnabled("ZLINK_DEBUG_FRAMEWORK_STARTUP");
-    private static readonly bool TasksEnabled =
-        IsEnabled("ZLINK_DEBUG_FRAMEWORK_TASKS");
+    internal static readonly bool SpotDiscoveryEnabled = IsEnabled(
+        "ZLINK_DEBUG_FRAMEWORK_SPOT_DISCOVERY"
+    );
+    private static readonly bool StartupEnabled = IsEnabled("ZLINK_DEBUG_FRAMEWORK_STARTUP");
+    private static readonly bool TasksEnabled = IsEnabled("ZLINK_DEBUG_FRAMEWORK_TASKS");
 
     public static void Startup(Exception exception)
     {
-        if (StartupEnabled) Write(exception.ToString());
+        if (StartupEnabled)
+            Write(exception.ToString());
     }
 
     /// <summary>
@@ -39,7 +39,8 @@ internal static class ZLinkFrameworkDebugLog
 
     public static void TaskFailure(string taskName, Exception exception)
     {
-        if (TasksEnabled) Write($"[zlink-framework] task '{taskName}' failed: {exception}");
+        if (TasksEnabled)
+            Write($"[zlink-framework] task '{taskName}' failed: {exception}");
     }
 
     /// <summary>
@@ -85,7 +86,8 @@ internal ref struct ZLinkSpotDiscoveryLogMessage
     public ZLinkSpotDiscoveryLogMessage(
         int literalLength,
         int formattedCount,
-        out bool shouldAppend)
+        out bool shouldAppend
+    )
     {
         _enabled = ZLinkFrameworkDebugLog.SpotDiscoveryEnabled;
         shouldAppend = _enabled;
@@ -96,22 +98,26 @@ internal ref struct ZLinkSpotDiscoveryLogMessage
 
     public void AppendLiteral(string value)
     {
-        if (_enabled) _inner.AppendLiteral(value);
+        if (_enabled)
+            _inner.AppendLiteral(value);
     }
 
     public void AppendFormatted<T>(T value)
     {
-        if (_enabled) _inner.AppendFormatted(value);
+        if (_enabled)
+            _inner.AppendFormatted(value);
     }
 
     public void AppendFormatted<T>(T value, string? format)
     {
-        if (_enabled) _inner.AppendFormatted(value, format);
+        if (_enabled)
+            _inner.AppendFormatted(value, format);
     }
 
     public void AppendFormatted(string? value)
     {
-        if (_enabled) _inner.AppendFormatted(value);
+        if (_enabled)
+            _inner.AppendFormatted(value);
     }
 
     internal string ToStringAndClear()
