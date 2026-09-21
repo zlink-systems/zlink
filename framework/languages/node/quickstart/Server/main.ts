@@ -22,13 +22,13 @@ class HelloHandler implements ZLinkRequestHandler<Hello, Greeting> {
         // Names the mesh and opens this process's endpoint for peers to connect to.
         // A wildcard bind host needs an explicit advertise host -- see README
         // "differences".
-        const mesh = builder.addRouteMesh('services')
+        const mesh = builder
+          .addRouteMesh('services')
           .listen('tcp://0.0.0.0:7101')
           .setAdvertiseHost('127.0.0.1');
         // This process handles the "greeting" channel. IZLinkRequestHandler classes
         // register on the channel builder explicitly -- see README "differences".
-        mesh.channel('greeting').server()
-          .addRequestHandler(PacketNames.hello, HelloHandler);
+        mesh.channel('greeting').server().addRequestHandler(PacketNames.hello, HelloHandler);
         return builder.build();
       }
     })

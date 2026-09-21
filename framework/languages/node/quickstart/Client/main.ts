@@ -13,7 +13,8 @@ import { Greeting, Hello } from '../Shared/contracts';
         const builder = zlinkFramework();
         // This process also needs its own endpoint (also needs an advertise
         // host -- see README "differences").
-        const mesh = builder.addRouteMesh('services')
+        const mesh = builder
+          .addRouteMesh('services')
           .listen('tcp://0.0.0.0:7102')
           .setAdvertiseHost('127.0.0.1');
         // This side only calls; it does not handle "greeting".
@@ -39,13 +40,14 @@ function startHttpServer(route: ZLinkRouteClient): http.Server {
     }
     const name = decodeURIComponent(match[1]);
     try {
-      const reply = await route.requestToChannel('greeting', new Hello(name))
-        .submit<Greeting>();
+      const reply = await route.requestToChannel('greeting', new Hello(name)).submit<Greeting>();
       response.writeHead(200, { 'content-type': 'application/json' });
       response.end(JSON.stringify(reply.text));
     } catch (error: unknown) {
       response.writeHead(500, { 'content-type': 'application/json' });
-      response.end(JSON.stringify({ error: error instanceof Error ? error.message : String(error) }));
+      response.end(
+        JSON.stringify({ error: error instanceof Error ? error.message : String(error) })
+      );
     }
   });
   server.listen(5080, '127.0.0.1');
@@ -53,7 +55,9 @@ function startHttpServer(route: ZLinkRouteClient): http.Server {
 }
 
 async function main(): Promise<void> {
-  const app = await NestFactory.createApplicationContext(ClientModule, { logger: ['error', 'warn', 'log'] });
+  const app = await NestFactory.createApplicationContext(ClientModule, {
+    logger: ['error', 'warn', 'log']
+  });
   const route = app.get<ZLinkRouteClient>(ZLINK_ROUTE_CLIENT, { strict: false });
   startHttpServer(route);
   console.log('client listening on http://127.0.0.1:5080');

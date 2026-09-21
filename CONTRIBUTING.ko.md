@@ -67,7 +67,7 @@ ZLINK_CORE_SOURCE=local bash bindings/python/tests/run_tests.sh
   형태로 다시 쓴다.
 - 소스 줄바꿈과 포매터: [`doc/principal/dev/source-formatting.ko.md`](doc/principal/dev/source-formatting.ko.md).
   100열, 들어가면 한 줄, 넘치면 인자마다·`.`마다 한 줄이고 나머지 모양은 언어 포매터 출력이
-  규칙이다. `scripts/format/format.sh [--check]`로 실행하며, 현재 범위는 framework tutorial·samples다.
+  규칙이다. `scripts/format/format.sh [--check]`로 실행하며, 현재 범위는 framework quickstart·tutorial·samples다.
 - 주석: [`doc/principal/source-comment-principles.ko.md`](doc/principal/source-comment-principles.ko.md).
   "왜"만 적고 구현을 반복 설명하지 않는다.
 - 공개 API·ABI·enum 변경은 스펙 문서 변경과 함께 별도 커밋으로 한다. 계약 없는 API는 구현 전에

@@ -113,7 +113,7 @@ README. Specific to this project:
 | `Server/` | Registers the `greeting` channel handler and listens on `7301` |
 | `Client/` | Connects to the server, exposes `GET /hello/{name}`, calls `greeting` |
 | `bootstrap.cmake` | The install script; identical to the tutorial's and the samples' |
-| `CMakePresets.json` | Presets for Visual Studio; `CMAKE_PREFIX_PATH` comes from `ZLINK_PREFIX` |
+| `CMakePresets.json` | IDE presets (Visual Studio, Rider, CLion) pointing at the `.zlink/` the bootstrap made |
 
 ## What to carry into your own project
 

@@ -1,4 +1,3 @@
 package systems.zlink.quickstart.shared;
 
-public record Greeting(String text) {
-}
+public record Greeting(String text) {}

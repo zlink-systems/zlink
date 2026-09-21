@@ -25,7 +25,7 @@ cd zlink-cpp-examples/quickstart
 ## 1. 설치
 
 - CMake 3.20 이상, C++20 컴파일러. framework가 C++20 coroutine을 사용한다.
-  `CMakePresets.json`을 사용하는 [Visual Studio 2022](#7-visual-studio-2022) 경로는 3.21 이상이 필요하다
+  `CMakePresets.json`을 읽는 [IDE](#7-ide에서-열기) 경로는 3.21 이상이 필요하고, `bootstrap.cmake`는 3.24 이상이다
 - nlohmann_json·Boost·liblz4·libprotobuf·OpenSSL·opentelemetry-cpp
 
 `zlink`는 아직 공식 vcpkg registry와 ConanCenter에 없다. 이 저장소가 overlay port와 Conan
@@ -160,35 +160,52 @@ curl http://127.0.0.1:5083/hello/world
 §1의 세 단계를 직접 설치했다면 bootstrap 대신 `cmake -S . -B build -DCMAKE_PREFIX_PATH=<framework
 install prefix>`로 구성한다. 응답은 `"hello, world"`, 상태 코드 200이다.
 
-## 7. Visual Studio 2022
+## 7. IDE에서 열기
 
-Windows에서는 CMake 명령 대신 Visual Studio로 열어도 된다. 필요한 것은 **Desktop
-development with C++** 워크로드와 그 안의 **C++ CMake tools for Windows** 구성 요소다.
+CMake project이므로 IDE는 `CMakeLists.txt`와 `CMakePresets.json`을 그대로 읽는다. preset이
+`bootstrap.cmake`가 만든 `.zlink/`(framework install prefix, vcpkg manifest·installed tree)를
+가리키므로, **§6의 `cmake -P bootstrap.cmake`를 한 번 실행한 뒤 폴더를 열고 preset을 고르면**
+끝이다. 환경 변수는 bootstrap과 같은 `VCPKG_ROOT` 하나다(Visual Studio가 설치한 vcpkg는
+Developer PowerShell이 넣어 준다). preset은 `build/<preset>/`에 구성하므로 §6의 `build/`와
+겹치지 않는다. Windows preset은 Release 하나만 둔다 — framework가 static library라 Release로
+지은 것에 Debug consumer를 링크할 수 없고, `/Od`라 디버깅에는 지장이 없다.
 
-1. 3단계 설치를 먼저 마친다. Windows에서도 순서는 같고 PowerShell에서 실행한다.
-2. framework install prefix를 환경 변수에 넣는다. Visual Studio는 이 값을 preset의
-   `CMAKE_PREFIX_PATH`로 읽는다.
+### 7.1 Visual Studio 2022
+
+**Desktop development with C++** 워크로드와 그 안의 **C++ CMake tools for Windows** 구성 요소가
+필요하다.
+
+1. Developer PowerShell에서 `cmake -P bootstrap.cmake`를 실행한다(§6).
+2. **파일 → 열기 → 폴더**로 `quickstart/`를 연다. 솔루션 파일은 필요 없다.
+3. 구성 드롭다운에서 **`Visual Studio 2022 (x64, Release)`** 를 고른다.
+4. **빌드 → 모두 빌드.**
+5. 시작 항목에서 `quickstart_server`를 골라 실행하고, client는 별도의 Developer PowerShell에서
+   띄운다.
 
     ```powershell
-    $env:ZLINK_PREFIX = "C:\zlink\install\framework"
-    ```
-
-3. **파일 → 열기 → 폴더**로 `framework/languages/cpp/quickstart`를 연다. 솔루션 파일을
-   만들 필요는 없다. Visual Studio가 `CMakePresets.json`을 읽는다.
-4. 도구 모음의 구성 드롭다운에서 **`Visual Studio 2022 (x64)`** 를 고른다. vcpkg로 의존성을
-   설치했다면 **`Visual Studio 2022 (x64, vcpkg toolchain)`** 을 고른다. 이쪽은
-   `VCPKG_ROOT`를 읽는다.
-5. **빌드 → 모두 빌드.**
-6. 시작 항목에서 `quickstart_server`를 골라 실행하고, 별도의 Developer PowerShell에서
-   클라이언트를 실행한다. 한 번에 한 항목만 디버깅할 수 있으므로 두 process를 모두 Visual
-   Studio에서 띄우지는 않는다.
-
-    ```powershell
-    .\build\vs2022\Debug\quickstart_client.exe
+    .\build\vs2022\Release\quickstart_client.exe
     curl http://127.0.0.1:5083/hello/world
     ```
 
-preset은 프로젝트의 `CMakePresets.json`에 있다. 값을 바꿔야 하면 그 파일을 고치지 말고 같은
+### 7.2 Rider · CLion
+
+JetBrains IDE(Rider의 C++ 지원, CLion)도 폴더를 열면 CMake project로 인식하고 preset을 profile로
+읽는다.
+
+1. 터미널에서 `cmake -P bootstrap.cmake`를 실행한다(§6). WSL에서 빌드하려면 WSL 안에서 실행한다.
+2. **File → Open**으로 `quickstart/` 폴더를 연다.
+3. **Settings → Build, Execution, Deployment → CMake**에 preset이 profile로 나열된다. 플랫폼에
+   맞는 것 하나(`linux`, `macos`, `vs2022`)를 켠다. Toolchain은 Windows에서 Visual Studio, WSL에서
+   빌드하면 WSL toolchain을 고른다. `VCPKG_ROOT`가 IDE 환경에 없으면 그 profile의
+   **Environment**에 넣는다.
+4. CMake 로드가 끝나면 run configuration에 `quickstart_server`·`quickstart_client`가 생긴다.
+   `quickstart_server`를 실행한 뒤 `quickstart_client`를 실행하고 터미널에서 확인한다.
+
+    ```bash
+    curl http://127.0.0.1:5083/hello/world
+    ```
+
+preset은 project의 `CMakePresets.json`에 있다. 값을 바꿔야 하면 그 파일을 고치지 말고 같은
 디렉터리에 `CMakeUserPresets.json`을 두는 쪽이 낫다 — 그 파일은 버전 관리 대상이 아니다.
 
 ```json title="CMakePresets.json"
@@ -199,7 +216,7 @@ preset은 프로젝트의 `CMakePresets.json`에 있다. 값을 바꿔야 하면
 
 | 증상 | 확인할 항목 |
 | --- | --- |
-| `find_package`가 실패한다 | `CMAKE_PREFIX_PATH`가 framework install prefix를 가리키는지, 세 단계 설치를 모두 마쳤는지 확인한다 |
+| `find_package`가 실패한다 | `cmake -P bootstrap.cmake`가 `bootstrap done`으로 끝났는지, `.zlink/install/lib/cmake/zlink_framework/`가 있는지 확인한다. 직접 설치했다면 `CMAKE_PREFIX_PATH`가 framework install prefix를 가리키는지 확인한다 |
 | server가 location store를 요구한다 | `set_object_role`을 `none`으로 지정했는지 확인한다 |
 | startup이 실패한다 | 두 process의 mesh 이름이 같은지, `routing_id`를 지정했는지 확인한다 |
 | 메시지가 직렬화되지 않는다 | 메시지 타입에 `NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE`를 붙였는지 확인한다 |
