@@ -17,9 +17,6 @@ if (!sampleName) {
 const configPath = readOption('--config');
 if (!configPath) throw new Error('--config <path> is required.');
 
-if (!standaloneSample) {
-  process.env.PLAYWRIGHT_BROWSERS_PATH ??= path.join(workspaceRoot, '.cache/ms-playwright');
-}
 const { chromium } = await import('playwright');
 const definition = loadDefinition(configPath);
 const sampleRoot = standaloneSample ? workspaceRoot : path.join(workspaceRoot, 'samples', sampleName);
