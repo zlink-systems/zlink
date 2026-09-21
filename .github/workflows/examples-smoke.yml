@@ -41,9 +41,12 @@ on:
   schedule:
     - cron: '30 2 * * *'
 
+# Named explicitly: in a called workflow `github.workflow` is the caller's
+# name, so `${{ github.workflow }}-${{ inputs.ref }}` here equalled
+# examples-mirror.yml's own group on a workflow_dispatch (both see the same
+# `inputs.ref`) and the call could not be scheduled.
 concurrency:
-  group: >-
-    ${{ github.workflow }}-${{ inputs.ref || github.ref }}
+  group: examples-smoke-${{ inputs.ref || github.ref }}
   cancel-in-progress: true
 
 permissions:
