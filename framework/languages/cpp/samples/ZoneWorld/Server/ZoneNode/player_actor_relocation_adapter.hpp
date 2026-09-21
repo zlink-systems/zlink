@@ -72,12 +72,12 @@ class player_actor_t final : public fw::actor_t
         if (completed_join_operations.contains (operation))
             co_return;
         if (std::holds_alternative<fw::actor_join_accepted_t> (completion)) {
-            const std::string line =
-              std::format ("zoneworld-join-accepted player={} zone={} pending-initial={} bot={}\n",
-                           player_id,
-                           zone_id,
-                           pending_initial_entry ? "true" : "false",
-                           is_bot ? "true" : "false");
+            const std::string line = std::format (
+              "zoneworld-join-accepted player={} zone={} pending-initial={} bot={}\n",
+              player_id,
+              zone_id,
+              pending_initial_entry ? "true" : "false",
+              is_bot ? "true" : "false");
             std::cerr << line;
             if (pending_initial_entry && !is_bot) {
                 co_await _context.bound_session ()
@@ -217,21 +217,21 @@ class player_relocation_adapter_t final : public fw::actor_relocation_adapter_t<
     // --8<-- [start:doc-zw-actor-capture]
     fw::task_t<std::vector<std::byte>> capture (player_actor_t &actor, std::stop_token) override
     {
-        const auto message =
-          zlink::message_t::from_json (player_state_t{actor.x,
-                                                      actor.y,
-                                                      actor.zone_id,
-                                                      actor.is_bot,
-                                                      actor.dir_x,
-                                                      actor.dir_y,
-                                                      actor.initial_entry,
-                                                      actor.pending_join,
-                                                      actor.pending_initial_entry,
-                                                      actor.pending_crash_probe,
-                                                      actor.pending_x,
-                                                      actor.pending_y,
-                                                      actor.pending_zone_id,
-                                                      actor.completed_join_operation_order});
+        const auto message = zlink::message_t::from_json (
+          player_state_t{actor.x,
+                         actor.y,
+                         actor.zone_id,
+                         actor.is_bot,
+                         actor.dir_x,
+                         actor.dir_y,
+                         actor.initial_entry,
+                         actor.pending_join,
+                         actor.pending_initial_entry,
+                         actor.pending_crash_probe,
+                         actor.pending_x,
+                         actor.pending_y,
+                         actor.pending_zone_id,
+                         actor.completed_join_operation_order});
         co_return std::vector<std::byte> (message.bytes ().begin (), message.bytes ().end ());
     }
     // --8<-- [end:doc-zw-actor-capture]
@@ -239,9 +239,9 @@ class player_relocation_adapter_t final : public fw::actor_relocation_adapter_t<
     fw::task_t<void>
     restore (player_actor_t &actor, std::vector<std::byte> payload, std::stop_token) override
     {
-        const auto restored =
-          zlink::message_t::from (std::span<const std::byte> (payload.data (), payload.size ()))
-            .parse_json<player_state_t> ();
+        const auto restored = zlink::message_t::from (
+                                std::span<const std::byte> (payload.data (), payload.size ()))
+                                .parse_json<player_state_t> ();
         actor.x = restored.x;
         actor.y = restored.y;
         actor.zone_id = restored.zone_id;

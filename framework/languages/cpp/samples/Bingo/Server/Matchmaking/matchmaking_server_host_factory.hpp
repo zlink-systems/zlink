@@ -97,8 +97,8 @@ class matchmaking_server_host_factory_t
           .set_connection_string (topology.redis_endpoint)
           .set_key_prefix (topology.redis_key_prefix + "relocation:");
 
-        std::unique_ptr<bingo_match_reservation_store_t> reservations =
-          std::make_unique<redis_bingo_match_reservation_store_t> (topology);
+        std::unique_ptr<bingo_match_reservation_store_t>
+          reservations = std::make_unique<redis_bingo_match_reservation_store_t> (topology);
         options.services ().add_singleton<bingo_match_reservation_store_t> (
           std::move (reservations));
 

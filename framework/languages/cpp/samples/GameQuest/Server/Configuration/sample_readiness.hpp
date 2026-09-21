@@ -118,8 +118,8 @@ class spot_route_readiness_service_t final : public framework::hosted_service_t
                                  const std::vector<std::string> &target_rids,
                                  const framework::mesh_node_snapshot_t &snapshot)
     {
-        const auto targets_ready =
-          std::ranges::all_of (target_rids, [&snapshot] (const std::string &target_rid) {
+        const auto targets_ready = std::ranges::all_of (
+          target_rids, [&snapshot] (const std::string &target_rid) {
               return std::ranges::any_of (
                 snapshot.peers, [&target_rid] (const framework::mesh_peer_snapshot_t &peer) {
                     return peer.node_rid.to_string () == target_rid

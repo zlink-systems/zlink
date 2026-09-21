@@ -88,8 +88,8 @@ class courier_entry_spot_t : public entry_spot_t<courier_actor_t>
                                                      message_context_t &,
                                                      const bind_courier_session_req_t &request)
     {
-        const std::string line =
-          std::format ("deliverydispatch-courier bind-relayed courier={}\n", request.courier_id);
+        const std::string line = std::format ("deliverydispatch-courier bind-relayed courier={}\n",
+                                              request.courier_id);
         std::cerr << line;
         return {request.courier_id};
     }

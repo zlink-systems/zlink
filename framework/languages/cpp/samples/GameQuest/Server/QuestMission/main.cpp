@@ -67,8 +67,8 @@ class quest_event_store_t
     {
         const std::lock_guard lock (_mutex);
         auto &stream = _streams[event.player_id];
-        const auto already_applied =
-          std::any_of (stream.begin (), stream.end (), [&] (const stored_quest_event_t &stored) {
+        const auto already_applied = std::any_of (
+          stream.begin (), stream.end (), [&] (const stored_quest_event_t &stored) {
               return stored.source_event_id && *stored.source_event_id == event.event_id;
           });
         if (already_applied) {
@@ -86,8 +86,8 @@ class quest_event_store_t
         auto projection = replay_unlocked (event.player_id);
         const auto current = find_progress (projection, rule->quest_id);
         const auto previous_count = current ? current->current_count : 0;
-        const auto previous_status =
-          current ? current->status : std::string (quest_status_t::active);
+        const auto previous_status = current ? current->status
+                                             : std::string (quest_status_t::active);
         const auto reconciliation = event.type == "SnapshotKillCount";
         if (!reconciliation && previous_status == quest_status_t::reward_granted) {
             return {projection, {}, {}, false};
@@ -197,8 +197,8 @@ class quest_event_store_t
     static const quest_progress_t *find_progress (const std::vector<quest_progress_t> &projection,
                                                   const std::string &quest_id)
     {
-        const auto found =
-          std::find_if (projection.begin (), projection.end (), [&] (const quest_progress_t &item) {
+        const auto found = std::find_if (
+          projection.begin (), projection.end (), [&] (const quest_progress_t &item) {
               return item.quest_id == quest_id;
           });
         return found == projection.end () ? nullptr : &*found;
@@ -363,10 +363,10 @@ class player_quest_spot_t : public instance_spot_t
                                           static_cast<long long> (std::time (nullptr)) * 1000LL};
             auto result = _store.apply (decode_gameplay (snapshot));
             if (!result.reconciled_quest_id.empty ()) {
-                const std::string line =
-                  std::format ("gamequest-mission reconciled player={} quest={}\n",
-                               request.player_id,
-                               result.reconciled_quest_id);
+                const std::string line = std::format (
+                  "gamequest-mission reconciled player={} quest={}\n",
+                  request.player_id,
+                  result.reconciled_quest_id);
                 std::cerr << line;
             }
             return {std::move (result.projection)};

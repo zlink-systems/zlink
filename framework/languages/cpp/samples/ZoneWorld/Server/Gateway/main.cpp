@@ -37,9 +37,9 @@ class game_session_t final : public fw::packet_stream_session_t
             const auto request = payload.parse_json<actor_location_probe_req_t> ();
             actor_location_probe_res_t response;
             try {
-                response =
-                  co_await _actor_client.request (fw::actor_id_t (request.actor_id), request)
-                    .async<actor_location_probe_res_t> ();
+                response = co_await _actor_client
+                             .request (fw::actor_id_t (request.actor_id), request)
+                             .async<actor_location_probe_res_t> ();
             }
             catch (const fw::framework_exception_t &) {
                 response = {request.actor_id, 0, {}, errors_t::not_found};
@@ -84,9 +84,9 @@ class game_session_t final : public fw::packet_stream_session_t
         if (packet == message_follow_probe_req_t::packet_name) {
             const auto request = payload.parse_json<message_follow_probe_req_t> ();
             try {
-                const auto reply =
-                  co_await _actor_client.request (fw::actor_id_t (request.actor_id), request)
-                    .async<message_follow_probe_res_t> ();
+                const auto reply = co_await _actor_client
+                                     .request (fw::actor_id_t (request.actor_id), request)
+                                     .async<message_follow_probe_res_t> ();
                 stream.reply_packet (zlink::message_t::from_json (reply)).async ();
             }
             catch (const fw::framework_exception_t &error) {
@@ -189,10 +189,10 @@ class world_bootstrap_handler_t
     {
         int zone_count = 0;
         for (const auto &zone : all_zones ()) {
-            const auto created =
-              co_await _spots.get_or_create (fw::spot_id_t (zone), names_t::zone_spot)
-                .in_mesh (names_t::mesh)
-                .async ();
+            const auto created = co_await _spots
+                                   .get_or_create (fw::spot_id_t (zone), names_t::zone_spot)
+                                   .in_mesh (names_t::mesh)
+                                   .async ();
             if (created.state != fw::spot_create_state_t::rejected)
                 ++zone_count;
         }
@@ -216,10 +216,10 @@ class world_bootstrap_handler_t
         std::vector<fw::actor_id_t> actor_ids;
         int bot_count = 0;
         for (const auto &route : routes) {
-            const auto created =
-              co_await _directory.get_or_create (fw::actor_id_t (route.id), names_t::player_actor)
-                .in_mesh (names_t::mesh)
-                .async ();
+            const auto created = co_await _directory
+                                   .get_or_create (fw::actor_id_t (route.id), names_t::player_actor)
+                                   .in_mesh (names_t::mesh)
+                                   .async ();
             if (const auto *value = std::get_if<fw::actor_create_created_t> (&created)) {
                 actor_ids.push_back (value->actor.actor_id ());
                 ++bot_count;
@@ -231,11 +231,11 @@ class world_bootstrap_handler_t
         }
         for (std::size_t index = 0; index < routes.size (); ++index) {
             const auto &route = routes[index];
-            const auto entered =
-              co_await _actors
-                .request (actor_ids[index],
-                          enter_world_req_t{route.x, route.y, true, route.dx, route.dy})
-                .async<enter_world_res_t> ();
+            const auto entered = co_await _actors
+                                   .request (
+                                     actor_ids[index],
+                                     enter_world_req_t{route.x, route.y, true, route.dx, route.dy})
+                                   .async<enter_world_res_t> ();
             if (entered.error)
                 throw fw::framework_exception_t (fw::framework_error_kind_t::rejected,
                                                  *entered.error);

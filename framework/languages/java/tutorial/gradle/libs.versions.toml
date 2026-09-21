@@ -1,7 +1,7 @@
 [versions]
 # 배포된 패키지를 그대로 쓴다. 문서가 보여주는 코드와 독자가 Maven Central에서 받는
 # 라이브러리를 같은 것으로 유지하기 위해서다. 이 디렉터리만 복사해 나가도 빌드된다.
-zlinkFramework = "0.20.0"
+zlinkFramework = "0.21.0"
 # 아래 셋은 위 zlinkFramework 버전의 POM이 선언한 값과 맞춘 것이다.
 # 충돌 해석에 맡기지 않는다.
 springBoot = "3.5.14"

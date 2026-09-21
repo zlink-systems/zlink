@@ -88,17 +88,17 @@ class tictactoe_client_scenario_t
             auto guest_connector_options = connector_options;
             guest_connector_options.endpoint = guest_endpoint;
 
-            auto core_client1 =
-              zlink::stream_connector::connector_factory_t::create (connector_options);
+            auto core_client1 = zlink::stream_connector::connector_factory_t::create (
+              connector_options);
             use_json_codec (core_client1);
-            auto core_client2 =
-              zlink::stream_connector::connector_factory_t::create (guest_connector_options);
+            auto core_client2 = zlink::stream_connector::connector_factory_t::create (
+              guest_connector_options);
             use_json_codec (core_client2);
-            auto core_observer =
-              zlink::stream_connector::connector_factory_t::create (guest_connector_options);
+            auto core_observer = zlink::stream_connector::connector_factory_t::create (
+              guest_connector_options);
             use_json_codec (core_observer);
-            auto core_reconnected_client =
-              zlink::stream_connector::connector_factory_t::create (connector_options);
+            auto core_reconnected_client = zlink::stream_connector::connector_factory_t::create (
+              connector_options);
             use_json_codec (core_reconnected_client);
             auto client1 = zlink::stream_e2e_client::use (core_client1);
             auto client2 = zlink::stream_e2e_client::use (core_client2);
@@ -120,8 +120,8 @@ class tictactoe_client_scenario_t
                           const create_game_http_res_t &room,
                           const tictactoe_client_options_t &options)
     {
-        auto result =
-          run_game_async (client1, client2, observer, reconnected_client, room, options).result ();
+        auto result = run_game_async (client1, client2, observer, reconnected_client, room, options)
+                        .result ();
         return result && result.value ();
     }
 
@@ -150,8 +150,8 @@ class tictactoe_client_scenario_t
 
             trace ("authenticate client1");
             const auto client1_auth_request = authenticate_req_t{options.x_actor_id};
-            auto client1_auth =
-              co_await client1.request (client1_auth_request).async<authenticate_res_t> ();
+            auto client1_auth = co_await client1.request (client1_auth_request)
+                                  .async<authenticate_res_t> ();
             ensure (client1_auth.player.actor_id == options.x_actor_id);
             ensure (client1_auth.player.display_name == options.x_actor_id);
             ensure (client1_auth.player.level >= room.required_level);
@@ -159,8 +159,8 @@ class tictactoe_client_scenario_t
 
             trace ("authenticate client2");
             const auto client2_auth_request = authenticate_req_t{options.o_actor_id};
-            auto client2_auth =
-              co_await client2.request (client2_auth_request).async<authenticate_res_t> ();
+            auto client2_auth = co_await client2.request (client2_auth_request)
+                                  .async<authenticate_res_t> ();
             ensure (client2_auth.player.actor_id == options.o_actor_id);
             ensure (client2_auth.player.display_name == options.o_actor_id);
             ensure (client2_auth.player.level >= room.required_level);
@@ -169,15 +169,15 @@ class tictactoe_client_scenario_t
 
             trace ("authenticate observer");
             const auto observer_auth_request = authenticate_req_t{options.observer_actor_id};
-            auto observer_auth =
-              co_await observer.request (observer_auth_request).async<authenticate_res_t> ();
+            auto observer_auth = co_await observer.request (observer_auth_request)
+                                   .async<authenticate_res_t> ();
             ensure (observer_auth.player.actor_id == options.observer_actor_id);
             ensure (observer_auth.player.display_name == options.observer_actor_id);
             ensure (observer_auth.player.level > 0);
             ensure (observer_auth.player.wins == 0);
             const auto observe_request = observe_milestone_req_t{};
-            auto observe =
-              co_await observer.request (observe_request).async<observe_milestone_res_t> ();
+            auto observe = co_await observer.request (observe_request)
+                             .async<observe_milestone_res_t> ();
             ensure (observe.subscribed);
             std::cout << "observer-subscription=verified subscribed=true\n";
 
@@ -195,18 +195,20 @@ class tictactoe_client_scenario_t
               .within (std::chrono::milliseconds (25))
               .async ();
 
-            auto client1_wait_client2_join =
-              client1.wait_for<player_joined_notify_t> ()
-                .where (&player_joined_notify_t::actor_id, client2_auth.player.actor_id)
-                .async ();
-            auto client1_wait_game_start =
-              client1.wait_for<game_state_notify_t> ()
-                .where ([&options] (const game_state_message_t &message) {
-                    const auto &payload = message.payload;
-                    return payload.state.status == tictactoe_status_t::in_progress
-                           && payload.state.o_actor_id == options.o_actor_id;
-                })
-                .async ();
+            auto client1_wait_client2_join = client1.wait_for<player_joined_notify_t> ()
+                                               .where (&player_joined_notify_t::actor_id,
+                                                       client2_auth.player.actor_id)
+                                               .async ();
+            auto client1_wait_game_start = client1.wait_for<game_state_notify_t> ()
+                                             .where (
+                                               [&options] (const game_state_message_t &message) {
+                                                   const auto &payload = message.payload;
+                                                   return payload.state.status
+                                                            == tictactoe_status_t::in_progress
+                                                          && payload.state.o_actor_id
+                                                               == options.o_actor_id;
+                                               })
+                                             .async ();
             trace ("join client2");
             const auto client2_join_request = join_game_msg_t{room.room_id};
             auto client2_join_completion = client2.wait_for<join_game_notify_t> ().async ();
@@ -239,18 +241,19 @@ class tictactoe_client_scenario_t
             ensure (client1_saw_game_start.payload.state.o_actor_id == options.o_actor_id);
             ensure (client1_saw_game_start.payload.state.next_turn == tictactoe_marks_t::x);
 
-            auto client2_wait_first_move =
-              client2.wait_for<game_state_notify_t> ()
-                .where ([&options] (const game_state_message_t &message) {
-                    const auto &payload = message.payload;
-                    return payload.state.last_move_actor_id == options.x_actor_id
-                           && payload.state.last_move_cell == 0;
-                })
-                .async ();
+            auto client2_wait_first_move = client2.wait_for<game_state_notify_t> ()
+                                             .where (
+                                               [&options] (const game_state_message_t &message) {
+                                                   const auto &payload = message.payload;
+                                                   return payload.state.last_move_actor_id
+                                                            == options.x_actor_id
+                                                          && payload.state.last_move_cell == 0;
+                                               })
+                                             .async ();
             trace ("client1 first move");
             const auto client1_first_move_request = place_mark_req_t{0};
-            auto client1_first_move =
-              co_await client1.request (client1_first_move_request).async<place_mark_res_t> ();
+            auto client1_first_move = co_await client1.request (client1_first_move_request)
+                                        .async<place_mark_res_t> ();
             ensure (client1_first_move.state.room_id == room.room_id);
             ensure (client1_first_move.state.board == "X........");
             ensure (client1_first_move.state.next_turn == tictactoe_marks_t::o);
@@ -262,18 +265,19 @@ class tictactoe_client_scenario_t
             ensure (client2_saw_first_move.payload.state.last_move_cell == 0);
             ensure (same_state (client2_saw_first_move.payload.state, client1_first_move.state));
 
-            auto client1_wait_first_o_move =
-              client1.wait_for<game_state_notify_t> ()
-                .where ([&options] (const game_state_message_t &message) {
-                    const auto &payload = message.payload;
-                    return payload.state.last_move_actor_id == options.o_actor_id
-                           && payload.state.last_move_cell == 3;
-                })
-                .async ();
+            auto client1_wait_first_o_move = client1.wait_for<game_state_notify_t> ()
+                                               .where (
+                                                 [&options] (const game_state_message_t &message) {
+                                                     const auto &payload = message.payload;
+                                                     return payload.state.last_move_actor_id
+                                                              == options.o_actor_id
+                                                            && payload.state.last_move_cell == 3;
+                                                 })
+                                               .async ();
             trace ("client2 first move");
             const auto client2_first_move_request = place_mark_req_t{3};
-            auto client2_first_move =
-              co_await client2.request (client2_first_move_request).async<place_mark_res_t> ();
+            auto client2_first_move = co_await client2.request (client2_first_move_request)
+                                        .async<place_mark_res_t> ();
             ensure (client2_first_move.state.room_id == room.room_id);
             ensure (client2_first_move.state.board == "X..O.....");
             ensure (client2_first_move.state.next_turn == tictactoe_marks_t::x);
@@ -285,18 +289,19 @@ class tictactoe_client_scenario_t
             ensure (client1_saw_first_o_move.payload.state.last_move_cell == 3);
             ensure (same_state (client1_saw_first_o_move.payload.state, client2_first_move.state));
 
-            auto client2_wait_second_x_move =
-              client2.wait_for<game_state_notify_t> ()
-                .where ([&options] (const game_state_message_t &message) {
-                    const auto &payload = message.payload;
-                    return payload.state.last_move_actor_id == options.x_actor_id
-                           && payload.state.last_move_cell == 1;
-                })
-                .async ();
+            auto client2_wait_second_x_move = client2.wait_for<game_state_notify_t> ()
+                                                .where (
+                                                  [&options] (const game_state_message_t &message) {
+                                                      const auto &payload = message.payload;
+                                                      return payload.state.last_move_actor_id
+                                                               == options.x_actor_id
+                                                             && payload.state.last_move_cell == 1;
+                                                  })
+                                                .async ();
             trace ("client1 second move");
             const auto client1_second_move_request = place_mark_req_t{1};
-            auto client1_second_move =
-              co_await client1.request (client1_second_move_request).async<place_mark_res_t> ();
+            auto client1_second_move = co_await client1.request (client1_second_move_request)
+                                         .async<place_mark_res_t> ();
             ensure (client1_second_move.state.room_id == room.room_id);
             ensure (client1_second_move.state.board == "XX.O.....");
             ensure (client1_second_move.state.next_turn == tictactoe_marks_t::o);
@@ -309,18 +314,19 @@ class tictactoe_client_scenario_t
             ensure (
               same_state (client2_saw_second_x_move.payload.state, client1_second_move.state));
 
-            auto client1_wait_second_o_move =
-              client1.wait_for<game_state_notify_t> ()
-                .where ([&options] (const game_state_message_t &message) {
-                    const auto &payload = message.payload;
-                    return payload.state.last_move_actor_id == options.o_actor_id
-                           && payload.state.last_move_cell == 4;
-                })
-                .async ();
+            auto client1_wait_second_o_move = client1.wait_for<game_state_notify_t> ()
+                                                .where (
+                                                  [&options] (const game_state_message_t &message) {
+                                                      const auto &payload = message.payload;
+                                                      return payload.state.last_move_actor_id
+                                                               == options.o_actor_id
+                                                             && payload.state.last_move_cell == 4;
+                                                  })
+                                                .async ();
             trace ("client2 second move");
             const auto client2_second_move_request = place_mark_req_t{4};
-            auto client2_second_move =
-              co_await client2.request (client2_second_move_request).async<place_mark_res_t> ();
+            auto client2_second_move = co_await client2.request (client2_second_move_request)
+                                         .async<place_mark_res_t> ();
             ensure (client2_second_move.state.room_id == room.room_id);
             ensure (client2_second_move.state.board == "XX.OO....");
             ensure (client2_second_move.state.next_turn == tictactoe_marks_t::x);
@@ -333,24 +339,26 @@ class tictactoe_client_scenario_t
             ensure (
               same_state (client1_saw_second_o_move.payload.state, client2_second_move.state));
 
-            auto client2_wait_winning_move =
-              client2.wait_for<game_state_notify_t> ()
-                .where ([&options] (const game_state_message_t &message) {
-                    const auto &payload = message.payload;
-                    return payload.state.winner == options.x_actor_id;
-                })
-                .async ();
-            auto observer_wait_milestone =
-              observer.wait_for<win_milestone_notify_t> ()
-                .where ([&options] (const win_milestone_message_t &message) {
-                    const auto &payload = message.payload;
-                    return payload.actor_id == options.x_actor_id && payload.wins == 100;
-                })
-                .async ();
+            auto client2_wait_winning_move = client2.wait_for<game_state_notify_t> ()
+                                               .where (
+                                                 [&options] (const game_state_message_t &message) {
+                                                     const auto &payload = message.payload;
+                                                     return payload.state.winner
+                                                            == options.x_actor_id;
+                                                 })
+                                               .async ();
+            auto observer_wait_milestone = observer.wait_for<win_milestone_notify_t> ()
+                                             .where (
+                                               [&options] (const win_milestone_message_t &message) {
+                                                   const auto &payload = message.payload;
+                                                   return payload.actor_id == options.x_actor_id
+                                                          && payload.wins == 100;
+                                               })
+                                             .async ();
             trace ("client1 winning move");
             const auto client1_winning_move_request = place_mark_req_t{2};
-            auto client1_winning_move =
-              co_await client1.request (client1_winning_move_request).async<place_mark_res_t> ();
+            auto client1_winning_move = co_await client1.request (client1_winning_move_request)
+                                          .async<place_mark_res_t> ();
             ensure (client1_winning_move.state.room_id == room.room_id);
             ensure (client1_winning_move.state.last_move_actor_id == options.x_actor_id);
             ensure (client1_winning_move.state.last_move_cell == 2);
@@ -381,8 +389,8 @@ class tictactoe_client_scenario_t
             ensure (reconnected_auth.player.actor_id == client1_auth.player.actor_id);
 
             trace ("confirm reconnected game state");
-            auto reconnected_join_completion =
-              reconnected_client.wait_for<join_game_notify_t> ().async ();
+            auto reconnected_join_completion = reconnected_client.wait_for<join_game_notify_t> ()
+                                                 .async ();
             reconnected_client.send (join_game_msg_t{room.room_id}).submit ();
             auto reconnected_join = co_await reconnected_join_completion;
             ensure (same_state (reconnected_join.payload.state, client1_winning_move.state));

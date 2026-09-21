@@ -36,9 +36,9 @@ class authenticate_play_session_handler_t
     {
         auto request = payload.parse_json<authenticate_req_t> ();
         const auto authenticate_request = authenticate_player_req_t{request.access_token};
-        auto authenticated =
-          co_await _client.request (sample_names_t::api_channel, authenticate_request)
-            .async<authenticate_player_res_t> ();
+        auto authenticated = co_await _client
+                               .request (sample_names_t::api_channel, authenticate_request)
+                               .async<authenticate_player_res_t> ();
         if (authenticated.player.actor_id.empty ()) {
             co_return result_t<session_actor_t>::failure (framework_error_kind_t::internal_failure,
                                                           "Player authentication failed.");
@@ -59,9 +59,9 @@ class authenticate_play_session_handler_t
         bool first_player_x_binding = false;
         {
             std::lock_guard lock (bound_actors_mutex);
-            first_player_x_binding =
-              actor.actor_id () == "player-x"
-              && bound_actors.insert (std::string (actor.actor_id ())).second;
+            first_player_x_binding = actor.actor_id () == "player-x"
+                                     && bound_actors.insert (std::string (actor.actor_id ()))
+                                          .second;
         }
         if (first_player_x_binding) {
             std::cout << "tictactoe-lifecycle actor-bound actor=" << actor.actor_id () << std::endl;

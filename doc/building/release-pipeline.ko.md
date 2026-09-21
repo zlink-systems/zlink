@@ -152,6 +152,7 @@ TicTacToe·ZoneWorld)도 framework 빌드·CI·배포에 포함하지 않는다.
 | `framework-node.yml` | Node framework gate, Chromium STREAM e2e, Node↔.NET cross-language smoke | 4 플랫폼(win-x64·linux-x64·linux-arm64·darwin-arm64) × Node 20/22 |
 | `pr-verify.yml` | Core ctest와 binding smoke, Java framework unit·contract 테스트, Windows x64 정적 계약 | ubuntu-24.04, Windows 정적 계약만 windows-2022 |
 | `build.yml` | Core 빌드·검증(릴리스 겸용) | 4 플랫폼 |
+| `framework-tutorial.yml` | tutorial·quickstart를 **publish된 패키지로, publish 뒤에** 검증한다. `framework-release.yml`·`release-dotnet.yml`이 registry index(npm view / Maven Central pom / nuget flatcontainer / GitHub Release asset, 최대 30분 대기)를 확인한 뒤 `workflow_call(language)`로 호출한다. PR·main push는 tutorial 소스가 바뀔 때만 돌고 버전 pin 파일만 바뀐 커밋(`sync-version`)에는 돌지 않는다(#862) | ubuntu-24.04 4언어 |
 | `examples-smoke.yml` | 내보낸 examples tree를 checkout 없는 job에서 README 명령만으로 빌드·실행(quickstart 빌드, tutorial 기동·검증, 샘플 하나 완주). `examples-mirror.yml`이 push 전에 호출하고, 매일 최신 framework 태그로 다시 돈다 | ubuntu-24.04 4언어, windows-2022는 dotnet·java |
 | `docs.yml` | 문서 사이트 빌드·배포 | ubuntu |
 

@@ -72,11 +72,10 @@ zlink::framework::spot_create_result_t existing_or_created = co_await spot_manag
 기존 Spot을 조회하거나 정확한 incarnation을 닫는다.
 
 ```cpp
-std::optional<zlink::framework::spot_ref_t> spot =
-  co_await spot_manager.find("lobby-eu");
+std::optional<zlink::framework::spot_ref_t> spot = co_await spot_manager.find ("lobby-eu");
 
 if (spot) {
-    bool closed = co_await spot_manager.close(*spot);
+    bool closed = co_await spot_manager.close (*spot);
 }
 ```
 
@@ -179,12 +178,11 @@ messaging-execution category의 classic fanout `publish`와 달리, ChannelName�
 Spot에 속한 주기 timer를 등록한다. `spot_common_context_t::add_timer(...)`로 호출한다.
 
 ```cpp
-zlink::framework::timer_t timer = context_.add_timer<room_tick_handler_t>(
+zlink::framework::timer_t timer = context_.add_timer<room_tick_handler_t> (
   "room-tick",
   std::chrono::seconds{1},
   zlink::framework::timer_options_t{
-      .overrun_policy =
-        zlink::framework::timer_overrun_policy_t::skip_late_ticks,
+    .overrun_policy = zlink::framework::timer_overrun_policy_t::skip_late_ticks,
   });
 ```
 

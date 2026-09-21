@@ -71,8 +71,8 @@ class tictactoe_match_t
         if (_state.status != tictactoe_status_t::in_progress) {
             throw std::runtime_error ("match is not playing");
         }
-        const auto &next_actor_id =
-          _state.next_turn == tictactoe_marks_t::x ? _state.x_actor_id : _state.o_actor_id;
+        const auto &next_actor_id = _state.next_turn == tictactoe_marks_t::x ? _state.x_actor_id
+                                                                             : _state.o_actor_id;
         if (!next_actor_id || actor_id != *next_actor_id) {
             throw std::runtime_error ("not actor turn");
         }
@@ -81,8 +81,8 @@ class tictactoe_match_t
             throw std::runtime_error ("invalid move");
         }
 
-        const char mark =
-          actor_id == _state.x_actor_id ? tictactoe_marks_t::x[0] : tictactoe_marks_t::o[0];
+        const char mark = actor_id == _state.x_actor_id ? tictactoe_marks_t::x[0]
+                                                        : tictactoe_marks_t::o[0];
         _state.board[static_cast<std::size_t> (request.cell)] = mark;
         _state.last_move_cell = request.cell;
         _state.last_move_actor_id = actor_id;
@@ -92,8 +92,8 @@ class tictactoe_match_t
         } else if (_state.board.find ('.') == std::string::npos) {
             _state.status = tictactoe_status_t::draw;
         } else {
-            _state.next_turn =
-              actor_id == _state.x_actor_id ? tictactoe_marks_t::o : tictactoe_marks_t::x;
+            _state.next_turn = actor_id == _state.x_actor_id ? tictactoe_marks_t::o
+                                                             : tictactoe_marks_t::x;
             reset_turn_deadline ();
         }
         return _state;
@@ -105,14 +105,14 @@ class tictactoe_match_t
             || std::chrono::steady_clock::now () < *_turn_deadline) {
             return false;
         }
-        const auto &timed_out_actor =
-          _state.next_turn == tictactoe_marks_t::x ? _state.x_actor_id : _state.o_actor_id;
+        const auto &timed_out_actor = _state.next_turn == tictactoe_marks_t::x ? _state.x_actor_id
+                                                                               : _state.o_actor_id;
         if (!timed_out_actor) {
             throw std::logic_error ("active turn is missing its player actor");
         }
         _state.status = tictactoe_status_t::turn_timed_out;
-        _state.winner =
-          timed_out_actor == _state.x_actor_id ? _state.o_actor_id : _state.x_actor_id;
+        _state.winner = timed_out_actor == _state.x_actor_id ? _state.o_actor_id
+                                                             : _state.x_actor_id;
         _state.next_turn.clear ();
         _state.last_move_actor_id = *timed_out_actor;
         _state.last_move_cell.reset ();

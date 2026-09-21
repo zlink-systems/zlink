@@ -229,9 +229,9 @@ Automatic discovery 없이 특정 endpoint에 수동으로 연결한다. `mesh_n
 호출한다.
 
 ```cpp
-play.peer_connections().connect("play-node-2:5501");
-std::vector<zlink::framework::mesh_peer_connection_t> connections =
-  play.peer_connections().list_connections();
+play.peer_connections ().connect ("play-node-2:5501");
+std::vector<zlink::framework::mesh_peer_connection_t> connections = play.peer_connections ()
+                                                                      .list_connections ();
 ```
 
 **옵션.** 이 호출에는 다음 modifier가 붙는다.
@@ -346,10 +346,10 @@ Application Job Queue는 별도의 job-count limit이다. Manual 범위는 `1..2
 배포를 다시 하지 않고 placement weight나 channel weight를 바꾼다.
 
 ```cpp
-zlink::framework::route_mesh_runtime_options_t &placement =
-  route_mesh_runtime_options; // DI에서 주입받은 인스턴스
-placement.placement_weight(50); // 이 node로 가는 새 Actor·Spot 배치 비중을 낮춘다
-placement.channel("play.api").weight(0); // 이 Channel Server를 선택 대상에서 제외한다
+// DI에서 주입받은 인스턴스
+zlink::framework::route_mesh_runtime_options_t &placement = route_mesh_runtime_options;
+placement.placement_weight (50); // 이 node로 가는 새 Actor·Spot 배치 비중을 낮춘다
+placement.channel ("play.api").weight (0); // 이 Channel Server를 선택 대상에서 제외한다
 ```
 
 **옵션.** 이 진입점에는 두 개의 독립된 property가 있다.

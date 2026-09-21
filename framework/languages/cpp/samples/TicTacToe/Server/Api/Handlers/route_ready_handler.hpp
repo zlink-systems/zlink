@@ -28,8 +28,8 @@ class route_ready_handler_t
         const auto snapshot = _runtime.snapshot (sample_names_t::game_spot_node);
         for (const auto &peer : snapshot.peers) {
             if (peer.node_rid.to_string () == found->second && peer.state == peer_state_t::ready)
-                return {.body =
-                          nlohmann::json{{"ready", true}, {"targetRid", found->second}}.dump ()};
+                return {
+                  .body = nlohmann::json{{"ready", true}, {"targetRid", found->second}}.dump ()};
         }
 
         nlohmann::json peers = nlohmann::json::array ();

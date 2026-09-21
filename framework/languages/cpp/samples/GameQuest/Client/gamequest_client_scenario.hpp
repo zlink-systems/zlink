@@ -49,57 +49,60 @@ class gamequest_client_scenario_t
             ensure (joined && joined.value ().active_quests.empty (),
                     "player-alice initial join should have no active quests");
 
-            auto first_progress =
-              api_a.wait_for<quest_progress_notify_t> ()
-                .where ([] (const quest_progress_message_t &message) {
-                    const auto &payload = message.payload;
-                    return payload.player_id == "player-alice"
-                           && payload.progress.quest_id == quest_ids_t::first_hunt
-                           && payload.progress.current_count == 1;
-                })
-                .timeout (std::chrono::seconds (12))
-                .to_future ("first hunt progress wait failed");
-            auto first_kill =
-              api_a.request (kill_monster_req_t{"player-alice", "wolf", "forest", "kill-1"})
-                .packet_name (kill_monster_req_t::packet_name)
-                .async<kill_monster_res_t> ()
-                .result ();
+            auto first_progress = api_a.wait_for<quest_progress_notify_t> ()
+                                    .where ([] (const quest_progress_message_t &message) {
+                                        const auto &payload = message.payload;
+                                        return payload.player_id == "player-alice"
+                                               && payload.progress.quest_id
+                                                    == quest_ids_t::first_hunt
+                                               && payload.progress.current_count == 1;
+                                    })
+                                    .timeout (std::chrono::seconds (12))
+                                    .to_future ("first hunt progress wait failed");
+            auto first_kill = api_a
+                                .request (
+                                  kill_monster_req_t{"player-alice", "wolf", "forest", "kill-1"})
+                                .packet_name (kill_monster_req_t::packet_name)
+                                .async<kill_monster_res_t> ()
+                                .result ();
             dump_event_id_if_mismatch ("first kill", "player-alice-kill-1", first_kill);
             ensure (first_kill && first_kill.value ().event_id == "player-alice-kill-1",
                     "first kill event id mismatch");
             ensure (first_progress.get ().payload.progress.current_count == 1,
                     "first hunt progress push mismatch");
 
-            auto first_hunt_completed =
-              api_a.wait_for<quest_completed_notify_t> ()
-                .where ([] (const quest_completed_message_t &message) {
-                    const auto &payload = message.payload;
-                    return payload.player_id == "player-alice"
-                           && payload.progress.quest_id == quest_ids_t::first_hunt
-                           && payload.reward_granted;
-                })
-                .timeout (std::chrono::seconds (12))
-                .to_future ("first hunt completion wait failed");
+            auto first_hunt_completed = api_a.wait_for<quest_completed_notify_t> ()
+                                          .where ([] (const quest_completed_message_t &message) {
+                                              const auto &payload = message.payload;
+                                              return payload.player_id == "player-alice"
+                                                     && payload.progress.quest_id
+                                                          == quest_ids_t::first_hunt
+                                                     && payload.reward_granted;
+                                          })
+                                          .timeout (std::chrono::seconds (12))
+                                          .to_future ("first hunt completion wait failed");
             (void) api_a.request (kill_monster_req_t{"player-alice", "wolf", "forest", "kill-2"})
               .packet_name (kill_monster_req_t::packet_name)
               .async<kill_monster_res_t> ()
               .result ();
-            auto third_kill =
-              api_a.request (kill_monster_req_t{"player-alice", "wolf", "forest", "kill-3"})
-                .packet_name (kill_monster_req_t::packet_name)
-                .async<kill_monster_res_t> ()
-                .result ();
+            auto third_kill = api_a
+                                .request (
+                                  kill_monster_req_t{"player-alice", "wolf", "forest", "kill-3"})
+                                .packet_name (kill_monster_req_t::packet_name)
+                                .async<kill_monster_res_t> ()
+                                .result ();
             ensure (third_kill && third_kill.value ().event_id == "player-alice-kill-3",
                     "third kill event id mismatch");
             ensure (first_hunt_completed.get ().payload.progress.status
                       == quest_status_t::reward_granted,
                     "first hunt completion push mismatch");
 
-            auto duplicate =
-              api_a.request (kill_monster_req_t{"player-alice", "wolf", "forest", "kill-3"})
-                .packet_name (kill_monster_req_t::packet_name)
-                .async<kill_monster_res_t> ()
-                .result ();
+            auto duplicate = api_a
+                               .request (
+                                 kill_monster_req_t{"player-alice", "wolf", "forest", "kill-3"})
+                               .packet_name (kill_monster_req_t::packet_name)
+                               .async<kill_monster_res_t> ()
+                               .result ();
             ensure (duplicate && duplicate.value ().event_id == third_kill.value ().event_id,
                     "duplicate kill idempotency mismatch");
 
@@ -115,16 +118,16 @@ class gamequest_client_scenario_t
             ensure (wait_for_progress (api_b, "player-bob", quest_ids_t::herb_gathering, 1),
                     "player-bob did not see the offline herb progress");
 
-            auto herb_completed =
-              api_b.wait_for<quest_completed_notify_t> ()
-                .where ([] (const quest_completed_message_t &message) {
-                    const auto &payload = message.payload;
-                    return payload.player_id == "player-bob"
-                           && payload.progress.quest_id == quest_ids_t::herb_gathering
-                           && payload.reward_granted;
-                })
-                .timeout (std::chrono::seconds (12))
-                .to_future ("herb completion wait failed");
+            auto herb_completed = api_b.wait_for<quest_completed_notify_t> ()
+                                    .where ([] (const quest_completed_message_t &message) {
+                                        const auto &payload = message.payload;
+                                        return payload.player_id == "player-bob"
+                                               && payload.progress.quest_id
+                                                    == quest_ids_t::herb_gathering
+                                               && payload.reward_granted;
+                                    })
+                                    .timeout (std::chrono::seconds (12))
+                                    .to_future ("herb completion wait failed");
             api_b.send (collect_item_req_t{"player-bob", "healing-herb", 4, "herb-2"}).submit ();
             ensure (herb_completed.get ().payload.progress.status == quest_status_t::reward_granted,
                     "herb completion push mismatch");
@@ -167,11 +170,12 @@ class gamequest_client_scenario_t
 
             /* reward 멱등(§14): 완료된 quest에 같은 gameplay event를 다시 적용해도 진행이 더
              * 오르지 않고 상태도 그대로다. */
-            auto replayed_kill =
-              api_a.request (kill_monster_req_t{"player-alice", "wolf", "forest", "kill-3"})
-                .packet_name (kill_monster_req_t::packet_name)
-                .async<kill_monster_res_t> ()
-                .result ();
+            auto replayed_kill = api_a
+                                   .request (
+                                     kill_monster_req_t{"player-alice", "wolf", "forest", "kill-3"})
+                                   .packet_name (kill_monster_req_t::packet_name)
+                                   .async<kill_monster_res_t> ()
+                                   .result ();
             ensure (replayed_kill && replayed_kill.value ().event_id == "player-alice-kill-3",
                     "replayed kill event id mismatch");
             auto after_replay = api_a.request (get_quest_progress_req_t{"player-alice"})
@@ -210,15 +214,15 @@ class gamequest_client_scenario_t
                                     .result ();
             ensure (static_cast<bool> (alice_rejoined),
                     "player-alice rejoin on the second node failed");
-            auto ruins_completed =
-              alice_b.wait_for<quest_completed_notify_t> ()
-                .where ([] (const quest_completed_message_t &message) {
-                    const auto &payload = message.payload;
-                    return payload.player_id == "player-alice"
-                           && payload.progress.quest_id == quest_ids_t::visit_ruins;
-                })
-                .timeout (std::chrono::seconds (12))
-                .to_future ("ruins completion wait after reconnect failed");
+            auto ruins_completed = alice_b.wait_for<quest_completed_notify_t> ()
+                                     .where ([] (const quest_completed_message_t &message) {
+                                         const auto &payload = message.payload;
+                                         return payload.player_id == "player-alice"
+                                                && payload.progress.quest_id
+                                                     == quest_ids_t::visit_ruins;
+                                     })
+                                     .timeout (std::chrono::seconds (12))
+                                     .to_future ("ruins completion wait after reconnect failed");
             alice_b.send (enter_area_req_t{"player-alice", "ruins", "enter-ruins"}).submit ();
             ensure (ruins_completed.get ().payload.progress.status
                       == quest_status_t::reward_granted,
@@ -290,12 +294,12 @@ class gamequest_client_scenario_t
                                       })
                                       .timeout (std::chrono::seconds (12))
                                       .to_future ("scale-b progress wait failed");
-            auto scale_a_event =
-              scale_a
-                .request (kill_monster_req_t{"player-scale-a", "wolf", "forest", "scale-kill-1"})
-                .packet_name (kill_monster_req_t::packet_name)
-                .async<kill_monster_res_t> ()
-                .result ();
+            auto scale_a_event = scale_a
+                                   .request (kill_monster_req_t{
+                                     "player-scale-a", "wolf", "forest", "scale-kill-1"})
+                                   .packet_name (kill_monster_req_t::packet_name)
+                                   .async<kill_monster_res_t> ()
+                                   .result ();
             scale_b.send (collect_item_req_t{"player-scale-b", "healing-herb", 1, "scale-herb-1"})
               .submit ();
             ensure (scale_a_event
@@ -315,16 +319,16 @@ class gamequest_client_scenario_t
                                   .async<join_session_res_t> ()
                                   .result ();
             ensure (static_cast<bool> (owner_joined), "owner-failure player join failed");
-            auto owner_progress =
-              owner_failure.wait_for<quest_progress_notify_t> ()
-                .where ([] (const quest_progress_message_t &message) {
-                    const auto &payload = message.payload;
-                    return payload.player_id == "player-owner-failure"
-                           && payload.progress.quest_id == quest_ids_t::first_hunt
-                           && payload.progress.current_count == 1;
-                })
-                .timeout (std::chrono::seconds (12))
-                .to_future ("owner-failure progress wait failed");
+            auto owner_progress = owner_failure.wait_for<quest_progress_notify_t> ()
+                                    .where ([] (const quest_progress_message_t &message) {
+                                        const auto &payload = message.payload;
+                                        return payload.player_id == "player-owner-failure"
+                                               && payload.progress.quest_id
+                                                    == quest_ids_t::first_hunt
+                                               && payload.progress.current_count == 1;
+                                    })
+                                    .timeout (std::chrono::seconds (12))
+                                    .to_future ("owner-failure progress wait failed");
             auto owner_setup = owner_failure
                                  .request (kill_monster_req_t{
                                    "player-owner-failure", "wolf", "forest", "owner-ready-kill"})
@@ -340,13 +344,14 @@ class gamequest_client_scenario_t
                       << std::endl;
             wait_for_release (owner_loss_release_file);
 
-            auto unavailable =
-              owner_failure
-                .request (kill_monster_req_t{
-                  "player-owner-failure", "wolf", "forest", "owner-unavailable-kill"})
-                .packet_name (kill_monster_req_t::packet_name)
-                .async<kill_monster_res_t> ()
-                .result ();
+            auto unavailable = owner_failure
+                                 .request (kill_monster_req_t{"player-owner-failure",
+                                                              "wolf",
+                                                              "forest",
+                                                              "owner-unavailable-kill"})
+                                 .packet_name (kill_monster_req_t::packet_name)
+                                 .async<kill_monster_res_t> ()
+                                 .result ();
             ensure (!unavailable
                       && unavailable.error_code ()
                            == zlink::stream_connector::error_code_t::remote_error,
@@ -433,8 +438,8 @@ class gamequest_client_scenario_t
             return;
         }
 
-        std::string line =
-          std::format ("gamequest event id dump label={} expected={}", label, expected);
+        std::string line = std::format (
+          "gamequest event id dump label={} expected={}", label, expected);
         if (result) {
             line += std::format (" actual={}", result.value ().event_id);
         } else {

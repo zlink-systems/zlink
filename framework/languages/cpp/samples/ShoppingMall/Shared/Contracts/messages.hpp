@@ -38,8 +38,8 @@ class decimal_t
         }
         const auto point = value.find ('.');
         auto integral = std::string (value.substr (0, point));
-        auto fractional =
-          point == std::string_view::npos ? std::string{} : std::string (value.substr (point + 1));
+        auto fractional = point == std::string_view::npos ? std::string{}
+                                                          : std::string (value.substr (point + 1));
         if (integral.empty () || (point != std::string_view::npos && fractional.empty ())
             || !std::all_of (integral.begin (),
                              integral.end (),
@@ -54,8 +54,8 @@ class decimal_t
         while (!fractional.empty () && fractional.back () == '0') {
             fractional.pop_back ();
         }
-        const auto significant_digits =
-          (integral == "0" ? std::size_t{0} : integral.size ()) + fractional.size ();
+        const auto significant_digits = (integral == "0" ? std::size_t{0} : integral.size ())
+                                        + fractional.size ();
         if (significant_digits > 29 || fractional.size () > 28) {
             throw std::out_of_range ("decimal value exceeds the .NET decimal range");
         }
@@ -486,8 +486,8 @@ inline void from_json (const nlohmann::json &json, order_state_t &value)
 {
     value.order_id = json_string (json, "orderId", "order_id");
     value.status = json.value ("status", "");
-    value.shipping_address_id =
-      json_nullable_string (json, "shippingAddressId", "shipping_address_id");
+    value.shipping_address_id = json_nullable_string (
+      json, "shippingAddressId", "shipping_address_id");
     value.reservation_id = json_nullable_string (json, "reservationId", "reservation_id");
     value.payment_id = json_nullable_string (json, "paymentId", "payment_id");
     value.reason = json_nullable_string (json, "reason", "reason");
@@ -640,14 +640,14 @@ inline void to_json (nlohmann::json &json, const server_assertion_req_t &value)
 inline void from_json (const nlohmann::json &json, server_assertion_req_t &value)
 {
     value.successful_order_id = json_string (json, "successfulOrderId", "successful_order_id");
-    value.pending_recovered_order_id =
-      json_string (json, "pendingRecoveredOrderId", "pending_recovered_order_id");
+    value.pending_recovered_order_id = json_string (
+      json, "pendingRecoveredOrderId", "pending_recovered_order_id");
     value.concurrent_order_id = json_string (json, "concurrentOrderId", "concurrent_order_id");
     value.resumed_order_id = json_string (json, "resumedOrderId", "resumed_order_id");
-    value.inventory_failure_order_id =
-      json_string (json, "inventoryFailureOrderId", "inventory_failure_order_id");
-    value.payment_failure_order_id =
-      json_string (json, "paymentFailureOrderId", "payment_failure_order_id");
+    value.inventory_failure_order_id = json_string (
+      json, "inventoryFailureOrderId", "inventory_failure_order_id");
+    value.payment_failure_order_id = json_string (
+      json, "paymentFailureOrderId", "payment_failure_order_id");
     value.scale_out_order_id = json_string (json, "scaleOutOrderId", "scale_out_order_id");
 }
 

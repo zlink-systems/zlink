@@ -782,10 +782,10 @@ class node_report_service_t final : public fw::hosted_service_t
                       << " kind=" << kind << " " << detail << std::endl;
         }
         catch (const std::exception &error) {
-            const std::string line =
-              std::format ("zoneworld-spot-event-report-failed node={} error={}\n",
-                           g_node_state->node_id,
-                           error.what ());
+            const std::string line = std::format (
+              "zoneworld-spot-event-report-failed node={} error={}\n",
+              g_node_state->node_id,
+              error.what ());
             std::cerr << line;
         }
     }
@@ -803,10 +803,10 @@ class node_report_service_t final : public fw::hosted_service_t
             std::cout << "zoneworld-status-report node=" << g_node_state->node_id << std::endl;
         }
         catch (const std::exception &error) {
-            const std::string line =
-              std::format ("zoneworld-status-report-failed node={} error={}\n",
-                           g_node_state->node_id,
-                           error.what ());
+            const std::string line = std::format (
+              "zoneworld-status-report-failed node={} error={}\n",
+              g_node_state->node_id,
+              error.what ());
             std::cerr << line;
         }
     }
@@ -919,8 +919,8 @@ class zone_bootstrap_service_t final : public fw::hosted_service_t
             if (!await_bootstrap (bootstrap (spots, claimed))) {
                 if (_stopping.load ())
                     return;
-                const std::string line =
-                  std::format ("Zone Spot claim failed. node={}\n", _configuration.node_id);
+                const std::string line = std::format ("Zone Spot claim failed. node={}\n",
+                                                      _configuration.node_id);
                 std::cerr << line;
             }
             const auto zones = g_node_state->zone_snapshot ();

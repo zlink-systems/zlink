@@ -82,8 +82,8 @@ app.config ().load_env ("ZLINK_CPP_SAMPLE__").load_cli (argc, argv);   // ③ en
 auto endpoint = app.config ().model ().get ("sample.topology.apiHttpEndpoint");
 // std::optional<std::string>
 
-bool keep_running =
-  app.config ().model ().get ("sample.host.keepRunning").value_or ("false") == "true";
+bool keep_running = app.config ().model ().get ("sample.host.keepRunning").value_or ("false")
+                    == "true";
 ```
 
 ### section: prefix 묶음 조회
@@ -110,8 +110,8 @@ struct topology_t
     {
         topology_t value;
         value.api_endpoint = section.get ("apiEndpoint").value_or (value.api_endpoint);
-        value.api_http_endpoint =
-          section.get ("apiHttpEndpoint").value_or (value.api_http_endpoint);
+        value.api_http_endpoint = section.get ("apiHttpEndpoint")
+                                    .value_or (value.api_http_endpoint);
         return value;
     }
 };
