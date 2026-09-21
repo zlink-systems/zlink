@@ -24,6 +24,20 @@ on:
       - "framework/languages/java/quickstart/**"
       - "framework/languages/node/quickstart/**"
       - "framework/languages/cpp/quickstart/**"
+      - "!framework/languages/dotnet/tutorial/Directory.Packages.props"
+      - "!framework/languages/dotnet/quickstart/Directory.Packages.props"
+      - "!framework/languages/java/tutorial/gradle/libs.versions.toml"
+      - "!framework/languages/java/quickstart/gradle/libs.versions.toml"
+      - "!framework/languages/node/tutorial/package.json"
+      - "!framework/languages/node/tutorial/package-lock.json"
+      - "!framework/languages/node/tutorial/HttpClient/package.json"
+      - "!framework/languages/node/tutorial/HttpClient/package-lock.json"
+      - "!framework/languages/node/tutorial/StreamClient/package.json"
+      - "!framework/languages/node/tutorial/StreamClient/package-lock.json"
+      - "!framework/languages/node/quickstart/package.json"
+      - "!framework/languages/node/quickstart/package-lock.json"
+      - "!framework/languages/cpp/tutorial/bootstrap.cmake"
+      - "!framework/languages/cpp/quickstart/bootstrap.cmake"
   pull_request:
     branches:
       - main
@@ -37,7 +51,28 @@ on:
       - "framework/languages/java/quickstart/**"
       - "framework/languages/node/quickstart/**"
       - "framework/languages/cpp/quickstart/**"
+      - "!framework/languages/dotnet/tutorial/Directory.Packages.props"
+      - "!framework/languages/dotnet/quickstart/Directory.Packages.props"
+      - "!framework/languages/java/tutorial/gradle/libs.versions.toml"
+      - "!framework/languages/java/quickstart/gradle/libs.versions.toml"
+      - "!framework/languages/node/tutorial/package.json"
+      - "!framework/languages/node/tutorial/package-lock.json"
+      - "!framework/languages/node/tutorial/HttpClient/package.json"
+      - "!framework/languages/node/tutorial/HttpClient/package-lock.json"
+      - "!framework/languages/node/tutorial/StreamClient/package.json"
+      - "!framework/languages/node/tutorial/StreamClient/package-lock.json"
+      - "!framework/languages/node/quickstart/package.json"
+      - "!framework/languages/node/quickstart/package-lock.json"
+      - "!framework/languages/cpp/tutorial/bootstrap.cmake"
+      - "!framework/languages/cpp/quickstart/bootstrap.cmake"
   workflow_dispatch:
+  workflow_call:
+    inputs:
+      language:
+        description: 'Tutorial lane to run: cpp, dotnet, java, node, or all'
+        required: false
+        default: all
+        type: string
 
 env:
   DOTNET_NOLOGO: true
@@ -49,6 +84,7 @@ concurrency:
 
 jobs:
   tutorial-dotnet:
+    if: inputs.language == '' || inputs.language == 'all' || inputs.language == 'dotnet'
     name: dotnet
     runs-on: ubuntu-24.04
 
@@ -229,6 +265,7 @@ jobs:
           echo "all tutorial steps passed"
 
   tutorial-java-kotlin:
+    if: inputs.language == '' || inputs.language == 'all' || inputs.language == 'java'
     name: java-kotlin
     runs-on: ubuntu-24.04
 
@@ -376,6 +413,7 @@ jobs:
             ./kotlin/HttpClient/build/install/HttpClient/bin/HttpClient
 
   tutorial-node:
+    if: inputs.language == '' || inputs.language == 'all' || inputs.language == 'node'
     name: node
     runs-on: ubuntu-24.04
 
@@ -528,6 +566,7 @@ jobs:
           echo "all Node tutorial steps passed"
 
   tutorial-cpp:
+    if: inputs.language == '' || inputs.language == 'all' || inputs.language == 'cpp'
     name: cpp
     runs-on: ubuntu-24.04
 

@@ -370,3 +370,36 @@ jobs:
             sleep 60
           done
           echo "::warning::symbol package (.snupkg) was not accepted after 30 attempts; the package itself is published"
+
+  wait-tutorial-dotnet:
+    if: needs.release-framework-dotnet.result == 'success'
+    name: Wait for the published .NET framework package
+    runs-on: ubuntu-24.04
+    needs: release-framework-dotnet
+    steps:
+      - name: Wait for the NuGet flatcontainer (external propagation, not a publish retry)
+        env:
+          REQUESTED_VERSION: ${{ inputs.version }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          version="${REQUESTED_VERSION:-${GITHUB_REF_NAME##*/v}}"
+          url="https://api.nuget.org/v3-flatcontainer/zlink.framework/${version}/zlink.framework.nuspec"
+          for attempt in $(seq 1 60); do
+            if curl -sfL -o /dev/null "${url}"; then
+              echo "Zlink.Framework ${version} is available on nuget.org"
+              exit 0
+            fi
+            echo "attempt ${attempt}: ${url} is not indexed yet; waiting 30s"
+            [ "${attempt}" -lt 60 ] && sleep 30
+          done
+          echo "::error::Zlink.Framework ${version} is not indexed on nuget.org after 30 minutes" >&2
+          exit 1
+
+  tutorial-dotnet:
+    if: needs.wait-tutorial-dotnet.result == 'success'
+    name: Verify the published .NET framework package with the tutorial
+    needs: wait-tutorial-dotnet
+    uses: ./.github/workflows/framework-tutorial.yml
+    with:
+      language: dotnet
