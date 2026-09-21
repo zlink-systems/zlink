@@ -44,13 +44,13 @@ That directory contains `Bingo.Ts/`, `TicTacToe.Ts/`, … the seven samples. Eac
 workspace, so install each one separately.
 
 ```bash title="linux"
-cd TicTacToe.Ts
+cd Bingo.Ts
 npm install
 npm run browser:install   # only for samples that use Chromium (all but ShoppingMall.Ts)
 ```
 
 ```powershell title="windows"
-Set-Location TicTacToe.Ts
+Set-Location Bingo.Ts
 npm install
 npm run browser:install   # only for samples that use Chromium (all but ShoppingMall.Ts)
 ```

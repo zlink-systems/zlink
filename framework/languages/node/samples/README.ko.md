@@ -44,13 +44,13 @@ TicTacToe만 MeshNode peer endpoint를 수동으로 설정한다. 다른 샘플�
 샘플마다 따로 설치한다.
 
 ```bash title="linux"
-cd TicTacToe.Ts
+cd Bingo.Ts
 npm install
 npm run browser:install   # Chromium을 쓰는 샘플만(ShoppingMall.Ts 제외)
 ```
 
 ```powershell title="windows"
-Set-Location TicTacToe.Ts
+Set-Location Bingo.Ts
 npm install
 npm run browser:install   # Chromium을 쓰는 샘플만(ShoppingMall.Ts 제외)
 ```
