@@ -11,7 +11,8 @@ on:
       - 'core/doc/**'
       - 'bindings/doc/**'
       - '.github/workflows/docs.yml'
-  # PR에서는 build job만 돈다(deploy는 push 전용). main에 들어간 뒤에야 생성물 드리프트가
+  # PR에서는 build job만 돈다(deploy는 main 전용 — #844: 브랜치 dispatch가 그 브랜치의 사이트를
+  # 배포하지 않는다). main에 들어간 뒤에야 생성물 드리프트가
   # 잡히면 그 사이 배포가 멈춘다 — 27991265d1이 cpp 16-options 생성물을 빠뜨려 두 배포가
   # 첫 단계에서 죽었다(#775). 가이드가 `--8<--`로 발췌하는 tutorial·samples 소스도 포함한다:
   # 소스 줄바꿈이 곧 문서 모양이다(doc/principal/dev/source-formatting.ko.md).
@@ -122,13 +123,13 @@ jobs:
         run: python3 doc/site/scripts/make_core_redirects.py doc/site/site
 
       - name: Upload artifact
-        if: github.event_name != 'pull_request'
+        if: github.ref == 'refs/heads/main'
         uses: actions/upload-pages-artifact@v5
         with:
           path: doc/site/site
 
   deploy:
-    if: github.event_name != 'pull_request'
+    if: github.ref == 'refs/heads/main'
     environment:
       name: github-pages
       url: ${{ steps.deployment.outputs.page_url }}
