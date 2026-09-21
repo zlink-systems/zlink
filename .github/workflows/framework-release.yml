@@ -215,26 +215,33 @@ jobs:
     runs-on: ubuntu-24.04
     needs: [resolve, release-node]
     steps:
-      - uses: actions/setup-node@v5
+      - uses: actions/checkout@v4
         with:
-          node-version: 22
+          ref: ${{ github.ref }}
 
-      - name: Wait for the npm index (external propagation, not a publish retry)
+      # The tutorial installs every published package, and the registry serves
+      # metadata minutes before the tarball (doc/building/release-pipeline.ko.md §5),
+      # so wait for each tarball to answer 200 (external propagation, not a publish retry).
+      - name: Wait for every published tarball
         env:
           VERSION: ${{ needs.resolve.outputs.node_version }}
         shell: bash
         run: |
           set -euo pipefail
-          for attempt in $(seq 1 60); do
-            if actual=$(npm view "@zlink-systems/framework@${VERSION}" version 2>/dev/null) && [ "${actual}" = "${VERSION}" ]; then
-              echo "@zlink-systems/framework@${VERSION} is available on npm"
-              exit 0
-            fi
-            echo "attempt ${attempt}: @zlink-systems/framework@${VERSION} is not indexed yet; waiting 30s"
-            [ "${attempt}" -lt 60 ] && sleep 30
+          deadline=$(( $(date +%s) + 45 * 60 ))
+          for package_dir in             stream-wire             stream-connector             framework             framework-codec-protobuf             framework-codec-msgpack             framework-locations-redis             http-client             nestjs; do
+            name=$(node -p "require('./framework/languages/node/packages/${package_dir}/package.json').name")
+            url="https://registry.npmjs.org/${name}/-/${name#*/}-${VERSION}.tgz"
+            until curl -sfI -o /dev/null "${url}"; do
+              if [ "$(date +%s)" -ge "${deadline}" ]; then
+                echo "::error::${url} is not served after 45 minutes" >&2
+                exit 1
+              fi
+              echo "${name}@${VERSION} tarball is not served yet; waiting 30s"
+              sleep 30
+            done
+            echo "${name}@${VERSION} tarball is served"
           done
-          echo "::error::@zlink-systems/framework@${VERSION} is not indexed on npm after 30 minutes" >&2
-          exit 1
 
   tutorial-node:
     if: needs.wait-tutorial-node.result == 'success'
