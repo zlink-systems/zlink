@@ -10,6 +10,7 @@
 #include "runtime/locations/store_location_resolvers.hpp"
 #include "runtime/channels/channel_runtime_manager.hpp"
 #include "runtime/channels/channel_runtime.hpp"
+#include "runtime/messaging/envelope_codec.hpp"
 #include "runtime/client_server/client_server_location_runtime.hpp"
 #include "runtime/mesh/user_spot_terminal_mapping.hpp"
 #include "runtime/streams/stream_runtime.hpp"
@@ -408,9 +409,27 @@ class other_test_location_repository_t : public test_location_repository_t
 {
 };
 
-class failing_owner_lease_store_t final : public test_location_repository_t
+enum class owner_lease_confirmation_mode_t
+{
+    same_lease,
+    missing,
+    transport_failure
+};
+
+class renew_failure_owner_lease_store_t final : public test_location_repository_t
 {
   public:
+    explicit renew_failure_owner_lease_store_t (
+      owner_lease_confirmation_mode_t confirmation_mode) :
+        _confirmation_mode (confirmation_mode)
+    {
+    }
+
+    std::size_t confirmation_read_count () const noexcept
+    {
+        return _confirmation_read_count.load (std::memory_order_relaxed);
+    }
+
     zlink::framework::task_t<
       zlink::framework::owner_lease_renew_result_t>
     renew_owner_lease (
@@ -424,6 +443,29 @@ class failing_owner_lease_store_t final : public test_location_repository_t
             zlink::framework::framework_error_kind_t::internal_failure,
             "owner lease renewal failed"));
     }
+
+    zlink::framework::task_t<zlink::framework::owner_lease_read_result_t>
+    read_owner_lease (std::string owner_id) override
+    {
+        _confirmation_read_count.fetch_add (1, std::memory_order_relaxed);
+        if (_confirmation_mode == owner_lease_confirmation_mode_t::missing) {
+            return zlink::framework::task_t<zlink::framework::owner_lease_read_result_t> (
+              zlink::framework::result_t<zlink::framework::owner_lease_read_result_t>::success (
+                zlink::framework::owner_lease_read_result_t{
+                  zlink::framework::owner_lease_missing_t{}}));
+        }
+        if (_confirmation_mode == owner_lease_confirmation_mode_t::transport_failure) {
+            return zlink::framework::task_t<zlink::framework::owner_lease_read_result_t> (
+              zlink::framework::result_t<zlink::framework::owner_lease_read_result_t>::failure (
+                zlink::framework::framework_error_kind_t::unavailable,
+                "owner lease confirmation read failed"));
+        }
+        return test_location_repository_t::read_owner_lease (std::move (owner_id));
+    }
+
+  private:
+    owner_lease_confirmation_mode_t _confirmation_mode;
+    std::atomic_size_t _confirmation_read_count{0};
 };
 
 class fake_location_runtime_query_t final : public location_runtime_query_t
@@ -1959,6 +2001,95 @@ TEST (ZLinkFrameworkStoreLocationResolvers, ResolvesSpotAddressFromStore)
     EXPECT_EQ ("spot-a", address->spot_id);
 }
 
+TEST (ZLinkFrameworkStoreLocationResolvers,
+      DirectSendAndRequestResolveCanonicalInstanceSpotAuthority)
+{
+    test_location_repository_t store;
+    (void) claim_test_owner (store, "owner-instance");
+    const auto owner = live_owner_token (store, "owner-instance");
+    store.set_authority (
+      "zla1:s:13:instance-spot",
+      zlink::framework::authority_snapshot_t{
+        .store_version = "1",
+        .payload = zlink::framework::runtime::encode_instance_spot_authority_payload ({
+          .state = zlink::framework::runtime::instance_spot_authority_state_t::ready,
+          .stable_type = "cart",
+          .spot_id = "instance-spot",
+          .owner_id = owner.owner_id,
+          .owner_lease_generation = static_cast<std::uint64_t> (owner.lease_generation),
+          .mesh_name = "mesh-instance",
+          .node_rid = zlink::framework::node_rid_t::from_string ("node-instance"),
+          .node_generation = 7}),
+        .object_generation = 11,
+        .authority_owner_generation = 1,
+        .owner = owner,
+        .allocation = {
+          .state = zlink::framework::placement_allocation_state_t::active,
+          .object_kind = zlink::framework::placement_object_kind_t::instance_spot,
+          .stable_type = "cart",
+          .target = {
+            .mesh_name = "mesh-instance",
+            .node_rid = zlink::framework::node_rid_t::from_string ("node-instance"),
+            .node_lifecycle_generation = 7,
+            .owner = owner}}});
+
+    store_location_resolvers_t resolvers (store);
+    zlink::framework::zlink_builder_t builder;
+    auto runtime = zlink::framework::detail::channel_runtime_t::from (
+      builder.message_bus ());
+    runtime.bind_spot_address_resolver (resolvers);
+
+    std::atomic_int sends{0};
+    std::atomic_int requests{0};
+    zlink::framework::runtime::messaging::envelope_codec_t envelope_codec;
+    zlink::framework::serializer_registry_t serializers;
+    runtime.bind_spot_mesh_transport (
+      "mesh-instance",
+      [&] (const zlink::routing_id_t &node_rid, const std::string &spot_id,
+           std::uint64_t generation,
+           zlink::framework::runtime::messaging::message_parts_t)
+        -> zlink::framework::task_t<zlink::framework::result_t<void>> {
+          if (node_rid.to_string () == "node-instance" && spot_id == "instance-spot"
+              && generation == 11)
+              ++sends;
+          co_return zlink::framework::result_t<void>::success ();
+      },
+      [&] (const zlink::routing_id_t &node_rid, const std::string &spot_id,
+           std::uint64_t generation,
+           zlink::framework::runtime::messaging::message_parts_t parts,
+           std::chrono::milliseconds)
+        -> zlink::framework::task_t<zlink::framework::result_t<
+          zlink::framework::runtime::messaging::message_parts_t>> {
+          if (node_rid.to_string () == "node-instance" && spot_id == "instance-spot"
+              && generation == 11)
+              ++requests;
+          auto header = envelope_codec.decode_header (parts).value ();
+          header.kind = zlink::framework::runtime::messaging::message_kind_t::response;
+          lease_target_reply_t reply{"node-instance"};
+          co_return zlink::framework::result_t<
+            zlink::framework::runtime::messaging::message_parts_t>::success (
+            envelope_codec.encode_parts (header, reply, serializers));
+      });
+
+    auto client = builder.route_client (serializers);
+    const auto sent = client
+                        .send_to_spot ("instance-spot", user_spot_delivery_probe_t{41})
+                        .async ()
+                        .result ();
+    const auto reply = client
+                         .request_to_spot ("instance-spot", lease_target_request_t{42})
+                         .timeout (std::chrono::milliseconds (100))
+                         .async<lease_target_reply_t> ()
+                         .result ();
+
+    EXPECT_TRUE (sent) << (sent.error () ? sent.error ()->what () : "no error detail");
+    EXPECT_TRUE (reply) << (reply.error () ? reply.error ()->what () : "no error detail");
+    if (reply)
+        EXPECT_EQ ("node-instance", reply.value ().node_rid);
+    EXPECT_EQ (1, sends.load ());
+    EXPECT_EQ (1, requests.load ());
+}
+
 TEST (ZLinkFrameworkStoreLocationResolvers, DirectReadyRouteUsesPositiveCacheOnly)
 {
     test_location_repository_t store;
@@ -2383,9 +2514,11 @@ TEST (ZLinkFrameworkStoreLocationResolvers, RuntimeQueryReportsHealthyStoreStatu
     EXPECT_FALSE (status.last_error.has_value ());
 }
 
-TEST (ZLinkFrameworkStoreLocationResolvers, RuntimeQueryReportsStoreFailureAsStatus)
+TEST (ZLinkFrameworkStoreLocationResolvers,
+      RuntimeQueryConvergesHealthyWhenRenewFailureConfirmsSameLease)
 {
-    failing_owner_lease_store_t store;
+    renew_failure_owner_lease_store_t store (
+      owner_lease_confirmation_mode_t::same_lease);
     location_options_t options;
     location_runtime_t runtime (store, options, "owner-a");
     runtime.start (zlink::routing_id_t::from ("node-a"));
@@ -2394,11 +2527,41 @@ TEST (ZLinkFrameworkStoreLocationResolvers, RuntimeQueryReportsStoreFailureAsSta
 
     const auto status = query.get_status ().result ().value ();
 
-    EXPECT_FALSE (status.store_healthy);
-    EXPECT_FALSE (status.owner_lease_healthy);
-    ASSERT_TRUE (status.last_error.has_value ());
-    EXPECT_NE (std::string::npos, status.last_error->find ("owner lease renewal failed"));
+    EXPECT_TRUE (status.store_healthy);
+    EXPECT_TRUE (status.owner_lease_healthy);
+    EXPECT_FALSE (status.last_error.has_value ());
+    EXPECT_EQ (1u, store.confirmation_read_count ());
     runtime.stop ();
+}
+
+TEST (ZLinkFrameworkStoreLocationResolvers,
+      RuntimeQueryReportsStoreFailureWhenRenewConfirmationFails)
+{
+    for (const auto mode : {owner_lease_confirmation_mode_t::missing,
+                            owner_lease_confirmation_mode_t::transport_failure}) {
+        SCOPED_TRACE (mode == owner_lease_confirmation_mode_t::missing
+                        ? "confirmation missing"
+                        : "confirmation transport failure");
+        renew_failure_owner_lease_store_t store (mode);
+        location_options_t options;
+        location_runtime_t runtime (store, options, "owner-a");
+        runtime.start (zlink::routing_id_t::from ("node-a"));
+        runtime.renew_owner_lease_once ();
+        store_location_runtime_query_t query (store, runtime, options);
+
+        const auto status = query.get_status ().result ().value ();
+
+        EXPECT_FALSE (status.store_healthy);
+        EXPECT_FALSE (status.owner_lease_healthy);
+        EXPECT_EQ (1u, store.confirmation_read_count ());
+        ASSERT_TRUE (status.last_error.has_value ());
+        EXPECT_NE (std::string::npos,
+                   status.last_error->find (
+                     mode == owner_lease_confirmation_mode_t::missing
+                       ? "owner lease renewal failed"
+                       : "owner lease confirmation read failed"));
+        runtime.stop ();
+    }
 }
 
 TEST (ZLinkFrameworkStoreLocationResolvers, RuntimeQueryProjectsMeshNodeDescriptors)

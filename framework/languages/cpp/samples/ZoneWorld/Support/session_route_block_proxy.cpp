@@ -6,6 +6,7 @@
 #include <boost/asio.hpp>
 
 #include <array>
+#include <format>
 #include <atomic>
 #include <chrono>
 #include <cstdint>
@@ -298,7 +299,8 @@ int main (int argc, char **argv)
         }
     }
     catch (const std::exception &error) {
-        std::cerr << "session_route_block_proxy: " << error.what () << std::endl;
+        const std::string line = std::format ("session_route_block_proxy: {}\n", error.what ());
+        std::cerr << line;
         return 1;
     }
 }

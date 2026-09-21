@@ -31,7 +31,7 @@ test('TicTacToe uses one-way client join and a distinct internal room join respo
   assert.doesNotMatch(messages, /JoinGameReq|JoinGameRes|joinGameReq|joinGameRes/);
   assert.match(messages, /class LeaveGameMsg \{[\s\S]*?roomId: string/);
   assert.doesNotMatch(messages, /LeaveGameReq|leaveGameReq/);
-  assert.match(joinHandler, /ZLinkEntrySpotActorSendHandler<[\s\S]*?JoinGameMsg>/);
+  assert.match(joinHandler, /ZLinkEntrySpotActorSendHandler<[\s\S]*?JoinGameMsg\s*>/);
   assert.match(joinHandler, /\.joinSpot\(message\.roomId, joinRequest\)[\s\S]*?\.defer\(\)/);
   assert.doesNotMatch(joinHandler, /return joinGame/);
   assert.match(room, /private admit\([^)]*\): TicTacToeGameJoinRes/);

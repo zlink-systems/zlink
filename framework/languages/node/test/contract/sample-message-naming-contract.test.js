@@ -80,8 +80,8 @@ test('Actor and Spot creation payloads use request wrappers', () => {
   assert.match(bingoProto, /message PlayerActorCreateReq\b/);
   assert.match(bingoProto, /message BingoRoomCreateReq\b/);
   assert.doesNotMatch(bingoProto, /EnsurePlayerActorReq|EnsurePlayerActorRes/);
-  assert.match(bingoSession, /\.request\(new PlayerActorCreateReq\(/);
-  assert.match(bingoApi, /\.request\(new BingoRoomCreateReq\(/);
+  assert.match(bingoSession, /\.request\(\s*new PlayerActorCreateReq\(/);
+  assert.match(bingoApi, /\.request\(\s*new BingoRoomCreateReq\(/);
   assert.match(bingoRoom, /request\.decode<BingoRoomCreateReq>\(\)/);
 
   const deliveryMessages = read('samples/DeliveryDispatch.Ts/Shared/Contracts/messages.ts');
@@ -131,7 +131,7 @@ test('sample request handlers keep named Req and Res types at wire boundaries', 
   );
   const gameQuestServer = read('samples/GameQuest.Ts/Server/GameApi/game-api-server.ts');
   assert.match(gameQuestMessages, /type RebuildQuestProjectionRes\b/);
-  assert.match(gameQuestHandler, /RebuildQuestProjectionReq, RebuildQuestProjectionRes/);
+  assert.match(gameQuestHandler, /RebuildQuestProjectionReq,\s*RebuildQuestProjectionRes/);
   assert.match(gameQuestServer, /submit<RebuildQuestProjectionRes>\(\)/);
 
   const bingoHandlers = read(
@@ -146,8 +146,8 @@ test('sample request handlers keep named Req and Res types at wire boundaries', 
   const shoppingRebuild = read(
     'samples/ShoppingMall.Ts/Server/OrderWorkflow/Infrastructure/ZLink/Spots/OrderWorkflowSpot/Handlers/rebuild-order-projection-handler.ts'
   );
-  assert.match(shoppingContinue, /OrderWorkflowSpot, ContinueOrderWorkflowReq, ContinueOrderWorkflowRes/);
-  assert.match(shoppingRebuild, /OrderWorkflowSpot, RebuildOrderProjectionReq, RebuildOrderProjectionRes/);
+  assert.match(shoppingContinue, /OrderWorkflowSpot,\s*ContinueOrderWorkflowReq,\s*ContinueOrderWorkflowRes/);
+  assert.match(shoppingRebuild, /OrderWorkflowSpot,\s*RebuildOrderProjectionReq,\s*RebuildOrderProjectionRes/);
   assert.doesNotMatch(shoppingContinue, /OrderWorkflowSpot, \{ orderId: string \}/);
   assert.doesNotMatch(shoppingRebuild, /OrderWorkflowSpot, \{ orderId: string \}/);
 

@@ -2,6 +2,7 @@
 
 #include "supportchat_client_scenario.hpp"
 
+#include <format>
 #include <exception>
 #include <iostream>
 #include <string>
@@ -25,7 +26,8 @@ int main (int argc, char **argv)
 {
     const auto stream_endpoint = read_option (argc, argv, "--stream-endpoint");
     if (stream_endpoint.empty ()) {
-        std::cerr << "usage: " << argv[0] << " --stream-endpoint <endpoint>\n";
+        const std::string line = std::format ("usage: {} --stream-endpoint <endpoint>\n", argv[0]);
+        std::cerr << line;
         return 2;
     }
     try {
@@ -34,7 +36,8 @@ int main (int argc, char **argv)
         return 0;
     }
     catch (const std::exception &error) {
-        std::cerr << "supportchat client failed: " << error.what () << std::endl;
+        const std::string line = std::format ("supportchat client failed: {}\n", error.what ());
+        std::cerr << line;
         return 1;
     }
 }

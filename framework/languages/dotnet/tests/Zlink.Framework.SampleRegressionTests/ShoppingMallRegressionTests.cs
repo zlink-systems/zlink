@@ -178,13 +178,23 @@ public sealed partial class RegressionTests
         Assert.DoesNotContain("ServerAssertionReq", messages, StringComparison.Ordinal);
         Assert.DoesNotContain("ServerAssertionRes", messages, StringComparison.Ordinal);
         Assert.Contains("record StartOrderRes", messages, StringComparison.Ordinal);
-        Assert.Contains("public sealed record StartOrderRes(\n    string OrderId,\n    OrderState State);",
-            messages, StringComparison.Ordinal);
+        Assert.Contains(
+            NormalizeWhitespace("public sealed record StartOrderRes(string OrderId, OrderState State);"),
+            NormalizeWhitespace(messages),
+            StringComparison.Ordinal);
         Assert.Contains("string SourceCommandId,", messages, StringComparison.Ordinal);
-        Assert.Contains("public sealed record ContinueOrderWorkflowReq(\n    string OrderId,\n    string SourceCommandId);",
-            messages, StringComparison.Ordinal);
-        Assert.Contains("public sealed record RebuildOrderProjectionReq(\n    string OrderId,\n    string SourceCommandId);",
-            messages, StringComparison.Ordinal);
+        Assert.Contains(
+            NormalizeWhitespace(
+                "public sealed record ContinueOrderWorkflowReq(string OrderId, string SourceCommandId);"
+            ),
+            NormalizeWhitespace(messages),
+            StringComparison.Ordinal);
+        Assert.Contains(
+            NormalizeWhitespace(
+                "public sealed record RebuildOrderProjectionReq(string OrderId, string SourceCommandId);"
+            ),
+            NormalizeWhitespace(messages),
+            StringComparison.Ordinal);
         Assert.Contains("internal sealed record ServerAssertionReq", commerceApi, StringComparison.Ordinal);
         Assert.DoesNotContain("ServerAssertionReq", clientScenario, StringComparison.Ordinal);
         Assert.DoesNotContain("StartOrderWorkflowToInventoryReq", messages, StringComparison.Ordinal);
@@ -239,7 +249,11 @@ public sealed partial class RegressionTests
             StringComparison.Ordinal);
         Assert.Contains("await commerce.MarkIdempotencyStartedAsync(command.IdempotencyKey, cancellationToken);",
             workflowService, StringComparison.Ordinal);
-        Assert.Contains("OrderContractMapper.ToContract(\n                await SaveProjectionFromEventsAsync(stored, cancellationToken))", workflowService,
+        Assert.Contains(
+            NormalizeWhitespace(
+                "OrderContractMapper.ToContract(await SaveProjectionFromEventsAsync(stored, cancellationToken))"
+            ),
+            NormalizeWhitespace(workflowService),
             StringComparison.Ordinal);
         Assert.Contains("OrderStatus.PaymentFailed => await ReleaseInventoryAsync", workflowService,
             StringComparison.Ordinal);
@@ -248,14 +262,21 @@ public sealed partial class RegressionTests
         Assert.Contains("public sealed class RedisCommerceStores", stores, StringComparison.Ordinal);
         Assert.Contains("ConnectionMultiplexer.Connect(topology.RedisEndpoint)", stores, StringComparison.Ordinal);
         Assert.Contains("topology.RedisKeyPrefix", stores, StringComparison.Ordinal);
-        Assert.Contains("_database.LockTakeAsync", stores, StringComparison.Ordinal);
+        Assert.Contains(
+            NormalizeWhitespace("_database.LockTakeAsync"),
+            NormalizeWhitespace(stores),
+            StringComparison.Ordinal);
         Assert.Contains("ReserveInventoryCommand command", stores, StringComparison.Ordinal);
         Assert.Contains("ReleaseInventoryCommand command", stores, StringComparison.Ordinal);
         Assert.Contains("AuthorizePaymentCommand command", stores, StringComparison.Ordinal);
         Assert.Contains("state.Reservations.TryGetValue(command.ReservationId", stores, StringComparison.Ordinal);
         Assert.Contains("InventoryReservationLine", stores, StringComparison.Ordinal);
-        Assert.Contains("state.Inventory[line.Sku] = state.Inventory.GetValueOrDefault(line.Sku) + line.Quantity",
-            stores, StringComparison.Ordinal);
+        Assert.Contains(
+            NormalizeWhitespace(
+                "state.Inventory[line.Sku] = state.Inventory.GetValueOrDefault(line.Sku) + line.Quantity"
+            ),
+            NormalizeWhitespace(stores),
+            StringComparison.Ordinal);
         Assert.Contains("state.Payments.ContainsKey(command.PaymentId)", stores, StringComparison.Ordinal);
         Assert.Contains("AcquireLockAsync(cancellationToken)", stores, StringComparison.Ordinal);
         Assert.Contains("Task.Delay(10, cancellationToken)", stores, StringComparison.Ordinal);

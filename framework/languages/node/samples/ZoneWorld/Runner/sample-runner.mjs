@@ -217,14 +217,17 @@ async function runFullLane(ctx) {
     throw new Error('ZW-F4 attempted to push to an unbound bot actor.');
   }
 
+  // The browser lane (dependency preparation, vite build, preview, Playwright start) finishes
+  // before the transition client is armed: its ops session waits for pushes only, and the
+  // stream session closes an application-idle connection after 30 s.
+  const browser = await startSharedBrowser(ctx, gateway, ops, targetNode.nodeId);
+  await waitForFile(browser.markerPath, 45_000);
   const transition = startScenarioClient(
     ctx,
     specialClientConfig(ctx, shared, gateway, ops, 'B4-C2-C3'),
     'transition'
   );
   await transition.waitFor('scenario ZW-B4-C2-C3 armed');
-  const browser = await startSharedBrowser(ctx, gateway, ops, targetNode.nodeId);
-  await waitForFile(browser.markerPath, 45_000);
   await ctx.stop(targetNode.nodeId, 'SIGKILL');
   await browser.complete();
   await transition.waitFor('scenario ZW-B4 passed');
@@ -697,6 +700,12 @@ async function startSharedBrowser(ctx, gateway, ops, lifecycleNodeId) {
   const previewPort = await ctx.port();
   const markerPath = path.join(ctx.runDir, 'browser-lifecycle-armed');
   const playwrightConfig = path.join(ctx.runDir, 'zoneworld-playwright.live.mjs');
+  if (!packagedBrowser) {
+    await ctx.runCommand('npm', ['run', 'prepare:browser'], {
+      cwd: browserRoot,
+      env: browserEnv
+    });
+  }
   await ctx.runCommand(process.execPath, [viteCli, 'build', '--outDir', outputDirectory], {
     cwd: browserRoot,
     env: browserEnv

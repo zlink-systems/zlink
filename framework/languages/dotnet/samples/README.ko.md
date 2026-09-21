@@ -19,7 +19,7 @@
   설치할 필요가 없고, 실행이 끝나면 컨테이너도 남지 않는다.
 - **PowerShell** — `.ps1` 러너는 Windows에 기본 내장된 Windows PowerShell 5.1과
   PowerShell 7 모두에서 동작한다.
-- ZoneWorld의 `-BrowserSmoke`/`--browser-smoke` 플래그는 추가로 Node.js와 npm이
+- ZoneWorld의 `--browser-smoke` 플래그는 추가로 Node.js와 npm이
   필요하고 저장소 전체 checkout에서만 동작한다([ZoneWorld](ZoneWorld) 참고).
   기본값이 꺼짐이고 아래 7개 샘플 확인에는 필요 없다.
 

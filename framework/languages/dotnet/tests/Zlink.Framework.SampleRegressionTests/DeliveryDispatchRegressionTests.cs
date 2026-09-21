@@ -40,7 +40,9 @@ public sealed partial class RegressionTests
             StringComparison.Ordinal);
         Assert.Contains("dispatchChannel.Client()", dispatch, StringComparison.Ordinal);
         Assert.Contains("dispatchChannel.Server()", dispatch, StringComparison.Ordinal);
-        Assert.Contains("AddClientServerChannel(SampleNames.TrackingRouteChannel).Server()", tracking,
+        Assert.Contains(
+            NormalizeWhitespace("AddClientServerChannel(SampleNames.TrackingRouteChannel).Server()"),
+            NormalizeWhitespace(tracking),
             StringComparison.Ordinal);
     }
 
@@ -68,25 +70,30 @@ public sealed partial class RegressionTests
         var sampleRoot = ResolveSampleRoot("DeliveryDispatch");
         var worker = ReadSource(Path.Combine(sampleRoot, "Server", "Dispatch", "DispatchWorker.cs"));
 
-        var firstPublish = worker.IndexOf(
-            "await statusPublisher.PublishAsync(request, DeliveryStatus.Assigned",
+        var normalizedWorker = NormalizeWhitespace(worker);
+        var firstPublish = normalizedWorker.IndexOf(
+            NormalizeWhitespace("await statusPublisher.PublishAsync(request, DeliveryStatus.Assigned"),
             StringComparison.Ordinal);
-        var firstOffer = worker.IndexOf(
-            "var attempt = offers.Offer(request, 0, SampleTimings.CourierDecisionTimeout)",
+        var firstOffer = normalizedWorker.IndexOf(
+            NormalizeWhitespace("var attempt = offers.Offer(request, 0, SampleTimings.CourierDecisionTimeout)"),
             StringComparison.Ordinal);
-        var firstSend = worker.IndexOf(
-            "await courierOffers.OfferAsync(request, courierId, attempt",
+        var firstSend = normalizedWorker.IndexOf(
+            NormalizeWhitespace("await courierOffers.OfferAsync(request, courierId, attempt"),
             StringComparison.Ordinal);
         Assert.True(firstPublish >= 0 && firstPublish < firstOffer && firstOffer < firstSend);
 
-        var reassignPublish = worker.IndexOf(
-            "await statusPublisher.PublishAsync(offer.Request, DeliveryStatus.Reassigned",
+        var reassignPublish = normalizedWorker.IndexOf(
+            NormalizeWhitespace(
+                "await statusPublisher.PublishAsync(offer.Request, DeliveryStatus.Reassigned"
+            ),
             StringComparison.Ordinal);
-        var reassignOffer = worker.IndexOf(
-            "var attempt = offers.Offer(offer.Request, nextIndex, SampleTimings.CourierDecisionTimeout)",
+        var reassignOffer = normalizedWorker.IndexOf(
+            NormalizeWhitespace(
+                "var attempt = offers.Offer(offer.Request, nextIndex, SampleTimings.CourierDecisionTimeout)"
+            ),
             StringComparison.Ordinal);
-        var reassignSend = worker.IndexOf(
-            "await courierOffers.OfferAsync(offer.Request, courierId, attempt",
+        var reassignSend = normalizedWorker.IndexOf(
+            NormalizeWhitespace("await courierOffers.OfferAsync(offer.Request, courierId, attempt"),
             StringComparison.Ordinal);
         Assert.True(reassignPublish >= 0 && reassignPublish < reassignOffer && reassignOffer < reassignSend);
     }
@@ -226,8 +233,10 @@ public sealed partial class RegressionTests
         Assert.Contains("actors.Register(actor)", customerEntrySpot, StringComparison.Ordinal);
         Assert.Contains("actors.FindAsync(CustomerId", customerSession, StringComparison.Ordinal);
         Assert.Contains("actors.EnsureAsync(CustomerId", customerSession, StringComparison.Ordinal);
-        Assert.Contains("IZLinkSpotPacketHandler<CustomerEntrySpot, DeliveryStatusUpdatedMsg>",
-            customerStatusHandler, StringComparison.Ordinal);
+        Assert.Contains(
+            NormalizeWhitespace("IZLinkSpotPacketHandler<CustomerEntrySpot, DeliveryStatusUpdatedMsg>"),
+            NormalizeWhitespace(customerStatusHandler),
+            StringComparison.Ordinal);
         Assert.DoesNotContain(".Actor.ObjectGeneration", clientScenario, StringComparison.Ordinal);
         Assert.Contains("WaitForSequence<DeliveryStatusNotify>()", clientScenario, StringComparison.Ordinal);
         Assert.Contains("ExpectNone<OfferDeliveryNotify>()", clientScenario, StringComparison.Ordinal);
@@ -337,7 +346,9 @@ public sealed partial class RegressionTests
         var courierActor = ReadSource(Path.Combine(sampleRoot, "Server", "CourierActorNode",
             "CourierActor.cs"));
         Assert.DoesNotContain("TaskCompletionSource", courierActor, StringComparison.Ordinal);
-        Assert.Contains("RequestAsync<DeliveryStatusChangedReq, DeliveryStatusChangedRes>", dispatchAdapters,
+        Assert.Contains(
+            NormalizeWhitespace("RequestAsync<DeliveryStatusChangedReq, DeliveryStatusChangedRes>"),
+            NormalizeWhitespace(dispatchAdapters),
             StringComparison.Ordinal);
     }
 }

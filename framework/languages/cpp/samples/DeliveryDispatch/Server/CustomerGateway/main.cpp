@@ -8,6 +8,7 @@
 #include <zlink/locations/redis.hpp>
 
 #include <set>
+#include <format>
 #include <mutex>
 #include <iostream>
 #include <memory>
@@ -29,8 +30,11 @@ class customer_session_directory_t
     {
         const std::lock_guard lock (_mutex);
         _subscriptions[delivery_id] = subscription_t{customer_id, std::move (stream)};
-        std::cerr << "deliverydispatch customer-session: registered subscription customer="
-                  << customer_id << " delivery=" << delivery_id << "\n";
+        const std::string registered_line = std::format (
+          "deliverydispatch customer-session: registered subscription customer={} delivery={}\n",
+          customer_id,
+          delivery_id);
+        std::cerr << registered_line;
     }
 
     std::optional<std::string> customer_for_delivery (const std::string &delivery_id) const
@@ -135,8 +139,11 @@ class customer_entry_spot_t : public entry_spot_t<customer_actor_t>
     {
         auto customer_id = _sessions.customer_for_delivery (status.delivery_id);
         if (!customer_id || *customer_id != actor.actor_id) {
-            std::cerr << "deliverydispatch customer-entry: ignored status delivery="
-                      << status.delivery_id << " actor=" << actor.actor_id << "\n";
+            const std::string ignored_line =
+              std::format ("deliverydispatch customer-entry: ignored status delivery={} actor={}\n",
+                           status.delivery_id,
+                           actor.actor_id);
+            std::cerr << ignored_line;
             return;
         }
         actor.context ()
@@ -145,8 +152,10 @@ class customer_entry_spot_t : public entry_spot_t<customer_actor_t>
             status.delivery_id, status.status, status.courier_id, status.occurred_at_unix_ms})
           .async ();
         if (status.status == delivery_status_t::delivered) {
-            std::cerr << "deliverydispatch-customer pushed status=Delivered delivery="
-                      << status.delivery_id << "\n";
+            const std::string delivered_line =
+              std::format ("deliverydispatch-customer pushed status=Delivered delivery={}\n",
+                           status.delivery_id);
+            std::cerr << delivered_line;
         }
     }
     // --8<-- [end:doc-dd-customer-push]
@@ -181,8 +190,9 @@ class customer_gateway_session_t final : public packet_stream_session_t
                             const session_message_context_t &dispatch,
                             const zlink::message_t &payload) override
     {
-        std::cerr << "deliverydispatch customer-gateway: dispatch packet=" << dispatch.packet_name
-                  << "\n";
+        const std::string line = std::format (
+          "deliverydispatch customer-gateway: dispatch packet={}\n", dispatch.packet_name);
+        std::cerr << line;
         if (dispatch.packet_name != subscribe_delivery_req_t::packet_name) {
             auto actor = require_single_bound_actor (stream, std::string (dispatch.packet_name));
             if (dispatch.can_reply) {
@@ -209,7 +219,9 @@ class customer_gateway_session_t final : public packet_stream_session_t
             auto bound = co_await actors.bind_or_get (actor.value ().ref ()).async ();
             actor_id = std::string (bound.actor_id ());
             _bound_actors.insert (actor_id);
-            std::cerr << "deliverydispatch-customer bound customer=" << actor_id << "\n";
+            const std::string line =
+              std::format ("deliverydispatch-customer bound customer={}\n", actor_id);
+            std::cerr << line;
         }
         auto current = actors.find (actor_id);
         if (!current) {
@@ -220,8 +232,11 @@ class customer_gateway_session_t final : public packet_stream_session_t
           co_await current->relay_request (zlink::message_t::from_json (request)).async ();
         _sessions.subscribe (actor_id, request.delivery_id, stream);
         stream.reply_packet (reply).async ();
-        std::cerr << "deliverydispatch customer-session: subscribed customer="
-                  << sample_names_t::customer_id << " delivery=" << request.delivery_id << "\n";
+        const std::string subscribed_line =
+          std::format ("deliverydispatch customer-session: subscribed customer={} delivery={}\n",
+                       sample_names_t::customer_id,
+                       request.delivery_id);
+        std::cerr << subscribed_line;
     }
 
   private:

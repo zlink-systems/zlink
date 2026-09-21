@@ -34,8 +34,12 @@ public sealed partial class RegressionTests
             "Context.Handlers.AddHandler<PlayActorPlaceMarkHandler>(nameof(PlaceMarkReq))",
             "Context.AddTimer<TicTacToeGameTimerHandler>("
         };
+        var normalizedCombined = NormalizeWhitespace(combined);
         foreach (var registration in registrations)
-            Assert.Equal(1, combined.Split(registration, StringSplitOptions.None).Length - 1);
+            Assert.Equal(
+                1,
+                normalizedCombined.Split(NormalizeWhitespace(registration), StringSplitOptions.None).Length - 1
+            );
 
         Assert.Equal(7, combined.Split("Context.Handlers.Add", StringSplitOptions.None).Length - 1);
         Assert.Equal(4, combined.Split("// request:", StringSplitOptions.None).Length - 1);
@@ -69,7 +73,10 @@ public sealed partial class RegressionTests
         Assert.Contains("AddRouteMesh(SampleNodes.Mesh)", playServer, StringComparison.Ordinal);
 
         Assert.Contains("mesh.Objects().Client()", apiServer, StringComparison.Ordinal);
-        Assert.Contains("mesh.Objects().Server()", playServer, StringComparison.Ordinal);
+        Assert.Contains(
+            NormalizeWhitespace("mesh.Objects().Server()"),
+            NormalizeWhitespace(playServer),
+            StringComparison.Ordinal);
         Assert.DoesNotContain("mesh.Channel(SampleChannels.Api)", apiServer, StringComparison.Ordinal);
         Assert.DoesNotContain("mesh.Channel(SampleChannels.Api)", playServer, StringComparison.Ordinal);
 
@@ -77,8 +84,10 @@ public sealed partial class RegressionTests
         Assert.Contains(".Server()", apiServer, StringComparison.Ordinal);
         Assert.Contains(".Listen(apiChannelEndpoint.Port)", apiServer, StringComparison.Ordinal);
         Assert.Contains(
-            ".AddRequestHandler<AuthenticatePlayerHandler, AuthenticatePlayerReq, AuthenticatePlayerRes>()",
-            apiServer,
+            NormalizeWhitespace(
+                ".AddRequestHandler<AuthenticatePlayerHandler, AuthenticatePlayerReq, AuthenticatePlayerRes>()"
+            ),
+            NormalizeWhitespace(apiServer),
             StringComparison.Ordinal);
         Assert.Contains("AddClientServerChannel(SampleChannels.Api)", playServer, StringComparison.Ordinal);
         Assert.Contains(".Client()", playServer, StringComparison.Ordinal);
@@ -93,11 +102,16 @@ public sealed partial class RegressionTests
         Assert.Contains(".EnableActorDispatch()", playServer, StringComparison.Ordinal);
         Assert.Contains(".Create(SampleTypes.GameSpot)", createGame, StringComparison.Ordinal);
         Assert.Contains(".InMesh(SampleNodes.Mesh)", createGame, StringComparison.Ordinal);
-        Assert.Contains(".Request(new TicTacToeGameCreateReq(", createGame, StringComparison.Ordinal);
+        Assert.Contains(
+            NormalizeWhitespace(".Request(new TicTacToeGameCreateReq("),
+            NormalizeWhitespace(createGame),
+            StringComparison.Ordinal);
         Assert.DoesNotContain(".GetOrCreate(", createGame, StringComparison.Ordinal);
         Assert.DoesNotContain("Guid.NewGuid", createGame, StringComparison.Ordinal);
-        Assert.Contains("RequestToChannel(\n                SampleChannels.Api,",
-            authenticate, StringComparison.Ordinal);
+        Assert.Contains(
+            NormalizeWhitespace("RequestToChannel(SampleChannels.Api,"),
+            NormalizeWhitespace(authenticate),
+            StringComparison.Ordinal);
         Assert.Contains("record PlayerActorCreateReq(PlayerInfo Player)", messages,
             StringComparison.Ordinal);
         Assert.Contains(".Request(new PlayerActorCreateReq(player))", authenticate,
@@ -108,7 +122,10 @@ public sealed partial class RegressionTests
         var game = ReadSource(Path.Combine(
             sampleRoot, "Server", "Play", "Infrastructure", "ZLink", "Spots", "TicTacToeGameSpot",
             "TicTacToeGame.cs"));
-        Assert.Contains("Context.Outbound.Publish(", game, StringComparison.Ordinal);
+        Assert.Contains(
+            NormalizeWhitespace("Context.Outbound.Publish("),
+            NormalizeWhitespace(game),
+            StringComparison.Ordinal);
         Assert.DoesNotContain("ZLinkPublishResult", game, StringComparison.Ordinal);
         Assert.DoesNotContain("result.Detail", game, StringComparison.Ordinal);
         Assert.Contains("string MeshEndpoint", settings, StringComparison.Ordinal);

@@ -8,6 +8,7 @@
 #include <zlink/http_client.hpp>
 #include <zlink/locations/redis.hpp>
 
+#include <format>
 #include <filesystem>
 #include <fstream>
 #include <iostream>
@@ -96,8 +97,9 @@ class commerce_api_handlers_t
 
         auto state = (co_await request_workflow<start_order_workflow_res_t> (plan.command)).state;
         // --8<-- [end:doc-sm-api-start]
-        std::cerr << "shoppingmall api: start order=" << state.order_id
-                  << " status=" << state.status << "\n";
+        const std::string line = std::format (
+          "shoppingmall api: start order={} status={}\n", state.order_id, state.status);
+        std::cerr << line;
         co_return start_order_res_t{state.order_id, state};
     }
 
@@ -241,9 +243,11 @@ class commerce_api_handlers_t
                * this run, rather than relying on guessed order numbers. */
               && state["idempotency"].size () == 10;
             if (passed) {
-                std::cerr << "shoppingmall-evidence order=" << request.successful_order_id
-                          << " events="
-                          << event_types_for (state, request.successful_order_id).size () << "\n";
+                const std::string line =
+                  std::format ("shoppingmall-evidence order={} events={}\n",
+                               request.successful_order_id,
+                               event_types_for (state, request.successful_order_id).size ());
+                std::cerr << line;
             }
             return server_assertion_res_t{passed, evidence};
         });

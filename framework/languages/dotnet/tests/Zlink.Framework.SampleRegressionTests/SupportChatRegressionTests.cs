@@ -25,11 +25,17 @@ public sealed partial class RegressionTests
             Assert.DoesNotContain("mesh.Channel(SampleNames.MeshName)", source, StringComparison.Ordinal);
         }
 
-        Assert.Contains("AddClientServerChannel(SampleNames.ApiChannel).Server()", ReadSource(hosts[0]),
+        Assert.Contains(
+            NormalizeWhitespace("AddClientServerChannel(SampleNames.ApiChannel).Server()"),
+            NormalizeWhitespace(ReadSource(hosts[0])),
             StringComparison.Ordinal);
-        Assert.Contains("AddClientServerChannel(SampleNames.ApiChannel).Client()", ReadSource(hosts[1]),
+        Assert.Contains(
+            NormalizeWhitespace("AddClientServerChannel(SampleNames.ApiChannel).Client()"),
+            NormalizeWhitespace(ReadSource(hosts[1])),
             StringComparison.Ordinal);
-        Assert.Contains("AddClientServerChannel(SampleNames.ApiChannel).Client()", ReadSource(hosts[2]),
+        Assert.Contains(
+            NormalizeWhitespace("AddClientServerChannel(SampleNames.ApiChannel).Client()"),
+            NormalizeWhitespace(ReadSource(hosts[2])),
             StringComparison.Ordinal);
     }
 
@@ -87,7 +93,10 @@ public sealed partial class RegressionTests
 
         Assert.Contains("record SetTypingMsg", messages, StringComparison.Ordinal);
         Assert.DoesNotContain("SetTypingReq", messages, StringComparison.Ordinal);
-        Assert.Contains("connector.Send(new SetTypingMsg", scenario, StringComparison.Ordinal);
+        Assert.Contains(
+            NormalizeWhitespace("connector.Send(new SetTypingMsg"),
+            NormalizeWhitespace(scenario),
+            StringComparison.Ordinal);
         Assert.DoesNotContain("connector.Request(new SetTypingMsg", scenario, StringComparison.Ordinal);
         Assert.Contains("IZLinkSpotActorSendHandler<ConversationSpot, SupportUserActor, SetTypingMsg>",
             handler, StringComparison.Ordinal);
@@ -104,14 +113,18 @@ public sealed partial class RegressionTests
         var host = ReadSource(Path.Combine(sampleRoot, "Server", "Support", "SupportServerHostFactory.cs"));
 
         Assert.Contains(
-            "AddActorFactory<SupportUserActor, SupportUserActorFactory>(\n"
-            + "                    SampleNames.SupportActorType, factory => factory.DisableRelocation())",
-            host,
+            NormalizeWhitespace(
+                "AddActorFactory<SupportUserActor, SupportUserActorFactory>("
+                + "SampleNames.SupportActorType, factory => factory.DisableRelocation())"
+            ),
+            NormalizeWhitespace(host),
             StringComparison.Ordinal);
         Assert.Contains(
-            "AddSpotFactory<ConversationSpot>(\n"
-            + "                    SampleNames.ConversationSpotType, factory => factory.DisableRelocation())",
-            host,
+            NormalizeWhitespace(
+                "AddSpotFactory<ConversationSpot>("
+                + "SampleNames.ConversationSpotType, factory => factory.DisableRelocation())"
+            ),
+            NormalizeWhitespace(host),
             StringComparison.Ordinal);
         Assert.DoesNotContain("PreserveStateWith", host, StringComparison.Ordinal);
         Assert.DoesNotContain("AddRelocationStore", host, StringComparison.Ordinal);
@@ -283,7 +296,10 @@ public sealed partial class RegressionTests
         Assert.DoesNotContain("record JoinConversationNotify", sharedMessages, StringComparison.Ordinal);
         Assert.DoesNotContain("record ConversationJoinReq", sharedMessages, StringComparison.Ordinal);
         Assert.DoesNotContain("record ConversationJoinRes", sharedMessages, StringComparison.Ordinal);
-        Assert.Contains("connector.Request(new JoinConversationReq())", clientScenario, StringComparison.Ordinal);
+        Assert.Contains(
+            NormalizeWhitespace("connector.Request(new JoinConversationReq())"),
+            NormalizeWhitespace(clientScenario),
+            StringComparison.Ordinal);
         Assert.Contains(".Async<JoinConversationRes>(cancellationToken)", clientScenario, StringComparison.Ordinal);
         Assert.Contains("new JoinConversationReq(", joinConversationHandler, StringComparison.Ordinal);
         Assert.Contains("ValueTask<JoinConversationRes> HandleAsync", joinConversationHandler,
