@@ -6,6 +6,9 @@ name: Framework Tutorial
 #
 # tutorial은 저장소 소스가 아니라 nuget.org에 배포된 패키지를 참조하므로 Core를 받거나
 # binding을 pack할 필요가 없다. framework-dotnet.yml과 달리 SDK 하나로 끝난다.
+#
+# quickstart(설치부터 첫 응답까지의 최소 project)도 같은 이유로 여기서 빌드한다(#831). C++
+# quickstart는 README가 Core·binding·framework 3단계 소스 빌드를 전제하므로 제외한다.
 
 on:
   push:
@@ -17,6 +20,9 @@ on:
       - "framework/languages/java/tutorial/**"
       - "framework/languages/node/tutorial/**"
       - "framework/languages/cpp/tutorial/**"
+      - "framework/languages/dotnet/quickstart/**"
+      - "framework/languages/java/quickstart/**"
+      - "framework/languages/node/quickstart/**"
   pull_request:
     branches:
       - main
@@ -26,6 +32,9 @@ on:
       - "framework/languages/java/tutorial/**"
       - "framework/languages/node/tutorial/**"
       - "framework/languages/cpp/tutorial/**"
+      - "framework/languages/dotnet/quickstart/**"
+      - "framework/languages/java/quickstart/**"
+      - "framework/languages/node/quickstart/**"
   workflow_dispatch:
 
 env:
@@ -61,6 +70,10 @@ jobs:
         uses: actions/setup-dotnet@v5
         with:
           dotnet-version: 8.0.x
+
+      - name: Build the quickstart against the published packages
+        working-directory: framework/languages/dotnet/quickstart
+        run: dotnet build
 
       - name: Build the tutorial against the published packages
         working-directory: framework/languages/dotnet/tutorial
@@ -229,6 +242,13 @@ jobs:
           distribution: temurin
           java-version: 25
 
+      - name: Build Java and Kotlin quickstarts against the published packages
+        working-directory: framework/languages/java/quickstart
+        run: >-
+          bash ./gradlew --no-daemon
+          :java:Server:installDist :java:Client:installDist
+          :kotlin:Server:installDist :kotlin:Client:installDist
+
       - name: Build Java and Kotlin tutorials against the published packages
         working-directory: framework/languages/java/tutorial
         run: >-
@@ -367,6 +387,12 @@ jobs:
         uses: actions/setup-node@v5
         with:
           node-version: 22
+
+      - name: Build the quickstart against the published packages
+        working-directory: framework/languages/node/quickstart
+        run: |
+          npm install
+          npm run build
 
       - name: Install the published packages
         working-directory: framework/languages/node/tutorial
