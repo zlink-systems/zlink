@@ -86,10 +86,11 @@ Text validation은 BOM을 보존하고 overlong UTF-8·surrogate code point와 e
 `negotiated-bound`는 encoder·decoder application이 같은 비교 규칙과 context policy를 사용하도록
 명시한다. Context 값이 없거나 음수이거나 선언된 absolute maximum을 초과하면 protocol error이며,
 유효한 협상값과 실제 content 또는 encoded byte 수를 비교한다.
-Fixture catalog v3는 닫힌 25개 operation마다 정상 경계 accept와 단일 규칙 위반 reject를 한 쌍 이상
+Fixture catalog v4는 닫힌 25개 operation마다 정상 경계 accept와 단일 규칙 위반 reject를 한 쌍 이상
 포함하며, encode 전용 invalid DTO와 큰 입력은 `directions`와 compact byte recipe로 표현한다.
-현재 생성되는 logical-stream API는 완성된 단일 배열을 받는다. Chunk 단위 incremental decode는
-#778에서 구현하며 W-3 adapter 교체의 선행 조건이다.
+Generated logical-stream decoder는 ordered chunk를 incremental state machine에 직접 공급하며
+complete encoded stream 배열을 만들지 않는다. One-shot decode API는 같은 machine의 final-chunk
+wrapper다.
 
 Codec table이나 fixture를 생성하기 전에 다음 명령이 성공해야 한다. 현재 gate는 40개 command, 156개 type,
 4개 flag, 33개 bound, durable fixture 4개와 logical·JSON·multipart·authority key fixture를 확인한다. `--self-test`는

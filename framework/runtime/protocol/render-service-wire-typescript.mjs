@@ -4,16 +4,27 @@ import path from "node:path";
 import process from "node:process";
 import { lowerSchema } from "./service-wire-lowering.mjs";
 
-const id = (name) => name.split(/[^A-Za-z0-9]+/).filter(Boolean)
-  .map((part) => part[0].toUpperCase() + part.slice(1)).join("");
-const prop = (name) => /^[A-Za-z_$][A-Za-z0-9_$]*$/.test(name) ? name : JSON.stringify(name);
+const id = (name) =>
+  name
+    .split(/[^A-Za-z0-9]+/)
+    .filter(Boolean)
+    .map((part) => part[0].toUpperCase() + part.slice(1))
+    .join("");
+const prop = (name) =>
+  /^[A-Za-z_$][A-Za-z0-9_$]*$/.test(name) ? name : JSON.stringify(name);
 const at = (base, name) => `${base}[${JSON.stringify(name)}]`;
-const indent = (text, width = 2) => text.split("\n")
-  .map((line) => line ? " ".repeat(width) + line : line).join("\n");
-const literal = (value) => typeof value === "bigint" ? `${value}n` : JSON.stringify(value);
+const indent = (text, width = 2) =>
+  text
+    .split("\n")
+    .map((line) => (line ? " ".repeat(width) + line : line))
+    .join("\n");
+const literal = (value) =>
+  typeof value === "bigint" ? `${value}n` : JSON.stringify(value);
 let ir;
 let types;
 let flags;
+let incrementalRead = false;
+let incrementalReachable = new Set();
 
 function op(owner, name) {
   const value = owner.operations.find((entry) => entry.op === name);
@@ -26,82 +37,150 @@ function root(owner) {
   return value;
 }
 const refName = (reference) => id(reference.$ref);
-const readRef = (reference, reader = "reader", enclosing = "enclosing", flagValue = "flags") =>
-  `read${refName(reference)}(${reader}, context, ${enclosing}, ${flagValue})`;
-const writeRef = (reference, value, writer = "writer", enclosing = "enclosing", flagValue = "flags") => {
+const readRef = (
+  reference,
+  reader = "reader",
+  enclosing = "enclosing",
+  flagValue = "flags",
+) =>
+  `${incrementalRead ? "yield* readIncremental" : "read"}${refName(reference)}(${reader}, context, ${enclosing}, ${flagValue})`;
+const readerRead = (expression) =>
+  incrementalRead ? `yield* ${expression}` : expression;
+const writeRef = (
+  reference,
+  value,
+  writer = "writer",
+  enclosing = "enclosing",
+  flagValue = "flags",
+) => {
   const target = types?.get(reference.$ref);
   const targetRoot = target?.operations.find((entry) => entry.op === "integer");
-  const expression = targetRoot?.encoding.endsWith("64") ? `numeric(${value})` : value;
+  const expression = targetRoot?.encoding.endsWith("64")
+    ? `numeric(${value})`
+    : value;
   return `write${refName(reference)}(${expression}, ${writer}, context, ${enclosing}, ${flagValue})`;
 };
-const topRead = (reference, bytes) => `decode${refName(reference)}(${bytes}, context)`;
-const topWrite = (reference, value) => `encode${refName(reference)}(${value}, context)`;
-const mask = (operands) => operands.reduce((value, entry) => value | flags.get(entry.name).bit, 0);
+const topRead = (reference, bytes) =>
+  `decode${refName(reference)}(${bytes}, context)`;
+const topWrite = (reference, value) =>
+  `encode${refName(reference)}(${value}, context)`;
+const mask = (operands) =>
+  operands.reduce((value, entry) => value | flags.get(entry.name).bit, 0);
 
 function condition(value, valueName = "value", flagValue = "flags") {
-  return value.all.map((atom) => {
-    if (atom.kind === "fieldPresent") {
-      if (atom.presence?.internal?.absent !== null || atom.presence.internal.present !== "non-null") throw new Error(`unsupported field presence ${atom.operand.name}`);
-      return `${at(valueName, atom.operand.name)} !== null`;
-    }
-    if (atom.kind === "fieldEquals") return `same(${at(valueName, atom.operand.name)}, ${literal(atom.value)})`;
-    if (atom.kind === "contextEquals") return `same(requireContext(context, ${JSON.stringify(atom.operand.name)}), ${literal(atom.value)})`;
-    const bits = mask(atom.operands);
-    return atom.kind === "allFlagsSet" ? `((${flagValue} & ${bits}) === ${bits})` : `((${flagValue} & ${bits}) !== 0)`;
-  }).join(" && ") || "true";
+  return (
+    value.all
+      .map((atom) => {
+        if (atom.kind === "fieldPresent") {
+          if (
+            atom.presence?.internal?.absent !== null ||
+            atom.presence.internal.present !== "non-null"
+          )
+            throw new Error(`unsupported field presence ${atom.operand.name}`);
+          return `${at(valueName, atom.operand.name)} !== null`;
+        }
+        if (atom.kind === "fieldEquals")
+          return `same(${at(valueName, atom.operand.name)}, ${literal(atom.value)})`;
+        if (atom.kind === "contextEquals")
+          return `same(requireContext(context, ${JSON.stringify(atom.operand.name)}), ${literal(atom.value)})`;
+        const bits = mask(atom.operands);
+        return atom.kind === "allFlagsSet"
+          ? `((${flagValue} & ${bits}) === ${bits})`
+          : `((${flagValue} & ${bits}) !== 0)`;
+      })
+      .join(" && ") || "true"
+  );
 }
 
 function bounds(field, expression) {
   const checks = [];
-  if (field.minimum !== undefined) checks.push(`numeric(${expression}) < ${BigInt(field.minimum)}n`);
-  if (field.maximum !== undefined) checks.push(`numeric(${expression}) > ${BigInt(field.maximum)}n`);
-  if (field.constant !== undefined) checks.push(`!same(${expression}, ${literal(field.constant)})`);
-  return checks.length ? `if (${checks.join(" || ")}) fail(${JSON.stringify(field.name + " constraint")});` : "";
+  if (field.minimum !== undefined)
+    checks.push(`numeric(${expression}) < ${BigInt(field.minimum)}n`);
+  if (field.maximum !== undefined)
+    checks.push(`numeric(${expression}) > ${BigInt(field.maximum)}n`);
+  if (field.constant !== undefined)
+    checks.push(`!same(${expression}, ${literal(field.constant)})`);
+  return checks.length
+    ? `if (${checks.join(" || ")}) fail(${JSON.stringify(field.name + " constraint")});`
+    : "";
 }
 function fieldConstraints(field, expression) {
-  return (field.constraints ?? []).map((constraint) => {
-    if (constraint.kind !== "contains-protocol-required-capability") throw new Error(`unsupported field constraint ${constraint.kind}`);
-    return `if (!${expression}.includes(${JSON.stringify(ir.protocol[constraint.requiredCapability.name])})) fail(${JSON.stringify(field.name + " required capability")});`;
-  }).join("\n");
+  return (field.constraints ?? [])
+    .map((constraint) => {
+      if (constraint.kind !== "contains-protocol-required-capability")
+        throw new Error(`unsupported field constraint ${constraint.kind}`);
+      return `if (!${expression}.includes(${JSON.stringify(ir.protocol[constraint.requiredCapability.name])})) fail(${JSON.stringify(field.name + " required capability")});`;
+    })
+    .join("\n");
 }
-function readField(field, reader = "reader", value = "value", flagValue = "flags") {
+function readField(
+  field,
+  reader = "reader",
+  value = "value",
+  flagValue = "flags",
+) {
   const expression = at(value, field.name);
   const body = `${expression} = ${readRef(field.type, reader, value, flagValue)};\n${bounds(field, expression)}\n${fieldConstraints(field, expression)}`;
-  return field.when ? `if (${condition(field.when, value, flagValue)}) {\n${indent(body)}\n}` : body;
+  return field.when
+    ? `if (${condition(field.when, value, flagValue)}) {\n${indent(body)}\n}`
+    : body;
 }
-function writeField(field, writer = "writer", value = "value", flagValue = "flags") {
+function writeField(
+  field,
+  writer = "writer",
+  value = "value",
+  flagValue = "flags",
+) {
   const expression = at(value, field.name);
   const body = `if (${expression} === undefined) fail(${JSON.stringify(field.name + " required")});\n${bounds(field, expression)}\n${fieldConstraints(field, expression)}\n${writeRef(field.type, expression, writer, value, flagValue)};`;
   if (!field.when) return body;
-  const absent = field.when.all.find((atom) => atom.kind === "fieldPresent")?.presence?.internal?.absent;
-  const forbidden = absent === undefined ? `${expression} !== undefined` : `${expression} !== undefined && !same(${expression}, ${literal(absent)})`;
+  const absent = field.when.all.find((atom) => atom.kind === "fieldPresent")
+    ?.presence?.internal?.absent;
+  const forbidden =
+    absent === undefined
+      ? `${expression} !== undefined`
+      : `${expression} !== undefined && !same(${expression}, ${literal(absent)})`;
   return `if (${condition(field.when, value, flagValue)}) {\n${indent(body)}\n} else if (${forbidden}) fail(${JSON.stringify(field.name + " forbidden")});`;
 }
 function fieldsType(value) {
-  return value.length ? `{ ${value.map((field) => `readonly ${prop(field.name)}${field.when || field.required === false ? "?" : ""}: ${refName(field.type)}`).join("; ")} }` : "Record<string, never>";
+  return value.length
+    ? `{ ${value.map((field) => `readonly ${prop(field.name)}${field.when || field.required === false ? "?" : ""}: ${refName(field.type)}`).join("; ")} }`
+    : "Record<string, never>";
 }
 
-const pathValue = (base, pathValueString) => pathValueString.split(".")
-  .reduce((value, segment) => at(value, segment), base);
+const pathValue = (base, pathValueString) =>
+  pathValueString
+    .split(".")
+    .reduce((value, segment) => at(value, segment), base);
 const pathCondition = (base, pathValueString, expected, negate = false) => {
   const segments = pathValueString.split(".");
-  const parents = segments.slice(0, -1).map((_, index) =>
-    `${pathValue(base, segments.slice(0, index + 1).join("."))} !== undefined`);
+  const parents = segments
+    .slice(0, -1)
+    .map(
+      (_, index) =>
+        `${pathValue(base, segments.slice(0, index + 1).join("."))} !== undefined`,
+    );
   const comparison = `same(${pathValue(base, pathValueString)}, ${literal(expected)})`;
   return [...parents, negate ? `!${comparison}` : comparison].join(" && ");
 };
 function constraintRootType(owner) {
   const operation = root(owner);
   if (operation.op === "vector") return types.get(operation.item.$ref);
-  if (operation.op === "versioned-vector") return types.get(operation.layout.find((entry) => entry.kind === "repeat").item.$ref);
+  if (operation.op === "versioned-vector")
+    return types.get(
+      operation.layout.find((entry) => entry.kind === "repeat").item.$ref,
+    );
   return owner;
 }
 function constraintPathType(owner, pathName) {
   let current = constraintRootType(owner);
   if (!pathName) return current;
   for (const segment of pathName.split(".")) {
-    const field = (root(current).fields ?? []).find((entry) => entry.name === segment);
-    if (!field) throw new Error(`${owner.name}.${pathName}: unresolved constraint path`);
+    const field = (root(current).fields ?? []).find(
+      (entry) => entry.name === segment,
+    );
+    if (!field)
+      throw new Error(`${owner.name}.${pathName}: unresolved constraint path`);
     current = types.get(field.type.$ref);
   }
   return current;
@@ -112,217 +191,446 @@ function keySource(base, source) {
   throw new Error(`unsupported comparison source ${source.kind}`);
 }
 function authorityKey(owner, key, base) {
-  if (key.format.encoding !== "canonical-ascii-utf8" || key.format.componentLayout !== "decimal-raw-byte-length-colon-percent-encoded-bytes"
-      || key.format.decimalLength !== "base10-no-leading-zero" || key.format.escaping !== "rfc3986-unreserved-literal-otherwise-uppercase-percent-hex"
-      || key.format.unicodeNormalization !== "none") throw new Error(`${owner.name}: unsupported authority key format`);
+  if (
+    key.format.encoding !== "canonical-ascii-utf8" ||
+    key.format.componentLayout !==
+      "decimal-raw-byte-length-colon-percent-encoded-bytes" ||
+    key.format.decimalLength !== "base10-no-leading-zero" ||
+    key.format.escaping !==
+      "rfc3986-unreserved-literal-otherwise-uppercase-percent-hex" ||
+    key.format.unicodeNormalization !== "none"
+  )
+    throw new Error(`${owner.name}: unsupported authority key format`);
   const value = keySource(base, key.source);
-  const variants = Object.entries(key.variants).map(([variantName, variant]) => {
-    const discriminator = key.format.kindDiscriminators.find((entry) => entry.objectKind === variant.objectKind);
-    if (!discriminator) throw new Error(`${owner.name}: missing authority key discriminator ${variant.objectKind}`);
-    const components = variant.components.map((pathName) => `utf8(${pathValue(value, pathName)})`);
-    return `same(${at(value, "objectKind")}, ${JSON.stringify(variantName)}) ? canonicalAuthorityKey(${JSON.stringify(key.format.prefix)}, ${JSON.stringify(key.format.separator)}, ${JSON.stringify(discriminator.wire)}, [${components}], ${key.format.componentRawBytesMinimum}, ${key.format.componentRawBytesMaximum}, ${key.format.maximumEncodedBytes})`;
-  });
+  const variants = Object.entries(key.variants).map(
+    ([variantName, variant]) => {
+      const discriminator = key.format.kindDiscriminators.find(
+        (entry) => entry.objectKind === variant.objectKind,
+      );
+      if (!discriminator)
+        throw new Error(
+          `${owner.name}: missing authority key discriminator ${variant.objectKind}`,
+        );
+      const components = variant.components.map(
+        (pathName) => `utf8(${pathValue(value, pathName)})`,
+      );
+      return `same(${at(value, "objectKind")}, ${JSON.stringify(variantName)}) ? canonicalAuthorityKey(${JSON.stringify(key.format.prefix)}, ${JSON.stringify(key.format.separator)}, ${JSON.stringify(discriminator.wire)}, [${components}], ${key.format.componentRawBytesMinimum}, ${key.format.componentRawBytesMaximum}, ${key.format.maximumEncodedBytes})`;
+    },
+  );
   return `(${variants.join(" : ")} : fail(${JSON.stringify(owner.name + " authority key variant")}))`;
 }
 function keyPartComparison(owner, part, left, right) {
-  const a = keySource(left, part.source); const b = keySource(right, part.source);
-  if (part.kind === "unsigned-wire-value") return `compareBigint(numeric(${a}), numeric(${b}))`;
+  const a = keySource(left, part.source);
+  const b = keySource(right, part.source);
+  if (part.kind === "unsigned-wire-value")
+    return `compareBigint(numeric(${a}), numeric(${b}))`;
   if (part.kind === "wire-value") {
-    const valueType = constraintPathType(owner, part.source.kind === "item" ? "" : part.source.path);
-    const wire = root(valueType).op === "enum" ? `enumWire${id(valueType.name)}` : "numeric";
+    const valueType = constraintPathType(
+      owner,
+      part.source.kind === "item" ? "" : part.source.path,
+    );
+    const wire =
+      root(valueType).op === "enum"
+        ? `enumWire${id(valueType.name)}`
+        : "numeric";
     return `compareBigint(numeric(${wire}(${a})), numeric(${wire}(${b})))`;
   }
-  if (part.kind === "utf-8-bytes") return `compareBytes(utf8(${a}), utf8(${b}))`;
-  throw new Error(`${owner.name}: unsupported comparison key part ${part.kind}`);
+  if (part.kind === "utf-8-bytes")
+    return `compareBytes(utf8(${a}), utf8(${b}))`;
+  throw new Error(
+    `${owner.name}: unsupported comparison key part ${part.kind}`,
+  );
 }
 function compare(owner, constraint, left, right) {
-  if (constraint.key?.kind === "canonical-authority-key-bytes") return `compareBytes(${authorityKey(owner, constraint.key, left)}, ${authorityKey(owner, constraint.key, right)})`;
-  if (constraint.key?.kind === "tuple") return `compareResults([${constraint.key.parts.map((part) => keyPartComparison(owner, part, left, right)).join(", ")}])`;
-  throw new Error(`${owner.name}: unsupported comparison key ${constraint.key?.kind}`);
+  if (constraint.key?.kind === "canonical-authority-key-bytes")
+    return `compareBytes(${authorityKey(owner, constraint.key, left)}, ${authorityKey(owner, constraint.key, right)})`;
+  if (constraint.key?.kind === "tuple")
+    return `compareResults([${constraint.key.parts.map((part) => keyPartComparison(owner, part, left, right)).join(", ")}])`;
+  throw new Error(
+    `${owner.name}: unsupported comparison key ${constraint.key?.kind}`,
+  );
 }
 function collectionChecks(owner, constraints, value) {
-  return constraints.map((constraint) => {
-    if (constraint.kind === "sorted") return `for (let index = 1; index < ${value}.length; ++index) if (${compare(owner, constraint, `${value}[index - 1]`, `${value}[index]`)} >= 0) fail(${JSON.stringify(owner.name + " sorted")});`;
-    if (constraint.kind === "unique") {
-      return `for (let left = 0; left < ${value}.length; ++left) for (let right = left + 1; right < ${value}.length; ++right) if (${compare(owner, constraint, `${value}[left]`, `${value}[right]`)} === 0) fail(${JSON.stringify(owner.name + " unique")});`;
-    }
-    throw new Error(`${owner.name}: unsupported collection constraint ${constraint.kind}`);
-  }).join("\n");
+  const consumed = new Set();
+  return constraints
+    .map((constraint, constraintIndex) => {
+      if (consumed.has(constraintIndex)) return "";
+      if (constraint.kind === "sorted") {
+        const uniqueIndex = constraints.findIndex(
+          (candidate, candidateIndex) =>
+            candidateIndex !== constraintIndex &&
+            candidate.kind === "unique" &&
+            JSON.stringify(candidate.key) === JSON.stringify(constraint.key),
+        );
+        if (uniqueIndex >= 0) consumed.add(uniqueIndex);
+        return `try { for (let index = 1; index < ${value}.length; ++index) if (${compare(owner, constraint, `${value}[index - 1]`, `${value}[index]`)} ${uniqueIndex >= 0 ? ">=" : ">"} 0) fail(${JSON.stringify(owner.name + " sorted")}); } catch (error) { if (error instanceof ServiceWireProtocolError || error instanceof ServiceWireCapacityError) throw error; if (error instanceof RangeError) capacityFail(${JSON.stringify(owner.name + " constraint capacity")}); throw error; }`;
+      }
+      if (constraint.kind === "unique") {
+        return `try { for (let left = 0; left < ${value}.length; ++left) for (let right = left + 1; right < ${value}.length; ++right) if (${compare(owner, constraint, `${value}[left]`, `${value}[right]`)} === 0) fail(${JSON.stringify(owner.name + " unique")}); } catch (error) { if (error instanceof ServiceWireProtocolError || error instanceof ServiceWireCapacityError) throw error; if (error instanceof RangeError) capacityFail(${JSON.stringify(owner.name + " constraint capacity")}); throw error; }`;
+      }
+      throw new Error(
+        `${owner.name}: unsupported collection constraint ${constraint.kind}`,
+      );
+    })
+    .join("\n");
 }
 function objectChecks(owner, constraints, value = "value") {
-  return constraints.map((constraint) => {
-    if (constraint.kind === "not-both-zero") return `if (${constraint.fields.map((field) => `numeric(${at(value, field.name)}) === 0n`).join(" && ")}) fail(${JSON.stringify(owner.name + " all zero")});`;
-    if (constraint.kind === "field-less-than-or-equal") return `if (numeric(${at(value, constraint.left.name)}) > numeric(${at(value, constraint.right.name)})) fail(${JSON.stringify(owner.name + " field order")});`;
-    const when = Object.entries(constraint.when ?? {}).map(([name, expected]) => {
-      if (name.endsWith("Not")) return pathCondition(value, name.slice(0, -3), expected, true);
-      return pathCondition(value, name, expected);
-    }).join(" && ");
-    const requires = Object.entries(constraint.requires ?? {}).map(([name, expected]) => pathCondition(value, name, expected)).join(" && ");
-    if (["terminal-success-shape", "terminal-failure-shape", "existing-has-no-application-payload"].includes(constraint.kind)) return `if (${when} && !(${requires})) fail(${JSON.stringify(owner.name + " " + constraint.kind)});`;
-    throw new Error(`${owner.name}: unsupported object constraint ${constraint.kind}`);
-  }).join("\n");
+  return constraints
+    .map((constraint) => {
+      if (constraint.kind === "not-both-zero")
+        return `if (${constraint.fields.map((field) => `numeric(${at(value, field.name)}) === 0n`).join(" && ")}) fail(${JSON.stringify(owner.name + " all zero")});`;
+      if (constraint.kind === "field-less-than-or-equal")
+        return `if (numeric(${at(value, constraint.left.name)}) > numeric(${at(value, constraint.right.name)})) fail(${JSON.stringify(owner.name + " field order")});`;
+      const when = Object.entries(constraint.when ?? {})
+        .map(([name, expected]) => {
+          if (name.endsWith("Not"))
+            return pathCondition(value, name.slice(0, -3), expected, true);
+          return pathCondition(value, name, expected);
+        })
+        .join(" && ");
+      const requires = Object.entries(constraint.requires ?? {})
+        .map(([name, expected]) => pathCondition(value, name, expected))
+        .join(" && ");
+      if (
+        [
+          "terminal-success-shape",
+          "terminal-failure-shape",
+          "existing-has-no-application-payload",
+        ].includes(constraint.kind)
+      )
+        return `if (${when} && !(${requires})) fail(${JSON.stringify(owner.name + " " + constraint.kind)});`;
+      throw new Error(
+        `${owner.name}: unsupported object constraint ${constraint.kind}`,
+      );
+    })
+    .join("\n");
 }
 function caseConstraint(owner, operation) {
-  if (operation.owner?.kind !== "conditional-union-case" || !Array.isArray(operation.owner.path)) throw new Error(`${owner.name}: invalid conditional-union constraint owner`);
-  return objectChecks({ ...owner, name: operation.owner.path.join(".") }, [operation]);
+  if (
+    operation.owner?.kind !== "conditional-union-case" ||
+    !Array.isArray(operation.owner.path)
+  )
+    throw new Error(
+      `${owner.name}: invalid conditional-union constraint owner`,
+    );
+  return objectChecks({ ...owner, name: operation.owner.path.join(".") }, [
+    operation,
+  ]);
 }
 function encodedLimit(owner, operation, measurements) {
-  if (operation.measured !== "complete-encoded-value" || operation.exceeded !== "protocol-error") throw new Error(`${owner.name}: unsupported encoded limit`);
-  return Object.fromEntries(operation.applications.map((application) => {
-    const measured = measurements[application];
-    if (!measured) throw new Error(`${owner.name}: missing encoded-limit ${application} measurement`);
-    return [application, `if (${measured} > ${operation.maximumEncodedBytes}) fail(${JSON.stringify(owner.name + " maximum")});`];
-  }));
+  if (
+    operation.measured !== "complete-encoded-value" ||
+    operation.exceeded !== "protocol-error"
+  )
+    throw new Error(`${owner.name}: unsupported encoded limit`);
+  return Object.fromEntries(
+    operation.applications.map((application) => {
+      const measured = measurements[application];
+      if (!measured)
+        throw new Error(
+          `${owner.name}: missing encoded-limit ${application} measurement`,
+        );
+      return [
+        application,
+        `if (${measured} > ${operation.maximumEncodedBytes}) fail(${JSON.stringify(owner.name + " maximum")});`,
+      ];
+    }),
+  );
 }
 function encodeCapacity(owner, policy, measurements) {
-  if (!Number.isSafeInteger(policy?.declaredMaximumBytes)
-      || !Number.isSafeInteger(policy.representationCeiling)
-      || !Number.isSafeInteger(policy.requiredThroughBytes)
-      || !Array.isArray(policy.applications)) throw new Error(`${owner.name}: invalid encode capacity`);
+  if (
+    !Number.isSafeInteger(policy?.declaredMaximumBytes) ||
+    !Number.isSafeInteger(policy.representationCeiling) ||
+    !Number.isSafeInteger(policy.requiredThroughBytes) ||
+    !Array.isArray(policy.applications)
+  )
+    throw new Error(`${owner.name}: invalid encode capacity`);
   const rejection = (kind, message) => {
     if (kind === "protocol-error") return `fail(${JSON.stringify(message)})`;
-    if (kind === "capacity-error") return `capacityFail(${JSON.stringify(message)})`;
-    throw new Error(`${owner.name}: unsupported encode capacity rejection ${kind}`);
+    if (kind === "capacity-error")
+      return `capacityFail(${JSON.stringify(message)})`;
+    throw new Error(
+      `${owner.name}: unsupported encode capacity rejection ${kind}`,
+    );
   };
-  return Object.fromEntries(policy.applications.map((application) => {
-    const measured = measurements[application];
-    if (!measured) throw new Error(`${owner.name}: missing encode capacity ${application} measurement`);
-    return [application, `if (${measured} > ${policy.declaredMaximumBytes}) ${rejection(policy.aboveDeclaredMaximum, owner.name + " length")}; if (${measured} > ${policy.representationCeiling}) ${rejection(policy.aboveRepresentationCeiling, owner.name + " capacity")};`];
-  }));
+  return Object.fromEntries(
+    policy.applications.map((application) => {
+      const measured = measurements[application];
+      if (!measured)
+        throw new Error(
+          `${owner.name}: missing encode capacity ${application} measurement`,
+        );
+      return [
+        application,
+        `if (${measured} > ${policy.representationCeiling}) ${rejection(policy.aboveRepresentationCeiling, owner.name + " capacity")}; if (${measured} > ${policy.declaredMaximumBytes}) ${rejection(policy.aboveDeclaredMaximum, owner.name + " length")};`,
+      ];
+    }),
+  );
 }
 function negotiatedBound(owner, operation, measurements) {
-  if (operation.topology !== "clientServer" || operation.comparison !== "less-than-or-equal"
-      || operation.context?.missing !== "protocol-error" || operation.context?.negative !== "protocol-error"
-      || operation.context?.aboveAbsoluteMaximum !== "protocol-error") throw new Error(`${owner.name}: unsupported negotiated bound`);
-  return Object.fromEntries(Object.entries(operation.applications).map(([application, applied]) => {
-    const measured = measurements[application]?.[operation.measured];
-    if (!measured || applied.context?.kind !== `${application}r-context`) throw new Error(`${owner.name}: unsupported negotiated ${application} application`);
-    const syntax = `const negotiatedMaximum = numeric(requireContext(context, ${JSON.stringify(applied.context.name)})); if (negotiatedMaximum < 0n || negotiatedMaximum > ${BigInt(operation.context.absoluteMaximum)}n || BigInt(${measured}) > negotiatedMaximum) fail(${JSON.stringify(owner.name + " negotiated maximum")});`;
-    return [application, syntax];
-  }));
+  if (
+    operation.topology !== "clientServer" ||
+    operation.comparison !== "less-than-or-equal" ||
+    operation.context?.missing !== "protocol-error" ||
+    operation.context?.negative !== "protocol-error" ||
+    operation.context?.aboveAbsoluteMaximum !== "protocol-error"
+  )
+    throw new Error(`${owner.name}: unsupported negotiated bound`);
+  return Object.fromEntries(
+    Object.entries(operation.applications).map(([application, applied]) => {
+      const measured = measurements[application]?.[operation.measured];
+      if (!measured || applied.context?.kind !== `${application}r-context`)
+        throw new Error(
+          `${owner.name}: unsupported negotiated ${application} application`,
+        );
+      const syntax = `const negotiatedMaximum = numeric(requireContext(context, ${JSON.stringify(applied.context.name)})); if (negotiatedMaximum < 0n || negotiatedMaximum > ${BigInt(operation.context.absoluteMaximum)}n || BigInt(${measured}) > negotiatedMaximum) fail(${JSON.stringify(owner.name + " negotiated maximum")});`;
+      return [application, syntax];
+    }),
+  );
 }
 function predicateChecks(owner, value = "value") {
-  return owner.operations.filter((entry) => entry.op === "runtime-predicate").flatMap((entry) => {
-    if (entry.reference.asset !== "service-wire-constants" || entry.reference.name !== "valid-terminal-failure") throw new Error(`${owner.name}: unsupported runtime predicate`);
-    return entry.targets.map((target) => {
-      let local = target.path.startsWith(`${owner.name}.`) ? target.path.slice(owner.name.length + 1) : target.path;
-      let guard = "";
-      const layout = owner.operations.find((operation) => operation.op === "conditional-union");
-      if (layout) {
-        const [caseName, ...remaining] = local.split(".");
-        const selected = Object.keys(layout.cases).map((signature) => JSON.parse(signature))
-          .find((signature) => Object.values(signature).includes(caseName));
-        if (selected) {
-          guard = Object.entries(selected).map(([name, expected]) => `same(${at(value, name)}, ${literal(expected)})`).join(" && ");
-          local = remaining.join(".");
+  const checks = owner.operations
+    .filter((entry) => entry.op === "runtime-predicate")
+    .flatMap((entry) => {
+      if (
+        entry.reference.asset !== "service-wire-constants" ||
+        entry.reference.name !== "valid-terminal-failure"
+      )
+        throw new Error(`${owner.name}: unsupported runtime predicate`);
+      return entry.targets.map((target) => {
+        let local = target.path.startsWith(`${owner.name}.`)
+          ? target.path.slice(owner.name.length + 1)
+          : target.path;
+        let guard = "";
+        const layout = owner.operations.find(
+          (operation) => operation.op === "conditional-union",
+        );
+        if (layout) {
+          const [caseName, ...remaining] = local.split(".");
+          const selected = Object.keys(layout.cases)
+            .map((signature) => JSON.parse(signature))
+            .find((signature) => Object.values(signature).includes(caseName));
+          if (selected) {
+            guard = Object.entries(selected)
+              .map(
+                ([name, expected]) =>
+                  `same(${at(value, name)}, ${literal(expected)})`,
+              )
+              .join(" && ");
+            local = remaining.join(".");
+          }
         }
-      }
-      const failure = pathValue(value, local); const terminal = pathValue(value, local.replace(/failureCode$/, "terminalResult"));
-      const valid = `validTerminalFailure(enumWireRequestTerminalResult(${terminal}), enumWireFrameworkErrorCode(${failure}))`;
-      return `if (${guard ? `${guard} && !(${valid})` : `!(${valid})`}) fail(${JSON.stringify(owner.name + " runtime predicate")});`;
-    });
-  }).join("\n");
+        const failure = pathValue(value, local);
+        const terminal = pathValue(
+          value,
+          local.replace(/failureCode$/, "terminalResult"),
+        );
+        const valid = `validTerminalFailure(enumWireRequestTerminalResult(${terminal}), enumWireFrameworkErrorCode(${failure}))`;
+        return `if (${guard ? `${guard} && !(${valid})` : `!(${valid})`}) fail(${JSON.stringify(owner.name + " runtime predicate")});`;
+      });
+    })
+    .join("\n");
+  return checks ? `void context;\n${checks}` : "";
 }
 function casePredicate(_owner, operation) {
-  if (operation.reference.asset !== "service-wire-constants"
-      || operation.reference.name !== "valid-terminal-failure") {
+  if (
+    operation.reference.asset !== "service-wire-constants" ||
+    operation.reference.name !== "valid-terminal-failure"
+  ) {
     throw new Error("unsupported terminal failure predicate");
   }
   return `if (!validTerminalFailure(enumWireRequestTerminalResult(value["terminalResult"]), enumWireFrameworkErrorCode(value["failureCode"]))) fail("terminal failure predicate");`;
 }
 
 function scalar(owner, operation) {
-  const name = id(owner.name); const wide = operation.encoding.endsWith("64");
-  const read = operation.encoding === "i64" ? "reader.i64()" : `reader.u(${operation.width})`;
-  const write = operation.encoding === "i64" ? "writer.i64(raw)" : `writer.u(raw, ${operation.width})`;
-  return { type: `export type ${name} = ${wide ? "bigint" : "number"};`,
+  const name = id(owner.name);
+  const wide = operation.encoding.endsWith("64");
+  const read = readerRead(
+    operation.encoding === "i64"
+      ? "reader.i64()"
+      : `reader.u(${operation.width})`,
+  );
+  const write =
+    operation.encoding === "i64"
+      ? "writer.i64(raw)"
+      : `writer.u(raw, ${operation.width})`;
+  return {
+    type: `export type ${name} = ${wide ? "bigint" : "number"};`,
     read: `const raw = ${read}; if (raw < ${BigInt(operation.minimum)}n || raw > ${BigInt(operation.maximum)}n) fail(${JSON.stringify(owner.name + " range")}); return ${wide ? "raw" : "Number(raw)"};`,
-    write: `const raw = numeric(value); if (raw < ${BigInt(operation.minimum)}n || raw > ${BigInt(operation.maximum)}n) fail(${JSON.stringify(owner.name + " range")}); ${write};` };
+    write: `const raw = numeric(value); if (raw < ${BigInt(operation.minimum)}n || raw > ${BigInt(operation.maximum)}n) fail(${JSON.stringify(owner.name + " range")}); ${write};`,
+  };
 }
 function enumeration(owner, operation) {
-  const name = id(owner.name); const wide = operation.encoding.endsWith("64");
-  const values = operation.values.map((entry) => JSON.stringify(entry.name)).join(" | ");
-  const decode = operation.values.map((entry) => `case ${wide ? `${entry.value}n` : entry.value}: return ${JSON.stringify(entry.name)};`).join("\n");
-  const encode = operation.values.map((entry) => `case ${JSON.stringify(entry.name)}: return ${wide ? `${entry.value}n` : entry.value};`).join("\n");
-  return { type: `export type ${name} = ${values};`, extra: `export function enumWire${name}(value: ${name}): ${wide ? "bigint" : "number"} { switch (value) {\n${indent(encode)}\n} }`,
-    read: `const raw = ${operation.encoding === "i64" ? "reader.i64()" : `reader.u(${operation.width})`}; switch (${wide ? "raw" : "Number(raw)"}) {\n${indent(decode)}\n  default: fail(${JSON.stringify(owner.name + " enum")});\n}`,
-    write: `${operation.encoding === "i64" ? "writer.i64" : "writer.u"}(numeric(enumWire${name}(value))${operation.encoding === "i64" ? "" : `, ${operation.width}`});` };
+  const name = id(owner.name);
+  const wide = operation.encoding.endsWith("64");
+  const values = operation.values
+    .map((entry) => JSON.stringify(entry.name))
+    .join(" | ");
+  const decode = operation.values
+    .map(
+      (entry) =>
+        `case ${wide ? `${entry.value}n` : entry.value}: return ${JSON.stringify(entry.name)};`,
+    )
+    .join("\n");
+  const encode = operation.values
+    .map(
+      (entry) =>
+        `case ${JSON.stringify(entry.name)}: return ${wide ? `${entry.value}n` : entry.value};`,
+    )
+    .join("\n");
+  return {
+    type: `export type ${name} = ${values};`,
+    extra: `export function enumWire${name}(value: ${name}): ${wide ? "bigint" : "number"} { switch (value) {\n${indent(encode)}\n} }`,
+    read: `const raw = ${readerRead(operation.encoding === "i64" ? "reader.i64()" : `reader.u(${operation.width})`)}; switch (${wide ? "raw" : "Number(raw)"}) {\n${indent(decode)}\n  default: fail(${JSON.stringify(owner.name + " enum")});\n}`,
+    write: `${operation.encoding === "i64" ? "writer.i64" : "writer.u"}(numeric(enumWire${name}(value))${operation.encoding === "i64" ? "" : `, ${operation.width}`});`,
+  };
 }
 function lengthPrefixed(owner, operation) {
-  const name = id(owner.name); const nullable = operation.zeroLengthMeaning === "absent";
-  const text = operation.content === "text"; const validation = owner.operations.find((entry) => entry.op === "text-validation");
-  const capacity = encodeCapacity(owner, operation.encodeCapacity, { encode: "bytes.length", decode: "length" });
-  if (text && (validation?.encoding !== "utf-8" || validation.malformed !== "protocol-error"
-      || validation.decode?.bom !== "preserve" || validation.decode.overlong !== "protocol-error"
-      || validation.decode.surrogateCodePoint !== "protocol-error" || validation.encode?.loneSurrogate !== "protocol-error")) throw new Error(`${owner.name}: unsupported text validation`);
-  const decode = text ? `const bytes = reader.take(length); ${validation?.nul === "forbidden" ? `if (bytes.includes(0)) fail(${JSON.stringify(owner.name + " NUL")});` : ""} return decodeUtf8(bytes, ${JSON.stringify(owner.name)});` : "return reader.take(length);";
-  const negotiated = owner.operations.filter((entry) => entry.op === "negotiated-bound")
-    .map((entry) => emitters[entry.op].syntax(owner, entry, {
-      encode: { "content-bytes": "bytes.length" }, decode: { "content-bytes": "length" },
-    }));
+  const name = id(owner.name);
+  const nullable = operation.zeroLengthMeaning === "absent";
+  const text = operation.content === "text";
+  const validation = owner.operations.find(
+    (entry) => entry.op === "text-validation",
+  );
+  const capacity = encodeCapacity(owner, operation.encodeCapacity, {
+    encode: "bytes.length",
+    decode: "length",
+  });
+  if (
+    text &&
+    (validation?.encoding !== "utf-8" ||
+      validation.malformed !== "protocol-error" ||
+      validation.decode?.bom !== "preserve" ||
+      validation.decode.overlong !== "protocol-error" ||
+      validation.decode.surrogateCodePoint !== "protocol-error" ||
+      validation.encode?.loneSurrogate !== "protocol-error")
+  )
+    throw new Error(`${owner.name}: unsupported text validation`);
+  const decode = incrementalRead
+    ? text
+      ? `return yield* reader.text(length, ${validation?.nul === "forbidden"}, ${JSON.stringify(owner.name)});`
+      : `return yield* reader.bytes(length);`
+    : text
+      ? `const bytes = reader.take(length); ${validation?.nul === "forbidden" ? `if (bytes.includes(0)) fail(${JSON.stringify(owner.name + " NUL")});` : ""} return decodeUtf8(bytes, ${JSON.stringify(owner.name)});`
+      : `return reader.take(length);`;
+  const negotiated = owner.operations
+    .filter((entry) => entry.op === "negotiated-bound")
+    .map((entry) =>
+      emitters[entry.op].syntax(owner, entry, {
+        encode: { "content-bytes": "bytes.length" },
+        decode: { "content-bytes": "length" },
+      }),
+    );
   const decodeNegotiated = negotiated.map((entry) => entry.decode).join("\n");
   const encodeNegotiated = negotiated.map((entry) => entry.encode).join("\n");
   const encodeCheck = encodeNegotiated ? ` ${encodeNegotiated}` : "";
-  return { type: `export type ${name} = ${text ? "string" : "Uint8Array"}${nullable ? " | null" : ""};`,
+  return {
+    type: `export type ${name} = ${text ? "string" : "Uint8Array"}${nullable ? " | null" : ""};`,
     read: `const length = Number(${readRef(operation.lengthType)}); ${nullable ? "if (length === 0) return null;" : ""} ${capacity.decode} if (length < ${operation.minimumBytes}) fail(${JSON.stringify(owner.name + " length")}); ${decodeNegotiated} ${decode}`,
-    write: `${nullable ? `if (value === null) { ${writeRef(operation.lengthType, "0")}; return; }` : ""} const bytes = ${text ? "utf8(value)" : "value as Uint8Array"}; ${text && validation?.nul === "forbidden" ? `if (bytes.includes(0)) fail(${JSON.stringify(owner.name + " NUL")});` : ""} ${capacity.encode} if (bytes.length < ${operation.minimumBytes}) fail(${JSON.stringify(owner.name + " length")}); ${writeRef(operation.lengthType, "bytes.length")}; writer.put(bytes);${encodeCheck}` };
+    write: `${nullable ? `if (value === null) { ${writeRef(operation.lengthType, "0")}; return; }` : ""} const bytes = ${text ? "utf8(value)" : "value as Uint8Array"}; ${text && validation?.nul === "forbidden" ? `if (bytes.includes(0)) fail(${JSON.stringify(owner.name + " NUL")});` : ""} ${capacity.encode} if (bytes.length < ${operation.minimumBytes}) fail(${JSON.stringify(owner.name + " length")}); ${writeRef(operation.lengthType, "bytes.length")}; writer.put(bytes);${encodeCheck}`,
+  };
 }
 function structure(owner, operation) {
   const checks = objectChecks(owner, operation.constraints);
-  return { type: `export type ${id(owner.name)} = ${fieldsType(operation.fields)};`,
+  return {
+    type: `export type ${id(owner.name)} = ${fieldsType(operation.fields)};`,
     read: `const value: any = {};\n${operation.fields.map((field) => readField(field)).join("\n")}\n${checks}\n${predicateChecks(owner)}\nreturn value;`,
-    write: `${checks}\n${predicateChecks(owner)}\n${operation.fields.map((field) => writeField(field)).join("\n")}` };
+    write: `${checks}\n${predicateChecks(owner)}\n${operation.fields.map((field) => writeField(field)).join("\n")}`,
+  };
 }
 function vector(owner, operation) {
   const checks = collectionChecks(owner, operation.constraints, "value");
-  return { type: `export type ${id(owner.name)} = readonly ${refName(operation.item)}[];`,
-    read: `const count = Number(${readRef(operation.countType)}); ${operation.maximumItems === undefined ? "" : `if (count > ${operation.maximumItems}) fail(${JSON.stringify(owner.name + " count")});`} const value: any = Array.from({ length: count }, () => ${readRef(operation.item)});\n${checks}\nreturn value;`,
-    write: `if (!Array.isArray(value)${operation.maximumItems === undefined ? "" : ` || value.length > ${operation.maximumItems}`}) fail(${JSON.stringify(owner.name + " count")});\n${checks}\n${writeRef(operation.countType, "value.length")}; for (const item of value) ${writeRef(operation.item, "item")};` };
+  const readItems = incrementalRead
+    ? `const value: any[] = []; for (let index = 0; index < count; ++index) { const item = ${readRef(operation.item)}; try { value.push(item); } catch { capacityFail(${JSON.stringify(owner.name + " capacity")}); } }`
+    : `const value: any = Array.from({ length: count }, () => ${readRef(operation.item)});`;
+  return {
+    type: `export type ${id(owner.name)} = readonly ${refName(operation.item)}[];`,
+    read: `const count = Number(${readRef(operation.countType)}); ${operation.maximumItems === undefined ? "" : `if (count > ${operation.maximumItems}) fail(${JSON.stringify(owner.name + " count")});`} ${readItems}\n${checks}\nreturn value;`,
+    write: `if (!Array.isArray(value)${operation.maximumItems === undefined ? "" : ` || value.length > ${operation.maximumItems}`}) fail(${JSON.stringify(owner.name + " count")});\n${checks}\n${writeRef(operation.countType, "value.length")}; for (const item of value) ${writeRef(operation.item, "item")};`,
+  };
 }
 function versionedVector(owner, operation) {
   const repeat = operation.layout.find((entry) => entry.kind === "repeat");
-  const checks = collectionChecks(owner, operation.constraints, `value.${prop(repeat.name)}`);
-  const reads = operation.layout.map((entry) => entry.kind === "repeat"
-    ? `value.${prop(entry.name)} = Array.from({ length: Number(layout.${prop(entry.countFrom)}) }, () => ${readRef(entry.item)});`
-    : `layout.${prop(entry.name)} = ${readRef(entry)};${entry.constant === undefined ? "" : ` if (!same(layout.${prop(entry.name)}, ${literal(entry.constant)})) fail(${JSON.stringify(owner.name + " constant")});`}`).join("\n");
-  const writes = operation.layout.map((entry) => entry.kind === "repeat" ? `for (const item of value.${prop(entry.name)}) ${writeRef(entry.item, "item")};` : `${writeRef(entry, entry.constant === undefined ? `value.${prop(repeat.name)}.length` : literal(entry.constant))};`).join("\n");
-  return { type: `export type ${id(owner.name)} = { readonly ${prop(repeat.name)}: readonly ${refName(repeat.item)}[] };`,
+  const checks = collectionChecks(
+    owner,
+    operation.constraints,
+    `value.${prop(repeat.name)}`,
+  );
+  const reads = operation.layout
+    .map((entry) =>
+      entry.kind === "repeat"
+        ? incrementalRead
+          ? `value.${prop(entry.name)} = []; for (let index = 0; index < Number(layout.${prop(entry.countFrom)}); ++index) { const item = ${readRef(entry.item)}; try { value.${prop(entry.name)}.push(item); } catch { capacityFail(${JSON.stringify(owner.name + " capacity")}); } }`
+          : `value.${prop(entry.name)} = Array.from({ length: Number(layout.${prop(entry.countFrom)}) }, () => ${readRef(entry.item)});`
+        : `layout.${prop(entry.name)} = ${readRef(entry)};${entry.constant === undefined ? "" : ` if (!same(layout.${prop(entry.name)}, ${literal(entry.constant)})) fail(${JSON.stringify(owner.name + " constant")});`}`,
+    )
+    .join("\n");
+  const writes = operation.layout
+    .map((entry) =>
+      entry.kind === "repeat"
+        ? `for (const item of value.${prop(entry.name)}) ${writeRef(entry.item, "item")};`
+        : `${writeRef(entry, entry.constant === undefined ? `value.${prop(repeat.name)}.length` : literal(entry.constant))};`,
+    )
+    .join("\n");
+  return {
+    type: `export type ${id(owner.name)} = { readonly ${prop(repeat.name)}: readonly ${refName(repeat.item)}[] };`,
     read: `const layout: any = {}; const value: any = {};\n${reads}\n${checks}\nreturn value;`,
-    write: `${checks}\n${writes}` };
+    write: `${checks}\n${writes}`,
+  };
 }
 function versionedLength(owner, operation) {
   const checks = objectChecks(owner, operation.constraints);
-  const negotiated = owner.operations.filter((entry) => entry.op === "negotiated-bound")
-    .map((entry) => emitters[entry.op].syntax(owner, entry, {
-      encode: { "encoded-bytes": "writer.length - encodedStart" },
-      decode: { "encoded-bytes": "reader.offset - encodedStart" },
-    }));
+  const negotiated = owner.operations
+    .filter((entry) => entry.op === "negotiated-bound")
+    .map((entry) =>
+      emitters[entry.op].syntax(owner, entry, {
+        encode: { "encoded-bytes": "writer.length - encodedStart" },
+        decode: { "encoded-bytes": "reader.offset - encodedStart" },
+      }),
+    );
   const decodeNegotiated = negotiated.map((entry) => entry.decode).join("\n");
   const encodeNegotiated = negotiated.map((entry) => entry.encode).join("\n");
-  return { type: `export type ${id(owner.name)} = ${fieldsType(operation.fields)};`,
+  return {
+    type: `export type ${id(owner.name)} = ${fieldsType(operation.fields)};`,
     read: `${negotiated.length ? "const encodedStart = reader.offset; " : ""}const version = ${readRef(operation.version)}; if (!same(version, ${literal(operation.version.constant)})) fail(${JSON.stringify(owner.name + " version")}); const length = Number(${readRef(operation.length)}); const body = reader.bounded(length); const value: any = {};\n${operation.fields.map((field) => readField(field, "body")).join("\n")}\nbody.done(${JSON.stringify(owner.name)});\n${decodeNegotiated}\n${checks}\n${predicateChecks(owner)}\nreturn value;`,
-    write: `${negotiated.length ? "const encodedStart = writer.length;\n" : ""}${checks}\n${predicateChecks(owner)}\n${writeRef(operation.version, literal(operation.version.constant))}; const body = new Writer();\n${operation.fields.map((field) => writeField(field, "body")).join("\n")}\nconst bytes = body.result(); ${writeRef(operation.length, "bytes.length")}; writer.put(bytes);\n${encodeNegotiated}` };
+    write: `${negotiated.length ? "const encodedStart = writer.length;\n" : ""}${checks}\n${predicateChecks(owner)}\n${writeRef(operation.version, literal(operation.version.constant))}; const body = new Writer();\n${operation.fields.map((field) => writeField(field, "body")).join("\n")}\nconst bytes = body.result(); ${writeRef(operation.length, "bytes.length")}; writer.put(bytes);\n${encodeNegotiated}`,
+  };
 }
 function discriminator(entry, reader) {
   if (entry.source.kind === "wire") return readRef(entry.type, reader);
-  if (entry.source.kind === "enclosingField") return at("enclosing", entry.source.name);
-  if (entry.source.kind === "context") return `requireContext(context, ${JSON.stringify(entry.source.name)})`;
+  if (entry.source.kind === "enclosingField")
+    return at("enclosing", entry.source.name);
+  if (entry.source.kind === "context")
+    return `requireContext(context, ${JSON.stringify(entry.source.name)})`;
   throw new Error(`unsupported discriminator source ${entry.source.kind}`);
 }
 function selection(owner, operation, body) {
-  const branches = Object.entries(operation.cases).map(([signature, selected], index) => {
-    const test = Object.entries(JSON.parse(signature)).map(([name, value]) => `same(${at("value", name)}, ${literal(value)})`).join(" && ");
-    return `${index ? "else if" : "if"} (${test}) {\n${indent(body(selected, signature))}\n}`;
-  });
-  branches.push(operation.otherwise.kind === "fields" ? `else {\n${indent(body({ operations: operation.otherwise.fields }))}\n}` : `else fail(${JSON.stringify(owner.name + " discriminator")});`);
+  const branches = Object.entries(operation.cases).map(
+    ([signature, selected], index) => {
+      const test = Object.entries(JSON.parse(signature))
+        .map(([name, value]) => `same(${at("value", name)}, ${literal(value)})`)
+        .join(" && ");
+      return `${index ? "else if" : "if"} (${test}) {\n${indent(body(selected, signature))}\n}`;
+    },
+  );
+  branches.push(
+    operation.otherwise.kind === "fields"
+      ? `else {\n${indent(body({ operations: operation.otherwise.fields }))}\n}`
+      : `else fail(${JSON.stringify(owner.name + " discriminator")});`,
+  );
   return branches.join(" ");
 }
 function selectedSyntax(owner, selected, direction) {
-  return selected.operations.map((operation) => {
-    const syntax = emitters[operation.op]?.[direction];
-    if (!syntax) throw new Error(`${owner.name}: operation ${operation.op} has no ${direction} syntax`);
-    return syntax(owner, operation);
-  }).join("\n");
+  return selected.operations
+    .map((operation) => {
+      const syntax = emitters[operation.op]?.[direction];
+      if (!syntax)
+        throw new Error(
+          `${owner.name}: operation ${operation.op} has no ${direction} syntax`,
+        );
+      return syntax(owner, operation);
+    })
+    .join("\n");
 }
 function selectedProperties(owner, selected) {
   return selected.operations.flatMap((operation) => {
@@ -332,54 +640,158 @@ function selectedProperties(owner, selected) {
   });
 }
 function variantAgreement(owner, operation, selected) {
-  if (operation.encode?.selection !== "variant" || operation.encode.discriminatorAgreement !== "required" || operation.encode.mismatch !== "protocol-error") throw new Error(`${owner.name}: unsupported union encode agreement`);
-  const selectedFields = new Set(selected.operations.filter((entry) => entry.op === "field").map((entry) => entry.name));
-  const otherFields = [...new Set(Object.values(operation.cases).flatMap((entry) => entry.operations)
-    .filter((entry) => entry.op === "field" && !selectedFields.has(entry.name)).map((entry) => entry.name))];
-  return otherFields.length ? `if (${otherFields.map((name) => `${at("value", name)} !== undefined`).join(" || ")}) fail(${JSON.stringify(owner.name + " discriminator agreement")});` : "";
+  if (
+    operation.encode?.selection !== "variant" ||
+    operation.encode.discriminatorAgreement !== "required" ||
+    operation.encode.mismatch !== "protocol-error"
+  )
+    throw new Error(`${owner.name}: unsupported union encode agreement`);
+  const selectedFields = new Set(
+    selected.operations
+      .filter((entry) => entry.op === "field")
+      .map((entry) => entry.name),
+  );
+  const otherFields = [
+    ...new Set(
+      Object.values(operation.cases)
+        .flatMap((entry) => entry.operations)
+        .filter(
+          (entry) => entry.op === "field" && !selectedFields.has(entry.name),
+        )
+        .map((entry) => entry.name),
+    ),
+  ];
+  return otherFields.length
+    ? `if (${otherFields.map((name) => `${at("value", name)} !== undefined`).join(" || ")}) fail(${JSON.stringify(owner.name + " discriminator agreement")});`
+    : "";
 }
 function conditionalUnion(owner, operation) {
-  const variants = Object.entries(operation.cases).map(([signature, selected]) => `{ ${Object.entries(JSON.parse(signature)).map(([name, value]) => `readonly ${prop(name)}: ${JSON.stringify(value)}`).concat(selectedProperties(owner, selected)).join("; ")} }`);
-  if (operation.otherwise.kind === "fields") variants.push(fieldsType([...operation.discriminators.map((entry) => ({ name: entry.name, type: entry.type })), ...operation.otherwise.fields]));
-  const readCases = selection(owner, operation, (selected) => selectedSyntax(owner, selected, "caseRead"));
-  const writeCases = selection(owner, operation, (selected) => `${variantAgreement(owner, operation, selected)}\n${selectedSyntax(owner, selected, "caseWrite")}`);
-  const readDiscriminators = operation.discriminators.map((entry) => `${at("value", entry.name)} = ${discriminator(entry, "reader")};`).join("\n");
-  const writeDiscriminators = operation.discriminators.filter((entry) => entry.source.kind === "wire").map((entry) => `${writeRef(entry.type, at("value", entry.name))};`).join("\n");
-  return { type: `export type ${id(owner.name)} = ${variants.join(" | ")};`,
+  const variants = Object.entries(operation.cases).map(
+    ([signature, selected]) =>
+      `{ ${Object.entries(JSON.parse(signature))
+        .map(
+          ([name, value]) => `readonly ${prop(name)}: ${JSON.stringify(value)}`,
+        )
+        .concat(selectedProperties(owner, selected))
+        .join("; ")} }`,
+  );
+  if (operation.otherwise.kind === "fields")
+    variants.push(
+      fieldsType([
+        ...operation.discriminators.map((entry) => ({
+          name: entry.name,
+          type: entry.type,
+        })),
+        ...operation.otherwise.fields,
+      ]),
+    );
+  const readCases = selection(owner, operation, (selected) =>
+    selectedSyntax(owner, selected, "caseRead"),
+  );
+  const writeCases = selection(
+    owner,
+    operation,
+    (selected) =>
+      `${variantAgreement(owner, operation, selected)}\n${selectedSyntax(owner, selected, "caseWrite")}`,
+  );
+  const readDiscriminators = operation.discriminators
+    .map(
+      (entry) =>
+        `${at("value", entry.name)} = ${discriminator(entry, "reader")};`,
+    )
+    .join("\n");
+  const writeDiscriminators = operation.discriminators
+    .filter((entry) => entry.source.kind === "wire")
+    .map((entry) => `${writeRef(entry.type, at("value", entry.name))};`)
+    .join("\n");
+  return {
+    type: `export type ${id(owner.name)} = ${variants.join(" | ")};`,
     read: `const value: any = {};\n${readDiscriminators}\n${operation.bodyLengthType ? `const body = reader.bounded(Number(${readRef(operation.bodyLengthType)}));` : "const body = reader;"}\n${readCases}\n${operation.bodyLengthType ? `body.done(${JSON.stringify(owner.name)});` : ""}\n${predicateChecks(owner)}\nreturn value;`,
-    write: `${predicateChecks(owner)}\n${writeDiscriminators}\n${operation.bodyLengthType ? "const body = new Writer();" : "const body = writer;"}\n${writeCases}\n${operation.bodyLengthType ? `const bytes = body.result(); ${writeRef(operation.bodyLengthType, "bytes.length")}; writer.put(bytes);` : ""}` };
+    write: `${predicateChecks(owner)}\n${writeDiscriminators}\n${operation.bodyLengthType ? "const body = new Writer();" : "const body = writer;"}\n${writeCases}\n${operation.bodyLengthType ? `const bytes = body.result(); ${writeRef(operation.bodyLengthType, "bytes.length")}; writer.put(bytes);` : ""}`,
+  };
 }
 
 function presenceChecks(operation) {
-  return operation.presenceRules.map((rule) => {
-    const checks = [...(rule.require ?? []).map((name) => `${at("value", name)} === undefined`), ...(rule.forbid ?? []).map((name) => `${at("value", name)} !== undefined`)];
-    return checks.length ? `if (${condition(rule.when)} && (${checks.join(" || ")})) fail("tlv presence rule");` : "";
-  }).join("\n");
+  return operation.presenceRules
+    .map((rule) => {
+      const checks = [
+        ...(rule.require ?? []).map(
+          (name) => `${at("value", name)} === undefined`,
+        ),
+        ...(rule.forbid ?? []).map(
+          (name) => `${at("value", name)} !== undefined`,
+        ),
+      ];
+      return checks.length
+        ? `if (${condition(rule.when)} && (${checks.join(" || ")})) fail("tlv presence rule");`
+        : "";
+    })
+    .join("\n");
 }
 function tlv(owner, operation) {
-  const required = operation.requiredFields.map((name) => `${at("value", name)} === undefined`).join(" || ");
-  const cases = operation.fields.map((field) => `case ${field.id}:\n${indent(`if (${at("value", field.name)} !== undefined) fail(${JSON.stringify(owner.name + " duplicate")}); ${at("value", field.name)} = ${readRef(field.type, "item", "value")};\n${bounds(field, at("value", field.name))}\n${fieldConstraints(field, at("value", field.name))}\nitem.done(${JSON.stringify(field.name)}); break;`, 6)}`).join("\n");
-  const writes = operation.fields.map((field) => `if (${at("value", field.name)} !== undefined) {\n${indent(`${bounds(field, at("value", field.name))}\n${fieldConstraints(field, at("value", field.name))}\nconst item = new Writer(); ${writeRef(field.type, at("value", field.name), "item", "value")}; const itemBytes = item.result(); ${writeRef(operation.fieldIdType, String(field.id), "body", "value")}; ${writeRef(operation.fieldLengthType, "itemBytes.length", "body", "value")}; body.put(itemBytes);`)}\n}`).join("\n");
-  return { type: `export type ${id(owner.name)} = { ${operation.fields.map((field) => `readonly ${prop(field.name)}${field.required ? "" : "?"}: ${refName(field.type)}`).join("; ")} };`,
+  const required = operation.requiredFields
+    .map((name) => `${at("value", name)} === undefined`)
+    .join(" || ");
+  const cases = operation.fields
+    .map(
+      (field) =>
+        `case ${field.id}:\n${indent(`if (${at("value", field.name)} !== undefined) fail(${JSON.stringify(owner.name + " duplicate")}); ${at("value", field.name)} = ${readRef(field.type, "item", "value")};\n${bounds(field, at("value", field.name))}\n${fieldConstraints(field, at("value", field.name))}\nitem.done(${JSON.stringify(field.name)}); break;`, 6)}`,
+    )
+    .join("\n");
+  const writes = operation.fields
+    .map(
+      (field) =>
+        `if (${at("value", field.name)} !== undefined) {\n${indent(`${bounds(field, at("value", field.name))}\n${fieldConstraints(field, at("value", field.name))}\nconst item = new Writer(); ${writeRef(field.type, at("value", field.name), "item", "value")}; const itemBytes = item.result(); ${writeRef(operation.fieldIdType, String(field.id), "body", "value")}; ${writeRef(operation.fieldLengthType, "itemBytes.length", "body", "value")}; body.put(itemBytes);`)}\n}`,
+    )
+    .join("\n");
+  return {
+    type: `export type ${id(owner.name)} = { ${operation.fields.map((field) => `readonly ${prop(field.name)}${field.required ? "" : "?"}: ${refName(field.type)}`).join("; ")} };`,
     read: `const total = Number(${readRef(operation.totalLengthType)}); const body = reader.bounded(total); const value: any = {}; let previous = -1;\nwhile (body.remaining > 0) { const fieldId = Number(${readRef(operation.fieldIdType, "body", "value")}); const length = Number(${readRef(operation.fieldLengthType, "body", "value")}); if (fieldId <= previous) fail(${JSON.stringify(owner.name + " order")}); previous = fieldId; const item = body.bounded(length); switch (fieldId) {\n${indent(cases)}\n  default: item.take(item.remaining); break;\n} }\n${required ? `if (${required}) fail(${JSON.stringify(owner.name + " required")});` : ""}\n${presenceChecks(operation)}\nreturn value;`,
-    write: `${required ? `if (${required}) fail(${JSON.stringify(owner.name + " required")});` : ""}\n${presenceChecks(operation)}\nconst body = new Writer();\n${writes}\nconst bytes = body.result(); ${writeRef(operation.totalLengthType, "bytes.length")}; writer.put(bytes);` };
+    write: `${required ? `if (${required}) fail(${JSON.stringify(owner.name + " required")});` : ""}\n${presenceChecks(operation)}\nconst body = new Writer();\n${writes}\nconst bytes = body.result(); ${writeRef(operation.totalLengthType, "bytes.length")}; writer.put(bytes);`,
+  };
 }
 
 const emitters = {
   integer: { root: true, syntax: scalar, render: scalar },
   enum: { root: true, syntax: enumeration, render: enumeration },
-  "length-prefixed": { root: true, syntax: lengthPrefixed, render: lengthPrefixed },
+  "length-prefixed": {
+    root: true,
+    syntax: lengthPrefixed,
+    render: lengthPrefixed,
+  },
   "text-validation": { syntax: lengthPrefixed },
-  field: { syntax: readField, property: (_owner, operation) => `readonly ${prop(operation.name)}${operation.when ? "?" : ""}: ${refName(operation.type)}`, caseRead: (_owner, operation) => readField(operation, "body"), caseWrite: (_owner, operation) => writeField(operation, "body") },
+  field: {
+    syntax: readField,
+    property: (_owner, operation) =>
+      `readonly ${prop(operation.name)}${operation.when ? "?" : ""}: ${refName(operation.type)}`,
+    caseRead: (_owner, operation) => readField(operation, "body"),
+    caseWrite: (_owner, operation) => writeField(operation, "body"),
+  },
   struct: { root: true, syntax: structure, render: structure },
   vector: { root: true, syntax: vector, render: vector },
-  "versioned-vector": { root: true, syntax: versionedVector, render: versionedVector },
+  "versioned-vector": {
+    root: true,
+    syntax: versionedVector,
+    render: versionedVector,
+  },
   "bounded-reader": { syntax: versionedLength },
-  "versioned-length-delimited": { root: true, syntax: versionedLength, render: versionedLength },
+  "versioned-length-delimited": {
+    root: true,
+    syntax: versionedLength,
+    render: versionedLength,
+  },
   discriminator: { syntax: discriminator },
-  "conditional-union": { root: true, syntax: conditionalUnion, render: conditionalUnion },
+  "conditional-union": {
+    root: true,
+    syntax: conditionalUnion,
+    render: conditionalUnion,
+  },
   tlv32: { root: true, syntax: tlv, render: tlv },
-  constraint: { syntax: objectChecks, caseRead: caseConstraint, caseWrite: caseConstraint },
+  constraint: {
+    syntax: objectChecks,
+    caseRead: caseConstraint,
+    caseWrite: caseConstraint,
+  },
   "command-header": { syntax: renderCommand },
   flags: { syntax: flagChecks },
   "flag-constraint": { syntax: flagChecks },
@@ -390,96 +802,297 @@ const emitters = {
   "encoded-limit": { syntax: encodedLimit },
   "logical-stream": { syntax: renderLogical },
   "negotiated-bound": { syntax: negotiatedBound },
-  "runtime-predicate": { syntax: predicateChecks, caseRead: casePredicate, caseWrite: casePredicate },
+  "runtime-predicate": {
+    syntax: predicateChecks,
+    caseRead: casePredicate,
+    caseWrite: casePredicate,
+  },
 };
 function verifyVocabulary() {
-  if (JSON.stringify(Object.keys(emitters).sort()) !== JSON.stringify([...ir.operationVocabulary].sort())) throw new Error("TypeScript operation vocabulary mismatch");
-  for (const [name, emitter] of Object.entries(emitters)) if (typeof emitter.syntax !== "function") throw new Error(`TypeScript operation ${name} has no syntax emitter`);
+  if (
+    JSON.stringify(Object.keys(emitters).sort()) !==
+    JSON.stringify([...ir.operationVocabulary].sort())
+  )
+    throw new Error("TypeScript operation vocabulary mismatch");
+  for (const [name, emitter] of Object.entries(emitters))
+    if (typeof emitter.syntax !== "function")
+      throw new Error(`TypeScript operation ${name} has no syntax emitter`);
   const inspect = (value, owner) => {
-    if (Array.isArray(value)) return value.forEach((entry) => inspect(entry, owner));
+    if (Array.isArray(value))
+      return value.forEach((entry) => inspect(entry, owner));
     if (!value || typeof value !== "object") return;
-    if (value.op && !emitters[value.op]) throw new Error(`${owner}: unsupported operation ${value.op}`);
+    if (value.op && !emitters[value.op])
+      throw new Error(`${owner}: unsupported operation ${value.op}`);
     Object.values(value).forEach((entry) => inspect(entry, owner));
   };
-  [...ir.types, ...ir.commands, ...ir.durableFormats, ir.relocationLogicalStreamFormat].forEach((owner) => inspect(owner.operations, owner.name));
+  [
+    ...ir.types,
+    ...ir.commands,
+    ...ir.durableFormats,
+    ir.relocationLogicalStreamFormat,
+  ].forEach((owner) => inspect(owner.operations, owner.name));
 }
 function renderType(owner) {
-  const rendered = emitters[root(owner).op].render(owner, root(owner)); const name = id(owner.name);
+  incrementalRead = false;
+  const rendered = emitters[root(owner).op].render(owner, root(owner));
+  const name = id(owner.name);
+  incrementalRead = true;
+  const incrementalRendered = emitters[root(owner).op].render(
+    owner,
+    root(owner),
+  );
+  incrementalRead = false;
   const limit = owner.operations.find((entry) => entry.op === "encoded-limit");
-  const limitSyntax = limit ? emitters[limit.op].syntax(owner, limit, {
-    encode: "writer.length - limitStart", decode: "reader.offset - limitStart",
-  }) : null;
+  const limitSyntax = limit
+    ? emitters[limit.op].syntax(owner, limit, {
+        encode: "writer.length - limitStart",
+        decode: "reader.offset - limitStart",
+      })
+    : null;
   const read = limit
     ? `const limitStart = reader.offset; const decoded = (() => {\n${indent(rendered.read)}\n})();\n${limitSyntax.decode}\nreturn decoded;`
     : rendered.read;
   const write = limit
     ? `const limitStart = writer.length;\n${rendered.write}\n${limitSyntax.encode}`
     : rendered.write;
-  return `${rendered.type}\n${rendered.extra ?? ""}\nfunction read${name}(reader: Reader, context: ServiceWireDecoderContext, enclosing: any, flags: number): ${name} {\n  void context; void enclosing; void flags;\n${indent(read)}\n}\nfunction write${name}(input: ${name}, writer: Writer, context: ServiceWireDecoderContext, enclosing: any, flags: number): void {\n  void context; void enclosing; void flags; const value: any = input;\n${indent(write)}\n}\nexport function decode${name}(bytes: Uint8Array, context: ServiceWireDecoderContext): ${name} { const reader = new Reader(bytes); const value = read${name}(reader, context, {}, 0); reader.done(${JSON.stringify(owner.name)}); return value; }\nexport function encode${name}(value: ${name}, context: ServiceWireDecoderContext): Uint8Array { const writer = new Writer(); write${name}(value, writer, context, {}, 0); return writer.result(); }`;
+  const incrementalBody = limit
+    ? `const limitStart = reader.offset; const decoded = yield* (function* (): Generator<void, ${name}, void> {\n${indent(incrementalRendered.read)}\n})();\n${limitSyntax.decode}\nreturn decoded;`
+    : incrementalRendered.read;
+  const incrementalFunction = incrementalReachable.has(owner.name)
+    ? `function* readIncremental${name}(reader: IncrementalInput, context: ServiceWireDecoderContext, enclosing: any, flags: number): Generator<void, ${name}, void> {\n  void context; void enclosing; void flags;\n${indent(incrementalBody)}\n}`
+    : "";
+  return `${rendered.type}\n${rendered.extra ?? ""}\nfunction read${name}(reader: Reader, context: ServiceWireDecoderContext, enclosing: any, flags: number): ${name} {\n  void context; void enclosing; void flags;\n${indent(read)}\n}\n${incrementalFunction}\nfunction write${name}(input: ${name}, writer: Writer, context: ServiceWireDecoderContext, enclosing: any, flags: number): void {\n  void context; void enclosing; void flags; const value: any = input;\n${indent(write)}\n}\nexport function decode${name}(bytes: Uint8Array, context: ServiceWireDecoderContext): ${name} { const reader = new Reader(bytes); const value = read${name}(reader, context, {}, 0); reader.done(${JSON.stringify(owner.name)}); return value; }\nexport function encode${name}(value: ${name}, context: ServiceWireDecoderContext): Uint8Array { const writer = new Writer(); write${name}(value, writer, context, {}, 0); return writer.result(); }`;
 }
 
 function flagChecks(command, expression) {
-  const operation = op(command, "flags"); const allowed = mask(operation.allowed); const required = mask(operation.required);
-  const lines = [`if ((${expression} & ~${allowed}) !== 0 || (${expression} & ${required}) !== ${required}) fail(${JSON.stringify(command.name + " flags")});`];
-  for (const constraint of command.operations.filter((entry) => entry.op === "flag-constraint")) {
-    if (constraint.kind === "all-or-none") { const bits = mask(constraint.flags); lines.push(`if ((${expression} & ${bits}) !== 0 && (${expression} & ${bits}) !== ${bits}) fail(${JSON.stringify(command.name + " flags")});`); }
-    else if (constraint.kind === "implies") { const source = flags.get(constraint.if.name).bit; const target = mask(constraint.then); lines.push(`if ((${expression} & ${source}) !== 0 && (${expression} & ${target}) !== ${target}) fail(${JSON.stringify(command.name + " flags")});`); }
-    else throw new Error(`${command.name}: unsupported flag constraint ${constraint.kind}`);
+  const operation = op(command, "flags");
+  const allowed = mask(operation.allowed);
+  const required = mask(operation.required);
+  const lines = [
+    `if ((${expression} & ~${allowed}) !== 0 || (${expression} & ${required}) !== ${required}) fail(${JSON.stringify(command.name + " flags")});`,
+  ];
+  for (const constraint of command.operations.filter(
+    (entry) => entry.op === "flag-constraint",
+  )) {
+    if (constraint.kind === "all-or-none") {
+      const bits = mask(constraint.flags);
+      lines.push(
+        `if ((${expression} & ${bits}) !== 0 && (${expression} & ${bits}) !== ${bits}) fail(${JSON.stringify(command.name + " flags")});`,
+      );
+    } else if (constraint.kind === "implies") {
+      const source = flags.get(constraint.if.name).bit;
+      const target = mask(constraint.then);
+      lines.push(
+        `if ((${expression} & ${source}) !== 0 && (${expression} & ${target}) !== ${target}) fail(${JSON.stringify(command.name + " flags")});`,
+      );
+    } else
+      throw new Error(
+        `${command.name}: unsupported flag constraint ${constraint.kind}`,
+      );
   }
   return lines.join("\n");
 }
 function renderCommand(command) {
-  const name = id(command.name); const header = op(command, "command-header"); const payload = op(command, "payload");
-  const fields = command.operations.filter((entry) => entry.op === "field"); const metadata = command.operations.find((entry) => entry.op === "metadata-flag-frame");
-  const properties = fields.map((field) => `readonly ${prop(field.name)}${field.when ? "?" : ""}: ${refName(field.type)};`);
-  if (metadata) properties.push(`readonly metadata?: ${refName(metadata.frame)};`);
-  if (payload.policy !== "forbidden") properties.push(`readonly payload${payload.policy === "required" ? "" : "?"}: ${refName(payload.type)};`);
-  const decodeFrames = []; const encodeFrames = [];
-  if (metadata) { const bit = flags.get(metadata.flag.name).bit; decodeFrames.push(`if ((flags & ${bit}) !== 0) { if (frameIndex >= frames.length) fail(${JSON.stringify(command.name + " metadata")}); value.metadata = ${topRead(metadata.frame, "frames[frameIndex++]")}; }`); encodeFrames.push(`if ((value.flags & ${bit}) !== 0) { if (value.metadata === undefined) fail(${JSON.stringify(command.name + " metadata")}); frames.push(${topWrite(metadata.frame, "value.metadata")}); } else if (value.metadata !== undefined) fail(${JSON.stringify(command.name + " metadata forbidden")});`); }
-  if (payload.policy === "required") { decodeFrames.push(`if (frameIndex >= frames.length) fail(${JSON.stringify(command.name + " payload")}); value.payload = ${topRead(payload.type, "frames[frameIndex++]")};`); encodeFrames.push(`if (value.payload === undefined) fail(${JSON.stringify(command.name + " payload")}); frames.push(${topWrite(payload.type, "value.payload")});`); }
-  if (payload.policy === "optional") { decodeFrames.push(`if (frameIndex < frames.length) value.payload = ${topRead(payload.type, "frames[frameIndex++]")};`); encodeFrames.push(`if (value.payload !== undefined) frames.push(${topWrite(payload.type, "value.payload")});`); }
-  const magic = header.magic.map((byte) => `Number(reader.u(1)) !== ${byte}`).join(" || "); const predicates = predicateChecks(command);
+  const name = id(command.name);
+  const header = op(command, "command-header");
+  const payload = op(command, "payload");
+  const fields = command.operations.filter((entry) => entry.op === "field");
+  const metadata = command.operations.find(
+    (entry) => entry.op === "metadata-flag-frame",
+  );
+  const properties = fields.map(
+    (field) =>
+      `readonly ${prop(field.name)}${field.when ? "?" : ""}: ${refName(field.type)};`,
+  );
+  if (metadata)
+    properties.push(`readonly metadata?: ${refName(metadata.frame)};`);
+  if (payload.policy !== "forbidden")
+    properties.push(
+      `readonly payload${payload.policy === "required" ? "" : "?"}: ${refName(payload.type)};`,
+    );
+  const decodeFrames = [];
+  const encodeFrames = [];
+  if (metadata) {
+    const bit = flags.get(metadata.flag.name).bit;
+    decodeFrames.push(
+      `if ((flags & ${bit}) !== 0) { if (frameIndex >= frames.length) fail(${JSON.stringify(command.name + " metadata")}); value.metadata = ${topRead(metadata.frame, "frames[frameIndex++]")}; }`,
+    );
+    encodeFrames.push(
+      `if ((value.flags & ${bit}) !== 0) { if (value.metadata === undefined) fail(${JSON.stringify(command.name + " metadata")}); frames.push(${topWrite(metadata.frame, "value.metadata")}); } else if (value.metadata !== undefined) fail(${JSON.stringify(command.name + " metadata forbidden")});`,
+    );
+  }
+  if (payload.policy === "required") {
+    decodeFrames.push(
+      `if (frameIndex >= frames.length) fail(${JSON.stringify(command.name + " payload")}); value.payload = ${topRead(payload.type, "frames[frameIndex++]")};`,
+    );
+    encodeFrames.push(
+      `if (value.payload === undefined) fail(${JSON.stringify(command.name + " payload")}); frames.push(${topWrite(payload.type, "value.payload")});`,
+    );
+  }
+  if (payload.policy === "optional") {
+    decodeFrames.push(
+      `if (frameIndex < frames.length) value.payload = ${topRead(payload.type, "frames[frameIndex++]")};`,
+    );
+    encodeFrames.push(
+      `if (value.payload !== undefined) frames.push(${topWrite(payload.type, "value.payload")});`,
+    );
+  }
+  const magic = header.magic
+    .map((byte) => `Number(reader.u(1)) !== ${byte}`)
+    .join(" || ");
+  const predicates = predicateChecks(command);
   return `export type ${name}Command = { readonly command: ${JSON.stringify(command.name)}; readonly flags: number; ${properties.join(" ")} };\nexport function decode${name}Command(frames: readonly Uint8Array[], context: ServiceWireDecoderContext): ${name}Command { if (!frames.length) fail(${JSON.stringify(command.name + " frames")}); const reader = new Reader(frames[0]); if (${magic} || Number(reader.u(1)) !== ${header.wireMajor} || Number(reader.u(1)) !== ${header.commandId}) fail(${JSON.stringify(command.name + " header")}); const flags = Number(reader.u(1)); ${flagChecks(command, "flags")} const value: any = { command: ${JSON.stringify(command.name)}, flags };\n${indent(fields.map((field) => readField(field)).join("\n"))}\nreader.done(${JSON.stringify(command.name)}); let frameIndex = 1;\n${indent(decodeFrames.join("\n"))}\nif (frameIndex !== frames.length) fail(${JSON.stringify(command.name + " frames")});\n${indent(predicates)}\nreturn value; }\nexport function encode${name}Command(value: ${name}Command, context: ServiceWireDecoderContext): readonly Uint8Array[] { ${flagChecks(command, "value.flags")} ${predicates} const writer = new Writer(); writer.put([${header.magic}, ${header.wireMajor}, ${header.commandId}, value.flags]);\n${indent(fields.map((field) => writeField(field, "writer", "value", "value.flags")).join("\n"))}\nconst frames: Uint8Array[] = [writer.result()];\n${indent(encodeFrames.join("\n"))}\nreturn frames; }\nexport function validate${name}CommandRuntimePredicates(value: any, context: ServiceWireDecoderContext): void { ${predicates || "void value; void context;"} }`;
 }
 
 function renderDurable(format) {
-  const name = id(format.name); const header = op(format, "durable-header"); const checksum = op(format, "checksum"); const limit = op(format, "encoded-limit");
-  const bodyField = format.operations.find((entry) => entry.op === "field" && entry.name === "body");
-  if (checksum.algorithm !== "crc32c-castagnoli" || checksum.encoding !== "u32-big-endian" || checksum.coverage !== "magic-through-body"
-      || checksum.position !== "trailing" || checksum.mismatch !== "protocol-error" || checksum.verification !== "before-body-interpretation"
-      || bodyField?.interpretation !== "after-checksum-verification") throw new Error(`${format.name}: unsupported checksum`);
-  const limits = emitters[limit.op].syntax(format, limit, { encode: "bytes.length", decode: "bytes.length" });
-  const magic = header.magic.map((byte) => `Number(reader.u(1)) !== ${byte}`).join(" || ");
+  const name = id(format.name);
+  const header = op(format, "durable-header");
+  const checksum = op(format, "checksum");
+  const limit = op(format, "encoded-limit");
+  const bodyField = format.operations.find(
+    (entry) => entry.op === "field" && entry.name === "body",
+  );
+  if (
+    checksum.algorithm !== "crc32c-castagnoli" ||
+    checksum.encoding !== "u32-big-endian" ||
+    checksum.coverage !== "magic-through-body" ||
+    checksum.position !== "trailing" ||
+    checksum.mismatch !== "protocol-error" ||
+    checksum.verification !== "before-body-interpretation" ||
+    bodyField?.interpretation !== "after-checksum-verification"
+  )
+    throw new Error(`${format.name}: unsupported checksum`);
+  const limits = emitters[limit.op].syntax(format, limit, {
+    encode: "bytes.length",
+    decode: "bytes.length",
+  });
+  const magic = header.magic
+    .map((byte) => `Number(reader.u(1)) !== ${byte}`)
+    .join(" || ");
   return `export function decode${name}DurableFormat(bytes: Uint8Array, context: ServiceWireDecoderContext): ${refName(bodyField.type)} { ${limits.decode} const reader = new Reader(bytes); if (${magic} || Number(reader.u(1)) !== ${header.formatVersion}) fail(${JSON.stringify(format.name + " header")}); const flags = ${readRef(header.flagsType, "reader", "{}", "0")}; if (!same(flags, ${literal(header.flags)})) fail(${JSON.stringify(format.name + " flags")}); const length = Number(${readRef(header.bodyLengthType, "reader", "{}", "0")}); const body = reader.take(length); const checksumOffset = reader.offset; const declared = Number(reader.u(4)); reader.done(${JSON.stringify(format.name)}); if (crc32c(bytes.slice(0, checksumOffset)) !== declared) fail(${JSON.stringify(format.name + " checksum")}); return ${topRead(bodyField.type, "body")}; }\nexport function encode${name}DurableFormat(value: ${refName(bodyField.type)}, context: ServiceWireDecoderContext): Uint8Array { const body = ${topWrite(bodyField.type, "value")}; const writer = new Writer(); writer.put([${header.magic}, ${header.formatVersion}]); ${writeRef(header.flagsType, literal(header.flags), "writer", "{}", "0")}; ${writeRef(header.bodyLengthType, "body.length", "writer", "{}", "0")}; writer.put(body); writer.u(BigInt(crc32c(writer.result())), 4); const bytes = writer.result(); ${limits.encode} return bytes; }`;
 }
 function renderLogical(format) {
-  const name = id(format.name); const logical = op(format, "logical-stream"); const limit = op(format, "encoded-limit");
-  const limits = emitters[limit.op].syntax(format, limit, { encode: "bytes.length", decode: "bytes.length" });
-  return `export function decode${name}LogicalStream(bytes: Uint8Array, context: ServiceWireDecoderContext): ${refName(logical.body)} { ${limits.decode} return ${topRead(logical.body, "bytes")}; }\nexport function encode${name}LogicalStream(value: ${refName(logical.body)}, context: ServiceWireDecoderContext): Uint8Array { const bytes = ${topWrite(logical.body, "value")}; ${limits.encode} return bytes; }`;
+  const name = id(format.name);
+  const logical = op(format, "logical-stream");
+  const limit = op(format, "encoded-limit");
+  const machine = logical.decode;
+  if (
+    JSON.stringify(machine?.replay) !== JSON.stringify(logical.replay) ||
+    machine.replay.mode !== "bounded-incremental-decode" ||
+    machine.replay.wholeStreamInputAllocation !== "forbidden" ||
+    machine.replay.completion !== "success-only-on-final-chunk" ||
+    machine.replay.incompleteFinalChunk !== "truncation" ||
+    machine.replay.bytesAfterRoot !== "trailing-bytes" ||
+    !Array.isArray(machine.frames?.kinds) ||
+    !Array.isArray(machine.frames.reachableTypes) ||
+    !Number.isInteger(machine.frames.maximumDepth)
+  ) {
+    throw new Error(`${format.name}: unsupported incremental decode machine`);
+  }
+  const limits = emitters[limit.op].syntax(format, limit, {
+    encode: "bytes.length",
+    decode: "this.totalInputByteCount",
+  });
+  const body = refName(logical.body);
+  return `export type ${name}LogicalDecodeStep =
+  | { readonly state: "needMore"; readonly bufferedInputByteCount: number; readonly consumedByteCount: number; readonly continuationDepth: number }
+  | { readonly state: "complete"; readonly value: ${body}; readonly consumedByteCount: number; readonly continuationDepth: number };
+export type LogicalFailureKind = "truncated" | "trailing" | "capacity" | "limit" | "protocol";
+export class LogicalDecodeError extends RangeError { constructor(readonly kind: LogicalFailureKind, readonly offset: number, options?: ErrorOptions) { super(kind + " at byte " + offset, options); this.name = "LogicalDecodeError"; } }
+export class ${name}LogicalStreamDecoder {
+  static readonly maximumContinuationDepth = ${machine.frames.maximumDepth};
+  private readonly reader = new IncrementalReader();
+  private readonly machine: Generator<void, ${body}, void>;
+  private state: "reading" | "await-final" | "complete" | "failed" = "reading";
+  private pendingValue: ${body} | undefined;
+  private totalInputByteCount = 0;
+  constructor(context: ServiceWireDecoderContext) {
+    this.machine = readIncremental${body}(this.reader, context, {}, 0);
+  }
+  setSyntheticPriorInputByteCountForTest(value: number): void { if (this.totalInputByteCount !== 0) throw new Error("decoder already used"); this.totalInputByteCount = value; }
+  private logicalFailure(error: unknown, forced?: LogicalFailureKind): LogicalDecodeError { if (error instanceof LogicalDecodeError) return error; const kind = forced ?? (error instanceof ServiceWireCapacityError ? "capacity" : "protocol"); return new LogicalDecodeError(kind, this.reader.offset, { cause: error }); }
+  push(chunk: Uint8Array, finalChunk: boolean): ${name}LogicalDecodeStep {
+    if (this.state === "complete" || this.state === "failed") throw new Error("terminal logical decoder push");
+    if (chunk.length > ${logical.maximumBytes} - this.totalInputByteCount) { this.state = "failed"; throw this.logicalFailure(new RangeError(${JSON.stringify(format.name + " encoded limit")}), "limit"); }
+    this.totalInputByteCount += chunk.length;
+    if (this.state === "await-final") {
+      if (chunk.length !== 0) { this.state = "failed"; throw this.logicalFailure(new RangeError(${JSON.stringify(format.name + " trailing bytes")}), "trailing"); }
+      if (!finalChunk) return { state: "needMore", bufferedInputByteCount: 0, consumedByteCount: this.reader.offset, continuationDepth: ${machine.frames.maximumDepth} };
+      this.state = "complete";
+      return { state: "complete", value: this.pendingValue as ${body}, consumedByteCount: this.reader.offset, continuationDepth: 0 };
+    }
+    try {
+      this.reader.supply(chunk);
+      const result = this.machine.next();
+      if (!result.done) {
+        this.reader.release();
+        if (finalChunk) { this.state = "failed"; throw this.logicalFailure(new RangeError(${JSON.stringify(format.name + " truncated")}), "truncated"); }
+        return { state: "needMore", bufferedInputByteCount: this.reader.bufferedInputByteCount, consumedByteCount: this.reader.offset, continuationDepth: ${machine.frames.maximumDepth} };
+      }
+      if (this.reader.remaining !== 0) { this.state = "failed"; throw this.logicalFailure(new RangeError(${JSON.stringify(format.name + " trailing bytes")}), "trailing"); }
+      this.reader.release();
+      if (finalChunk) { this.state = "complete"; return { state: "complete", value: result.value, consumedByteCount: this.reader.offset, continuationDepth: 0 }; }
+      this.pendingValue = result.value;
+      this.state = "await-final";
+      return { state: "needMore", bufferedInputByteCount: 0, consumedByteCount: this.reader.offset, continuationDepth: ${machine.frames.maximumDepth} };
+    } catch (error) {
+      this.reader.discard();
+      this.state = "failed";
+      throw this.logicalFailure(error);
+    }
+  }
+}
+export function decode${name}LogicalStream(bytes: Uint8Array, context: ServiceWireDecoderContext): ${body} { const step = new ${name}LogicalStreamDecoder(context).push(bytes, true); if (step.state !== "complete") fail(${JSON.stringify(format.name + " truncated")}); return step.value; }
+export function encode${name}LogicalStream(value: ${body}, context: ServiceWireDecoderContext): Uint8Array { const bytes = ${topWrite(logical.body, "value")}; ${limits.encode} return bytes; }`;
 }
 
 function renderRuntime() {
-  const negotiatedContext = [...new Set(ir.types.flatMap((owner) => owner.operations
-    .filter((operation) => operation.op === "negotiated-bound")
-    .flatMap((operation) => Object.values(operation.applications)
-    .map((application) => application.context.name))))]
-    .map((name) => `readonly ${prop(name)}?: number | bigint;`).join(" ");
+  const negotiatedContext = [
+    ...new Set(
+      ir.types.flatMap((owner) =>
+        owner.operations
+          .filter((operation) => operation.op === "negotiated-bound")
+          .flatMap((operation) =>
+            Object.values(operation.applications).map(
+              (application) => application.context.name,
+            ),
+          ),
+      ),
+    ),
+  ]
+    .map((name) => `readonly ${prop(name)}?: number | bigint;`)
+    .join(" ");
   const taxonomy = ir.semanticConstraints.find(
     (constraint) => constraint.kind === "terminal-failure-integrity",
   );
   if (!taxonomy) throw new Error("missing terminal failure taxonomy");
-  const terminalValues = new Map(types.get("request-terminal-result").operations
-    .find((operation) => operation.op === "enum").values.map((entry) => [entry.name, entry.value]));
-  const failureValues = new Map(types.get("framework-error-code").operations
-    .find((operation) => operation.op === "enum").values.map((entry) => [entry.name, entry.value]));
+  const terminalValues = new Map(
+    types
+      .get("request-terminal-result")
+      .operations.find((operation) => operation.op === "enum")
+      .values.map((entry) => [entry.name, entry.value]),
+  );
+  const failureValues = new Map(
+    types
+      .get("framework-error-code")
+      .operations.find((operation) => operation.op === "enum")
+      .values.map((entry) => [entry.name, entry.value]),
+  );
   const boundary = taxonomy.boundaryFailure.terminalResults
-    .map((name) => terminalValues.get(name)).join(", ");
-  const exact = Object.entries(taxonomy.typedFrameworkFailure.exactResultByFailureCode)
-    .map(([failure, terminal]) => `[${failureValues.get(failure)}, ${terminalValues.get(terminal)}]`)
+    .map((name) => terminalValues.get(name))
+    .join(", ");
+  const exact = Object.entries(
+    taxonomy.typedFrameworkFailure.exactResultByFailureCode,
+  )
+    .map(
+      ([failure, terminal]) =>
+        `[${failureValues.get(failure)}, ${terminalValues.get(terminal)}]`,
+    )
     .join(", ");
   return String.raw`
-export type ServiceWireDecoderContext = Readonly<{ originalOperationKind?: MeshOperationKind; durableRelocationPresent?: boolean; applicationSnapshotPresent?: boolean; ${negotiatedContext} }>;
-function fail(message: string): never { throw new RangeError(message); }
+export type ServiceWireDecoderContext = Readonly<{ originalOperationKind?: MeshOperationKind; durableRelocationPresent?: boolean; applicationSnapshotPresent?: boolean; runtimePredicates?: Readonly<Record<string, unknown>>; ${negotiatedContext} }>;
+class ServiceWireProtocolError extends RangeError { constructor(message: string) { super(message); this.name = "ServiceWireProtocolError"; } }
+function fail(message: string): never { throw new ServiceWireProtocolError(message); }
 class ServiceWireCapacityError extends RangeError { constructor(message: string) { super(message); this.name = "ServiceWireCapacityError"; } }
 function capacityFail(message: string): never { throw new ServiceWireCapacityError(message); }
 function numeric(value: unknown): bigint { return typeof value === "bigint" ? value : BigInt(value as number); }
@@ -490,6 +1103,10 @@ const encoder = new TextEncoder(); const decoder = new TextDecoder("utf-8", { fa
 function utf8(value: unknown): Uint8Array { const text = value as string; for (let index = 0; index < text.length; ++index) { const unit = text.charCodeAt(index); if (unit >= 0xd800 && unit <= 0xdbff) { const next = text.charCodeAt(++index); if (!(next >= 0xdc00 && next <= 0xdfff)) fail("lone UTF-16 surrogate"); } else if (unit >= 0xdc00 && unit <= 0xdfff) fail("lone UTF-16 surrogate"); } return encoder.encode(text); }
 function decodeUtf8(bytes: Uint8Array, label: string): string { try { return decoder.decode(bytes); } catch { return fail(label + " UTF-8"); } }
 class Reader { offset = 0; constructor(readonly bytes: Uint8Array, readonly end = bytes.length) {} get remaining(): number { return this.end - this.offset; } take(length: number): Uint8Array { if (!Number.isSafeInteger(length) || length < 0 || length > this.remaining) fail("truncated service-wire value"); const value = this.bytes.subarray(this.offset, this.offset + length); this.offset += length; return value; } bounded(length: number): Reader { return new Reader(this.take(length)); } u(width: number): bigint { let value = 0n; for (const byte of this.take(width)) value = (value << 8n) | BigInt(byte); return value; } i64(): bigint { const value = this.u(8); return (value & (1n << 63n)) === 0n ? value : value - (1n << 64n); } done(label: string): void { if (this.remaining) fail(label + " trailing bytes"); } }
+interface IncrementalInput { readonly offset: number; readonly remaining: number; take(length: number): Generator<void, Uint8Array, void>; bytes(length: number): Generator<void, Uint8Array, void>; text(length: number, forbidNul: boolean, label: string): Generator<void, string, void>; bounded(length: number): IncrementalInput; u(width: number): Generator<void, bigint, void>; i64(): Generator<void, bigint, void>; done(label: string): void; }
+class IncrementalReader implements IncrementalInput { offset = 0; private chunk: Uint8Array = new Uint8Array(); private chunkOffset = 0; bufferedInputByteCount = 0; get remaining(): number { return this.chunk.length - this.chunkOffset; } supply(chunk: Uint8Array): void { if (this.remaining) throw new Error("incremental reader still owns caller input"); this.chunk = chunk; this.chunkOffset = 0; } release(): void { if (this.remaining) throw new Error("incremental reader did not consume caller input"); this.discard(); } discard(): void { this.chunk = new Uint8Array(); this.chunkOffset = 0; } *take(length: number): Generator<void, Uint8Array, void> { if (!Number.isSafeInteger(length) || length < 0 || length > 8) fail("invalid incremental scalar read length"); const value = new Uint8Array(length); let filled = 0; while (filled < length) { const available = this.remaining; if (available === 0) { this.bufferedInputByteCount = filled; yield; continue; } const count = Math.min(length - filled, available); value.set(this.chunk.subarray(this.chunkOffset, this.chunkOffset + count), filled); this.chunkOffset += count; this.offset += count; filled += count; } this.bufferedInputByteCount = 0; return value; } *bytes(length: number): Generator<void, Uint8Array, void> { if (!Number.isSafeInteger(length) || length < 0) fail("invalid incremental content length"); let value: Uint8Array; try { value = new Uint8Array(length); } catch { return capacityFail("incremental content capacity"); } let filled = 0; while (filled < length) { const available = this.remaining; if (available === 0) { this.bufferedInputByteCount = 0; yield; continue; } const count = Math.min(length - filled, available); value.set(this.chunk.subarray(this.chunkOffset, this.chunkOffset + count), filled); this.chunkOffset += count; this.offset += count; filled += count; } return value; } *text(length: number, forbidNul: boolean, label: string): Generator<void, string, void> { if (!Number.isSafeInteger(length) || length < 0) fail("invalid incremental text length"); let value = "", remaining = length, codePoint = 0, needed = 0, minimum = 0; while (remaining > 0) { if (this.remaining === 0) { this.bufferedInputByteCount = 0; yield; continue; } const byte = this.chunk[this.chunkOffset++]; ++this.offset; --remaining; if (needed === 0) { if (byte <= 0x7f) { if (forbidNul && byte === 0) fail(label + " NUL"); try { value += String.fromCodePoint(byte); } catch { return capacityFail(label + " capacity"); } continue; } if (byte >= 0xc2 && byte <= 0xdf) { codePoint = byte & 0x1f; needed = 1; minimum = 0x80; continue; } if (byte >= 0xe0 && byte <= 0xef) { codePoint = byte & 0x0f; needed = 2; minimum = 0x800; continue; } if (byte >= 0xf0 && byte <= 0xf4) { codePoint = byte & 0x07; needed = 3; minimum = 0x10000; continue; } fail(label + " UTF-8"); } if ((byte & 0xc0) !== 0x80) fail(label + " UTF-8"); codePoint = (codePoint << 6) | (byte & 0x3f); if (--needed === 0) { if (codePoint < minimum || codePoint > 0x10ffff || (codePoint >= 0xd800 && codePoint <= 0xdfff) || (forbidNul && codePoint === 0)) fail(label + " UTF-8"); try { value += String.fromCodePoint(codePoint); } catch { return capacityFail(label + " capacity"); } } } if (needed !== 0) fail(label + " UTF-8"); return value; } bounded(length: number): IncrementalInput { if (!Number.isSafeInteger(length) || length < 0) fail("invalid bounded read length"); return new IncrementalBoundedReader(this, length); } *u(width: number): Generator<void, bigint, void> { let value = 0n; for (const byte of yield* this.take(width)) value = (value << 8n) | BigInt(byte); return value; } *i64(): Generator<void, bigint, void> { const value = yield* this.u(8); return (value & (1n << 63n)) === 0n ? value : value - (1n << 64n); } done(label: string): void { if (this.remaining) fail(label + " bounded body remainder"); } }
+class IncrementalBoundedReader implements IncrementalInput { offset = 0; constructor(private readonly source: IncrementalReader, public remaining: number) {} private check(length: number): void { if (!Number.isSafeInteger(length) || length < 0 || length > this.remaining) fail("bounded service-wire value overflow"); } private consumed(length: number): void { this.remaining -= length; this.offset += length; } *take(length: number): Generator<void, Uint8Array, void> { this.check(length); const value = yield* this.source.take(length); this.consumed(length); return value; } *bytes(length: number): Generator<void, Uint8Array, void> { this.check(length); const value = yield* this.source.bytes(length); this.consumed(length); return value; } *text(length: number, forbidNul: boolean, label: string): Generator<void, string, void> { this.check(length); const value = yield* this.source.text(length, forbidNul, label); this.consumed(length); return value; } bounded(length: number): IncrementalInput { this.check(length); return new IncrementalNestedBoundedReader(this, length); } *u(width: number): Generator<void, bigint, void> { let value = 0n; for (const byte of yield* this.take(width)) value = (value << 8n) | BigInt(byte); return value; } *i64(): Generator<void, bigint, void> { const value = yield* this.u(8); return (value & (1n << 63n)) === 0n ? value : value - (1n << 64n); } done(label: string): void { if (this.remaining) fail(label + " bounded body remainder"); } }
+class IncrementalNestedBoundedReader implements IncrementalInput { offset = 0; constructor(private readonly parent: IncrementalInput, public remaining: number) {} private check(length: number): void { if (!Number.isSafeInteger(length) || length < 0 || length > this.remaining) fail("bounded service-wire value overflow"); } private consumed(length: number): void { this.remaining -= length; this.offset += length; } *take(length: number): Generator<void, Uint8Array, void> { this.check(length); const value = yield* this.parent.take(length); this.consumed(length); return value; } *bytes(length: number): Generator<void, Uint8Array, void> { this.check(length); const value = yield* this.parent.bytes(length); this.consumed(length); return value; } *text(length: number, forbidNul: boolean, label: string): Generator<void, string, void> { this.check(length); const value = yield* this.parent.text(length, forbidNul, label); this.consumed(length); return value; } bounded(length: number): IncrementalInput { this.check(length); return new IncrementalNestedBoundedReader(this, length); } *u(width: number): Generator<void, bigint, void> { let value = 0n; for (const byte of yield* this.take(width)) value = (value << 8n) | BigInt(byte); return value; } *i64(): Generator<void, bigint, void> { const value = yield* this.u(8); return (value & (1n << 63n)) === 0n ? value : value - (1n << 64n); } done(label: string): void { if (this.remaining) fail(label + " bounded body remainder"); } }
 class Writer { readonly chunks: Uint8Array[] = []; length = 0; put(bytes: Iterable<number>): void { const chunk = bytes instanceof Uint8Array ? bytes : Uint8Array.from(bytes); if (!chunk.length) return; this.chunks.push(chunk); this.length += chunk.length; } u(value: bigint, width: number): void { const bytes = new Uint8Array(width); for (let index = width - 1; index >= 0; --index) { bytes[index] = Number(value & 255n); value >>= 8n; } this.put(bytes); } i64(value: bigint): void { this.u(BigInt.asUintN(64, value), 8); } result(): Uint8Array { if (!this.chunks.length) return new Uint8Array(); if (this.chunks.length === 1) return this.chunks[0]; const result = new Uint8Array(this.length); let offset = 0; for (const chunk of this.chunks) { result.set(chunk, offset); offset += chunk.length; } return result; } }
 function compareBytes(left: Uint8Array, right: Uint8Array): number { const count = Math.min(left.length, right.length); for (let index = 0; index < count; ++index) if (left[index] !== right[index]) return left[index] < right[index] ? -1 : 1; return left.length === right.length ? 0 : left.length < right.length ? -1 : 1; }
 function compareBigint(left: bigint, right: bigint): number { return left < right ? -1 : left > right ? 1 : 0; }
@@ -500,16 +1117,45 @@ function crc32c(bytes: Uint8Array): number { let crc = 0xffffffff; for (const by
 }
 
 function render(schemaPath) {
-  ir = lowerSchema(schemaPath); types = new Map(ir.types.map((entry) => [entry.name, entry])); flags = new Map(ir.flags.map((entry) => [entry.name, entry])); verifyVocabulary();
-  const typeCode = ir.types.map(renderType).join("\n\n"); const commandCode = ir.commands.map(renderCommand).join("\n\n");
+  ir = lowerSchema(schemaPath);
+  types = new Map(ir.types.map((entry) => [entry.name, entry]));
+  flags = new Map(ir.flags.map((entry) => [entry.name, entry]));
+  incrementalReachable = new Set(
+    op(ir.relocationLogicalStreamFormat, "logical-stream").decode.frames
+      .reachableTypes,
+  );
+  verifyVocabulary();
+  const typeCode = ir.types.map(renderType).join("\n\n");
+  const commandCode = ir.commands.map(renderCommand).join("\n\n");
   return `/* This file is generated by render-service-wire-typescript.mjs. */\n/* eslint-disable */\n${renderRuntime()}\n${typeCode}\n\n${commandCode}\n\nexport type ServiceWireCommand = ${ir.commands.map((entry) => `${id(entry.name)}Command`).join(" | ")};\n\n${ir.durableFormats.map(renderDurable).join("\n\n")}\n\n${renderLogical(ir.relocationLogicalStreamFormat)}\n`;
 }
 function main() {
   const [mode, schemaPath, outputPath, ...extra] = process.argv.slice(2);
-  if (!["--write", "--check"].includes(mode) || !schemaPath || !outputPath || extra.length) { console.error("usage: render-service-wire-typescript.mjs --write|--check <schema-path> <output-path>"); process.exit(2); }
-  const target = path.resolve(outputPath); const output = render(path.resolve(schemaPath));
-  if (mode === "--write") { fs.mkdirSync(path.dirname(target), { recursive: true }); fs.writeFileSync(target, output); console.log(`wrote ${target} (${Buffer.byteLength(output)} bytes)`); return; }
-  if (!fs.existsSync(target) || fs.readFileSync(target, "utf8") !== output) { console.error(`generated TypeScript codec drift: ${target}`); process.exit(1); }
-  console.log(`generated TypeScript codec is current (${ir.types.length} types, ${ir.commands.length} commands)`);
+  if (
+    !["--write", "--check"].includes(mode) ||
+    !schemaPath ||
+    !outputPath ||
+    extra.length
+  ) {
+    console.error(
+      "usage: render-service-wire-typescript.mjs --write|--check <schema-path> <output-path>",
+    );
+    process.exit(2);
+  }
+  const target = path.resolve(outputPath);
+  const output = render(path.resolve(schemaPath));
+  if (mode === "--write") {
+    fs.mkdirSync(path.dirname(target), { recursive: true });
+    fs.writeFileSync(target, output);
+    console.log(`wrote ${target} (${Buffer.byteLength(output)} bytes)`);
+    return;
+  }
+  if (!fs.existsSync(target) || fs.readFileSync(target, "utf8") !== output) {
+    console.error(`generated TypeScript codec drift: ${target}`);
+    process.exit(1);
+  }
+  console.log(
+    `generated TypeScript codec is current (${ir.types.length} types, ${ir.commands.length} commands)`,
+  );
 }
 main();
