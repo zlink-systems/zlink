@@ -41,8 +41,7 @@ import {
 
 const CREATION_TERMINAL_CODEC_CONTEXT = {
   effectiveCompleteMessageBytesMinusActualEnvelopeOverhead: 1024 * 1024,
-  effectiveCompleteMessageBytes: 1024 * 1024,
-  runtimePredicates: {}
+  effectiveCompleteMessageBytes: 1024 * 1024
 } as const;
 
 export interface ZLinkActorPlacementTarget {
