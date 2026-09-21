@@ -113,8 +113,7 @@ of a specific role is ready.
 Checks the Location runtime's own status (Store connection, owner lease renewal).
 
 ```cpp
-zlink::framework::location_runtime_status_t status =
-  co_await location_query.get_status();
+zlink::framework::location_runtime_status_t status = co_await location_query.get_status ();
 bool healthy = status.store_healthy && status.owner_lease_healthy;
 ```
 
@@ -134,11 +133,11 @@ bool healthy = status.store_healthy && status.owner_lease_healthy;
 Queries registered node topology or per-MeshName service summaries, page by page.
 
 ```cpp
-zlink::framework::location_page_t<zlink::framework::location_topology_entry_t> page =
-  co_await location_query.list_topology(
+zlink::framework::location_page_t<zlink::framework::location_topology_entry_t>
+  page = co_await location_query.list_topology (
     zlink::framework::location_topology_filter_t{
-        .mesh_name = "play",
-        .state = zlink::framework::location_topology_state_t::ready,
+      .mesh_name = "play",
+      .state = zlink::framework::location_topology_state_t::ready,
     },
     zlink::framework::location_page_request_t{.page_size = 200});
 ```

@@ -88,8 +88,9 @@ fw::task_t<int> run ()
         const auto player = co_await client.post ("/players/p2")
                               .body (create_player_t{"rookie"})
                               .async<std::string> ();
-        const auto room =
-          co_await client.post ("/rooms").body (open_room_t{"tutorial-room"}).async<std::string> ();
+        const auto room = co_await client.post ("/rooms")
+                            .body (open_room_t{"tutorial-room"})
+                            .async<std::string> ();
         const auto chat = co_await client.post ("/rooms/" + room.body + "/chat")
                             .body (post_chat_t{"p2", "hello"})
                             .async_raw ();
@@ -109,10 +110,11 @@ fw::task_t<int> run ()
 
         // --8<-- [start:http-compressed-response]
         // compression() asks the server for gzip and removes content-encoding after decoding.
-        auto compressed_client =
-          hc::client_t::create ("http://127.0.0.1:5180").compression ().build ();
-        const auto compressed =
-          co_await compressed_client.get ("/rooms/" + room_id).async<room_state_t> ();
+        auto compressed_client = hc::client_t::create ("http://127.0.0.1:5180")
+                                   .compression ()
+                                   .build ();
+        const auto compressed = co_await compressed_client.get ("/rooms/" + room_id)
+                                  .async<room_state_t> ();
         const bool encoding_removed = compressed.headers.count ("content-encoding") == 0;
         std::cout << "compressed response: " << compressed.status << " encoding-removed "
                   << std::boolalpha << encoding_removed << std::endl;
@@ -123,8 +125,9 @@ fw::task_t<int> run ()
         (void) co_await client.post ("/players/p1")
           .body (create_player_t{"rookie"})
           .async<std::string> ();
-        auto redirect_client =
-          hc::client_t::create ("http://127.0.0.1:5180").follow_redirects ().build ();
+        auto redirect_client = hc::client_t::create ("http://127.0.0.1:5180")
+                                 .follow_redirects ()
+                                 .build ();
         const auto redirected = co_await redirect_client.get ("/player/p1").async<player_info_t> ();
         std::cout << "redirect: " << redirected.status << " " << redirected.body.player_id
                   << std::endl;
@@ -133,10 +136,10 @@ fw::task_t<int> run ()
         // --8<-- [start:http-basic-auth]
         // The admin endpoint uses a separate base URL, so two clients show the 401 and 200 paths.
         auto unauthenticated_admin = hc::client_t::create ("http://127.0.0.1:5181").build ();
-        const auto without_auth =
-          co_await unauthenticated_admin.post ("/admin/channels/profile/weight")
-            .query ("value", "2")
-            .async_raw ();
+        const auto without_auth = co_await unauthenticated_admin
+                                    .post ("/admin/channels/profile/weight")
+                                    .query ("value", "2")
+                                    .async_raw ();
         auto authenticated_admin = hc::client_t::create ("http://127.0.0.1:5181")
                                      .basic_auth ("ops", "tutorial-admin")
                                      .build ();

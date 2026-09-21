@@ -118,11 +118,11 @@ class supportchat_session_t final : public packet_stream_session_t
         const auto existing = _conversation_actor_ids.find (conversation_id);
         if (existing != _conversation_actor_ids.end ()) {
             auto actor = require_actor (existing->second, std::string (dispatch.packet_name));
-            auto refreshed =
-              co_await actor
-                .relay_request (std::string (dispatch.packet_name),
-                                zlink::message_t::from_json (join_conversation_req_t{}))
-                .async ();
+            auto refreshed = co_await actor
+                               .relay_request (
+                                 std::string (dispatch.packet_name),
+                                 zlink::message_t::from_json (join_conversation_req_t{}))
+                               .async ();
             co_return ensure_agent_conversation_res_t{
               actor_location_t::from (actor.ref ()),
               false,
@@ -159,12 +159,13 @@ class supportchat_session_t final : public packet_stream_session_t
                 /* Refresh only the exact ActorRef; the FIRST Ensure reply is
                  * what the caller reports (its `scheduled` flag reflects the
                  * original deferred membership operation). */
-                const auto refreshed =
-                  co_await _channels
-                    .request ("supportchat.support",
-                              ensure_agent_conversation_req_t{
-                                _identity_actor_id, _identity_display_name, conversation_id})
-                    .async<ensure_agent_conversation_res_t> ();
+                const auto refreshed = co_await _channels
+                                         .request (
+                                           "supportchat.support",
+                                           ensure_agent_conversation_req_t{_identity_actor_id,
+                                                                           _identity_display_name,
+                                                                           conversation_id})
+                                         .async<ensure_agent_conversation_res_t> ();
                 actor_ref = refreshed.actor.to_actor_ref (sample_names_t::mesh);
             }
         }

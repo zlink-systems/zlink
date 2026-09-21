@@ -132,8 +132,8 @@ inline crossing_t crossing_from_nw (const std::string &target_zone_id)
 
 inline const node_view_t &node_for_zone (const watch_nodes_res_t &nodes, const std::string &zone_id)
 {
-    const auto found =
-      std::find_if (nodes.nodes.begin (), nodes.nodes.end (), [&] (const auto &node) {
+    const auto found = std::find_if (
+      nodes.nodes.begin (), nodes.nodes.end (), [&] (const auto &node) {
           return std::find (node.zones.begin (), node.zones.end (), zone_id) != node.zones.end ();
       });
     if (found == nodes.nodes.end ())
@@ -146,8 +146,8 @@ inline std::string same_owner_adjacent_zone (const watch_nodes_res_t &nodes,
 {
     const auto &owner = node_for_zone (nodes, source_zone_id);
     const auto adjacent = adjacent_zones (source_zone_id);
-    const auto found =
-      std::find_if (owner.zones.begin (), owner.zones.end (), [&] (const auto &zone) {
+    const auto found = std::find_if (
+      owner.zones.begin (), owner.zones.end (), [&] (const auto &zone) {
           return zone != source_zone_id
                  && std::find (adjacent.begin (), adjacent.end (), zone) != adjacent.end ();
       });
@@ -165,15 +165,15 @@ se::task_t<join_world_res_t> join_and_wait (se::coroutine_connector_t &game,
                             return reply.player_id == player_id;
                         })
                         .async ();
-    auto state_wait =
-      game.wait_for<zone_state_notify_t> ()
-        .where ([player_id] (const auto &state_message) {
-            const auto &state = state_message.payload;
-            return std::any_of (state.players.begin (),
-                                state.players.end (),
-                                [&] (const auto &player) { return player.player_id == player_id; });
-        })
-        .async ();
+    auto state_wait = game.wait_for<zone_state_notify_t> ()
+                        .where ([player_id] (const auto &state_message) {
+                            const auto &state = state_message.payload;
+                            return std::any_of (
+                              state.players.begin (),
+                              state.players.end (),
+                              [&] (const auto &player) { return player.player_id == player_id; });
+                        })
+                        .async ();
     game.send (join_world_req_t{player_id}).submit ();
     const auto reply = co_await reply_wait;
     require (!reply.payload.error, "JoinWorldReq was rejected");
@@ -197,17 +197,18 @@ se::task_t<void> move_within (se::coroutine_connector_t &game,
             next_x += std::clamp (target_x - x, -spec_t::max_step, spec_t::max_step);
         else
             next_y += std::clamp (target_y - y, -spec_t::max_step, spec_t::max_step);
-        auto state_wait =
-          game.wait_for<zone_state_notify_t> ()
-            .where ([player_id, next_x, next_y] (const auto &state_message) {
-                const auto &state = state_message.payload;
-                return std::any_of (
-                  state.players.begin (), state.players.end (), [&] (const auto &player) {
-                      return player.player_id == player_id && player.x == next_x
-                             && player.y == next_y;
-                  });
-            })
-            .async ();
+        auto state_wait = game.wait_for<zone_state_notify_t> ()
+                            .where ([player_id, next_x, next_y] (const auto &state_message) {
+                                const auto &state = state_message.payload;
+                                return std::any_of (state.players.begin (),
+                                                    state.players.end (),
+                                                    [&] (const auto &player) {
+                                                        return player.player_id == player_id
+                                                               && player.x == next_x
+                                                               && player.y == next_y;
+                                                    });
+                            })
+                            .async ();
         game.send (move_msg_t{next_x, next_y}).submit ();
         (void) co_await state_wait;
         x = next_x;
@@ -225,13 +226,13 @@ se::task_t<void> cross_zone (se::coroutine_connector_t &game,
     const auto expected_zone = returning ? std::string ("zone-nw") : edge.target_zone_id;
     const auto target_x = returning ? edge.source_x : edge.target_x;
     const auto target_y = returning ? edge.source_y : edge.target_y;
-    auto changed_wait =
-      game.wait_for<zone_changed_notify_t> ()
-        .where ([player_id, expected_zone] (const auto &changed_message) {
-            const auto &changed = changed_message.payload;
-            return changed.player_id == player_id && changed.zone_id == expected_zone;
-        })
-        .async ();
+    auto changed_wait = game.wait_for<zone_changed_notify_t> ()
+                          .where ([player_id, expected_zone] (const auto &changed_message) {
+                              const auto &changed = changed_message.payload;
+                              return changed.player_id == player_id
+                                     && changed.zone_id == expected_zone;
+                          })
+                          .async ();
     game.send (move_msg_t{target_x, target_y}).submit ();
     (void) co_await changed_wait;
     x = target_x;
@@ -262,8 +263,8 @@ se::task_t<bool> run_main (se::coroutine_connector_t &game,
              "ZoneNodes must be registered and connected");
     std::cout << "scenario ZW-C1 passed\n";
 
-    const auto pair =
-      co_await ops.request (relocation_pair_req_t{}).async<relocation_pair_res_t> ();
+    const auto pair = co_await ops.request (relocation_pair_req_t{})
+                        .async<relocation_pair_res_t> ();
     require (!pair.error && pair.source_zone_id == "zone-nw",
              "Ops did not discover the canonical cross-owner adjacent pair");
     const auto edge = crossing_from_nw (pair.target_zone_id);
@@ -282,20 +283,23 @@ se::task_t<bool> run_main (se::coroutine_connector_t &game,
              "JoinWorldRes must confirm the canonical spawn");
     std::cout << "scenario ZW-A1 passed\n";
 
-    auto alice_shared_wait =
-      game.wait_for<zone_state_notify_t> ()
-        .where ([] (const auto &state_message) {
-            const auto &state = state_message.payload;
-            return std::any_of (
-                     state.players.begin (),
-                     state.players.end (),
-                     [] (const auto &player) { return player.player_id == "player-alice"; })
-                   && std::any_of (
-                     state.players.begin (), state.players.end (), [] (const auto &player) {
-                         return player.player_id == "player-bob";
-                     });
-        })
-        .async ();
+    auto alice_shared_wait = game.wait_for<zone_state_notify_t> ()
+                               .where ([] (const auto &state_message) {
+                                   const auto &state = state_message.payload;
+                                   return std::any_of (state.players.begin (),
+                                                       state.players.end (),
+                                                       [] (const auto &player) {
+                                                           return player.player_id
+                                                                  == "player-alice";
+                                                       })
+                                          && std::any_of (state.players.begin (),
+                                                          state.players.end (),
+                                                          [] (const auto &player) {
+                                                              return player.player_id
+                                                                     == "player-bob";
+                                                          });
+                               })
+                               .async ();
     const auto bob_joined = co_await join_and_wait (neighbor, "player-bob");
     require (bob_joined.zone_id == "zone-nw", "second player did not join the spawn zone");
     const auto alice_shared = co_await alice_shared_wait;
@@ -343,15 +347,15 @@ se::task_t<bool> run_main (se::coroutine_connector_t &game,
     co_await reject (52, 52, reject_reason_t::diagonal_crossing);
     co_await move_within (game, "player-alice", alice_x, alice_y, edge.source_x, edge.source_y);
     const auto &target_node = node_for_zone (nodes, pair.target_zone_id);
-    const auto target_maintenance =
-      co_await ops.request (set_maintenance_req_t{target_node.node_id, true})
-        .async<set_maintenance_res_t> ();
+    const auto target_maintenance = co_await ops
+                                      .request (set_maintenance_req_t{target_node.node_id, true})
+                                      .async<set_maintenance_res_t> ();
     require (!target_maintenance.error && target_maintenance.enabled,
              "A3 target maintenance was not applied");
     co_await reject (edge.target_x, edge.target_y, reject_reason_t::zone_maintenance);
-    const auto target_reset =
-      co_await ops.request (set_maintenance_req_t{target_node.node_id, false})
-        .async<set_maintenance_res_t> ();
+    const auto target_reset = co_await ops
+                                .request (set_maintenance_req_t{target_node.node_id, false})
+                                .async<set_maintenance_res_t> ();
     require (!target_reset.error && !target_reset.enabled, "A3 target maintenance cleanup failed");
     const std::vector<std::string> expected_rejections{reject_reason_t::out_of_range,
                                                        reject_reason_t::too_far,
@@ -361,9 +365,9 @@ se::task_t<bool> run_main (se::coroutine_connector_t &game,
     std::cout << "scenario ZW-A3 passed\n";
 
     const auto &source_node = node_for_zone (nodes, "zone-nw");
-    const auto source_maintenance =
-      co_await ops.request (set_maintenance_req_t{source_node.node_id, true})
-        .async<set_maintenance_res_t> ();
+    const auto source_maintenance = co_await ops
+                                      .request (set_maintenance_req_t{source_node.node_id, true})
+                                      .async<set_maintenance_res_t> ();
     require (!source_maintenance.error && source_maintenance.enabled
                && source_maintenance.zones == source_node.zones,
              "targeted maintenance did not change only the selected NodeId");
@@ -404,27 +408,28 @@ se::task_t<bool> run_main (se::coroutine_connector_t &game,
                && diagnostics.player_count >= 2,
              "NodeDiagnosticsRes did not expose current zones, population and maintenance");
     std::cout << "scenario ZW-E6 passed\n";
-    const auto source_reset =
-      co_await ops.request (set_maintenance_req_t{source_node.node_id, false})
-        .async<set_maintenance_res_t> ();
+    const auto source_reset = co_await ops
+                                .request (set_maintenance_req_t{source_node.node_id, false})
+                                .async<set_maintenance_res_t> ();
     require (!source_reset.error && !source_reset.enabled, "maintenance cleanup failed");
 
     int bob_x = spec_t::spawn_x;
     int bob_y = spec_t::spawn_y;
     co_await move_within (neighbor, "player-bob", bob_x, bob_y, edge.source_x, edge.source_y);
     co_await cross_zone (neighbor, "player-bob", bob_x, bob_y, edge);
-    auto border_wait =
-      game.wait_for<zone_state_notify_t> ()
-        .where ([&] (const auto &state_message) {
-            const auto &state = state_message.payload;
-            return state.zone_id == "zone-nw"
-                   && std::any_of (
-                     state.players.begin (), state.players.end (), [&] (const auto &player) {
-                         return player.player_id == "player-bob"
-                                && player.zone_id == pair.target_zone_id;
-                     });
-        })
-        .async ();
+    auto border_wait = game.wait_for<zone_state_notify_t> ()
+                         .where ([&] (const auto &state_message) {
+                             const auto &state = state_message.payload;
+                             return state.zone_id == "zone-nw"
+                                    && std::any_of (state.players.begin (),
+                                                    state.players.end (),
+                                                    [&] (const auto &player) {
+                                                        return player.player_id == "player-bob"
+                                                               && player.zone_id
+                                                                    == pair.target_zone_id;
+                                                    });
+                         })
+                         .async ();
     (void) co_await border_wait;
     std::cout << "scenario ZW-B1 passed\n";
 
@@ -451,17 +456,17 @@ se::task_t<bool> run_main (se::coroutine_connector_t &game,
       .submit ();
     std::cout << "scenario ZW-B5 passed\n";
     const std::vector<std::uint8_t> request_payload{1, 3, 5, 7};
-    const auto followed =
-      co_await game
-        .request (message_follow_probe_req_t{"player-alice", "follow-request", request_payload})
-        .async<message_follow_probe_res_t> ();
+    const auto followed = co_await game
+                            .request (message_follow_probe_req_t{
+                              "player-alice", "follow-request", request_payload})
+                            .async<message_follow_probe_res_t> ();
     require (!followed.error && followed.probe_id == "follow-request"
                && followed.payload == request_payload,
              "Message Follow request changed payload or reply correlation");
-    const auto missing =
-      co_await game
-        .request (message_follow_probe_req_t{"player-missing", "follow-missing", request_payload})
-        .async<message_follow_probe_res_t> ();
+    const auto missing = co_await game
+                           .request (message_follow_probe_req_t{
+                             "player-missing", "follow-missing", request_payload})
+                           .async<message_follow_probe_res_t> ();
     require (missing.error.has_value (),
              "a route-less Message Follow request did not end terminally");
     std::cout << "scenario ZW-B6 passed\n";
@@ -515,8 +520,8 @@ se::task_t<bool> run_transition (se::coroutine_connector_t &source,
     co_await target.connect ().async ();
     co_await ops.connect ().async ();
     const auto nodes = co_await ops.request (watch_nodes_req_t{}).async<watch_nodes_res_t> ();
-    const auto pair =
-      co_await ops.request (relocation_pair_req_t{}).async<relocation_pair_res_t> ();
+    const auto pair = co_await ops.request (relocation_pair_req_t{})
+                        .async<relocation_pair_res_t> ();
     require (!pair.error, "lifecycle lane has no cross-owner pair");
     const auto edge = crossing_from_nw (pair.target_zone_id);
     const auto target_node_id = node_for_zone (nodes, pair.target_zone_id).node_id;
@@ -532,29 +537,31 @@ se::task_t<bool> run_transition (se::coroutine_connector_t &source,
     co_await move_within (
       target, "player-transition-target", target_x, target_y, edge.source_x, edge.source_y);
     co_await cross_zone (target, "player-transition-target", target_x, target_y, edge);
-    auto visible_wait =
-      source.wait_for<zone_state_notify_t> ()
-        .where ([&] (const auto &state_message) {
-            const auto &state = state_message.payload;
-            return std::any_of (
-              state.players.begin (), state.players.end (), [&] (const auto &player) {
-                  return player.player_id == "player-transition-target"
-                         && player.zone_id == pair.target_zone_id;
-              });
-        })
-        .async ();
+    auto visible_wait = source.wait_for<zone_state_notify_t> ()
+                          .where ([&] (const auto &state_message) {
+                              const auto &state = state_message.payload;
+                              return std::any_of (
+                                state.players.begin (),
+                                state.players.end (),
+                                [&] (const auto &player) {
+                                    return player.player_id == "player-transition-target"
+                                           && player.zone_id == pair.target_zone_id;
+                                });
+                          })
+                          .async ();
     (void) co_await visible_wait;
 
-    auto expired_wait =
-      source.wait_for<zone_state_notify_t> ()
-        .where ([] (const auto &state_message) {
-            const auto &state = state_message.payload;
-            return std::none_of (
-              state.players.begin (), state.players.end (), [] (const auto &player) {
-                  return player.player_id == "player-transition-target";
-              });
-        })
-        .async ();
+    auto expired_wait = source.wait_for<zone_state_notify_t> ()
+                          .where ([] (const auto &state_message) {
+                              const auto &state = state_message.payload;
+                              return std::none_of (state.players.begin (),
+                                                   state.players.end (),
+                                                   [] (const auto &player) {
+                                                       return player.player_id
+                                                              == "player-transition-target";
+                                                   });
+                          })
+                          .async ();
     auto disconnected_wait = ops.wait_for<node_status_notify_t> ()
                                .where ([target_node_id] (const auto &node_message) {
                                    const auto &node = node_message.payload;
@@ -632,13 +639,13 @@ se::task_t<bool> run_e5_restore (se::coroutine_connector_t &ops, const std::stri
                           .async ();
     std::cout << "scenario ZW-E5 restore armed" << std::endl;
     (void) co_await stopped_wait;
-    auto replacement_wait =
-      ops.wait_for<node_status_notify_t> ()
-        .where ([target_node_id] (const auto &node_message) {
-            const auto &node = node_message.payload;
-            return node.node_id == target_node_id && node.registered && node.connected;
-        })
-        .async ();
+    auto replacement_wait = ops.wait_for<node_status_notify_t> ()
+                              .where ([target_node_id] (const auto &node_message) {
+                                  const auto &node = node_message.payload;
+                                  return node.node_id == target_node_id && node.registered
+                                         && node.connected;
+                              })
+                              .async ();
     std::cout << "scenario ZW-E5 replacement waiting" << std::endl;
     (void) co_await replacement_wait;
     const auto diagnostics = co_await ops.request (node_diagnostics_req_t{target_node_id})
@@ -679,8 +686,8 @@ se::task_t<bool> run_g4_boundary (se::coroutine_connector_t &game, se::coroutine
     co_await game.connect ().async ();
     co_await ops.connect ().async ();
     const auto nodes = co_await ops.request (watch_nodes_req_t{}).async<watch_nodes_res_t> ();
-    const auto pair =
-      co_await ops.request (relocation_pair_req_t{}).async<relocation_pair_res_t> ();
+    const auto pair = co_await ops.request (relocation_pair_req_t{})
+                        .async<relocation_pair_res_t> ();
     require (!pair.error, "G4 requires a cross-owner pair");
     const auto edge = crossing_from_nw (pair.target_zone_id);
     const auto target_node_id = node_for_zone (nodes, pair.target_zone_id).node_id;
@@ -713,8 +720,8 @@ se::task_t<bool> run_b8 (se::coroutine_connector_t &game,
     require (!arm_file.empty (), "B8 requires --arm-file");
     co_await game.connect ().async ();
     co_await ops.connect ().async ();
-    const auto pair =
-      co_await ops.request (relocation_pair_req_t{}).async<relocation_pair_res_t> ();
+    const auto pair = co_await ops.request (relocation_pair_req_t{})
+                        .async<relocation_pair_res_t> ();
     require (!pair.error, "B8 requires a cross-owner pair");
     const auto edge = crossing_from_nw (pair.target_zone_id);
     const auto joined = co_await join_and_wait (game, "player-b8-seal");
@@ -775,27 +782,29 @@ int main (int argc, char **argv)
         auto probe = se::use (probe_core);
         auto ops = se::use (ops_core);
 
-        se::task_t<bool> task =
-          topology.scenario == "main"         ? run_main (game, neighbor, probe, ops)
-          : topology.scenario == "D2"         ? run_announce (ops, "ZW-D2")
-          : topology.scenario == "transition" ? run_transition (game, neighbor, ops)
-          : topology.scenario == "C2"         ? run_c2 (ops, topology.target_node_id)
-          : topology.scenario == "E5-arm"     ? run_e5_arm (ops, topology.target_node_id)
-          : topology.scenario == "E5"         ? run_e5_restore (ops, topology.target_node_id)
-          : topology.scenario == "G3" || topology.scenario == "G4-fresh"
-            ? run_fresh_actor_probes (game, topology.scenario)
-          : topology.scenario == "G4" ? run_g4_boundary (game, ops)
-          : topology.scenario == "B8"
-            ? run_b8 (game, ops, topology.arm_file, disconnected)
-            : throw std::runtime_error ("unknown ZoneWorld client scenario");
+        se::task_t<bool> task = topology.scenario == "main" ? run_main (game, neighbor, probe, ops)
+                                : topology.scenario == "D2" ? run_announce (ops, "ZW-D2")
+                                : topology.scenario == "transition"
+                                  ? run_transition (game, neighbor, ops)
+                                : topology.scenario == "C2" ? run_c2 (ops, topology.target_node_id)
+                                : topology.scenario == "E5-arm"
+                                  ? run_e5_arm (ops, topology.target_node_id)
+                                : topology.scenario == "E5"
+                                  ? run_e5_restore (ops, topology.target_node_id)
+                                : topology.scenario == "G3" || topology.scenario == "G4-fresh"
+                                  ? run_fresh_actor_probes (game, topology.scenario)
+                                : topology.scenario == "G4" ? run_g4_boundary (game, ops)
+                                : topology.scenario == "B8"
+                                  ? run_b8 (game, ops, topology.arm_file, disconnected)
+                                  : throw std::runtime_error ("unknown ZoneWorld client scenario");
 
         const auto &result = task.result ();
         if (!result) {
-            const std::string line =
-              std::format ("zoneworld=failed stream-error-code={} message={}\n",
-                           static_cast<int> (result.error_code ().value_or (
-                             zlink::stream_connector::error_code_t::disconnected)),
-                           result.error ()->message);
+            const std::string line = std::format (
+              "zoneworld=failed stream-error-code={} message={}\n",
+              static_cast<int> (result.error_code ().value_or (
+                zlink::stream_connector::error_code_t::disconnected)),
+              result.error ()->message);
             std::cerr << line;
             return 1;
         }

@@ -48,14 +48,14 @@ class commerce_api_handlers_t
             if (!mappings.contains (request.idempotency_key)) {
                 const auto next = state.value ("nextOrderSequence", 0) + 1;
                 state["nextOrderSequence"] = next;
-                mappings[request.idempotency_key] =
-                  nlohmann::json{{"orderId",
-                                  "order-" + std::string (4 - std::to_string (next).size (), '0')
-                                    + std::to_string (next)},
-                                 {"started", false}};
+                mappings[request.idempotency_key] = nlohmann::json{
+                  {"orderId",
+                   "order-" + std::string (4 - std::to_string (next).size (), '0')
+                     + std::to_string (next)},
+                  {"started", false}};
             }
-            const auto order_id =
-              mappings[request.idempotency_key].value ("orderId", std::string{});
+            const auto order_id = mappings[request.idempotency_key].value ("orderId",
+                                                                           std::string{});
             const auto already_started = mappings[request.idempotency_key].value ("started", false);
 
             /* 장바구니는 CommerceStateStore의 시드에서 읽어 검증한다 — 금액 범위나 cart id
@@ -125,8 +125,8 @@ class commerce_api_handlers_t
             state["nextOrderSequence"] = next;
             const auto order_id = "order-" + std::string (4 - std::to_string (next).size (), '0')
                                   + std::to_string (next);
-            state["idempotency"][request.idempotency_key] =
-              nlohmann::json{{"orderId", order_id}, {"started", false}};
+            state["idempotency"][request.idempotency_key] = nlohmann::json{{"orderId", order_id},
+                                                                           {"started", false}};
             return order_id;
         });
         /* The runner receives this freshly allocated value and supplies it to
@@ -144,11 +144,11 @@ class commerce_api_handlers_t
             if (!mappings.contains (request.idempotency_key)) {
                 const auto next = state.value ("nextOrderSequence", 0) + 1;
                 state["nextOrderSequence"] = next;
-                mappings[request.idempotency_key] =
-                  nlohmann::json{{"orderId",
-                                  "order-" + std::string (4 - std::to_string (next).size (), '0')
-                                    + std::to_string (next)},
-                                 {"started", false}};
+                mappings[request.idempotency_key] = nlohmann::json{
+                  {"orderId",
+                   "order-" + std::string (4 - std::to_string (next).size (), '0')
+                     + std::to_string (next)},
+                  {"started", false}};
             }
             const auto id = mappings[request.idempotency_key].value ("orderId", std::string{});
             state["testHooks"]["stopAt"][id] = order_status_t::inventory_reserved;
@@ -157,8 +157,8 @@ class commerce_api_handlers_t
         (void) order_id;
 
         auto response = co_await start_order (request);
-        auto state =
-          co_await wait_for_status (response.order_id, order_status_t::inventory_reserved);
+        auto state = co_await wait_for_status (response.order_id,
+                                               order_status_t::inventory_reserved);
         _store.update ([&] (nlohmann::json &saved) {
             saved["testHooks"]["stopAt"].erase (response.order_id);
             return true;
@@ -243,10 +243,10 @@ class commerce_api_handlers_t
                * this run, rather than relying on guessed order numbers. */
               && state["idempotency"].size () == 10;
             if (passed) {
-                const std::string line =
-                  std::format ("shoppingmall-evidence order={} events={}\n",
-                               request.successful_order_id,
-                               event_types_for (state, request.successful_order_id).size ());
+                const std::string line = std::format (
+                  "shoppingmall-evidence order={} events={}\n",
+                  request.successful_order_id,
+                  event_types_for (state, request.successful_order_id).size ());
                 std::cerr << line;
             }
             return server_assertion_res_t{passed, evidence};

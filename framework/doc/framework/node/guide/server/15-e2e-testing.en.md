@@ -149,6 +149,27 @@ await client2.expectNone<PlayerJoinedNotify>(PacketNames.playerJoinedNotify)
 In a flow where state changes in stages, the contract isn't whether something arrives but
 its **order.**
 
+auto status_sequence = co_await customer.wait_for_sequence<delivery_status_notify_t> ()
+                         .expect ([&] (const auto &m) {
+                             return m.delivery_id == delivery_id
+                                    && m.status == delivery_status_t::assigned;
+                         })
+                         .expect ([&] (const auto &m) {
+                             return m.delivery_id == delivery_id
+                                    && m.status == delivery_status_t::accepted;
+                         })
+                         .expect ([&] (const auto &m) {
+                             return m.delivery_id == delivery_id
+                                    && m.status == delivery_status_t::picked_up;
+                         })
+                         .expect ([&] (const auto &m) {
+                             return m.delivery_id == delivery_id
+                                    && m.status == delivery_status_t::delivered;
+                         })
+                         .timeout (customer.options ().wait_timeout)
+                         .async ();
+```
+
 ```typescript
 const statusSequence = await customer
   .waitForSequence<DeliveryStatusNotify>(PacketNames.deliveryStatusNotify)
@@ -180,6 +201,25 @@ Most E2E flakiness has the same cause. **You act first, then start waiting**, an
 push that arrived in between.
 
 Reverse the order. Register the wait first, then run the action that triggers that push.
+
+// Register the wait first -- don't co_await it yet.
+auto status_sequence_task = customer.wait_for_sequence<delivery_status_notify_t> ()
+                              .expect ([&] (const auto &m) {
+                                  return m.delivery_id == delivery_id
+                                         && m.status == delivery_status_t::assigned;
+                              })
+                              .timeout (customer.options ().wait_timeout)
+                              .async ();
+
+// Then run the action that triggers the push.
+auto created = http.post ("/deliveries")
+                 .body (
+                   create_delivery_req_t{delivery_id, "customer-1", "Kitchen 12", "Customer Lobby"})
+                 .fetch<create_delivery_res_t> ();
+
+// Receive the result last.
+auto status_sequence = co_await std::move (status_sequence_task);
+```
 
 ```typescript
 // Register the wait first -- don't await it yet.

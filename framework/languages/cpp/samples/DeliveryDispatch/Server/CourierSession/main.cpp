@@ -63,8 +63,8 @@ class courier_session_t final : public packet_stream_session_t
                                              bind_courier_session_req_t{request.courier_id}))
                            .async ();
             stream.reply_packet (reply).async ();
-            const std::string line =
-              std::format ("deliverydispatch-courier bound courier={}\n", request.courier_id);
+            const std::string line = std::format ("deliverydispatch-courier bound courier={}\n",
+                                                  request.courier_id);
             std::cerr << line;
             // --8<-- [end:doc-dd-session-bind]
             co_return;

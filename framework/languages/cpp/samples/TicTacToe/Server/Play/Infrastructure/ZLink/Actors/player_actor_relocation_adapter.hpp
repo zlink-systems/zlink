@@ -52,8 +52,8 @@ class player_actor_relocation_adapter_t final : public actor_relocation_adapter_
     task_t<void>
     restore (player_actor_t &actor, std::vector<std::byte> payload, std::stop_token) override
     {
-        const auto message =
-          zlink::message_t::from (std::span<const std::byte> (payload.data (), payload.size ()));
+        const auto message = zlink::message_t::from (
+          std::span<const std::byte> (payload.data (), payload.size ()));
         auto restored = message.parse_json<player_actor_state_t> ();
         actor.destroy_after_entry_spot_join = restored.destroy_after_entry_spot_join;
         actor.disconnected = restored.disconnected;

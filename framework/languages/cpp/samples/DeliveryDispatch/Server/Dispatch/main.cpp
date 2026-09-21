@@ -206,10 +206,10 @@ class dispatch_worker_t
     /* 첫 제안. Assigned를 기록하고 제안을 보낸 뒤 이 턴은 끝난다. */
     task_t<void> start (const assign_delivery_msg_t &request)
     {
-        const std::string assign_line =
-          std::format ("deliverydispatch dispatch: assign delivery={} customer={}\n",
-                       request.delivery_id,
-                       request.customer_id);
+        const std::string assign_line = std::format (
+          "deliverydispatch dispatch: assign delivery={} customer={}\n",
+          request.delivery_id,
+          request.customer_id);
         std::cerr << assign_line;
         const auto &courier_id = _couriers.candidates ().front ();
         co_await _statuses.publish (request, delivery_status_t::assigned, courier_id);
@@ -232,11 +232,11 @@ class dispatch_worker_t
             _state.close (offer.request.delivery_id);
             co_return;
         }
-        const std::string declined_line =
-          std::format ("deliverydispatch dispatch: courier={} did not take delivery={} ({})\n",
-                       courier_id,
-                       offer.request.delivery_id,
-                       reason);
+        const std::string declined_line = std::format (
+          "deliverydispatch dispatch: courier={} did not take delivery={} ({})\n",
+          courier_id,
+          offer.request.delivery_id,
+          reason);
         std::cerr << declined_line;
         co_await reassign (offer);
     }
@@ -258,8 +258,8 @@ class dispatch_worker_t
         }
         const auto &courier_id = _couriers.candidates ()[next_index];
         co_await _statuses.publish (offer.request, delivery_status_t::reassigned, courier_id);
-        const auto attempt =
-          _state.offer (offer.request, next_index, sample_timings_t::courier_decision_timeout);
+        const auto attempt = _state.offer (
+          offer.request, next_index, sample_timings_t::courier_decision_timeout);
         co_await _offers.offer (offer.request, courier_id, attempt);
     }
     // --8<-- [end:doc-dd-reassign]
@@ -389,8 +389,8 @@ class offer_deadline_sweeper_t final : public hosted_service_t
                 sweep (*_state, *_worker);
             }
             catch (const std::exception &error) {
-                const std::string line =
-                  std::format ("deliverydispatch dispatch: sweep failed: {}\n", error.what ());
+                const std::string line = std::format (
+                  "deliverydispatch dispatch: sweep failed: {}\n", error.what ());
                 std::cerr << line;
             }
         }
@@ -420,10 +420,10 @@ class offer_deadline_sweeper_t final : public hosted_service_t
         }
         // --8<-- [end:doc-dd-decision-settle]
         for (const auto &offer : state.expired ()) {
-            const std::string expired_line =
-              std::format ("deliverydispatch dispatch: offer expired delivery={} attempt={}\n",
-                           offer.request.delivery_id,
-                           offer.attempt);
+            const std::string expired_line = std::format (
+              "deliverydispatch dispatch: offer expired delivery={} attempt={}\n",
+              offer.request.delivery_id,
+              offer.attempt);
             std::cerr << expired_line;
             _work.push_back (reassign (worker, offer));
         }
@@ -436,10 +436,10 @@ class offer_deadline_sweeper_t final : public hosted_service_t
             co_await worker.start (request);
         }
         catch (const std::exception &error) {
-            const std::string assignment_failed_line =
-              std::format ("deliverydispatch dispatch: assignment failed delivery={}: {}\n",
-                           request.delivery_id,
-                           error.what ());
+            const std::string assignment_failed_line = std::format (
+              "deliverydispatch dispatch: assignment failed delivery={}: {}\n",
+              request.delivery_id,
+              error.what ());
             std::cerr << assignment_failed_line;
         }
     }
@@ -451,10 +451,10 @@ class offer_deadline_sweeper_t final : public hosted_service_t
             co_await worker.settle (offer, decision.accepted, decision.reason.value_or (""));
         }
         catch (const std::exception &error) {
-            const std::string decision_failed_line =
-              std::format ("deliverydispatch dispatch: decision failed delivery={}: {}\n",
-                           offer.request.delivery_id,
-                           error.what ());
+            const std::string decision_failed_line = std::format (
+              "deliverydispatch dispatch: decision failed delivery={}: {}\n",
+              offer.request.delivery_id,
+              error.what ());
             std::cerr << decision_failed_line;
         }
     }
@@ -466,10 +466,10 @@ class offer_deadline_sweeper_t final : public hosted_service_t
             co_await worker.reassign (offer);
         }
         catch (const std::exception &error) {
-            const std::string reassign_failed_line =
-              std::format ("deliverydispatch dispatch: reassign failed delivery={}: {}\n",
-                           offer.request.delivery_id,
-                           error.what ());
+            const std::string reassign_failed_line = std::format (
+              "deliverydispatch dispatch: reassign failed delivery={}: {}\n",
+              offer.request.delivery_id,
+              error.what ());
             std::cerr << reassign_failed_line;
         }
     }
@@ -508,8 +508,8 @@ class create_delivery_http_handler_t
                                        request.pickup_address,
                                        request.dropoff_address})
           .async ();
-        const std::string line =
-          std::format ("deliverydispatch api: created delivery={}\n", request.delivery_id);
+        const std::string line = std::format ("deliverydispatch api: created delivery={}\n",
+                                              request.delivery_id);
         std::cerr << line;
         return create_delivery_res_t{request.delivery_id};
     }
@@ -530,10 +530,10 @@ class server_assertion_http_handler_t
 
     server_assertion_res_t handle (const server_assertion_req_t &request)
     {
-        const std::string assert_line =
-          std::format ("deliverydispatch api: assert successful={} reassigned={}\n",
-                       request.successful_delivery_id,
-                       request.reassigned_delivery_id);
+        const std::string assert_line = std::format (
+          "deliverydispatch api: assert successful={} reassigned={}\n",
+          request.successful_delivery_id,
+          request.reassigned_delivery_id);
         std::cerr << assert_line;
         const auto success = _evidence.has_sequence (request.successful_delivery_id,
                                                      {delivery_status_t::assigned,
@@ -574,8 +574,8 @@ int main (int argc, char **argv)
       .add_singleton<dispatch_state_t> ()
       .add_singleton<courier_selection_policy_t> ();
     // --8<-- [start:doc-dd-dispatch-register]
-    auto dispatch_channel =
-      options.add_client_server_channel (sample_names_t::dispatch_route_channel);
+    auto dispatch_channel = options.add_client_server_channel (
+      sample_names_t::dispatch_route_channel);
     dispatch_channel.server ()
       .set_bind_host (host_from_tcp_endpoint (topology.dispatch_route_endpoint))
       .listen (port_from_http_url (topology.dispatch_route_endpoint))

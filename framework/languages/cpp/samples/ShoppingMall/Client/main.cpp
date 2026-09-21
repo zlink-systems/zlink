@@ -27,10 +27,10 @@ int main (int argc, char **argv)
     const auto api_a_http_url = read_option (argc, argv, "--api-a-http-url");
     const auto api_b_http_url = read_option (argc, argv, "--api-b-http-url");
     const auto resume_order_id = read_option (argc, argv, "--resume-order-id");
-    const auto projection_continue_order_id =
-      read_option (argc, argv, "--projection-continue-order-id");
-    const auto projection_rebuild_order_id =
-      read_option (argc, argv, "--projection-rebuild-order-id");
+    const auto projection_continue_order_id = read_option (
+      argc, argv, "--projection-continue-order-id");
+    const auto projection_rebuild_order_id = read_option (
+      argc, argv, "--projection-rebuild-order-id");
     if (api_a_http_url.empty () || api_b_http_url.empty () || resume_order_id.empty ()
         || projection_continue_order_id.empty () || projection_rebuild_order_id.empty ()) {
         const std::string line = std::format (

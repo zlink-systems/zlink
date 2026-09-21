@@ -139,8 +139,8 @@ class ops_state_t
         std::vector<node_view_t> changed;
         for (auto &[node_id, node] : _nodes) {
             const auto found = _rid_by_node.find (node_id);
-            const auto connected =
-              found != _rid_by_node.end () && _live_rids.contains (found->second);
+            const auto connected = found != _rid_by_node.end ()
+                                   && _live_rids.contains (found->second);
             if (connected != node.connected) {
                 node.connected = connected;
                 changed.push_back (node);
@@ -445,12 +445,12 @@ class ops_session_t final : public fw::packet_stream_session_t
         if (packet == node_diagnostics_req_t::packet_name) {
             const auto request = payload.parse_json<node_diagnostics_req_t> ();
             try {
-                const auto result =
-                  co_await _routes
-                    .request_to_channel (names_t::ops_channel (request.node_id),
-                                         get_node_diagnostics_req_t{request.node_id})
-                    .timeout (std::chrono::seconds (10))
-                    .async<get_node_diagnostics_res_t> ();
+                const auto result = co_await _routes
+                                      .request_to_channel (
+                                        names_t::ops_channel (request.node_id),
+                                        get_node_diagnostics_req_t{request.node_id})
+                                      .timeout (std::chrono::seconds (10))
+                                      .async<get_node_diagnostics_res_t> ();
                 stream
                   .reply_packet (
                     zlink::message_t::from_json (node_diagnostics_res_t{result.node_id,

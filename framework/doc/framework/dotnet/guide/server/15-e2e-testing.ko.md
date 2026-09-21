@@ -158,6 +158,27 @@ var statusSequence = await customer.WaitForSequence<DeliveryStatusNotify>()
     .Async(ct);
 ```
 
+auto status_sequence = co_await customer.wait_for_sequence<delivery_status_notify_t> ()
+                         .expect ([&] (const auto &m) {
+                             return m.delivery_id == delivery_id
+                                    && m.status == delivery_status_t::assigned;
+                         })
+                         .expect ([&] (const auto &m) {
+                             return m.delivery_id == delivery_id
+                                    && m.status == delivery_status_t::accepted;
+                         })
+                         .expect ([&] (const auto &m) {
+                             return m.delivery_id == delivery_id
+                                    && m.status == delivery_status_t::picked_up;
+                         })
+                         .expect ([&] (const auto &m) {
+                             return m.delivery_id == delivery_id
+                                    && m.status == delivery_status_t::delivered;
+                         })
+                         .timeout (customer.options ().wait_timeout)
+                         .async ();
+```
+
 ### 요청 실패 확인
 
 권한이 없거나 순서가 맞지 않는 요청이 **거절되는지**도 계약이다. 성공 경로만 검증하면 이
@@ -193,6 +214,25 @@ var created = await http.Post("/deliveries")
 
 // 마지막에 결과를 받는다.
 var statusSequence = await statusSequenceTask;
+```
+
+// 대기를 먼저 등록한다 — 아직 co_await하지 않는다.
+auto status_sequence_task = customer.wait_for_sequence<delivery_status_notify_t> ()
+                              .expect ([&] (const auto &m) {
+                                  return m.delivery_id == delivery_id
+                                         && m.status == delivery_status_t::assigned;
+                              })
+                              .timeout (customer.options ().wait_timeout)
+                              .async ();
+
+// 그다음에 push를 유발하는 행동을 실행한다.
+auto created = http.post ("/deliveries")
+                 .body (
+                   create_delivery_req_t{delivery_id, "customer-1", "Kitchen 12", "Customer Lobby"})
+                 .fetch<create_delivery_res_t> ();
+
+// 마지막에 결과를 받는다.
+auto status_sequence = co_await std::move (status_sequence_task);
 ```
 
 여러 client가 같은 사건을 확인해야 한다면 각각 등록해 두고 `Task.WhenAll`로 함께 받는다.

@@ -75,13 +75,13 @@ Queries an existing Actor, queries the Spot it currently participates in, or ter
 incarnation.
 
 ```cpp
-std::optional<zlink::framework::actor_ref_t> actor =
-  co_await actor_manager.find(zlink::framework::actor_id_t{"player-1"});
-std::optional<zlink::framework::spot_ref_t> spot =
-  co_await actor_manager.find_spot(zlink::framework::actor_id_t{"player-1"});
+std::optional<zlink::framework::actor_ref_t> actor = co_await actor_manager.find (
+  zlink::framework::actor_id_t{"player-1"});
+std::optional<zlink::framework::spot_ref_t> spot = co_await actor_manager.find_spot (
+  zlink::framework::actor_id_t{"player-1"});
 
 if (actor) {
-    bool destroyed = co_await actor_manager.destroy(*actor);
+    bool destroyed = co_await actor_manager.destroy (*actor);
 }
 ```
 

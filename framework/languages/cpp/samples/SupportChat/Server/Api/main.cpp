@@ -78,8 +78,8 @@ class authenticate_user_handler_t
             return authenticate_user_res_t{
               false, std::nullopt, std::nullopt, std::nullopt, std::string ("UnknownAccessToken")};
         }
-        const std::string line =
-          std::format ("supportchat api: authenticate actor={}\n", user->actor_id);
+        const std::string line = std::format ("supportchat api: authenticate actor={}\n",
+                                              user->actor_id);
         std::cerr << line;
         return authenticate_user_res_t{
           true, user->actor_id, user->display_name, user->role, std::nullopt};
@@ -117,10 +117,10 @@ class open_conversation_api_handler_t
                                          "SupportChat conversation creation returned no state");
         }
         const auto response = created.reply->decode<conversation_create_res_t> ();
-        const std::string line =
-          std::format ("supportchat api: conversation created id={} status={}\n",
-                       response.state.conversation_id,
-                       response.state.status);
+        const std::string line = std::format (
+          "supportchat api: conversation created id={} status={}\n",
+          response.state.conversation_id,
+          response.state.status);
         std::cerr << line;
         co_return open_conversation_api_res_t{response.state};
     }

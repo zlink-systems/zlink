@@ -29,8 +29,8 @@ struct conversation_event_t
     conversation_state_t state;
 };
 
-using conversation_timeout_event_t =
-  std::variant<std::monostate, conversation_idle_notify_t, conversation_closed_notify_t>;
+using conversation_timeout_event_t = std::
+  variant<std::monostate, conversation_idle_notify_t, conversation_closed_notify_t>;
 
 class conversation_t
 {
@@ -82,8 +82,8 @@ class conversation_t
             _status = conversation_status_t::active;
             _close_deadline_unix_ms.reset ();
         }
-        auto message =
-          chat_message_t{_conversation_id, ++_last_message_seq, sender_actor_id, text, now_unix_ms};
+        auto message = chat_message_t{
+          _conversation_id, ++_last_message_seq, sender_actor_id, text, now_unix_ms};
         _last_message_at_unix_ms = now_unix_ms;
         _idle_deadline_unix_ms = now_unix_ms + idle_timeout_ms;
         return {message, snapshot ()};
@@ -161,8 +161,8 @@ class conversation_t
 
     void ensure_participant (const std::string &actor_id) const
     {
-        const auto found =
-          std::any_of (_participants.begin (), _participants.end (), [&] (const auto &participant) {
+        const auto found = std::any_of (
+          _participants.begin (), _participants.end (), [&] (const auto &participant) {
               return participant.actor_id == actor_id;
           });
         if (!found) {
@@ -172,8 +172,8 @@ class conversation_t
 
     void upsert_participant (conversation_participant_t participant)
     {
-        const auto existing =
-          std::find_if (_participants.begin (), _participants.end (), [&] (const auto &current) {
+        const auto existing = std::find_if (
+          _participants.begin (), _participants.end (), [&] (const auto &current) {
               return current.actor_id == participant.actor_id;
           });
         if (existing == _participants.end ()) {

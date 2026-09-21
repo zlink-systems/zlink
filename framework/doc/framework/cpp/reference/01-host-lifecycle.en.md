@@ -94,8 +94,7 @@ Shuts the host down. It does not start a relocation — call `relocate` first if
 needed.
 
 ```cpp
-zlink::framework::termination_result_t result =
-  co_await app.shutdown(std::chrono::seconds{30});
+zlink::framework::termination_result_t result = co_await app.shutdown (std::chrono::seconds{30});
 ```
 
 **Options.** This call carries the following modifiers.

@@ -46,8 +46,8 @@ class bingo_entry_spot_t : public entry_spot_t<player_actor_t>
                                                      const message_t &create_request) override
     {
         const auto request = create_request.decode<ensure_player_actor_req_t> ();
-        actor.display_name =
-          request.display_name ().empty () ? request.actor_id () : request.display_name ();
+        actor.display_name = request.display_name ().empty () ? request.actor_id ()
+                                                              : request.display_name ();
         created_actor_ids.push_back (actor.actor_id);
         co_return actor_create_response_t::accept ();
     }
