@@ -10,7 +10,8 @@ internal static class ZLinkHandlerEndpointDescriptorFactory
         ZLinkMessageKind kind,
         IReadOnlySet<string> groups,
         string? explicitChannelName,
-        string? packetName)
+        string? packetName
+    )
     {
         var args = handlerInterface.GetGenericArguments();
         var messageType = args[0];
@@ -19,15 +20,15 @@ internal static class ZLinkHandlerEndpointDescriptorFactory
             declaringType,
             handlerInterface,
             nameof(IZLinkFanoutHandler<object>.HandleAsync),
-            "Handler");
+            "Handler"
+        );
 
         var messageName = packetName ?? ZLinkMessageNameResolver.ResolveFromType(messageType);
         Type? contextType = kind switch
         {
-            ZLinkMessageKind.Request or ZLinkMessageKind.Command =>
-                typeof(IZLinkMessageContext),
+            ZLinkMessageKind.Request or ZLinkMessageKind.Command => typeof(IZLinkMessageContext),
             ZLinkMessageKind.Publish => typeof(ZLinkPublishMessageContext),
-            _ => null
+            _ => null,
         };
 
         return new ZLinkHandlerEndpointDescriptor(
@@ -41,7 +42,8 @@ internal static class ZLinkHandlerEndpointDescriptorFactory
             contextType,
             true,
             groups,
-            explicitChannelName);
+            explicitChannelName
+        );
     }
 
     public static ZLinkRouteHandlerEndpointDescriptor CreateRouteInterface(
@@ -49,7 +51,8 @@ internal static class ZLinkHandlerEndpointDescriptorFactory
         Type handlerInterface,
         ZLinkMessageKind kind,
         IReadOnlySet<string> groups,
-        string? packetName)
+        string? packetName
+    )
     {
         var args = handlerInterface.GetGenericArguments();
         var messageType = args[0];
@@ -58,7 +61,8 @@ internal static class ZLinkHandlerEndpointDescriptorFactory
             declaringType,
             handlerInterface,
             nameof(IZLinkRouteSendHandler<object>.HandleAsync),
-            "Route handler");
+            "Route handler"
+        );
 
         return new ZLinkRouteHandlerEndpointDescriptor(
             kind,
@@ -67,7 +71,8 @@ internal static class ZLinkHandlerEndpointDescriptorFactory
             ZLinkHandlerMethodInvokerFactory.Create(targetMethod),
             messageType,
             replyType,
-            groups);
+            groups
+        );
     }
 
     public static ZLinkHandlerEndpointDescriptor CreateAttributed(
@@ -75,15 +80,18 @@ internal static class ZLinkHandlerEndpointDescriptorFactory
         MethodInfo method,
         string? messageNameOverride,
         ZLinkMessageKind kind,
-        IReadOnlySet<string> groups)
+        IReadOnlySet<string> groups
+    )
     {
         var parameters = method.GetParameters();
         if (parameters.Length == 0)
             throw new ZLinkConfigurationException(
-                $"Handler method '{declaringType.FullName}.{method.Name}' must accept a message parameter.");
+                $"Handler method '{declaringType.FullName}.{method.Name}' must accept a message parameter."
+            );
 
         var messageType = parameters[0].ParameterType;
-        var messageName = messageNameOverride ?? ZLinkMessageNameResolver.ResolveFromType(messageType);
+        var messageName =
+            messageNameOverride ?? ZLinkMessageNameResolver.ResolveFromType(messageType);
         Type? contextType = null;
         var hasCancellationToken = false;
 
@@ -99,9 +107,7 @@ internal static class ZLinkHandlerEndpointDescriptorFactory
                 contextType = parameters[i].ParameterType;
         }
 
-        var replyType = kind == ZLinkMessageKind.Request
-            ? GetReplyType(method.ReturnType)
-            : null;
+        var replyType = kind == ZLinkMessageKind.Request ? GetReplyType(method.ReturnType) : null;
 
         return new ZLinkHandlerEndpointDescriptor(
             kind,
@@ -114,14 +120,16 @@ internal static class ZLinkHandlerEndpointDescriptorFactory
             contextType,
             hasCancellationToken,
             groups,
-            null);
+            null
+        );
     }
 
     private static MethodInfo ResolveInterfaceHandleMethod(
         Type declaringType,
         Type handlerInterface,
         string methodName,
-        string label)
+        string label
+    )
     {
         var map = declaringType.GetInterfaceMap(handlerInterface);
         for (var i = 0; i < map.InterfaceMethods.Length; i++)
@@ -129,15 +137,18 @@ internal static class ZLinkHandlerEndpointDescriptorFactory
                 return map.TargetMethods[i];
 
         throw new ZLinkConfigurationException(
-            $"{label} '{declaringType.FullName}' does not implement HandleAsync for '{handlerInterface.Name}'.");
+            $"{label} '{declaringType.FullName}' does not implement HandleAsync for '{handlerInterface.Name}'."
+        );
     }
 
     private static ZLinkHandlerArgumentKind[] BuildArgumentPlan(
         IReadOnlyList<ParameterInfo> parameters,
-        Type? contextType)
+        Type? contextType
+    )
     {
         var plan = new ZLinkHandlerArgumentKind[parameters.Count];
-        if (parameters.Count == 0) return plan;
+        if (parameters.Count == 0)
+            return plan;
 
         plan[0] = ZLinkHandlerArgumentKind.Message;
         for (var i = 1; i < parameters.Count; i++)
@@ -148,7 +159,10 @@ internal static class ZLinkHandlerEndpointDescriptorFactory
                 continue;
             }
 
-            if (contextType is not null && parameters[i].ParameterType.IsAssignableFrom(contextType))
+            if (
+                contextType is not null
+                && parameters[i].ParameterType.IsAssignableFrom(contextType)
+            )
             {
                 plan[i] = ZLinkHandlerArgumentKind.Context;
                 continue;
@@ -162,7 +176,10 @@ internal static class ZLinkHandlerEndpointDescriptorFactory
 
     private static Type? GetReplyType(Type returnType)
     {
-        if (returnType.IsGenericType && returnType.GetGenericTypeDefinition() == typeof(ValueTask<>))
+        if (
+            returnType.IsGenericType
+            && returnType.GetGenericTypeDefinition() == typeof(ValueTask<>)
+        )
             return returnType.GetGenericArguments()[0];
 
         if (returnType.IsGenericType && returnType.GetGenericTypeDefinition() == typeof(Task<>))

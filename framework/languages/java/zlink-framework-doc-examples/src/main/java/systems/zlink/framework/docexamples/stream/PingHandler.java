@@ -1,14 +1,15 @@
 package systems.zlink.framework.docexamples.stream;
 
-import java.util.concurrent.CompletionStage;
 import systems.zlink.framework.streams.ZLinkSessionContext;
 import systems.zlink.framework.streams.ZLinkSessionDispatchContext;
 import systems.zlink.framework.streams.ZLinkTypedSessionPacketHandler;
 
+import java.util.concurrent.CompletionStage;
+
 /** 가이드 9장 §3 — typed packet handler. */
 // --8<-- [start:typed-packet-handler]
 public final class PingHandler
-    implements ZLinkTypedSessionPacketHandler<ZLinkSessionContext, StreamMessages.Ping> {
+        implements ZLinkTypedSessionPacketHandler<ZLinkSessionContext, StreamMessages.Ping> {
 
     @Override
     public Class<StreamMessages.Ping> messageType() {
@@ -17,9 +18,9 @@ public final class PingHandler
 
     @Override
     public CompletionStage<Void> handle(
-        ZLinkSessionContext context,
-        ZLinkSessionDispatchContext dispatch,
-        StreamMessages.Ping message) {
+            ZLinkSessionContext context,
+            ZLinkSessionDispatchContext dispatch,
+            StreamMessages.Ping message) {
         if (!dispatch.canReply()) {
             throw new IllegalStateException("Ping must be a request.");
         }

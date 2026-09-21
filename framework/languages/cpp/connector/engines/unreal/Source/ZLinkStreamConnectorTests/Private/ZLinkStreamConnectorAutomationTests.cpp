@@ -28,22 +28,19 @@ bool FZLinkStreamConnectorLifecycleTest::RunTest (const FString &)
 
     Connector->ShutdownForPie ();
     Connector->Dispatch ();
-    TestEqual (TEXT ("PIE shutdown closes connector"),
-               Connector->LastState (),
+    TestEqual (TEXT ("PIE shutdown closes connector"), Connector->LastState (),
                EZLinkStreamConnectionState::Closed);
 
     Connector->Connect (TEXT ("tcp://127.0.0.1:1"));
     Connector->ShutdownForMapUnload ();
     Connector->Dispatch ();
-    TestEqual (TEXT ("map unload closes connector"),
-               Connector->LastState (),
+    TestEqual (TEXT ("map unload closes connector"), Connector->LastState (),
                EZLinkStreamConnectionState::Closed);
 
     Connector->Connect (TEXT ("tcp://127.0.0.1:1"));
     Connector->ShutdownForGameInstanceShutdown ();
     Connector->Dispatch ();
-    TestEqual (TEXT ("game instance shutdown closes connector"),
-               Connector->LastState (),
+    TestEqual (TEXT ("game instance shutdown closes connector"), Connector->LastState (),
                EZLinkStreamConnectionState::Closed);
     return true;
 }

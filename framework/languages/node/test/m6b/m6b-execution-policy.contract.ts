@@ -76,8 +76,9 @@ test('same-owner nested execute rejects instead of running inside the active tur
     events.push('outer');
     assert.throws(
       () => serial.execute(() => events.push('nested')),
-      (error) => error instanceof ZLinkFrameworkException
-        && error.kind === ZLinkFrameworkErrorKind.InvalidOperation
+      (error) =>
+        error instanceof ZLinkFrameworkException &&
+        error.kind === ZLinkFrameworkErrorKind.InvalidOperation
     );
     events.push('rejected');
   });
@@ -92,7 +93,7 @@ test('SpotWide Yield releases the Spot gate but retains the Actor claim', async 
   const response = deferred<string>();
   const events: string[] = [];
 
-  const firstActorJob = state.executeActor('actor-a', actorSerial =>
+  const firstActorJob = state.executeActor('actor-a', (actorSerial) =>
     actorSerial.execute(async () => {
       events.push('actor-a:start');
       const value = await actorSerial.yieldPromise(response.promise);
@@ -101,12 +102,12 @@ test('SpotWide Yield releases the Spot gate but retains the Actor claim', async 
   );
   await Promise.resolve();
 
-  const secondActorJob = state.executeActor('actor-a', actorSerial =>
+  const secondActorJob = state.executeActor('actor-a', (actorSerial) =>
     actorSerial.execute(() => {
       events.push('actor-a:next');
     })
   );
-  const otherActorJob = state.executeActor('actor-b', actorSerial =>
+  const otherActorJob = state.executeActor('actor-b', (actorSerial) =>
     actorSerial.execute(() => {
       events.push('actor-b');
     })
@@ -129,7 +130,7 @@ test('PerActor keeps Actor continuations ordered while Actor and Spot lanes run 
   const response = deferred<string>();
   const events: string[] = [];
 
-  const firstActorJob = state.executeActor('actor-a', actorSerial =>
+  const firstActorJob = state.executeActor('actor-a', (actorSerial) =>
     actorSerial.execute(async () => {
       events.push('actor-a:start');
       const value = await response.promise;
@@ -138,12 +139,12 @@ test('PerActor keeps Actor continuations ordered while Actor and Spot lanes run 
   );
   await Promise.resolve();
 
-  const secondActorJob = state.executeActor('actor-a', actorSerial =>
+  const secondActorJob = state.executeActor('actor-a', (actorSerial) =>
     actorSerial.execute(() => {
       events.push('actor-a:next');
     })
   );
-  const otherActorJob = state.executeActor('actor-b', actorSerial =>
+  const otherActorJob = state.executeActor('actor-b', (actorSerial) =>
     actorSerial.execute(() => {
       events.push('actor-b');
     })
@@ -162,32 +163,20 @@ test('PerActor keeps Actor continuations ordered while Actor and Spot lanes run 
 
 test('Yield rejects outside an allowed gate before worker admission', async () => {
   let scheduled = 0;
-  const outsideCall = new DefaultZLinkWorkerCall(
-    new ZLinkSpotSerialTurnExecutor(),
-    async () => {
-      scheduled += 1;
-      return 'outside';
-    }
-  );
-  assert.throws(
-    () => outsideCall.yield(),
-    ZLinkConfigurationException
-  );
+  const outsideCall = new DefaultZLinkWorkerCall(new ZLinkSpotSerialTurnExecutor(), async () => {
+    scheduled += 1;
+    return 'outside';
+  });
+  assert.throws(() => outsideCall.yield(), ZLinkConfigurationException);
   assert.equal(scheduled, 0);
 
   const perActorSerial = new ZLinkSpotSerialTurnExecutor(false);
   await perActorSerial.execute(() => {
-    const call = new DefaultZLinkWorkerCall(
-      perActorSerial,
-      async () => {
-        scheduled += 1;
-        return 'inside';
-      }
-    );
-    assert.throws(
-      () => call.yield(),
-      ZLinkConfigurationException
-    );
+    const call = new DefaultZLinkWorkerCall(perActorSerial, async () => {
+      scheduled += 1;
+      return 'inside';
+    });
+    assert.throws(() => call.yield(), ZLinkConfigurationException);
     assert.equal(scheduled, 0);
   });
 });
@@ -219,14 +208,7 @@ test('PerActor timer registrations select an independent lane per timer name', a
     spotSerial,
     {} as never
   );
-  await registry.add(
-    'expiry',
-    10_000,
-    undefined,
-    TimerHandler as never,
-    spotSerial,
-    {} as never
-  );
+  await registry.add('expiry', 10_000, undefined, TimerHandler as never, spotSerial, {} as never);
 
   const heartbeatStarted = deferred<void>();
   const heartbeatDone = deferred<void>();
@@ -246,7 +228,7 @@ test('PerActor timer registrations select an independent lane per timer name', a
 test('Spot execution reserves message and byte capacity as one bounded admission', async () => {
   const serial = new ZLinkSpotSerialTurnExecutor(false, undefined, {
     ownerTimeBudget: 50,
-    lifecycleBurstLimit: 8,
+    lifecycleBurstLimit: 8
   });
   const startedSignal = deferred<void>();
   const finished = deferred<void>();
@@ -263,8 +245,7 @@ test('Spot execution reserves message and byte capacity as one bounded admission
 });
 
 test('Spot execution includes metadata bytes in the same atomic reservation', async () => {
-  const serial = new ZLinkSpotSerialTurnExecutor(false, undefined, {
-  });
+  const serial = new ZLinkSpotSerialTurnExecutor(false, undefined, {});
   const started = deferred<void>();
   const finished = deferred<void>();
   const first = serial.execute(async () => {
@@ -281,7 +262,7 @@ test('Spot execution includes metadata bytes in the same atomic reservation', as
 test('Spot barrier turns remain in application FIFO order and scheduler yields at its time budget', async () => {
   const serial = new ZLinkSpotSerialTurnExecutor(false, undefined, {
     ownerTimeBudget: 1,
-    lifecycleBurstLimit: 8,
+    lifecycleBurstLimit: 8
   });
   const events: string[] = [];
   const application = serial.execute(() => events.push('application'));

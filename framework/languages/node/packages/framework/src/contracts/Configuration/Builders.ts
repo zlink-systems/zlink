@@ -1,18 +1,10 @@
 import type { ZLinkActor, ZLinkActorFactory } from '../Actors';
-import type {
-  ZLinkEntrySpot,
-  ZLinkInstanceSpot,
-  ZLinkSpot
-} from '../Spots';
+import type { ZLinkEntrySpot, ZLinkInstanceSpot, ZLinkSpot } from '../Spots';
 import type { ZLinkSession, ZLinkSessionFactory, ZLinkStreamCompressionCodec } from '../Streams';
 import type { ZLinkEndpointConnections } from './Connections';
 import type { ZLinkCodecRegistryBuilder } from '../Codecs';
 import type { ZLinkDispatchOptionsBuilder, ZLinkInboundDispatchOptions } from '../Dispatch';
-import type {
-  ZLinkLocationOptions,
-  ZLinkLocationStore,
-  ZLinkRelocationStore
-} from '../Locations';
+import type { ZLinkLocationOptions, ZLinkLocationStore, ZLinkRelocationStore } from '../Locations';
 import type { RoutingId, Type } from '../Common';
 import type { ZLinkWorkerOptions } from './RegistrationTypes';
 import type { ZLinkSpotPublisherConfig } from './Configs';
@@ -71,7 +63,9 @@ export interface ZLinkClientServerChannelServerBuilder {
   setWeight(weight: number): this;
   addHandlerGroup(groupName: string): this;
   addSendHandler<TMessage>(handlerType: Type<ZLinkSendHandler<TMessage>>): this;
-  addRequestHandler<TRequest, TReply>(handlerType: Type<ZLinkRequestHandler<TRequest, TReply>>): this;
+  addRequestHandler<TRequest, TReply>(
+    handlerType: Type<ZLinkRequestHandler<TRequest, TReply>>
+  ): this;
 }
 
 export interface ZLinkMeshPeerConnection {
@@ -97,7 +91,9 @@ export interface ZLinkMeshChannelServerBuilder {
   setWeight(weight: number): this;
   addHandlerGroup(groupName: string): this;
   addSendHandler<TMessage>(handlerType: Type<ZLinkSendHandler<TMessage>>): this;
-  addRequestHandler<TRequest, TReply>(handlerType: Type<ZLinkRequestHandler<TRequest, TReply>>): this;
+  addRequestHandler<TRequest, TReply>(
+    handlerType: Type<ZLinkRequestHandler<TRequest, TReply>>
+  ): this;
 }
 
 export interface ZLinkMeshNodeSocketConfig {
@@ -130,7 +126,9 @@ export interface ZLinkMeshNodeBuilder {
   setDefaultRequestTimeout(timeoutMs: number): this;
   objects(): ZLinkMeshObjectRoleBuilder;
   addRouteSendHandler<TMessage>(handlerType: Type<ZLinkRouteSendHandler<TMessage>>): this;
-  addRouteRequestHandler<TRequest, TReply>(handlerType: Type<ZLinkRouteRequestHandler<TRequest, TReply>>): this;
+  addRouteRequestHandler<TRequest, TReply>(
+    handlerType: Type<ZLinkRouteRequestHandler<TRequest, TReply>>
+  ): this;
 }
 
 export interface ZLinkNetworkOptions {
@@ -196,5 +194,7 @@ export interface ZLinkStreamNodeBuilder {
   configureSocket(): ZLinkStreamSocketConfig;
   enableActorDispatch(): this;
   setTlsServer(certificatePath: string, keyPath: string, requireClientCertificate?: boolean): this;
-  registerSession<TSession extends ZLinkSession>(sessionType: Type<TSession> | Type<ZLinkSessionFactory<TSession>>): this;
+  registerSession<TSession extends ZLinkSession>(
+    sessionType: Type<TSession> | Type<ZLinkSessionFactory<TSession>>
+  ): this;
 }

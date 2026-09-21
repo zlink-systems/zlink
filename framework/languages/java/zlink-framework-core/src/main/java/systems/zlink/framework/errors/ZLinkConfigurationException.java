@@ -5,9 +5,7 @@ public final class ZLinkConfigurationException extends ZLinkFrameworkException {
         super(ZLinkFrameworkErrorKind.NOT_CONFIGURED, message);
     }
 
-    public ZLinkConfigurationException(
-        ZLinkFrameworkErrorKind kind,
-        String message) {
+    public ZLinkConfigurationException(ZLinkFrameworkErrorKind kind, String message) {
         super(kind, message);
     }
 

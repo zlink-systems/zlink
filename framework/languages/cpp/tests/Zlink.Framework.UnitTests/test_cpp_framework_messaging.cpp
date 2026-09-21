@@ -60,17 +60,13 @@ class work_latch_t
     bool wait_for (std::chrono::milliseconds timeout)
     {
         std::unique_lock lock (_mutex);
-        return _changed.wait_for (lock, timeout,
-                                  [&] { return _remaining == 0; });
+        return _changed.wait_for (lock, timeout, [&] { return _remaining == 0; });
     }
 
-    bool wait_until_at_most (
-      std::size_t remaining,
-      std::chrono::steady_clock::time_point deadline)
+    bool wait_until_at_most (std::size_t remaining, std::chrono::steady_clock::time_point deadline)
     {
         std::unique_lock lock (_mutex);
-        return _changed.wait_until (
-          lock, deadline, [&] { return _remaining <= remaining; });
+        return _changed.wait_until (lock, deadline, [&] { return _remaining <= remaining; });
     }
 
   private:
@@ -167,7 +163,8 @@ int main ()
             bool rejected = false;
             try {
                 (void) codec.encode_header (header);
-            } catch (const nlohmann::json::type_error &error) {
+            }
+            catch (const nlohmann::json::type_error &error) {
                 rejected = error.id == 316;
             }
             if (!rejected)
@@ -197,44 +194,51 @@ int main ()
         }
         const auto invalid_kind = codec.decode_header (zlink::message_t::from (
           R"({"formatMarker":242,"kind":"3","channelName":"c","messageName":"m"})"));
-        if (invalid_kind || invalid_kind.error_kind ()
-                              != zlink::framework::framework_error_kind_t::protocol_error) {
+        if (invalid_kind
+            || invalid_kind.error_kind ()
+                 != zlink::framework::framework_error_kind_t::protocol_error) {
             return 177;
         }
         const auto invalid_metadata = codec.decode_header (zlink::message_t::from (
           R"({"formatMarker":242,"kind":3,"channelName":"c","messageName":"m","metadata":{"number":1}})"));
-        if (invalid_metadata || invalid_metadata.error_kind ()
-                                  != zlink::framework::framework_error_kind_t::protocol_error) {
+        if (invalid_metadata
+            || invalid_metadata.error_kind ()
+                 != zlink::framework::framework_error_kind_t::protocol_error) {
             return 178;
         }
         const auto duplicate_metadata = codec.decode_header (zlink::message_t::from (
           R"({"formatMarker":242,"kind":3,"channelName":"c","messageName":"m","metadata":42,"metadata":{"last":"value"}})"));
-        if (!duplicate_metadata || duplicate_metadata.value ().metadata
-                                     != std::map<std::string, std::string>{{"last", "value"}}) {
+        if (!duplicate_metadata
+            || duplicate_metadata.value ().metadata
+                 != std::map<std::string, std::string>{{"last", "value"}}) {
             return 179;
         }
         const auto empty_metadata_key = codec.decode_header (zlink::message_t::from (
           R"({"formatMarker":242,"kind":3,"channelName":"c","messageName":"m","metadata":{"":"value"}})"));
-        if (!empty_metadata_key || empty_metadata_key.value ().metadata
-                                     != std::map<std::string, std::string>{{"", "value"}}) {
+        if (!empty_metadata_key
+            || empty_metadata_key.value ().metadata
+                 != std::map<std::string, std::string>{{"", "value"}}) {
             return 185;
         }
         const auto invalid_empty_metadata_key = codec.decode_header (zlink::message_t::from (
           R"({"formatMarker":242,"kind":3,"channelName":"c","messageName":"m","metadata":{"":1}})"));
-        if (invalid_empty_metadata_key || invalid_empty_metadata_key.error_kind ()
-                                            != zlink::framework::framework_error_kind_t::protocol_error) {
+        if (invalid_empty_metadata_key
+            || invalid_empty_metadata_key.error_kind ()
+                 != zlink::framework::framework_error_kind_t::protocol_error) {
             return 186;
         }
         const auto restored_empty_metadata_key = codec.decode_header (zlink::message_t::from (
           R"({"formatMarker":242,"kind":3,"channelName":"c","messageName":"m","metadata":{"":1,"":"value"}})"));
-        if (!restored_empty_metadata_key || restored_empty_metadata_key.value ().metadata
-                                                != std::map<std::string, std::string>{{"", "value"}}) {
+        if (!restored_empty_metadata_key
+            || restored_empty_metadata_key.value ().metadata
+                 != std::map<std::string, std::string>{{"", "value"}}) {
             return 187;
         }
         const auto invalidated_empty_metadata_key = codec.decode_header (zlink::message_t::from (
           R"({"formatMarker":242,"kind":3,"channelName":"c","messageName":"m","metadata":{"":"value","":1}})"));
-        if (invalidated_empty_metadata_key || invalidated_empty_metadata_key.error_kind ()
-                                               != zlink::framework::framework_error_kind_t::protocol_error) {
+        if (invalidated_empty_metadata_key
+            || invalidated_empty_metadata_key.error_kind ()
+                 != zlink::framework::framework_error_kind_t::protocol_error) {
             return 188;
         }
 
@@ -243,8 +247,8 @@ int main ()
         // JSON number conversion is not equivalent to accepting only integral
         // enum tokens.
         for (const char *kind_value : {"3.75", "true", "4294967297"}) {
-            const std::string wire = std::string (R"({"formatMarker":242,"kind":)")
-                                     + kind_value + R"(,"channelName":"c","messageName":"m"})";
+            const std::string wire = std::string (R"({"formatMarker":242,"kind":)") + kind_value
+                                     + R"(,"channelName":"c","messageName":"m"})";
             bool dom_accepts = true;
             int dom_kind = 0;
             try {
@@ -260,10 +264,12 @@ int main ()
             }
         }
         for (const char *content_type : {static_cast<const char *> (nullptr), "null", "17"}) {
-            const std::string wire = content_type == nullptr
-              ? R"({"formatMarker":242,"kind":3,"channelName":"c","messageName":"m"})"
-              : std::string (R"({"formatMarker":242,"kind":3,"channelName":"c","messageName":"m","contentType":)")
-                  + content_type + "}";
+            const std::string wire =
+              content_type == nullptr
+                ? R"({"formatMarker":242,"kind":3,"channelName":"c","messageName":"m"})"
+                : std::string (
+                    R"({"formatMarker":242,"kind":3,"channelName":"c","messageName":"m","contentType":)")
+                    + content_type + "}";
             bool dom_accepts = true;
             std::string dom_content_type;
             try {
@@ -294,18 +300,13 @@ int main ()
           zlink::framework::framework_error_kind_t::unavailable,
           zlink::framework::detail::failure_origin_t::actor_transfer_in_progress,
           "wording is not part of retry classification");
-        const auto header =
-          zlink::framework::detail::channel_reply_writer_t{}
-            .create_error_header ("actor", request, moving);
-        const auto restored =
-          zlink::framework::runtime::messaging::restore_failure_origin (
-            header,
-            zlink::framework::framework_exception_t (
-              zlink::framework::framework_error_kind_t::unavailable,
-              "translated text"));
+        const auto header = zlink::framework::detail::channel_reply_writer_t{}.create_error_header (
+          "actor", request, moving);
+        const auto restored = zlink::framework::runtime::messaging::restore_failure_origin (
+          header, zlink::framework::framework_exception_t (
+                    zlink::framework::framework_error_kind_t::unavailable, "translated text"));
         if (zlink::framework::detail::failure_origin (restored)
-            != zlink::framework::detail::failure_origin_t::
-                 actor_transfer_in_progress) {
+            != zlink::framework::detail::failure_origin_t::actor_transfer_in_progress) {
             return 106;
         }
     }
@@ -313,10 +314,9 @@ int main ()
     {
         zlink::framework::serializer_registry_t serializers;
         const auto packet_serializer =
-          serializers.get<zlink::framework::detail::
-                            spot_actor_packet_route_request_t> ();
-        const auto packet_wire = packet_serializer.serialize (
-          zlink::framework::detail::spot_actor_packet_route_request_t{
+          serializers.get<zlink::framework::detail::spot_actor_packet_route_request_t> ();
+        const auto packet_wire =
+          packet_serializer.serialize (zlink::framework::detail::spot_actor_packet_route_request_t{
             .payload = {0, 1, 2, 253, 254, 255}});
         const auto packet_json = nlohmann::json::parse (packet_wire.to_string ());
         if (packet_serializer.content_type () != "application/json"
@@ -327,35 +327,30 @@ int main ()
             return 154;
         }
         auto duplicate_field_wire = packet_wire.to_string ();
-        duplicate_field_wire.insert (
-          duplicate_field_wire.size () - 1,
-          R"(,"payload":"AA==")");
+        duplicate_field_wire.insert (duplicate_field_wire.size () - 1, R"(,"payload":"AA==")");
         try {
             (void) packet_serializer.deserialize (
-              zlink::framework::encoded_payload_t::from_string (
-                duplicate_field_wire));
+              zlink::framework::encoded_payload_t::from_string (duplicate_field_wire));
             return 158;
         }
         catch (const zlink::framework::framework_exception_t &error) {
-            if (error.kind ()
-                != zlink::framework::framework_error_kind_t::protocol_error)
+            if (error.kind () != zlink::framework::framework_error_kind_t::protocol_error)
                 return 159;
         }
         const auto actor_node = zlink::routing_id_t::from ("actor-node-b");
         const auto fenced_packet = packet_serializer.deserialize (
-          packet_serializer.serialize (
-            zlink::framework::detail::spot_actor_packet_route_request_t{
-              .actor_node_rid = actor_node.to_string (),
-              .actor_type = "player",
-              .actor_id = "actor-1",
-              .actor_generation = 7,
-              .actor_node_generation = 11,
-              .actor_authority_owner_generation = 13,
-              .actor_owner_lease_generation = 17,
-              .spot_id = "spot-b",
-              .packet_name_value = "ProbeReq",
-              .message_follow_hop_count = 1,
-              .payload = {1}}));
+          packet_serializer.serialize (zlink::framework::detail::spot_actor_packet_route_request_t{
+            .actor_node_rid = actor_node.to_string (),
+            .actor_type = "player",
+            .actor_id = "actor-1",
+            .actor_generation = 7,
+            .actor_node_generation = 11,
+            .actor_authority_owner_generation = 13,
+            .actor_owner_lease_generation = 17,
+            .spot_id = "spot-b",
+            .packet_name_value = "ProbeReq",
+            .message_follow_hop_count = 1,
+            .payload = {1}}));
         if (fenced_packet.actor_node_generation != 11
             || fenced_packet.actor_authority_owner_generation != 13
             || fenced_packet.actor_owner_lease_generation != 17
@@ -366,8 +361,7 @@ int main ()
         incomplete_fence["messageFollowHopCount"] = 1;
         try {
             (void) packet_serializer.deserialize (
-              zlink::framework::encoded_payload_t::from_string (
-                incomplete_fence.dump ()));
+              zlink::framework::encoded_payload_t::from_string (incomplete_fence.dump ()));
             return 157;
         }
         catch (const std::exception &) {
@@ -377,48 +371,31 @@ int main ()
             invalid_json["payload"] = invalid_payload;
             try {
                 (void) packet_serializer.deserialize (
-                  zlink::framework::encoded_payload_t::from_string (
-                    invalid_json.dump ()));
+                  zlink::framework::encoded_payload_t::from_string (invalid_json.dump ()));
                 return 155;
             }
             catch (const std::exception &) {
             }
         }
         const auto admission_root =
-          serializers
-            .get<zlink::framework::detail::
-                   spot_actor_admission_route_reply_t> ()
+          serializers.get<zlink::framework::detail::spot_actor_admission_route_reply_t> ()
             .deserialize (
-              serializers
-                .get<zlink::framework::detail::
-                       spot_actor_admission_route_reply_t> ()
-                .serialize (
-                  zlink::framework::detail::
-                    spot_actor_admission_route_reply_t{
-                      true,
-                      {1, 2},
-                      "join-root",
-                      0x12345678}));
-        if (admission_root.completion_root_reference
-              != "join-root"
-            || admission_root.completion_root_checksum
-                 != 0x12345678) {
+              serializers.get<zlink::framework::detail::spot_actor_admission_route_reply_t> ()
+                .serialize (zlink::framework::detail::spot_actor_admission_route_reply_t{
+                  true, {1, 2}, "join-root", 0x12345678}));
+        if (admission_root.completion_root_reference != "join-root"
+            || admission_root.completion_root_checksum != 0x12345678) {
             return 150;
         }
         const auto serialized_commit =
-          serializers
-            .get<zlink::framework::detail::
-                   spot_actor_commit_route_request_t> ()
-            .serialize (
-              zlink::framework::detail::
-                spot_actor_commit_route_request_t{
-                  .transfer_id = "transfer-root",
-                  .completion_root_reference = "join-root",
-                  .completion_root_checksum = 0x12345678,
-                  .source_spot_id = "source-spot",
-                  .session_relocation_route = {3, 5, 8}});
-        const auto commit_shape =
-          nlohmann::json::parse (serialized_commit.to_string ());
+          serializers.get<zlink::framework::detail::spot_actor_commit_route_request_t> ()
+            .serialize (zlink::framework::detail::spot_actor_commit_route_request_t{
+              .transfer_id = "transfer-root",
+              .completion_root_reference = "join-root",
+              .completion_root_checksum = 0x12345678,
+              .source_spot_id = "source-spot",
+              .session_relocation_route = {3, 5, 8}});
+        const auto commit_shape = nlohmann::json::parse (serialized_commit.to_string ());
         if (commit_shape.contains ("coreReserveMessageCount")
             || commit_shape.contains ("coreReserveByteCount")
             || commit_shape.contains ("deferCompletion")
@@ -426,32 +403,24 @@ int main ()
             return 153;
         }
         const auto commit_root =
-          serializers
-            .get<zlink::framework::detail::
-                   spot_actor_commit_route_request_t> ()
+          serializers.get<zlink::framework::detail::spot_actor_commit_route_request_t> ()
             .deserialize (serialized_commit);
-        if (commit_root.completion_root_reference
-              != "join-root"
-            || commit_root.completion_root_checksum
-                 != 0x12345678
+        if (commit_root.completion_root_reference != "join-root"
+            || commit_root.completion_root_checksum != 0x12345678
             || commit_root.source_spot_id != "source-spot"
-            || commit_root.session_relocation_route
-                 != std::vector<std::uint8_t> ({3, 5, 8})) {
+            || commit_root.session_relocation_route != std::vector<std::uint8_t> ({3, 5, 8})) {
             return 151;
         }
         //  The handoff backlog has no record-count or stored-size bound, so a
         //  large backlog round-trips instead of being rejected.
-        auto large_backlog =
-          zlink::framework::detail::spot_actor_commit_route_request_t{};
+        auto large_backlog = zlink::framework::detail::spot_actor_commit_route_request_t{};
         large_backlog.handoff_backlog.resize (2048);
         for (auto &packet : large_backlog.handoff_backlog)
             packet.packet_name_value = "handoff";
         const auto round_tripped =
-          serializers
-            .get<zlink::framework::detail::spot_actor_commit_route_request_t> ()
+          serializers.get<zlink::framework::detail::spot_actor_commit_route_request_t> ()
             .deserialize (
-              serializers
-                .get<zlink::framework::detail::spot_actor_commit_route_request_t> ()
+              serializers.get<zlink::framework::detail::spot_actor_commit_route_request_t> ()
                 .serialize (large_backlog));
         if (round_tripped.handoff_backlog.size () != 2048) {
             return 152;
@@ -491,8 +460,8 @@ int main ()
         const auto decoded_body = envelope_codec.decode_body (parts);
         if (!decoded_body
             || serializers.get<envelope_payload_t> ()
-                   .deserialize (zlink::framework::detail::encoded_payload_from_raw (
-                     decoded_body.value ()))
+                   .deserialize (
+                     zlink::framework::detail::encoded_payload_from_raw (decoded_body.value ()))
                    .value
                  != 42) {
             return 12;
@@ -522,8 +491,7 @@ int main ()
         const auto error_result = client_codec.decode_envelope_reply<envelope_payload_t> (
           error_reply, serializers, "empty reply", "reply failed", "profile request");
         if (error_result
-            || error_result.error_kind ()
-                 != zlink::framework::framework_error_kind_t::unavailable
+            || error_result.error_kind () != zlink::framework::framework_error_kind_t::unavailable
             || error_result.error () == nullptr) {
             return 14;
         }
@@ -537,15 +505,13 @@ int main ()
         wire_error_header.error_message = "missing handler";
         const auto wire_error_json = envelope_codec.encode_header (wire_error_header).to_string ();
         if (wire_error_json.find (R"("kind":5)") == std::string::npos
-            || wire_error_json.find (R"("errorCode":"not_found")")
-                 == std::string::npos
-            || wire_error_json.find (R"("errorMessage":"missing handler")")
-                 == std::string::npos
+            || wire_error_json.find (R"("errorCode":"not_found")") == std::string::npos
+            || wire_error_json.find (R"("errorMessage":"missing handler")") == std::string::npos
             || wire_error_json.find (R"("status")") != std::string::npos) {
             return 53;
         }
-        const auto decoded_wire_error = envelope_codec.decode_header (
-          zlink::message_t::from (wire_error_json));
+        const auto decoded_wire_error =
+          envelope_codec.decode_header (zlink::message_t::from (wire_error_json));
         if (!decoded_wire_error
             || decoded_wire_error.value ().kind
                  != zlink::framework::runtime::messaging::message_kind_t::error
@@ -571,10 +537,10 @@ int main ()
         zlink::framework::runtime::messaging::request_failure_mapper_t mapper;
         using zlink::framework::framework_error_kind_t;
         using zlink::framework::runtime::messaging::map_request_result_exception;
-        using zlink::framework::runtime::messaging::map_submit_result_exception;
         using zlink::framework::runtime::messaging::map_submit_result_error_kind;
+        using zlink::framework::runtime::messaging::map_submit_result_exception;
         if (map_submit_result_error_kind (zlink::submit_result_t::backpressured)
-                != framework_error_kind_t::deadline_exceeded
+              != framework_error_kind_t::deadline_exceeded
             || map_submit_result_error_kind (zlink::submit_result_t::not_connected)
                  != framework_error_kind_t::unavailable
             || map_submit_result_error_kind (zlink::submit_result_t::not_found)
@@ -589,14 +555,14 @@ int main ()
                  != framework_error_kind_t::invalid_operation) {
             return 25;
         }
-        const auto submit_backpressured = map_submit_result_exception (
-          zlink::submit_result_t::backpressured, "native submit");
-        const auto submit_disconnected = map_submit_result_exception (
-          zlink::submit_result_t::not_connected, "native submit");
-        const auto submit_shutdown = map_submit_result_exception (
-          zlink::submit_result_t::terminated, "native submit");
-        const auto submit_not_found = map_submit_result_exception (
-          zlink::submit_result_t::not_found, "native submit");
+        const auto submit_backpressured =
+          map_submit_result_exception (zlink::submit_result_t::backpressured, "native submit");
+        const auto submit_disconnected =
+          map_submit_result_exception (zlink::submit_result_t::not_connected, "native submit");
+        const auto submit_shutdown =
+          map_submit_result_exception (zlink::submit_result_t::terminated, "native submit");
+        const auto submit_not_found =
+          map_submit_result_exception (zlink::submit_result_t::not_found, "native submit");
         if (submit_backpressured.kind () != framework_error_kind_t::deadline_exceeded
             || zlink::framework::detail::boundary_state (submit_backpressured)
                  != zlink::framework::detail::boundary_error_t::timed_out
@@ -609,62 +575,47 @@ int main ()
             || submit_not_found.kind () != framework_error_kind_t::not_found) {
             return 26;
         }
-        const auto native_timeout = map_request_result_exception (
-          zlink::request_result_t::timed_out, "native request");
-        const auto native_disconnected = map_request_result_exception (
-          zlink::request_result_t::not_connected, "native request");
-        const auto native_shutdown = map_request_result_exception (
-          zlink::request_result_t::terminated, "native request");
-        const auto native_rejected = map_request_result_exception (
-          zlink::request_result_t::rejected, "native request");
-        const auto native_busy = map_request_result_exception (
-          zlink::request_result_t::busy, "native request");
-        const auto worker_queue_full = mapper.reply_header_exception (
-          106, 18, "RouteMesh request");
-        const auto spot_moving = mapper.reply_header_exception (
-          107, 34, "RouteMesh request");
-        const auto actor_location_stale = mapper.reply_header_exception (
-          107, 21, "RouteMesh request");
-        const auto spot_generation_stale = mapper.reply_header_exception (
-          107, 33, "RouteMesh request");
-        const auto relocation_data_lost = mapper.reply_header_exception (
-          105, 35, "RouteMesh request");
-        const auto remote_conflict = mapper.reply_header_exception (
-          107, 0, "RouteMesh request");
-        const auto remote_busy = mapper.reply_header_exception (
-          108, 0, "RouteMesh request");
-        const auto already_exists = mapper.reply_header_exception (
-          107, 3, "RouteMesh request");
-        const auto actor_type_mismatch = mapper.reply_header_exception (
-          107, 4, "RouteMesh request");
-        const auto spot_type_mismatch = mapper.reply_header_exception (
-          107, 7, "RouteMesh request");
-        const auto session_not_bound = mapper.reply_header_exception (
-          107, 8, "RouteMesh request");
+        const auto native_timeout =
+          map_request_result_exception (zlink::request_result_t::timed_out, "native request");
+        const auto native_disconnected =
+          map_request_result_exception (zlink::request_result_t::not_connected, "native request");
+        const auto native_shutdown =
+          map_request_result_exception (zlink::request_result_t::terminated, "native request");
+        const auto native_rejected =
+          map_request_result_exception (zlink::request_result_t::rejected, "native request");
+        const auto native_busy =
+          map_request_result_exception (zlink::request_result_t::busy, "native request");
+        const auto worker_queue_full = mapper.reply_header_exception (106, 18, "RouteMesh request");
+        const auto spot_moving = mapper.reply_header_exception (107, 34, "RouteMesh request");
+        const auto actor_location_stale =
+          mapper.reply_header_exception (107, 21, "RouteMesh request");
+        const auto spot_generation_stale =
+          mapper.reply_header_exception (107, 33, "RouteMesh request");
+        const auto relocation_data_lost =
+          mapper.reply_header_exception (105, 35, "RouteMesh request");
+        const auto remote_conflict = mapper.reply_header_exception (107, 0, "RouteMesh request");
+        const auto remote_busy = mapper.reply_header_exception (108, 0, "RouteMesh request");
+        const auto already_exists = mapper.reply_header_exception (107, 3, "RouteMesh request");
+        const auto actor_type_mismatch =
+          mapper.reply_header_exception (107, 4, "RouteMesh request");
+        const auto spot_type_mismatch = mapper.reply_header_exception (107, 7, "RouteMesh request");
+        const auto session_not_bound = mapper.reply_header_exception (107, 8, "RouteMesh request");
         if (zlink::framework::detail::boundary_state (native_timeout)
-                != zlink::framework::detail::boundary_error_t::timed_out
+              != zlink::framework::detail::boundary_error_t::timed_out
             || zlink::framework::detail::boundary_state (native_disconnected)
                  != zlink::framework::detail::boundary_error_t::disconnected
-            || worker_queue_full.kind ()
-                 != framework_error_kind_t::unavailable
+            || worker_queue_full.kind () != framework_error_kind_t::unavailable
             || remote_conflict.kind () != framework_error_kind_t::unavailable
             || remote_busy.kind () != framework_error_kind_t::unavailable
             || already_exists.kind () != framework_error_kind_t::already_exists
-            || actor_type_mismatch.kind ()
-                 != framework_error_kind_t::type_mismatch
-            || spot_type_mismatch.kind ()
-                 != framework_error_kind_t::type_mismatch
-            || session_not_bound.kind ()
-                 != framework_error_kind_t::invalid_operation
+            || actor_type_mismatch.kind () != framework_error_kind_t::type_mismatch
+            || spot_type_mismatch.kind () != framework_error_kind_t::type_mismatch
+            || session_not_bound.kind () != framework_error_kind_t::invalid_operation
             || spot_moving.kind () != framework_error_kind_t::unavailable
-            || actor_location_stale.kind ()
-                 != framework_error_kind_t::unavailable
-            || spot_generation_stale.kind ()
-                 != framework_error_kind_t::invalid_operation
-            || relocation_data_lost.kind ()
-                 != framework_error_kind_t::data_lost
-            || native_disconnected.code ()
-                 != std::make_error_code (std::errc::not_connected)
+            || actor_location_stale.kind () != framework_error_kind_t::unavailable
+            || spot_generation_stale.kind () != framework_error_kind_t::invalid_operation
+            || relocation_data_lost.kind () != framework_error_kind_t::data_lost
+            || native_disconnected.code () != std::make_error_code (std::errc::not_connected)
             || zlink::framework::detail::boundary_state (native_shutdown)
                  != zlink::framework::detail::boundary_error_t::shutdown
             || native_shutdown.kind () != framework_error_kind_t::shutting_down
@@ -684,7 +635,7 @@ int main ()
             //  refine (spotMoving(34)->Unavailable, spotGenerationStale(33)->
             //  InvalidOperation); Terminated(103)->ShuttingDown.
             if (ust::map_user_spot_wire_failure (reply_header_t{0, 108, 0}, true)
-                    != framework_error_kind_t::unavailable
+                  != framework_error_kind_t::unavailable
                 || ust::map_user_spot_wire_failure (reply_header_t{0, 107, 0}, true)
                      != framework_error_kind_t::unavailable
                 || ust::map_user_spot_wire_failure (reply_header_t{0, 108, 0}, false)
@@ -711,8 +662,7 @@ int main ()
         if (not_connected.kind () != zlink::framework::framework_error_kind_t::unavailable
             || zlink::framework::detail::boundary_state (not_connected)
                  != zlink::framework::detail::boundary_error_t::disconnected
-            || not_connected.code ()
-                 != std::make_error_code (std::errc::not_connected)) {
+            || not_connected.code () != std::make_error_code (std::errc::not_connected)) {
             return 16;
         }
         const auto not_found = mapper.completion_exception (
@@ -722,7 +672,8 @@ int main ()
         }
         const auto timed_out = mapper.completion_exception (
           zlink::framework::runtime::messaging::request_result_t::timed_out, "profile request");
-        if (zlink::framework::detail::boundary_state (timed_out) != zlink::framework::detail::boundary_error_t::timed_out
+        if (zlink::framework::detail::boundary_state (timed_out)
+              != zlink::framework::detail::boundary_error_t::timed_out
             || timed_out.kind () != zlink::framework::framework_error_kind_t::deadline_exceeded) {
             return 18;
         }
@@ -753,15 +704,16 @@ int main ()
         if (conflict.kind () != zlink::framework::framework_error_kind_t::unavailable
             || rejected.kind () != zlink::framework::framework_error_kind_t::rejected
             || protocol.kind () != zlink::framework::framework_error_kind_t::protocol_error
-            || invalid_argument.kind () != zlink::framework::framework_error_kind_t::invalid_operation
+            || invalid_argument.kind ()
+                 != zlink::framework::framework_error_kind_t::invalid_operation
             || invalid_state.kind () != zlink::framework::framework_error_kind_t::invalid_operation
             || not_supported.kind () != zlink::framework::framework_error_kind_t::internal_failure
             || terminated.kind () != zlink::framework::framework_error_kind_t::shutting_down
             || zlink::framework::detail::boundary_state (terminated)
                  != zlink::framework::detail::boundary_error_t::shutdown
-            || terminated.code ()
-                 != std::make_error_code (std::errc::operation_canceled)
-            || internal_error.kind () != zlink::framework::framework_error_kind_t::internal_failure) {
+            || terminated.code () != std::make_error_code (std::errc::operation_canceled)
+            || internal_error.kind ()
+                 != zlink::framework::framework_error_kind_t::internal_failure) {
             return 22;
         }
         const auto timeout_header =
@@ -782,21 +734,19 @@ int main ()
           mapper.error_header_exception ("unknown", "", "profile request");
         const auto unknown_with_message =
           mapper.error_header_exception ("unknown", "explicit", "profile request");
-        if (zlink::framework::detail::boundary_state (timeout_header) != zlink::framework::detail::boundary_error_t::timed_out
+        if (zlink::framework::detail::boundary_state (timeout_header)
+              != zlink::framework::detail::boundary_error_t::timed_out
             || std::string (timeout_with_message.what ()) != "explicit timeout"
             || route_header.kind () != zlink::framework::framework_error_kind_t::unavailable
             || zlink::framework::detail::boundary_state (route_header)
                  != zlink::framework::detail::boundary_error_t::disconnected
-            || unavailable_header.code ()
-                 != std::make_error_code (std::errc::not_connected)
+            || unavailable_header.code () != std::make_error_code (std::errc::not_connected)
             || zlink::framework::detail::boundary_state (shutdown_header)
                  != zlink::framework::detail::boundary_error_t::shutdown
-            || shutdown_header.kind ()
-                 != zlink::framework::framework_error_kind_t::shutting_down
+            || shutdown_header.kind () != zlink::framework::framework_error_kind_t::shutting_down
             || zlink::framework::detail::boundary_state (deadline_header)
                  != zlink::framework::detail::boundary_error_t::timed_out
-            || not_found_header.kind ()
-                 != zlink::framework::framework_error_kind_t::not_found
+            || not_found_header.kind () != zlink::framework::framework_error_kind_t::not_found
             || unknown_header.kind () != zlink::framework::framework_error_kind_t::internal_failure
             || std::string (unknown_with_message.what ()) != "explicit") {
             return 23;
@@ -808,20 +758,17 @@ int main ()
         }
         const auto protocol_header =
           mapper.error_header_exception ("request_protocol_error", "", "profile request");
-        if (protocol_header.kind ()
-            != zlink::framework::framework_error_kind_t::protocol_error) {
+        if (protocol_header.kind () != zlink::framework::framework_error_kind_t::protocol_error) {
             return 20;
         }
         const auto missing_handler_header =
           mapper.error_header_exception ("handler_not_found", "", "profile request");
-        if (missing_handler_header.kind ()
-            != zlink::framework::framework_error_kind_t::not_found) {
+        if (missing_handler_header.kind () != zlink::framework::framework_error_kind_t::not_found) {
             return 21;
         }
         const auto decode_header =
           mapper.error_header_exception ("payload_decode_failed", "", "profile request");
-        if (decode_header.kind ()
-            != zlink::framework::framework_error_kind_t::protocol_error) {
+        if (decode_header.kind () != zlink::framework::framework_error_kind_t::protocol_error) {
             return 24;
         }
     }
@@ -837,8 +784,7 @@ int main ()
         std::atomic_int duplicate_attempts{0};
         zlink::framework::send_call_t duplicate_call (
           "duplicate",
-          [&] (const std::string &,
-               const zlink::framework::send_call_t::metadata_map_t &) {
+          [&] (const std::string &, const zlink::framework::send_call_t::metadata_map_t &) {
               ++duplicate_attempts;
               return zlink::framework::result_t<void>::success ();
           });
@@ -850,8 +796,7 @@ int main ()
         }
         catch (const zlink::framework::framework_exception_t &error) {
             duplicate_rejected =
-              error.kind ()
-              == zlink::framework::framework_error_kind_t::invalid_operation;
+              error.kind () == zlink::framework::framework_error_kind_t::invalid_operation;
         }
         if (!duplicate_rejected || duplicate_attempts.load () != 1) {
             return 78;
@@ -873,8 +818,7 @@ int main ()
         }
         catch (const zlink::framework::framework_exception_t &error) {
             duplicate_multicast_rejected =
-              error.kind ()
-              == zlink::framework::framework_error_kind_t::invalid_operation;
+              error.kind () == zlink::framework::framework_error_kind_t::invalid_operation;
         }
         if (!duplicate_multicast_rejected
             || !multicast_work_finished.wait_for (std::chrono::seconds (2))
@@ -895,8 +839,7 @@ int main ()
         /* Logical Multicast uses one direct handoff after its worker slots.
          * Test-owned work latches prove that every slot is occupied before the
          * overflow assertion, without exposing executor state from runtime. */
-        const auto worker_count = std::max<std::size_t> (
-          2, std::thread::hardware_concurrency ());
+        const auto worker_count = std::max<std::size_t> (2, std::thread::hardware_concurrency ());
         std::mutex multicast_gate_mutex;
         std::condition_variable multicast_gate_changed;
         bool release_multicast_workers = false;
@@ -909,8 +852,7 @@ int main ()
               [&] (const zlink::framework::publish_call_t::metadata_map_t &) {
                   occupied_workers_started.arrive ();
                   std::unique_lock lock (multicast_gate_mutex);
-                  multicast_gate_changed.wait (
-                    lock, [&] { return release_multicast_workers; });
+                  multicast_gate_changed.wait (lock, [&] { return release_multicast_workers; });
                   occupied_workers_finished.arrive ();
                   return zlink::framework::result_t<void>::success ();
               });
@@ -950,11 +892,9 @@ int main ()
         }
         catch (const zlink::framework::framework_exception_t &error) {
             overflow_timed_out =
-              error.kind ()
-              == zlink::framework::framework_error_kind_t::deadline_exceeded;
+              error.kind () == zlink::framework::framework_error_kind_t::deadline_exceeded;
         }
-        if (!overflow_completed_immediately || !overflow_timed_out
-            || overflow_calls.load () != 0) {
+        if (!overflow_completed_immediately || !overflow_timed_out || overflow_calls.load () != 0) {
             {
                 std::lock_guard lock (multicast_gate_mutex);
                 release_multicast_workers = true;
@@ -988,8 +928,7 @@ int main ()
               [&] (const zlink::framework::publish_call_t::metadata_map_t &) {
                   deadline_workers_started.arrive ();
                   std::unique_lock lock (multicast_gate_mutex);
-                  multicast_gate_changed.wait (
-                    lock, [&] { return release_deadline_workers; });
+                  multicast_gate_changed.wait (lock, [&] { return release_deadline_workers; });
                   deadline_workers_finished.arrive ();
                   return zlink::framework::result_t<void>::success ();
               });
@@ -999,9 +938,8 @@ int main ()
              * confirmed worker at a time so a still-returning slot cannot turn
              * the burst into handoff/overflow jobs. The original two-second
              * budget remains shared by the whole phase. */
-            if (!deadline_workers_started.wait_until_at_most (
-                  worker_count - index - 1,
-                  deadline_workers_start_deadline)) {
+            if (!deadline_workers_started.wait_until_at_most (worker_count - index - 1,
+                                                              deadline_workers_start_deadline)) {
                 {
                     std::lock_guard lock (multicast_gate_mutex);
                     release_deadline_workers = true;
@@ -1031,13 +969,12 @@ int main ()
         }
         catch (const zlink::framework::framework_exception_t &error) {
             handoff_timed_out =
-              error.kind ()
-              == zlink::framework::framework_error_kind_t::deadline_exceeded;
+              error.kind () == zlink::framework::framework_error_kind_t::deadline_exceeded;
         }
         for (auto &task : deadline_workers)
             task.result ().value ();
-        if (!deadline_workers_finished.wait_for (std::chrono::seconds (2))
-            || !handoff_timed_out || expired_handoff_calls.load () != 0) {
+        if (!deadline_workers_finished.wait_for (std::chrono::seconds (2)) || !handoff_timed_out
+            || expired_handoff_calls.load () != 0) {
             return 84;
         }
 
@@ -1076,16 +1013,17 @@ int main ()
         if (!rt::flow_id_t::is_valid (created) || created.size () != 36 || created[14] != '7') {
             return 42;
         }
-        if (rt::flow_id_t::is_valid ("01890a5d-ac96-474b-bcce-b302099a8057")   // v4
+        if (rt::flow_id_t::is_valid ("01890a5d-ac96-474b-bcce-b302099a8057")    // v4
             || rt::flow_id_t::is_valid ("01890A5D-AC96-774B-BCCE-B302099A8057") // uppercase
             || rt::flow_id_t::is_valid ("short")) {
             return 43;
         }
 
         {
-            auto scope = rt::flow_context_t::enter (created, zlink::framework::flow_origin_t::inbound,
-                                                    zlink::framework::message_flow_log_mode_t::normal,
-                                                    zlink::framework::flow_origin_t::inbound);
+            auto scope =
+              rt::flow_context_t::enter (created, zlink::framework::flow_origin_t::inbound,
+                                         zlink::framework::message_flow_log_mode_t::normal,
+                                         zlink::framework::flow_origin_t::inbound);
             const auto stamped = codec.decode_header (codec.encode_header (header));
             if (!stamped || stamped.value ().flow_id != created
                 || stamped.value ().flow_origin != zlink::framework::flow_origin_t::inbound) {
@@ -1099,11 +1037,9 @@ int main ()
         /* create-if-absent: no inbound id + capture on → new id. Off skips
          * inbound propagation and does not install even an empty context. */
         {
-            auto scope =
-              rt::flow_context_t::enter (
-                std::nullopt, std::nullopt,
-                zlink::framework::message_flow_log_mode_t::normal,
-                                         zlink::framework::flow_origin_t::inbound);
+            auto scope = rt::flow_context_t::enter (
+              std::nullopt, std::nullopt, zlink::framework::message_flow_log_mode_t::normal,
+              zlink::framework::flow_origin_t::inbound);
             if (!rt::flow_context_t::current ()
                 || !rt::flow_id_t::is_valid (rt::flow_context_t::current ()->flow_id)) {
                 return 46;
@@ -1118,21 +1054,18 @@ int main ()
             }
         }
         {
-            auto scope =
-              rt::flow_context_t::enter (
-                std::nullopt, std::nullopt,
-                zlink::framework::message_flow_log_mode_t::off,
-                                         zlink::framework::flow_origin_t::inbound);
+            auto scope = rt::flow_context_t::enter (std::nullopt, std::nullopt,
+                                                    zlink::framework::message_flow_log_mode_t::off,
+                                                    zlink::framework::flow_origin_t::inbound);
             if (rt::flow_context_t::current ()) {
                 return 48;
             }
         }
         {
             const std::optional<std::string> malformed_flow{"not-a-uuid"};
-            auto scope = rt::flow_context_t::enter (
-              malformed_flow, std::nullopt,
-              zlink::framework::message_flow_log_mode_t::off,
-              zlink::framework::flow_origin_t::inbound);
+            auto scope = rt::flow_context_t::enter (malformed_flow, std::nullopt,
+                                                    zlink::framework::message_flow_log_mode_t::off,
+                                                    zlink::framework::flow_origin_t::inbound);
             if (rt::flow_context_t::current ()) {
                 return 160;
             }
@@ -1142,15 +1075,14 @@ int main ()
          * flow data from a tracing-on sender cannot fail a frame at Off. */
         {
             auto stamped_message = [&] {
-                auto scope = rt::flow_context_t::enter (
-                  created, zlink::framework::flow_origin_t::inbound,
-                  zlink::framework::message_flow_log_mode_t::normal,
-                  zlink::framework::flow_origin_t::inbound);
+                auto scope =
+                  rt::flow_context_t::enter (created, zlink::framework::flow_origin_t::inbound,
+                                             zlink::framework::message_flow_log_mode_t::normal,
+                                             zlink::framework::flow_origin_t::inbound);
                 return codec.encode_header (header);
-            } ();
+            }();
             const auto off_decoded = codec.decode_header (stamped_message, false);
-            if (!off_decoded || off_decoded.value ().flow_id
-                || off_decoded.value ().flow_origin) {
+            if (!off_decoded || off_decoded.value ().flow_id || off_decoded.value ().flow_origin) {
                 return 161;
             }
             auto corrupted = stamped_message.to_string ();
@@ -1168,10 +1100,10 @@ int main ()
             }
         }
         {
-            auto outer = rt::flow_context_t::enter (
-              created, zlink::framework::flow_origin_t::application,
-              zlink::framework::message_flow_log_mode_t::normal,
-              zlink::framework::flow_origin_t::application);
+            auto outer =
+              rt::flow_context_t::enter (created, zlink::framework::flow_origin_t::application,
+                                         zlink::framework::message_flow_log_mode_t::normal,
+                                         zlink::framework::flow_origin_t::application);
             {
                 auto off = rt::flow_context_t::enter_current_or_create (
                   zlink::framework::flow_origin_t::application,
@@ -1194,9 +1126,10 @@ int main ()
                  != zlink::framework::framework_error_kind_t::protocol_error) {
             return 49;
         }
-        auto lonely_flow = codec.decode_header (zlink::message_t::from (
-          "{\"formatMarker\":242,\"kind\":3,\"channelName\":\"c\",\"messageName\":\"m\",\"flowId\":\""
-          + created + "\"}"));
+        auto lonely_flow = codec.decode_header (
+          zlink::message_t::from ("{\"formatMarker\":242,\"kind\":3,\"channelName\":\"c\","
+                                  "\"messageName\":\"m\",\"flowId\":\""
+                                  + created + "\"}"));
         if (lonely_flow
             || lonely_flow.error_kind ()
                  != zlink::framework::framework_error_kind_t::protocol_error) {

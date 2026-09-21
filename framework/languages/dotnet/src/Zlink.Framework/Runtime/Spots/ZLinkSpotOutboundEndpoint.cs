@@ -3,7 +3,8 @@ namespace Zlink.Framework.Runtime.Spots;
 internal sealed class ZLinkSpotOutboundEndpoint(
     IZLinkCurrentSpotActivation activation,
     ZLinkSpotOutboundTransport outbound,
-    ZLinkFrameworkRuntime runtime) : IZLinkSpotOutbound
+    ZLinkFrameworkRuntime runtime
+) : IZLinkSpotOutbound
 {
     public IZLinkSpotSendCall SendToSpot<TMessage>(string spotId, TMessage message)
     {
@@ -45,7 +46,8 @@ internal sealed class ZLinkSpotOutboundEndpoint(
         IReadOnlyList<Message> parts,
         TimeSpan? timeout,
         CancellationToken cancellationToken,
-        ReadOnlyMemory<byte> metadata = default)
+        ReadOnlyMemory<byte> metadata = default
+    )
     {
         activation.EnsureOperationAllowed();
         using var operation = runtime.EnterOperation(countAsRequest: true);
@@ -57,12 +59,14 @@ internal sealed class ZLinkSpotOutboundEndpoint(
             // A Spot may target a channel registered on any process-local
             // RouteMesh. Resolve that channel through the framework runtime;
             // the current Spot native socket only owns its own mesh.
-            return await runtime.RequestToChannelAsync(
+            return await runtime
+                .RequestToChannelAsync(
                     channelName,
                     parts,
                     requestTimeout,
                     cancellationToken,
-                    metadata)
+                    metadata
+                )
                 .ConfigureAwait(false);
         }
         catch (TimeoutException)
@@ -90,15 +94,13 @@ internal sealed class ZLinkSpotOutboundEndpoint(
         string channelName,
         IReadOnlyList<Message> parts,
         CancellationToken cancellationToken,
-        ReadOnlyMemory<byte> metadata = default)
+        ReadOnlyMemory<byte> metadata = default
+    )
     {
         activation.EnsureOperationAllowed();
         using var operation = runtime.EnterOperation();
-        return await runtime.SendToChannelAsync(
-                channelName,
-                parts,
-                cancellationToken,
-                metadata)
+        return await runtime
+            .SendToChannelAsync(channelName, parts, cancellationToken, metadata)
             .ConfigureAwait(false);
     }
 
@@ -113,7 +115,8 @@ internal sealed class ZLinkSpotOutboundEndpoint(
         IReadOnlyList<Message> parts,
         TimeSpan? timeout,
         CancellationToken cancellationToken,
-        ReadOnlyMemory<byte> metadata = default)
+        ReadOnlyMemory<byte> metadata = default
+    )
     {
         activation.EnsureOperationAllowed();
         return runtime.RequestToSpotViaRouterChannelAsync(
@@ -127,7 +130,8 @@ internal sealed class ZLinkSpotOutboundEndpoint(
             parts,
             timeout ?? activation.DefaultRequestTimeout,
             cancellationToken,
-            metadata);
+            metadata
+        );
     }
 
     public async ValueTask<SubmitResult> PublishCurrentAsync(
@@ -137,7 +141,8 @@ internal sealed class ZLinkSpotOutboundEndpoint(
         CancellationToken cancellationToken,
         ReadOnlyMemory<byte> metadata,
         Action release,
-        IZLinkRuntimeFailureReporter errorSink)
+        IZLinkRuntimeFailureReporter errorSink
+    )
     {
         activation.EnsureOperationAllowed();
         using var operation = runtime.EnterOperation();
@@ -146,21 +151,24 @@ internal sealed class ZLinkSpotOutboundEndpoint(
 
         void ReleaseWorkerResources()
         {
-            if (Interlocked.Exchange(ref released, 1) != 0) return;
+            if (Interlocked.Exchange(ref released, 1) != 0)
+                return;
             release();
             backgroundOperation.Dispose();
         }
 
         try
         {
-            return await ZLinkLogicalMulticastSubmitter.SubmitAsync(
+            return await ZLinkLogicalMulticastSubmitter
+                .SubmitAsync(
                     runtime.LogicalMulticastWorkerPool,
                     () => outbound.PublishCurrent(channelName, topic, parts, metadata),
                     cancellationToken,
                     runtime.ShutdownToken,
                     runtime.Registration.DefaultSocketSendTimeout,
                     ReleaseWorkerResources,
-                    errorSink)
+                    errorSink
+                )
                 .ConfigureAwait(false);
         }
         catch
@@ -181,7 +189,8 @@ internal sealed class ZLinkSpotOutboundEndpoint(
         ulong authorityOwnerGeneration,
         ulong ownerLeaseGeneration,
         IReadOnlyList<Message> parts,
-        ReadOnlyMemory<byte> metadata = default)
+        ReadOnlyMemory<byte> metadata = default
+    )
     {
         activation.EnsureOperationAllowed();
         return runtime.TrySendToSpotViaRouterChannelOnce(
@@ -193,7 +202,8 @@ internal sealed class ZLinkSpotOutboundEndpoint(
             authorityOwnerGeneration,
             ownerLeaseGeneration,
             parts,
-            metadata);
+            metadata
+        );
     }
 
     public ValueTask<ZLinkOneWaySubmitResult> SendToSpotAsync(
@@ -206,7 +216,8 @@ internal sealed class ZLinkSpotOutboundEndpoint(
         ulong ownerLeaseGeneration,
         IReadOnlyList<Message> parts,
         CancellationToken cancellationToken,
-        ReadOnlyMemory<byte> metadata = default)
+        ReadOnlyMemory<byte> metadata = default
+    )
     {
         activation.EnsureOperationAllowed();
         return runtime.SendToSpotViaRouterChannelAsync(
@@ -219,7 +230,7 @@ internal sealed class ZLinkSpotOutboundEndpoint(
             ownerLeaseGeneration,
             parts,
             cancellationToken,
-            metadata);
+            metadata
+        );
     }
-
 }

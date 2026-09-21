@@ -1,5 +1,9 @@
 package systems.zlink.framework.runtime.spots;
-import java.util.ArrayList;
+
+import systems.zlink.contracts.core.RoutingId;
+import systems.zlink.framework.runtime.internal.backend.ZLinkInternalMeshNode;
+import systems.zlink.framework.runtime.internal.execution.ZLinkStateLane;
+import systems.zlink.framework.runtime.internal.service.ZLinkServiceRelocationWireCodec;
 
 import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
@@ -14,26 +18,23 @@ import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
 import java.time.Duration;
+import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.Objects;
 import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionException;
 import java.util.concurrent.CompletionStage;
-import java.util.HashMap;
-import java.util.Map;
 import java.util.function.Supplier;
-import systems.zlink.contracts.core.RoutingId;
-import systems.zlink.framework.runtime.internal.backend.ZLinkInternalMeshNode;
-import systems.zlink.framework.runtime.internal.execution.ZLinkStateLane;
-import systems.zlink.framework.runtime.internal.service.ZLinkServiceRelocationWireCodec;
 
 /**
- * Infrastructure-only request/reply bridge for User Spot relocation control.
- * The handoff payload lives in source memory and travels directly with the
- * stage request; commands carry the exact aggregate, node and owner fences
- * plus the payload the target assembles and restores (spec 28 §4.2).
+ * Infrastructure-only request/reply bridge for User Spot relocation control. The handoff payload
+ * lives in source memory and travels directly with the stage request; commands carry the exact
+ * aggregate, node and owner fences plus the payload the target assembles and restores (spec 28
+ * §4.2).
  */
 final class ZLinkSpotRetireControl {
     private static final int MAGIC = 0x5a4c5243; // ZLRC
@@ -48,16 +49,13 @@ final class ZLinkSpotRetireControl {
     private static final int MAX_COMMAND_BYTES = 64 * 1024 * 1024;
     private static final int MAX_PARTICIPANTS = 1024;
 
-    private ZLinkSpotRetireControl() {
-    }
+    private ZLinkSpotRetireControl() {}
 
     static Client client(ZLinkInternalMeshNode node) {
         return new Client(node);
     }
 
-    static Target install(
-        ZLinkInternalMeshNode node,
-        TargetEndpoint endpoint) {
+    static Target install(ZLinkInternalMeshNode node, TargetEndpoint endpoint) {
         Target target = new Target(endpoint);
         node.setRelocationControlHandler(target::handle);
         return target;
@@ -72,89 +70,59 @@ final class ZLinkSpotRetireControl {
 
         @Override
         public CompletionStage<Void> stage(
-            RoutingId targetNodeRid,
-            StageRequest request,
-            Duration timeout) {
-            return invoke(
-                targetNodeRid,
-                request.fence(),
-                encodeStage(request),
-                timeout);
+                RoutingId targetNodeRid, StageRequest request, Duration timeout) {
+            return invoke(targetNodeRid, request.fence(), encodeStage(request), timeout);
         }
 
         @Override
         public CompletionStage<Void> relay(
-            RoutingId targetNodeRid,
-            Fence fence,
-            byte[] frozenRecord,
-            Duration timeout) {
+                RoutingId targetNodeRid, Fence fence, byte[] frozenRecord, Duration timeout) {
             return CompletableFuture.failedFuture(
-                new UnsupportedOperationException(
-                    "legacy relocation control has no command 31 relay"));
+                    new UnsupportedOperationException(
+                            "legacy relocation control has no command 31 relay"));
         }
 
         @Override
         public CompletionStage<Void> publish(
-            RoutingId targetNodeRid,
-            Fence fence,
-            Duration timeout) {
-            return invoke(
-                targetNodeRid,
-                fence,
-                encodeFence(PUBLISH, fence),
-                timeout);
+                RoutingId targetNodeRid, Fence fence, Duration timeout) {
+            return invoke(targetNodeRid, fence, encodeFence(PUBLISH, fence), timeout);
         }
 
         @Override
-        public CompletionStage<Void> abort(
-            RoutingId targetNodeRid,
-            Fence fence,
-            Duration timeout) {
-            return invoke(
-                targetNodeRid,
-                fence,
-                encodeFence(ABORT, fence),
-                timeout);
+        public CompletionStage<Void> abort(RoutingId targetNodeRid, Fence fence, Duration timeout) {
+            return invoke(targetNodeRid, fence, encodeFence(ABORT, fence), timeout);
         }
 
         CompletionStage<ZLinkSpotRelocationReplyRoutes.Ack> relayReply(
-            RoutingId sourceNodeRid,
-            Fence fence,
-            ZLinkSpotRelocationReplyRoutes.Relay relay,
-            Duration timeout) {
-            return node.requestRelocationControl(
-                    sourceNodeRid,
-                    encodeRelay(fence, relay),
-                    timeout)
-                .thenApply(reply -> decodeRelayAck(reply, fence));
+                RoutingId sourceNodeRid,
+                Fence fence,
+                ZLinkSpotRelocationReplyRoutes.Relay relay,
+                Duration timeout) {
+            return node.requestRelocationControl(sourceNodeRid, encodeRelay(fence, relay), timeout)
+                    .thenApply(reply -> decodeRelayAck(reply, fence));
         }
 
         CompletionStage<byte[]> relayCanonicalReply(
-            RoutingId landingNodeRid,
-            ZLinkServiceRelocationWireCodec.RequestSourceFence expectedSource,
-            byte[] command33,
-            List<byte[]> payload,
-            Duration timeout) {
+                RoutingId landingNodeRid,
+                ZLinkServiceRelocationWireCodec.RequestSourceFence expectedSource,
+                byte[] command33,
+                List<byte[]> payload,
+                Duration timeout) {
             return node.requestRelocationReplyRelay(
-                landingNodeRid, expectedSource, command33, payload, timeout);
+                    landingNodeRid, expectedSource, command33, payload, timeout);
         }
 
         private CompletionStage<Void> invoke(
-            RoutingId targetNodeRid,
-            Fence expectedFence,
-            byte[] command,
-            Duration timeout) {
-            return node.requestRelocationControl(
-                    targetNodeRid,
-                    command,
-                    timeout)
-                .thenApply(reply -> {
-                    if (!decodeAck(reply).equals(expectedFence)) {
-                        throw new IllegalArgumentException(
-                            "relocation acknowledgment fence differs");
-                    }
-                    return null;
-                });
+                RoutingId targetNodeRid, Fence expectedFence, byte[] command, Duration timeout) {
+            return node.requestRelocationControl(targetNodeRid, command, timeout)
+                    .thenApply(
+                            reply -> {
+                                if (!decodeAck(reply).equals(expectedFence)) {
+                                    throw new IllegalArgumentException(
+                                            "relocation acknowledgment fence differs");
+                                }
+                                return null;
+                            });
         }
     }
 
@@ -169,28 +137,23 @@ final class ZLinkSpotRetireControl {
             this.endpoint = Objects.requireNonNull(endpoint, "endpoint");
         }
 
-        CompletionStage<byte[]> handle(
-            RoutingId transportSource,
-            byte[] encoded) {
+        CompletionStage<byte[]> handle(RoutingId transportSource, byte[] encoded) {
             Command command = decode(encoded);
             if (command instanceof RelayReplyCommand relay) {
-                return endpoint.relayReply(
-                        transportSource,
-                        relay.relay())
-                    .thenApply(ack -> encodeRelayAck(
-                        relay.fence(), ack));
+                return endpoint.relayReply(transportSource, relay.relay())
+                        .thenApply(ack -> encodeRelayAck(relay.fence(), ack));
             }
             if (command instanceof StageCommand stage) {
                 if (!stage.request().sourceNodeRid().equals(transportSource)) {
-                    return failed(new IllegalArgumentException(
-                        "relocation source RID does not match transport"));
+                    return failed(
+                            new IllegalArgumentException(
+                                    "relocation source RID does not match transport"));
                 }
                 return stage(stage, encoded);
             }
             Slot slot = inStateLane(() -> slots.get(command.fence()));
             if (slot == null || !slot.request.sourceNodeRid().equals(transportSource)) {
-                return failed(new IllegalStateException(
-                    "relocation target stage is unavailable"));
+                return failed(new IllegalStateException("relocation target stage is unavailable"));
             }
             if (command instanceof PublishCommand) {
                 return publish(slot);
@@ -198,29 +161,33 @@ final class ZLinkSpotRetireControl {
             return abort(slot);
         }
 
-        private CompletionStage<byte[]> stage(
-            StageCommand command,
-            byte[] encoded) {
+        private CompletionStage<byte[]> stage(StageCommand command, byte[] encoded) {
             byte[] digest = sha256(encoded);
             Slot candidate = new Slot(command.request(), digest);
-            StageState state = inStateLane(() -> {
-                Slot slot = slots.get(command.fence());
-                if (slot == null) {
-                    slots.put(command.fence(), candidate);
-                    return new StageState(candidate, true, null);
-                }
-                if (!Arrays.equals(slot.stageDigest, digest)) {
-                    return new StageState(null, false,
-                        new IllegalArgumentException(
-                            "duplicate relocation stage payload differs"));
-                }
-                if (slot.aborted) {
-                    return new StageState(null, false,
-                        new IllegalStateException(
-                            "aborted relocation cannot be staged again"));
-                }
-                return new StageState(slot, false, null);
-            });
+            StageState state =
+                    inStateLane(
+                            () -> {
+                                Slot slot = slots.get(command.fence());
+                                if (slot == null) {
+                                    slots.put(command.fence(), candidate);
+                                    return new StageState(candidate, true, null);
+                                }
+                                if (!Arrays.equals(slot.stageDigest, digest)) {
+                                    return new StageState(
+                                            null,
+                                            false,
+                                            new IllegalArgumentException(
+                                                    "duplicate relocation stage payload differs"));
+                                }
+                                if (slot.aborted) {
+                                    return new StageState(
+                                            null,
+                                            false,
+                                            new IllegalStateException(
+                                                    "aborted relocation cannot be staged again"));
+                                }
+                                return new StageState(slot, false, null);
+                            });
             if (state.failure != null) {
                 return failed(state.failure);
             }
@@ -231,19 +198,23 @@ final class ZLinkSpotRetireControl {
         }
 
         private CompletionStage<byte[]> publish(Slot slot) {
-            PublishState state = inStateLane(() -> {
-                if (slot.aborted) {
-                    return new PublishState(null, null,
-                        new IllegalStateException(
-                            "aborted relocation cannot be published"));
-                }
-                if (slot.published != null) {
-                    return new PublishState(slot.published, null, null);
-                }
-                CompletableFuture<byte[]> published = new CompletableFuture<>();
-                slot.published = published;
-                return new PublishState(published, slot, null);
-            });
+            PublishState state =
+                    inStateLane(
+                            () -> {
+                                if (slot.aborted) {
+                                    return new PublishState(
+                                            null,
+                                            null,
+                                            new IllegalStateException(
+                                                    "aborted relocation cannot be published"));
+                                }
+                                if (slot.published != null) {
+                                    return new PublishState(slot.published, null, null);
+                                }
+                                CompletableFuture<byte[]> published = new CompletableFuture<>();
+                                slot.published = published;
+                                return new PublishState(published, slot, null);
+                            });
             if (state.failure != null) {
                 return failed(state.failure);
             }
@@ -252,61 +223,72 @@ final class ZLinkSpotRetireControl {
             }
             //  Install the exact slot claim before a completed stage invokes
             //  endpoint.publish inline and reenters relocation control.
-            state.start.staged
-                .thenCompose(ignored -> endpoint.publish(state.start.request))
-                .thenApply(ignored -> encodeAck(state.start.request.fence()))
-                .whenComplete((ack, failure) -> {
-                    if (failure == null) {
-                        state.published.complete(ack);
-                    } else {
-                        state.published.completeExceptionally(failure);
-                    }
-                });
+            state.start
+                    .staged
+                    .thenCompose(ignored -> endpoint.publish(state.start.request))
+                    .thenApply(ignored -> encodeAck(state.start.request.fence()))
+                    .whenComplete(
+                            (ack, failure) -> {
+                                if (failure == null) {
+                                    state.published.complete(ack);
+                                } else {
+                                    state.published.completeExceptionally(failure);
+                                }
+                            });
             return state.published;
         }
 
         private CompletionStage<byte[]> abort(Slot slot) {
-            AbortState state = inStateLane(() -> {
-                if (slot.published != null) {
-                    return new AbortState(false, new IllegalStateException(
-                        "published relocation cannot roll back to source"));
-                }
-                if (slot.aborted) {
-                    return new AbortState(false, null);
-                }
-                slot.aborted = true;
-                return new AbortState(true, null);
-            });
+            AbortState state =
+                    inStateLane(
+                            () -> {
+                                if (slot.published != null) {
+                                    return new AbortState(
+                                            false,
+                                            new IllegalStateException(
+                                                    "published relocation cannot roll back to"
+                                                            + " source"));
+                                }
+                                if (slot.aborted) {
+                                    return new AbortState(false, null);
+                                }
+                                slot.aborted = true;
+                                return new AbortState(true, null);
+                            });
             if (state.failure != null) {
                 return failed(state.failure);
             }
             if (!state.start) {
-                return CompletableFuture.completedFuture(
-                    encodeAck(slot.request.fence()));
+                return CompletableFuture.completedFuture(encodeAck(slot.request.fence()));
             }
-            return slot.staged.handle((ignored, stageFailure) -> null)
-                .thenCompose(ignored -> endpoint.abort(slot.request))
-                .thenApply(ignored -> encodeAck(slot.request.fence()));
+            return slot.staged
+                    .handle((ignored, stageFailure) -> null)
+                    .thenCompose(ignored -> endpoint.abort(slot.request))
+                    .thenApply(ignored -> encodeAck(slot.request.fence()));
         }
 
         private void startStage(Fence fence, Slot candidate) {
             try {
-                endpoint.stage(candidate.request).whenComplete((ignored, failure) -> {
-                    if (failure == null) {
-                        candidate.staged.complete(null);
-                    } else {
-                        inStateLane(() -> {
+                endpoint.stage(candidate.request)
+                        .whenComplete(
+                                (ignored, failure) -> {
+                                    if (failure == null) {
+                                        candidate.staged.complete(null);
+                                    } else {
+                                        inStateLane(
+                                                () -> {
+                                                    slots.remove(fence, candidate);
+                                                    return null;
+                                                });
+                                        candidate.staged.completeExceptionally(unwrap(failure));
+                                    }
+                                });
+            } catch (RuntimeException failure) {
+                inStateLane(
+                        () -> {
                             slots.remove(fence, candidate);
                             return null;
                         });
-                        candidate.staged.completeExceptionally(unwrap(failure));
-                    }
-                });
-            } catch (RuntimeException failure) {
-                inStateLane(() -> {
-                    slots.remove(fence, candidate);
-                    return null;
-                });
                 candidate.staged.completeExceptionally(failure);
             }
         }
@@ -326,20 +308,18 @@ final class ZLinkSpotRetireControl {
             }
         }
 
-        private record StageState(Slot slot, boolean start,
-                                  RuntimeException failure) { }
-        private record PublishState(CompletableFuture<byte[]> published,
-                                    Slot start,
-                                    RuntimeException failure) { }
-        private record AbortState(boolean start, RuntimeException failure) { }
+        private record StageState(Slot slot, boolean start, RuntimeException failure) {}
 
+        private record PublishState(
+                CompletableFuture<byte[]> published, Slot start, RuntimeException failure) {}
+
+        private record AbortState(boolean start, RuntimeException failure) {}
     }
 
     interface TargetEndpoint {
         /** Applies an admitted target-only profile before authority prepare. */
         default TargetProfile applyTargetProfile(
-            StageRequest request,
-            long defaultActorSpotGeneration) {
+                StageRequest request, long defaultActorSpotGeneration) {
             return new TargetProfile(request, defaultActorSpotGeneration, 1);
         }
 
@@ -349,32 +329,25 @@ final class ZLinkSpotRetireControl {
 
         /** Stages one command 31 frozen application record in arrival order. */
         default CompletionStage<Void> stageRelayedRecord(
-            StageRequest request,
-            byte[] frozenRecord) {
-            return CompletableFuture.failedFuture(new IllegalStateException(
-                "relocation data staging is unavailable"));
+                StageRequest request, byte[] frozenRecord) {
+            return CompletableFuture.failedFuture(
+                    new IllegalStateException("relocation data staging is unavailable"));
         }
 
         CompletionStage<Void> abort(StageRequest request);
 
         default CompletionStage<ZLinkSpotRelocationReplyRoutes.Ack> relayReply(
-            RoutingId transportSource,
-            ZLinkSpotRelocationReplyRoutes.Relay relay) {
-            return CompletableFuture.failedFuture(new IllegalStateException(
-                "relocation reply relay is unavailable"));
+                RoutingId transportSource, ZLinkSpotRelocationReplyRoutes.Relay relay) {
+            return CompletableFuture.failedFuture(
+                    new IllegalStateException("relocation reply relay is unavailable"));
         }
     }
 
-    record TargetProfile(
-        StageRequest request,
-        long actorSpotGeneration,
-        int actorSpotKind) {
+    record TargetProfile(StageRequest request, long actorSpotGeneration, int actorSpotKind) {
         TargetProfile {
             Objects.requireNonNull(request, "request");
-            if (actorSpotGeneration <= 0
-                || (actorSpotKind != 1 && actorSpotKind != 2)) {
-                throw new IllegalArgumentException(
-                    "canonical target Actor membership is invalid");
+            if (actorSpotGeneration <= 0 || (actorSpotKind != 1 && actorSpotKind != 2)) {
+                throw new IllegalArgumentException("canonical target Actor membership is invalid");
             }
         }
     }
@@ -383,37 +356,12 @@ final class ZLinkSpotRetireControl {
         Fence {
             Objects.requireNonNull(aggregateId, "aggregateId");
             if (aggregateGeneration <= 0) {
-                throw new IllegalArgumentException(
-                    "aggregate generation must be positive");
+                throw new IllegalArgumentException("aggregate generation must be positive");
             }
         }
     }
 
     record StageRequest(
-        Fence fence,
-        RoutingId sourceNodeRid,
-        long sourceNodeGeneration,
-        String sourceOwnerId,
-        long sourceOwnerLeaseGeneration,
-        RoutingId targetNodeRid,
-        long targetNodeGeneration,
-        String targetOwnerId,
-        long targetOwnerLeaseGeneration,
-        String meshName,
-        String spotId,
-        String stableType,
-        boolean instanceSpot,
-        boolean restoreSpotSnapshot,
-        byte[] relocationPayload,
-        List<ParticipantFence> participants,
-        List<SessionRouteFence> sessionRoutes,
-        //  Source-side planning input only, never re-derived on the target:
-        //  the target's advertised relocation state chunk receive limit
-        //  (spec 15 §4.2) for this exact Direct Join, or 0 when not
-        //  advertised (bounds this relocation's chunk size in addition to
-        //  the node-local budget's effective chunk size).
-        long advertisedReceiveChunkLimitBytes) {
-        StageRequest(
             Fence fence,
             RoutingId sourceNodeRid,
             long sourceNodeGeneration,
@@ -430,63 +378,87 @@ final class ZLinkSpotRetireControl {
             boolean restoreSpotSnapshot,
             byte[] relocationPayload,
             List<ParticipantFence> participants,
-            List<SessionRouteFence> sessionRoutes) {
+            List<SessionRouteFence> sessionRoutes,
+            //  Source-side planning input only, never re-derived on the target:
+            //  the target's advertised relocation state chunk receive limit
+            //  (spec 15 §4.2) for this exact Direct Join, or 0 when not
+            //  advertised (bounds this relocation's chunk size in addition to
+            //  the node-local budget's effective chunk size).
+            long advertisedReceiveChunkLimitBytes) {
+        StageRequest(
+                Fence fence,
+                RoutingId sourceNodeRid,
+                long sourceNodeGeneration,
+                String sourceOwnerId,
+                long sourceOwnerLeaseGeneration,
+                RoutingId targetNodeRid,
+                long targetNodeGeneration,
+                String targetOwnerId,
+                long targetOwnerLeaseGeneration,
+                String meshName,
+                String spotId,
+                String stableType,
+                boolean instanceSpot,
+                boolean restoreSpotSnapshot,
+                byte[] relocationPayload,
+                List<ParticipantFence> participants,
+                List<SessionRouteFence> sessionRoutes) {
             this(
-                fence,
-                sourceNodeRid,
-                sourceNodeGeneration,
-                sourceOwnerId,
-                sourceOwnerLeaseGeneration,
-                targetNodeRid,
-                targetNodeGeneration,
-                targetOwnerId,
-                targetOwnerLeaseGeneration,
-                meshName,
-                spotId,
-                stableType,
-                instanceSpot,
-                restoreSpotSnapshot,
-                relocationPayload,
-                participants,
-                sessionRoutes,
-                0L);
+                    fence,
+                    sourceNodeRid,
+                    sourceNodeGeneration,
+                    sourceOwnerId,
+                    sourceOwnerLeaseGeneration,
+                    targetNodeRid,
+                    targetNodeGeneration,
+                    targetOwnerId,
+                    targetOwnerLeaseGeneration,
+                    meshName,
+                    spotId,
+                    stableType,
+                    instanceSpot,
+                    restoreSpotSnapshot,
+                    relocationPayload,
+                    participants,
+                    sessionRoutes,
+                    0L);
         }
 
         StageRequest(
-            Fence fence,
-            RoutingId sourceNodeRid,
-            long sourceNodeGeneration,
-            String sourceOwnerId,
-            long sourceOwnerLeaseGeneration,
-            RoutingId targetNodeRid,
-            long targetNodeGeneration,
-            String targetOwnerId,
-            long targetOwnerLeaseGeneration,
-            String meshName,
-            String spotId,
-            String stableType,
-            boolean instanceSpot,
-            boolean restoreSpotSnapshot,
-            byte[] relocationPayload,
-            List<ParticipantFence> participants) {
+                Fence fence,
+                RoutingId sourceNodeRid,
+                long sourceNodeGeneration,
+                String sourceOwnerId,
+                long sourceOwnerLeaseGeneration,
+                RoutingId targetNodeRid,
+                long targetNodeGeneration,
+                String targetOwnerId,
+                long targetOwnerLeaseGeneration,
+                String meshName,
+                String spotId,
+                String stableType,
+                boolean instanceSpot,
+                boolean restoreSpotSnapshot,
+                byte[] relocationPayload,
+                List<ParticipantFence> participants) {
             this(
-                fence,
-                sourceNodeRid,
-                sourceNodeGeneration,
-                sourceOwnerId,
-                sourceOwnerLeaseGeneration,
-                targetNodeRid,
-                targetNodeGeneration,
-                targetOwnerId,
-                targetOwnerLeaseGeneration,
-                meshName,
-                spotId,
-                stableType,
-                instanceSpot,
-                restoreSpotSnapshot,
-                relocationPayload,
-                participants,
-                List.of());
+                    fence,
+                    sourceNodeRid,
+                    sourceNodeGeneration,
+                    sourceOwnerId,
+                    sourceOwnerLeaseGeneration,
+                    targetNodeRid,
+                    targetNodeGeneration,
+                    targetOwnerId,
+                    targetOwnerLeaseGeneration,
+                    meshName,
+                    spotId,
+                    stableType,
+                    instanceSpot,
+                    restoreSpotSnapshot,
+                    relocationPayload,
+                    participants,
+                    List.of());
         }
 
         StageRequest {
@@ -498,58 +470,55 @@ final class ZLinkSpotRetireControl {
             requireText(meshName, "meshName");
             requireText(spotId, "spotId");
             requireText(stableType, "stableType");
-            relocationPayload = Objects.requireNonNull(
-                relocationPayload, "relocationPayload").clone();
+            relocationPayload =
+                    Objects.requireNonNull(relocationPayload, "relocationPayload").clone();
             if (advertisedReceiveChunkLimitBytes < 0) {
                 throw new IllegalArgumentException(
-                    "advertised receive chunk limit must not be negative");
+                        "advertised receive chunk limit must not be negative");
             }
             if (relocationPayload.length == 0) {
-                throw new IllegalArgumentException(
-                    "relocation stage payload is required");
+                throw new IllegalArgumentException("relocation stage payload is required");
             }
-            participants = List.copyOf(Objects.requireNonNull(
-                participants, "participants"));
-            sessionRoutes = List.copyOf(Objects.requireNonNull(
-                sessionRoutes, "sessionRoutes"));
+            participants = List.copyOf(Objects.requireNonNull(participants, "participants"));
+            sessionRoutes = List.copyOf(Objects.requireNonNull(sessionRoutes, "sessionRoutes"));
             if (sourceNodeGeneration == 0
-                || sourceOwnerLeaseGeneration <= 0
-                || targetNodeGeneration == 0
-                || targetOwnerLeaseGeneration <= 0) {
+                    || sourceOwnerLeaseGeneration <= 0
+                    || targetNodeGeneration == 0
+                    || targetOwnerLeaseGeneration <= 0) {
                 throw new IllegalArgumentException(
-                    "relocation stage contains an invalid generation");
+                        "relocation stage contains an invalid generation");
             }
-            if (participants.isEmpty()
-                || participants.size() > MAX_PARTICIPANTS) {
-                throw new IllegalArgumentException(
-                    "relocation participant count is invalid");
+            if (participants.isEmpty() || participants.size() > MAX_PARTICIPANTS) {
+                throw new IllegalArgumentException("relocation participant count is invalid");
             }
             String previous = null;
             for (ParticipantFence participant : participants) {
-                if (previous != null
-                    && compareUtf8(previous, participant.authorityKey()) >= 0) {
-                    throw new IllegalArgumentException(
-                        "relocation participants are not canonical");
+                if (previous != null && compareUtf8(previous, participant.authorityKey()) >= 0) {
+                    throw new IllegalArgumentException("relocation participants are not canonical");
                 }
                 previous = participant.authorityKey();
             }
             previous = null;
             for (SessionRouteFence route : sessionRoutes) {
-                if (previous != null
-                    && compareUtf8(previous, route.actorId()) >= 0) {
-                    throw new IllegalArgumentException(
-                        "Session routes are not canonical");
+                if (previous != null && compareUtf8(previous, route.actorId()) >= 0) {
+                    throw new IllegalArgumentException("Session routes are not canonical");
                 }
-                boolean actorMatches = participants.stream().anyMatch(
-                    participant -> participant.objectKind() == 1
-                        && participant.objectId().equals(route.actorId())
-                        && participant.objectGeneration()
-                            == route.actorObjectGeneration()
-                        && participant.sourceAuthorityOwnerGeneration()
-                            == route.sourceAuthorityOwnerGeneration());
+                boolean actorMatches =
+                        participants.stream()
+                                .anyMatch(
+                                        participant ->
+                                                participant.objectKind() == 1
+                                                        && participant
+                                                                .objectId()
+                                                                .equals(route.actorId())
+                                                        && participant.objectGeneration()
+                                                                == route.actorObjectGeneration()
+                                                        && participant
+                                                                        .sourceAuthorityOwnerGeneration()
+                                                                == route
+                                                                        .sourceAuthorityOwnerGeneration());
                 if (!actorMatches) {
-                    throw new IllegalArgumentException(
-                        "Session route is outside Actor inventory");
+                    throw new IllegalArgumentException("Session route is outside Actor inventory");
                 }
                 previous = route.actorId();
             }
@@ -563,51 +532,47 @@ final class ZLinkSpotRetireControl {
         @Override
         public boolean equals(Object other) {
             return other instanceof StageRequest that
-                && fence.equals(that.fence)
-                && sourceNodeRid.equals(that.sourceNodeRid)
-                && sourceNodeGeneration == that.sourceNodeGeneration
-                && sourceOwnerId.equals(that.sourceOwnerId)
-                && sourceOwnerLeaseGeneration
-                    == that.sourceOwnerLeaseGeneration
-                && targetNodeRid.equals(that.targetNodeRid)
-                && targetNodeGeneration == that.targetNodeGeneration
-                && targetOwnerId.equals(that.targetOwnerId)
-                && targetOwnerLeaseGeneration
-                    == that.targetOwnerLeaseGeneration
-                && meshName.equals(that.meshName)
-                && spotId.equals(that.spotId)
-                && stableType.equals(that.stableType)
-                && instanceSpot == that.instanceSpot
-                && restoreSpotSnapshot == that.restoreSpotSnapshot
-                && Arrays.equals(
-                    relocationPayload, that.relocationPayload)
-                && participants.equals(that.participants)
-                && sessionRoutes.equals(that.sessionRoutes)
-                && advertisedReceiveChunkLimitBytes
-                    == that.advertisedReceiveChunkLimitBytes;
+                    && fence.equals(that.fence)
+                    && sourceNodeRid.equals(that.sourceNodeRid)
+                    && sourceNodeGeneration == that.sourceNodeGeneration
+                    && sourceOwnerId.equals(that.sourceOwnerId)
+                    && sourceOwnerLeaseGeneration == that.sourceOwnerLeaseGeneration
+                    && targetNodeRid.equals(that.targetNodeRid)
+                    && targetNodeGeneration == that.targetNodeGeneration
+                    && targetOwnerId.equals(that.targetOwnerId)
+                    && targetOwnerLeaseGeneration == that.targetOwnerLeaseGeneration
+                    && meshName.equals(that.meshName)
+                    && spotId.equals(that.spotId)
+                    && stableType.equals(that.stableType)
+                    && instanceSpot == that.instanceSpot
+                    && restoreSpotSnapshot == that.restoreSpotSnapshot
+                    && Arrays.equals(relocationPayload, that.relocationPayload)
+                    && participants.equals(that.participants)
+                    && sessionRoutes.equals(that.sessionRoutes)
+                    && advertisedReceiveChunkLimitBytes == that.advertisedReceiveChunkLimitBytes;
         }
 
         @Override
         public int hashCode() {
             return Objects.hash(
-                fence,
-                sourceNodeRid,
-                sourceNodeGeneration,
-                sourceOwnerId,
-                sourceOwnerLeaseGeneration,
-                targetNodeRid,
-                targetNodeGeneration,
-                targetOwnerId,
-                targetOwnerLeaseGeneration,
-                meshName,
-                spotId,
-                stableType,
-                instanceSpot,
-                restoreSpotSnapshot,
-                Arrays.hashCode(relocationPayload),
-                participants,
-                sessionRoutes,
-                advertisedReceiveChunkLimitBytes);
+                    fence,
+                    sourceNodeRid,
+                    sourceNodeGeneration,
+                    sourceOwnerId,
+                    sourceOwnerLeaseGeneration,
+                    targetNodeRid,
+                    targetNodeGeneration,
+                    targetOwnerId,
+                    targetOwnerLeaseGeneration,
+                    meshName,
+                    spotId,
+                    stableType,
+                    instanceSpot,
+                    restoreSpotSnapshot,
+                    Arrays.hashCode(relocationPayload),
+                    participants,
+                    sessionRoutes,
+                    advertisedReceiveChunkLimitBytes);
         }
 
         /** CRC-32C of the whole encoded handoff payload (spec 28 §4.2). */
@@ -619,81 +584,69 @@ final class ZLinkSpotRetireControl {
     }
 
     record SessionRouteFence(
-        String actorId,
-        long actorObjectGeneration,
-        long sourceAuthorityOwnerGeneration,
-        String sourceAuthorityStoreVersion,
-        RoutingId sessionOwnerNodeRid,
-        long sessionOwnerNodeGeneration,
-        String sessionOwnerId,
-        long sessionOwnerLeaseGeneration,
-        RoutingId sessionRid,
-        long bindingGeneration) {
+            String actorId,
+            long actorObjectGeneration,
+            long sourceAuthorityOwnerGeneration,
+            String sourceAuthorityStoreVersion,
+            RoutingId sessionOwnerNodeRid,
+            long sessionOwnerNodeGeneration,
+            String sessionOwnerId,
+            long sessionOwnerLeaseGeneration,
+            RoutingId sessionRid,
+            long bindingGeneration) {
         SessionRouteFence {
             requireText(actorId, "actorId");
-            requireText(
-                sourceAuthorityStoreVersion, "sourceAuthorityStoreVersion");
-            Objects.requireNonNull(
-                sessionOwnerNodeRid, "sessionOwnerNodeRid");
+            requireText(sourceAuthorityStoreVersion, "sourceAuthorityStoreVersion");
+            Objects.requireNonNull(sessionOwnerNodeRid, "sessionOwnerNodeRid");
             requireText(sessionOwnerId, "sessionOwnerId");
             Objects.requireNonNull(sessionRid, "sessionRid");
             positive(actorObjectGeneration, "actorObjectGeneration");
-            positive(
-                sourceAuthorityOwnerGeneration,
-                "sourceAuthorityOwnerGeneration");
-            nonzero(
-                sessionOwnerNodeGeneration,
-                "sessionOwnerNodeGeneration");
-            positive(
-                sessionOwnerLeaseGeneration,
-                "sessionOwnerLeaseGeneration");
+            positive(sourceAuthorityOwnerGeneration, "sourceAuthorityOwnerGeneration");
+            nonzero(sessionOwnerNodeGeneration, "sessionOwnerNodeGeneration");
+            positive(sessionOwnerLeaseGeneration, "sessionOwnerLeaseGeneration");
             nonzero(bindingGeneration, "bindingGeneration");
         }
     }
 
     record ParticipantFence(
-        String authorityKey,
-        int objectKind,
-        String objectId,
-        String stableType,
-        boolean restoreSnapshot,
-        long objectGeneration,
-        long sourceAuthorityOwnerGeneration) {
+            String authorityKey,
+            int objectKind,
+            String objectId,
+            String stableType,
+            boolean restoreSnapshot,
+            long objectGeneration,
+            long sourceAuthorityOwnerGeneration) {
         ParticipantFence {
             requireText(authorityKey, "authorityKey");
             if (objectKind != 1 && objectKind != 2) {
                 throw new IllegalArgumentException(
-                    "participant objectKind must be Actor or User Spot");
+                        "participant objectKind must be Actor or User Spot");
             }
             requireText(objectId, "objectId");
             requireText(stableType, "stableType");
             positive(objectGeneration, "objectGeneration");
-            positive(
-                sourceAuthorityOwnerGeneration,
-                "sourceAuthorityOwnerGeneration");
+            positive(sourceAuthorityOwnerGeneration, "sourceAuthorityOwnerGeneration");
         }
     }
 
-    private sealed interface Command permits
-        StageCommand, PublishCommand, AbortCommand,
-        RelayReplyCommand {
+    private sealed interface Command
+            permits StageCommand, PublishCommand, AbortCommand, RelayReplyCommand {
         Fence fence();
     }
 
     private record StageCommand(StageRequest request) implements Command {
-        @Override public Fence fence() { return request.fence(); }
+        @Override
+        public Fence fence() {
+            return request.fence();
+        }
     }
 
-    private record PublishCommand(Fence fence) implements Command {
-    }
+    private record PublishCommand(Fence fence) implements Command {}
 
-    private record AbortCommand(Fence fence) implements Command {
-    }
+    private record AbortCommand(Fence fence) implements Command {}
 
-    private record RelayReplyCommand(
-        Fence fence,
-        ZLinkSpotRelocationReplyRoutes.Relay relay) implements Command {
-    }
+    private record RelayReplyCommand(Fence fence, ZLinkSpotRelocationReplyRoutes.Relay relay)
+            implements Command {}
 
     private static final class Slot {
         private final StageRequest request;
@@ -709,78 +662,79 @@ final class ZLinkSpotRetireControl {
     }
 
     private static byte[] encodeStage(StageRequest request) {
-        return write(STAGE, output -> {
-            writeFence(output, request.fence());
-            writeRid(output, request.sourceNodeRid());
-            output.writeLong(request.sourceNodeGeneration());
-            writeText(output, request.sourceOwnerId());
-            output.writeLong(request.sourceOwnerLeaseGeneration());
-            writeRid(output, request.targetNodeRid());
-            output.writeLong(request.targetNodeGeneration());
-            writeText(output, request.targetOwnerId());
-            output.writeLong(request.targetOwnerLeaseGeneration());
-            writeText(output, request.meshName());
-            writeText(output, request.spotId());
-            writeText(output, request.stableType());
-            output.writeBoolean(request.instanceSpot());
-            output.writeBoolean(request.restoreSpotSnapshot());
-            byte[] payload = request.relocationPayload();
-            output.writeInt(payload.length);
-            output.write(payload);
-            output.writeInt(request.participants().size());
-            for (ParticipantFence participant : request.participants()) {
-                writeText(output, participant.authorityKey());
-                output.writeByte(participant.objectKind());
-                writeText(output, participant.objectId());
-                writeText(output, participant.stableType());
-                output.writeBoolean(participant.restoreSnapshot());
-                output.writeLong(participant.objectGeneration());
-                output.writeLong(
-                    participant.sourceAuthorityOwnerGeneration());
-            }
-            output.writeInt(request.sessionRoutes().size());
-            for (SessionRouteFence route : request.sessionRoutes()) {
-                writeText(output, route.actorId());
-                output.writeLong(route.actorObjectGeneration());
-                output.writeLong(route.sourceAuthorityOwnerGeneration());
-                writeText(output, route.sourceAuthorityStoreVersion());
-                writeRid(output, route.sessionOwnerNodeRid());
-                output.writeLong(route.sessionOwnerNodeGeneration());
-                writeText(output, route.sessionOwnerId());
-                output.writeLong(route.sessionOwnerLeaseGeneration());
-                writeRid(output, route.sessionRid());
-                output.writeLong(route.bindingGeneration());
-            }
-        });
+        return write(
+                STAGE,
+                output -> {
+                    writeFence(output, request.fence());
+                    writeRid(output, request.sourceNodeRid());
+                    output.writeLong(request.sourceNodeGeneration());
+                    writeText(output, request.sourceOwnerId());
+                    output.writeLong(request.sourceOwnerLeaseGeneration());
+                    writeRid(output, request.targetNodeRid());
+                    output.writeLong(request.targetNodeGeneration());
+                    writeText(output, request.targetOwnerId());
+                    output.writeLong(request.targetOwnerLeaseGeneration());
+                    writeText(output, request.meshName());
+                    writeText(output, request.spotId());
+                    writeText(output, request.stableType());
+                    output.writeBoolean(request.instanceSpot());
+                    output.writeBoolean(request.restoreSpotSnapshot());
+                    byte[] payload = request.relocationPayload();
+                    output.writeInt(payload.length);
+                    output.write(payload);
+                    output.writeInt(request.participants().size());
+                    for (ParticipantFence participant : request.participants()) {
+                        writeText(output, participant.authorityKey());
+                        output.writeByte(participant.objectKind());
+                        writeText(output, participant.objectId());
+                        writeText(output, participant.stableType());
+                        output.writeBoolean(participant.restoreSnapshot());
+                        output.writeLong(participant.objectGeneration());
+                        output.writeLong(participant.sourceAuthorityOwnerGeneration());
+                    }
+                    output.writeInt(request.sessionRoutes().size());
+                    for (SessionRouteFence route : request.sessionRoutes()) {
+                        writeText(output, route.actorId());
+                        output.writeLong(route.actorObjectGeneration());
+                        output.writeLong(route.sourceAuthorityOwnerGeneration());
+                        writeText(output, route.sourceAuthorityStoreVersion());
+                        writeRid(output, route.sessionOwnerNodeRid());
+                        output.writeLong(route.sessionOwnerNodeGeneration());
+                        writeText(output, route.sessionOwnerId());
+                        output.writeLong(route.sessionOwnerLeaseGeneration());
+                        writeRid(output, route.sessionRid());
+                        output.writeLong(route.bindingGeneration());
+                    }
+                });
     }
 
     private static byte[] encodeFence(int kind, Fence fence) {
         return write(kind, output -> writeFence(output, fence));
     }
 
-    private static byte[] encodeRelay(
-        Fence fence,
-        ZLinkSpotRelocationReplyRoutes.Relay relay) {
-        return write(RELAY_REPLY, output -> {
-            writeFence(output, fence);
-            output.writeLong(relay.operation().high());
-            output.writeLong(relay.operation().low());
-            output.writeLong(relay.replyRouteId());
-            writeText(output, relay.spotId());
-            output.writeLong(relay.objectGeneration());
-            writeText(output, relay.sourceOwnerId());
-            output.writeLong(relay.sourceOwnerLeaseGeneration());
-            writeRid(output, relay.sourceNodeRid());
-            output.writeLong(relay.sourceNodeGeneration());
-            output.writeLong(relay.targetNodeGeneration());
-            output.writeLong(relay.targetAttemptGeneration());
-            output.writeInt(relay.hopCount());
-            output.writeInt(relay.parts().size());
-            for (byte[] part : relay.parts()) {
-                output.writeInt(part.length);
-                output.write(part);
-            }
-        });
+    private static byte[] encodeRelay(Fence fence, ZLinkSpotRelocationReplyRoutes.Relay relay) {
+        return write(
+                RELAY_REPLY,
+                output -> {
+                    writeFence(output, fence);
+                    output.writeLong(relay.operation().high());
+                    output.writeLong(relay.operation().low());
+                    output.writeLong(relay.replyRouteId());
+                    writeText(output, relay.spotId());
+                    output.writeLong(relay.objectGeneration());
+                    writeText(output, relay.sourceOwnerId());
+                    output.writeLong(relay.sourceOwnerLeaseGeneration());
+                    writeRid(output, relay.sourceNodeRid());
+                    output.writeLong(relay.sourceNodeGeneration());
+                    output.writeLong(relay.targetNodeGeneration());
+                    output.writeLong(relay.targetAttemptGeneration());
+                    output.writeInt(relay.hopCount());
+                    output.writeInt(relay.parts().size());
+                    for (byte[] part : relay.parts()) {
+                        output.writeInt(part.length);
+                        output.write(part);
+                    }
+                });
     }
 
     private static byte[] encodeAck(Fence fence) {
@@ -790,32 +744,27 @@ final class ZLinkSpotRetireControl {
     private static Command decode(byte[] encoded) {
         byte[] bytes = Objects.requireNonNull(encoded, "encoded");
         if (bytes.length == 0 || bytes.length > MAX_COMMAND_BYTES) {
-            throw new IllegalArgumentException(
-                "relocation command exceeds its size bound");
+            throw new IllegalArgumentException("relocation command exceeds its size bound");
         }
         try {
-            DataInputStream input = new DataInputStream(
-                new ByteArrayInputStream(bytes));
+            DataInputStream input = new DataInputStream(new ByteArrayInputStream(bytes));
             if (input.readInt() != MAGIC || input.readUnsignedByte() != VERSION) {
-                throw new IllegalArgumentException(
-                    "relocation command prefix is invalid");
+                throw new IllegalArgumentException("relocation command prefix is invalid");
             }
             int kind = input.readUnsignedByte();
             Command command;
             if (kind == STAGE) {
                 Fence fence = readFence(input);
                 RoutingId sourceNode = readRid(input);
-                long sourceNodeGeneration = nonzero(
-                    input.readLong(), "sourceNodeGeneration");
+                long sourceNodeGeneration = nonzero(input.readLong(), "sourceNodeGeneration");
                 String sourceOwner = readText(input);
-                long sourceOwnerGeneration = positive(
-                    input.readLong(), "sourceOwnerLeaseGeneration");
+                long sourceOwnerGeneration =
+                        positive(input.readLong(), "sourceOwnerLeaseGeneration");
                 RoutingId targetNode = readRid(input);
-                long targetNodeGeneration = nonzero(
-                    input.readLong(), "targetNodeGeneration");
+                long targetNodeGeneration = nonzero(input.readLong(), "targetNodeGeneration");
                 String targetOwner = readText(input);
-                long targetOwnerGeneration = positive(
-                    input.readLong(), "targetOwnerLeaseGeneration");
+                long targetOwnerGeneration =
+                        positive(input.readLong(), "targetOwnerLeaseGeneration");
                 String meshName = readText(input);
                 String spotId = readText(input);
                 String stableType = readText(input);
@@ -824,113 +773,97 @@ final class ZLinkSpotRetireControl {
                 int payloadLength = input.readInt();
                 if (payloadLength < 1 || payloadLength > MAX_COMMAND_BYTES) {
                     throw new IllegalArgumentException(
-                        "relocation stage payload length is invalid");
+                            "relocation stage payload length is invalid");
                 }
                 byte[] payload = input.readNBytes(payloadLength);
                 if (payload.length != payloadLength) {
                     throw new EOFException();
                 }
                 int participantCount = input.readInt();
-                if (participantCount < 1
-                    || participantCount > MAX_PARTICIPANTS) {
-                    throw new IllegalArgumentException(
-                        "relocation participant count is invalid");
+                if (participantCount < 1 || participantCount > MAX_PARTICIPANTS) {
+                    throw new IllegalArgumentException("relocation participant count is invalid");
                 }
-                ArrayList<ParticipantFence> participants =
-                    new ArrayList<>(participantCount);
+                ArrayList<ParticipantFence> participants = new ArrayList<>(participantCount);
                 for (int index = 0; index < participantCount; index++) {
-                    participants.add(new ParticipantFence(
-                        readText(input),
-                        input.readUnsignedByte(),
-                        readText(input),
-                        readText(input),
-                        input.readBoolean(),
-                        positive(input.readLong(), "objectGeneration"),
-                        positive(
-                            input.readLong(),
-                            "sourceAuthorityOwnerGeneration")));
+                    participants.add(
+                            new ParticipantFence(
+                                    readText(input),
+                                    input.readUnsignedByte(),
+                                    readText(input),
+                                    readText(input),
+                                    input.readBoolean(),
+                                    positive(input.readLong(), "objectGeneration"),
+                                    positive(input.readLong(), "sourceAuthorityOwnerGeneration")));
                 }
                 int sessionRouteCount = input.readInt();
-                if (sessionRouteCount < 0
-                    || sessionRouteCount > MAX_PARTICIPANTS) {
-                    throw new IllegalArgumentException(
-                        "Session route count is invalid");
+                if (sessionRouteCount < 0 || sessionRouteCount > MAX_PARTICIPANTS) {
+                    throw new IllegalArgumentException("Session route count is invalid");
                 }
-                ArrayList<SessionRouteFence> sessionRoutes =
-                    new ArrayList<>(sessionRouteCount);
+                ArrayList<SessionRouteFence> sessionRoutes = new ArrayList<>(sessionRouteCount);
                 for (int index = 0; index < sessionRouteCount; index++) {
-                    sessionRoutes.add(new SessionRouteFence(
-                        readText(input),
-                        positive(input.readLong(), "actorObjectGeneration"),
-                        positive(
-                            input.readLong(),
-                            "sourceAuthorityOwnerGeneration"),
-                        readText(input),
-                        readRid(input),
-                        nonzero(
-                            input.readLong(),
-                            "sessionOwnerNodeGeneration"),
-                        readText(input),
-                        positive(
-                            input.readLong(),
-                            "sessionOwnerLeaseGeneration"),
-                        readRid(input),
-                        nonzero(input.readLong(), "bindingGeneration")));
+                    sessionRoutes.add(
+                            new SessionRouteFence(
+                                    readText(input),
+                                    positive(input.readLong(), "actorObjectGeneration"),
+                                    positive(input.readLong(), "sourceAuthorityOwnerGeneration"),
+                                    readText(input),
+                                    readRid(input),
+                                    nonzero(input.readLong(), "sessionOwnerNodeGeneration"),
+                                    readText(input),
+                                    positive(input.readLong(), "sessionOwnerLeaseGeneration"),
+                                    readRid(input),
+                                    nonzero(input.readLong(), "bindingGeneration")));
                 }
-                command = new StageCommand(new StageRequest(
-                    fence,
-                    sourceNode,
-                    sourceNodeGeneration,
-                    sourceOwner,
-                    sourceOwnerGeneration,
-                    targetNode,
-                    targetNodeGeneration,
-                    targetOwner,
-                    targetOwnerGeneration,
-                    meshName,
-                    spotId,
-                    stableType,
-                    instanceSpot,
-                    restoreSpotSnapshot,
-                    payload,
-                    participants,
-                    sessionRoutes));
+                command =
+                        new StageCommand(
+                                new StageRequest(
+                                        fence,
+                                        sourceNode,
+                                        sourceNodeGeneration,
+                                        sourceOwner,
+                                        sourceOwnerGeneration,
+                                        targetNode,
+                                        targetNodeGeneration,
+                                        targetOwner,
+                                        targetOwnerGeneration,
+                                        meshName,
+                                        spotId,
+                                        stableType,
+                                        instanceSpot,
+                                        restoreSpotSnapshot,
+                                        payload,
+                                        participants,
+                                        sessionRoutes));
             } else if (kind == PUBLISH) {
                 command = new PublishCommand(readFence(input));
             } else if (kind == ABORT) {
                 command = new AbortCommand(readFence(input));
             } else if (kind == RELAY_REPLY) {
                 Fence fence = readFence(input);
-                var operation = new ZLinkSpotRelocationReplyRoutes.OperationId(
-                    input.readLong(), input.readLong());
-                long replyRouteId = positive(
-                    input.readLong(), "replyRouteId");
+                var operation =
+                        new ZLinkSpotRelocationReplyRoutes.OperationId(
+                                input.readLong(), input.readLong());
+                long replyRouteId = positive(input.readLong(), "replyRouteId");
                 String spotId = readText(input);
-                long objectGeneration = positive(
-                    input.readLong(), "objectGeneration");
+                long objectGeneration = positive(input.readLong(), "objectGeneration");
                 String sourceOwnerId = readText(input);
-                long sourceOwnerLeaseGeneration = positive(
-                    input.readLong(), "sourceOwnerLeaseGeneration");
+                long sourceOwnerLeaseGeneration =
+                        positive(input.readLong(), "sourceOwnerLeaseGeneration");
                 RoutingId sourceNodeRid = readRid(input);
-                long sourceNodeGeneration = nonzero(
-                    input.readLong(), "sourceNodeGeneration");
-                long targetNodeGeneration = nonzero(
-                    input.readLong(), "targetNodeGeneration");
-                long targetAttemptGeneration = positive(
-                    input.readLong(), "targetAttemptGeneration");
+                long sourceNodeGeneration = nonzero(input.readLong(), "sourceNodeGeneration");
+                long targetNodeGeneration = nonzero(input.readLong(), "targetNodeGeneration");
+                long targetAttemptGeneration =
+                        positive(input.readLong(), "targetAttemptGeneration");
                 int hopCount = input.readInt();
                 int partCount = input.readInt();
                 if (partCount < 1 || partCount > 64) {
-                    throw new IllegalArgumentException(
-                        "relocation reply part count is invalid");
+                    throw new IllegalArgumentException("relocation reply part count is invalid");
                 }
-                ArrayList<byte[]> parts =
-                    new ArrayList<>(partCount);
+                ArrayList<byte[]> parts = new ArrayList<>(partCount);
                 for (int index = 0; index < partCount; index++) {
                     int length = input.readInt();
                     if (length < 0 || length > MAX_COMMAND_BYTES) {
-                        throw new IllegalArgumentException(
-                            "relocation reply part is too large");
+                        throw new IllegalArgumentException("relocation reply part is too large");
                     }
                     byte[] part = input.readNBytes(length);
                     if (part.length != length) {
@@ -938,92 +871,84 @@ final class ZLinkSpotRetireControl {
                     }
                     parts.add(part);
                 }
-                command = new RelayReplyCommand(fence,
-                    new ZLinkSpotRelocationReplyRoutes.Relay(
-                        operation,
-                        replyRouteId,
-                        spotId,
-                        objectGeneration,
-                        sourceOwnerId,
-                        sourceOwnerLeaseGeneration,
-                        sourceNodeRid,
-                        sourceNodeGeneration,
-                        targetNodeGeneration,
-                        targetAttemptGeneration,
-                        hopCount,
-                        parts));
+                command =
+                        new RelayReplyCommand(
+                                fence,
+                                new ZLinkSpotRelocationReplyRoutes.Relay(
+                                        operation,
+                                        replyRouteId,
+                                        spotId,
+                                        objectGeneration,
+                                        sourceOwnerId,
+                                        sourceOwnerLeaseGeneration,
+                                        sourceNodeRid,
+                                        sourceNodeGeneration,
+                                        targetNodeGeneration,
+                                        targetAttemptGeneration,
+                                        hopCount,
+                                        parts));
             } else {
-                throw new IllegalArgumentException(
-                    "relocation command kind is invalid");
+                throw new IllegalArgumentException("relocation command kind is invalid");
             }
             if (input.available() != 0) {
-                throw new IllegalArgumentException(
-                    "relocation command contains trailing bytes");
+                throw new IllegalArgumentException("relocation command contains trailing bytes");
             }
             return command;
         } catch (EOFException failure) {
-            throw new IllegalArgumentException(
-                "relocation command is truncated", failure);
+            throw new IllegalArgumentException("relocation command is truncated", failure);
         } catch (IOException failure) {
-            throw new IllegalArgumentException(
-                "relocation command is invalid", failure);
+            throw new IllegalArgumentException("relocation command is invalid", failure);
         }
     }
 
     private static Fence decodeAck(byte[] encoded) {
         try {
-            DataInputStream input = new DataInputStream(
-                new ByteArrayInputStream(encoded));
+            DataInputStream input = new DataInputStream(new ByteArrayInputStream(encoded));
             if (input.readInt() != MAGIC
-                || input.readUnsignedByte() != VERSION
-                || input.readUnsignedByte() != ACK) {
-                throw new IllegalArgumentException(
-                    "relocation command acknowledgment is invalid");
+                    || input.readUnsignedByte() != VERSION
+                    || input.readUnsignedByte() != ACK) {
+                throw new IllegalArgumentException("relocation command acknowledgment is invalid");
             }
             Fence fence = readFence(input);
             if (input.available() != 0) {
                 throw new IllegalArgumentException(
-                    "relocation acknowledgment contains trailing bytes");
+                        "relocation acknowledgment contains trailing bytes");
             }
             return fence;
         } catch (IOException failure) {
-            throw new IllegalArgumentException(
-                "relocation acknowledgment is invalid", failure);
+            throw new IllegalArgumentException("relocation acknowledgment is invalid", failure);
         }
     }
 
-    private static byte[] encodeRelayAck(
-        Fence fence,
-        ZLinkSpotRelocationReplyRoutes.Ack ack) {
-        return write(RELAY_ACK, output -> {
-            writeFence(output, fence);
-            output.writeByte(ack.ordinal());
-        });
+    private static byte[] encodeRelayAck(Fence fence, ZLinkSpotRelocationReplyRoutes.Ack ack) {
+        return write(
+                RELAY_ACK,
+                output -> {
+                    writeFence(output, fence);
+                    output.writeByte(ack.ordinal());
+                });
     }
 
     private static ZLinkSpotRelocationReplyRoutes.Ack decodeRelayAck(
-        byte[] encoded,
-        Fence expectedFence) {
+            byte[] encoded, Fence expectedFence) {
         try {
-            DataInputStream input = new DataInputStream(
-                new ByteArrayInputStream(encoded));
+            DataInputStream input = new DataInputStream(new ByteArrayInputStream(encoded));
             if (input.readInt() != MAGIC
-                || input.readUnsignedByte() != VERSION
-                || input.readUnsignedByte() != RELAY_ACK
-                || !readFence(input).equals(expectedFence)) {
-                throw new IllegalArgumentException(
-                    "relocation reply acknowledgment is invalid");
+                    || input.readUnsignedByte() != VERSION
+                    || input.readUnsignedByte() != RELAY_ACK
+                    || !readFence(input).equals(expectedFence)) {
+                throw new IllegalArgumentException("relocation reply acknowledgment is invalid");
             }
             int state = input.readUnsignedByte();
             if (state >= ZLinkSpotRelocationReplyRoutes.Ack.values().length
-                || input.available() != 0) {
+                    || input.available() != 0) {
                 throw new IllegalArgumentException(
-                    "relocation reply acknowledgment state is invalid");
+                        "relocation reply acknowledgment state is invalid");
             }
             return ZLinkSpotRelocationReplyRoutes.Ack.values()[state];
         } catch (IOException failure) {
             throw new IllegalArgumentException(
-                "relocation reply acknowledgment is invalid", failure);
+                    "relocation reply acknowledgment is invalid", failure);
         }
     }
 
@@ -1038,18 +963,15 @@ final class ZLinkSpotRetireControl {
             output.flush();
             byte[] result = bytes.toByteArray();
             if (result.length > MAX_COMMAND_BYTES) {
-                throw new IllegalArgumentException(
-                    "relocation command exceeds its size bound");
+                throw new IllegalArgumentException("relocation command exceeds its size bound");
             }
             return result;
         } catch (IOException failure) {
-            throw new IllegalStateException(
-                "relocation command could not be encoded", failure);
+            throw new IllegalStateException("relocation command could not be encoded", failure);
         }
     }
 
-    private static void writeFence(DataOutputStream output, Fence fence)
-        throws IOException {
+    private static void writeFence(DataOutputStream output, Fence fence) throws IOException {
         output.writeLong(fence.aggregateId().getMostSignificantBits());
         output.writeLong(fence.aggregateId().getLeastSignificantBits());
         output.writeLong(fence.aggregateGeneration());
@@ -1057,23 +979,20 @@ final class ZLinkSpotRetireControl {
 
     private static Fence readFence(DataInputStream input) throws IOException {
         return new Fence(
-            new UUID(input.readLong(), input.readLong()),
-            positive(input.readLong(), "aggregateGeneration"));
+                new UUID(input.readLong(), input.readLong()),
+                positive(input.readLong(), "aggregateGeneration"));
     }
 
-    private static void writeRid(DataOutputStream output, RoutingId rid)
-        throws IOException {
+    private static void writeRid(DataOutputStream output, RoutingId rid) throws IOException {
         byte[] bytes = rid.toBytes();
         output.writeShort(bytes.length);
         output.write(bytes);
     }
 
-    private static RoutingId readRid(DataInputStream input)
-        throws IOException {
+    private static RoutingId readRid(DataInputStream input) throws IOException {
         int length = input.readUnsignedShort();
         if (length < 1 || length > 255) {
-            throw new IllegalArgumentException(
-                "relocation RID length is invalid");
+            throw new IllegalArgumentException("relocation RID length is invalid");
         }
         byte[] bytes = input.readNBytes(length);
         if (bytes.length != length) {
@@ -1082,10 +1001,8 @@ final class ZLinkSpotRetireControl {
         return RoutingId.from(bytes);
     }
 
-    private static void writeText(DataOutputStream output, String value)
-        throws IOException {
-        byte[] bytes = requireText(value, "value")
-            .getBytes(StandardCharsets.UTF_8);
+    private static void writeText(DataOutputStream output, String value) throws IOException {
+        byte[] bytes = requireText(value, "value").getBytes(StandardCharsets.UTF_8);
         output.writeShort(bytes.length);
         output.write(bytes);
     }
@@ -1093,22 +1010,21 @@ final class ZLinkSpotRetireControl {
     private static String readText(DataInputStream input) throws IOException {
         int length = input.readUnsignedShort();
         if (length < 1 || length > MAX_TEXT_BYTES) {
-            throw new IllegalArgumentException(
-                "relocation text length is invalid");
+            throw new IllegalArgumentException("relocation text length is invalid");
         }
         byte[] bytes = input.readNBytes(length);
         if (bytes.length != length) {
             throw new EOFException();
         }
         try {
-            return StandardCharsets.UTF_8.newDecoder()
-                .onMalformedInput(CodingErrorAction.REPORT)
-                .onUnmappableCharacter(CodingErrorAction.REPORT)
-                .decode(ByteBuffer.wrap(bytes))
-                .toString();
+            return StandardCharsets.UTF_8
+                    .newDecoder()
+                    .onMalformedInput(CodingErrorAction.REPORT)
+                    .onUnmappableCharacter(CodingErrorAction.REPORT)
+                    .decode(ByteBuffer.wrap(bytes))
+                    .toString();
         } catch (CharacterCodingException failure) {
-            throw new IllegalArgumentException(
-                "relocation text is not strict UTF-8", failure);
+            throw new IllegalArgumentException("relocation text is not strict UTF-8", failure);
         }
     }
 
@@ -1118,8 +1034,7 @@ final class ZLinkSpotRetireControl {
         }
         int length = value.getBytes(StandardCharsets.UTF_8).length;
         if (length > MAX_TEXT_BYTES) {
-            throw new IllegalArgumentException(
-                name + " exceeds its UTF-8 bound");
+            throw new IllegalArgumentException(name + " exceeds its UTF-8 bound");
         }
         return value;
     }
@@ -1147,8 +1062,7 @@ final class ZLinkSpotRetireControl {
 
     private static int compareUtf8(String left, String right) {
         return Arrays.compareUnsigned(
-            left.getBytes(StandardCharsets.UTF_8),
-            right.getBytes(StandardCharsets.UTF_8));
+                left.getBytes(StandardCharsets.UTF_8), right.getBytes(StandardCharsets.UTF_8));
     }
 
     private static byte[] sha256(byte[] value) {
@@ -1161,8 +1075,7 @@ final class ZLinkSpotRetireControl {
 
     private static Throwable unwrap(Throwable failure) {
         Throwable current = failure;
-        while (current instanceof CompletionException
-            && current.getCause() != null) {
+        while (current instanceof CompletionException && current.getCause() != null) {
             current = current.getCause();
         }
         return current;

@@ -5,14 +5,13 @@ public sealed class PublicContractSnapshotTests
     [Fact]
     public void Renderer_Preserves_CSharp_PublicContract_Distinctions()
     {
-        var snapshot = PublicContractSnapshot.RenderTypes(
-        [
+        var snapshot = PublicContractSnapshot.RenderTypes([
             typeof(ContractFixture<>),
             typeof(IVariantContract<,>),
             typeof(ReadOnlyContract),
             typeof(ByRefContract),
             typeof(SnapshotFixtureExtensions),
-            typeof(SnapshotFixtureAttribute)
+            typeof(SnapshotFixtureAttribute),
         ]);
 
         Assert.Contains("required System.String Name { get; init; }", snapshot);
@@ -30,7 +29,10 @@ public sealed class PublicContractSnapshotTests
         Assert.Contains("in System.Int32 input", snapshot);
         Assert.Contains("this System.String value", snapshot);
         Assert.Contains("System.Threading.CancellationToken cancellationToken = default", snapshot);
-        Assert.Contains("attribute-usage targets=Class, Struct allow-multiple=true inherited=false", snapshot);
+        Assert.Contains(
+            "attribute-usage targets=Class, Struct allow-multiple=true inherited=false",
+            snapshot
+        );
     }
 
     public sealed class ContractFixture<T>
@@ -69,14 +71,16 @@ public sealed class PublicContractSnapshotTests
 
 public static class SnapshotFixtureExtensions
 {
-    public static void Apply(
-        this string value,
-        CancellationToken cancellationToken = default)
+    public static void Apply(this string value, CancellationToken cancellationToken = default)
     {
         _ = value;
         _ = cancellationToken;
     }
 }
 
-[AttributeUsage(AttributeTargets.Class | AttributeTargets.Struct, AllowMultiple = true, Inherited = false)]
+[AttributeUsage(
+    AttributeTargets.Class | AttributeTargets.Struct,
+    AllowMultiple = true,
+    Inherited = false
+)]
 public sealed class SnapshotFixtureAttribute : Attribute;

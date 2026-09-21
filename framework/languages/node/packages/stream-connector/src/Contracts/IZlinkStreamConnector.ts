@@ -13,7 +13,11 @@ import type {
   ZlinkStreamError,
   ZlinkStreamMessage
 } from './ZlinkStreamModels';
-import type { ZlinkStreamCloseReason, ZlinkStreamConnectionState, ZlinkStreamDiagnosticsLevel } from './ZlinkStreamEnums';
+import type {
+  ZlinkStreamCloseReason,
+  ZlinkStreamConnectionState,
+  ZlinkStreamDiagnosticsLevel
+} from './ZlinkStreamEnums';
 
 export interface ZlinkStreamConnector {
   readonly isConnected: boolean;
@@ -49,9 +53,16 @@ export interface ZlinkStreamConnector {
    * not change it. Restarts at 0 every time a connection is established.
    */
   receivedCount(name: string): number;
-  onErrorReceived(handler: (error: ZlinkStreamError, signal?: AbortSignal) => Promise<void> | void): Disposable;
+  onErrorReceived(
+    handler: (error: ZlinkStreamError, signal?: AbortSignal) => Promise<void> | void
+  ): Disposable;
   onDisconnected(handler: (signal?: AbortSignal) => Promise<void> | void): Disposable;
-  onConnectionStateChanged(handler: (change: ZlinkStreamConnectionStateChanged, signal?: AbortSignal) => Promise<void> | void): Disposable;
+  onConnectionStateChanged(
+    handler: (
+      change: ZlinkStreamConnectionStateChanged,
+      signal?: AbortSignal
+    ) => Promise<void> | void
+  ): Disposable;
   connect(signal?: AbortSignal): Promise<void>;
   close(signal?: AbortSignal): Promise<void>;
   dispatch(signal?: AbortSignal): Promise<void>;
@@ -68,7 +79,13 @@ export interface ZlinkStreamConnector {
    * `nameResolver` turns into that name — TypeScript types are erased at
    * runtime, so the type-driven path takes a constructor value.
    */
-  waitFor<TPayload = ZlinkStreamEncodedPayload>(nameOrType: string | Function): ZlinkStreamWaitCall<TPayload>;
-  expectNone<TPayload = ZlinkStreamEncodedPayload>(nameOrType: string | Function): ZlinkStreamExpectNoneCall<TPayload>;
-  waitForSequence<TPayload = ZlinkStreamEncodedPayload>(nameOrType: string | Function): ZlinkStreamSequenceCall<TPayload>;
+  waitFor<TPayload = ZlinkStreamEncodedPayload>(
+    nameOrType: string | Function
+  ): ZlinkStreamWaitCall<TPayload>;
+  expectNone<TPayload = ZlinkStreamEncodedPayload>(
+    nameOrType: string | Function
+  ): ZlinkStreamExpectNoneCall<TPayload>;
+  waitForSequence<TPayload = ZlinkStreamEncodedPayload>(
+    nameOrType: string | Function
+  ): ZlinkStreamSequenceCall<TPayload>;
 }

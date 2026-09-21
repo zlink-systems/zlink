@@ -1,26 +1,27 @@
 package systems.zlink.framework.runtime;
 
-import java.lang.reflect.InvocationTargetException;
-import java.lang.reflect.Method;
-import systems.zlink.framework.runtime.internal.backend.ZLinkBackendAdapterProvider;
 import systems.zlink.framework.runtime.configuration.DefaultZLinkFrameworkOptions;
 import systems.zlink.framework.runtime.host.ZLinkFrameworkRuntime;
+import systems.zlink.framework.runtime.internal.backend.ZLinkBackendAdapterProvider;
+
+import java.lang.reflect.InvocationTargetException;
+import java.lang.reflect.Method;
 
 final class RuntimeTestSupport {
-    private RuntimeTestSupport() {
-    }
+    private RuntimeTestSupport() {}
 
     static ZLinkFrameworkRuntime startFramework(
-        DefaultZLinkFrameworkOptions options,
-        ZLinkBackendAdapterProvider backendFactory) {
-        return invoke(() -> {
-            Method start = ZLinkFrameworkRuntime.class.getDeclaredMethod(
-                "start",
-                DefaultZLinkFrameworkOptions.class,
-                ZLinkBackendAdapterProvider.class);
-            start.setAccessible(true);
-            return (ZLinkFrameworkRuntime) start.invoke(null, options, backendFactory);
-        });
+            DefaultZLinkFrameworkOptions options, ZLinkBackendAdapterProvider backendFactory) {
+        return invoke(
+                () -> {
+                    Method start =
+                            ZLinkFrameworkRuntime.class.getDeclaredMethod(
+                                    "start",
+                                    DefaultZLinkFrameworkOptions.class,
+                                    ZLinkBackendAdapterProvider.class);
+                    start.setAccessible(true);
+                    return (ZLinkFrameworkRuntime) start.invoke(null, options, backendFactory);
+                });
     }
 
     private static <T> T invoke(ReflectiveCall<T> call) {

@@ -72,13 +72,12 @@ template <typename TStream> class websocket_stream_connection_t final : public s
 
     std::size_t available (boost::system::error_code &error) override
     {
-        return run_serialized_sync (
-          _io_context, _strand, [this, &error] { return available_impl (error); });
+        return run_serialized_sync (_io_context, _strand,
+                                    [this, &error] { return available_impl (error); });
     }
 
-    std::size_t read_some (std::uint8_t *buffer,
-                           std::size_t size,
-                           boost::system::error_code &error) override
+    std::size_t
+    read_some (std::uint8_t *buffer, std::size_t size, boost::system::error_code &error) override
     {
         return run_serialized_sync (_io_context, _strand, [this, buffer, size, &error] {
             return read_some_impl (buffer, size, error);
@@ -108,9 +107,8 @@ template <typename TStream> class websocket_stream_connection_t final : public s
         return _read_buffer.size ();
     }
 
-    std::size_t read_some_impl (std::uint8_t *buffer,
-                                std::size_t size,
-                                boost::system::error_code &error)
+    std::size_t
+    read_some_impl (std::uint8_t *buffer, std::size_t size, boost::system::error_code &error)
     {
         if (available_impl (error) == 0 || error) {
             return 0;
@@ -127,36 +125,32 @@ template <typename TStream> class websocket_stream_connection_t final : public s
         return copied;
     }
 
-    void async_read_some (
-      std::size_t max_size,
-      std::function<void (boost::system::error_code, std::vector<std::uint8_t>)> completion) override
+    void async_read_some (std::size_t max_size,
+                          std::function<void (boost::system::error_code, std::vector<std::uint8_t>)>
+                            completion) override
     {
         (void) max_size;
         auto buffer = std::make_shared<beast::flat_buffer> ();
-        asio::post (
-          _strand,
-          [this, buffer, completion = std::move (completion)] () mutable {
-              _stream.read_message_max (_read_message_limit);
-              _stream.async_read (
-                *buffer,
-                asio::bind_executor (
-                  _strand,
-                  [buffer, completion = std::move (completion)] (
-                    boost::system::error_code error, std::size_t) mutable {
-                      if (error) {
-                          buffer->consume (buffer->size ());
-                          if (completion) {
-                              completion (error, {});
-                          }
-                          return;
-                      }
-                      std::vector<std::uint8_t> bytes (buffer->size ());
-                      asio::buffer_copy (asio::buffer (bytes), buffer->data ());
-                      if (completion) {
-                          completion (error, std::move (bytes));
-                      }
-                  }));
-          });
+        asio::post (_strand, [this, buffer, completion = std::move (completion)] () mutable {
+            _stream.read_message_max (_read_message_limit);
+            _stream.async_read (*buffer,
+                                asio::bind_executor (
+                                  _strand, [buffer, completion = std::move (completion)] (
+                                             boost::system::error_code error, std::size_t) mutable {
+                                      if (error) {
+                                          buffer->consume (buffer->size ());
+                                          if (completion) {
+                                              completion (error, {});
+                                          }
+                                          return;
+                                      }
+                                      std::vector<std::uint8_t> bytes (buffer->size ());
+                                      asio::buffer_copy (asio::buffer (bytes), buffer->data ());
+                                      if (completion) {
+                                          completion (error, std::move (bytes));
+                                      }
+                                  }));
+        });
     }
 
     void write (const std::vector<std::uint8_t> &bytes) override
@@ -171,21 +165,18 @@ template <typename TStream> class websocket_stream_connection_t final : public s
                       std::function<void (boost::system::error_code)> completion) override
     {
         auto buffer = std::make_shared<std::vector<std::uint8_t>> (std::move (bytes));
-        asio::post (
-          _strand,
-          [this, buffer, completion = std::move (completion)] () mutable {
-              _stream.binary (true);
-              _stream.async_write (
-                asio::buffer (*buffer),
-                asio::bind_executor (
-                  _strand,
-                  [buffer, completion = std::move (completion)] (
-                    boost::system::error_code error, std::size_t) mutable {
-                      if (completion) {
-                          completion (error);
-                      }
-                  }));
-          });
+        asio::post (_strand, [this, buffer, completion = std::move (completion)] () mutable {
+            _stream.binary (true);
+            _stream.async_write (
+              asio::buffer (*buffer),
+              asio::bind_executor (_strand,
+                                   [buffer, completion = std::move (completion)] (
+                                     boost::system::error_code error, std::size_t) mutable {
+                                       if (completion) {
+                                           completion (error);
+                                       }
+                                   }));
+        });
     }
 
     void shutdown_and_close () override
@@ -218,15 +209,11 @@ template <typename TStream> class websocket_stream_connection_t final : public s
 
     void close (boost::system::error_code &error) override
     {
-        run_serialized_sync (_io_context, _strand, [this, &error] {
-            beast::get_lowest_layer (_stream).close (error);
-        });
+        run_serialized_sync (_io_context, _strand,
+                             [this, &error] { beast::get_lowest_layer (_stream).close (error); });
     }
 
-    void set_read_message_limit (std::size_t limit) override
-    {
-        _read_message_limit = limit;
-    }
+    void set_read_message_limit (std::size_t limit) override { _read_message_limit = limit; }
 
   private:
     asio::io_context &_io_context;
@@ -286,7 +273,7 @@ std::unique_ptr<stream_connection_t> connect_websocket (boost::asio::io_context 
     stream.binary (true);
     stream.handshake (endpoint.host, endpoint.target);
     return std::make_unique<websocket_stream_connection_t<tcp::socket>> (std::move (stream),
-                                                                           io_context);
+                                                                         io_context);
 }
 
 void connect_websocket_async (
@@ -307,8 +294,9 @@ void connect_websocket_async (
     const auto port = endpoint.port;
     resolver->async_resolve (
       host, port,
-      [&io_context, resolver, stream, control, endpoint = std::move (endpoint), callback = std::move (callback)] (
-        boost::system::error_code error, tcp::resolver::results_type endpoints) mutable {
+      [&io_context, resolver, stream, control, endpoint = std::move (endpoint),
+       callback = std::move (callback)] (boost::system::error_code error,
+                                         tcp::resolver::results_type endpoints) mutable {
           if (control->cancelled ()) {
               callback (asio::error::operation_aborted, nullptr);
               return;
@@ -319,8 +307,9 @@ void connect_websocket_async (
           }
           asio::async_connect (
             stream->next_layer (), endpoints,
-            [&io_context, stream, control, endpoint = std::move (endpoint), callback = std::move (callback)] (
-              boost::system::error_code connect_error, const tcp::endpoint &) mutable {
+            [&io_context, stream, control, endpoint = std::move (endpoint),
+             callback = std::move (callback)] (boost::system::error_code connect_error,
+                                               const tcp::endpoint &) mutable {
                 if (control->cancelled ()) {
                     callback (asio::error::operation_aborted, nullptr);
                     return;
@@ -343,7 +332,7 @@ void connect_websocket_async (
                           return;
                       }
                       callback ({}, std::make_unique<websocket_stream_connection_t<tcp::socket>> (
-                                          std::move (*stream), io_context));
+                                      std::move (*stream), io_context));
                   });
             });
       });
@@ -420,8 +409,8 @@ void connect_websocket_secure_async (
           asio::async_connect (
             beast::get_lowest_layer (*stream), endpoints,
             [&io_context, context, stream, control, endpoint = std::move (endpoint),
-             callback = std::move (callback)] (
-              boost::system::error_code connect_error, const tcp::endpoint &) mutable {
+             callback = std::move (callback)] (boost::system::error_code connect_error,
+                                               const tcp::endpoint &) mutable {
                 if (control->cancelled ()) {
                     callback (asio::error::operation_aborted, nullptr);
                     return;
@@ -433,8 +422,7 @@ void connect_websocket_secure_async (
                 stream->next_layer ().async_handshake (
                   ssl::stream_base::client,
                   [&io_context, context, stream, control, endpoint = std::move (endpoint),
-                   callback = std::move (callback)] (
-                    boost::system::error_code tls_error) mutable {
+                   callback = std::move (callback)] (boost::system::error_code tls_error) mutable {
                       if (control->cancelled ()) {
                           callback (asio::error::operation_aborted, nullptr);
                           return;
@@ -446,7 +434,7 @@ void connect_websocket_secure_async (
                       stream->binary (true);
                       stream->async_handshake (
                         endpoint.host, endpoint.target,
-                          [&io_context, context, stream, control, callback = std::move (callback)] (
+                        [&io_context, context, stream, control, callback = std::move (callback)] (
                           boost::system::error_code websocket_error) mutable {
                             if (control->cancelled ()) {
                                 callback (asio::error::operation_aborted, nullptr);
@@ -456,10 +444,10 @@ void connect_websocket_secure_async (
                                 callback (websocket_error, nullptr);
                                 return;
                             }
-                            callback (
-                              {}, std::make_unique<
-                                    websocket_stream_connection_t<ssl::stream<tcp::socket>>> (
-                                    std::move (*stream), io_context, std::move (context)));
+                            callback ({},
+                                      std::make_unique<
+                                        websocket_stream_connection_t<ssl::stream<tcp::socket>>> (
+                                        std::move (*stream), io_context, std::move (context)));
                         });
                   });
             });

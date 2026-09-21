@@ -11,14 +11,15 @@ import {
 } from '../../packages/framework/src/runtime/protocol/service_wire_pilot_codec.generated';
 
 function goldenEnvelope(): Buffer {
-  const fixture = JSON.parse(readFileSync(
-    '../../runtime/protocol/golden/relocation-envelope-v1.json',
-    'utf8'
-  )) as { readonly logicalHex: string };
-  const projection = JSON.parse(readFileSync(
-    '../../runtime/protocol/generated/fixtures/relocation-envelope-v1-pilot.json',
-    'utf8'
-  )) as { readonly hex: string };
+  const fixture = JSON.parse(
+    readFileSync('../../runtime/protocol/golden/relocation-envelope-v1.json', 'utf8')
+  ) as { readonly logicalHex: string };
+  const projection = JSON.parse(
+    readFileSync(
+      '../../runtime/protocol/generated/fixtures/relocation-envelope-v1-pilot.json',
+      'utf8'
+    )
+  ) as { readonly hex: string };
   assert.equal(projection.hex, fixture.logicalHex);
   return Buffer.from(fixture.logicalHex, 'hex');
 }
@@ -33,10 +34,7 @@ test('relocation envelope runtime and generated codecs are byte-equal on the sha
   const hand = decodeServiceRelocationEnvelope(golden, 7n);
   const generated = decodeRelocationEnvelopeV1([golden]);
 
-  assert.deepEqual(
-    encodeServiceRelocationEnvelope(hand, hand.applicationVersion!),
-    golden
-  );
+  assert.deepEqual(encodeServiceRelocationEnvelope(hand, hand.applicationVersion!), golden);
   assert.deepEqual(Buffer.from(encodeRelocationEnvelopeV1(generated)), golden);
 });
 
@@ -50,10 +48,7 @@ test('relocation envelope runtime and generated codecs reject all adjudicated cr
   assertRejectedByBoth(timerReferenceMutation);
 
   const golden = goldenEnvelope();
-  const emptyApplicationStates = Buffer.concat([
-    golden.subarray(0, 48),
-    Buffer.alloc(16)
-  ]);
+  const emptyApplicationStates = Buffer.concat([golden.subarray(0, 48), Buffer.alloc(16)]);
   assert.equal(emptyApplicationStates.byteLength, 64);
   assertRejectedByBoth(emptyApplicationStates);
 });

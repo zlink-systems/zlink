@@ -23,7 +23,7 @@ export class RetryPolicy {
 
   async execute(
     spec: HttpRequestSpec,
-    perform: (spec: HttpRequestSpec, signal: AbortSignal) => Promise<RawResult>,
+    perform: (spec: HttpRequestSpec, signal: AbortSignal) => Promise<RawResult>
   ): Promise<RawResult> {
     const maxRetries =
       spec.sink !== undefined || spec.bodyProvider !== undefined ? 0 : this.options.retryAttempts;
@@ -58,7 +58,7 @@ function mapFailure(error: unknown, aborted: boolean): ZLinkFrameworkException {
     return new ZLinkFrameworkException(
       ZLinkFrameworkErrorKind.DeadlineExceeded,
       'HTTP request exceeded timeout',
-      error,
+      error
     );
   }
   // Transport failures (connection refused/reset, undici errors) are retriable.
@@ -67,8 +67,10 @@ function mapFailure(error: unknown, aborted: boolean): ZLinkFrameworkException {
 }
 
 function isRetriableHttpFailure(error: ZLinkFrameworkException): boolean {
-  return error.kind === ZLinkFrameworkErrorKind.Unavailable
-    || error.kind === ZLinkFrameworkErrorKind.DeadlineExceeded;
+  return (
+    error.kind === ZLinkFrameworkErrorKind.Unavailable ||
+    error.kind === ZLinkFrameworkErrorKind.DeadlineExceeded
+  );
 }
 
 function delay(ms: number): Promise<void> {

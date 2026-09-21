@@ -3,9 +3,7 @@ package systems.zlink.framework.runtime.internal.locations;
 import java.time.Instant;
 
 public record ZLinkLocationWriteResult(
-    ZLinkLocationWriteStatus status,
-    long generation,
-    Instant updatedAt) {
+        ZLinkLocationWriteStatus status, long generation, Instant updatedAt) {
 
     public static ZLinkLocationWriteResult stored(long generation, Instant updatedAt) {
         return new ZLinkLocationWriteResult(ZLinkLocationWriteStatus.STORED, generation, updatedAt);

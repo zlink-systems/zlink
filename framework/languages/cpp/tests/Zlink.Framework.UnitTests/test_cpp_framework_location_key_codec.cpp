@@ -16,12 +16,10 @@ TEST (ZLinkFrameworkLocationKeyCodec, MatchesDotNetCanonicalKeyBytes)
     using zlink::framework::runtime::location_key_codec_t;
 
     EXPECT_EQ ("6:spot-a",
-               location_key_codec_t::encode_spot_key (
-                 spot_location_key_t{.spot_id = "spot-a"}));
+               location_key_codec_t::encode_spot_key (spot_location_key_t{.spot_id = "spot-a"}));
 
-    EXPECT_EQ ("4:play7:actor-1",
-               location_key_codec_t::encode_actor_key (
-                 actor_location_key_t{.mesh_name = "play", .actor_id = "actor-1"}));
+    EXPECT_EQ ("4:play7:actor-1", location_key_codec_t::encode_actor_key (actor_location_key_t{
+                                    .mesh_name = "play", .actor_id = "actor-1"}));
 
     EXPECT_EQ ("1:113:session:alpha",
                location_key_codec_t::encode_route_key (route_location_key_t{

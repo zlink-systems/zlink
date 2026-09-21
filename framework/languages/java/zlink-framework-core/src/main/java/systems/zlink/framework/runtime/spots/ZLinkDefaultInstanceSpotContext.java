@@ -1,13 +1,8 @@
 package systems.zlink.framework.runtime.spots;
 
-import java.time.Duration;
-import java.util.Objects;
-import java.util.concurrent.CompletableFuture;
-import java.util.concurrent.CompletionStage;
-import java.util.function.Supplier;
 import systems.zlink.contracts.core.RoutingId;
-import systems.zlink.framework.execution.ZLinkSerialExecutionQueue;
 import systems.zlink.framework.execution.ZLinkExecutionLanePolicy;
+import systems.zlink.framework.execution.ZLinkSerialExecutionQueue;
 import systems.zlink.framework.execution.ZLinkWorkerPool;
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendSpot;
 import systems.zlink.framework.runtime.internal.handlers.ZLinkHandlerInstanceOwner;
@@ -21,8 +16,13 @@ import systems.zlink.framework.spots.ZLinkTimerOptions;
 import systems.zlink.framework.spots.ZLinkWorkerCall;
 import systems.zlink.framework.spots.ZLinkWorkerTask;
 
-final class DefaultInstanceSpotContext
-    implements ZLinkInstanceSpotContext, SpotDispatchLine {
+import java.time.Duration;
+import java.util.Objects;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CompletionStage;
+import java.util.function.Supplier;
+
+final class DefaultInstanceSpotContext implements ZLinkInstanceSpotContext, SpotDispatchLine {
     private final ZLinkSpotContextHost host;
     private final ZLinkWorkerPool workerPool;
     private final ZLinkSpotHandlerLoader handlerLoader;
@@ -33,37 +33,42 @@ final class DefaultInstanceSpotContext
     private final ZLinkHandlerInstanceOwner handlerInstances;
     private final ZLinkSerialExecutionQueue dispatchQueue;
     private final ZLinkSerialExecutionQueue infrastructureQueue;
-    private final ZLinkSpotHandlerCatalog handlers = new ZLinkSpotHandlerCatalog(
-        "Instance Spot handler registration is only allowed while configure is running");
+    private final ZLinkSpotHandlerCatalog handlers =
+            new ZLinkSpotHandlerCatalog(
+                    "Instance Spot handler registration is only allowed while configure is"
+                            + " running");
     private final ZLinkInstanceSpotHandlerRegistry publicHandlers =
-        handlerType -> handlers.addHandler(handlerType);
+            handlerType -> handlers.addHandler(handlerType);
     private final ZLinkSpotTimerRegistry timers;
     private ZLinkInstanceSpot spot;
 
     DefaultInstanceSpotContext(
-        ZLinkSpotContextHost host,
-        ZLinkWorkerPool workerPool,
-        ZLinkSpotHandlerLoader handlerLoader,
-        String meshName,
-        RoutingId nodeRid,
-        ZLinkBackendSpot backendSpot) {
+            ZLinkSpotContextHost host,
+            ZLinkWorkerPool workerPool,
+            ZLinkSpotHandlerLoader handlerLoader,
+            String meshName,
+            RoutingId nodeRid,
+            ZLinkBackendSpot backendSpot) {
         this.host = Objects.requireNonNull(host, "host");
         this.workerPool = Objects.requireNonNull(workerPool, "workerPool");
         this.handlerLoader = Objects.requireNonNull(handlerLoader, "handlerLoader");
         this.meshName = Objects.requireNonNull(meshName, "meshName");
         this.nodeRid = Objects.requireNonNull(nodeRid, "nodeRid");
         this.backendSpot = Objects.requireNonNull(backendSpot, "backendSpot");
-        this.dispatchQueue = new ZLinkSerialExecutionQueue(
-            host.serialExecutor(), ZLinkExecutionLanePolicy.spot());
-        this.infrastructureQueue = new ZLinkSerialExecutionQueue(
-            host.infrastructureExecutor(), ZLinkExecutionLanePolicy.spot());
+        this.dispatchQueue =
+                new ZLinkSerialExecutionQueue(
+                        host.serialExecutor(), ZLinkExecutionLanePolicy.spot());
+        this.infrastructureQueue =
+                new ZLinkSerialExecutionQueue(
+                        host.infrastructureExecutor(), ZLinkExecutionLanePolicy.spot());
         this.handlerInstances = host.createHandlerInstances();
         this.outbound = host.createContextOutbound(backendSpot, nodeRid);
-        this.timers = host.createTimerRegistry(
-            backendSpot.spotId(),
-            handlerInstances,
-            (timerName, operation) -> enqueueDispatch(() -> host.runWithOutbound(
-                outbound, operation)));
+        this.timers =
+                host.createTimerRegistry(
+                        backendSpot.spotId(),
+                        handlerInstances,
+                        (timerName, operation) ->
+                                enqueueDispatch(() -> host.runWithOutbound(outbound, operation)));
     }
 
     void bind(ZLinkInstanceSpot value) {
@@ -72,23 +77,22 @@ final class DefaultInstanceSpotContext
     }
 
     void closeRegistration(Class<?> spotType) {
-        handlers.closeRegistration(configured -> handlerLoader.load(
-            spotType,
-            configured,
-            (name, period, handlerType, options) -> timers.add(
-                name, period, handlerType, options)));
+        handlers.closeRegistration(
+                configured ->
+                        handlerLoader.load(
+                                spotType,
+                                configured,
+                                (name, period, handlerType, options) ->
+                                        timers.add(name, period, handlerType, options)));
     }
 
-    CompletionStage<Void> runLifecycle(
-        Supplier<CompletionStage<Void>> operation) {
+    CompletionStage<Void> runLifecycle(Supplier<CompletionStage<Void>> operation) {
         return enqueueDispatch(() -> host.runWithOutbound(outbound, operation));
     }
 
-    CompletionStage<Void> runClosing(
-        Supplier<CompletionStage<Void>> operation) {
+    CompletionStage<Void> runClosing(Supplier<CompletionStage<Void>> operation) {
         timers.freeze();
-        return awaitQuiescence().thenCompose(ignored ->
-            runLifecycle(operation));
+        return awaitQuiescence().thenCompose(ignored -> runLifecycle(operation));
     }
 
     void closeResources() {
@@ -99,86 +103,107 @@ final class DefaultInstanceSpotContext
 
     CompletionStage<Void> awaitQuiescence() {
         return CompletableFuture.allOf(
-            dispatchQueue.awaitQuiescence().toCompletableFuture(),
-            infrastructureQueue.awaitQuiescence().toCompletableFuture());
+                dispatchQueue.awaitQuiescence().toCompletableFuture(),
+                infrastructureQueue.awaitQuiescence().toCompletableFuture());
     }
 
     boolean hasActiveTimers() {
         return timers.hasActiveTimers();
     }
 
-    <T> CompletionStage<T> runLifecycleExecution(
-        Supplier<CompletionStage<T>> operation) {
-        var execution = new systems.zlink.framework.runtime.internal.handlers
-            .ZLinkSuspendInvocationContext.ApplicationExecution(
-                spotId(),
-                null,
-                true,
-                true,
-                false,
-                ignored -> false);
-        try (var ignored = systems.zlink.framework.runtime.internal.handlers
-                 .ZLinkSuspendInvocationContext.enterApplicationExecution(execution)) {
+    <T> CompletionStage<T> runLifecycleExecution(Supplier<CompletionStage<T>> operation) {
+        var execution =
+                new systems.zlink.framework.runtime.internal.handlers.ZLinkSuspendInvocationContext
+                        .ApplicationExecution(spotId(), null, true, true, false, ignored -> false);
+        try (var ignored =
+                systems.zlink.framework.runtime.internal.handlers.ZLinkSuspendInvocationContext
+                        .enterApplicationExecution(execution)) {
             return host.runWithOutbound(outbound, operation);
         } catch (RuntimeException failure) {
             return CompletableFuture.failedFuture(failure);
         }
     }
 
-    @Override public String meshName() { return meshName; }
-    @Override public String spotId() { return backendSpot.spotId(); }
-    @Override public long objectGeneration() {
+    @Override
+    public String meshName() {
+        return meshName;
+    }
+
+    @Override
+    public String spotId() {
+        return backendSpot.spotId();
+    }
+
+    @Override
+    public long objectGeneration() {
         return backendSpot.lifecycleGeneration();
     }
-    @Override public RoutingId nodeRid() { return nodeRid; }
-    @Override public ZLinkInstanceSpotHandlerRegistry handlers() {
+
+    @Override
+    public RoutingId nodeRid() {
+        return nodeRid;
+    }
+
+    @Override
+    public ZLinkInstanceSpotHandlerRegistry handlers() {
         return publicHandlers;
     }
-    @Override public ZLinkSpotOutbound outbound() { return outbound; }
-    @Override public DefaultSpotOutbound dispatchOutbound() { return outbound; }
-    @Override public ZLinkSpotHandlerCatalog handlerCatalog() { return handlers; }
-    @Override public ZLinkHandlerInstanceOwner handlerInstances() {
+
+    @Override
+    public ZLinkSpotOutbound outbound() {
+        return outbound;
+    }
+
+    @Override
+    public DefaultSpotOutbound dispatchOutbound() {
+        return outbound;
+    }
+
+    @Override
+    public ZLinkSpotHandlerCatalog handlerCatalog() {
+        return handlers;
+    }
+
+    @Override
+    public ZLinkHandlerInstanceOwner handlerInstances() {
         return handlerInstances;
     }
 
     @Override
-    public CompletionStage<Void> enqueueDispatch(
-        Supplier<CompletionStage<Void>> operation) {
+    public CompletionStage<Void> enqueueDispatch(Supplier<CompletionStage<Void>> operation) {
         return enqueueDispatch(0, operation);
     }
 
     @Override
     public CompletionStage<Void> enqueueDispatch(
-        long payloadBytes,
-        Supplier<CompletionStage<Void>> operation) {
+            long payloadBytes, Supplier<CompletionStage<Void>> operation) {
         host.ensureOwnerAdmissionOpen();
         return dispatchQueue.enqueue(operation);
     }
 
     @Override
     public CompletionStage<Void> enqueueInfrastructureDispatch(
-        Supplier<CompletionStage<Void>> operation) {
+            Supplier<CompletionStage<Void>> operation) {
         Objects.requireNonNull(operation, "operation");
         return infrastructureQueue.enqueue(operation);
     }
 
     @Override
     public CompletionStage<Void> enqueueActorDispatch(
-        String actorId,
-        Supplier<CompletionStage<Void>> operation) {
-        return CompletableFuture.failedFuture(new IllegalStateException(
-            "Instance Spot does not own Actor dispatch"));
+            String actorId, Supplier<CompletionStage<Void>> operation) {
+        return CompletableFuture.failedFuture(
+                new IllegalStateException("Instance Spot does not own Actor dispatch"));
     }
 
     @Override
     public CompletionStage<Void> enqueueActorDispatch(
-        String actorId,
-        Supplier<byte[]> acceptedJournalRecord,
-        long acceptedJournalRecordSizeHint,
-        Supplier<CompletionStage<Void>> operation,
-        Runnable relocationRelease) {
-        return CompletableFuture.failedFuture(new IllegalStateException(
-            "Instance Spot does not own Actor dispatch"));
+            String actorId,
+            Supplier<byte[]> acceptedJournalRecord,
+            long acceptedJournalRecordSizeHint,
+            Supplier<CompletionStage<Void>> operation,
+            Runnable relocationRelease) {
+        return CompletableFuture.failedFuture(
+                new IllegalStateException("Instance Spot does not own Actor dispatch"));
     }
 
     @Override
@@ -198,10 +223,7 @@ final class DefaultInstanceSpotContext
 
     @Override
     public CompletionStage<ZLinkTimer> addTimer(
-        String name,
-        Duration period,
-        Class<?> handlerType,
-        ZLinkTimerOptions options) {
+            String name, Duration period, Class<?> handlerType, ZLinkTimerOptions options) {
         return timers.add(name, period, handlerType, options);
     }
 }

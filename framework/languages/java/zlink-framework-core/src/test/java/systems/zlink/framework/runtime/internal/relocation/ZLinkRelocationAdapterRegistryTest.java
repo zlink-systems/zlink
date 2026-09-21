@@ -3,10 +3,8 @@ package systems.zlink.framework.runtime.internal.relocation;
 import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
-import java.util.Set;
-import java.util.concurrent.CompletableFuture;
-import java.util.concurrent.CompletionStage;
 import org.junit.jupiter.api.Test;
+
 import systems.zlink.framework.actors.ZLinkActor;
 import systems.zlink.framework.actors.ZLinkActorContext;
 import systems.zlink.framework.actors.ZLinkActorFactory;
@@ -16,35 +14,35 @@ import systems.zlink.framework.runtime.configuration.ZLinkFrameworkRegistration;
 import systems.zlink.framework.runtime.internal.handlers.ZLinkHandlerActivator;
 import systems.zlink.framework.runtime.mesh.MeshNodeRegistration;
 
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CompletionStage;
+
 final class ZLinkRelocationAdapterRegistryTest {
     @Test
     void mapsSnapshotAdapterByStableActorType() {
-        ZLinkFrameworkRegistration registration =
-            new ZLinkFrameworkRegistration();
+        ZLinkFrameworkRegistration registration = new ZLinkFrameworkRegistration();
         MeshNodeRegistration node = new MeshNodeRegistration("game");
         node.listen("inproc://game");
-        node.objects().server().addActorFactory(
-            "player",
-            TestActor.class,
-            TestActorFactory.class,
-            factory -> factory.preserveStateWith(TestActorAdapter.class));
+        node.objects()
+                .server()
+                .addActorFactory(
+                        "player",
+                        TestActor.class,
+                        TestActorFactory.class,
+                        factory -> factory.preserveStateWith(TestActorAdapter.class));
         node.validate();
         registration.meshNodes().add(node);
 
         ZLinkRelocationAdapterRegistry adapters =
-            new ZLinkRelocationAdapterRegistry(
-                registration,
-                ZLinkHandlerActivator.reflection());
+                new ZLinkRelocationAdapterRegistry(
+                        registration, ZLinkHandlerActivator.reflection());
 
         assertTrue(adapters.hasActorAdapter("player"));
         assertArrayEquals(
-            new byte[] {4, 2},
-            adapters.captureActor(
-                    "player",
-                    new TestActor(),
-                    () -> false)
-                .toCompletableFuture()
-                .join());
+                new byte[] {4, 2},
+                adapters.captureActor("player", new TestActor(), () -> false)
+                        .toCompletableFuture()
+                        .join());
     }
 
     public static final class TestActor implements ZLinkActor {
@@ -61,20 +59,16 @@ final class ZLinkRelocationAdapterRegistryTest {
         }
     }
 
-    public static final class TestActorAdapter
-        implements ZLinkActorRelocationAdapter<TestActor> {
+    public static final class TestActorAdapter implements ZLinkActorRelocationAdapter<TestActor> {
         @Override
         public CompletionStage<byte[]> capture(
-            TestActor actor,
-            ZLinkRelocationCancellation cancellation) {
+                TestActor actor, ZLinkRelocationCancellation cancellation) {
             return CompletableFuture.completedFuture(new byte[] {4, 2});
         }
 
         @Override
         public CompletionStage<Void> restore(
-            TestActor actor,
-            byte[] state,
-            ZLinkRelocationCancellation cancellation) {
+                TestActor actor, byte[] state, ZLinkRelocationCancellation cancellation) {
             return CompletableFuture.completedFuture(null);
         }
     }

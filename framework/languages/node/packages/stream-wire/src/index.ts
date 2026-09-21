@@ -108,9 +108,10 @@ export function encodeStreamWireHeader(
   const nameBytes = utf8Encode(packetName);
   const hasRequestSeq = header.requestSeq !== undefined;
   const hasMetadata = header.metadata.size > 0;
-  const correlationBytes = header.correlationId !== undefined && header.correlationId.length > 0
-    ? utf8Encode(header.correlationId)
-    : undefined;
+  const correlationBytes =
+    header.correlationId !== undefined && header.correlationId.length > 0
+      ? utf8Encode(header.correlationId)
+      : undefined;
   if (correlationBytes !== undefined && correlationBytes.length > 0xff) {
     throw new Error('Stream correlation id is too large.');
   }
@@ -124,16 +125,24 @@ export function encodeStreamWireHeader(
     throw new Error('Stream flow origin is invalid.');
   }
   let headerFlags = header.flags;
-  headerFlags = hasRequestSeq ? headerFlags | flags.hasRequestSeq : headerFlags & ~flags.hasRequestSeq;
+  headerFlags = hasRequestSeq
+    ? headerFlags | flags.hasRequestSeq
+    : headerFlags & ~flags.hasRequestSeq;
   headerFlags = hasMetadata ? headerFlags | flags.hasMetadata : headerFlags & ~flags.hasMetadata;
-  headerFlags = hasCorrelation ? headerFlags | flags.hasCorrelationId : headerFlags & ~flags.hasCorrelationId;
+  headerFlags = hasCorrelation
+    ? headerFlags | flags.hasCorrelationId
+    : headerFlags & ~flags.hasCorrelationId;
   headerFlags = hasFlow ? headerFlags | flags.hasFlowId : headerFlags & ~flags.hasFlowId;
 
   const metadataBytes = hasMetadata ? encodeStreamWireMetadata(header.metadata) : new Uint8Array();
-  const size = 4 + (hasRequestSeq ? 8 : 0) + 1 + nameBytes.length
-    + (hasMetadata ? 2 + metadataBytes.length : 0)
-    + (hasCorrelation ? 1 + correlationBytes.length : 0)
-    + (hasFlow ? 37 : 0);
+  const size =
+    4 +
+    (hasRequestSeq ? 8 : 0) +
+    1 +
+    nameBytes.length +
+    (hasMetadata ? 2 + metadataBytes.length : 0) +
+    (hasCorrelation ? 1 + correlationBytes.length : 0) +
+    (hasFlow ? 37 : 0);
   const buffer = new Uint8Array(size);
   let offset = 0;
   buffer[offset++] = ZLINK_STREAM_FORMAT_MARKER;
@@ -321,10 +330,7 @@ export function lz4PickleUncompressed(payload: Uint8Array): Uint8Array {
   return pickleUncompressed(payload);
 }
 
-export function lz4UnpicklePayload(
-  payload: Uint8Array,
-  maxDecompressedSize?: number
-): Uint8Array {
+export function lz4UnpicklePayload(payload: Uint8Array, maxDecompressedSize?: number): Uint8Array {
   return unpicklePayload(payload, maxDecompressedSize ?? defaultMaxDecompressedPayloadSize);
 }
 
@@ -413,8 +419,8 @@ function readUInt16BE(buffer: Uint8Array, offset: number): number {
 
 function readUInt32BE(buffer: Uint8Array, offset: number): number {
   return (
-    buffer[offset] * 0x1000000
-    + ((buffer[offset + 1] << 16) | (buffer[offset + 2] << 8) | buffer[offset + 3])
+    buffer[offset] * 0x1000000 +
+    ((buffer[offset + 1] << 16) | (buffer[offset + 2] << 8) | buffer[offset + 3])
   );
 }
 

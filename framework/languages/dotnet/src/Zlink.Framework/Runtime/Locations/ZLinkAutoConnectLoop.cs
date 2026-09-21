@@ -35,7 +35,8 @@ internal sealed class ZLinkAutoConnectLoop : IAsyncDisposable
         IZLinkLocationRepository store,
         IZLinkLocationWatchStore? watchStore = null,
         TimeProvider? timeProvider = null,
-        ZLinkOwnerLeaseTracker? leaseTracker = null)
+        ZLinkOwnerLeaseTracker? leaseTracker = null
+    )
     {
         _reconciler = reconciler;
         _options = options;
@@ -46,7 +47,8 @@ internal sealed class ZLinkAutoConnectLoop : IAsyncDisposable
         _time = timeProvider ?? TimeProvider.System;
         _disposeTask = new Lazy<Task>(
             DisposeCoreAsync,
-            LazyThreadSafetyMode.ExecutionAndPublication);
+            LazyThreadSafetyMode.ExecutionAndPublication
+        );
     }
 
     internal async ValueTask StartAsync(CancellationToken cancellationToken = default)
@@ -73,7 +75,8 @@ internal sealed class ZLinkAutoConnectLoop : IAsyncDisposable
         _watch = null;
         var failures = new List<Exception>();
         if (cts is not null)
-            await CaptureAsync(async () => await cts.CancelAsync().ConfigureAwait(false)).ConfigureAwait(false);
+            await CaptureAsync(async () => await cts.CancelAsync().ConfigureAwait(false))
+                .ConfigureAwait(false);
 
         foreach (var task in new[] { loop, watch })
         {
@@ -86,20 +89,20 @@ internal sealed class ZLinkAutoConnectLoop : IAsyncDisposable
             {
                 await task.ConfigureAwait(false);
             }
-            catch (OperationCanceledException)
-            {
-            }
+            catch (OperationCanceledException) { }
             catch (Exception exception)
             {
                 failures.Add(exception);
             }
         }
 
-        await CaptureAsync(() => _reconciler.ShutdownAsync(cancellationToken)).ConfigureAwait(false);
+        await CaptureAsync(() => _reconciler.ShutdownAsync(cancellationToken))
+            .ConfigureAwait(false);
         cts?.Dispose();
         if (failures.Count == 1)
             System.Runtime.ExceptionServices.ExceptionDispatchInfo.Capture(failures[0]).Throw();
-        if (failures.Count > 1) throw new AggregateException(failures);
+        if (failures.Count > 1)
+            throw new AggregateException(failures);
         return;
 
         async ValueTask CaptureAsync(Func<ValueTask> operation)
@@ -145,15 +148,16 @@ internal sealed class ZLinkAutoConnectLoop : IAsyncDisposable
         {
             try
             {
-                var stamp = await _store.GetMeshNodeChangeStampAsync(
-                        _meshName.Value,
-                        cancellationToken)
+                var stamp = await _store
+                    .GetMeshNodeChangeStampAsync(_meshName.Value, cancellationToken)
                     .ConfigureAwait(false);
                 if (stamp is not null)
                 {
-                    if (_leaseTracker is null
+                    if (
+                        _leaseTracker is null
                         && _lastStamp == stamp
-                        && !_reconciler.HasPendingTargets)
+                        && !_reconciler.HasPendingTargets
+                    )
                     {
                         return;
                     }
@@ -199,12 +203,8 @@ internal sealed class ZLinkAutoConnectLoop : IAsyncDisposable
             if (_wake.CurrentCount == 0)
                 _wake.Release();
         }
-        catch (ObjectDisposedException)
-        {
-        }
-        catch (SemaphoreFullException)
-        {
-        }
+        catch (ObjectDisposedException) { }
+        catch (SemaphoreFullException) { }
     }
 
     private async Task LoopAsync(CancellationToken cancellationToken)
@@ -220,7 +220,8 @@ internal sealed class ZLinkAutoConnectLoop : IAsyncDisposable
                 var delay = Task.Delay(_options.PollingInterval, _time, cancellationToken);
                 woken ??= _wake.WaitAsync(cancellationToken);
                 await Task.WhenAny(delay, woken).ConfigureAwait(false);
-                if (woken.IsCompleted) woken = null;
+                if (woken.IsCompleted)
+                    woken = null;
             }
             catch (OperationCanceledException)
             {
@@ -242,11 +243,17 @@ internal sealed class ZLinkAutoConnectLoop : IAsyncDisposable
         {
             try
             {
-                await foreach (var _ in _watchStore!.WatchAsync(
-                    new ZLinkLocationWatchFilter(
-                        ZLinkLocationKind.MeshNode,
-                        _meshName.Value),
-                    cancellationToken).ConfigureAwait(false))
+                await foreach (
+                    var _ in _watchStore!
+                        .WatchAsync(
+                            new ZLinkLocationWatchFilter(
+                                ZLinkLocationKind.MeshNode,
+                                _meshName.Value
+                            ),
+                            cancellationToken
+                        )
+                        .ConfigureAwait(false)
+                )
                 {
                     // Wake the loop; the tick re-reads the store, so a lost
                     // or duplicated event can never corrupt the state.

@@ -16,7 +16,7 @@ final class ConfiguredSocketRuntimeOptions implements ZLinkSocketRuntimeOptions 
     public void maxMessageSize(long value) {
         if (value < 0) {
             throw new ZLinkConfigurationException(
-                "MaxMessageSize must be zero or a positive byte count.");
+                    "MaxMessageSize must be zero or a positive byte count.");
         }
         maxMessageSize = value;
     }

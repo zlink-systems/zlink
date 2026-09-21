@@ -6,7 +6,5 @@ internal interface IZLinkRuntimeFailureReporter
 
     void ReportUnhandledCallbackException(Exception exception);
 
-    void ReportRuntimeTaskException(
-        string taskName,
-        Exception exception);
+    void ReportRuntimeTaskException(string taskName, Exception exception);
 }

@@ -6,8 +6,11 @@ internal sealed class ZlinkStreamSendBuilder : IZlinkStreamSendCall
     private readonly IZlinkStreamConnectorInternal _connector;
     private readonly ZlinkStreamCallBuilderState _state;
 
-    internal ZlinkStreamSendBuilder(IZlinkStreamConnectorInternal connector, string? name,
-        ZlinkStreamEncodedPayload payload)
+    internal ZlinkStreamSendBuilder(
+        IZlinkStreamConnectorInternal connector,
+        string? name,
+        ZlinkStreamEncodedPayload payload
+    )
     {
         _connector = connector;
         _body = payload;
@@ -47,7 +50,8 @@ internal sealed class ZlinkStreamSendBuilder : IZlinkStreamSendCall
             name,
             _body,
             _state.Metadata,
-            _state.Compress);
+            _state.Compress
+        );
 
         return _connector.SubmitFrameAsync(frame, cancellationToken);
     }

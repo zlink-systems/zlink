@@ -1,7 +1,5 @@
 import { crc32c } from './service-relocation-runtime';
-import {
-  validateApplicationPayloadFrame
-} from './service-wire-m6a-codec';
+import { validateApplicationPayloadFrame } from './service-wire-m6a-codec';
 import type { ServiceInstanceActivationTarget } from './service-stateful-wire-codec';
 import { validateServiceMetadataFrame } from './service-metadata-codec';
 
@@ -36,9 +34,8 @@ export function encodeInstanceActivationRecoveryEnvelope(
   const targetNodeRid = textBytes(value.target.targetNodeRid, 'targetNodeRid');
   const descriptorVersion = textBytes(value.target.descriptorVersion, 'targetDescriptorVersion');
   const sourceNodeRid = textBytes(value.sourceNodeRid, 'sourceNodeRid');
-  const sourceSpotId = value.sourceSpotId === undefined
-    ? undefined
-    : textBytes(value.sourceSpotId, 'sourceSpotId');
+  const sourceSpotId =
+    value.sourceSpotId === undefined ? undefined : textBytes(value.sourceSpotId, 'sourceSpotId');
   validatePositiveU64(value.target.targetNodeGeneration, 'targetNodeGeneration');
   validatePositiveU64(value.sourceNodeGeneration, 'sourceNodeGeneration');
   validateU64(value.operation.high, 'operation.high');
@@ -47,26 +44,29 @@ export function encodeInstanceActivationRecoveryEnvelope(
     validatePositiveU64(value.replyRouteId!, 'replyRouteId');
   }
   validatePositiveU64(value.deadlineUnixMs, 'deadlineUnixMs');
-  const metadataFrame = value.metadataFrame === undefined
-    ? undefined
-    : validateServiceMetadataFrame(value.metadataFrame);
+  const metadataFrame =
+    value.metadataFrame === undefined
+      ? undefined
+      : validateServiceMetadataFrame(value.metadataFrame);
   const bodyLength =
-    text8Size(targetSpotId)
-    + text8Size(stableType)
-    + text8Size(targetMeshName)
-    + text8Size(targetNodeRid)
-    + 8
-    + text8Size(descriptorVersion)
-    + text8Size(sourceNodeRid)
-    + 8
-    + 1 + (sourceSpotId === undefined ? 0 : text8Size(sourceSpotId))
-    + 1
-    + 8
-    + 8
-    + (value.operationKind === 'request' ? 8 : 0)
-    + 8
-    + 1 + (metadataFrame?.byteLength ?? 0)
-    + value.applicationPayloadFrame.byteLength;
+    text8Size(targetSpotId) +
+    text8Size(stableType) +
+    text8Size(targetMeshName) +
+    text8Size(targetNodeRid) +
+    8 +
+    text8Size(descriptorVersion) +
+    text8Size(sourceNodeRid) +
+    8 +
+    1 +
+    (sourceSpotId === undefined ? 0 : text8Size(sourceSpotId)) +
+    1 +
+    8 +
+    8 +
+    (value.operationKind === 'request' ? 8 : 0) +
+    8 +
+    1 +
+    (metadataFrame?.byteLength ?? 0) +
+    value.applicationPayloadFrame.byteLength;
   const envelopeLength = 4 + 1 + 2 + 4 + bodyLength;
   const encodedLength = envelopeLength + 4;
   if (encodedLength > MAX_ENCODED_BYTES) {
@@ -157,9 +157,7 @@ export function decodeInstanceActivationRecoveryEnvelope(
   if (hasMetadata !== 0 && hasMetadata !== 1) {
     throw new TypeError('Instance activation recovery metadata flag is invalid.');
   }
-  const metadataFrame = hasMetadata === 1
-    ? body.metadataFrame()
-    : undefined;
+  const metadataFrame = hasMetadata === 1 ? body.metadataFrame() : undefined;
   const applicationPayloadFrame = body.takeRemaining();
   validateApplicationPayloadFrame(applicationPayloadFrame);
   if (!body.done) {
@@ -293,7 +291,8 @@ class RecoveryReader {
   optionalText8(): string | undefined {
     const present = this.u8();
     if (present === 0) return undefined;
-    if (present !== 1) throw new TypeError('Instance activation recovery optional flag is invalid.');
+    if (present !== 1)
+      throw new TypeError('Instance activation recovery optional flag is invalid.');
     return this.text8();
   }
 

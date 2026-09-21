@@ -45,17 +45,15 @@ interface ZljrGolden {
 }
 
 function commandGolden(name: string): CommandGolden {
-  return JSON.parse(readFileSync(
-    `../../runtime/protocol/golden/${name}.json`,
-    'utf8'
-  )) as CommandGolden;
+  return JSON.parse(
+    readFileSync(`../../runtime/protocol/golden/${name}.json`, 'utf8')
+  ) as CommandGolden;
 }
 
 function zljrGolden(): ZljrGolden {
-  return JSON.parse(readFileSync(
-    '../../runtime/protocol/golden/zljr-v1.json',
-    'utf8'
-  )) as ZljrGolden;
+  return JSON.parse(
+    readFileSync('../../runtime/protocol/golden/zljr-v1.json', 'utf8')
+  ) as ZljrGolden;
 }
 
 function handCommandRoundTrip(encoded: Uint8Array): Buffer {
@@ -85,9 +83,15 @@ function generatedCommandRoundTrip(command: 47 | 48 | 49, encoded: Uint8Array): 
 
 function generatedCommandDecode(command: 47 | 48 | 49, encoded: Uint8Array): void {
   switch (command) {
-    case 47: decodeUserSpotCreate47(encoded); return;
-    case 48: decodeUserSpotClose48(encoded); return;
-    case 49: decodeActorCreate49(encoded); return;
+    case 47:
+      decodeUserSpotCreate47(encoded);
+      return;
+    case 48:
+      decodeUserSpotClose48(encoded);
+      return;
+    case 49:
+      decodeActorCreate49(encoded);
+      return;
   }
 }
 
@@ -97,10 +101,14 @@ function assertCommandProjection(command: 47 | 48 | 49, decoded: ServiceStateful
     const record = decoded as ServiceUserSpotCreateRecord;
     const generated = decodeUserSpotCreate47(encodeUserSpotCreateHeader(record));
     assert.equal(Buffer.from(generated.sourceNodeRid).toString('utf8'), record.sourceNodeRid);
-    assert.equal(Buffer.from(generated.reservation.targetNodeRid).toString('utf8'),
-      record.reservation.targetNodeRid);
-    assert.equal(generated.reservation.pendingCapacityDelta,
-      record.reservation.pendingCapacityDelta);
+    assert.equal(
+      Buffer.from(generated.reservation.targetNodeRid).toString('utf8'),
+      record.reservation.targetNodeRid
+    );
+    assert.equal(
+      generated.reservation.pendingCapacityDelta,
+      record.reservation.pendingCapacityDelta
+    );
     return;
   }
   if (command === 48) {
@@ -108,16 +116,17 @@ function assertCommandProjection(command: 47 | 48 | 49, decoded: ServiceStateful
     const record = decoded as ServiceUserSpotCloseRecord;
     const generated = decodeUserSpotClose48(encodeUserSpotCloseHeader(record));
     assert.equal(Buffer.from(generated.sourceNodeRid).toString('utf8'), record.sourceNodeRid);
-    assert.equal(generated.target.expectedAuthorityOwnerGeneration,
-      record.target.authorityOwnerGeneration);
+    assert.equal(
+      generated.target.expectedAuthorityOwnerGeneration,
+      record.target.authorityOwnerGeneration
+    );
     return;
   }
   assert.equal(decoded.kind, 'actorCreate');
   const record = decoded as ServiceActorCreateRecord;
   const generated = decodeActorCreate49(encodeActorCreateHeader(record));
   assert.equal(Buffer.from(generated.sourceNodeRid).toString('utf8'), record.sourceNodeRid);
-  assert.equal(generated.reservation.pendingCapacityDelta,
-    record.reservation.pendingCapacityDelta);
+  assert.equal(generated.reservation.pendingCapacityDelta, record.reservation.pendingCapacityDelta);
 }
 
 test('batch-4 commands 47, 48, and 49 hand/generated codecs match the complete golden frames', () => {
@@ -127,8 +136,11 @@ test('batch-4 commands 47, 48, and 49 hand/generated codecs match the complete g
     const decoded = decodeStatefulHeader(encoded);
     assertCommandProjection(golden.commandId, decoded);
     assert.deepEqual(handCommandRoundTrip(encoded), encoded, `hand:${golden.canonical.name}`);
-    assert.deepEqual(generatedCommandRoundTrip(golden.commandId, encoded), encoded,
-      `generated:${golden.canonical.name}`);
+    assert.deepEqual(
+      generatedCommandRoundTrip(golden.commandId, encoded),
+      encoded,
+      `generated:${golden.canonical.name}`
+    );
   }
 });
 
@@ -138,8 +150,11 @@ test('batch-4 commands 47, 48, and 49 hand/generated codecs reject the same malf
     for (const malformed of golden.malformed) {
       const encoded = Buffer.from(malformed.hex, 'hex');
       assert.throws(() => decodeStatefulHeader(encoded), Error, `hand:${malformed.name}`);
-      assert.throws(() => generatedCommandDecode(golden.commandId, encoded), Error,
-        `generated:${malformed.name}`);
+      assert.throws(
+        () => generatedCommandDecode(golden.commandId, encoded),
+        Error,
+        `generated:${malformed.name}`
+      );
     }
   }
 });
@@ -200,8 +215,10 @@ test('batch-4 ZLJR hand/generated codecs match the fixed 1958-byte golden record
 
   const generated = decodeZljrRecordV1(encoded);
   assert.equal(Buffer.from(generated.source.nodeRid).toString('utf8'), '737263');
-  assert.equal(JSON.parse(Buffer.from(generated.metadata).toString('utf8')).Request.ActorId,
-    hand.request.actorId);
+  assert.equal(
+    JSON.parse(Buffer.from(generated.metadata).toString('utf8')).Request.ActorId,
+    hand.request.actorId
+  );
   assert.deepEqual(Buffer.from(encodeZljrRecordV1(generated)), encoded);
 });
 

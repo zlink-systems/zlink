@@ -4,7 +4,8 @@ namespace Zlink.Framework.Runtime.Host;
 
 internal sealed class ZLinkBoundedRemoteRequestAdmission(
     int maxTotal = 65_536,
-    int maxPerBinding = 1_024)
+    int maxPerBinding = 1_024
+)
 {
     private readonly Dictionary<ZLinkSessionBindingKey, int> _counts = [];
     private int _total;
@@ -23,7 +24,8 @@ internal sealed class ZLinkBoundedRemoteRequestAdmission(
     {
         if (!_counts.TryGetValue(key, out var bindingCount))
             throw new InvalidOperationException(
-                "Remote request admission was released without ownership.");
+                "Remote request admission was released without ownership."
+            );
         if (bindingCount == 1)
             _counts.Remove(key);
         else

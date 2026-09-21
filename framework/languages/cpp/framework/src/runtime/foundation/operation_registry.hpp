@@ -50,7 +50,7 @@ class operation_registry_t
                              mesh_request_metric_t request_metric = {});
     bool contains (const call_id_t &id) const;
     std::size_t fail_target (const std::vector<std::uint8_t> &target_routing_id,
-                            operation_terminal_t terminal);
+                             operation_terminal_t terminal);
     bool complete (const call_id_t &id, std::vector<std::uint8_t> payload);
     // Packed infrastructure replies retain their delivery terminal and payload
     // for the caller to decode; request_terminal observes their semantic result.
@@ -83,12 +83,9 @@ class operation_registry_t
         std::vector<std::uint8_t> target_routing_id;
     };
 
-    bool take (
-      const call_id_t &id,
-      std::unique_ptr<operation_completion_item_t> &completion);
+    bool take (const call_id_t &id, std::unique_ptr<operation_completion_item_t> &completion);
 
-    std::shared_ptr<operation_completion_dispatcher_t>
-      _completion_dispatcher;
+    std::shared_ptr<operation_completion_dispatcher_t> _completion_dispatcher;
     std::shared_ptr<operation_registry_drain_state_t> _drain_state;
     mutable std::mutex _mutex;
     std::unordered_map<call_id_t, pending_t, id_hash_t> _pending;

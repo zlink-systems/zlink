@@ -30,7 +30,7 @@ export function createDispatcher(options: HttpClientOptions): Dispatcher | undef
     return new ProxyAgent({
       uri: options.proxy,
       ...(options.proxyAuthorization !== undefined ? { token: options.proxyAuthorization } : {}),
-      ...(hasTls ? { requestTls: connect } : {}),
+      ...(hasTls ? { requestTls: connect } : {})
     });
   }
   if (hasTls) {

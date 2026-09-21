@@ -10,17 +10,10 @@ import { ZLinkEncodedPayload, ZLinkMessage } from '../../contracts';
 import { throwIfAborted } from '../abort';
 import type { Message } from '../../contracts/Common/Message';
 import { ZLinkBufferMessage as RuntimeMessage } from '../backend/runtime-message';
-import {
-  ZLinkConfigurationException
-} from '../configuration';
+import { ZLinkConfigurationException } from '../configuration';
 import { ZLinkDispatchErrorReporter } from '../channels';
-import {
-  ZLINK_ACTOR_JOIN_ENTRY_SPOT_RUNTIME,
-  ZLinkSpotActorDispatcher
-} from '../actors';
-import {
-  encodeFrameworkPayloadMessage
-} from '../messaging/payload-codec';
+import { ZLINK_ACTOR_JOIN_ENTRY_SPOT_RUNTIME, ZLinkSpotActorDispatcher } from '../actors';
+import { encodeFrameworkPayloadMessage } from '../messaging/payload-codec';
 import { routingIdsEqual } from '../routing-id';
 import type { ZLinkSpotActivation } from './spot-activation-state';
 import type { ZLinkSpotActorTransferRuntime } from './spot-runtime-ports';
@@ -55,7 +48,9 @@ export class ZLinkSpotActorMembership {
     spotId: RoutingId,
     actor: ZLinkActor,
     request: Message,
-    commit: (spot: ZLinkSpot) => Promise<ZLinkActorJoinRollback | void> | ZLinkActorJoinRollback | void,
+    commit: (
+      spot: ZLinkSpot
+    ) => Promise<ZLinkActorJoinRollback | void> | ZLinkActorJoinRollback | void,
     signal?: AbortSignal,
     leaveSource?: () => Promise<void>,
     contentType = 'application/json'
@@ -93,9 +88,10 @@ export class ZLinkSpotActorMembership {
     }
     return {
       accepted: response.accepted,
-      reply: response.reply === undefined
-        ? undefined
-        : encodeFrameworkPayloadMessage(response.reply, this.options.messageSerializers)
+      reply:
+        response.reply === undefined
+          ? undefined
+          : encodeFrameworkPayloadMessage(response.reply, this.options.messageSerializers)
     };
   }
 
@@ -112,19 +108,23 @@ export class ZLinkSpotActorMembership {
       this.options.entryNodeRidProvider?.() ??
       this.options.entryNodeRid ??
       this.options.nodeRid;
-    const entrySpotId = meshName === undefined
-      ? undefined
-      : this.options.entrySpotIdProvider?.(meshName);
-    const resolvedEntry = entrySpotId === undefined
-      ? undefined
-      : await this.options.spotRouteResolver?.resolve(entrySpotId, signal);
-    const entryNodeRid = resolvedEntry?.targetNodeRid ??
+    const entrySpotId =
+      meshName === undefined ? undefined : this.options.entrySpotIdProvider?.(meshName);
+    const resolvedEntry =
+      entrySpotId === undefined
+        ? undefined
+        : await this.options.spotRouteResolver?.resolve(entrySpotId, signal);
+    const entryNodeRid =
+      resolvedEntry?.targetNodeRid ??
       this.options.actorTransferRuntime?.actorEntryNodeRid(actor) ??
       localEntryNodeRid;
     if (entryNodeRid === undefined) {
-      throw new ZLinkConfigurationException('Spot actor leave requires an Entry Spot node routing id.');
+      throw new ZLinkConfigurationException(
+        'Spot actor leave requires an Entry Spot node routing id.'
+      );
     }
-    const remoteEntry = localEntryNodeRid !== undefined && !routingIdsEqual(entryNodeRid, localEntryNodeRid);
+    const remoteEntry =
+      localEntryNodeRid !== undefined && !routingIdsEqual(entryNodeRid, localEntryNodeRid);
     if (!remoteEntry) {
       const leaveSource = async () => {
         activation.beginActorTransfer(actor.context.actorId);
@@ -149,7 +149,7 @@ export class ZLinkSpotActorMembership {
           request: unknown,
           signal?: AbortSignal
         ): Promise<boolean>;
-    };
+      };
       const joinEntry = context[ZLINK_ACTOR_JOIN_ENTRY_SPOT_RUNTIME](
         entryNodeRid,
         ZLinkMessage.fromEncoded(ZLinkEncodedPayload.from(request.data())),
@@ -183,7 +183,6 @@ export class ZLinkSpotActorMembership {
       activation.commitActorDeparture(actor.context.actorId);
     });
   }
-
 
   async prepareActorLeaveForTransfer(
     spotId: RoutingId,
@@ -241,8 +240,7 @@ export class ZLinkSpotActorMembership {
     if (joinedActor === undefined) {
       return false;
     }
-    await activation.serial.execute(() =>
-      activation.spot.onDisconnectActor?.(joinedActor));
+    await activation.serial.execute(() => activation.spot.onDisconnectActor?.(joinedActor));
     return true;
   }
 

@@ -61,30 +61,21 @@ class Redis
         throw Error ("unexpected Redis command");
     }
 
-    std::optional<std::string> get (const std::string &)
-    {
-        throw Error ("unexpected Redis GET");
-    }
+    std::optional<std::string> get (const std::string &) { throw Error ("unexpected Redis GET"); }
 
     std::optional<std::string> hget (const std::string &, const std::string &)
     {
         throw Error ("unexpected Redis HGET");
     }
 
-    long long pttl (const std::string &)
-    {
-        throw Error ("unexpected Redis PTTL");
-    }
+    long long pttl (const std::string &) { throw Error ("unexpected Redis PTTL"); }
 
     bool pexpire (const std::string &, std::chrono::milliseconds)
     {
         throw Error ("unexpected Redis PEXPIRE");
     }
 
-    long long del (const std::string &)
-    {
-        throw Error ("unexpected Redis DEL");
-    }
+    long long del (const std::string &) { throw Error ("unexpected Redis DEL"); }
 };
 
 } // namespace sw::redis

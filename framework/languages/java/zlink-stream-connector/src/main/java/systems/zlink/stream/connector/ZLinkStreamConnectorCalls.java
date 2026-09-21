@@ -1,24 +1,22 @@
 package systems.zlink.stream.connector;
-import java.nio.charset.StandardCharsets;
 
+import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import java.util.HashMap;
 import java.util.Map;
 import java.util.Objects;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionStage;
-import systems.zlink.contracts.messaging.Message;
 
 record ZLinkStreamConnectorSendCall(
-    DefaultZLinkStreamConnector connector,
-    ZLinkStreamEncodedPayload payload,
-    boolean compressed) implements ZLinkStreamSendCall {
+        DefaultZLinkStreamConnector connector,
+        ZLinkStreamEncodedPayload payload,
+        boolean compressed)
+        implements ZLinkStreamSendCall {
     @Override
     public ZLinkStreamSendCall packetName(String name) {
         return new ZLinkStreamConnectorSendCall(
-            connector,
-            ZLinkStreamCallPayload.withPacketName(payload, name),
-            compressed);
+                connector, ZLinkStreamCallPayload.withPacketName(payload, name), compressed);
     }
 
     @Override
@@ -30,11 +28,14 @@ record ZLinkStreamConnectorSendCall(
 
     @Override
     public ZLinkStreamSendCall metadata(Map<String, String> metadata) {
-        return new ZLinkStreamConnectorSendCall(connector, new ZLinkStreamEncodedPayload(
-            payload.packetName(),
-            payload.payload(),
-            Map.copyOf(Objects.requireNonNull(metadata, "metadata")),
-            payload.codec()), compressed);
+        return new ZLinkStreamConnectorSendCall(
+                connector,
+                new ZLinkStreamEncodedPayload(
+                        payload.packetName(),
+                        payload.payload(),
+                        Map.copyOf(Objects.requireNonNull(metadata, "metadata")),
+                        payload.codec()),
+                compressed);
     }
 
     @Override
@@ -49,17 +50,18 @@ record ZLinkStreamConnectorSendCall(
 }
 
 record ZLinkStreamConnectorRequestCall(
-    DefaultZLinkStreamConnector connector,
-    ZLinkStreamEncodedPayload payload,
-    Duration timeout,
-    boolean compressed) implements ZLinkStreamRequestCall {
+        DefaultZLinkStreamConnector connector,
+        ZLinkStreamEncodedPayload payload,
+        Duration timeout,
+        boolean compressed)
+        implements ZLinkStreamRequestCall {
     @Override
     public ZLinkStreamRequestCall packetName(String name) {
         return new ZLinkStreamConnectorRequestCall(
-            connector,
-            ZLinkStreamCallPayload.withPacketName(payload, name),
-            timeout,
-            compressed);
+                connector,
+                ZLinkStreamCallPayload.withPacketName(payload, name),
+                timeout,
+                compressed);
     }
 
     @Override
@@ -71,11 +73,15 @@ record ZLinkStreamConnectorRequestCall(
 
     @Override
     public ZLinkStreamRequestCall metadata(Map<String, String> metadata) {
-        return new ZLinkStreamConnectorRequestCall(connector, new ZLinkStreamEncodedPayload(
-            payload.packetName(),
-            payload.payload(),
-            Map.copyOf(Objects.requireNonNull(metadata, "metadata")),
-            payload.codec()), timeout, compressed);
+        return new ZLinkStreamConnectorRequestCall(
+                connector,
+                new ZLinkStreamEncodedPayload(
+                        payload.packetName(),
+                        payload.payload(),
+                        Map.copyOf(Objects.requireNonNull(metadata, "metadata")),
+                        payload.codec()),
+                timeout,
+                compressed);
     }
 
     @Override
@@ -100,35 +106,35 @@ record ZLinkStreamConnectorRequestCall(
         ZLinkStreamTypedCodec codec = connector.options().typedCodec();
         if (codec == null) {
             throw ZLinkStreamException.configurationError(
-                "typed stream reply API requires ZLinkStreamConnectorOptions.typedCodec");
+                    "typed stream reply API requires ZLinkStreamConnectorOptions.typedCodec");
         }
         CompletionStage<ZLinkStreamEncodedPayload> source = submit();
         CompletableFuture<TReply> result = new CompletableFuture<>();
-        source.whenComplete((reply, error) -> {
-            if (error != null) {
-                result.completeExceptionally(error);
-                return;
-            }
-            try {
-                result.complete(decodeReply(codec, replyType, reply));
-            } catch (Throwable failure) {
-                result.completeExceptionally(failure);
-            } finally {
-                reply.payload().close();
-            }
-        });
-        result.whenComplete((ignored, error) -> {
-            if (result.isCancelled()) {
-                source.toCompletableFuture().cancel(false);
-            }
-        });
+        source.whenComplete(
+                (reply, error) -> {
+                    if (error != null) {
+                        result.completeExceptionally(error);
+                        return;
+                    }
+                    try {
+                        result.complete(decodeReply(codec, replyType, reply));
+                    } catch (Throwable failure) {
+                        result.completeExceptionally(failure);
+                    } finally {
+                        reply.payload().close();
+                    }
+                });
+        result.whenComplete(
+                (ignored, error) -> {
+                    if (result.isCancelled()) {
+                        source.toCompletableFuture().cancel(false);
+                    }
+                });
         return result;
     }
 
     private <TReply> TReply decodeReply(
-        ZLinkStreamTypedCodec codec,
-        Class<TReply> replyType,
-        ZLinkStreamEncodedPayload reply) {
+            ZLinkStreamTypedCodec codec, Class<TReply> replyType, ZLinkStreamEncodedPayload reply) {
         try {
             return codec.decode(reply, replyType);
         } catch (RuntimeException ex) {
@@ -136,16 +142,16 @@ record ZLinkStreamConnectorRequestCall(
             //  frame the connector could not turn into a value, so spec 32 9
             //  files it under FrameDecodeFailed.
             throw ZLinkStreamException.of(
-                ZLinkStreamErrorCode.FRAME_DECODE_FAILED,
-                "failed to decode stream reply request="
-                    + payload.packetName()
-                    + " reply="
-                    + reply.packetName()
-                    + " as "
-                    + replyType.getName()
-                    + " payload="
-                    + new String(reply.payload().toByteArray(), StandardCharsets.UTF_8),
-                ex);
+                    ZLinkStreamErrorCode.FRAME_DECODE_FAILED,
+                    "failed to decode stream reply request="
+                            + payload.packetName()
+                            + " reply="
+                            + reply.packetName()
+                            + " as "
+                            + replyType.getName()
+                            + " payload="
+                            + new String(reply.payload().toByteArray(), StandardCharsets.UTF_8),
+                    ex);
         }
     }
 
@@ -157,19 +163,17 @@ record ZLinkStreamConnectorRequestCall(
             throw ZLinkStreamException.validationFailed(name + " must be positive");
         }
     }
-
 }
 
 final class ZLinkStreamCallPayload {
-    private ZLinkStreamCallPayload() { }
+    private ZLinkStreamCallPayload() {}
 
     static ZLinkStreamEncodedPayload withPacketName(
-        ZLinkStreamEncodedPayload payload,
-        String name) {
+            ZLinkStreamEncodedPayload payload, String name) {
         return new ZLinkStreamEncodedPayload(
-            DefaultZLinkStreamConnector.validatePacketName(name),
-            payload.payload(),
-            payload.metadata(),
-            payload.codec());
+                DefaultZLinkStreamConnector.validatePacketName(name),
+                payload.payload(),
+                payload.metadata(),
+                payload.codec());
     }
 }

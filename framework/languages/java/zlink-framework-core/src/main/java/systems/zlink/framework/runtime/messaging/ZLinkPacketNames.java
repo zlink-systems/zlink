@@ -6,8 +6,7 @@ import systems.zlink.framework.handlers.ZLinkPacket;
 import systems.zlink.framework.messaging.ZLinkMessage;
 
 public final class ZLinkPacketNames {
-    private ZLinkPacketNames() {
-    }
+    private ZLinkPacketNames() {}
 
     public static String resolve(Object payload) {
         if (payload == null) {
@@ -35,13 +34,12 @@ public final class ZLinkPacketNames {
         if (!typeName.isBlank()) {
             return typeName;
         }
-        throw new ZLinkConfigurationException(
-            "packet name cannot be resolved for payload type");
+        throw new ZLinkConfigurationException("packet name cannot be resolved for payload type");
     }
 
     public static String resolve(Class<?> payloadType, String explicitPacketName) {
         return explicitPacketName == null || explicitPacketName.isBlank()
-            ? resolve(payloadType)
-            : explicitPacketName;
+                ? resolve(payloadType)
+                : explicitPacketName;
     }
 }

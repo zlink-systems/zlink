@@ -1,5 +1,7 @@
 package systems.zlink.framework.runtime.handlers;
 
+import systems.zlink.framework.errors.ZLinkConfigurationException;
+
 import java.io.File;
 import java.io.IOException;
 import java.net.JarURLConnection;
@@ -9,11 +11,9 @@ import java.util.Enumeration;
 import java.util.LinkedHashSet;
 import java.util.Set;
 import java.util.jar.JarFile;
-import systems.zlink.framework.errors.ZLinkConfigurationException;
 
 final class ZLinkHandlerPackageScanner {
-    private ZLinkHandlerPackageScanner() {
-    }
+    private ZLinkHandlerPackageScanner() {}
 
     static Set<Class<?>> scan(Class<?> markerType) {
         String packageName = markerType.getPackageName();
@@ -31,17 +31,13 @@ final class ZLinkHandlerPackageScanner {
                 }
             }
         } catch (IOException | URISyntaxException ex) {
-            throw new ZLinkConfigurationException(
-                "failed to scan handler package: " + packageName);
+            throw new ZLinkConfigurationException("failed to scan handler package: " + packageName);
         }
         return classes;
     }
 
     private static void scanDirectory(
-        ClassLoader loader,
-        String packageName,
-        File directory,
-        Set<Class<?>> classes) {
+            ClassLoader loader, String packageName, File directory, Set<Class<?>> classes) {
         File[] files = directory.listFiles();
         if (files == null) {
             return;
@@ -57,18 +53,16 @@ final class ZLinkHandlerPackageScanner {
     }
 
     private static void scanJar(
-        ClassLoader loader,
-        String packagePath,
-        URL resource,
-        Set<Class<?>> classes) throws IOException {
+            ClassLoader loader, String packagePath, URL resource, Set<Class<?>> classes)
+            throws IOException {
         JarURLConnection connection = (JarURLConnection) resource.openConnection();
         try (JarFile jar = connection.getJarFile()) {
             jar.stream()
-                .filter(entry -> !entry.isDirectory())
-                .map(entry -> entry.getName())
-                .filter(name -> name.startsWith(packagePath) && name.endsWith(".class"))
-                .map(name -> name.substring(0, name.length() - 6).replace('/', '.'))
-                .forEach(className -> loadClass(loader, className, classes));
+                    .filter(entry -> !entry.isDirectory())
+                    .map(entry -> entry.getName())
+                    .filter(name -> name.startsWith(packagePath) && name.endsWith(".class"))
+                    .map(name -> name.substring(0, name.length() - 6).replace('/', '.'))
+                    .forEach(className -> loadClass(loader, className, classes));
         }
     }
 

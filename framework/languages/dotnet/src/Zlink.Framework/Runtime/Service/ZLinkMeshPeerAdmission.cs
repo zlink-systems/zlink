@@ -17,17 +17,16 @@ internal sealed class ZLinkMeshPeerAdmission
 {
     internal static ZLinkMeshPeer? FindReadyOutboundCandidate(
         IEnumerable<ZLinkMeshPeer> peersByIntent,
-        string remoteAddress)
+        string remoteAddress
+    )
     {
         ArgumentNullException.ThrowIfNull(peersByIntent);
         ArgumentNullException.ThrowIfNull(remoteAddress);
         return peersByIntent.FirstOrDefault(peer =>
             peer.Direction == ZLinkServiceConnectionDirection.Outbound
             && peer.State != MeshPeerState.Closed
-            && string.Equals(
-                peer.Endpoint,
-                remoteAddress,
-                StringComparison.Ordinal));
+            && string.Equals(peer.Endpoint, remoteAddress, StringComparison.Ordinal)
+        );
     }
 
     internal ZLinkMeshPeer? FindForAdmission(
@@ -36,19 +35,24 @@ internal sealed class ZLinkMeshPeerAdmission
         RoutingId sourceRid,
         ServiceWireConstants.Command command,
         string advertisedEndpoint,
-        ZLinkServiceConnectionDirection? candidateDirection)
+        ZLinkServiceConnectionDirection? candidateDirection
+    )
     {
         ArgumentNullException.ThrowIfNull(peersByRid);
         ArgumentNullException.ThrowIfNull(peersByIntent);
         ArgumentNullException.ThrowIfNull(advertisedEndpoint);
 
-        if (peersByRid.TryGetValue(sourceRid, out var exact)
-            && (exact.Admitted
+        if (
+            peersByRid.TryGetValue(sourceRid, out var exact)
+            && (
+                exact.Admitted
                 || command == ServiceWireConstants.Command.Update
                 || command == ServiceWireConstants.Command.Hello
                     && exact.Direction == ZLinkServiceConnectionDirection.Inbound
                 || command == ServiceWireConstants.Command.Admit
-                    && exact.Direction == ZLinkServiceConnectionDirection.Outbound))
+                    && exact.Direction == ZLinkServiceConnectionDirection.Outbound
+            )
+        )
             return exact;
 
         var peers = peersByIntent.ToArray();
@@ -57,16 +61,20 @@ internal sealed class ZLinkMeshPeerAdmission
             var inbound = peers
                 .Where(peer =>
                     peer.Direction == ZLinkServiceConnectionDirection.Inbound
-                    && candidateDirection
-                        != ZLinkServiceConnectionDirection.Outbound
+                    && candidateDirection != ZLinkServiceConnectionDirection.Outbound
                     && !peer.Admitted
-                    && (peer.State == MeshPeerState.NotRequired
-                        || peer.State == MeshPeerState.Connecting)
-                    && peer.RoutingId == sourceRid)
+                    && (
+                        peer.State == MeshPeerState.NotRequired
+                        || peer.State == MeshPeerState.Connecting
+                    )
+                    && peer.RoutingId == sourceRid
+                )
                 .OrderBy(static peer => peer.Discriminator, StringComparer.Ordinal)
                 .FirstOrDefault();
-            if (inbound is not null
-                || candidateDirection == ZLinkServiceConnectionDirection.Inbound)
+            if (
+                inbound is not null
+                || candidateDirection == ZLinkServiceConnectionDirection.Inbound
+            )
                 return inbound;
             // RouteMesh peers can both send Hello on one unilateral physical
             // connection. With no accepted inbound candidate, bind that Hello
@@ -76,13 +84,13 @@ internal sealed class ZLinkMeshPeerAdmission
 
         var candidates = peers
             .Where(peer =>
-                peer.Direction == ZLinkServiceConnectionDirection.Outbound
-                && !peer.Admitted)
+                peer.Direction == ZLinkServiceConnectionDirection.Outbound && !peer.Admitted
+            )
             .OrderBy(static peer => peer.Discriminator, StringComparer.Ordinal)
             .ToArray();
         var identityMatch = candidates.FirstOrDefault(peer =>
-            peer.ExpectedRid == sourceRid
-            || peer.PhysicalRoutingId == sourceRid);
+            peer.ExpectedRid == sourceRid || peer.PhysicalRoutingId == sourceRid
+        );
         if (identityMatch is not null)
             return identityMatch;
 
@@ -92,10 +100,8 @@ internal sealed class ZLinkMeshPeerAdmission
         // attach two different peers to the same physical pipe.
         var endpointMatch = candidates.FirstOrDefault(peer =>
             peer.ExpectedRid is null
-            && string.Equals(
-                peer.Endpoint,
-                advertisedEndpoint,
-                StringComparison.Ordinal));
+            && string.Equals(peer.Endpoint, advertisedEndpoint, StringComparison.Ordinal)
+        );
         if (endpointMatch is not null)
             return endpointMatch;
 
@@ -110,19 +116,23 @@ internal sealed class ZLinkMeshPeerAdmission
         IReadOnlyDictionary<RoutingId, ZLinkMeshPeer> peersByRid,
         IEnumerable<ZLinkMeshPeer> peersByIntent,
         RoutingId sourceRid,
-        ZLinkMeshPeer candidate)
+        ZLinkMeshPeer candidate
+    )
     {
         ArgumentNullException.ThrowIfNull(peersByRid);
         ArgumentNullException.ThrowIfNull(peersByIntent);
         ArgumentNullException.ThrowIfNull(candidate);
 
-        if (peersByRid.TryGetValue(sourceRid, out var admitted)
-            && !ReferenceEquals(admitted, candidate))
+        if (
+            peersByRid.TryGetValue(sourceRid, out var admitted)
+            && !ReferenceEquals(admitted, candidate)
+        )
             return admitted;
         return peersByIntent
             .Where(peer =>
                 !ReferenceEquals(peer, candidate)
-                && (peer.RoutingId == sourceRid
+                && (
+                    peer.RoutingId == sourceRid
                     || peer.ExpectedRid == sourceRid
                     || peer.PhysicalRoutingId == sourceRid
                     || peer.ExpectedRid is null
@@ -130,7 +140,10 @@ internal sealed class ZLinkMeshPeerAdmission
                         && string.Equals(
                             peer.Endpoint,
                             candidate.Endpoint,
-                            StringComparison.Ordinal)))
+                            StringComparison.Ordinal
+                        )
+                )
+            )
             .OrderBy(static peer => peer.Discriminator, StringComparer.Ordinal)
             .FirstOrDefault();
     }
@@ -138,17 +151,21 @@ internal sealed class ZLinkMeshPeerAdmission
     internal static ZLinkMeshPeer? FindNotRequiredDuplicate(
         IEnumerable<ZLinkMeshPeer> peersByIntent,
         ZLinkMeshPeer candidate,
-        RoutingId sourceRid)
+        RoutingId sourceRid
+    )
     {
         ArgumentNullException.ThrowIfNull(peersByIntent);
         ArgumentNullException.ThrowIfNull(candidate);
         var peers = peersByIntent
             .Where(existingPeer =>
-            !ReferenceEquals(existingPeer, candidate)
-            && existingPeer.State == MeshPeerState.NotRequired
-            && (existingPeer.RoutingId == sourceRid
-                || existingPeer.ExpectedRid == sourceRid
-                || existingPeer.PhysicalRoutingId == sourceRid))
+                !ReferenceEquals(existingPeer, candidate)
+                && existingPeer.State == MeshPeerState.NotRequired
+                && (
+                    existingPeer.RoutingId == sourceRid
+                    || existingPeer.ExpectedRid == sourceRid
+                    || existingPeer.PhysicalRoutingId == sourceRid
+                )
+            )
             .ToArray();
         if (peers.Length != 0)
             return peers[0];
@@ -167,7 +184,9 @@ internal sealed class ZLinkMeshPeerAdmission
                 && string.Equals(
                     existingPeer.Endpoint,
                     candidate.Endpoint,
-                    StringComparison.Ordinal))
+                    StringComparison.Ordinal
+                )
+            )
             .ToArray();
         return sameEndpoint.Length == 1 ? sameEndpoint[0] : null;
     }
@@ -176,19 +195,20 @@ internal sealed class ZLinkMeshPeerAdmission
 internal readonly record struct ZLinkMeshPeerExpectation(
     string Endpoint,
     string SecurityIdentity,
-    ulong LifecycleGeneration);
+    ulong LifecycleGeneration
+);
 
 internal sealed class ZLinkMeshConnectionCandidates
 {
-    private readonly Dictionary<RoutingId, Dictionary<ulong, Candidate>>
-        _candidates = [];
+    private readonly Dictionary<RoutingId, Dictionary<ulong, Candidate>> _candidates = [];
     private ulong _nextReadySequence = 1;
 
     internal void Ready(
         RoutingId routingId,
         ulong connectionId,
         ZLinkServiceConnectionDirection direction,
-        string remoteEndpoint)
+        string remoteEndpoint
+    )
     {
         ArgumentNullException.ThrowIfNull(remoteEndpoint);
         if (routingId.IsEmpty || connectionId == 0)
@@ -201,42 +221,44 @@ internal sealed class ZLinkMeshConnectionCandidates
         var readySequence = _nextReadySequence++;
         if (_nextReadySequence == 0)
             _nextReadySequence = 1;
-        connections[connectionId] = new Candidate(
-            direction,
-            remoteEndpoint,
-            readySequence);
+        connections[connectionId] = new Candidate(direction, remoteEndpoint, readySequence);
     }
 
     internal ZLinkMeshConnectionCandidate? ForHandshake(
         RoutingId routingId,
-        ZLinkServiceConnectionDirection preferredDirection)
+        ZLinkServiceConnectionDirection preferredDirection
+    )
     {
         if (!_candidates.TryGetValue(routingId, out var connections))
             return null;
         var preferred = connections
-            .Where(pair => pair.Value.Pending
-                && pair.Value.Direction == preferredDirection)
+            .Where(pair => pair.Value.Pending && pair.Value.Direction == preferredDirection)
             .OrderByDescending(static pair => pair.Value.ReadySequence)
             .Select(static pair => new ZLinkMeshConnectionCandidate(
                 pair.Key,
                 pair.Value.Direction,
-                pair.Value.RemoteEndpoint))
+                pair.Value.RemoteEndpoint
+            ))
             .FirstOrDefault();
-        return preferred ?? connections
-            .Where(static pair => pair.Value.Pending)
-            .OrderByDescending(static pair => pair.Value.ReadySequence)
-            .Select(static pair => new ZLinkMeshConnectionCandidate(
-                pair.Key,
-                pair.Value.Direction,
-                pair.Value.RemoteEndpoint))
-            .FirstOrDefault();
+        return preferred
+            ?? connections
+                .Where(static pair => pair.Value.Pending)
+                .OrderByDescending(static pair => pair.Value.ReadySequence)
+                .Select(static pair => new ZLinkMeshConnectionCandidate(
+                    pair.Key,
+                    pair.Value.Direction,
+                    pair.Value.RemoteEndpoint
+                ))
+                .FirstOrDefault();
     }
 
     internal bool Consume(RoutingId routingId, ulong connectionId)
     {
-        if (!_candidates.TryGetValue(routingId, out var connections)
+        if (
+            !_candidates.TryGetValue(routingId, out var connections)
             || !connections.TryGetValue(connectionId, out var candidate)
-            || !candidate.Pending)
+            || !candidate.Pending
+        )
             return false;
         connections[connectionId] = candidate with { Pending = false };
         return true;
@@ -245,23 +267,21 @@ internal sealed class ZLinkMeshConnectionCandidates
     internal ZLinkMeshConnectionCandidateDisconnect? Disconnect(
         RoutingId routingId,
         ulong connectionId,
-        string remoteEndpoint)
+        string remoteEndpoint
+    )
     {
         ArgumentNullException.ThrowIfNull(remoteEndpoint);
         if (connectionId == 0)
             return null;
 
-        if (!routingId.IsEmpty
-            && TryRemove(routingId, connectionId, remoteEndpoint, out var direct))
+        if (
+            !routingId.IsEmpty && TryRemove(routingId, connectionId, remoteEndpoint, out var direct)
+        )
             return direct;
 
         foreach (var candidateRid in _candidates.Keys.ToArray())
         {
-            if (TryRemove(
-                    candidateRid,
-                    connectionId,
-                    remoteEndpoint,
-                    out var found))
+            if (TryRemove(candidateRid, connectionId, remoteEndpoint, out var found))
                 return found;
         }
         return null;
@@ -273,25 +293,27 @@ internal sealed class ZLinkMeshConnectionCandidates
         RoutingId routingId,
         ulong connectionId,
         string remoteEndpoint,
-        out ZLinkMeshConnectionCandidateDisconnect? result)
+        out ZLinkMeshConnectionCandidateDisconnect? result
+    )
     {
         result = null;
-        if (!_candidates.TryGetValue(routingId, out var connections)
+        if (
+            !_candidates.TryGetValue(routingId, out var connections)
             || !connections.TryGetValue(connectionId, out var candidate)
             || remoteEndpoint.Length != 0
                 && !string.Equals(
                     candidate.RemoteEndpoint,
                     remoteEndpoint,
-                    StringComparison.Ordinal))
+                    StringComparison.Ordinal
+                )
+        )
             return false;
 
         connections.Remove(connectionId);
         var hasRemainingCandidates = connections.Count != 0;
         if (!hasRemainingCandidates)
             _candidates.Remove(routingId);
-        result = new ZLinkMeshConnectionCandidateDisconnect(
-            routingId,
-            hasRemainingCandidates);
+        result = new ZLinkMeshConnectionCandidateDisconnect(routingId, hasRemainingCandidates);
         return true;
     }
 
@@ -299,14 +321,17 @@ internal sealed class ZLinkMeshConnectionCandidates
         ZLinkServiceConnectionDirection Direction,
         string RemoteEndpoint,
         ulong ReadySequence,
-        bool Pending = true);
+        bool Pending = true
+    );
 }
 
 internal sealed record ZLinkMeshConnectionCandidate(
     ulong ConnectionId,
     ZLinkServiceConnectionDirection Direction,
-    string RemoteEndpoint);
+    string RemoteEndpoint
+);
 
 internal sealed record ZLinkMeshConnectionCandidateDisconnect(
     RoutingId RoutingId,
-    bool HasRemainingCandidates);
+    bool HasRemainingCandidates
+);

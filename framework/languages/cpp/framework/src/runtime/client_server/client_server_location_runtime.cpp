@@ -36,62 +36,54 @@ namespace
 constexpr std::string_view default_security_identity = "default";
 constexpr auto maximum_ready_wait = std::chrono::seconds (5);
 constexpr std::uint32_t default_effective_max_message_bytes =
-  static_cast<std::uint32_t> (
-    std::numeric_limits<std::int32_t>::max ());
+  static_cast<std::uint32_t> (std::numeric_limits<std::int32_t>::max ());
 
 std::atomic<std::uintptr_t> next_client_server_poller_slot{1};
 
 std::uintptr_t next_transport_poller_slot () noexcept
 {
-    auto slot = next_client_server_poller_slot.fetch_add (
-      1, std::memory_order_relaxed);
+    auto slot = next_client_server_poller_slot.fetch_add (1, std::memory_order_relaxed);
     if (slot == 0) {
-        slot = next_client_server_poller_slot.fetch_add (
-          1, std::memory_order_relaxed);
+        slot = next_client_server_poller_slot.fetch_add (1, std::memory_order_relaxed);
     }
     return slot;
 }
 
-std::string connection_key (
-  const client_server_server_descriptor_t &descriptor)
+std::string connection_key (const client_server_server_descriptor_t &descriptor)
 {
-    return descriptor.server_rid.to_hex () + "|"
-           + std::to_string (descriptor.lifecycle_generation);
+    return descriptor.server_rid.to_hex () + "|" + std::to_string (descriptor.lifecycle_generation);
 }
 
-std::string stable_key (
-  const client_server_server_descriptor_t &descriptor)
+std::string stable_key (const client_server_server_descriptor_t &descriptor)
 {
     return descriptor.server_rid.to_hex ();
 }
 
-void report_client_server_dispatch_error (
-  const dispatch_options_t &options,
-  const mesh::service_mailbox_record_t &record,
-  std::string_view packet_name,
-  dispatch_message_kind_t message_kind,
-  dispatch_error_action_t action,
-  const framework_exception_t &error) noexcept
+void report_client_server_dispatch_error (const dispatch_options_t &options,
+                                          const mesh::service_mailbox_record_t &record,
+                                          std::string_view packet_name,
+                                          dispatch_message_kind_t message_kind,
+                                          dispatch_error_action_t action,
+                                          const framework_exception_t &error) noexcept
 {
-    zlink::framework::detail::dispatch_error_reporter_t (options)
-      .report_lazy ([&] {
-          std::optional<std::string> correlation;
-          if (record.correlation)
-              correlation = std::to_string (*record.correlation);
-          return message_dispatch_error_event_t{
-            dispatch_error_surface_t::channel,
-            message_kind,
-            zlink::framework::detail::dispatch_reason_from_error (&error),
-            action,
-            std::string (packet_name),
-            record.owner,
-            std::nullopt,
-            std::nullopt,
-            std::nullopt,
-            std::nullopt,
-            std::move (correlation),
-            std::make_exception_ptr (error)};
-      });
+    zlink::framework::detail::dispatch_error_reporter_t (options).report_lazy ([&] {
+        std::optional<std::string> correlation;
+        if (record.correlation)
+            correlation = std::to_string (*record.correlation);
+        return message_dispatch_error_event_t{
+          dispatch_error_surface_t::channel,
+          message_kind,
+          zlink::framework::detail::dispatch_reason_from_error (&error),
+          action,
+          std::string (packet_name),
+          record.owner,
+          std::nullopt,
+          std::nullopt,
+          std::nullopt,
+          std::nullopt,
+          std::move (correlation),
+          std::make_exception_ptr (error)};
+    });
 }
 
 std::string manual_connection_key (std::string_view endpoint)
@@ -99,46 +91,40 @@ std::string manual_connection_key (std::string_view endpoint)
     return "manual|" + std::string (endpoint);
 }
 
-void trace_client_server_runtime_failure (
-  std::string_view stage,
-  std::string_view error) noexcept
+void trace_client_server_runtime_failure (std::string_view stage, std::string_view error) noexcept
 {
     try {
         const auto *trace = std::getenv ("ZLINK_CPP_CLIENT_SERVER_TRACE");
         if (trace == nullptr || std::string_view (trace) == "0"
             || std::string_view (trace).empty ())
             return;
-        std::cerr << "zlink-cpp-client-server-trace stage=" << stage
-                  << " error=" << error << std::endl;
+        std::cerr << "zlink-cpp-client-server-trace stage=" << stage << " error=" << error
+                  << std::endl;
     }
     catch (...) {
     }
 }
 
-client_server_server_descriptor_t manual_descriptor (
-  std::string_view channel_name,
-  std::string_view endpoint)
+client_server_server_descriptor_t manual_descriptor (std::string_view channel_name,
+                                                     std::string_view endpoint)
 {
-    return client_server_server_descriptor_t{
-      .channel_name = std::string (channel_name),
-      .endpoint = std::string (endpoint),
-      .weight = 100,
-      .state = framework_runtime_state_t::serving,
-      .security_identity = std::string (default_security_identity)};
+    return client_server_server_descriptor_t{.channel_name = std::string (channel_name),
+                                             .endpoint = std::string (endpoint),
+                                             .weight = 100,
+                                             .state = framework_runtime_state_t::serving,
+                                             .security_identity =
+                                               std::string (default_security_identity)};
 }
 
-framework_runtime_state_t current_state (
-  const location_runtime_t &locations)
+framework_runtime_state_t current_state (const location_runtime_t &locations)
 {
-    return locations.draining ()
-             ? framework_runtime_state_t::draining
-             : framework_runtime_state_t::serving;
+    return locations.draining () ? framework_runtime_state_t::draining
+                                 : framework_runtime_state_t::serving;
 }
 
 } // namespace
 
-mesh::service_node_state_t client_server_service_state (
-  framework_runtime_state_t state)
+mesh::service_node_state_t client_server_service_state (framework_runtime_state_t state)
 {
     switch (state) {
         case framework_runtime_state_t::preparing:
@@ -154,13 +140,11 @@ mesh::service_node_state_t client_server_service_state (
         case framework_runtime_state_t::error:
             return mesh::service_node_state_t::error;
         default:
-            throw std::invalid_argument (
-              "invalid framework ClientServer runtime state");
+            throw std::invalid_argument ("invalid framework ClientServer runtime state");
     }
 }
 
-framework_runtime_state_t client_server_framework_state (
-  mesh::service_node_state_t state)
+framework_runtime_state_t client_server_framework_state (mesh::service_node_state_t state)
 {
     switch (state) {
         case mesh::service_node_state_t::preparing:
@@ -176,8 +160,7 @@ framework_runtime_state_t client_server_framework_state (
         case mesh::service_node_state_t::error:
             return framework_runtime_state_t::error;
         default:
-            throw std::invalid_argument (
-              "invalid service ClientServer runtime state");
+            throw std::invalid_argument ("invalid service ClientServer runtime state");
     }
 }
 
@@ -209,8 +192,8 @@ struct client_server_location_runtime_t::ready_waiter_t
 {
     std::string channel_name;
     std::chrono::steady_clock::time_point deadline;
-    std::shared_ptr<detail::task_completion_source_t<
-      std::shared_ptr<raw_client_server_client_t>>> completion;
+    std::shared_ptr<detail::task_completion_source_t<std::shared_ptr<raw_client_server_client_t>>>
+      completion;
 };
 
 struct client_server_location_runtime_t::client_channel_t
@@ -226,20 +209,18 @@ struct client_server_location_runtime_t::client_channel_t
 namespace
 {
 
-task_t<void> pump_server_transport (
-  std::shared_ptr<raw_client_server_server_t> server,
-  mesh::service_liveness_registry_t::clock_t::time_point now,
-  std::shared_ptr<application_job_queue_t::permit_t> application_permit)
+task_t<void>
+pump_server_transport (std::shared_ptr<raw_client_server_server_t> server,
+                       mesh::service_liveness_registry_t::clock_t::time_point now,
+                       std::shared_ptr<application_job_queue_t::permit_t> application_permit)
 {
     (void) server->drain_monitor_events (now);
-    (void) co_await server->pump_one (
-      now, std::move (application_permit));
+    (void) co_await server->pump_one (now, std::move (application_permit));
     (void) co_await server->tick_liveness (now);
 }
 
-task_t<void> pump_client_transport (
-  std::shared_ptr<raw_client_server_client_t> client,
-  mesh::service_liveness_registry_t::clock_t::time_point now)
+task_t<void> pump_client_transport (std::shared_ptr<raw_client_server_client_t> client,
+                                    mesh::service_liveness_registry_t::clock_t::time_point now)
 {
     (void) co_await client->drain_monitor_events (now);
     receive_batch_budget_t budget;
@@ -278,16 +259,14 @@ class client_server_observation_t final : public mesh_runtime_observation_t
     std::shared_ptr<client_server_location_runtime_t::observer_t> _observer;
 };
 
-client_server_server_state_t snapshot_state (
-  framework_runtime_state_t state,
-  bool transport_ready)
+client_server_server_state_t snapshot_state (framework_runtime_state_t state, bool transport_ready)
 {
     switch (state) {
         case framework_runtime_state_t::preparing:
             return client_server_server_state_t::configured;
         case framework_runtime_state_t::serving:
             return transport_ready ? client_server_server_state_t::ready
-                                    : client_server_server_state_t::connecting;
+                                   : client_server_server_state_t::connecting;
         case framework_runtime_state_t::relocating:
         case framework_runtime_state_t::relocated:
         case framework_runtime_state_t::draining:
@@ -335,14 +314,10 @@ client_server_location_runtime_t::client_server_location_runtime_t (
     _application_jobs (
       application_jobs
         ? std::move (application_jobs)
-        : std::make_shared<application_job_queue_t> (
-            application_job_queue_configuration_t{
-              application_job_queue_profile_t::balanced,
-              static_cast<std::uint32_t> (
-                std::numeric_limits<std::int32_t>::max ()),
-              1,
-              static_cast<std::uint32_t> (
-                std::numeric_limits<std::int32_t>::max ())})),
+        : std::make_shared<application_job_queue_t> (application_job_queue_configuration_t{
+            application_job_queue_profile_t::balanced,
+            static_cast<std::uint32_t> (std::numeric_limits<std::int32_t>::max ()), 1,
+            static_cast<std::uint32_t> (std::numeric_limits<std::int32_t>::max ())})),
     _advertise_hosts (std::move (advertise_hosts)),
     _listener_statuses (std::move (listener_statuses))
 {
@@ -355,27 +330,22 @@ client_server_location_runtime_t::~client_server_location_runtime_t () noexcept
 
 bool client_server_location_runtime_t::empty () const noexcept
 {
-    return std::none_of (
-      _channels.begin (), _channels.end (), [] (const auto &channel) {
-          return (channel.server.enabled
-                  && !channel.server.bind_endpoints.empty ())
-                 || (channel.client.enabled
-                     && (channel.client.discovery
-                         || !channel.client.connect_endpoints.empty ()));
-      });
+    return std::none_of (_channels.begin (), _channels.end (), [] (const auto &channel) {
+        return (channel.server.enabled && !channel.server.bind_endpoints.empty ())
+               || (channel.client.enabled
+                   && (channel.client.discovery || !channel.client.connect_endpoints.empty ()));
+    });
 }
 
 client_server_channel_snapshot_t
-client_server_location_runtime_t::build_snapshot_locked (
-  const std::string &channel_name) const
+client_server_location_runtime_t::build_snapshot_locked (const std::string &channel_name) const
 {
     client_server_channel_snapshot_t result;
     result.channel_name = channel_name;
     result.observed_at = std::chrono::system_clock::now ();
-    const auto configured = std::find_if (
-      _channels.begin (), _channels.end (), [&] (const auto &channel) {
-          return channel.name == channel_name;
-      });
+    const auto configured =
+      std::find_if (_channels.begin (), _channels.end (),
+                    [&] (const auto &channel) { return channel.name == channel_name; });
     if (configured == _channels.end ()) {
         result.location.store_healthy = false;
         return result;
@@ -385,74 +355,60 @@ client_server_location_runtime_t::build_snapshot_locked (
     if (_locations != nullptr) {
         const auto error = _locations->last_error ();
         result.location.store_healthy = !error.has_value ();
-        result.location.last_refresh_at =
-          _locations->owner_lease_renewed_at ();
-        result.location.owner_lease_healthy =
-          _locations->owner_lease_healthy ();
-        result.location.owner_lease_renewed_at =
-          _locations->owner_lease_renewed_at ();
+        result.location.last_refresh_at = _locations->owner_lease_renewed_at ();
+        result.location.owner_lease_healthy = _locations->owner_lease_healthy ();
+        result.location.owner_lease_renewed_at = _locations->owner_lease_renewed_at ();
     }
 
     const auto to_count = [] (std::size_t value) {
-        return value > static_cast<std::size_t> (
-                          std::numeric_limits<int>::max ())
+        return value > static_cast<std::size_t> (std::numeric_limits<int>::max ())
                  ? std::numeric_limits<int>::max ()
                  : static_cast<int> (value);
     };
     const auto client = _clients.find (channel_name);
     if (client != _clients.end ()) {
-        result.connection_intent_count =
-          to_count (client->second->connections.size ());
+        result.connection_intent_count = to_count (client->second->connections.size ());
         for (const auto &[key, connection] : client->second->connections) {
-            const bool ready =
-              connection.owner->ready ()
-              && connection.descriptor.state
-                   == framework_runtime_state_t::serving
-              && connection.descriptor.weight > 0;
+            const bool ready = connection.owner->ready ()
+                               && connection.descriptor.state == framework_runtime_state_t::serving
+                               && connection.descriptor.weight > 0;
             client_server_server_snapshot_t snapshot{
               .server_rid = connection.descriptor.server_rid,
-              .lifecycle_generation =
-                connection.descriptor.lifecycle_generation,
+              .lifecycle_generation = connection.descriptor.lifecycle_generation,
               .weight = connection.descriptor.weight,
               .ready = ready,
-              .state = snapshot_state (
-                connection.descriptor.state, ready),
-              .descriptor_source =
-                key.starts_with ("manual|") ? "manual" : "location_store",
+              .state = snapshot_state (connection.descriptor.state, ready),
+              .descriptor_source = key.starts_with ("manual|") ? "manual" : "location_store",
               .last_failure = std::nullopt};
             result.selectable = result.selectable || ready;
             result.servers.push_back (std::move (snapshot));
             const auto pending = connection.owner->pending_request_count ();
-            const auto current = static_cast<std::size_t> (
-              std::max (0, result.pending_request_count));
-            result.pending_request_count = to_count (
-              current + pending < current
-                ? static_cast<std::size_t> (
-                    std::numeric_limits<int>::max ())
-                : current + pending);
+            const auto current =
+              static_cast<std::size_t> (std::max (0, result.pending_request_count));
+            result.pending_request_count =
+              to_count (current + pending < current
+                          ? static_cast<std::size_t> (std::numeric_limits<int>::max ())
+                          : current + pending);
         }
     }
 
     const auto local_server = _servers.find (channel_name);
     if (local_server != _servers.end () && local_server->second->owner) {
         const auto admission = local_server->second->owner->descriptor ();
-        const auto local_rid = zlink::routing_id_t::from (
-          admission.server_routing_id);
+        const auto local_rid = zlink::routing_id_t::from (admission.server_routing_id);
         const auto transport_ready =
-          admission.state == mesh::service_node_state_t::serving
-          && admission.weight > 0;
+          admission.state == mesh::service_node_state_t::serving && admission.weight > 0;
         client_server_server_snapshot_t snapshot{
           .server_rid = local_rid,
           .lifecycle_generation = admission.lifecycle_generation,
           .weight = static_cast<int> (admission.weight),
           .ready = transport_ready,
-          .state = snapshot_state (
-            client_server_framework_state (admission.state),
-            transport_ready),
+          .state =
+            snapshot_state (client_server_framework_state (admission.state), transport_ready),
           .descriptor_source = "local",
           .last_failure = std::nullopt};
-        const auto existing = std::find_if (
-          result.servers.begin (), result.servers.end (), [&] (const auto &server) {
+        const auto existing =
+          std::find_if (result.servers.begin (), result.servers.end (), [&] (const auto &server) {
               return server.server_rid == snapshot.server_rid
                      && server.lifecycle_generation == snapshot.lifecycle_generation;
           });
@@ -461,13 +417,11 @@ client_server_location_runtime_t::build_snapshot_locked (
         else
             *existing = std::move (snapshot);
     }
-    result.ready_server_count = to_count (std::count_if (
-      result.servers.begin (), result.servers.end (),
-      [] (const auto &server) { return server.ready; }));
+    result.ready_server_count =
+      to_count (std::count_if (result.servers.begin (), result.servers.end (),
+                               [] (const auto &server) { return server.ready; }));
     const auto sequence = _snapshot_sequences.find (channel_name);
-    result.sequence = sequence == _snapshot_sequences.end ()
-                        ? 0
-                        : sequence->second;
+    result.sequence = sequence == _snapshot_sequences.end () ? 0 : sequence->second;
     return result;
 }
 
@@ -475,47 +429,42 @@ bool client_server_location_runtime_t::snapshot_equivalent (
   const client_server_channel_snapshot_t &left,
   const client_server_channel_snapshot_t &right) noexcept
 {
-    return left.channel_name == right.channel_name
-           && left.local_role == right.local_role
+    return left.channel_name == right.channel_name && left.local_role == right.local_role
            && left.selectable == right.selectable
            && left.ready_server_count == right.ready_server_count
            && left.connection_intent_count == right.connection_intent_count
            && left.pending_request_count == right.pending_request_count
-           && left.servers == right.servers
-           && left.location == right.location;
+           && left.servers == right.servers && left.location == right.location;
 }
 
 client_server_channel_snapshot_t
 client_server_location_runtime_t::snapshot (std::string channel_name) const
 {
-    return _lane.run ([this, &channel_name] {
-        return build_snapshot_locked (channel_name);
-    }).get ();
+    return _lane.run ([this, &channel_name] { return build_snapshot_locked (channel_name); })
+      .get ();
 }
 
-std::unique_ptr<mesh_runtime_observation_t>
-client_server_location_runtime_t::observe (
+std::unique_ptr<mesh_runtime_observation_t> client_server_location_runtime_t::observe (
   std::string channel_name,
   std::size_t capacity,
-  std::function<void (
-    const observed_status_t<client_server_runtime_event_t> &)> observer)
+  std::function<void (const observed_status_t<client_server_runtime_event_t> &)> observer)
 {
     if (channel_name.empty () || capacity == 0 || !observer)
-        throw std::invalid_argument (
-          "ClientServer observation requires a channel and callback");
-    auto value = std::make_shared<observer_t> (
-      capacity, std::move (observer));
+        throw std::invalid_argument ("ClientServer observation requires a channel and callback");
+    auto value = std::make_shared<observer_t> (capacity, std::move (observer));
     value->start ();
-    auto initial = _lane.run ([this, &channel_name, &value] {
-        _observers[channel_name].push_back (value);
-        const auto current = build_snapshot_locked (channel_name);
-        return client_server_runtime_event_t{
-          .identifier = "zlink.runtime.client_server.channel_changed",
-          .sequence = current.sequence,
-          .timestamp = current.observed_at,
-          .channel_name = channel_name,
-          .reason = std::string ("initial_snapshot")};
-    }).get ();
+    auto initial = _lane
+                     .run ([this, &channel_name, &value] {
+                         _observers[channel_name].push_back (value);
+                         const auto current = build_snapshot_locked (channel_name);
+                         return client_server_runtime_event_t{
+                           .identifier = "zlink.runtime.client_server.channel_changed",
+                           .sequence = current.sequence,
+                           .timestamp = current.observed_at,
+                           .channel_name = channel_name,
+                           .reason = std::string ("initial_snapshot")};
+                     })
+                     .get ();
     const auto source_key = initial.channel_name;
     value->enqueue (source_key, std::move (initial));
     return std::make_unique<client_server_observation_t> (std::move (value));
@@ -530,51 +479,52 @@ bool client_server_location_runtime_t::is_ready (std::string channel_name) const
 
 void client_server_location_runtime_t::publish_snapshot_changes ()
 {
-    std::vector<std::pair<std::shared_ptr<observer_t>,
-                          client_server_runtime_event_t>> notifications;
-    notifications = _lane.run ([this] {
-        std::vector<std::pair<std::shared_ptr<observer_t>,
-                              client_server_runtime_event_t>> result;
-        std::set<std::string> channel_names;
-        for (const auto &channel : _channels)
-            channel_names.insert (channel.name);
-        for (const auto &[channel_name, _] : _servers)
-            channel_names.insert (channel_name);
-        for (const auto &[channel_name, _] : _clients)
-            channel_names.insert (channel_name);
+    std::vector<std::pair<std::shared_ptr<observer_t>, client_server_runtime_event_t>>
+      notifications;
+    notifications =
+      _lane
+        .run ([this] {
+            std::vector<std::pair<std::shared_ptr<observer_t>, client_server_runtime_event_t>>
+              result;
+            std::set<std::string> channel_names;
+            for (const auto &channel : _channels)
+                channel_names.insert (channel.name);
+            for (const auto &[channel_name, _] : _servers)
+                channel_names.insert (channel_name);
+            for (const auto &[channel_name, _] : _clients)
+                channel_names.insert (channel_name);
 
-        for (const auto &channel_name : channel_names) {
-            auto current = build_snapshot_locked (channel_name);
-            const auto previous = _last_snapshots.find (channel_name);
-            if (previous != _last_snapshots.end ()
-                && snapshot_equivalent (previous->second, current))
-                continue;
-            current.sequence = ++_snapshot_sequences[channel_name];
-            current.observed_at = std::chrono::system_clock::now ();
-            _last_snapshots.insert_or_assign (channel_name, current);
-            client_server_runtime_event_t event{
-              .identifier = "zlink.runtime.client_server.channel_changed",
-              .sequence = current.sequence,
-              .timestamp = current.observed_at,
-              .channel_name = channel_name,
-              .reason = std::string ("snapshot_changed")};
-            auto &registered = _observers[channel_name];
-            auto write = registered.begin ();
-            for (auto read = registered.begin (); read != registered.end (); ++read) {
-                if (auto current_observer = read->lock ()) {
-                    result.emplace_back (current_observer, event);
-                    *write++ = *read;
+            for (const auto &channel_name : channel_names) {
+                auto current = build_snapshot_locked (channel_name);
+                const auto previous = _last_snapshots.find (channel_name);
+                if (previous != _last_snapshots.end ()
+                    && snapshot_equivalent (previous->second, current))
+                    continue;
+                current.sequence = ++_snapshot_sequences[channel_name];
+                current.observed_at = std::chrono::system_clock::now ();
+                _last_snapshots.insert_or_assign (channel_name, current);
+                client_server_runtime_event_t event{.identifier =
+                                                      "zlink.runtime.client_server.channel_changed",
+                                                    .sequence = current.sequence,
+                                                    .timestamp = current.observed_at,
+                                                    .channel_name = channel_name,
+                                                    .reason = std::string ("snapshot_changed")};
+                auto &registered = _observers[channel_name];
+                auto write = registered.begin ();
+                for (auto read = registered.begin (); read != registered.end (); ++read) {
+                    if (auto current_observer = read->lock ()) {
+                        result.emplace_back (current_observer, event);
+                        *write++ = *read;
+                    }
                 }
+                registered.erase (write, registered.end ());
             }
-            registered.erase (write, registered.end ());
-        }
-        return result;
-    }).get ();
+            return result;
+        })
+        .get ();
     for (auto &notification : notifications) {
         const auto source_key = notification.second.channel_name;
-        notification.first->enqueue (
-          source_key,
-          std::move (notification.second));
+        notification.first->enqueue (source_key, std::move (notification.second));
     }
 }
 
@@ -589,15 +539,12 @@ void client_server_location_runtime_t::start ()
         _transport_poller = std::make_unique<zlink::poller_t> ();
         _wake_timer->attach (*_transport_poller);
         _application_supply = std::make_unique<application_supply_slot_t> (
-          _application_jobs,
-          [wake = _wake_timer] { wake->signal (); });
+          _application_jobs, [wake = _wake_timer] { wake->signal (); });
         for (const auto &channel : _channels) {
-            if (channel.server.enabled
-                && !channel.server.bind_endpoints.empty ())
+            if (channel.server.enabled && !channel.server.bind_endpoints.empty ())
                 start_server (channel, owner);
             if (channel.client.enabled
-                && (channel.client.discovery
-                    || !channel.client.connect_endpoints.empty ()))
+                && (channel.client.discovery || !channel.client.connect_endpoints.empty ()))
                 start_client (channel);
         }
         reconcile ();
@@ -611,70 +558,54 @@ void client_server_location_runtime_t::start ()
 }
 
 void client_server_location_runtime_t::start_server (
-  const channel_snapshot_t &channel,
-  const std::optional<location_owner_token_t> &publication_owner)
+  const channel_snapshot_t &channel, const std::optional<location_owner_token_t> &publication_owner)
 {
     if (channel.server.bind_endpoints.size () != 1) {
-        throw std::invalid_argument (
-          "ClientServer server requires one bind endpoint");
+        throw std::invalid_argument ("ClientServer server requires one bind endpoint");
     }
     protocol::client_server_server_admission_t admission;
     admission.channel_name = channel.name;
-    admission.server_routing_id =
-      server_routing_id (channel);
+    admission.server_routing_id = server_routing_id (channel);
     admission.lifecycle_generation = make_lifecycle_generation ();
-    admission.weight = static_cast<std::uint32_t> (
-      channel.server.service_weight);
+    admission.weight = static_cast<std::uint32_t> (channel.server.service_weight);
     admission.state = mesh::service_node_state_t::preparing;
-    admission.security_identity =
-      std::string (default_security_identity);
-    admission.effective_max_message_bytes =
-      effective_max_message_bytes (channel.server);
-    admission.advertised_endpoint =
-      channel.server.bind_endpoints.front ();
+    admission.security_identity = std::string (default_security_identity);
+    admission.effective_max_message_bytes = effective_max_message_bytes (channel.server);
+    admission.advertised_endpoint = channel.server.bind_endpoints.front ();
 
-    const auto advertise =
-      _advertise_hosts.find (channel.name);
-    raw_client_server_server_options_t options{
-      admission,
-      advertise == _advertise_hosts.end ()
-        ? std::nullopt
-        : std::optional<std::string> (advertise->second)};
+    const auto advertise = _advertise_hosts.find (channel.name);
+    raw_client_server_server_options_t options{admission,
+                                               advertise == _advertise_hosts.end ()
+                                                 ? std::nullopt
+                                                 : std::optional<std::string> (advertise->second)};
     options.transport_poller = _transport_poller.get ();
     options.transport_poller_slot = next_transport_poller_slot ();
     options.application_jobs = _application_jobs;
-    auto raw = std::make_shared<raw_client_server_server_t> (
-      std::move (options), _channel_runtime.core_context ());
+    auto raw = std::make_shared<raw_client_server_server_t> (std::move (options),
+                                                             _channel_runtime.core_context ());
     raw->start ();
     auto entry = std::make_unique<server_entry_t> ();
     entry->capability = channel.server;
     entry->owner = std::move (raw);
     if (publication_owner) {
-        auto descriptor =
-          to_descriptor (
-            entry->owner->descriptor (), *publication_owner);
-        const auto stored = _store
-                              ->update_client_server (
-                                descriptor,
-                                location_write_intent_t::new_claim)
-                              .result ()
-                              .value ();
+        auto descriptor = to_descriptor (entry->owner->descriptor (), *publication_owner);
+        const auto stored =
+          _store->update_client_server (descriptor, location_write_intent_t::new_claim)
+            .result ()
+            .value ();
         if (stored.status != location_write_status_t::stored) {
             entry->owner->close ();
-            throw std::runtime_error (
-              "ClientServer descriptor publication was fenced");
+            throw std::runtime_error ("ClientServer descriptor publication was fenced");
         }
         entry->published_descriptor = std::move (descriptor);
     }
     const auto endpoint = entry->owner->endpoint ();
     _servers.emplace (channel.name, std::move (entry));
     if (_listener_statuses)
-        _listener_statuses->update (
-          listener_kind_t::client_server, channel.name, endpoint);
+        _listener_statuses->update (listener_kind_t::client_server, channel.name, endpoint);
 }
 
-void client_server_location_runtime_t::start_client (
-  const channel_snapshot_t &channel)
+void client_server_location_runtime_t::start_client (const channel_snapshot_t &channel)
 {
     auto entry = std::make_unique<client_channel_t> ();
     entry->snapshot = channel;
@@ -682,24 +613,16 @@ void client_server_location_runtime_t::start_client (
     _clients.emplace (channel.name, std::move (entry));
     _channel_runtime.bind_client_server_transport (
       channel.name,
-      [this, name = channel.name] (
-        std::string packet_name,
-        std::string content_type,
-        zlink::message_t message,
-        std::chrono::milliseconds timeout) {
-          return send (name, std::move (packet_name),
-                       std::move (content_type),
-                       std::move (message), timeout);
+      [this, name = channel.name] (std::string packet_name, std::string content_type,
+                                   zlink::message_t message, std::chrono::milliseconds timeout) {
+          return send (name, std::move (packet_name), std::move (content_type), std::move (message),
+                       timeout);
       },
-      [this, name = channel.name] (
-        std::string packet_name,
-        std::string content_type,
-        zlink::message_t message,
-        std::chrono::milliseconds timeout) {
-          return request (name, std::move (packet_name),
-                          std::move (content_type),
+      [this, name = channel.name] (std::string packet_name, std::string content_type,
+                                   zlink::message_t message, std::chrono::milliseconds timeout) {
+          return request (name, std::move (packet_name), std::move (content_type),
                           std::move (message), timeout);
-    });
+      });
 }
 
 bool client_server_location_runtime_t::publish_descriptor_state (
@@ -718,9 +641,8 @@ bool client_server_location_runtime_t::publish_descriptor_state (
     _wake_timer->signal ();
 
     std::unique_lock lock (_descriptor_publish_mutex);
-    if (!_descriptor_publish_changed.wait_for (
-          lock, std::chrono::seconds (5),
-          [this] { return !_descriptor_publish_pending; })) {
+    if (!_descriptor_publish_changed.wait_for (lock, std::chrono::seconds (5),
+                                               [this] { return !_descriptor_publish_pending; })) {
         return false;
     }
     return _descriptor_publish_result;
@@ -764,8 +686,7 @@ void client_server_location_runtime_t::run ()
             catch (...) {
                 _locations->record_store_error ();
             }
-            next_reconcile =
-              now + _locations->options ().polling_interval;
+            next_reconcile = now + _locations->options ().polling_interval;
         }
         try {
             pump ();
@@ -780,8 +701,7 @@ void client_server_location_runtime_t::run ()
             }
         }
         catch (...) {
-            trace_client_server_runtime_failure (
-              "runtime-loop-error", "unknown exception");
+            trace_client_server_runtime_failure ("runtime-loop-error", "unknown exception");
             try {
                 _locations->record_store_error ();
             }
@@ -793,13 +713,11 @@ void client_server_location_runtime_t::run ()
 
         auto wake_at = next_reconcile;
         for (const auto &[_, server] : _servers) {
-            if (const auto activity =
-                  server->owner->next_liveness_activity ())
+            if (const auto activity = server->owner->next_liveness_activity ())
                 wake_at = std::min (wake_at, *activity);
         }
         for (const auto *connection : _client_pump_snapshot) {
-            if (const auto activity =
-                  connection->owner->next_liveness_activity ())
+            if (const auto activity = connection->owner->next_liveness_activity ())
                 wake_at = std::min (wake_at, *activity);
         }
         if (const auto ready_deadline = next_ready_waiter_deadline ())
@@ -811,10 +729,8 @@ void client_server_location_runtime_t::run ()
         try {
             zlink::poll_event_t readiness;
             const auto count = _transport_poller->wait (
-              &readiness,
-              1,
-              std::chrono::duration_cast<std::chrono::milliseconds> (
-                wake_at - after_pump));
+              &readiness, 1,
+              std::chrono::duration_cast<std::chrono::milliseconds> (wake_at - after_pump));
             if (count == 1 && _wake_timer->is_event (readiness))
                 _wake_timer->consume ();
         }
@@ -831,34 +747,25 @@ bool client_server_location_runtime_t::publish_servers ()
     std::lock_guard publish_lock (_descriptor_publish_mutex);
     const auto owner = _locations->current_owner_token ();
     if (!owner) {
-        return std::none_of (
-          _servers.begin (), _servers.end (), [] (const auto &entry) {
-              return entry.second->published_descriptor.has_value ();
-          });
+        return std::none_of (_servers.begin (), _servers.end (), [] (const auto &entry) {
+            return entry.second->published_descriptor.has_value ();
+        });
     }
     bool published = true;
     for (auto &[channel_name, server] : _servers) {
-        const auto weight_override =
-          _channel_runtime.server_peer_weight_override (channel_name);
-        const auto weight =
-          weight_override.value_or (
-            server->capability.service_weight);
+        const auto weight_override = _channel_runtime.server_peer_weight_override (channel_name);
+        const auto weight = weight_override.value_or (server->capability.service_weight);
         const auto state = current_state (*_locations);
         const bool new_owner =
-          !server->published_descriptor
-          || server->published_descriptor->owner_id != owner->owner_id
-          || server->published_descriptor->lease_generation
-               != owner->lease_generation;
-        if (!new_owner
-            && server->published_descriptor->weight == weight
+          !server->published_descriptor || server->published_descriptor->owner_id != owner->owner_id
+          || server->published_descriptor->lease_generation != owner->lease_generation;
+        if (!new_owner && server->published_descriptor->weight == weight
             && server->published_descriptor->state == state)
             continue;
 
         auto admission = server->owner->descriptor ();
-        if (admission.descriptor_revision
-            == std::numeric_limits<std::uint64_t>::max ())
-            throw std::overflow_error (
-              "ClientServer descriptor revision is exhausted");
+        if (admission.descriptor_revision == std::numeric_limits<std::uint64_t>::max ())
+            throw std::overflow_error ("ClientServer descriptor revision is exhausted");
         if (server->published_descriptor) {
             ++admission.descriptor_revision;
             admission.weight = static_cast<std::uint32_t> (weight);
@@ -870,10 +777,8 @@ bool client_server_location_runtime_t::publish_servers ()
         auto descriptor = to_descriptor (admission, *owner);
         const auto written =
           _store
-            ->update_client_server (
-              descriptor,
-              new_owner ? location_write_intent_t::new_claim
-                        : location_write_intent_t::renew)
+            ->update_client_server (descriptor, new_owner ? location_write_intent_t::new_claim
+                                                          : location_write_intent_t::renew)
             .result ()
             .value ();
         if (written.status == location_write_status_t::stored)
@@ -890,144 +795,123 @@ void client_server_location_runtime_t::reconcile ()
         reconcile_channel (*channel);
 }
 
-void client_server_location_runtime_t::reconcile_channel (
-  client_channel_t &channel)
+void client_server_location_runtime_t::reconcile_channel (client_channel_t &channel)
 {
     std::map<std::string, client_server_server_descriptor_t> desired;
     location_page_request_t page;
     do {
         const auto listed =
-          _store->list_client_servers (
-                   channel.snapshot.name, page)
-            .result ()
-            .value ();
+          _store->list_client_servers (channel.snapshot.name, page).result ().value ();
         for (const auto &descriptor : listed.items) {
-            if ((descriptor.state
-                   == framework_runtime_state_t::stopped)
-                || descriptor.state
-                     == framework_runtime_state_t::error
+            if ((descriptor.state == framework_runtime_state_t::stopped)
+                || descriptor.state == framework_runtime_state_t::error
                 || !owner_is_live (descriptor))
                 continue;
-            desired.insert_or_assign (
-              connection_key (descriptor), descriptor);
+            desired.insert_or_assign (connection_key (descriptor), descriptor);
         }
         page.continuation_token = listed.continuation_token;
     } while (page.continuation_token);
 
-    for (const auto &endpoint :
-         channel.snapshot.client.connect_endpoints) {
-        const auto discovered = std::find_if (
-          desired.begin (), desired.end (),
-          [&] (const auto &entry) {
-              return entry.second.endpoint == endpoint;
-          });
+    for (const auto &endpoint : channel.snapshot.client.connect_endpoints) {
+        const auto discovered =
+          std::find_if (desired.begin (), desired.end (),
+                        [&] (const auto &entry) { return entry.second.endpoint == endpoint; });
         if (discovered == desired.end ()) {
-            desired.emplace (
-              manual_connection_key (endpoint),
-              manual_descriptor (channel.snapshot.name, endpoint));
+            desired.emplace (manual_connection_key (endpoint),
+                             manual_descriptor (channel.snapshot.name, endpoint));
         }
     }
     std::vector<std::shared_ptr<raw_client_server_client_t>> close;
     for (const auto &[key, descriptor] : desired) {
         bool exists = false;
         {
-            _lane.run ([&] {
-            const auto found = channel.connections.find (key);
-            if (found != channel.connections.end ()) {
-                if (found->second.descriptor.endpoint != descriptor.endpoint
-                    || found->second.descriptor.server_rid
-                         != descriptor.server_rid
-                    || found->second.descriptor.lifecycle_generation
-                         != descriptor.lifecycle_generation
-                    || found->second.descriptor.weight != descriptor.weight
-                    || found->second.descriptor.state != descriptor.state) {
-                    channel.selector_dirty = true;
-                    found->second.descriptor = descriptor;
-                }
-                exists = true;
-            } else if (!key.starts_with ("manual|")) {
-                const auto manual = channel.connections.find (
-                  manual_connection_key (descriptor.endpoint));
-                if (manual != channel.connections.end ()) {
-                    auto connection = std::move (manual->second);
-                    channel.selector_dirty = true;
-                    channel.connections.erase (manual);
-                    connection.descriptor = descriptor;
-                    channel.connections.emplace (
-                      key, std::move (connection));
-                    exists = true;
-                }
-            }
-            }).get ();
+            _lane
+              .run ([&] {
+                  const auto found = channel.connections.find (key);
+                  if (found != channel.connections.end ()) {
+                      if (found->second.descriptor.endpoint != descriptor.endpoint
+                          || found->second.descriptor.server_rid != descriptor.server_rid
+                          || found->second.descriptor.lifecycle_generation
+                               != descriptor.lifecycle_generation
+                          || found->second.descriptor.weight != descriptor.weight
+                          || found->second.descriptor.state != descriptor.state) {
+                          channel.selector_dirty = true;
+                          found->second.descriptor = descriptor;
+                      }
+                      exists = true;
+                  } else if (!key.starts_with ("manual|")) {
+                      const auto manual =
+                        channel.connections.find (manual_connection_key (descriptor.endpoint));
+                      if (manual != channel.connections.end ()) {
+                          auto connection = std::move (manual->second);
+                          channel.selector_dirty = true;
+                          channel.connections.erase (manual);
+                          connection.descriptor = descriptor;
+                          channel.connections.emplace (key, std::move (connection));
+                          exists = true;
+                      }
+                  }
+              })
+              .get ();
         }
         if (exists)
             continue;
         protocol::client_server_client_admission_t admission;
         admission.channel_name = channel.snapshot.name;
-        admission.security_identity =
-          std::string (default_security_identity);
+        admission.security_identity = std::string (default_security_identity);
         admission.effective_max_message_bytes =
           effective_max_message_bytes (channel.snapshot.client);
-        auto expected = key.starts_with ("manual|")
-                          ? protocol::client_server_server_admission_t{
-                              .channel_name =
-                                channel.snapshot.name,
-                              .security_identity =
-                                std::string (
-                                  default_security_identity),
-                              .effective_max_message_bytes =
-                                admission.effective_max_message_bytes,
-                              .advertised_endpoint =
-                                descriptor.endpoint}
-                          : to_admission (
-                              descriptor,
-                              admission.effective_max_message_bytes);
-        raw_client_server_client_options_t options{
-          channel.routing_id,
-          admission,
-          std::move (expected)};
+        auto expected =
+          key.starts_with ("manual|")
+            ? protocol::client_server_server_admission_t{.channel_name = channel.snapshot.name,
+                                                         .security_identity =
+                                                           std::string (default_security_identity),
+                                                         .effective_max_message_bytes =
+                                                           admission.effective_max_message_bytes,
+                                                         .advertised_endpoint = descriptor.endpoint}
+            : to_admission (descriptor, admission.effective_max_message_bytes);
+        raw_client_server_client_options_t options{channel.routing_id, admission,
+                                                   std::move (expected)};
         options.transport_poller = _transport_poller.get ();
         options.transport_poller_slot = next_transport_poller_slot ();
         options.application_jobs = _application_jobs;
-        auto raw = std::make_shared<raw_client_server_client_t> (
-          std::move (options), _channel_runtime.core_context ());
+        auto raw = std::make_shared<raw_client_server_client_t> (std::move (options),
+                                                                 _channel_runtime.core_context ());
         raw->start ();
-        _lane.run ([&] {
-            channel.selector_dirty = true;
-            channel.connections.emplace (
-              key, client_connection_t{descriptor, std::move (raw)});
-        }).get ();
+        _lane
+          .run ([&] {
+              channel.selector_dirty = true;
+              channel.connections.emplace (key, client_connection_t{descriptor, std::move (raw)});
+          })
+          .get ();
     }
 
     {
-        _lane.run ([&] {
-        for (auto it = channel.connections.begin ();
-             it != channel.connections.end ();) {
-            if (desired.contains (it->first)) {
-                ++it;
-                continue;
-            }
-            const auto stable =
-              stable_key (it->second.descriptor);
-            const auto replacement = std::find_if (
-              channel.connections.begin (),
-              channel.connections.end (),
-              [&] (const auto &candidate) {
-                  return desired.contains (candidate.first)
-                         && stable_key (
-                              candidate.second.descriptor)
-                              == stable;
-              });
-            if (replacement != channel.connections.end ()
-                && !replacement->second.owner->ready ()) {
-                ++it;
-                continue;
-            }
-            close.push_back (it->second.owner);
-            channel.selector_dirty = true;
-            it = channel.connections.erase (it);
-        }
-        }).get ();
+        _lane
+          .run ([&] {
+              for (auto it = channel.connections.begin (); it != channel.connections.end ();) {
+                  if (desired.contains (it->first)) {
+                      ++it;
+                      continue;
+                  }
+                  const auto stable = stable_key (it->second.descriptor);
+                  const auto replacement =
+                    std::find_if (channel.connections.begin (), channel.connections.end (),
+                                  [&] (const auto &candidate) {
+                                      return desired.contains (candidate.first)
+                                             && stable_key (candidate.second.descriptor) == stable;
+                                  });
+                  if (replacement != channel.connections.end ()
+                      && !replacement->second.owner->ready ()) {
+                      ++it;
+                      continue;
+                  }
+                  close.push_back (it->second.owner);
+                  channel.selector_dirty = true;
+                  it = channel.connections.erase (it);
+              }
+          })
+          .get ();
     }
     for (auto &owner : close)
         owner->close ();
@@ -1039,31 +923,26 @@ void client_server_location_runtime_t::pump ()
      * calculation in run(). Rebuilding it here avoids a second shared_ptr
      * copy in the same loop iteration. */
     refresh_client_pump_snapshot ();
-    const auto now =
-      mesh::service_liveness_registry_t::clock_t::now ();
+    const auto now = mesh::service_liveness_registry_t::clock_t::now ();
     complete_ready_waiters (now);
-    const auto take_completed = [] (
-      const std::shared_ptr<pump_task_state_t> &state)
-      -> std::optional<result_t<void>> {
+    const auto take_completed =
+      [] (const std::shared_ptr<pump_task_state_t> &state) -> std::optional<result_t<void>> {
         if (!state)
             return std::nullopt;
         std::lock_guard lock (state->mutex);
         return state->completion;
     };
-    const auto start_task = [wake = _wake_timer] (
-      task_t<void> pending) {
+    const auto start_task = [wake = _wake_timer] (task_t<void> pending) {
         auto state = std::make_shared<pump_task_state_t> ();
-        state->task = std::make_shared<task_t<void>> (
-          std::move (pending));
-        detail::observe_task_completion (
-          *state->task,
-          [state, wake] (const result_t<void> &result) {
-              {
-                  std::lock_guard lock (state->mutex);
-                  state->completion = result;
-              }
-              wake->signal ();
-          });
+        state->task = std::make_shared<task_t<void>> (std::move (pending));
+        detail::observe_task_completion (*state->task,
+                                         [state, wake] (const result_t<void> &result) {
+                                             {
+                                                 std::lock_guard lock (state->mutex);
+                                                 state->completion = result;
+                                             }
+                                             wake->signal ();
+                                         });
         return state;
     };
 
@@ -1074,38 +953,33 @@ void client_server_location_runtime_t::pump ()
     if (!_server_pump_snapshot.empty ()) {
         const auto start = _server_pump_cursor % _server_pump_snapshot.size ();
         for (std::size_t offset = 0; offset < _server_pump_snapshot.size (); ++offset) {
-            auto &server = *_server_pump_snapshot[
-              (start + offset) % _server_pump_snapshot.size ()];
+            auto &server = *_server_pump_snapshot[(start + offset) % _server_pump_snapshot.size ()];
             if (const auto completed = take_completed (server.pump_task)) {
                 if (!*completed)
                     _locations->record_store_error ();
                 server.pump_task.reset ();
             }
             if (!server.pump_task) {
-                std::shared_ptr<application_job_queue_t::permit_t>
-                  application_permit;
+                std::shared_ptr<application_job_queue_t::permit_t> application_permit;
                 _application_supply->ensure_waiter ();
                 auto reserved = _application_supply->take ();
                 const bool may_pump = reserved.has_value ();
                 if (reserved) {
-                    application_permit = std::make_shared<
-                      application_job_queue_t::permit_t> (
-                        std::move (*reserved));
+                    application_permit =
+                      std::make_shared<application_job_queue_t::permit_t> (std::move (*reserved));
                 }
                 if (may_pump) {
-                    server.pump_task = start_task (pump_server_transport (
-                      server.owner, now, std::move (application_permit)));
+                    server.pump_task = start_task (
+                      pump_server_transport (server.owner, now, std::move (application_permit)));
                 }
             }
-            if (const auto completed = take_completed (
-                  server.dispatch_task)) {
+            if (const auto completed = take_completed (server.dispatch_task)) {
                 if (!*completed)
                     _locations->record_store_error ();
                 server.dispatch_task.reset ();
             }
             if (!server.dispatch_task) {
-                server.dispatch_task = start_task (
-                  dispatch_server (server.owner));
+                server.dispatch_task = start_task (dispatch_server (server.owner));
             }
         }
         _server_pump_cursor = (start + 1) % _server_pump_snapshot.size ();
@@ -1113,48 +987,49 @@ void client_server_location_runtime_t::pump ()
     if (!_client_pump_snapshot.empty ()) {
         const auto start = _client_pump_cursor % _client_pump_snapshot.size ();
         for (std::size_t offset = 0; offset < _client_pump_snapshot.size (); ++offset) {
-            auto &connection = *_client_pump_snapshot[
-              (start + offset) % _client_pump_snapshot.size ()];
-            if (const auto completed = take_completed (
-                  connection.pump_task)) {
+            auto &connection =
+              *_client_pump_snapshot[(start + offset) % _client_pump_snapshot.size ()];
+            if (const auto completed = take_completed (connection.pump_task)) {
                 if (!*completed)
                     _locations->record_store_error ();
                 connection.pump_task.reset ();
             }
             if (!connection.pump_task) {
-                connection.pump_task = start_task (
-                  pump_client_transport (connection.owner, now));
+                connection.pump_task = start_task (pump_client_transport (connection.owner, now));
             }
         }
         _client_pump_cursor = (start + 1) % _client_pump_snapshot.size ();
     }
-    _lane.run ([this] {
-        for (auto &[_, channel] : _clients) {
-            for (auto &[__, connection] : channel->connections) {
-                const bool ready =
-                  connection.owner->ready ()
-                  && connection.descriptor.state
-                       == framework_runtime_state_t::serving
-                  && connection.descriptor.weight > 0;
-                if (ready != connection.selector_ready) {
-                    connection.selector_ready = ready;
-                    channel->selector_dirty = true;
-                }
-            }
-        }
-    }).get ();
+    _lane
+      .run ([this] {
+          for (auto &[_, channel] : _clients) {
+              for (auto &[__, connection] : channel->connections) {
+                  const bool ready =
+                    connection.owner->ready ()
+                    && connection.descriptor.state == framework_runtime_state_t::serving
+                    && connection.descriptor.weight > 0;
+                  if (ready != connection.selector_ready) {
+                      connection.selector_ready = ready;
+                      channel->selector_dirty = true;
+                  }
+              }
+          }
+      })
+      .get ();
     complete_ready_waiters (now);
 }
 
 void client_server_location_runtime_t::refresh_client_pump_snapshot ()
 {
-    _lane.run ([this] {
-        _client_pump_snapshot.clear ();
-        for (auto &[_, channel] : _clients) {
-            for (auto &[__, connection] : channel->connections)
-                _client_pump_snapshot.push_back (&connection);
-        }
-    }).get ();
+    _lane
+      .run ([this] {
+          _client_pump_snapshot.clear ();
+          for (auto &[_, channel] : _clients) {
+              for (auto &[__, connection] : channel->connections)
+                  _client_pump_snapshot.push_back (&connection);
+          }
+      })
+      .get ();
 }
 
 task_t<void> client_server_location_runtime_t::dispatch_server (
@@ -1165,10 +1040,9 @@ task_t<void> client_server_location_runtime_t::dispatch_server (
     for (;;) {
         if (!budget.can_receive ())
             co_return;
-        auto claim = mailbox.try_claim (
-          mesh::service_mailbox_domain_t::application,
-          dispatch_limits::receive_batch_messages,
-          dispatch_limits::receive_batch_bytes);
+        auto claim = mailbox.try_claim (mesh::service_mailbox_domain_t::application,
+                                        dispatch_limits::receive_batch_messages,
+                                        dispatch_limits::receive_batch_bytes);
         if (!claim)
             co_return;
         for (const auto &record : claim->records) {
@@ -1188,159 +1062,120 @@ task_t<void> client_server_location_runtime_t::dispatch_server (
                  * envelope: [JSON header, payload]. flow-correlation §4: at
                  * Off the wire flow pair is neither validated nor
                  * materialized at this ingress. */
-                const auto envelope_header =
-                  runtime::messaging::envelope_codec_t{}.decode_header (
-                    zlink::message_t::from (record.parts[0]),
-                    detail::message_flow_tracer_t (
-                      _channel_runtime.dispatch_options_ref ())
-                      .capture_enabled ());
+                const auto envelope_header = runtime::messaging::envelope_codec_t{}.decode_header (
+                  zlink::message_t::from (record.parts[0]),
+                  detail::message_flow_tracer_t (_channel_runtime.dispatch_options_ref ())
+                    .capture_enabled ());
                 if (!envelope_header) {
-                    throw framework_exception_t (
-                      framework_error_kind_t::protocol_error,
-                      envelope_header.error () != nullptr
-                        ? envelope_header.error ()->what ()
-                        : "ClientServer request envelope is malformed");
+                    throw framework_exception_t (framework_error_kind_t::protocol_error,
+                                                 envelope_header.error () != nullptr
+                                                   ? envelope_header.error ()->what ()
+                                                   : "ClientServer request envelope is malformed");
                 }
                 const auto &request_envelope = envelope_header.value ();
                 const protocol::application_payload_t payload{
-                  request_envelope.message_name,
-                  request_envelope.content_type,
-                  record.parts[1],
-                  request_envelope.flow_id,
-                  request_envelope.flow_origin};
-                const auto message =
-                  zlink::message_t::from (payload.payload_bytes ());
-                detail::inbound_message_context_t
-                  inbound;
-                inbound.before_application_handler =
-                  record.before_application_handler;
+                  request_envelope.message_name, request_envelope.content_type, record.parts[1],
+                  request_envelope.flow_id, request_envelope.flow_origin};
+                const auto message = zlink::message_t::from (payload.payload_bytes ());
+                detail::inbound_message_context_t inbound;
+                inbound.before_application_handler = record.before_application_handler;
                 inbound.message.channel_name = record.owner;
-                inbound.message.packet_name =
-                  payload.packet_name;
-                inbound.message.content_type =
-                  payload.content_type;
+                inbound.message.packet_name = payload.packet_name;
+                inbound.message.content_type = payload.content_type;
                 if (!request_envelope.correlation_id.empty ())
-                    inbound.message.correlation_id =
-                      request_envelope.correlation_id;
-                detail::message_flow_tracer_t flow (
-                  _channel_runtime.dispatch_options_ref ());
+                    inbound.message.correlation_id = request_envelope.correlation_id;
+                detail::message_flow_tracer_t flow (_channel_runtime.dispatch_options_ref ());
                 auto flow_scope = runtime::flow_context_t::enter (
-                  payload.flow_id,
-                  payload.flow_origin,
-                  flow.mode (),
-                  flow_origin_t::inbound);
+                  payload.flow_id, payload.flow_origin, flow.mode (), flow_origin_t::inbound);
                 flow.trace (message_flow_outcome_t::received, [&] {
-                    return message_flow_event_t{
-                      message_flow_outcome_t::received,
-                      dispatch_error_surface_t::channel,
-                      record.reply_token
-                        ? dispatch_message_kind_t::request
-                        : dispatch_message_kind_t::send,
-                      payload.packet_name,
-                      record.owner,
-                      std::nullopt,
-                      inbound.message.correlation_id,
-                      std::nullopt,
-                      std::nullopt,
-                      std::nullopt,
-                      std::nullopt};
+                    return message_flow_event_t{message_flow_outcome_t::received,
+                                                dispatch_error_surface_t::channel,
+                                                record.reply_token
+                                                  ? dispatch_message_kind_t::request
+                                                  : dispatch_message_kind_t::send,
+                                                payload.packet_name,
+                                                record.owner,
+                                                std::nullopt,
+                                                inbound.message.correlation_id,
+                                                std::nullopt,
+                                                std::nullopt,
+                                                std::nullopt,
+                                                std::nullopt};
                 });
                 flow.trace (message_flow_outcome_t::admitted, [&] {
-                    return message_flow_event_t{
-                      message_flow_outcome_t::admitted,
-                      dispatch_error_surface_t::channel,
-                      record.reply_token
-                        ? dispatch_message_kind_t::request
-                        : dispatch_message_kind_t::send,
-                      payload.packet_name,
-                      record.owner,
-                      std::nullopt,
-                      inbound.message.correlation_id,
-                      std::nullopt,
-                      std::nullopt,
-                      std::nullopt,
-                      std::nullopt};
+                    return message_flow_event_t{message_flow_outcome_t::admitted,
+                                                dispatch_error_surface_t::channel,
+                                                record.reply_token
+                                                  ? dispatch_message_kind_t::request
+                                                  : dispatch_message_kind_t::send,
+                                                payload.packet_name,
+                                                record.owner,
+                                                std::nullopt,
+                                                inbound.message.correlation_id,
+                                                std::nullopt,
+                                                std::nullopt,
+                                                std::nullopt,
+                                                std::nullopt};
                 });
-                auto scope =
-                  zlink::framework::detail::service_scope_t::create (
-                    _services,
-                    zlink::framework::detail::service_scope_kind_t::
-                      handler_invocation);
+                auto scope = zlink::framework::detail::service_scope_t::create (
+                  _services, zlink::framework::detail::service_scope_kind_t::handler_invocation);
                 if (record.reply_token) {
                     auto reply = _channel_runtime.dispatch_request (
-                      record.owner, {}, payload.packet_name,
-                      scope.provider (), *_serializers, *_handlers,
-                      message, inbound);
+                      record.owner, {}, payload.packet_name, scope.provider (), *_serializers,
+                      *_handlers, message, inbound);
                     if (reply) {
-                        pending_reply.emplace (
-                          protocol::application_payload_t{
-                            payload.packet_name,
-                            std::string (
-                              runtime::messaging::envelope_codec_t::
-                                default_content_type),
-                            reply.value ().to_bytes ()});
+                        pending_reply.emplace (protocol::application_payload_t{
+                          payload.packet_name,
+                          std::string (runtime::messaging::envelope_codec_t::default_content_type),
+                          reply.value ().to_bytes ()});
                     } else {
                         const framework_exception_t error (
-                          reply.error_kind (),
-                          reply.error () != nullptr
-                            ? reply.error ()->what ()
-                            : "ClientServer request handler failed");
+                          reply.error_kind (), reply.error () != nullptr
+                                                 ? reply.error ()->what ()
+                                                 : "ClientServer request handler failed");
                         report_client_server_dispatch_error (
-                          _channel_runtime.dispatch_options_ref (),
-                          record,
-                          payload.packet_name,
-                          dispatch_message_kind_t::request,
-                          dispatch_error_action_t::reply_error,
+                          _channel_runtime.dispatch_options_ref (), record, payload.packet_name,
+                          dispatch_message_kind_t::request, dispatch_error_action_t::reply_error,
                           error);
                         pending_failure_reply = error;
                     }
                 } else {
                     auto result = _channel_runtime.dispatch_send (
-                      record.owner, {}, payload.packet_name,
-                      scope.provider (), *_serializers, *_handlers,
-                      message, inbound);
+                      record.owner, {}, payload.packet_name, scope.provider (), *_serializers,
+                      *_handlers, message, inbound);
                     if (!result) {
-                        const framework_exception_t error (
-                          result.error_kind (),
-                          result.error () != nullptr
-                            ? result.error ()->what ()
-                            : "ClientServer send handler failed");
+                        const framework_exception_t error (result.error_kind (),
+                                                           result.error () != nullptr
+                                                             ? result.error ()->what ()
+                                                             : "ClientServer send handler failed");
                         report_client_server_dispatch_error (
-                          _channel_runtime.dispatch_options_ref (),
-                          record,
-                          payload.packet_name,
-                          dispatch_message_kind_t::send,
-                          dispatch_error_action_t::drop,
-                          error);
+                          _channel_runtime.dispatch_options_ref (), record, payload.packet_name,
+                          dispatch_message_kind_t::send, dispatch_error_action_t::drop, error);
                     } else {
                         flow.trace (message_flow_outcome_t::completed, [&] {
-                            return message_flow_event_t{
-                              message_flow_outcome_t::completed,
-                              dispatch_error_surface_t::channel,
-                              dispatch_message_kind_t::send,
-                              payload.packet_name,
-                              record.owner,
-                              std::nullopt,
-                              inbound.message.correlation_id,
-                              std::nullopt,
-                              std::nullopt,
-                              std::nullopt,
-                              std::nullopt};
+                            return message_flow_event_t{message_flow_outcome_t::completed,
+                                                        dispatch_error_surface_t::channel,
+                                                        dispatch_message_kind_t::send,
+                                                        payload.packet_name,
+                                                        record.owner,
+                                                        std::nullopt,
+                                                        inbound.message.correlation_id,
+                                                        std::nullopt,
+                                                        std::nullopt,
+                                                        std::nullopt,
+                                                        std::nullopt};
                         });
                     }
                 }
             }
             catch (const framework_exception_t &error) {
                 report_client_server_dispatch_error (
-                  _channel_runtime.dispatch_options_ref (),
-                  record,
+                  _channel_runtime.dispatch_options_ref (), record,
                   record.parts.size () > 1 ? "<decoded>" : "<unknown>",
-                  record.reply_token
-                    ? dispatch_message_kind_t::request
-                    : dispatch_message_kind_t::send,
-                  record.reply_token
-                    ? dispatch_error_action_t::reply_error
-                    : dispatch_error_action_t::drop,
+                  record.reply_token ? dispatch_message_kind_t::request
+                                     : dispatch_message_kind_t::send,
+                  record.reply_token ? dispatch_error_action_t::reply_error
+                                     : dispatch_error_action_t::drop,
                   error);
                 if (record.reply_token) {
                     pending_reply.reset ();
@@ -1348,19 +1183,15 @@ task_t<void> client_server_location_runtime_t::dispatch_server (
                 }
             }
             catch (const std::exception &error) {
-                const framework_exception_t failure (
-                  framework_error_kind_t::internal_failure,
-                  error.what ());
+                const framework_exception_t failure (framework_error_kind_t::internal_failure,
+                                                     error.what ());
                 report_client_server_dispatch_error (
-                  _channel_runtime.dispatch_options_ref (),
-                  record,
+                  _channel_runtime.dispatch_options_ref (), record,
                   record.parts.size () > 1 ? "<decoded>" : "<unknown>",
-                  record.reply_token
-                    ? dispatch_message_kind_t::request
-                    : dispatch_message_kind_t::send,
-                  record.reply_token
-                    ? dispatch_error_action_t::reply_error
-                    : dispatch_error_action_t::drop,
+                  record.reply_token ? dispatch_message_kind_t::request
+                                     : dispatch_message_kind_t::send,
+                  record.reply_token ? dispatch_error_action_t::reply_error
+                                     : dispatch_error_action_t::drop,
                   failure);
                 if (record.reply_token) {
                     pending_reply.reset ();
@@ -1368,19 +1199,15 @@ task_t<void> client_server_location_runtime_t::dispatch_server (
                 }
             }
             catch (...) {
-                const framework_exception_t failure (
-                  framework_error_kind_t::internal_failure,
-                  "ClientServer dispatch failed");
+                const framework_exception_t failure (framework_error_kind_t::internal_failure,
+                                                     "ClientServer dispatch failed");
                 report_client_server_dispatch_error (
-                  _channel_runtime.dispatch_options_ref (),
-                  record,
+                  _channel_runtime.dispatch_options_ref (), record,
                   record.parts.size () > 1 ? "<decoded>" : "<unknown>",
-                  record.reply_token
-                    ? dispatch_message_kind_t::request
-                    : dispatch_message_kind_t::send,
-                  record.reply_token
-                    ? dispatch_error_action_t::reply_error
-                    : dispatch_error_action_t::drop,
+                  record.reply_token ? dispatch_message_kind_t::request
+                                     : dispatch_message_kind_t::send,
+                  record.reply_token ? dispatch_error_action_t::reply_error
+                                     : dispatch_error_action_t::drop,
                   failure);
                 if (record.reply_token) {
                     pending_reply.reset ();
@@ -1402,153 +1229,120 @@ task_t<void> client_server_location_runtime_t::dispatch_server (
     }
 }
 
-task_t<void> client_server_location_runtime_t::send (
-  const std::string &channel_name,
-  std::string packet_name,
-  std::string content_type,
-  zlink::message_t message,
-  std::chrono::milliseconds timeout)
+task_t<void> client_server_location_runtime_t::send (const std::string &channel_name,
+                                                     std::string packet_name,
+                                                     std::string content_type,
+                                                     zlink::message_t message,
+                                                     std::chrono::milliseconds timeout)
 {
     const auto effective =
-      timeout > std::chrono::milliseconds::zero ()
-        ? timeout
-        : std::chrono::seconds (1);
+      timeout > std::chrono::milliseconds::zero () ? timeout : std::chrono::seconds (1);
     const auto wait = std::min (
-      effective,
-      std::chrono::duration_cast<std::chrono::milliseconds> (
-        maximum_ready_wait));
+      effective, std::chrono::duration_cast<std::chrono::milliseconds> (maximum_ready_wait));
     const auto deadline = std::chrono::steady_clock::now () + effective;
-    auto selected = co_await select_ready (
-      channel_name, std::chrono::steady_clock::now () + wait);
+    auto selected = co_await select_ready (channel_name, std::chrono::steady_clock::now () + wait);
     const auto now = std::chrono::steady_clock::now ();
     if (now >= deadline) {
-        throw detail::make_boundary_exception (
-          detail::boundary_error_t::timed_out,
-          "ClientServer send timed out");
+        throw detail::make_boundary_exception (detail::boundary_error_t::timed_out,
+                                               "ClientServer send timed out");
     }
     const auto remaining =
-      std::max (
-        std::chrono::milliseconds (1),
-        std::chrono::duration_cast<std::chrono::milliseconds> (
-          deadline - now));
+      std::max (std::chrono::milliseconds (1),
+                std::chrono::duration_cast<std::chrono::milliseconds> (deadline - now));
     const auto submitted = co_await selected->send (
-      protocol::application_payload_t{
-        std::move (packet_name),
-        std::move (content_type),
-        message.to_bytes ()},
+      protocol::application_payload_t{std::move (packet_name), std::move (content_type),
+                                      message.to_bytes ()},
       remaining);
     if (submitted == zlink::submit_result_t::backpressured) {
-        throw detail::make_boundary_exception (
-          detail::boundary_error_t::timed_out,
-          "ClientServer send timed out");
+        throw detail::make_boundary_exception (detail::boundary_error_t::timed_out,
+                                               "ClientServer send timed out");
     }
     if (submitted != zlink::submit_result_t::ok) {
-        throw runtime::messaging::map_submit_result_exception (
-          submitted, "ClientServer send failed");
+        throw runtime::messaging::map_submit_result_exception (submitted,
+                                                               "ClientServer send failed");
     }
     co_return;
 }
 
 task_t<zlink::message_t>
-client_server_location_runtime_t::request (
-  const std::string &channel_name,
-  std::string packet_name,
-  std::string content_type,
-  zlink::message_t message,
-  std::chrono::milliseconds timeout)
+client_server_location_runtime_t::request (const std::string &channel_name,
+                                           std::string packet_name,
+                                           std::string content_type,
+                                           zlink::message_t message,
+                                           std::chrono::milliseconds timeout)
 {
     const auto effective =
-      timeout > std::chrono::milliseconds::zero ()
-        ? timeout
-        : std::chrono::seconds (30);
+      timeout > std::chrono::milliseconds::zero () ? timeout : std::chrono::seconds (30);
     const auto wait = std::min (
-      effective,
-      std::chrono::duration_cast<std::chrono::milliseconds> (
-        maximum_ready_wait));
-    const auto deadline =
-      std::chrono::steady_clock::now () + effective;
+      effective, std::chrono::duration_cast<std::chrono::milliseconds> (maximum_ready_wait));
+    const auto deadline = std::chrono::steady_clock::now () + effective;
     std::shared_ptr<raw_client_server_client_t> selected;
     try {
-        selected = co_await select_ready (
-          channel_name, std::chrono::steady_clock::now () + wait);
+        selected = co_await select_ready (channel_name, std::chrono::steady_clock::now () + wait);
     }
     catch (const framework_exception_t &error) {
-        co_return detail::result_access_t::failure<zlink::message_t> (
-          error);
+        co_return detail::result_access_t::failure<zlink::message_t> (error);
     }
     const auto now = std::chrono::steady_clock::now ();
     if (now >= deadline) {
         co_return detail::result_access_t::failure<zlink::message_t> (
-          client_server_operation_exception (
-            foundation::operation_terminal_t::timed_out,
-            "ClientServer request"));
+          client_server_operation_exception (foundation::operation_terminal_t::timed_out,
+                                             "ClientServer request"));
     }
     const auto remaining =
-      std::max (
-        std::chrono::milliseconds (1),
-        std::chrono::duration_cast<std::chrono::milliseconds> (
-          deadline - now));
+      std::max (std::chrono::milliseconds (1),
+                std::chrono::duration_cast<std::chrono::milliseconds> (deadline - now));
     const auto completion = co_await selected->request (
-      protocol::application_payload_t{
-        std::move (packet_name),
-        std::move (content_type),
-        message.to_bytes ()},
+      protocol::application_payload_t{std::move (packet_name), std::move (content_type),
+                                      message.to_bytes ()},
       remaining);
-    if (completion.terminal
-        != foundation::operation_terminal_t::completed) {
+    if (completion.terminal != foundation::operation_terminal_t::completed) {
         co_return detail::result_access_t::failure<zlink::message_t> (
-          client_server_operation_exception (
-            completion.terminal, "ClientServer request"));
+          client_server_operation_exception (completion.terminal, "ClientServer request"));
     }
     if (completion.error_code) {
-        const auto error =
-          runtime::messaging::request_failure_mapper_t{}
-            .error_header_exception (
-              *completion.error_code,
-              completion.error_message.value_or (
-                "ClientServer request failed"),
-              "ClientServer request");
-        co_return detail::result_access_t::failure<zlink::message_t> (
-          error);
+        const auto error = runtime::messaging::request_failure_mapper_t{}.error_header_exception (
+          *completion.error_code, completion.error_message.value_or ("ClientServer request failed"),
+          "ClientServer request");
+        co_return detail::result_access_t::failure<zlink::message_t> (error);
     }
     /* The response envelope body is the reply payload as-is. */
     co_return zlink::message_t::from (completion.payload);
 }
 
 task_t<std::shared_ptr<raw_client_server_client_t>>
-client_server_location_runtime_t::select_ready (
-  const std::string &channel_name,
-  std::chrono::steady_clock::time_point deadline)
+client_server_location_runtime_t::select_ready (const std::string &channel_name,
+                                                std::chrono::steady_clock::time_point deadline)
 {
-    auto task = _lane.run ([this, &channel_name, deadline] {
-        auto selected = select_ready_locked (channel_name);
-        if (selected || selected.error_kind () != framework_error_kind_t::not_found
-            || std::chrono::steady_clock::now () >= deadline) {
-            return task_t<std::shared_ptr<raw_client_server_client_t>> (
-              std::move (selected));
-        }
-        auto completion = std::make_shared<detail::task_completion_source_t<
-          std::shared_ptr<raw_client_server_client_t>>> ();
-        auto task = completion->task ();
-        auto waiter = std::make_unique<ready_waiter_t> ();
-        waiter->channel_name = channel_name;
-        waiter->deadline = deadline;
-        waiter->completion = std::move (completion);
-        _ready_waiters.push_back (std::move (waiter));
-        return task;
-    }).get ();
+    auto task =
+      _lane
+        .run ([this, &channel_name, deadline] {
+            auto selected = select_ready_locked (channel_name);
+            if (selected || selected.error_kind () != framework_error_kind_t::not_found
+                || std::chrono::steady_clock::now () >= deadline) {
+                return task_t<std::shared_ptr<raw_client_server_client_t>> (std::move (selected));
+            }
+            auto completion = std::make_shared<
+              detail::task_completion_source_t<std::shared_ptr<raw_client_server_client_t>>> ();
+            auto task = completion->task ();
+            auto waiter = std::make_unique<ready_waiter_t> ();
+            waiter->channel_name = channel_name;
+            waiter->deadline = deadline;
+            waiter->completion = std::move (completion);
+            _ready_waiters.push_back (std::move (waiter));
+            return task;
+        })
+        .get ();
     _wake_timer->signal ();
     return task;
 }
 
 result_t<std::shared_ptr<raw_client_server_client_t>>
-client_server_location_runtime_t::select_ready_locked (
-  const std::string &channel_name)
+client_server_location_runtime_t::select_ready_locked (const std::string &channel_name)
 {
     if (_stop.load (std::memory_order_acquire)) {
         return result_t<std::shared_ptr<raw_client_server_client_t>>::failure (
-          framework_error_kind_t::shutting_down,
-          "ClientServer runtime is stopping");
+          framework_error_kind_t::shutting_down, "ClientServer runtime is stopping");
     }
     const auto channel_it = _clients.find (channel_name);
     if (channel_it == _clients.end ()) {
@@ -1562,14 +1356,11 @@ client_server_location_runtime_t::select_ready_locked (
         channel.selector_candidates.reserve (channel.connections.size ());
         for (auto &[key, connection] : channel.connections) {
             if (!connection.owner->ready ()
-                || connection.descriptor.state
-                     != framework_runtime_state_t::serving
+                || connection.descriptor.state != framework_runtime_state_t::serving
                 || connection.descriptor.weight <= 0)
                 continue;
             channel.selector_candidates.push_back (
-              {key,
-               static_cast<std::uint32_t> (
-                 connection.descriptor.weight),
+              {key, static_cast<std::uint32_t> (connection.descriptor.weight),
                stable_key (connection.descriptor)});
         }
         channel.selector.set_candidates (channel.selector_candidates);
@@ -1578,8 +1369,7 @@ client_server_location_runtime_t::select_ready_locked (
     const auto selected = channel.selector.select ();
     if (!selected) {
         return result_t<std::shared_ptr<raw_client_server_client_t>>::failure (
-          framework_error_kind_t::not_found,
-          "ClientServer has no selectable target snapshot");
+          framework_error_kind_t::not_found, "ClientServer has no selectable target snapshot");
     }
     const auto connection = channel.connections.find (*selected);
     if (connection == channel.connections.end ()) {
@@ -1597,32 +1387,29 @@ void client_server_location_runtime_t::complete_ready_waiters (
 {
     using client_t = std::shared_ptr<raw_client_server_client_t>;
     using completion_t = detail::task_completion_source_t<client_t>;
-    std::vector<std::pair<std::shared_ptr<completion_t>, result_t<client_t>>>
-      completed;
-    completed = _lane.run ([this, now] {
-        std::vector<std::pair<std::shared_ptr<completion_t>, result_t<client_t>>>
-          result;
-        auto write = _ready_waiters.begin ();
-        for (auto read = _ready_waiters.begin ();
-             read != _ready_waiters.end (); ++read) {
-            auto selected = select_ready_locked ((*read)->channel_name);
-            const bool terminal =
-              selected
-              || selected.error_kind ()
-                   != framework_error_kind_t::not_found
-              || now >= (*read)->deadline;
-            if (!terminal) {
-                if (write != read)
-                    *write = std::move (*read);
-                ++write;
-                continue;
+    std::vector<std::pair<std::shared_ptr<completion_t>, result_t<client_t>>> completed;
+    completed =
+      _lane
+        .run ([this, now] {
+            std::vector<std::pair<std::shared_ptr<completion_t>, result_t<client_t>>> result;
+            auto write = _ready_waiters.begin ();
+            for (auto read = _ready_waiters.begin (); read != _ready_waiters.end (); ++read) {
+                auto selected = select_ready_locked ((*read)->channel_name);
+                const bool terminal = selected
+                                      || selected.error_kind () != framework_error_kind_t::not_found
+                                      || now >= (*read)->deadline;
+                if (!terminal) {
+                    if (write != read)
+                        *write = std::move (*read);
+                    ++write;
+                    continue;
+                }
+                result.emplace_back ((*read)->completion, std::move (selected));
             }
-            result.emplace_back (
-              (*read)->completion, std::move (selected));
-        }
-        _ready_waiters.erase (write, _ready_waiters.end ());
-        return result;
-    }).get ();
+            _ready_waiters.erase (write, _ready_waiters.end ());
+            return result;
+        })
+        .get ();
     for (auto &entry : completed)
         entry.first->complete (std::move (entry.second));
 }
@@ -1630,20 +1417,21 @@ void client_server_location_runtime_t::complete_ready_waiters (
 std::optional<std::chrono::steady_clock::time_point>
 client_server_location_runtime_t::next_ready_waiter_deadline () const
 {
-    return _lane.run ([this] {
-        std::optional<std::chrono::steady_clock::time_point> deadline;
-        for (const auto &waiter : _ready_waiters) {
-            if (!deadline || waiter->deadline < *deadline)
-                deadline = waiter->deadline;
-        }
-        return deadline;
-    }).get ();
+    return _lane
+      .run ([this] {
+          std::optional<std::chrono::steady_clock::time_point> deadline;
+          for (const auto &waiter : _ready_waiters) {
+              if (!deadline || waiter->deadline < *deadline)
+                  deadline = waiter->deadline;
+          }
+          return deadline;
+      })
+      .get ();
 }
 
 void client_server_location_runtime_t::stop () noexcept
 {
-    const bool was_stopped =
-      _stop.exchange (true, std::memory_order_acq_rel);
+    const bool was_stopped = _stop.exchange (true, std::memory_order_acq_rel);
     {
         std::lock_guard lock (_descriptor_publish_mutex);
         _descriptor_publish_result = false;
@@ -1662,13 +1450,15 @@ void client_server_location_runtime_t::stop () noexcept
     std::vector<std::string> client_channels;
     bool has_servers = false;
     bool has_clients = false;
-    _lane.run ([this, &client_channels, &has_servers, &has_clients] {
-        client_channels.reserve (_clients.size ());
-        for (const auto &[channel_name, _] : _clients)
-            client_channels.push_back (channel_name);
-        has_servers = !_servers.empty ();
-        has_clients = !_clients.empty ();
-    }).get ();
+    _lane
+      .run ([this, &client_channels, &has_servers, &has_clients] {
+          client_channels.reserve (_clients.size ());
+          for (const auto &[channel_name, _] : _clients)
+              client_channels.push_back (channel_name);
+          has_servers = !_servers.empty ();
+          has_clients = !_clients.empty ();
+      })
+      .get ();
     if (!was_stopped || has_servers || has_clients) {
         stop_clients ();
         stop_servers ();
@@ -1688,15 +1478,17 @@ void client_server_location_runtime_t::stop () noexcept
 void client_server_location_runtime_t::stop_clients () noexcept
 {
     std::vector<std::shared_ptr<raw_client_server_client_t>> clients;
-    _lane.run ([this, &clients] {
-        for (auto &[_, channel] : _clients) {
-            for (auto &[__, connection] : channel->connections)
-                clients.push_back (connection.owner);
-            channel->connections.clear ();
-        }
-        _clients.clear ();
-        _client_pump_snapshot.clear ();
-    }).get ();
+    _lane
+      .run ([this, &clients] {
+          for (auto &[_, channel] : _clients) {
+              for (auto &[__, connection] : channel->connections)
+                  clients.push_back (connection.owner);
+              channel->connections.clear ();
+          }
+          _clients.clear ();
+          _client_pump_snapshot.clear ();
+      })
+      .get ();
     for (auto &client : clients)
         client->close ();
 }
@@ -1704,49 +1496,41 @@ void client_server_location_runtime_t::stop_clients () noexcept
 void client_server_location_runtime_t::stop_servers () noexcept
 {
     std::map<std::string, std::unique_ptr<server_entry_t>> servers;
-    _lane.run ([this, &servers] {
-        servers.swap (_servers);
-        _server_pump_snapshot.clear ();
-    }).get ();
+    _lane
+      .run ([this, &servers] {
+          servers.swap (_servers);
+          _server_pump_snapshot.clear ();
+      })
+      .get ();
     for (auto &[channel_name, server] : servers) {
         if (!server->published_descriptor) {
             server->owner->close ();
             if (_listener_statuses)
-                _listener_statuses->remove (
-                  listener_kind_t::client_server, channel_name);
+                _listener_statuses->remove (listener_kind_t::client_server, channel_name);
             continue;
         }
         try {
             auto admission = server->owner->descriptor ();
-            if (admission.state
-                != mesh::service_node_state_t::draining) {
+            if (admission.state != mesh::service_node_state_t::draining) {
                 ++admission.descriptor_revision;
-                admission.state =
-                  mesh::service_node_state_t::draining;
+                admission.state = mesh::service_node_state_t::draining;
                 admission.weight = 0;
                 auto draining = *server->published_descriptor;
-                draining.descriptor_revision =
-                  admission.descriptor_revision;
-                draining.state =
-                  framework_runtime_state_t::draining;
+                draining.descriptor_revision = admission.descriptor_revision;
+                draining.state = framework_runtime_state_t::draining;
                 draining.weight = 0;
                 const auto written =
-                  _store
-                    ->update_client_server (
-                      draining,
-                      location_write_intent_t::renew)
+                  _store->update_client_server (draining, location_write_intent_t::renew)
                     .result ()
                     .value ();
-                if (written.status
-                    == location_write_status_t::stored)
+                if (written.status == location_write_status_t::stored)
                     server->published_descriptor = std::move (draining);
             }
             (void) _store
-              ->remove_client_server (
-                {server->published_descriptor->channel_name,
-                 server->published_descriptor->server_rid},
-                {server->published_descriptor->owner_id,
-                 server->published_descriptor->lease_generation})
+              ->remove_client_server ({server->published_descriptor->channel_name,
+                                       server->published_descriptor->server_rid},
+                                      {server->published_descriptor->owner_id,
+                                       server->published_descriptor->lease_generation})
               .result ()
               .value ();
         }
@@ -1754,105 +1538,76 @@ void client_server_location_runtime_t::stop_servers () noexcept
         }
         server->owner->close ();
         if (_listener_statuses)
-            _listener_statuses->remove (
-              listener_kind_t::client_server, channel_name);
+            _listener_statuses->remove (listener_kind_t::client_server, channel_name);
     }
 }
 
-std::uint64_t
-client_server_location_runtime_t::make_lifecycle_generation ()
+std::uint64_t client_server_location_runtime_t::make_lifecycle_generation ()
 {
     static std::atomic_uint64_t counter{1};
-    const auto random =
-      (static_cast<std::uint64_t> (std::random_device{} ()) << 32u)
-      ^ static_cast<std::uint64_t> (std::random_device{} ());
-    const auto time = static_cast<std::uint64_t> (
-      std::chrono::steady_clock::now ()
-        .time_since_epoch ()
-        .count ());
-    auto value =
-      (random ^ time ^ counter.fetch_add (1))
-      & static_cast<std::uint64_t> (
-          std::numeric_limits<std::int64_t>::max ());
+    const auto random = (static_cast<std::uint64_t> (std::random_device{}()) << 32u)
+                        ^ static_cast<std::uint64_t> (std::random_device{}());
+    const auto time =
+      static_cast<std::uint64_t> (std::chrono::steady_clock::now ().time_since_epoch ().count ());
+    auto value = (random ^ time ^ counter.fetch_add (1))
+                 & static_cast<std::uint64_t> (std::numeric_limits<std::int64_t>::max ());
     return value == 0 ? 1 : value;
 }
 
-std::uint32_t
-client_server_location_runtime_t::effective_max_message_bytes (
+std::uint32_t client_server_location_runtime_t::effective_max_message_bytes (
   const channel_capability_snapshot_t &capability)
 {
-    if (!capability.max_message_size
-        || capability.max_message_size->bytes () <= 0)
+    if (!capability.max_message_size || capability.max_message_size->bytes () <= 0)
         return default_effective_max_message_bytes;
-    return static_cast<std::uint32_t> (
-      std::min<std::int64_t> (
-        capability.max_message_size->bytes (),
-        std::numeric_limits<std::uint32_t>::max ()));
+    return static_cast<std::uint32_t> (std::min<std::int64_t> (
+      capability.max_message_size->bytes (), std::numeric_limits<std::uint32_t>::max ()));
 }
 
 std::vector<std::uint8_t>
-client_server_location_runtime_t::client_routing_id (
-  const channel_snapshot_t &channel)
+client_server_location_runtime_t::client_routing_id (const channel_snapshot_t &channel)
 {
     if (channel.client.routing_id)
         return channel.client.routing_id->to_bytes ();
-    return zlink::routing_id_t::from (
-             channel.name + ":client:"
-             + std::to_string (make_lifecycle_generation ()))
+    return zlink::routing_id_t::from (channel.name
+                                      + ":client:" + std::to_string (make_lifecycle_generation ()))
       .to_bytes ();
 }
 
 std::vector<std::uint8_t>
-client_server_location_runtime_t::server_routing_id (
-  const channel_snapshot_t &channel)
+client_server_location_runtime_t::server_routing_id (const channel_snapshot_t &channel)
 {
     if (channel.server.routing_id)
         return channel.server.routing_id->to_bytes ();
-    return zlink::routing_id_t::from (
-             channel.name + ":server:"
-             + std::to_string (make_lifecycle_generation ()))
+    return zlink::routing_id_t::from (channel.name
+                                      + ":server:" + std::to_string (make_lifecycle_generation ()))
       .to_bytes ();
 }
 
 protocol::client_server_server_admission_t
-client_server_location_runtime_t::to_admission (
-  const client_server_server_descriptor_t &descriptor,
-  std::uint32_t effective_max_message_bytes)
+client_server_location_runtime_t::to_admission (const client_server_server_descriptor_t &descriptor,
+                                                std::uint32_t effective_max_message_bytes)
 {
     protocol::client_server_server_admission_t admission;
     admission.channel_name = descriptor.channel_name;
-    admission.server_routing_id =
-      descriptor.server_rid.to_bytes ();
-    admission.lifecycle_generation =
-      descriptor.lifecycle_generation;
-    admission.descriptor_revision =
-      descriptor.descriptor_revision;
-    admission.weight = static_cast<std::uint32_t> (
-      descriptor.weight);
-    admission.state =
-      client_server_service_state (descriptor.state);
-    admission.security_identity =
-      descriptor.security_identity;
-    admission.effective_max_message_bytes =
-      effective_max_message_bytes;
+    admission.server_routing_id = descriptor.server_rid.to_bytes ();
+    admission.lifecycle_generation = descriptor.lifecycle_generation;
+    admission.descriptor_revision = descriptor.descriptor_revision;
+    admission.weight = static_cast<std::uint32_t> (descriptor.weight);
+    admission.state = client_server_service_state (descriptor.state);
+    admission.security_identity = descriptor.security_identity;
+    admission.effective_max_message_bytes = effective_max_message_bytes;
     admission.advertised_endpoint = descriptor.endpoint;
     return admission;
 }
 
-client_server_server_descriptor_t
-client_server_location_runtime_t::to_descriptor (
-  const protocol::client_server_server_admission_t &admission,
-  const location_owner_token_t &owner)
+client_server_server_descriptor_t client_server_location_runtime_t::to_descriptor (
+  const protocol::client_server_server_admission_t &admission, const location_owner_token_t &owner)
 {
     return client_server_server_descriptor_t{
       .channel_name = admission.channel_name,
-      .server_rid =
-        zlink::routing_id_t::from (
-          admission.server_routing_id),
-      .lifecycle_generation =
-        admission.lifecycle_generation,
-      .descriptor_revision =
-        admission.descriptor_revision,
+      .server_rid = zlink::routing_id_t::from (admission.server_routing_id),
+      .lifecycle_generation = admission.lifecycle_generation,
+      .descriptor_revision = admission.descriptor_revision,
       .endpoint = admission.advertised_endpoint,
       .weight = static_cast<int> (admission.weight),
       .state = client_server_framework_state (admission.state),
@@ -1864,16 +1619,10 @@ client_server_location_runtime_t::to_descriptor (
 bool client_server_location_runtime_t::owner_is_live (
   const client_server_server_descriptor_t &descriptor) const
 {
-    const auto lease =
-      _leases->read_owner_lease (descriptor.owner_id)
-        .result ()
-        .value ();
-    const auto *found =
-      std::get_if<owner_lease_found_t> (&lease);
-    return found != nullptr
-           && found->token.owner_id == descriptor.owner_id
-           && found->token.lease_generation
-                == descriptor.lease_generation
+    const auto lease = _leases->read_owner_lease (descriptor.owner_id).result ().value ();
+    const auto *found = std::get_if<owner_lease_found_t> (&lease);
+    return found != nullptr && found->token.owner_id == descriptor.owner_id
+           && found->token.lease_generation == descriptor.lease_generation
            && found->lease_expires_at > found->store_now;
 }
 

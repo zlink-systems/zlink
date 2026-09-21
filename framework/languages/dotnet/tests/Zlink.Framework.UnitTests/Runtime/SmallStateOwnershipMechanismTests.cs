@@ -11,7 +11,8 @@ public sealed class SmallStateOwnershipMechanismTests
     {
         var unbound = new List<(string ActorId, string BindingToken)>();
         var registry = new ZLinkActorBoundSessionRegistry(
-            (actorId, bindingToken) => unbound.Add((actorId, bindingToken)));
+            (actorId, bindingToken) => unbound.Add((actorId, bindingToken))
+        );
         var sessionRid = RoutingId.From("session-a");
         var bindingToken = ZLinkActorBoundSessionBindingToken.Native(sessionRid);
 
@@ -31,8 +32,7 @@ public sealed class SmallStateOwnershipMechanismTests
         var admission = new ZLinkActivationConcurrencyAdmission(1, observed.Add);
 
         admission.Acquire("actor-a");
-        var exhausted = Assert.Throws<ZLinkFrameworkException>(
-            () => admission.Acquire("actor-b"));
+        var exhausted = Assert.Throws<ZLinkFrameworkException>(() => admission.Acquire("actor-b"));
         admission.Release();
 
         Assert.Equal(ZLinkFrameworkErrorKind.Unavailable, exhausted.Kind);
@@ -53,15 +53,20 @@ public sealed class SmallStateOwnershipMechanismTests
         membership.Add(actorA);
         membership.Add(actorA);
 
-        Assert.True(membership.TryGetActor(
-            ZLinkActorId.FromBoundary("actor-a", "actorId"), out var resolved));
+        Assert.True(
+            membership.TryGetActor(
+                ZLinkActorId.FromBoundary("actor-a", "actorId"),
+                out var resolved
+            )
+        );
         Assert.Same(actorA, resolved);
         Assert.Equal<IZLinkActor>([actorA, actorB], membership.Snapshot());
         Assert.Throws<InvalidOperationException>(() => membership.Add(new TestActor("actor-a")));
 
         membership.RemoveIfCurrent(actorA);
-        Assert.False(membership.TryGetActor(
-            ZLinkActorId.FromBoundary("actor-a", "actorId"), out _));
+        Assert.False(
+            membership.TryGetActor(ZLinkActorId.FromBoundary("actor-a", "actorId"), out _)
+        );
         Assert.Equal(1, membership.Count);
     }
 }

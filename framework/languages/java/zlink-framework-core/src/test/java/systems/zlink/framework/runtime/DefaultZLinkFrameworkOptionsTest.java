@@ -1,74 +1,67 @@
 package systems.zlink.framework.runtime;
-import systems.zlink.framework.locationprovider.ZLinkLocationStore;
-import systems.zlink.framework.runtime.internal.configuration.ZLinkLegacyTopology;
-import systems.zlink.framework.runtime.mesh.MeshNodeRegistration;
 
-import systems.zlink.framework.runtime.configuration.DefaultZLinkFrameworkOptions;
-import systems.zlink.framework.runtime.host.ZLinkFrameworkRuntime;
-
-import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
-import java.time.Duration;
-import java.util.ArrayList;
-import java.util.List;
-import java.util.concurrent.CompletableFuture;
-import java.util.concurrent.CompletionStage;
-import java.util.concurrent.atomic.AtomicBoolean;
 import org.junit.jupiter.api.Test;
+
 import systems.zlink.contracts.core.RoutingId;
-import systems.zlink.framework.channels.ZLinkPublishMessageContext;
+import systems.zlink.framework.ZLinkHandlerFilter;
+import systems.zlink.framework.ZLinkHandlerFilterContext;
+import systems.zlink.framework.ZLinkHandlerFilterNext;
+import systems.zlink.framework.ZLinkMessageContext;
+import systems.zlink.framework.actors.ZLinkActor;
 import systems.zlink.framework.channels.ZLinkFanoutHandler;
+import systems.zlink.framework.channels.ZLinkPublishMessageContext;
+import systems.zlink.framework.channels.ZLinkRequestHandler;
 import systems.zlink.framework.channels.ZLinkRouteMessageContext;
 import systems.zlink.framework.channels.ZLinkRouteRequestHandler;
 import systems.zlink.framework.channels.ZLinkRouteSendHandler;
-import systems.zlink.framework.channels.ZLinkRequestHandler;
-import systems.zlink.framework.ZLinkMessageContext;
 import systems.zlink.framework.channels.ZLinkSendHandler;
+import systems.zlink.framework.configuration.ZLinkUnhandledDispatchAction;
+import systems.zlink.framework.errors.ZLinkConfigurationException;
 import systems.zlink.framework.handlers.ZLinkHandlerGroup;
 import systems.zlink.framework.handlers.ZLinkPacket;
 import systems.zlink.framework.handlers.ZLinkPublish;
-import systems.zlink.framework.ZLinkHandlerFilter;
-import systems.zlink.framework.ZLinkHandlerFilterContext;
-import systems.zlink.framework.runtime.messaging.ZLinkJsonMessageSerializer;
-import systems.zlink.framework.ZLinkHandlerFilterNext;
-import systems.zlink.framework.ZLinkMessageContext;
-import systems.zlink.framework.configuration.ZLinkUnhandledDispatchAction;
-import systems.zlink.framework.errors.ZLinkConfigurationException;
+import systems.zlink.framework.locationprovider.ZLinkLocationStore;
+import systems.zlink.framework.runtime.configuration.DefaultZLinkFrameworkOptions;
+import systems.zlink.framework.runtime.internal.configuration.ZLinkLegacyTopology;
 import systems.zlink.framework.runtime.internal.locations.ZLinkLocationRepository;
-import systems.zlink.framework.actors.ZLinkActor;
 import systems.zlink.framework.runtime.locations.ZLinkInMemoryLocationStore;
+import systems.zlink.framework.runtime.mesh.MeshNodeRegistration;
+import systems.zlink.framework.runtime.messaging.ZLinkJsonMessageSerializer;
 import systems.zlink.framework.spots.ZLinkSpot;
 import systems.zlink.framework.spots.ZLinkSpotContext;
-import systems.zlink.framework.spots.ZLinkSpotKind;
 import systems.zlink.framework.streams.ZLinkSession;
 import systems.zlink.framework.streams.ZLinkSessionContext;
 import systems.zlink.framework.streams.ZLinkStreamCodec;
 import systems.zlink.framework.streams.ZLinkStreamError;
+
+import java.time.Duration;
+import java.util.List;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CompletionStage;
 
 final class DefaultZLinkFrameworkOptionsTest {
     @Test
     void coreHwmOptionsAreAHostWideSingleContextConfiguration() {
         DefaultZLinkFrameworkOptions options = new DefaultZLinkFrameworkOptions();
 
-        options.configureInboundDispatch().setCoreHwmProfile(
-            systems.zlink.framework.configuration.ZLinkCoreHwmProfile.THROUGHPUT);
         options.configureInboundDispatch()
-            .setCoreHwmMemoryLimitBytes(8L * 1024 * 1024);
-        options.configureInboundDispatch()
-            .setCoreHwmBudgetBytes(4L * 1024 * 1024);
+                .setCoreHwmProfile(
+                        systems.zlink.framework.configuration.ZLinkCoreHwmProfile.THROUGHPUT);
+        options.configureInboundDispatch().setCoreHwmMemoryLimitBytes(8L * 1024 * 1024);
+        options.configureInboundDispatch().setCoreHwmBudgetBytes(4L * 1024 * 1024);
 
         var configured = options.registration().inboundDispatch();
         assertEquals(
-            systems.zlink.framework.configuration.ZLinkCoreHwmProfile.THROUGHPUT,
-            configured.coreHwmProfile());
-        assertEquals(8L * 1024 * 1024,
-            configured.coreHwmMemoryLimitBytes().orElseThrow());
-        assertEquals(4L * 1024 * 1024,
-            configured.coreHwmBudgetBytes().orElseThrow());
+                systems.zlink.framework.configuration.ZLinkCoreHwmProfile.THROUGHPUT,
+                configured.coreHwmProfile());
+        assertEquals(8L * 1024 * 1024, configured.coreHwmMemoryLimitBytes().orElseThrow());
+        assertEquals(4L * 1024 * 1024, configured.coreHwmBudgetBytes().orElseThrow());
     }
 
     @Test
@@ -82,8 +75,7 @@ final class DefaultZLinkFrameworkOptionsTest {
         var mesh = options.registration().meshNodes().getFirst();
         assertEquals("tcp://0.0.0.0:0", mesh.bindEndpoint());
         assertEquals(
-            "tcp://mesh.example.test:43120",
-            mesh.advertisedEndpoint("tcp://0.0.0.0:43120"));
+                "tcp://mesh.example.test:43120", mesh.advertisedEndpoint("tcp://0.0.0.0:43120"));
     }
 
     @Test
@@ -95,81 +87,77 @@ final class DefaultZLinkFrameworkOptionsTest {
 
         var mesh = options.registration().meshNodes().getFirst();
         assertEquals("tcp://0.0.0.0:0", mesh.bindEndpoint());
-        assertEquals(
-            "tcp://127.0.0.1:43120",
-            mesh.advertisedEndpoint("tcp://0.0.0.0:43120"));
+        assertEquals("tcp://127.0.0.1:43120", mesh.advertisedEndpoint("tcp://0.0.0.0:43120"));
     }
 
     @Test
     void applicationVersionAndMaintenanceWaveAreHostWide() {
-        DefaultZLinkFrameworkOptions options =
-            new DefaultZLinkFrameworkOptions();
+        DefaultZLinkFrameworkOptions options = new DefaultZLinkFrameworkOptions();
 
         options.setApplicationVersion(17);
         options.setMaintenanceWave("blue");
 
         assertEquals(17, options.registration().applicationVersion());
-        assertEquals(
-            "blue",
-            options.registration().maintenanceWave().orElseThrow());
+        assertEquals("blue", options.registration().maintenanceWave().orElseThrow());
+        assertThrows(ZLinkConfigurationException.class, () -> options.setApplicationVersion(-1));
         assertThrows(
-            ZLinkConfigurationException.class,
-            () -> options.setApplicationVersion(-1));
-        assertThrows(
-            ZLinkConfigurationException.class,
-            () -> options.setMaintenanceWave("x".repeat(256)));
+                ZLinkConfigurationException.class,
+                () -> options.setMaintenanceWave("x".repeat(256)));
         options.setMaintenanceWave(null);
         assertTrue(options.registration().maintenanceWave().isEmpty());
     }
 
     @Test
     void retireTopologyGateUsesRegistrationRatherThanConnectionState() {
-        DefaultZLinkFrameworkOptions options =
-            new DefaultZLinkFrameworkOptions();
+        DefaultZLinkFrameworkOptions options = new DefaultZLinkFrameworkOptions();
         ZLinkLegacyTopology.addRouteMeshChannel(options, "manual-route")
-            .enableClient("inproc://manual-route");
-        options.addClientServerChannel("manual-client")
-            .client()
-            .connect("inproc://manual-client");
-        options.addFanoutChannel("manual-subscriber")
-            .connect("inproc://manual-subscriber");
+                .enableClient("inproc://manual-route");
+        options.addClientServerChannel("manual-client").client().connect("inproc://manual-client");
+        options.addFanoutChannel("manual-subscriber").connect("inproc://manual-subscriber");
         options.addFanoutChannel("storeless-publisher")
-            .enablePublisher("inproc://storeless-publisher");
+                .enablePublisher("inproc://storeless-publisher");
 
         var channels = options.registration().channels();
-        assertTrue(channels.stream()
-            .filter(value -> value.name().equals("manual-route"))
-            .findFirst().orElseThrow().blocksAutomaticRetire(true));
-        assertTrue(channels.stream()
-            .filter(value -> value.name().equals("manual-client"))
-            .findFirst().orElseThrow().blocksAutomaticRetire(true));
-        assertTrue(channels.stream()
-            .filter(value -> value.name().equals("manual-subscriber"))
-            .findFirst().orElseThrow().blocksAutomaticRetire(true));
-        assertTrue(channels.stream()
-            .filter(value -> value.name().equals("storeless-publisher"))
-            .findFirst().orElseThrow().blocksAutomaticRetire(false));
+        assertTrue(
+                channels.stream()
+                        .filter(value -> value.name().equals("manual-route"))
+                        .findFirst()
+                        .orElseThrow()
+                        .blocksAutomaticRetire(true));
+        assertTrue(
+                channels.stream()
+                        .filter(value -> value.name().equals("manual-client"))
+                        .findFirst()
+                        .orElseThrow()
+                        .blocksAutomaticRetire(true));
+        assertTrue(
+                channels.stream()
+                        .filter(value -> value.name().equals("manual-subscriber"))
+                        .findFirst()
+                        .orElseThrow()
+                        .blocksAutomaticRetire(true));
+        assertTrue(
+                channels.stream()
+                        .filter(value -> value.name().equals("storeless-publisher"))
+                        .findFirst()
+                        .orElseThrow()
+                        .blocksAutomaticRetire(false));
     }
 
     @Test
     void routeMeshBuilderRegistersOneMeshNodeWithChannelsAndPeers() {
         DefaultZLinkFrameworkOptions options = new DefaultZLinkFrameworkOptions();
 
-        var mesh = options.addRouteMesh("game")
-            .listen("inproc://game");
+        var mesh = options.addRouteMesh("game").listen("inproc://game");
         mesh.channelName("orders").server().setWeight(2);
-        mesh.peerConnections().connect(
-            RoutingId.from("game-2"),
-            "inproc://game-2");
+        mesh.peerConnections().connect(RoutingId.from("game-2"), "inproc://game-2");
 
         var registration = options.registration().meshNodes().getFirst();
         registration.validate();
         assertEquals("game", registration.meshName());
         assertEquals("inproc://game", registration.bindEndpoint());
         assertEquals(List.of("orders"), registration.channelNames());
-        assertEquals(
-            RoutingId.from("game-2"),
-            registration.peers().getFirst().expectedRoutingId());
+        assertEquals(RoutingId.from("game-2"), registration.peers().getFirst().expectedRoutingId());
     }
 
     @Test
@@ -178,13 +166,10 @@ final class DefaultZLinkFrameworkOptionsTest {
         var mesh = options.addRouteMesh("game");
 
         assertDoesNotThrow(() -> mesh.channelName("disabled").server().setWeight(0));
-        assertDoesNotThrow(
-            () -> mesh.channelName("maximum").server().setWeight(10_000));
+        assertDoesNotThrow(() -> mesh.channelName("maximum").server().setWeight(10_000));
         mesh.channelName("default").server();
         assertEquals(
-            100,
-            options.registration().meshNodes().getFirst()
-                .channelWeights().get("default"));
+                100, options.registration().meshNodes().getFirst().channelWeights().get("default"));
     }
 
     @Test
@@ -199,8 +184,8 @@ final class DefaultZLinkFrameworkOptionsTest {
         var registration = options.registration().meshNodes().getFirst();
         registration.validate();
         assertEquals(
-            List.of("disabled-server", "outbound"),
-            registration.channelNames().stream().sorted().toList());
+                List.of("disabled-server", "outbound"),
+                registration.channelNames().stream().sorted().toList());
         assertFalse(registration.channelWeights().containsKey("outbound"));
         assertEquals(0, registration.channelWeights().get("disabled-server"));
     }
@@ -211,11 +196,11 @@ final class DefaultZLinkFrameworkOptionsTest {
         var mesh = options.addRouteMesh("game");
 
         assertThrows(
-            ZLinkConfigurationException.class,
-            () -> mesh.channelName("negative").server().setWeight(-1));
+                ZLinkConfigurationException.class,
+                () -> mesh.channelName("negative").server().setWeight(-1));
         assertThrows(
-            ZLinkConfigurationException.class,
-            () -> mesh.channelName("too-large").server().setWeight(10_001));
+                ZLinkConfigurationException.class,
+                () -> mesh.channelName("too-large").server().setWeight(10_001));
     }
 
     @Test
@@ -229,12 +214,8 @@ final class DefaultZLinkFrameworkOptionsTest {
         assertEquals(0, registration.placementWeight());
         assertDoesNotThrow(() -> mesh.setPlacementWeight(10_000));
         assertEquals(10_000, registration.placementWeight());
-        assertThrows(
-            ZLinkConfigurationException.class,
-            () -> mesh.setPlacementWeight(-1));
-        assertThrows(
-            ZLinkConfigurationException.class,
-            () -> mesh.setPlacementWeight(10_001));
+        assertThrows(ZLinkConfigurationException.class, () -> mesh.setPlacementWeight(-1));
+        assertThrows(ZLinkConfigurationException.class, () -> mesh.setPlacementWeight(10_001));
     }
 
     @Test
@@ -242,20 +223,23 @@ final class DefaultZLinkFrameworkOptionsTest {
         DefaultZLinkFrameworkOptions options = new DefaultZLinkFrameworkOptions();
         options.addRouteMesh("game").listen("inproc://game");
 
-        assertThrows(
-            ZLinkConfigurationException.class,
-            () -> options.addRouteMesh("game"));
+        assertThrows(ZLinkConfigurationException.class, () -> options.addRouteMesh("game"));
     }
 
     @Test
     void addClientServerChannelRejectsDuplicateChannelName() {
         DefaultZLinkFrameworkOptions options = new DefaultZLinkFrameworkOptions();
 
-        { var channel = options.addClientServerChannel("profile");  };
+        {
+            var channel = options.addClientServerChannel("profile");
+        }
+        ;
 
         assertThrows(
-            ZLinkConfigurationException.class,
-            () -> { var channel = options.addFanoutChannel("profile");  });
+                ZLinkConfigurationException.class,
+                () -> {
+                    var channel = options.addFanoutChannel("profile");
+                });
     }
 
     @Test
@@ -263,59 +247,66 @@ final class DefaultZLinkFrameworkOptionsTest {
         DefaultZLinkFrameworkOptions options = new DefaultZLinkFrameworkOptions();
 
         assertThrows(
-            ZLinkConfigurationException.class,
-            () -> options.setDefaultRequestTimeout(Duration.ZERO));
+                ZLinkConfigurationException.class,
+                () -> options.setDefaultRequestTimeout(Duration.ZERO));
     }
 
     @Test
     void sessionReplacementCallbackTimeoutDefaultsToThirtySecondsAndRejectsNonPositiveValues() {
         DefaultZLinkFrameworkOptions options = new DefaultZLinkFrameworkOptions();
 
-        assertEquals(
-            Duration.ofMillis(30_000),
-            options.sessionReplacementCallbackTimeout());
+        assertEquals(Duration.ofMillis(30_000), options.sessionReplacementCallbackTimeout());
         options.setSessionReplacementCallbackTimeout(Duration.ofMillis(17));
-        assertEquals(
-            Duration.ofMillis(17),
-            options.sessionReplacementCallbackTimeout());
+        assertEquals(Duration.ofMillis(17), options.sessionReplacementCallbackTimeout());
         assertThrows(
-            ZLinkConfigurationException.class,
-            () -> options.setSessionReplacementCallbackTimeout(Duration.ZERO));
+                ZLinkConfigurationException.class,
+                () -> options.setSessionReplacementCallbackTimeout(Duration.ZERO));
         assertThrows(
-            ZLinkConfigurationException.class,
-            () -> options.setSessionReplacementCallbackTimeout(Duration.ofMillis(-1)));
+                ZLinkConfigurationException.class,
+                () -> options.setSessionReplacementCallbackTimeout(Duration.ofMillis(-1)));
     }
 
     @Test
     void globalConfigurationMutatesRegistrationModel() {
         DefaultZLinkFrameworkOptions options = new DefaultZLinkFrameworkOptions();
 
-        options.codecs().use(codecs ->
-            codecs.addSerializer("application/x-test", new ZLinkJsonMessageSerializer()));
+        options.codecs()
+                .use(
+                        codecs ->
+                                codecs.addSerializer(
+                                        "application/x-test", new ZLinkJsonMessageSerializer()));
         options.addHandlersFromPackageOf(DefaultZLinkFrameworkOptionsTest.class);
-        { var metadata = options.configureMetadata();
-            metadata.allowSessionToActor("session-trace")
-                .allowActorToSession("actor-trace"); };
+        {
+            var metadata = options.configureMetadata();
+            metadata.allowSessionToActor("session-trace").allowActorToSession("actor-trace");
+        }
+        ;
         options.useFilter(TestFilter.class);
         options.configureDispatch().traceSampleRate(0.25d);
 
         assertTrue(options.registration().codecs().serializers().containsKey("application/x-test"));
-        assertTrue(options.registration().handlerPackageMarkers()
-            .contains(DefaultZLinkFrameworkOptionsTest.class));
-        assertTrue(options.registration().metadataPolicy().sessionToActorKeys()
-            .contains("session-trace"));
-        assertTrue(options.registration().metadataPolicy().actorToSessionKeys()
-            .contains("actor-trace"));
+        assertTrue(
+                options.registration()
+                        .handlerPackageMarkers()
+                        .contains(DefaultZLinkFrameworkOptionsTest.class));
+        assertTrue(
+                options.registration()
+                        .metadataPolicy()
+                        .sessionToActorKeys()
+                        .contains("session-trace"));
+        assertTrue(
+                options.registration()
+                        .metadataPolicy()
+                        .actorToSessionKeys()
+                        .contains("actor-trace"));
         assertTrue(options.registration().filters().contains(TestFilter.class));
-        assertEquals(0.25d,
-            options.registration().dispatchOptions().diagnostics().sampleRate());
+        assertEquals(0.25d, options.registration().dispatchOptions().diagnostics().sampleRate());
     }
 
     @Test
     void locationStoreConfigurationMutatesRegistrationModel() {
         DefaultZLinkFrameworkOptions instance = new DefaultZLinkFrameworkOptions();
-        ZLinkLocationStore store =
-            new ZLinkInMemoryLocationStore();
+        ZLinkLocationStore store = new ZLinkInMemoryLocationStore();
         instance.addLocationStore(store);
         assertEquals(store, instance.registration().locations().storeInstance());
     }
@@ -324,25 +315,38 @@ final class DefaultZLinkFrameworkOptionsTest {
     void singleRegisteredSerializerProvidesDefaultStreamCodec() {
         DefaultZLinkFrameworkOptions options = new DefaultZLinkFrameworkOptions();
 
-        options.codecs().use(codecs -> {
-            codecs.addSerializer("application/x-test", new ZLinkJsonMessageSerializer(), ignored -> true);
-            codecs.addStreamCodec("application/x-test", ZLinkStreamCodec.PROTOBUF);
-        });
+        options.codecs()
+                .use(
+                        codecs -> {
+                            codecs.addSerializer(
+                                    "application/x-test",
+                                    new ZLinkJsonMessageSerializer(),
+                                    ignored -> true);
+                            codecs.addStreamCodec("application/x-test", ZLinkStreamCodec.PROTOBUF);
+                        });
 
         assertEquals(
-            ZLinkStreamCodec.PROTOBUF,
-            options.registration().codecs().streamCodecForCustomSerializer().orElseThrow());
+                ZLinkStreamCodec.PROTOBUF,
+                options.registration().codecs().streamCodecForCustomSerializer().orElseThrow());
     }
 
     @Test
     void configureDispatchRejectsReplyErrorForSendAndPublish() {
         DefaultZLinkFrameworkOptions send = new DefaultZLinkFrameworkOptions();
-        { var dispatch = send.configureDispatch(); dispatch.unhandled().setSend(ZLinkUnhandledDispatchAction.REPLY_ERROR); };
+        {
+            var dispatch = send.configureDispatch();
+            dispatch.unhandled().setSend(ZLinkUnhandledDispatchAction.REPLY_ERROR);
+        }
+        ;
 
         assertThrows(ZLinkConfigurationException.class, send::validate);
 
         DefaultZLinkFrameworkOptions publish = new DefaultZLinkFrameworkOptions();
-        { var dispatch = publish.configureDispatch(); dispatch.unhandled().setPublish(ZLinkUnhandledDispatchAction.REPLY_ERROR); };
+        {
+            var dispatch = publish.configureDispatch();
+            dispatch.unhandled().setPublish(ZLinkUnhandledDispatchAction.REPLY_ERROR);
+        }
+        ;
 
         assertThrows(ZLinkConfigurationException.class, publish::validate);
     }
@@ -350,7 +354,11 @@ final class DefaultZLinkFrameworkOptionsTest {
     @Test
     void configureDispatchRejectsInvalidDiagnosticsSampleRate() {
         DefaultZLinkFrameworkOptions options = new DefaultZLinkFrameworkOptions();
-        { var dispatch = options.configureDispatch(); dispatch.traceSampleRate(1.1d); };
+        {
+            var dispatch = options.configureDispatch();
+            dispatch.traceSampleRate(1.1d);
+        }
+        ;
 
         assertThrows(ZLinkConfigurationException.class, options::validate);
     }
@@ -389,11 +397,8 @@ final class DefaultZLinkFrameworkOptionsTest {
         options.addLocationStore(new ZLinkInMemoryLocationStore());
 
         options.addClientServerChannel("orders").client();
-        var server = options.addClientServerChannel("orders")
-            .server()
-            .listen();
-        server.addRequestHandler(
-            EchoHandler.class, String.class, String.class);
+        var server = options.addClientServerChannel("orders").server().listen();
+        server.addRequestHandler(EchoHandler.class, String.class, String.class);
 
         assertDoesNotThrow(options::validate);
         assertEquals(1, options.registration().channels().size());
@@ -404,11 +409,8 @@ final class DefaultZLinkFrameworkOptionsTest {
         DefaultZLinkFrameworkOptions options = new DefaultZLinkFrameworkOptions();
 
         options.addClientServerChannel("orders").client();
-        var server = options.addClientServerChannel("orders")
-            .server()
-            .listen();
-        server.addRequestHandler(
-            EchoHandler.class, String.class, String.class);
+        var server = options.addClientServerChannel("orders").server().listen();
+        server.addRequestHandler(EchoHandler.class, String.class, String.class);
 
         assertDoesNotThrow(options::validate);
         assertEquals(1, options.registration().channels().size());
@@ -417,26 +419,19 @@ final class DefaultZLinkFrameworkOptionsTest {
     @Test
     void clientServerChannelRejectsDuplicateClientRole() {
         DefaultZLinkFrameworkOptions options = new DefaultZLinkFrameworkOptions();
-        options.addClientServerChannel("orders")
-            .client().connect("inproc://orders");
+        options.addClientServerChannel("orders").client().connect("inproc://orders");
         options.addClientServerChannel("orders").client();
 
-        assertThrows(
-            ZLinkConfigurationException.class,
-            options::validate);
+        assertThrows(ZLinkConfigurationException.class, options::validate);
     }
 
     @Test
     void clientServerChannelRejectsDuplicateServerRole() {
         DefaultZLinkFrameworkOptions options = new DefaultZLinkFrameworkOptions();
-        options.addClientServerChannel("orders")
-            .server().listen();
-        options.addClientServerChannel("orders")
-            .server().listen();
+        options.addClientServerChannel("orders").server().listen();
+        options.addClientServerChannel("orders").server().listen();
 
-        assertThrows(
-            ZLinkConfigurationException.class,
-            options::validate);
+        assertThrows(ZLinkConfigurationException.class, options::validate);
     }
 
     @Test
@@ -445,21 +440,23 @@ final class DefaultZLinkFrameworkOptionsTest {
         options.addClientServerChannel("orders");
 
         assertThrows(
-            ZLinkConfigurationException.class,
-            () -> ZLinkLegacyTopology.addRouteMeshChannel(options, "orders"));
+                ZLinkConfigurationException.class,
+                () -> ZLinkLegacyTopology.addRouteMeshChannel(options, "orders"));
     }
 
     @Test
     void clientServerRolesAllowDifferentChannelNames() {
         DefaultZLinkFrameworkOptions options = new DefaultZLinkFrameworkOptions();
-        options.addClientServerChannel("orders").client()
-            .connect("inproc://orders");
-        options.addClientServerChannel("billing").client()
-            .connect("inproc://billing");
-        options.addClientServerChannel("shipping").server().listen()
-            .addRequestHandler(EchoHandler.class, String.class, String.class);
-        options.addClientServerChannel("inventory").server().listen()
-            .addRequestHandler(EchoHandler.class, String.class, String.class);
+        options.addClientServerChannel("orders").client().connect("inproc://orders");
+        options.addClientServerChannel("billing").client().connect("inproc://billing");
+        options.addClientServerChannel("shipping")
+                .server()
+                .listen()
+                .addRequestHandler(EchoHandler.class, String.class, String.class);
+        options.addClientServerChannel("inventory")
+                .server()
+                .listen()
+                .addRequestHandler(EchoHandler.class, String.class, String.class);
 
         assertDoesNotThrow(options::validate);
     }
@@ -468,25 +465,24 @@ final class DefaultZLinkFrameworkOptionsTest {
     void routeMeshAndClientServerChannelNameCollisionIsRejectedInEitherOrder() {
         DefaultZLinkFrameworkOptions routeFirst = new DefaultZLinkFrameworkOptions();
         routeFirst.addRouteMesh("mesh-a").channelName("orders");
-        routeFirst.addClientServerChannel("orders").client()
-            .connect("inproc://orders");
+        routeFirst.addClientServerChannel("orders").client().connect("inproc://orders");
         assertThrows(ZLinkConfigurationException.class, routeFirst::validate);
 
-        DefaultZLinkFrameworkOptions clientServerFirst =
-            new DefaultZLinkFrameworkOptions();
-        clientServerFirst.addClientServerChannel("orders").client()
-            .connect("inproc://orders");
+        DefaultZLinkFrameworkOptions clientServerFirst = new DefaultZLinkFrameworkOptions();
+        clientServerFirst.addClientServerChannel("orders").client().connect("inproc://orders");
         clientServerFirst.addRouteMesh("mesh-a").channelName("orders");
-        assertThrows(
-            ZLinkConfigurationException.class,
-            clientServerFirst::validate);
+        assertThrows(ZLinkConfigurationException.class, clientServerFirst::validate);
     }
 
     @Test
     void routeMeshClientWithManualConnectionDoesNotRequireBindEndpoint() {
         DefaultZLinkFrameworkOptions options = new DefaultZLinkFrameworkOptions();
 
-        { var channel = ZLinkLegacyTopology.addRouteMeshChannel(options, "play"); channel.enableClient("inproc://play-a"); };
+        {
+            var channel = ZLinkLegacyTopology.addRouteMeshChannel(options, "play");
+            channel.enableClient("inproc://play-a");
+        }
+        ;
 
         options.validate();
     }
@@ -495,7 +491,15 @@ final class DefaultZLinkFrameworkOptionsTest {
     void spotPublisherClientUsesSpotMeshPubSubNode() {
         DefaultZLinkFrameworkOptions options = new DefaultZLinkFrameworkOptions();
 
-        { var mesh = ZLinkLegacyTopology.addSpotMesh(options, "game"); { var node = mesh; node.enablePubSub("inproc://publisher");}; };
+        {
+            var mesh = ZLinkLegacyTopology.addSpotMesh(options, "game");
+            {
+                var node = mesh;
+                node.enablePubSub("inproc://publisher");
+            }
+            ;
+        }
+        ;
 
         options.validate();
         assertEquals("game", options.registration().spotNodes().get(0).meshName());
@@ -504,62 +508,104 @@ final class DefaultZLinkFrameworkOptionsTest {
     @Test
     void spotRouterAndPubSubManualConnectionsMutateRegistrationModel() {
         DefaultZLinkFrameworkOptions options = new DefaultZLinkFrameworkOptions();
-        RoutingId nodeRid =
-            RoutingId.from("spot-node-1");
+        RoutingId nodeRid = RoutingId.from("spot-node-1");
 
-        { var mesh = ZLinkLegacyTopology.addSpotMesh(options, "game"); { var node = mesh;
-                node.setRoutingId(nodeRid).enableRouter("inproc://spot-router-bind")
-                    .connectRouter("inproc://spot-router-peer");
+        {
+            var mesh = ZLinkLegacyTopology.addSpotMesh(options, "game");
+            {
+                var node = mesh;
+                node.setRoutingId(nodeRid)
+                        .enableRouter("inproc://spot-router-bind")
+                        .connectRouter("inproc://spot-router-peer");
                 node.enablePubSub("inproc://spot-pub-bind");
-                node.connectPeerPub("inproc://spot-pub-peer"); }; };
+                node.connectPeerPub("inproc://spot-pub-peer");
+            }
+            ;
+        }
+        ;
 
         options.validate();
         assertEquals(nodeRid, options.registration().spotNodes().get(0).nodeRoutingId());
         assertEquals(
-            "inproc://spot-router-peer",
-            options.registration().spotNodes().get(0).routerManualConnections().get(0).endpoint());
+                "inproc://spot-router-peer",
+                options.registration()
+                        .spotNodes()
+                        .get(0)
+                        .routerManualConnections()
+                        .get(0)
+                        .endpoint());
         assertEquals(
-            List.of("inproc://spot-pub-peer"),
-            options.registration().spotNodes().get(0).pubSubManualConnections());
+                List.of("inproc://spot-pub-peer"),
+                options.registration().spotNodes().get(0).pubSubManualConnections());
     }
 
     @Test
     void spotRouterAndPubSubManualConnectionsRejectBlankEndpoint() {
         DefaultZLinkFrameworkOptions router = new DefaultZLinkFrameworkOptions();
-        assertThrows(ZLinkConfigurationException.class, () ->
-            { var mesh = ZLinkLegacyTopology.addSpotMesh(router, "game"); { var node = mesh; node.connectRouter(" "); }; });
+        assertThrows(
+                ZLinkConfigurationException.class,
+                () -> {
+                    var mesh = ZLinkLegacyTopology.addSpotMesh(router, "game");
+                    {
+                        var node = mesh;
+                        node.connectRouter(" ");
+                    }
+                    ;
+                });
 
         DefaultZLinkFrameworkOptions pubSub = new DefaultZLinkFrameworkOptions();
-        assertThrows(ZLinkConfigurationException.class, () ->
-            { var mesh = ZLinkLegacyTopology.addSpotMesh(pubSub, "game"); { var node = mesh; node.connectPeerPub(" "); }; });
+        assertThrows(
+                ZLinkConfigurationException.class,
+                () -> {
+                    var mesh = ZLinkLegacyTopology.addSpotMesh(pubSub, "game");
+                    {
+                        var node = mesh;
+                        node.connectPeerPub(" ");
+                    }
+                    ;
+                });
     }
 
     @Test
     void spotNodeRejectsReplacingRoutingId() {
         DefaultZLinkFrameworkOptions options = new DefaultZLinkFrameworkOptions();
 
-        { var mesh = ZLinkLegacyTopology.addSpotMesh(options, "game"); { var node = mesh; node.setRoutingId(
-                        RoutingId.from("node-a"));
-                assertThrows(ZLinkConfigurationException.class, () -> node.setRoutingId(
-                        RoutingId.from("node-b"))); }; };
+        {
+            var mesh = ZLinkLegacyTopology.addSpotMesh(options, "game");
+            {
+                var node = mesh;
+                node.setRoutingId(RoutingId.from("node-a"));
+                assertThrows(
+                        ZLinkConfigurationException.class,
+                        () -> node.setRoutingId(RoutingId.from("node-b")));
+            }
+            ;
+        }
+        ;
     }
 
     @Test
     void entrySpotIdIsFrameworkIssuedAndStableForTheLifecycle() {
         DefaultZLinkFrameworkOptions options = new DefaultZLinkFrameworkOptions();
 
-        { var mesh = ZLinkLegacyTopology.addSpotMesh(options, "game"); { var node = mesh;
-                node.enableRouter("inproc://entry-router"); }; };
+        {
+            var mesh = ZLinkLegacyTopology.addSpotMesh(options, "game");
+            {
+                var node = mesh;
+                node.enableRouter("inproc://entry-router");
+            }
+            ;
+        }
+        ;
 
         options.validate();
-        String first =
-            options.registration().spotNodes().get(0).entrySpotId();
-        String second =
-            options.registration().spotNodes().get(0).entrySpotId();
+        String first = options.registration().spotNodes().get(0).entrySpotId();
+        String second = options.registration().spotNodes().get(0).entrySpotId();
         assertEquals(first, second);
-        assertTrue(first.matches(
-            "game-entry-[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}"
-                + "-[89ab][0-9a-f]{3}-[0-9a-f]{12}"));
+        assertTrue(
+                first.matches(
+                        "game-entry-[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}"
+                                + "-[89ab][0-9a-f]{3}-[0-9a-f]{12}"));
     }
 
     @Test
@@ -569,22 +615,25 @@ final class DefaultZLinkFrameworkOptionsTest {
         ZLinkLegacyTopology.addSpotMesh(first, "game");
         ZLinkLegacyTopology.addSpotMesh(second, "game");
 
-        assertTrue(!first.registration().spotNodes().get(0).entrySpotId()
-            .equals(second.registration().spotNodes().get(0).entrySpotId()));
+        assertTrue(
+                !first.registration()
+                        .spotNodes()
+                        .get(0)
+                        .entrySpotId()
+                        .equals(second.registration().spotNodes().get(0).entrySpotId()));
     }
 
     @Test
     void objectServerEntrySpotIdUsesConfiguredRoutingIdPrefix() {
-        var registration =
-            new MeshNodeRegistration(
-                "game");
+        var registration = new MeshNodeRegistration("game");
         registration.objects().server();
         registration.setRoutingIdPrefix("host-a");
 
         String entrySpotId = registration.entrySpotId();
-        assertTrue(entrySpotId.matches(
-            "host-a-entry-[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}"
-                + "-[89ab][0-9a-f]{3}-[0-9a-f]{12}"));
+        assertTrue(
+                entrySpotId.matches(
+                        "host-a-entry-[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}"
+                                + "-[89ab][0-9a-f]{3}-[0-9a-f]{12}"));
         assertEquals(entrySpotId, registration.entrySpotId());
     }
 
@@ -610,7 +659,10 @@ final class DefaultZLinkFrameworkOptionsTest {
     void clientServerChannelServerWithoutRequestHandlerIsRejected() {
         DefaultZLinkFrameworkOptions options = new DefaultZLinkFrameworkOptions();
 
-        { var channel = options.addClientServerChannel("profile").server().listen(); };
+        {
+            var channel = options.addClientServerChannel("profile").server().listen();
+        }
+        ;
 
         assertThrows(ZLinkConfigurationException.class, options::validate);
     }
@@ -619,9 +671,12 @@ final class DefaultZLinkFrameworkOptionsTest {
     void clientServerChannelRejectsDuplicateRequestHandlerPacketName() {
         DefaultZLinkFrameworkOptions options = new DefaultZLinkFrameworkOptions();
 
-        { var channel = options.addClientServerChannel("profile").server().listen();
+        {
+            var channel = options.addClientServerChannel("profile").server().listen();
             channel.addRequestHandler(EchoHandler.class, String.class, String.class);
-            channel.addRequestHandler(EchoHandler.class, String.class, String.class); };
+            channel.addRequestHandler(EchoHandler.class, String.class, String.class);
+        }
+        ;
 
         assertThrows(ZLinkConfigurationException.class, options::validate);
     }
@@ -631,24 +686,32 @@ final class DefaultZLinkFrameworkOptionsTest {
         DefaultZLinkFrameworkOptions options = new DefaultZLinkFrameworkOptions();
 
         options.addHandlersFromPackageOf(DefaultZLinkFrameworkOptionsTest.class);
-        { var channel = options.addClientServerChannel("profile").server().listen();
+        {
+            var channel = options.addClientServerChannel("profile").server().listen();
             channel.addHandlerGroup("scanned-request");
-            channel.addRequestHandler(EchoHandler.class, String.class, String.class); };
+            channel.addRequestHandler(EchoHandler.class, String.class, String.class);
+        }
+        ;
 
         ZLinkConfigurationException exception =
-            assertThrows(ZLinkConfigurationException.class, options::validate);
+                assertThrows(ZLinkConfigurationException.class, options::validate);
 
-        assertTrue(exception.getMessage().contains(
-            "duplicate client/server request handler packet name"));
+        assertTrue(
+                exception
+                        .getMessage()
+                        .contains("duplicate client/server request handler packet name"));
     }
 
     @Test
     void clientServerChannelRejectsDuplicateSendHandlerPacketName() {
         DefaultZLinkFrameworkOptions options = new DefaultZLinkFrameworkOptions();
 
-        { var channel = options.addClientServerChannel("profile").server().listen();
+        {
+            var channel = options.addClientServerChannel("profile").server().listen();
             channel.addSendHandler(SendHandler.class, String.class);
-            channel.addSendHandler(SendHandler.class, String.class); };
+            channel.addSendHandler(SendHandler.class, String.class);
+        }
+        ;
 
         assertThrows(ZLinkConfigurationException.class, options::validate);
     }
@@ -657,8 +720,11 @@ final class DefaultZLinkFrameworkOptionsTest {
     void clientServerChannelServerWithOnlySendHandlerIsAccepted() {
         DefaultZLinkFrameworkOptions options = new DefaultZLinkFrameworkOptions();
 
-        { var channel = options.addClientServerChannel("profile").server().listen();
-            channel.addSendHandler(SendHandler.class, String.class); };
+        {
+            var channel = options.addClientServerChannel("profile").server().listen();
+            channel.addSendHandler(SendHandler.class, String.class);
+        }
+        ;
 
         options.validate();
     }
@@ -666,8 +732,12 @@ final class DefaultZLinkFrameworkOptionsTest {
     @Test
     void clientServerChannelServerWithBindIsAccepted() {
         DefaultZLinkFrameworkOptions accepted = new DefaultZLinkFrameworkOptions();
-        { var channel = accepted.addClientServerChannel("profile").server().listen();
-            channel.addRequestHandler(AnnotatedEchoHandler.class, AnnotatedPacket.class, String.class); };
+        {
+            var channel = accepted.addClientServerChannel("profile").server().listen();
+            channel.addRequestHandler(
+                    AnnotatedEchoHandler.class, AnnotatedPacket.class, String.class);
+        }
+        ;
 
         accepted.validate();
     }
@@ -676,8 +746,9 @@ final class DefaultZLinkFrameworkOptionsTest {
     void fanoutChannelPublisherRejectsBlankEndpoint() {
         DefaultZLinkFrameworkOptions options = new DefaultZLinkFrameworkOptions();
 
-        assertThrows(ZLinkConfigurationException.class,
-            () -> options.addFanoutChannel("events").enablePublisher(" "));
+        assertThrows(
+                ZLinkConfigurationException.class,
+                () -> options.addFanoutChannel("events").enablePublisher(" "));
     }
 
     @Test
@@ -685,8 +756,8 @@ final class DefaultZLinkFrameworkOptionsTest {
         DefaultZLinkFrameworkOptions options = new DefaultZLinkFrameworkOptions();
 
         options.addFanoutChannel("events")
-            .setRoutingIdPrefix("events-publisher")
-            .enablePublisher("inproc://events");
+                .setRoutingIdPrefix("events-publisher")
+                .enablePublisher("inproc://events");
 
         assertDoesNotThrow(options::validate);
     }
@@ -695,8 +766,12 @@ final class DefaultZLinkFrameworkOptionsTest {
     void fanoutChannelSubscriberWithoutPeerAcquisitionPathIsRejected() {
         DefaultZLinkFrameworkOptions options = new DefaultZLinkFrameworkOptions();
 
-        { var channel = options.addFanoutChannel("events"); channel.enableSubscriber();
-            channel.addPublishHandler(EventHandler.class, String.class, "Event"); };
+        {
+            var channel = options.addFanoutChannel("events");
+            channel.enableSubscriber();
+            channel.addPublishHandler(EventHandler.class, String.class, "Event");
+        }
+        ;
 
         assertThrows(ZLinkConfigurationException.class, options::validate);
     }
@@ -706,8 +781,12 @@ final class DefaultZLinkFrameworkOptionsTest {
         DefaultZLinkFrameworkOptions options = new DefaultZLinkFrameworkOptions();
 
         options.addLocationStore(new ZLinkInMemoryLocationStore());
-        { var channel = options.addFanoutChannel("events"); channel.enableSubscriber();
-            channel.addPublishHandler(EventHandler.class, String.class, "Event"); };
+        {
+            var channel = options.addFanoutChannel("events");
+            channel.enableSubscriber();
+            channel.addPublishHandler(EventHandler.class, String.class, "Event");
+        }
+        ;
 
         assertDoesNotThrow(options::validate);
     }
@@ -716,8 +795,12 @@ final class DefaultZLinkFrameworkOptionsTest {
     void fanoutChannelSubscriberManualConnectionsAreAcceptedWithoutLocationAutoConnect() {
         DefaultZLinkFrameworkOptions options = new DefaultZLinkFrameworkOptions();
 
-        { var channel = options.addFanoutChannel("events"); channel.connect("inproc://events");
-            channel.addPublishHandler(EventHandler.class, String.class, "Event"); };
+        {
+            var channel = options.addFanoutChannel("events");
+            channel.connect("inproc://events");
+            channel.addPublishHandler(EventHandler.class, String.class, "Event");
+        }
+        ;
 
         assertDoesNotThrow(options::validate);
     }
@@ -727,8 +810,12 @@ final class DefaultZLinkFrameworkOptionsTest {
         DefaultZLinkFrameworkOptions options = new DefaultZLinkFrameworkOptions();
 
         options.addLocationStore(new ZLinkInMemoryLocationStore());
-        { var channel = options.addFanoutChannel("events"); channel.connect("inproc://events");
-            channel.addPublishHandler(EventHandler.class, String.class, "Event"); };
+        {
+            var channel = options.addFanoutChannel("events");
+            channel.connect("inproc://events");
+            channel.addPublishHandler(EventHandler.class, String.class, "Event");
+        }
+        ;
 
         assertDoesNotThrow(options::validate);
     }
@@ -738,15 +825,17 @@ final class DefaultZLinkFrameworkOptionsTest {
         DefaultZLinkFrameworkOptions options = new DefaultZLinkFrameworkOptions();
 
         options.addLocationStore(new ZLinkInMemoryLocationStore());
-        { var channel = options.addFanoutChannel("events"); channel.enableSubscriber();
+        {
+            var channel = options.addFanoutChannel("events");
+            channel.enableSubscriber();
             channel.subscriberConnections().connect("inproc://events");
-            channel.addPublishHandler(EventHandler.class, String.class, "Event"); };
+            channel.addPublishHandler(EventHandler.class, String.class, "Event");
+        }
+        ;
 
-        ZLinkConfigurationException failure = assertThrows(
-            ZLinkConfigurationException.class,
-            options::validate);
-        assertTrue(failure.getMessage().contains(
-            "cannot combine automatic subscriber discovery"));
+        ZLinkConfigurationException failure =
+                assertThrows(ZLinkConfigurationException.class, options::validate);
+        assertTrue(failure.getMessage().contains("cannot combine automatic subscriber discovery"));
     }
 
     @Test
@@ -765,9 +854,13 @@ final class DefaultZLinkFrameworkOptionsTest {
     void fanoutChannelRejectsDuplicatePublishHandlerPacketName() {
         DefaultZLinkFrameworkOptions options = new DefaultZLinkFrameworkOptions();
 
-        { var channel = options.addFanoutChannel("events"); channel.connect("inproc://events");
+        {
+            var channel = options.addFanoutChannel("events");
+            channel.connect("inproc://events");
             channel.addPublishHandler(EventHandler.class, String.class, "Event");
-            channel.addPublishHandler(EventHandler.class, String.class, "Event"); };
+            channel.addPublishHandler(EventHandler.class, String.class, "Event");
+        }
+        ;
 
         assertThrows(ZLinkConfigurationException.class, options::validate);
     }
@@ -777,15 +870,18 @@ final class DefaultZLinkFrameworkOptionsTest {
         DefaultZLinkFrameworkOptions options = new DefaultZLinkFrameworkOptions();
 
         options.addHandlersFromPackageOf(DefaultZLinkFrameworkOptionsTest.class);
-        { var channel = options.addFanoutChannel("events"); channel.connect("inproc://events");
+        {
+            var channel = options.addFanoutChannel("events");
+            channel.connect("inproc://events");
             channel.addHandlerGroup("scanned-publish");
-            channel.addPublishHandler(EventHandler.class, String.class); };
+            channel.addPublishHandler(EventHandler.class, String.class);
+        }
+        ;
 
         ZLinkConfigurationException exception =
-            assertThrows(ZLinkConfigurationException.class, options::validate);
+                assertThrows(ZLinkConfigurationException.class, options::validate);
 
-        assertTrue(exception.getMessage().contains(
-            "duplicate fanout publish handler packet name"));
+        assertTrue(exception.getMessage().contains("duplicate fanout publish handler packet name"));
     }
 
     @Test
@@ -793,8 +889,12 @@ final class DefaultZLinkFrameworkOptionsTest {
         DefaultZLinkFrameworkOptions options = new DefaultZLinkFrameworkOptions();
 
         options.addHandlersFromPackageOf(DefaultZLinkFrameworkOptionsTest.class);
-        { var channel = options.addFanoutChannel("events"); channel.connect("inproc://events");
-            channel.addHandlerGroup("scanned-attributed-publish"); };
+        {
+            var channel = options.addFanoutChannel("events");
+            channel.connect("inproc://events");
+            channel.addHandlerGroup("scanned-attributed-publish");
+        }
+        ;
 
         assertDoesNotThrow(options::validate);
     }
@@ -803,7 +903,10 @@ final class DefaultZLinkFrameworkOptionsTest {
     void routeMeshChannelWithoutBindIsRejected() {
         DefaultZLinkFrameworkOptions options = new DefaultZLinkFrameworkOptions();
 
-        { var channel = ZLinkLegacyTopology.addRouteMeshChannel(options, "route"); };
+        {
+            var channel = ZLinkLegacyTopology.addRouteMeshChannel(options, "route");
+        }
+        ;
 
         assertThrows(ZLinkConfigurationException.class, options::validate);
     }
@@ -812,7 +915,11 @@ final class DefaultZLinkFrameworkOptionsTest {
     void routeMeshChannelWithoutPeerAcquisitionPathIsRejected() {
         DefaultZLinkFrameworkOptions options = new DefaultZLinkFrameworkOptions();
 
-        { var channel = ZLinkLegacyTopology.addRouteMeshChannel(options, "route"); channel.enableClient(); };
+        {
+            var channel = ZLinkLegacyTopology.addRouteMeshChannel(options, "route");
+            channel.enableClient();
+        }
+        ;
 
         assertThrows(ZLinkConfigurationException.class, options::validate);
     }
@@ -822,7 +929,11 @@ final class DefaultZLinkFrameworkOptionsTest {
         DefaultZLinkFrameworkOptions options = new DefaultZLinkFrameworkOptions();
 
         options.addLocationStore(new ZLinkInMemoryLocationStore());
-        { var channel = ZLinkLegacyTopology.addRouteMeshChannel(options, "route"); channel.enableClient(); };
+        {
+            var channel = ZLinkLegacyTopology.addRouteMeshChannel(options, "route");
+            channel.enableClient();
+        }
+        ;
 
         assertDoesNotThrow(options::validate);
     }
@@ -831,8 +942,12 @@ final class DefaultZLinkFrameworkOptionsTest {
     void routeMeshChannelManualConnectionsAreAcceptedWithoutLocationAutoConnect() {
         DefaultZLinkFrameworkOptions options = new DefaultZLinkFrameworkOptions();
 
-        { var channel = ZLinkLegacyTopology.addRouteMeshChannel(options, "route"); channel.enableServer("inproc://route");
-            channel.enableClient("inproc://route-peer"); };
+        {
+            var channel = ZLinkLegacyTopology.addRouteMeshChannel(options, "route");
+            channel.enableServer("inproc://route");
+            channel.enableClient("inproc://route-peer");
+        }
+        ;
 
         assertDoesNotThrow(options::validate);
     }
@@ -841,10 +956,14 @@ final class DefaultZLinkFrameworkOptionsTest {
     void routeMeshChannelRejectsDuplicateRequestHandlerPacketName() {
         DefaultZLinkFrameworkOptions options = new DefaultZLinkFrameworkOptions();
 
-        { var channel = ZLinkLegacyTopology.addRouteMeshChannel(options, "route"); channel.enableServer("inproc://route");
+        {
+            var channel = ZLinkLegacyTopology.addRouteMeshChannel(options, "route");
+            channel.enableServer("inproc://route");
             channel.enableClient("inproc://route-peer");
             channel.addRequestHandler(RouteEchoHandler.class, String.class, String.class, "Echo");
-            channel.addRequestHandler(RouteEchoHandler.class, String.class, String.class, "Echo"); };
+            channel.addRequestHandler(RouteEchoHandler.class, String.class, String.class, "Echo");
+        }
+        ;
 
         assertThrows(ZLinkConfigurationException.class, options::validate);
     }
@@ -854,26 +973,36 @@ final class DefaultZLinkFrameworkOptionsTest {
         DefaultZLinkFrameworkOptions options = new DefaultZLinkFrameworkOptions();
 
         options.addHandlersFromPackageOf(DefaultZLinkFrameworkOptionsTest.class);
-        { var channel = ZLinkLegacyTopology.addRouteMeshChannel(options, "route"); channel.enableServer("inproc://route");
+        {
+            var channel = ZLinkLegacyTopology.addRouteMeshChannel(options, "route");
+            channel.enableServer("inproc://route");
             channel.enableClient("inproc://route");
             channel.addHandlerGroup("scanned-route");
-            channel.addRequestHandler(RouteEchoHandler.class, String.class, String.class); };
+            channel.addRequestHandler(RouteEchoHandler.class, String.class, String.class);
+        }
+        ;
 
         ZLinkConfigurationException exception =
-            assertThrows(ZLinkConfigurationException.class, options::validate);
+                assertThrows(ZLinkConfigurationException.class, options::validate);
 
-        assertTrue(exception.getMessage().contains(
-            "duplicate route mesh request handler packet name"));
+        assertTrue(
+                exception
+                        .getMessage()
+                        .contains("duplicate route mesh request handler packet name"));
     }
 
     @Test
     void routeMeshChannelRejectsDuplicateSendHandlerPacketName() {
         DefaultZLinkFrameworkOptions options = new DefaultZLinkFrameworkOptions();
 
-        { var channel = ZLinkLegacyTopology.addRouteMeshChannel(options, "route"); channel.enableServer("inproc://route");
+        {
+            var channel = ZLinkLegacyTopology.addRouteMeshChannel(options, "route");
+            channel.enableServer("inproc://route");
             channel.enableClient("inproc://route-peer");
             channel.addSendHandler(RouteSendHandler.class, String.class);
-            channel.addSendHandler(RouteSendHandler.class, String.class); };
+            channel.addSendHandler(RouteSendHandler.class, String.class);
+        }
+        ;
 
         assertThrows(ZLinkConfigurationException.class, options::validate);
     }
@@ -882,10 +1011,14 @@ final class DefaultZLinkFrameworkOptionsTest {
     void routeMeshChannelRejectsSendAndRequestWithSamePacketName() {
         DefaultZLinkFrameworkOptions options = new DefaultZLinkFrameworkOptions();
 
-        { var channel = ZLinkLegacyTopology.addRouteMeshChannel(options, "route"); channel.enableServer("inproc://route");
+        {
+            var channel = ZLinkLegacyTopology.addRouteMeshChannel(options, "route");
+            channel.enableServer("inproc://route");
             channel.enableClient("inproc://route-peer");
             channel.addSendHandler(RouteSendHandler.class, String.class, "Notify");
-            channel.addRequestHandler(RouteEchoHandler.class, String.class, String.class, "Notify"); };
+            channel.addRequestHandler(RouteEchoHandler.class, String.class, String.class, "Notify");
+        }
+        ;
 
         assertThrows(ZLinkConfigurationException.class, options::validate);
     }
@@ -895,14 +1028,17 @@ final class DefaultZLinkFrameworkOptionsTest {
         DefaultZLinkFrameworkOptions options = new DefaultZLinkFrameworkOptions();
 
         options.addHandlersFromPackageOf(DefaultZLinkFrameworkOptionsTest.class);
-        { var channel = options.addClientServerChannel("profile").server().listen();
+        {
+            var channel = options.addClientServerChannel("profile").server().listen();
             channel.addHandlerGroup("scanned-request");
-            channel.addHandlerGroup("scanned-request"); };
+            channel.addHandlerGroup("scanned-request");
+        }
+        ;
 
         options.validate();
         assertEquals(
-            List.of("scanned-request"),
-            options.registration().channels().get(0).handlerGroups());
+                List.of("scanned-request"),
+                options.registration().channels().get(0).handlerGroups());
     }
 
     @Test
@@ -910,8 +1046,11 @@ final class DefaultZLinkFrameworkOptionsTest {
         DefaultZLinkFrameworkOptions options = new DefaultZLinkFrameworkOptions();
 
         options.addHandlersFromPackageOf(DefaultZLinkFrameworkOptionsTest.class);
-        { var channel = options.addClientServerChannel("profile").server().listen();
-            channel.addHandlerGroup("missing-group"); };
+        {
+            var channel = options.addClientServerChannel("profile").server().listen();
+            channel.addHandlerGroup("missing-group");
+        }
+        ;
 
         assertThrows(ZLinkConfigurationException.class, options::validate);
     }
@@ -921,8 +1060,12 @@ final class DefaultZLinkFrameworkOptionsTest {
         DefaultZLinkFrameworkOptions options = new DefaultZLinkFrameworkOptions();
 
         options.addHandlersFromPackageOf(DefaultZLinkFrameworkOptionsTest.class);
-        { var channel = options.addFanoutChannel("events"); channel.connect("inproc://events");
-            channel.addHandlerGroup("scanned-request"); };
+        {
+            var channel = options.addFanoutChannel("events");
+            channel.connect("inproc://events");
+            channel.addHandlerGroup("scanned-request");
+        }
+        ;
 
         assertThrows(ZLinkConfigurationException.class, options::validate);
     }
@@ -932,8 +1075,11 @@ final class DefaultZLinkFrameworkOptionsTest {
         DefaultZLinkFrameworkOptions options = new DefaultZLinkFrameworkOptions();
 
         options.addHandlersFromPackageOf(DefaultZLinkFrameworkOptionsTest.class);
-        { var channel = options.addClientServerChannel("profile").server().listen();
-            channel.addHandlerGroup("scanned-request"); };
+        {
+            var channel = options.addClientServerChannel("profile").server().listen();
+            channel.addHandlerGroup("scanned-request");
+        }
+        ;
 
         options.validate();
     }
@@ -943,8 +1089,11 @@ final class DefaultZLinkFrameworkOptionsTest {
         DefaultZLinkFrameworkOptions options = new DefaultZLinkFrameworkOptions();
 
         options.addHandlersFromPackageOf(DefaultZLinkFrameworkOptionsTest.class);
-        { var channel = options.addClientServerChannel("profile").server().listen();
-            channel.addHandlerGroup("scanned-secondary"); };
+        {
+            var channel = options.addClientServerChannel("profile").server().listen();
+            channel.addHandlerGroup("scanned-secondary");
+        }
+        ;
 
         options.validate();
     }
@@ -953,10 +1102,14 @@ final class DefaultZLinkFrameworkOptionsTest {
     void streamNodeRejectsMultipleSessionTypes() {
         DefaultZLinkFrameworkOptions options = new DefaultZLinkFrameworkOptions();
 
-        assertThrows(ZLinkConfigurationException.class, () ->
-            { var stream = options.addStreamNode("gateway"); stream.bind("inproc://gateway");
-                stream.registerSession(GameSession.class);
-                stream.registerSession(GameSession.class); });
+        assertThrows(
+                ZLinkConfigurationException.class,
+                () -> {
+                    var stream = options.addStreamNode("gateway");
+                    stream.bind("inproc://gateway");
+                    stream.registerSession(GameSession.class);
+                    stream.registerSession(GameSession.class);
+                });
     }
 
     @Test
@@ -964,11 +1117,11 @@ final class DefaultZLinkFrameworkOptionsTest {
         DefaultZLinkFrameworkOptions options = new DefaultZLinkFrameworkOptions();
 
         options.addStreamNode("gateway-a")
-            .bind("inproc://gateway-a")
-            .registerSession(GameSession.class);
+                .bind("inproc://gateway-a")
+                .registerSession(GameSession.class);
         options.addStreamNode("gateway-b")
-            .bind("inproc://gateway-b")
-            .registerSession(GameSession.class);
+                .bind("inproc://gateway-b")
+                .registerSession(GameSession.class);
 
         assertThrows(ZLinkConfigurationException.class, options::validate);
     }
@@ -977,12 +1130,20 @@ final class DefaultZLinkFrameworkOptionsTest {
     void streamNodeRejectsBlankTlsServerPaths() {
         DefaultZLinkFrameworkOptions options = new DefaultZLinkFrameworkOptions();
 
-        assertThrows(ZLinkConfigurationException.class, () ->
-            { var stream = options.addStreamNode("gateway"); stream.bind("tls://127.0.0.1:1");
-                stream.setTlsServer("", "server.key"); });
-        assertThrows(ZLinkConfigurationException.class, () ->
-            { var stream = options.addStreamNode("gateway2"); stream.bind("tls://127.0.0.1:2");
-                stream.setTlsServer("server.crt", ""); });
+        assertThrows(
+                ZLinkConfigurationException.class,
+                () -> {
+                    var stream = options.addStreamNode("gateway");
+                    stream.bind("tls://127.0.0.1:1");
+                    stream.setTlsServer("", "server.key");
+                });
+        assertThrows(
+                ZLinkConfigurationException.class,
+                () -> {
+                    var stream = options.addStreamNode("gateway2");
+                    stream.bind("tls://127.0.0.1:2");
+                    stream.setTlsServer("server.crt", "");
+                });
     }
 
     @Test
@@ -990,38 +1151,46 @@ final class DefaultZLinkFrameworkOptionsTest {
         DefaultZLinkFrameworkOptions options = new DefaultZLinkFrameworkOptions();
 
         options.addRouteMesh("game").listen("inproc://play-mesh");
-        { var stream = options.addStreamNode("gateway"); stream.bind("inproc://gateway");
+        {
+            var stream = options.addStreamNode("gateway");
+            stream.bind("inproc://gateway");
             stream.enableActorDispatch();
-            stream.registerSession(GameSession.class); }
+            stream.registerSession(GameSession.class);
+        }
 
         options.validate();
 
         DefaultZLinkFrameworkOptions missing = new DefaultZLinkFrameworkOptions();
-        { var stream = missing.addStreamNode("gateway"); stream.bind("inproc://gateway");
+        {
+            var stream = missing.addStreamNode("gateway");
+            stream.bind("inproc://gateway");
             stream.enableActorDispatch();
-            stream.registerSession(GameSession.class); }
+            stream.registerSession(GameSession.class);
+        }
         assertThrows(ZLinkConfigurationException.class, missing::validate);
     }
 
     @Test
     void actorDispatchStreamsUseTheRootCanonicalSessionSealTimeout() {
         DefaultZLinkFrameworkOptions options = new DefaultZLinkFrameworkOptions();
-        options.configureLocations()
-            .setSessionRelocationSealTimeout(Duration.ofMillis(17));
+        options.configureLocations().setSessionRelocationSealTimeout(Duration.ofMillis(17));
         options.addRouteMesh("game").listen("inproc://play-mesh");
-        { var stream = options.addStreamNode("gateway-a");
+        {
+            var stream = options.addStreamNode("gateway-a");
             stream.bind("inproc://gateway-a");
             stream.enableActorDispatch();
-            stream.registerSession(GameSession.class); }
-        { var stream = options.addStreamNode("gateway-b");
+            stream.registerSession(GameSession.class);
+        }
+        {
+            var stream = options.addStreamNode("gateway-b");
             stream.bind("inproc://gateway-b");
             stream.enableActorDispatch();
-            stream.registerSession(AlternateGameSession.class); }
+            stream.registerSession(AlternateGameSession.class);
+        }
 
         assertDoesNotThrow(options::validate);
         assertEquals(
-            Duration.ofMillis(17),
-            options.configureLocations().sessionRelocationSealTimeout());
+                Duration.ofMillis(17), options.configureLocations().sessionRelocationSealTimeout());
     }
 
     @Test
@@ -1031,11 +1200,13 @@ final class DefaultZLinkFrameworkOptionsTest {
         assertThrows(ZLinkConfigurationException.class, empty::validate);
 
         DefaultZLinkFrameworkOptions routerWithoutBind = new DefaultZLinkFrameworkOptions();
-        ZLinkLegacyTopology.addSpotMesh(routerWithoutBind, "router").connectRouter("inproc://peer-router");
+        ZLinkLegacyTopology.addSpotMesh(routerWithoutBind, "router")
+                .connectRouter("inproc://peer-router");
         assertThrows(ZLinkConfigurationException.class, routerWithoutBind::validate);
 
         DefaultZLinkFrameworkOptions pubSubWithoutBind = new DefaultZLinkFrameworkOptions();
-        ZLinkLegacyTopology.addSpotMesh(pubSubWithoutBind, "pubsub").connectPeerPub("inproc://peer-pub");
+        ZLinkLegacyTopology.addSpotMesh(pubSubWithoutBind, "pubsub")
+                .connectPeerPub("inproc://peer-pub");
         assertThrows(ZLinkConfigurationException.class, pubSubWithoutBind::validate);
     }
 
@@ -1047,15 +1218,13 @@ final class DefaultZLinkFrameworkOptionsTest {
     }
 
     @ZLinkPacket("AnnotatedEcho")
-    public record AnnotatedPacket(String value) {
-    }
+    public record AnnotatedPacket(String value) {}
 
     public static final class AnnotatedEchoHandler
-        implements ZLinkRequestHandler<AnnotatedPacket, String> {
+            implements ZLinkRequestHandler<AnnotatedPacket, String> {
         @Override
         public CompletionStage<String> handle(
-            AnnotatedPacket request,
-            ZLinkMessageContext context) {
+                AnnotatedPacket request, ZLinkMessageContext context) {
             return CompletableFuture.completedFuture(request.value());
         }
     }
@@ -1063,9 +1232,7 @@ final class DefaultZLinkFrameworkOptionsTest {
     @ZLinkHandlerGroup("scanned-publish")
     public static final class EventHandler implements ZLinkFanoutHandler<String> {
         @Override
-        public CompletionStage<Void> handle(
-            String message,
-            ZLinkPublishMessageContext context) {
+        public CompletionStage<Void> handle(String message, ZLinkPublishMessageContext context) {
             return CompletableFuture.completedFuture(null);
         }
     }
@@ -1073,9 +1240,7 @@ final class DefaultZLinkFrameworkOptionsTest {
     @ZLinkHandlerGroup("scanned-attributed-publish")
     public static final class AttributedEventHandler {
         @ZLinkPublish(packetName = "AttributedEvent")
-        public CompletionStage<Void> handle(
-            String message,
-            ZLinkPublishMessageContext context) {
+        public CompletionStage<Void> handle(String message, ZLinkPublishMessageContext context) {
             return CompletableFuture.completedFuture(null);
         }
     }
@@ -1098,7 +1263,7 @@ final class DefaultZLinkFrameworkOptionsTest {
     @ZLinkHandlerGroup("scanned-primary")
     @ZLinkHandlerGroup("scanned-secondary")
     public static final class MultiGroupScannedRequestHandler
-        implements ZLinkRequestHandler<Integer, Integer> {
+            implements ZLinkRequestHandler<Integer, Integer> {
         @Override
         public CompletionStage<Integer> handle(Integer request, ZLinkMessageContext context) {
             return CompletableFuture.completedFuture(request);
@@ -1107,20 +1272,15 @@ final class DefaultZLinkFrameworkOptionsTest {
 
     public static final class RouteSendHandler implements ZLinkRouteSendHandler<String> {
         @Override
-        public CompletionStage<Void> handle(
-            String message,
-            ZLinkRouteMessageContext context) {
+        public CompletionStage<Void> handle(String message, ZLinkRouteMessageContext context) {
             return CompletableFuture.completedFuture(null);
         }
     }
 
     @ZLinkHandlerGroup("scanned-route")
-    public static final class RouteEchoHandler
-        implements ZLinkRouteRequestHandler<String, String> {
+    public static final class RouteEchoHandler implements ZLinkRouteRequestHandler<String, String> {
         @Override
-        public CompletionStage<String> handle(
-            String request,
-            ZLinkRouteMessageContext context) {
+        public CompletionStage<String> handle(String request, ZLinkRouteMessageContext context) {
             return CompletableFuture.completedFuture(request);
         }
     }
@@ -1131,10 +1291,13 @@ final class DefaultZLinkFrameworkOptionsTest {
             return null;
         }
 
-        @Override public CompletionStage<Void> onJoinedActor(ZLinkActor actor) {
+        @Override
+        public CompletionStage<Void> onJoinedActor(ZLinkActor actor) {
             return CompletableFuture.completedFuture(null);
         }
-        @Override public CompletionStage<Void> onLeaveActor(ZLinkActor actor) {
+
+        @Override
+        public CompletionStage<Void> onLeaveActor(ZLinkActor actor) {
             return CompletableFuture.completedFuture(null);
         }
     }
@@ -1142,16 +1305,12 @@ final class DefaultZLinkFrameworkOptionsTest {
     public static final class TestFilter implements ZLinkHandlerFilter {
         @Override
         public <T> CompletionStage<T> invoke(
-            ZLinkHandlerFilterContext context,
-            ZLinkHandlerFilterNext<T> next) {
+                ZLinkHandlerFilterContext context, ZLinkHandlerFilterNext<T> next) {
             return next.invoke();
         }
     }
 
-    abstract static class TestLocationStore implements
-        ZLinkLocationRepository {
-    }
-
+    abstract static class TestLocationStore implements ZLinkLocationRepository {}
 
     public static final class GameSession implements ZLinkSession {
         @Override

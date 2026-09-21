@@ -56,10 +56,9 @@ inline std::string_view trim_ascii_whitespace (std::string_view value) noexcept
 inline std::string lowercase_ascii (std::string_view value)
 {
     std::string result (value);
-    std::transform (result.begin (), result.end (), result.begin (),
-                    [] (unsigned char character) {
-                        return static_cast<char> (std::tolower (character));
-                    });
+    std::transform (result.begin (), result.end (), result.begin (), [] (unsigned char character) {
+        return static_cast<char> (std::tolower (character));
+    });
     return result;
 }
 
@@ -96,8 +95,7 @@ inline std::string strip_trailing_slashes (std::string_view path)
  * authority host (i.e. it contains a ':' and is not already bracketed). */
 inline bool looks_like_bare_ipv6 (std::string_view host) noexcept
 {
-    return !host.empty () && host.front () != '['
-           && host.find (':') != std::string_view::npos;
+    return !host.empty () && host.front () != '[' && host.find (':') != std::string_view::npos;
 }
 
 } // namespace detail

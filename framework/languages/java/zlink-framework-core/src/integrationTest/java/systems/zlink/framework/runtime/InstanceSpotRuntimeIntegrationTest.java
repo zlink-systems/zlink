@@ -1,11 +1,37 @@
 package systems.zlink.framework.runtime;
-import java.util.concurrent.atomic.AtomicReference;
-import systems.zlink.framework.runtime.locations.ZLinkAuthorityKeyCodec;
-import systems.zlink.framework.spots.ZLinkSpotClosingContext;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
+
+import org.junit.jupiter.api.Test;
+
+import systems.zlink.contracts.core.RoutingId;
+import systems.zlink.contracts.core.Zlink;
+import systems.zlink.framework.actors.ZLinkActor;
+import systems.zlink.framework.errors.ZLinkFrameworkErrorKind;
+import systems.zlink.framework.errors.ZLinkFrameworkException;
+import systems.zlink.framework.locationprovider.ZLinkLocationStore;
+import systems.zlink.framework.locationprovider.ZLinkStoreCancellation;
+import systems.zlink.framework.locationprovider.ZLinkStoreDelete;
+import systems.zlink.framework.locationprovider.ZLinkStoreReadResult;
+import systems.zlink.framework.locationprovider.ZLinkStoreScanRequest;
+import systems.zlink.framework.locationprovider.ZLinkStoreScanResult;
+import systems.zlink.framework.locationprovider.ZLinkStoreWriteRequest;
+import systems.zlink.framework.locationprovider.ZLinkStoreWriteResult;
+import systems.zlink.framework.runtime.binding.ZLinkJavaBackendAdapterFactory;
+import systems.zlink.framework.runtime.configuration.DefaultZLinkFrameworkOptions;
+import systems.zlink.framework.runtime.host.ZLinkFrameworkRuntime;
+import systems.zlink.framework.runtime.locations.ZLinkAuthorityKeyCodec;
+import systems.zlink.framework.runtime.locations.ZLinkInMemoryLocationStore;
+import systems.zlink.framework.spots.ZLinkEntrySpot;
+import systems.zlink.framework.spots.ZLinkEntrySpotContext;
+import systems.zlink.framework.spots.ZLinkInstanceSpot;
+import systems.zlink.framework.spots.ZLinkInstanceSpotContext;
+import systems.zlink.framework.spots.ZLinkSpotCloseReason;
+import systems.zlink.framework.spots.ZLinkSpotClosingContext;
+import systems.zlink.framework.spots.ZLinkSpotPacketHandler;
+import systems.zlink.framework.spots.ZLinkSpotRequestHandler;
 
 import java.io.IOException;
 import java.net.ServerSocket;
@@ -18,36 +44,11 @@ import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
-import org.junit.jupiter.api.Test;
-import systems.zlink.contracts.core.RoutingId;
-import systems.zlink.contracts.core.Zlink;
-import systems.zlink.framework.runtime.binding.ZLinkJavaBackendAdapterFactory;
-import systems.zlink.framework.runtime.configuration.DefaultZLinkFrameworkOptions;
-import systems.zlink.framework.runtime.host.ZLinkFrameworkRuntime;
-import systems.zlink.framework.runtime.locations.ZLinkInMemoryLocationStore;
-import systems.zlink.framework.locationprovider.ZLinkLocationStore;
-import systems.zlink.framework.locationprovider.ZLinkStoreCancellation;
-import systems.zlink.framework.locationprovider.ZLinkStoreDelete;
-import systems.zlink.framework.locationprovider.ZLinkStoreReadResult;
-import systems.zlink.framework.locationprovider.ZLinkStoreScanRequest;
-import systems.zlink.framework.locationprovider.ZLinkStoreScanResult;
-import systems.zlink.framework.locationprovider.ZLinkStoreWriteRequest;
-import systems.zlink.framework.locationprovider.ZLinkStoreWriteResult;
-import systems.zlink.framework.errors.ZLinkFrameworkErrorKind;
-import systems.zlink.framework.errors.ZLinkFrameworkException;
-import systems.zlink.framework.spots.ZLinkInstanceSpot;
-import systems.zlink.framework.spots.ZLinkInstanceSpotContext;
-import systems.zlink.framework.spots.ZLinkEntrySpot;
-import systems.zlink.framework.spots.ZLinkEntrySpotContext;
-import systems.zlink.framework.spots.ZLinkSpotCloseReason;
-import systems.zlink.framework.spots.ZLinkSpotRequestHandler;
-import systems.zlink.framework.spots.ZLinkSpotPacketHandler;
-import systems.zlink.framework.actors.ZLinkActor;
+import java.util.concurrent.atomic.AtomicReference;
 
 final class InstanceSpotRuntimeIntegrationTest {
     @Test
-    void publicRequestColdActivatesApplicationInstanceOnRemoteNode()
-        throws Exception {
+    void publicRequestColdActivatesApplicationInstanceOnRemoteNode() throws Exception {
         Zlink.version();
         EchoInstanceSpot.initializations.set(0);
         EchoInstanceSpot.sends.set(0);
@@ -60,30 +61,31 @@ final class InstanceSpotRuntimeIntegrationTest {
 
         var targetOptions = new DefaultZLinkFrameworkOptions();
         targetOptions.addLocationStore(store);
-        targetOptions.configureLocations().setPollingInterval(
-            Duration.ofMillis(20));
+        targetOptions.configureLocations().setPollingInterval(Duration.ofMillis(20));
         var targetNode = targetOptions.addRouteMesh("game");
-        targetNode.listen(targetEndpoint)
-            .setRoutingId(RoutingId.from("instance-target-" + suffix));
-        targetNode.objects().server().addInstanceSpotFactory(
-            "EchoInstance",
-            EchoInstanceSpot.class,
-            factory -> factory.disableRelocation());
+        targetNode.listen(targetEndpoint).setRoutingId(RoutingId.from("instance-target-" + suffix));
+        targetNode
+                .objects()
+                .server()
+                .addInstanceSpotFactory(
+                        "EchoInstance",
+                        EchoInstanceSpot.class,
+                        factory -> factory.disableRelocation());
 
         var sourceOptions = new DefaultZLinkFrameworkOptions();
         sourceOptions.addLocationStore(store);
-        sourceOptions.configureLocations().setPollingInterval(
-            Duration.ofMillis(20));
+        sourceOptions.configureLocations().setPollingInterval(Duration.ofMillis(20));
         var sourceNode = sourceOptions.addRouteMesh("game");
-        sourceNode.listen(sourceEndpoint)
-            .setRoutingId(RoutingId.from("instance-source-" + suffix));
+        sourceNode.listen(sourceEndpoint).setRoutingId(RoutingId.from("instance-source-" + suffix));
         sourceNode.objects().client();
         sourceNode.objects().server().addEntrySpot(SourceEntrySpot.class);
 
-        try (ZLinkFrameworkRuntime target = RuntimeTestSupport.startFramework(
-                 targetOptions, new ZLinkJavaBackendAdapterFactory());
-             ZLinkFrameworkRuntime source = RuntimeTestSupport.startFramework(
-                 sourceOptions, new ZLinkJavaBackendAdapterFactory())) {
+        try (ZLinkFrameworkRuntime target =
+                        RuntimeTestSupport.startFramework(
+                                targetOptions, new ZLinkJavaBackendAdapterFactory());
+                ZLinkFrameworkRuntime source =
+                        RuntimeTestSupport.startFramework(
+                                sourceOptions, new ZLinkJavaBackendAdapterFactory())) {
             SourceEntrySpot.request.set(new Request("echo-" + suffix));
             SourceEntrySpot.start.complete(null);
             String reply = SourceEntrySpot.reply.get();
@@ -96,8 +98,7 @@ final class InstanceSpotRuntimeIntegrationTest {
     }
 
     @Test
-    void authorityMissingIsNotPublishedBeforeLocalInstanceRetires()
-        throws Exception {
+    void authorityMissingIsNotPublishedBeforeLocalInstanceRetires() throws Exception {
         Zlink.version();
         EchoInstanceSpot.initializations.set(0);
         EchoInstanceSpot.generations.clear();
@@ -109,35 +110,39 @@ final class InstanceSpotRuntimeIntegrationTest {
         String spotId = "close-order-" + suffix;
         String sourceEndpoint = tcpEndpoint();
         String targetEndpoint = tcpEndpoint();
-        var store = new GatedDeleteStore(
-            new ZLinkInMemoryLocationStore(), spotId);
+        var store = new GatedDeleteStore(new ZLinkInMemoryLocationStore(), spotId);
 
         var targetOptions = new DefaultZLinkFrameworkOptions();
         targetOptions.addLocationStore(store);
-        targetOptions.configureLocations().setPollingInterval(
-            Duration.ofMillis(20));
+        targetOptions.configureLocations().setPollingInterval(Duration.ofMillis(20));
         var targetNode = targetOptions.addRouteMesh("game");
-        targetNode.listen(targetEndpoint)
-            .setRoutingId(RoutingId.from("close-order-target-" + suffix));
-        targetNode.objects().server().addInstanceSpotFactory(
-            "EchoInstance",
-            EchoInstanceSpot.class,
-            factory -> factory.disableRelocation());
+        targetNode
+                .listen(targetEndpoint)
+                .setRoutingId(RoutingId.from("close-order-target-" + suffix));
+        targetNode
+                .objects()
+                .server()
+                .addInstanceSpotFactory(
+                        "EchoInstance",
+                        EchoInstanceSpot.class,
+                        factory -> factory.disableRelocation());
 
         var sourceOptions = new DefaultZLinkFrameworkOptions();
         sourceOptions.addLocationStore(store);
-        sourceOptions.configureLocations().setPollingInterval(
-            Duration.ofMillis(20));
+        sourceOptions.configureLocations().setPollingInterval(Duration.ofMillis(20));
         var sourceNode = sourceOptions.addRouteMesh("game");
-        sourceNode.listen(sourceEndpoint)
-            .setRoutingId(RoutingId.from("close-order-source-" + suffix));
+        sourceNode
+                .listen(sourceEndpoint)
+                .setRoutingId(RoutingId.from("close-order-source-" + suffix));
         sourceNode.objects().client();
         sourceNode.objects().server().addEntrySpot(SourceEntrySpot.class);
 
-        try (ZLinkFrameworkRuntime target = RuntimeTestSupport.startFramework(
-                 targetOptions, new ZLinkJavaBackendAdapterFactory());
-             ZLinkFrameworkRuntime source = RuntimeTestSupport.startFramework(
-                 sourceOptions, new ZLinkJavaBackendAdapterFactory())) {
+        try (ZLinkFrameworkRuntime target =
+                        RuntimeTestSupport.startFramework(
+                                targetOptions, new ZLinkJavaBackendAdapterFactory());
+                ZLinkFrameworkRuntime source =
+                        RuntimeTestSupport.startFramework(
+                                sourceOptions, new ZLinkJavaBackendAdapterFactory())) {
             try {
                 SourceEntrySpot.request.set(new Request(spotId));
                 SourceEntrySpot.start.complete(null);
@@ -146,13 +151,12 @@ final class InstanceSpotRuntimeIntegrationTest {
                 assertEquals(0, target.activeSpotCount());
                 SourceEntrySpot.afterCloseStart.complete(null);
                 assertEquals(
-                    "echo:hello|echo:again|echo:after-close",
-                    SourceEntrySpot.reply.get(5, TimeUnit.SECONDS));
+                        "echo:hello|echo:again|echo:after-close",
+                        SourceEntrySpot.reply.get(5, TimeUnit.SECONDS));
                 assertEquals(2, EchoInstanceSpot.initializations.get());
                 assertEquals(2, EchoInstanceSpot.generations.size());
                 assertNotEquals(
-                    EchoInstanceSpot.generations.get(0),
-                    EchoInstanceSpot.generations.get(1));
+                        EchoInstanceSpot.generations.get(0), EchoInstanceSpot.generations.get(1));
             } finally {
                 store.releaseDelete.complete(null);
             }
@@ -160,8 +164,7 @@ final class InstanceSpotRuntimeIntegrationTest {
     }
 
     @Test
-    void publicRequestReactivatesInstanceSpotAfterIdleEviction()
-        throws Exception {
+    void publicRequestReactivatesInstanceSpotAfterIdleEviction() throws Exception {
         Zlink.version();
         EchoInstanceSpot.initializations.set(0);
         EchoInstanceSpot.sends.set(0);
@@ -179,39 +182,43 @@ final class InstanceSpotRuntimeIntegrationTest {
 
         var targetOptions = new DefaultZLinkFrameworkOptions();
         targetOptions.addLocationStore(store);
-        targetOptions.configureLocations().setPollingInterval(
-            Duration.ofMillis(20));
+        targetOptions.configureLocations().setPollingInterval(Duration.ofMillis(20));
         var targetNode = targetOptions.addRouteMesh("game");
-        targetNode.listen(targetEndpoint)
-            .setRoutingId(RoutingId.from("instance-idle-target-" + suffix))
-            .setInstanceSpotIdleTimeout(Duration.ofMillis(100));
-        targetNode.objects().server().addInstanceSpotFactory(
-            "EchoInstance",
-            EchoInstanceSpot.class,
-            factory -> factory.disableRelocation());
+        targetNode
+                .listen(targetEndpoint)
+                .setRoutingId(RoutingId.from("instance-idle-target-" + suffix))
+                .setInstanceSpotIdleTimeout(Duration.ofMillis(100));
+        targetNode
+                .objects()
+                .server()
+                .addInstanceSpotFactory(
+                        "EchoInstance",
+                        EchoInstanceSpot.class,
+                        factory -> factory.disableRelocation());
 
         var sourceOptions = new DefaultZLinkFrameworkOptions();
         sourceOptions.addLocationStore(store);
-        sourceOptions.configureLocations().setPollingInterval(
-            Duration.ofMillis(20));
+        sourceOptions.configureLocations().setPollingInterval(Duration.ofMillis(20));
         var sourceNode = sourceOptions.addRouteMesh("game");
-        sourceNode.listen(sourceEndpoint)
-            .setRoutingId(RoutingId.from("instance-idle-source-" + suffix));
+        sourceNode
+                .listen(sourceEndpoint)
+                .setRoutingId(RoutingId.from("instance-idle-source-" + suffix));
         sourceNode.objects().client();
         sourceNode.objects().server().addEntrySpot(IdleSourceEntrySpot.class);
 
-        try (ZLinkFrameworkRuntime target = RuntimeTestSupport.startFramework(
-                 targetOptions, new ZLinkJavaBackendAdapterFactory());
-             ZLinkFrameworkRuntime source = RuntimeTestSupport.startFramework(
-                 sourceOptions, new ZLinkJavaBackendAdapterFactory())) {
+        try (ZLinkFrameworkRuntime target =
+                        RuntimeTestSupport.startFramework(
+                                targetOptions, new ZLinkJavaBackendAdapterFactory());
+                ZLinkFrameworkRuntime source =
+                        RuntimeTestSupport.startFramework(
+                                sourceOptions, new ZLinkJavaBackendAdapterFactory())) {
             IdleSourceEntrySpot.request.set(new Request(spotId));
             IdleSourceEntrySpot.start.complete(null);
             String reply = IdleSourceEntrySpot.reply.get(10, TimeUnit.SECONDS);
 
             assertEquals("echo:hello|echo:after-idle", reply);
             assertEquals(2, EchoInstanceSpot.initializations.get());
-            assertEquals(ZLinkSpotCloseReason.IDLE_EVICTED,
-                EchoInstanceSpot.closeReason.get());
+            assertEquals(ZLinkSpotCloseReason.IDLE_EVICTED, EchoInstanceSpot.closeReason.get());
         }
     }
 
@@ -221,8 +228,7 @@ final class InstanceSpotRuntimeIntegrationTest {
 
     private record CloseInstance() {}
 
-    public static final class SourceEntrySpot
-        implements ZLinkEntrySpot<ZLinkActor> {
+    public static final class SourceEntrySpot implements ZLinkEntrySpot<ZLinkActor> {
         static CompletableFuture<Void> start;
         static CompletableFuture<Void> afterCloseStart;
         static AtomicReference<Request> request;
@@ -240,78 +246,106 @@ final class InstanceSpotRuntimeIntegrationTest {
             reply = new CompletableFuture<>();
         }
 
-        @Override public ZLinkEntrySpotContext context() { return context; }
-        @Override public CompletionStage<Void> onJoinedActor(ZLinkActor actor) {
+        @Override
+        public ZLinkEntrySpotContext context() {
+            return context;
+        }
+
+        @Override
+        public CompletionStage<Void> onJoinedActor(ZLinkActor actor) {
             return CompletableFuture.completedFuture(null);
         }
-        @Override public CompletionStage<Void> onLeaveActor(ZLinkActor actor) {
+
+        @Override
+        public CompletionStage<Void> onLeaveActor(ZLinkActor actor) {
             return CompletableFuture.completedFuture(null);
         }
 
         @Override
         public CompletionStage<Void> onInitialize() {
-            return start.thenCompose(ignored -> {
-                CompletionStage<Void> warmup = context.outbound()
-                    .sendToSpot(request.get().spotId(), new Warmup("warmup"))
-                    .instanceSpot("EchoInstance")
-                    .inMesh("game")
-                    .submit();
-                CompletionStage<String> first = warmup.thenCompose(
-                    sendCompleted -> context.outbound()
-                        .requestToSpot(request.get().spotId(), "hello")
-                        .instanceSpot("EchoInstance")
-                        .inMesh("game")
-                        .timeout(Duration.ofSeconds(5))
-                        .submit(String.class));
-                CompletionStage<String> firstAndSecond = first.thenCompose(
-                    firstValue -> {
-                        return context.outbound()
-                            .requestToSpot(request.get().spotId(), "again")
-                            .instanceSpot()
-                            .inMesh("game")
-                            .timeout(Duration.ofSeconds(5))
-                            .submit(String.class)
-                            .thenApply(secondValue -> firstValue + "|"
-                                + secondValue);
+            return start.thenCompose(
+                    ignored -> {
+                        CompletionStage<Void> warmup =
+                                context.outbound()
+                                        .sendToSpot(request.get().spotId(), new Warmup("warmup"))
+                                        .instanceSpot("EchoInstance")
+                                        .inMesh("game")
+                                        .submit();
+                        CompletionStage<String> first =
+                                warmup.thenCompose(
+                                        sendCompleted ->
+                                                context.outbound()
+                                                        .requestToSpot(
+                                                                request.get().spotId(), "hello")
+                                                        .instanceSpot("EchoInstance")
+                                                        .inMesh("game")
+                                                        .timeout(Duration.ofSeconds(5))
+                                                        .submit(String.class));
+                        CompletionStage<String> firstAndSecond =
+                                first.thenCompose(
+                                        firstValue -> {
+                                            return context.outbound()
+                                                    .requestToSpot(request.get().spotId(), "again")
+                                                    .instanceSpot()
+                                                    .inMesh("game")
+                                                    .timeout(Duration.ofSeconds(5))
+                                                    .submit(String.class)
+                                                    .thenApply(
+                                                            secondValue ->
+                                                                    firstValue + "|" + secondValue);
+                                        });
+                        CompletionStage<String> beforeAfterClose =
+                                firstAndSecond.thenCompose(
+                                        value -> {
+                                            return context.outbound()
+                                                    .sendToSpot(
+                                                            request.get().spotId(),
+                                                            new CloseInstance())
+                                                    .instanceSpot()
+                                                    .inMesh("game")
+                                                    .submit()
+                                                    .thenApply(ignoredClose -> value);
+                                        });
+                        CompletableFuture<String> completion =
+                                beforeAfterClose
+                                        .thenCompose(
+                                                value ->
+                                                        afterCloseStart.thenCompose(
+                                                                afterCloseAllowed ->
+                                                                        context.outbound()
+                                                                                .requestToSpot(
+                                                                                        request.get()
+                                                                                                .spotId(),
+                                                                                        "after-close")
+                                                                                .instanceSpot()
+                                                                                .inMesh("game")
+                                                                                .timeout(
+                                                                                        Duration
+                                                                                                .ofSeconds(
+                                                                                                        5))
+                                                                                .submit(
+                                                                                        String
+                                                                                                .class)
+                                                                                .thenApply(
+                                                                                        after ->
+                                                                                                value
+                                                                                                        + "|"
+                                                                                                        + after)))
+                                        .toCompletableFuture();
+                        completion.whenComplete(
+                                (value, failure) -> {
+                                    if (failure == null) {
+                                        reply.complete(value);
+                                    } else {
+                                        reply.completeExceptionally(failure);
+                                    }
+                                });
+                        return completion.thenApply(value -> null);
                     });
-                CompletionStage<String> beforeAfterClose =
-                    firstAndSecond.thenCompose(value -> {
-                        return context.outbound()
-                            .sendToSpot(
-                                request.get().spotId(),
-                                new CloseInstance())
-                            .instanceSpot()
-                            .inMesh("game")
-                            .submit()
-                            .thenApply(ignoredClose -> value);
-                    });
-                CompletableFuture<String> completion =
-                    beforeAfterClose.thenCompose(value ->
-                        afterCloseStart.thenCompose(afterCloseAllowed ->
-                            context.outbound()
-                                .requestToSpot(
-                                    request.get().spotId(),
-                                    "after-close")
-                                .instanceSpot()
-                                .inMesh("game")
-                                .timeout(Duration.ofSeconds(5))
-                                .submit(String.class)
-                                .thenApply(after -> value + "|" + after)))
-                        .toCompletableFuture();
-                completion.whenComplete((value, failure) -> {
-                    if (failure == null) {
-                        reply.complete(value);
-                    } else {
-                        reply.completeExceptionally(failure);
-                    }
-                });
-                return completion.thenApply(value -> null);
-            });
         }
     }
 
-    public static final class IdleSourceEntrySpot
-        implements ZLinkEntrySpot<ZLinkActor> {
+    public static final class IdleSourceEntrySpot implements ZLinkEntrySpot<ZLinkActor> {
         static CompletableFuture<Void> start;
         static AtomicReference<Request> request;
         static CompletableFuture<String> reply;
@@ -329,105 +363,138 @@ final class InstanceSpotRuntimeIntegrationTest {
             reply = new CompletableFuture<>();
         }
 
-        @Override public ZLinkEntrySpotContext context() { return context; }
-        @Override public CompletionStage<Void> onJoinedActor(ZLinkActor actor) {
+        @Override
+        public ZLinkEntrySpotContext context() {
+            return context;
+        }
+
+        @Override
+        public CompletionStage<Void> onJoinedActor(ZLinkActor actor) {
             return CompletableFuture.completedFuture(null);
         }
-        @Override public CompletionStage<Void> onLeaveActor(ZLinkActor actor) {
+
+        @Override
+        public CompletionStage<Void> onLeaveActor(ZLinkActor actor) {
             return CompletableFuture.completedFuture(null);
         }
 
         @Override
         public CompletionStage<Void> onInitialize() {
-            return start.thenCompose(ignored ->
-                context.outbound()
-                    .requestToSpot(spotId, "hello")
-                    .instanceSpot("EchoInstance")
-                    .inMesh("game")
-                    .timeout(Duration.ofSeconds(5))
-                    .submit(String.class))
-                .thenCompose(first -> {
-                    long deadline = System.nanoTime()
-                        + Duration.ofSeconds(5).toNanos();
-                    return EchoInstanceSpot.idleEvicted
-                        .thenCompose(ignored -> awaitAuthorityMissing(
-                            store, spotId, deadline))
-                        .thenComposeAsync(ignored -> context.outbound()
-                            .requestToSpot(spotId, "ordinary-after-idle")
-                            .inMesh("game")
-                            .timeout(Duration.ofSeconds(5))
-                            .submit(String.class)
-                            .handle((value, failure) -> {
+            return start.thenCompose(
+                            ignored ->
+                                    context.outbound()
+                                            .requestToSpot(spotId, "hello")
+                                            .instanceSpot("EchoInstance")
+                                            .inMesh("game")
+                                            .timeout(Duration.ofSeconds(5))
+                                            .submit(String.class))
+                    .thenCompose(
+                            first -> {
+                                long deadline = System.nanoTime() + Duration.ofSeconds(5).toNanos();
+                                return EchoInstanceSpot.idleEvicted
+                                        .thenCompose(
+                                                ignored ->
+                                                        awaitAuthorityMissing(
+                                                                store, spotId, deadline))
+                                        .thenComposeAsync(
+                                                ignored ->
+                                                        context.outbound()
+                                                                .requestToSpot(
+                                                                        spotId,
+                                                                        "ordinary-after-idle")
+                                                                .inMesh("game")
+                                                                .timeout(Duration.ofSeconds(5))
+                                                                .submit(String.class)
+                                                                .handle(
+                                                                        (value, failure) -> {
+                                                                            if (failure == null) {
+                                                                                throw new AssertionError(
+                                                                                        "ordinary"
+                                                                                                + " request"
+                                                                                                + " succeeded"
+                                                                                                + " after"
+                                                                                                + " idle"
+                                                                                                + " eviction");
+                                                                            }
+                                                                            Throwable cause =
+                                                                                    unwrap(failure);
+                                                                            assertTrue(
+                                                                                    cause
+                                                                                            instanceof
+                                                                                            ZLinkFrameworkException,
+                                                                                    "ordinary"
+                                                                                            + " request"
+                                                                                            + " failure"
+                                                                                            + " was not"
+                                                                                            + " typed: "
+                                                                                            + cause);
+                                                                            assertEquals(
+                                                                                    ZLinkFrameworkErrorKind
+                                                                                            .NOT_FOUND,
+                                                                                    ((ZLinkFrameworkException)
+                                                                                                    cause)
+                                                                                            .kind());
+                                                                            return (Void) null;
+                                                                        }),
+                                                CompletableFuture.delayedExecutor(
+                                                        1, TimeUnit.MILLISECONDS))
+                                        .thenComposeAsync(
+                                                ignored ->
+                                                        context.outbound()
+                                                                .requestToSpot(spotId, "after-idle")
+                                                                .instanceSpot("EchoInstance")
+                                                                .inMesh("game")
+                                                                .timeout(Duration.ofSeconds(5))
+                                                                .submit(String.class),
+                                                CompletableFuture.delayedExecutor(
+                                                        1, TimeUnit.MILLISECONDS))
+                                        .thenApply(after -> first + "|" + after);
+                            })
+                    .whenComplete(
+                            (value, failure) -> {
                                 if (failure == null) {
-                                    throw new AssertionError(
-                                        "ordinary request succeeded after idle eviction");
+                                    reply.complete(value);
+                                } else {
+                                    reply.completeExceptionally(failure);
                                 }
-                                Throwable cause = unwrap(failure);
-                                assertTrue(cause instanceof ZLinkFrameworkException,
-                                    "ordinary request failure was not typed: "
-                                        + cause);
-                                assertEquals(
-                                    ZLinkFrameworkErrorKind.NOT_FOUND,
-                                    ((ZLinkFrameworkException) cause).kind());
-                                return (Void) null;
-                            }),
-                            CompletableFuture.delayedExecutor(
-                                1, TimeUnit.MILLISECONDS))
-                        .thenComposeAsync(ignored -> context.outbound()
-                                .requestToSpot(spotId, "after-idle")
-                                .instanceSpot("EchoInstance")
-                                .inMesh("game")
-                                .timeout(Duration.ofSeconds(5))
-                                .submit(String.class),
-                            CompletableFuture.delayedExecutor(
-                                1, TimeUnit.MILLISECONDS))
-                        .thenApply(after -> first + "|" + after);
-                })
-                .whenComplete((value, failure) -> {
-                    if (failure == null) {
-                        reply.complete(value);
-                    } else {
-                        reply.completeExceptionally(failure);
-                    }
-                })
-                .thenApply(ignored -> null);
+                            })
+                    .thenApply(ignored -> null);
         }
     }
 
     private static Throwable unwrap(Throwable failure) {
         Throwable cause = failure;
-        while (cause instanceof CompletionException
-            && cause.getCause() != null) {
+        while (cause instanceof CompletionException && cause.getCause() != null) {
             cause = cause.getCause();
         }
         return cause;
     }
 
     private static CompletionStage<Void> awaitAuthorityMissing(
-        ZLinkInMemoryLocationStore store,
-        String spotId,
-        long deadlineNanos) {
-        return store.read(
-                ZLinkAuthorityKeyCodec
-                    .spot(spotId),
-                () -> false)
-            .thenCompose(read -> {
-                if (read instanceof systems.zlink.framework.runtime.internal.locations
-                        .ZLinkAuthorityMissing) {
-                    return CompletableFuture.completedFuture(null);
-                }
-                if (System.nanoTime() >= deadlineNanos) {
-                    return CompletableFuture.failedFuture(
-                        new AssertionError(
-                            "Instance Spot authority was not deleted"));
-                }
-                return CompletableFuture.supplyAsync(
-                        () -> (Void) null,
-                        CompletableFuture.delayedExecutor(
-                            10, TimeUnit.MILLISECONDS))
-                    .thenCompose(ignored -> awaitAuthorityMissing(
-                        store, spotId, deadlineNanos));
-            });
+            ZLinkInMemoryLocationStore store, String spotId, long deadlineNanos) {
+        return store.read(ZLinkAuthorityKeyCodec.spot(spotId), () -> false)
+                .thenCompose(
+                        read -> {
+                            if (read
+                                    instanceof
+                                    systems.zlink.framework.runtime.internal.locations
+                                            .ZLinkAuthorityMissing) {
+                                return CompletableFuture.completedFuture(null);
+                            }
+                            if (System.nanoTime() >= deadlineNanos) {
+                                return CompletableFuture.failedFuture(
+                                        new AssertionError(
+                                                "Instance Spot authority was not deleted"));
+                            }
+                            return CompletableFuture.supplyAsync(
+                                            () -> (Void) null,
+                                            CompletableFuture.delayedExecutor(
+                                                    10, TimeUnit.MILLISECONDS))
+                                    .thenCompose(
+                                            ignored ->
+                                                    awaitAuthorityMissing(
+                                                            store, spotId, deadlineNanos));
+                        });
     }
 
     private static String tcpEndpoint() throws IOException {
@@ -436,53 +503,47 @@ final class InstanceSpotRuntimeIntegrationTest {
         }
     }
 
-    private static final class GatedDeleteStore
-        implements ZLinkLocationStore {
+    private static final class GatedDeleteStore implements ZLinkLocationStore {
         private final ZLinkLocationStore delegate;
         private final String authorityKey;
         private final AtomicBoolean intercepted = new AtomicBoolean();
-        private final CompletableFuture<Void> deleteApplied =
-            new CompletableFuture<>();
-        private final CompletableFuture<Void> releaseDelete =
-            new CompletableFuture<>();
+        private final CompletableFuture<Void> deleteApplied = new CompletableFuture<>();
+        private final CompletableFuture<Void> releaseDelete = new CompletableFuture<>();
 
-        private GatedDeleteStore(
-            ZLinkLocationStore delegate,
-            String spotId) {
+        private GatedDeleteStore(ZLinkLocationStore delegate, String spotId) {
             this.delegate = delegate;
             this.authorityKey = "authority\0spot\0" + spotId;
         }
 
         @Override
         public CompletionStage<ZLinkStoreReadResult> read(
-            systems.zlink.framework.locationprovider.ZLinkStoreKey key,
-            ZLinkStoreCancellation cancellation) {
+                systems.zlink.framework.locationprovider.ZLinkStoreKey key,
+                ZLinkStoreCancellation cancellation) {
             return delegate.read(key, cancellation);
         }
 
         @Override
         public CompletionStage<ZLinkStoreWriteResult> write(
-            ZLinkStoreWriteRequest request,
-            ZLinkStoreCancellation cancellation) {
-            boolean targetDelete = request.mutations().stream()
-                .filter(ZLinkStoreDelete.class::isInstance)
-                .map(ZLinkStoreDelete.class::cast)
-                .anyMatch(delete -> authorityKey.equals(delete.key().value()));
-            CompletionStage<ZLinkStoreWriteResult> applied =
-                delegate.write(request, cancellation);
+                ZLinkStoreWriteRequest request, ZLinkStoreCancellation cancellation) {
+            boolean targetDelete =
+                    request.mutations().stream()
+                            .filter(ZLinkStoreDelete.class::isInstance)
+                            .map(ZLinkStoreDelete.class::cast)
+                            .anyMatch(delete -> authorityKey.equals(delete.key().value()));
+            CompletionStage<ZLinkStoreWriteResult> applied = delegate.write(request, cancellation);
             if (!targetDelete || !intercepted.compareAndSet(false, true)) {
                 return applied;
             }
-            return applied.thenCompose(result -> {
-                deleteApplied.complete(null);
-                return releaseDelete.thenApply(ignored -> result);
-            });
+            return applied.thenCompose(
+                    result -> {
+                        deleteApplied.complete(null);
+                        return releaseDelete.thenApply(ignored -> result);
+                    });
         }
 
         @Override
         public CompletionStage<ZLinkStoreScanResult> scan(
-            ZLinkStoreScanRequest request,
-            ZLinkStoreCancellation cancellation) {
+                ZLinkStoreScanRequest request, ZLinkStoreCancellation cancellation) {
             return delegate.scan(request, cancellation);
         }
     }
@@ -491,19 +552,19 @@ final class InstanceSpotRuntimeIntegrationTest {
         static final AtomicInteger initializations = new AtomicInteger();
         static final List<Long> generations = new CopyOnWriteArrayList<>();
         static final AtomicInteger sends = new AtomicInteger();
-        static final AtomicReference<Boolean> closes =
-            new AtomicReference<>();
-        static final AtomicReference<ZLinkSpotCloseReason>
-            closeReason = new AtomicReference<>();
-        static volatile CompletableFuture<Void> idleEvicted =
-            new CompletableFuture<>();
+        static final AtomicReference<Boolean> closes = new AtomicReference<>();
+        static final AtomicReference<ZLinkSpotCloseReason> closeReason = new AtomicReference<>();
+        static volatile CompletableFuture<Void> idleEvicted = new CompletableFuture<>();
         private final ZLinkInstanceSpotContext context;
 
         public EchoInstanceSpot(ZLinkInstanceSpotContext context) {
             this.context = context;
         }
 
-        @Override public ZLinkInstanceSpotContext context() { return context; }
+        @Override
+        public ZLinkInstanceSpotContext context() {
+            return context;
+        }
 
         @Override
         public void configure() {
@@ -520,8 +581,7 @@ final class InstanceSpotRuntimeIntegrationTest {
         }
 
         @Override
-        public CompletionStage<Void> onClosing(
-            ZLinkSpotClosingContext closing) {
+        public CompletionStage<Void> onClosing(ZLinkSpotClosingContext closing) {
             closeReason.set(closing.reason());
             if (closing.reason() == ZLinkSpotCloseReason.IDLE_EVICTED) {
                 idleEvicted.complete(null);
@@ -531,36 +591,33 @@ final class InstanceSpotRuntimeIntegrationTest {
     }
 
     public static final class EchoHandler
-        implements ZLinkSpotRequestHandler<EchoInstanceSpot, String, String> {
+            implements ZLinkSpotRequestHandler<EchoInstanceSpot, String, String> {
         @Override
-        public CompletionStage<String> handle(
-            EchoInstanceSpot spot,
-            String request) {
+        public CompletionStage<String> handle(EchoInstanceSpot spot, String request) {
             return CompletableFuture.completedFuture("echo:" + request);
         }
     }
 
     public static final class EchoPacketHandler
-        implements ZLinkSpotPacketHandler<EchoInstanceSpot, Warmup> {
+            implements ZLinkSpotPacketHandler<EchoInstanceSpot, Warmup> {
         @Override
-        public CompletionStage<Void> handle(
-            EchoInstanceSpot spot,
-            Warmup request) {
+        public CompletionStage<Void> handle(EchoInstanceSpot spot, Warmup request) {
             EchoInstanceSpot.sends.incrementAndGet();
             return CompletableFuture.completedFuture(null);
         }
     }
 
     public static final class CloseHandler
-        implements ZLinkSpotPacketHandler<EchoInstanceSpot, CloseInstance> {
+            implements ZLinkSpotPacketHandler<EchoInstanceSpot, CloseInstance> {
         @Override
-        public CompletionStage<Void> handle(
-            EchoInstanceSpot spot,
-            CloseInstance request) {
-            return spot.context().close().thenApply(closed -> {
-                EchoInstanceSpot.closes.set(closed);
-                return null;
-            });
+        public CompletionStage<Void> handle(EchoInstanceSpot spot, CloseInstance request) {
+            return spot.context()
+                    .close()
+                    .thenApply(
+                            closed -> {
+                                EchoInstanceSpot.closes.set(closed);
+                                return null;
+                            });
         }
     }
 }

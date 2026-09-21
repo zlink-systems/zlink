@@ -5,63 +5,53 @@ namespace Zlink.Framework.Runtime.Spots;
 
 internal sealed class ZLinkInstanceSpotMonitoring
 {
-    private readonly ConcurrentDictionary<string, Operation> _operations =
-        new(StringComparer.Ordinal);
-    private readonly ConcurrentDictionary<string, Aggregate> _aggregates =
-        new(StringComparer.Ordinal);
+    private readonly ConcurrentDictionary<string, Operation> _operations = new(
+        StringComparer.Ordinal
+    );
+    private readonly ConcurrentDictionary<string, Aggregate> _aggregates = new(
+        StringComparer.Ordinal
+    );
 
     internal async Task<InstanceSpotActivationTerminal> ObserveAsync(
         string operationKey,
         string meshName,
         string stableType,
         ulong pendingBytes,
-        Func<Task<InstanceSpotActivationTerminal>> operation)
+        Func<Task<InstanceSpotActivationTerminal>> operation
+    )
     {
         var selected = _operations.GetOrAdd(
             operationKey,
             _ => new Operation(
                 stableType,
-                ZLinkRuntimeMetrics.StartInstanceSpotActivation(
-                    meshName,
-                    stableType)));
+                ZLinkRuntimeMetrics.StartInstanceSpotActivation(meshName, stableType)
+            )
+        );
         if (!StringComparer.Ordinal.Equals(selected.StableType, stableType))
             throw new InvalidOperationException(
-                $"Instance operation '{operationKey}' changed stable type.");
+                $"Instance operation '{operationKey}' changed stable type."
+            );
 
-        var aggregate = _aggregates.GetOrAdd(
-            stableType,
-            static _ => new Aggregate());
+        var aggregate = _aggregates.GetOrAdd(stableType, static _ => new Aggregate());
         if (selected.TryAccept())
             aggregate.Accept(pendingBytes);
         try
         {
             var terminal = await operation().ConfigureAwait(false);
-            if (_operations.TryRemove(
-                    new KeyValuePair<string, Operation>(
-                        operationKey,
-                        selected)))
+            if (_operations.TryRemove(new KeyValuePair<string, Operation>(operationKey, selected)))
             {
-                var outcome = terminal.Result == RequestResult.Ok
-                    ? "ready"
-                    : "rejected";
-                aggregate.Complete(
-                    pendingBytes,
-                    outcome);
+                var outcome = terminal.Result == RequestResult.Ok ? "ready" : "rejected";
+                aggregate.Complete(pendingBytes, outcome);
                 selected.Metrics.Complete(outcome);
             }
             return terminal;
         }
         catch (Exception exception)
         {
-            if (_operations.TryRemove(
-                    new KeyValuePair<string, Operation>(
-                        operationKey,
-                        selected)))
+            if (_operations.TryRemove(new KeyValuePair<string, Operation>(operationKey, selected)))
             {
                 var outcome = Outcome(exception);
-                aggregate.Complete(
-                    pendingBytes,
-                    outcome);
+                aggregate.Complete(pendingBytes, outcome);
                 selected.Metrics.Complete(outcome);
             }
             throw;
@@ -69,50 +59,36 @@ internal sealed class ZLinkInstanceSpotMonitoring
     }
 
     internal ZLinkInstanceSpotOperationSnapshot Snapshot(string stableType) =>
-        _aggregates.TryGetValue(stableType, out var aggregate)
-            ? aggregate.Snapshot()
-            : default;
+        _aggregates.TryGetValue(stableType, out var aggregate) ? aggregate.Snapshot() : default;
 
     private static string Outcome(Exception exception) =>
         exception switch
         {
             TimeoutException => "timed_out",
             OperationCanceledException => "shutdown",
+            ZLinkFrameworkException { Kind: ZLinkFrameworkErrorKind.DeadlineExceeded } =>
+                "timed_out",
+            ZLinkFrameworkException { Kind: ZLinkFrameworkErrorKind.ShuttingDown } => "shutdown",
+            ZLinkFrameworkException { Kind: ZLinkFrameworkErrorKind.InvalidOperation } => "fenced",
+            ZLinkFrameworkException { Kind: ZLinkFrameworkErrorKind.AlreadyExists } => "conflict",
             ZLinkFrameworkException
             {
-                Kind: ZLinkFrameworkErrorKind.DeadlineExceeded
-            } => "timed_out",
-            ZLinkFrameworkException
-            {
-                Kind: ZLinkFrameworkErrorKind.ShuttingDown
-            } => "shutdown",
-            ZLinkFrameworkException
-            {
-                Kind: ZLinkFrameworkErrorKind.InvalidOperation
-            } => "fenced",
-            ZLinkFrameworkException
-            {
-                Kind: ZLinkFrameworkErrorKind.AlreadyExists
-            } => "conflict",
-            ZLinkFrameworkException
-            {
-                Kind: ZLinkFrameworkErrorKind.InternalFailure
-                or ZLinkFrameworkErrorKind.NotFound
+                Kind: ZLinkFrameworkErrorKind.InternalFailure or ZLinkFrameworkErrorKind.NotFound
             } => "store_failure",
-            _ => "rejected"
+            _ => "rejected",
         };
 
     private sealed class Operation(
         string stableType,
-        ZLinkRuntimeMetrics.ZLinkInstanceSpotMetricOperation metrics)
+        ZLinkRuntimeMetrics.ZLinkInstanceSpotMetricOperation metrics
+    )
     {
         private int _accepted;
 
         internal string StableType { get; } = stableType;
         internal ZLinkRuntimeMetrics.ZLinkInstanceSpotMetricOperation Metrics { get; } = metrics;
 
-        internal bool TryAccept() =>
-            Interlocked.Exchange(ref _accepted, 1) == 0;
+        internal bool TryAccept() => Interlocked.Exchange(ref _accepted, 1) == 0;
     }
 
     private sealed class Aggregate
@@ -137,7 +113,8 @@ internal sealed class ZLinkInstanceSpotMonitoring
             {
                 if (_pendingMessages == 0 || _pendingBytes < bytes)
                     throw new InvalidOperationException(
-                        "Instance monitoring counters became inconsistent.");
+                        "Instance monitoring counters became inconsistent."
+                    );
                 _pendingMessages--;
                 _pendingBytes -= bytes;
                 _lastOutcome = outcome;
@@ -150,7 +127,8 @@ internal sealed class ZLinkInstanceSpotMonitoring
                 return new ZLinkInstanceSpotOperationSnapshot(
                     _pendingMessages,
                     _pendingBytes,
-                    _lastOutcome);
+                    _lastOutcome
+                );
         }
     }
 }
@@ -158,9 +136,11 @@ internal sealed class ZLinkInstanceSpotMonitoring
 internal readonly record struct ZLinkInstanceSpotOperationSnapshot(
     ulong PendingMessageCount,
     ulong PendingByteCount,
-    string? LastActivationOutcome);
+    string? LastActivationOutcome
+);
 
 internal readonly record struct ZLinkInstanceSpotCatalogSnapshot(
     ulong ActiveCount,
     ulong ActivatingCount,
-    ulong ClosingCount);
+    ulong ClosingCount
+);

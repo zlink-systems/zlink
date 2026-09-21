@@ -38,7 +38,19 @@ export interface IZLinkLocationLifecycleRuntime {
     intent: ZLinkLocationWriteIntent,
     signal?: AbortSignal
   ): Promise<ZLinkLocationWriteResult>;
-  removeActor(key: ZLinkActorLocationKey, generation: bigint, signal?: AbortSignal): Promise<ZLinkLocationWriteStatus>;
-  removeSpot(key: ZLinkSpotLocationKey, generation: bigint, signal?: AbortSignal): Promise<ZLinkLocationWriteStatus>;
-  removeRoute(key: ZLinkRouteLocationKey, generation: bigint, signal?: AbortSignal): Promise<ZLinkLocationWriteResult>;
+  removeActor(
+    key: ZLinkActorLocationKey,
+    generation: bigint,
+    signal?: AbortSignal
+  ): Promise<ZLinkLocationWriteStatus>;
+  removeSpot(
+    key: ZLinkSpotLocationKey,
+    generation: bigint,
+    signal?: AbortSignal
+  ): Promise<ZLinkLocationWriteStatus>;
+  removeRoute(
+    key: ZLinkRouteLocationKey,
+    generation: bigint,
+    signal?: AbortSignal
+  ): Promise<ZLinkLocationWriteResult>;
 }

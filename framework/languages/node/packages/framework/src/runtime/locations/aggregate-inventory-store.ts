@@ -1,9 +1,5 @@
 import { createHash, timingSafeEqual } from 'node:crypto';
-import type {
-  ZLinkLocationStore,
-  ZLinkStoreKey,
-  ZLinkStoreReadResult
-} from '../../contracts';
+import type { ZLinkLocationStore, ZLinkStoreKey, ZLinkStoreReadResult } from '../../contracts';
 import type {
   ZLinkAggregateFence,
   ZLinkAggregatePrepareRequest
@@ -65,25 +61,19 @@ interface InventoryTree {
 export class ZLinkAggregateInventoryStore {
   constructor(private readonly provider: ZLinkLocationStore) {}
 
-  async store(
-    request: ZLinkAggregatePrepareRequest,
-    signal?: AbortSignal
-  ): Promise<void> {
+  async store(request: ZLinkAggregatePrepareRequest, signal?: AbortSignal): Promise<void> {
     const fence = aggregateFence(request);
     const tree = buildTree(request);
-    await parallelForEach(tree.pages, WRITE_CONCURRENCY, async page => {
+    await parallelForEach(tree.pages, WRITE_CONCURRENCY, async (page) => {
       const bytes = encode(page);
-      if (page.entries.length > MAX_PAGE_ENTRIES
-        || page.children.length > MAX_PAGE_ENTRIES
-        || bytes.byteLength > MAX_PAGE_BYTES) {
+      if (
+        page.entries.length > MAX_PAGE_ENTRIES ||
+        page.children.length > MAX_PAGE_ENTRIES ||
+        bytes.byteLength > MAX_PAGE_BYTES
+      ) {
         throw new Error('Aggregate inventory page exceeds its encoded bounds.');
       }
-      await putImmutable(
-        this.provider,
-        pageKey(fence, page.level, page.index),
-        bytes,
-        signal
-      );
+      await putImmutable(this.provider, pageKey(fence, page.level, page.index), bytes, signal);
     });
     await putImmutable(this.provider, rootKey(fence), encode(tree.root), signal);
     await this.read(fence, request.inventoryDigest, signal);
@@ -93,13 +83,15 @@ export class ZLinkAggregateInventoryStore {
     fence: ZLinkAggregateFence,
     expectedDeclaredDigest?: Uint8Array,
     signal?: AbortSignal
-  ): Promise<readonly {
-    readonly authorityKey: string;
-    readonly expectedStoreVersion: string;
-    readonly ownerTransition: 'preserve' | 'newOwner';
-    readonly authorityPayloadSha256: string;
-    readonly membershipMutationSha256: string;
-  }[]> {
+  ): Promise<
+    readonly {
+      readonly authorityKey: string;
+      readonly expectedStoreVersion: string;
+      readonly ownerTransition: 'preserve' | 'newOwner';
+      readonly authorityPayloadSha256: string;
+      readonly membershipMutationSha256: string;
+    }[]
+  > {
     const rootBytes = await requireFound(this.provider, rootKey(fence), signal);
     if (rootBytes.byteLength > MAX_PAGE_BYTES) {
       throw dataLost(fence, 'root exceeds 1 MiB');
@@ -107,17 +99,14 @@ export class ZLinkAggregateInventoryStore {
     const root = decodeRoot(rootBytes);
     validateRoot(root, fence);
     if (
-      expectedDeclaredDigest !== undefined
-      && !sameHash(root.declaredDigest, expectedDeclaredDigest)
+      expectedDeclaredDigest !== undefined &&
+      !sameHash(root.declaredDigest, expectedDeclaredDigest)
     ) {
       throw dataLost(fence, 'declared digest does not match');
     }
 
     const entries: InventoryEntry[] = [];
-    const observedPageCounts = Array.from(
-      { length: root.topLevel + 1 },
-      () => 0
-    );
+    const observedPageCounts = Array.from({ length: root.topLevel + 1 }, () => 0);
     const visited = new Set<string>();
     const readPage = async (reference: InventoryReference): Promise<void> => {
       validateReference(reference, root, fence);
@@ -130,32 +119,29 @@ export class ZLinkAggregateInventoryStore {
         signal
       );
       if (
-        bytes.byteLength > MAX_PAGE_BYTES
-        || !sameHash(reference.sha256, createHash('sha256').update(bytes).digest())
+        bytes.byteLength > MAX_PAGE_BYTES ||
+        !sameHash(reference.sha256, createHash('sha256').update(bytes).digest())
       ) {
         throw dataLost(fence, 'page checksum is invalid');
       }
       const page = decodePage(bytes);
       if (
-        page.level !== reference.level
-        || page.index !== reference.index
-        || page.startIndex !== reference.startIndex
-        || page.entryCount !== reference.entryCount
+        page.level !== reference.level ||
+        page.index !== reference.index ||
+        page.startIndex !== reference.startIndex ||
+        page.entryCount !== reference.entryCount
       ) {
         throw dataLost(fence, 'page metadata changed');
       }
-      if (
-        page.entries.length > MAX_PAGE_ENTRIES
-        || page.children.length > MAX_PAGE_ENTRIES
-      ) {
+      if (page.entries.length > MAX_PAGE_ENTRIES || page.children.length > MAX_PAGE_ENTRIES) {
         throw dataLost(fence, 'page entry bound is invalid');
       }
       observedPageCounts[page.level]!++;
       if (page.level === 0) {
         if (
-          page.entries.length < 1
-          || page.children.length !== 0
-          || page.entries.length !== page.entryCount
+          page.entries.length < 1 ||
+          page.children.length !== 0 ||
+          page.entries.length !== page.entryCount
         ) {
           throw dataLost(fence, 'leaf page bounds are invalid');
         }
@@ -185,21 +171,16 @@ export class ZLinkAggregateInventoryStore {
     };
     let expectedStart = 0;
     for (const reference of root.topPages) {
-      if (
-        reference.level !== root.topLevel
-        || reference.startIndex !== expectedStart
-      ) {
+      if (reference.level !== root.topLevel || reference.startIndex !== expectedStart) {
         throw dataLost(fence, 'top page references are reordered');
       }
       await readPage(reference);
       expectedStart += reference.entryCount;
     }
     if (
-      expectedStart !== root.totalCount
-      || entries.length !== root.totalCount
-      || observedPageCounts.some(
-        (count, level) => count !== root.pageCountsByLevel[level]
-      )
+      expectedStart !== root.totalCount ||
+      entries.length !== root.totalCount ||
+      observedPageCounts.some((count, level) => count !== root.pageCountsByLevel[level])
     ) {
       throw dataLost(fence, 'page counts do not match the root');
     }
@@ -220,7 +201,7 @@ export class ZLinkAggregateInventoryStore {
     if (!sameHash(root.digest, digest.digest())) {
       throw dataLost(fence, 'inventory digest does not match');
     }
-    return entries.map(entry => ({ ...entry }));
+    return entries.map((entry) => ({ ...entry }));
   }
 }
 
@@ -239,10 +220,10 @@ function buildTree(request: ZLinkAggregatePrepareRequest): InventoryTree {
     authorityPayloadSha256: sha256(participant.authorityPayload),
     membershipMutationSha256: sha256(participant.membershipMutation)
   }));
-  const keys = entries.map(entry => entry.authorityKey);
+  const keys = entries.map((entry) => entry.authorityKey);
   if (
-    new Set(keys).size !== keys.length
-    || keys.some((key, index) => index > 0 && keys[index - 1]!.localeCompare(key) >= 0)
+    new Set(keys).size !== keys.length ||
+    keys.some((key, index) => index > 0 && keys[index - 1]!.localeCompare(key) >= 0)
   ) {
     throw new TypeError('Aggregate participants must be unique and canonically sorted.');
   }
@@ -253,9 +234,9 @@ function buildTree(request: ZLinkAggregatePrepareRequest): InventoryTree {
   let references = packLeafPages(entries, pages);
   let level = 0;
   while (
-    references.length > MAX_PAGE_ENTRIES
-    || encode(rootCandidate(entries.length, level, references, pages, '', '')).byteLength
-      > MAX_PAGE_BYTES
+    references.length > MAX_PAGE_ENTRIES ||
+    encode(rootCandidate(entries.length, level, references, pages, '', '')).byteLength >
+      MAX_PAGE_BYTES
   ) {
     level++;
     if (level >= MAX_TREE_LEVELS) {
@@ -370,27 +351,27 @@ function rootCandidate(
 
 function validateRoot(root: InventoryRoot, fence: ZLinkAggregateFence): void {
   if (
-    !Number.isSafeInteger(root.totalCount)
-    || root.totalCount < 1
-    || !isSha256(root.digest)
-    || !isSha256(root.declaredDigest)
-    || !Number.isSafeInteger(root.topLevel)
-    || root.topLevel < 0
-    || root.topLevel >= MAX_TREE_LEVELS
-    || root.topPages.length < 1
-    || root.topPages.length > MAX_PAGE_ENTRIES
-    || root.pageCountsByLevel.length !== root.topLevel + 1
-    || root.pageCountsByLevel.some(
-      count => !Number.isSafeInteger(count) || count < 1 || count > root.totalCount
+    !Number.isSafeInteger(root.totalCount) ||
+    root.totalCount < 1 ||
+    !isSha256(root.digest) ||
+    !isSha256(root.declaredDigest) ||
+    !Number.isSafeInteger(root.topLevel) ||
+    root.topLevel < 0 ||
+    root.topLevel >= MAX_TREE_LEVELS ||
+    root.topPages.length < 1 ||
+    root.topPages.length > MAX_PAGE_ENTRIES ||
+    root.pageCountsByLevel.length !== root.topLevel + 1 ||
+    root.pageCountsByLevel.some(
+      (count) => !Number.isSafeInteger(count) || count < 1 || count > root.totalCount
     )
   ) {
     throw dataLost(fence, 'root metadata is invalid');
   }
   const leafPages = root.pageCountsByLevel[0]!;
   if (
-    leafPages > root.totalCount
-    || root.totalCount > leafPages * MAX_PAGE_ENTRIES
-    || root.topPages.length !== root.pageCountsByLevel[root.topLevel]
+    leafPages > root.totalCount ||
+    root.totalCount > leafPages * MAX_PAGE_ENTRIES ||
+    root.topPages.length !== root.pageCountsByLevel[root.topLevel]
   ) {
     throw dataLost(fence, 'root page counts are invalid');
   }
@@ -409,33 +390,29 @@ function validateReference(
   fence: ZLinkAggregateFence
 ): void {
   if (
-    !Number.isSafeInteger(reference.level)
-    || reference.level < 0
-    || reference.level > root.topLevel
-    || !Number.isSafeInteger(reference.index)
-    || reference.index < 0
-    || !Number.isSafeInteger(reference.startIndex)
-    || reference.startIndex < 0
-    || !Number.isSafeInteger(reference.entryCount)
-    || reference.entryCount < 1
-    || !isSha256(reference.sha256)
+    !Number.isSafeInteger(reference.level) ||
+    reference.level < 0 ||
+    reference.level > root.topLevel ||
+    !Number.isSafeInteger(reference.index) ||
+    reference.index < 0 ||
+    !Number.isSafeInteger(reference.startIndex) ||
+    reference.startIndex < 0 ||
+    !Number.isSafeInteger(reference.entryCount) ||
+    reference.entryCount < 1 ||
+    !isSha256(reference.sha256)
   ) {
     throw dataLost(fence, 'page reference is invalid');
   }
 }
 
-function validateEntry(
-  entry: InventoryEntry,
-  index: number,
-  fence: ZLinkAggregateFence
-): void {
+function validateEntry(entry: InventoryEntry, index: number, fence: ZLinkAggregateFence): void {
   if (
-    entry.index !== index
-    || entry.authorityKey.length < 1
-    || entry.expectedStoreVersion.length < 1
-    || !['preserve', 'newOwner'].includes(entry.ownerTransition)
-    || !isSha256(entry.authorityPayloadSha256)
-    || !isSha256(entry.membershipMutationSha256)
+    entry.index !== index ||
+    entry.authorityKey.length < 1 ||
+    entry.expectedStoreVersion.length < 1 ||
+    !['preserve', 'newOwner'].includes(entry.ownerTransition) ||
+    !isSha256(entry.authorityPayloadSha256) ||
+    !isSha256(entry.membershipMutationSha256)
   ) {
     throw dataLost(fence, 'inventory entry is invalid or reordered');
   }
@@ -447,16 +424,16 @@ async function putImmutable(
   bytes: Uint8Array,
   signal?: AbortSignal
 ): Promise<void> {
-  const result = await provider.write({
-    conditions: [{ kind: 'missing', key }],
-    mutations: [{ kind: 'put', key, bytes }]
-  }, signal);
+  const result = await provider.write(
+    {
+      conditions: [{ kind: 'missing', key }],
+      mutations: [{ kind: 'put', key, bytes }]
+    },
+    signal
+  );
   if (result.kind === 'applied') return;
   const current = await provider.read(key, signal);
-  if (
-    current.kind !== 'found'
-    || !Buffer.from(current.value.bytes).equals(Buffer.from(bytes))
-  ) {
+  if (current.kind !== 'found' || !Buffer.from(current.value.bytes).equals(Buffer.from(bytes))) {
     throw new Error(`Immutable aggregate inventory value changed: ${key.value}.`);
   }
 }
@@ -476,10 +453,10 @@ async function requireFound(
 function decodeRoot(bytes: Uint8Array): InventoryRoot {
   const value: unknown = JSON.parse(Buffer.from(bytes).toString('utf8'));
   if (
-    value === null
-    || typeof value !== 'object'
-    || !('kind' in value)
-    || value.kind !== 'aggregate-inventory-root-v1'
+    value === null ||
+    typeof value !== 'object' ||
+    !('kind' in value) ||
+    value.kind !== 'aggregate-inventory-root-v1'
   ) {
     throw new Error('Invalid inventory root.');
   }
@@ -489,14 +466,14 @@ function decodeRoot(bytes: Uint8Array): InventoryRoot {
 function decodePage(bytes: Uint8Array): InventoryPage {
   const value: unknown = JSON.parse(Buffer.from(bytes).toString('utf8'));
   if (
-    value === null
-    || typeof value !== 'object'
-    || !('kind' in value)
-    || value.kind !== 'aggregate-inventory-page-v1'
-    || !('entries' in value)
-    || !Array.isArray(value.entries)
-    || !('children' in value)
-    || !Array.isArray(value.children)
+    value === null ||
+    typeof value !== 'object' ||
+    !('kind' in value) ||
+    value.kind !== 'aggregate-inventory-page-v1' ||
+    !('entries' in value) ||
+    !Array.isArray(value.entries) ||
+    !('children' in value) ||
+    !Array.isArray(value.children)
   ) {
     throw new Error('Invalid inventory page.');
   }
@@ -507,10 +484,7 @@ function encode(value: unknown): Uint8Array {
   return Buffer.from(JSON.stringify(value), 'utf8');
 }
 
-function referenceFor(
-  page: InventoryPage,
-  encoded: Uint8Array
-): InventoryReference {
+function referenceFor(page: InventoryPage, encoded: Uint8Array): InventoryReference {
   return {
     level: page.level,
     index: page.index,
@@ -531,11 +505,7 @@ function rootKey(fence: ZLinkAggregateFence): ZLinkStoreKey {
   return storeKey(`${aggregatePrefix(fence)}root`);
 }
 
-function pageKey(
-  fence: ZLinkAggregateFence,
-  level: number,
-  index: number
-): ZLinkStoreKey {
+function pageKey(fence: ZLinkAggregateFence, level: number, index: number): ZLinkStoreKey {
   return storeKey(`${aggregatePrefix(fence)}page:${level}:${index}`);
 }
 
@@ -552,9 +522,11 @@ function isSha256(value: unknown): value is string {
 }
 
 function sameHash(expected: string, actual: Uint8Array): boolean {
-  return isSha256(expected)
-    && actual.byteLength === 32
-    && timingSafeEqual(Buffer.from(expected, 'hex'), Buffer.from(actual));
+  return (
+    isSha256(expected) &&
+    actual.byteLength === 32 &&
+    timingSafeEqual(Buffer.from(expected, 'hex'), Buffer.from(actual))
+  );
 }
 
 function dataLost(fence: ZLinkAggregateFence, reason: string): Error {
@@ -569,13 +541,12 @@ async function parallelForEach<T>(
   operation: (value: T) => Promise<void>
 ): Promise<void> {
   let next = 0;
-  await Promise.all(Array.from(
-    { length: Math.min(concurrency, values.length) },
-    async () => {
+  await Promise.all(
+    Array.from({ length: Math.min(concurrency, values.length) }, async () => {
       while (next < values.length) {
         const index = next++;
         await operation(values[index]!);
       }
-    }
-  ));
+    })
+  );
 }

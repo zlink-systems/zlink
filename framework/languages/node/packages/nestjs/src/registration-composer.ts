@@ -33,18 +33,20 @@ import {
 import { framework } from './framework-loader';
 import { SpotNodeHandlerRegistry } from './spot-node-handler-registry';
 
-
 export function hasNestHandlerDiscovery(options: ZLinkNestModuleRegistrationOptions): boolean {
-  return hasConfiguredSpotNodes(options.spotNodes)
-    || Object.values(options.clientServerChannels ?? {}).some(
-      (channel) => (channel.handlerGroups ?? []).length > 0
-        || (channel.requestHandlerTypes ?? []).length > 0
-        || (channel.sendHandlerTypes ?? []).length > 0
+  return (
+    hasConfiguredSpotNodes(options.spotNodes) ||
+    Object.values(options.clientServerChannels ?? {}).some(
+      (channel) =>
+        (channel.handlerGroups ?? []).length > 0 ||
+        (channel.requestHandlerTypes ?? []).length > 0 ||
+        (channel.sendHandlerTypes ?? []).length > 0
+    ) ||
+    Object.values(options.fanoutChannels ?? {}).some(
+      (channel) =>
+        (channel.handlerGroups ?? []).length > 0 || (channel.publishHandlerTypes ?? []).length > 0
     )
-    || Object.values(options.fanoutChannels ?? {}).some(
-      (channel) => (channel.handlerGroups ?? []).length > 0
-        || (channel.publishHandlerTypes ?? []).length > 0
-    );
+  );
 }
 
 function hasConfiguredSpotNodes(value: ZLinkNestModuleRegistrationOptions['spotNodes']): boolean {
@@ -53,7 +55,6 @@ function hasConfiguredSpotNodes(value: ZLinkNestModuleRegistrationOptions['spotN
   }
   return Array.isArray(value) ? value.length > 0 : Object.keys(value).length > 0;
 }
-
 
 export function createDiscoveredOptions(
   options: ZLinkNestModuleRegistrationOptions,
@@ -64,20 +65,40 @@ export function createDiscoveredOptions(
   const channels: Record<string, ZLinkChannelOptions> = { ...(registrationOptions.channels ?? {}) };
   const useImplicitHandlers = options.implicitHandlerAutoRegistration !== false;
   const providerRefs = useImplicitHandlers ? discoverProviderRefs(discovery, moduleRef) : [];
-  const spotActorProviderRefs = useImplicitHandlers ? discoverSpotActorProviderRefs(discovery, moduleRef) : [];
-  const spotProviderRefs = useImplicitHandlers ? discoverSpotProviderRefs(discovery, moduleRef) : [];
-  const spotTimerProviderRefs = useImplicitHandlers ? discoverSpotTimerProviderRefs(discovery, moduleRef) : [];
-  const sessionProviderRefs = useImplicitHandlers ? discoverSessionProviderRefs(discovery, moduleRef) : [];
-  const spotNodes = createDiscoveredMeshChannelOptions(createDiscoveredSpotNodeOptions(
-    registrationOptions.spotNodes,
-    spotActorProviderRefs,
-    spotProviderRefs,
-    spotTimerProviderRefs), providerRefs, moduleRef);
+  const spotActorProviderRefs = useImplicitHandlers
+    ? discoverSpotActorProviderRefs(discovery, moduleRef)
+    : [];
+  const spotProviderRefs = useImplicitHandlers
+    ? discoverSpotProviderRefs(discovery, moduleRef)
+    : [];
+  const spotTimerProviderRefs = useImplicitHandlers
+    ? discoverSpotTimerProviderRefs(discovery, moduleRef)
+    : [];
+  const sessionProviderRefs = useImplicitHandlers
+    ? discoverSessionProviderRefs(discovery, moduleRef)
+    : [];
+  const spotNodes = createDiscoveredMeshChannelOptions(
+    createDiscoveredSpotNodeOptions(
+      registrationOptions.spotNodes,
+      spotActorProviderRefs,
+      spotProviderRefs,
+      spotTimerProviderRefs
+    ),
+    providerRefs,
+    moduleRef
+  );
 
   for (const [channelName, channel] of Object.entries(options.fanoutChannels ?? {})) {
     const existingChannel = channels[channelName] as ZLinkChannelOptions | undefined;
-    const publishHandlers = createDiscoveredPublishHandlers(providerRefs, channel.handlerGroups, moduleRef);
-    const manualPublishHandlers = createManualPublishHandlers(channel.publishHandlerTypes, moduleRef);
+    const publishHandlers = createDiscoveredPublishHandlers(
+      providerRefs,
+      channel.handlerGroups,
+      moduleRef
+    );
+    const manualPublishHandlers = createManualPublishHandlers(
+      channel.publishHandlerTypes,
+      moduleRef
+    );
     channels[channelName] = {
       ...existingChannel,
       publishHandlers: [
@@ -125,11 +146,13 @@ function attachDiscoveredSessionHandlers(
   if (streamNodes === undefined || handlerTypes.length === 0) {
     return streamNodes;
   }
-  return Object.fromEntries(Object.entries(streamNodes).map(([name, stream]) => {
-    const configured = { ...stream } as typeof stream & Record<symbol, readonly Type[]>;
-    configured[ZLINK_SESSION_HANDLER_TYPES] = handlerTypes;
-    return [name, configured];
-  }));
+  return Object.fromEntries(
+    Object.entries(streamNodes).map(([name, stream]) => {
+      const configured = { ...stream } as typeof stream & Record<symbol, readonly Type[]>;
+      configured[ZLINK_SESSION_HANDLER_TYPES] = handlerTypes;
+      return [name, configured];
+    })
+  );
 }
 
 function createDiscoveredMeshChannelOptions(
@@ -140,22 +163,43 @@ function createDiscoveredMeshChannelOptions(
   if (value === undefined || Array.isArray(value)) {
     return value;
   }
-  return Object.fromEntries(Object.entries(value).map(([meshName, mesh]) => [meshName, {
-    ...mesh,
-    meshChannels: mesh.meshChannels === undefined
-      ? undefined
-      : Object.fromEntries((Object.entries(mesh.meshChannels) as Array<[string, ZLinkMeshChannelOptions]>).map(([channelName, channel]) => [channelName, {
-        ...channel,
-        requestHandlers: [
-          ...createManualRequestHandlers(channel.requestHandlers, moduleRef),
-          ...createDiscoveredRequestHandlers(providerRefs, channel.handlerGroups, moduleRef) as never
-        ],
-        sendHandlers: [
-          ...createManualSendHandlers(channel.sendHandlers, moduleRef),
-          ...createDiscoveredSendHandlers(providerRefs, channel.handlerGroups, moduleRef) as never
-        ]
-      }]))
-  }]));
+  return Object.fromEntries(
+    Object.entries(value).map(([meshName, mesh]) => [
+      meshName,
+      {
+        ...mesh,
+        meshChannels:
+          mesh.meshChannels === undefined
+            ? undefined
+            : Object.fromEntries(
+                (Object.entries(mesh.meshChannels) as Array<[string, ZLinkMeshChannelOptions]>).map(
+                  ([channelName, channel]) => [
+                    channelName,
+                    {
+                      ...channel,
+                      requestHandlers: [
+                        ...createManualRequestHandlers(channel.requestHandlers, moduleRef),
+                        ...(createDiscoveredRequestHandlers(
+                          providerRefs,
+                          channel.handlerGroups,
+                          moduleRef
+                        ) as never)
+                      ],
+                      sendHandlers: [
+                        ...createManualSendHandlers(channel.sendHandlers, moduleRef),
+                        ...(createDiscoveredSendHandlers(
+                          providerRefs,
+                          channel.handlerGroups,
+                          moduleRef
+                        ) as never)
+                      ]
+                    }
+                  ]
+                )
+              )
+      }
+    ])
+  );
 }
 
 function createDiscoveredSpotNodeOptions(
@@ -169,7 +213,9 @@ function createDiscoveredSpotNodeOptions(
   }
   const registry = SpotNodeHandlerRegistry.from(value);
   if (registry.isEmpty) {
-    throw new framework.ZLinkConfigurationException('ZLink SPOT actor handlers require a registered SpotNode.');
+    throw new framework.ZLinkConfigurationException(
+      'ZLink SPOT actor handlers require a registered SpotNode.'
+    );
   }
 
   addDiscoveredSpotTimers(registry, timerRefs);
@@ -276,7 +322,10 @@ function addDiscoveredSpotActorHandlers(
   refs: readonly DiscoveredNestSpotActorProvider[]
 ): void {
   for (const ref of refs) {
-    if (ref.metadata.kind === 'entrySpotActorSend' || ref.metadata.kind === 'entrySpotActorRequest') {
+    if (
+      ref.metadata.kind === 'entrySpotActorSend' ||
+      ref.metadata.kind === 'entrySpotActorRequest'
+    ) {
       const entrySpotType = resolveNestType(ref.metadata.entrySpot, 'entrySpot');
       const actorType = resolveNestType(ref.metadata.actor, 'actor');
       const targets = registry.entrySpotTargets(
@@ -323,14 +372,18 @@ function addDiscoveredSpotActorHandlers(
 
 function resolveNestType<T>(resolver: ZLinkNestTypeResolver<T> | undefined, name: string): Type<T> {
   if (resolver === undefined) {
-    throw new framework.ZLinkConfigurationException(`ZLink SPOT actor handler ${name} type is required.`);
+    throw new framework.ZLinkConfigurationException(
+      `ZLink SPOT actor handler ${name} type is required.`
+    );
   }
   if (isClassType(resolver)) {
     return resolver;
   }
   const resolved = (resolver as () => Type<T>)();
   if (!isClassType(resolved)) {
-    throw new framework.ZLinkConfigurationException(`ZLink SPOT actor handler ${name} type resolver must return a class.`);
+    throw new framework.ZLinkConfigurationException(
+      `ZLink SPOT actor handler ${name} type resolver must return a class.`
+    );
   }
   return resolved;
 }
@@ -339,11 +392,12 @@ function isClassType(value: unknown): value is Type {
   return typeof value === 'function' && /^class\s/.test(Function.prototype.toString.call(value));
 }
 
-
 function requireSpotSubscriptionTopic(ref: DiscoveredNestSpotProvider): string {
   const topic = ref.metadata.topic;
   if (topic === undefined || topic.trim().length === 0) {
-    throw new framework.ZLinkConfigurationException(`ZLink SPOT subscription handler '${ref.handlerName}' requires a topic.`);
+    throw new framework.ZLinkConfigurationException(
+      `ZLink SPOT subscription handler '${ref.handlerName}' requires a topic.`
+    );
   }
   return topic;
 }
@@ -358,7 +412,9 @@ function requireSpotSubscriptionChannelName(ref: DiscoveredNestSpotProvider): st
   return channelName;
 }
 
-export function createRegistrationOptions(options: ZLinkNestModuleRegistrationOptions): ZLinkFrameworkRegistrationOptions {
+export function createRegistrationOptions(
+  options: ZLinkNestModuleRegistrationOptions
+): ZLinkFrameworkRegistrationOptions {
   const channels: Record<string, ZLinkChannelOptions> = {};
 
   for (const [name, channel] of Object.entries(options.clientServerChannels ?? {})) {
@@ -411,19 +467,28 @@ function assertChannelNameAvailable(
   kind: string
 ): void {
   if (Object.hasOwn(channels, name)) {
-    throw new framework.ZLinkConfigurationException(`Channel '${name}' is already registered before ${kind}.`);
+    throw new framework.ZLinkConfigurationException(
+      `Channel '${name}' is already registered before ${kind}.`
+    );
   }
 }
 
-export function assertBuiltModuleOptions(options: ZLinkModuleOptions): ZLinkNestModuleRegistrationOptions {
+export function assertBuiltModuleOptions(
+  options: ZLinkModuleOptions
+): ZLinkNestModuleRegistrationOptions {
   if (!isBuiltModuleOptions(options)) {
-    throw new framework.ZLinkConfigurationException('NestJS ZLinkModule options must be created with zlinkFramework().build().');
+    throw new framework.ZLinkConfigurationException(
+      'NestJS ZLinkModule options must be created with zlinkFramework().build().'
+    );
   }
   return options;
 }
 
 function isBuiltModuleOptions(options: unknown): options is ZLinkNestModuleRegistrationOptions {
-  return typeof options === 'object'
-    && options !== null
-    && (options as { readonly [ZLINK_MODULE_OPTIONS_BRAND]?: unknown })[ZLINK_MODULE_OPTIONS_BRAND] === true;
+  return (
+    typeof options === 'object' &&
+    options !== null &&
+    (options as { readonly [ZLINK_MODULE_OPTIONS_BRAND]?: unknown })[ZLINK_MODULE_OPTIONS_BRAND] ===
+      true
+  );
 }

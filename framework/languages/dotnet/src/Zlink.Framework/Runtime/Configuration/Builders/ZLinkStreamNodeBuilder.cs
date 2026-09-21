@@ -1,6 +1,7 @@
 namespace Zlink.Framework.Runtime.Configuration.Builders;
 
-internal sealed class ZLinkStreamNodeBuilder(ZLinkStreamNodeRegistration registration) : IZLinkStreamNodeBuilder
+internal sealed class ZLinkStreamNodeBuilder(ZLinkStreamNodeRegistration registration)
+    : IZLinkStreamNodeBuilder
 {
     public IZLinkStreamNodeBuilder Bind(string endpoint)
     {
@@ -15,8 +16,7 @@ internal sealed class ZLinkStreamNodeBuilder(ZLinkStreamNodeRegistration registr
     public IZLinkStreamNodeBuilder Bind(int port = 0)
     {
         if (port is < 0 or > 65535)
-            throw new ZLinkConfigurationException(
-                "STREAM bind port must be between 0 and 65535.");
+            throw new ZLinkConfigurationException("STREAM bind port must be between 0 and 65535.");
         registration.ListenPort = port;
         registration.BindEndpoint = null;
         return this;
@@ -26,7 +26,8 @@ internal sealed class ZLinkStreamNodeBuilder(ZLinkStreamNodeRegistration registr
     {
         registration.BindHost = ZLinkChannelEndpointBuilderSupport.Validate(
             bindHost,
-            "STREAM bind host must not be empty.");
+            "STREAM bind host must not be empty."
+        );
         return this;
     }
 
@@ -34,7 +35,8 @@ internal sealed class ZLinkStreamNodeBuilder(ZLinkStreamNodeRegistration registr
     {
         registration.AdvertiseHost = ZLinkChannelEndpointBuilderSupport.Validate(
             advertiseHost,
-            "STREAM advertise host must not be empty.");
+            "STREAM advertise host must not be empty."
+        );
         return this;
     }
 
@@ -50,7 +52,8 @@ internal sealed class ZLinkStreamNodeBuilder(ZLinkStreamNodeRegistration registr
     {
         if (registration.ActorDispatchEnabled)
             throw new ZLinkConfigurationException(
-                $"STREAM node '{registration.StreamNodeName}' already enabled actor dispatch.");
+                $"STREAM node '{registration.StreamNodeName}' already enabled actor dispatch."
+            );
 
         registration.ActorDispatchEnabled = true;
         return this;
@@ -59,7 +62,8 @@ internal sealed class ZLinkStreamNodeBuilder(ZLinkStreamNodeRegistration registr
     public IZLinkStreamNodeBuilder SetTlsServer(
         string certificatePath,
         string keyPath,
-        bool requireClientCertificate = false)
+        bool requireClientCertificate = false
+    )
     {
         if (string.IsNullOrWhiteSpace(certificatePath))
             throw new ZLinkConfigurationException("STREAM TLS certificate path must not be empty.");
@@ -70,7 +74,8 @@ internal sealed class ZLinkStreamNodeBuilder(ZLinkStreamNodeRegistration registr
         registration.TlsServer = new ZLinkStreamTlsServerRegistration(
             certificatePath,
             keyPath,
-            requireClientCertificate);
+            requireClientCertificate
+        );
         return this;
     }
 
@@ -79,7 +84,8 @@ internal sealed class ZLinkStreamNodeBuilder(ZLinkStreamNodeRegistration registr
     {
         if (registration.HeaderSessionType is not null)
             throw new ZLinkConfigurationException(
-                $"STREAM node '{registration.StreamNodeName}' already has a stream session.");
+                $"STREAM node '{registration.StreamNodeName}' already has a stream session."
+            );
 
         registration.HeaderSessionType = typeof(TSession);
         return this;

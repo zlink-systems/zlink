@@ -2,12 +2,14 @@ package systems.zlink.framework.runtime.channels;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
-import java.util.List;
+
 import systems.zlink.contracts.messaging.Message;
 import systems.zlink.framework.ZLinkMessageSerializer;
 import systems.zlink.framework.errors.ZLinkFrameworkErrorKind;
 import systems.zlink.framework.errors.ZLinkFrameworkException;
 import systems.zlink.framework.runtime.messaging.ZLinkMessagePayloads;
+
+import java.util.List;
 
 final class ZLinkChannelReplyDecoder {
     private static final ObjectMapper JSON = new ObjectMapper();
@@ -17,24 +19,20 @@ final class ZLinkChannelReplyDecoder {
         this.serializer = serializer;
     }
 
-    <TReply> TReply decode(
-        List<Message> replies,
-        Class<TReply> replyType,
-        String failurePrefix) {
+    <TReply> TReply decode(List<Message> replies, Class<TReply> replyType, String failurePrefix) {
         systems.zlink.framework.runtime.messaging.ZLinkChannelEnvelope.Header header =
-            systems.zlink.framework.runtime.messaging.ZLinkChannelEnvelope
-                .tryDecodeHeader(replies, false);
+                systems.zlink.framework.runtime.messaging.ZLinkChannelEnvelope.tryDecodeHeader(
+                        replies, false);
         if (header != null) {
             if (header.isError()) {
                 throw new ZLinkFrameworkException(
-                    systems.zlink.framework.runtime.messaging.ZLinkChannelEnvelope
-                        .errorKindFromCode(header.errorCode()),
-                    header.errorMessage(),
-                    null,
-                    header.metadata());
+                        systems.zlink.framework.runtime.messaging.ZLinkChannelEnvelope
+                                .errorKindFromCode(header.errorCode()),
+                        header.errorMessage(),
+                        null,
+                        header.metadata());
             }
-            return ZLinkMessagePayloads.deserialize(
-                serializer, replies.get(1), replyType);
+            return ZLinkMessagePayloads.deserialize(serializer, replies.get(1), replyType);
         }
         if (replies.isEmpty()) {
             try (Message emptyReply = Message.from(new byte[0])) {
@@ -57,9 +55,7 @@ final class ZLinkChannelReplyDecoder {
                     }
                     try (Message responseMessage = Message.from(JSON.writeValueAsBytes(response))) {
                         return ZLinkMessagePayloads.deserialize(
-                            serializer,
-                            responseMessage,
-                            replyType);
+                                serializer, responseMessage, replyType);
                     }
                 } catch (Exception envelopeError) {
                     directError.addSuppressed(envelopeError);
@@ -67,8 +63,8 @@ final class ZLinkChannelReplyDecoder {
             }
         }
         throw new ZLinkFrameworkException(
-            ZLinkFrameworkErrorKind.PROTOCOL_ERROR,
-            failurePrefix + "; first reply frame=" + replies.get(0).toUtf8String(),
-            lastError);
+                ZLinkFrameworkErrorKind.PROTOCOL_ERROR,
+                failurePrefix + "; first reply frame=" + replies.get(0).toUtf8String(),
+                lastError);
     }
 }

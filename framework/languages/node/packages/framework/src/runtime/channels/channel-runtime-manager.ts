@@ -1,17 +1,12 @@
 import type { ZLinkLocationOptionOverrides } from '../../contracts/Locations/Options';
-import type {
-  RoutingId,
-} from '../../contracts';
+import type { RoutingId } from '../../contracts';
 import type { ZLinkProviderResolver } from '../../contracts/Common/ZLinkProviderResolver';
 import type { ZLinkSubmitResult } from '../messaging/submission-result';
 import type { ZLinkSpotRouteTarget } from '../spots/spot-routing-internal';
 import type { ZLinkMessageFlowModeCell } from '../diagnostics';
 import type { Message } from '../../contracts/Common/Message';
 import type { ReceiveRecord } from '../foundation/service-runtime-contracts';
-import {
-  ZLinkConfigurationException,
-  type ZLinkFrameworkRegistration
-} from '../configuration';
+import { ZLinkConfigurationException, type ZLinkFrameworkRegistration } from '../configuration';
 import type {
   ZLinkBackendContext,
   ZLinkBackendRouterSocket,
@@ -28,9 +23,7 @@ import {
   type ZLinkLocationEventSink,
   type ZLinkLocationRuntimeStores
 } from '../locations';
-import {
-  type ZLinkChannelEnvelopeCodecRegistry
-} from './channel-envelope';
+import { type ZLinkChannelEnvelopeCodecRegistry } from './channel-envelope';
 import { ZLinkChannelSocketRegistry } from './channel-socket-registry';
 import {
   type ZLinkRouteRuntimeRequestHandler,
@@ -60,8 +53,9 @@ export class ZLinkChannelRuntimeManager {
     options: ZLinkChannelRuntimeManagerOptions = {}
   ) {
     this.registration = registration;
-    const applicationJobQueue = options.applicationJobQueue
-      ?? new ApplicationJobQueue(resolveApplicationJobQueueConfiguration());
+    const applicationJobQueue =
+      options.applicationJobQueue ??
+      new ApplicationJobQueue(resolveApplicationJobQueueConfiguration());
     this.sockets = new ZLinkChannelSocketRegistry(
       registration,
       adapter,
@@ -70,7 +64,9 @@ export class ZLinkChannelRuntimeManager {
       options.oneWayFailureSink,
       applicationJobQueue
     );
-    const codecs: ZLinkChannelEnvelopeCodecRegistry = { serializers: registration.messageSerializers };
+    const codecs: ZLinkChannelEnvelopeCodecRegistry = {
+      serializers: registration.messageSerializers
+    };
     const dispatchServices = new ZLinkChannelDispatchServices(
       registration,
       providerResolver,
@@ -85,11 +81,7 @@ export class ZLinkChannelRuntimeManager {
       localSpotRouteDispatcher: options.localSpotRouteDispatcher,
       flowCreationEnabled: () => dispatchServices.flowCreationEnabled()
     });
-    this.outbound = new ZLinkChannelOutboundOperations(
-      this.sockets,
-      codecs,
-      dispatchServices
-    );
+    this.outbound = new ZLinkChannelOutboundOperations(this.sockets, codecs, dispatchServices);
     this.lifecycle = new ZLinkChannelRuntimeLifecycle({
       registration,
       adapter,
@@ -100,7 +92,7 @@ export class ZLinkChannelRuntimeManager {
       spotRoutes: this.spotRoutes,
       spotRouteBridges,
       internalRouteSendHandlers: options.internalRouteSendHandlers,
-      internalRouteRequestHandlers: options.internalRouteRequestHandlers,
+      internalRouteRequestHandlers: options.internalRouteRequestHandlers
     });
   }
 
@@ -109,10 +101,14 @@ export class ZLinkChannelRuntimeManager {
     const client = channel?.client !== undefined;
     const server = channel?.server !== undefined;
     return {
-      localRole: client && server ? 'clientAndServer' as const
-        : client ? 'client' as const
-          : server ? 'server' as const
-            : undefined,
+      localRole:
+        client && server
+          ? ('clientAndServer' as const)
+          : client
+            ? ('client' as const)
+            : server
+              ? ('server' as const)
+              : undefined,
       descriptors: this.sockets.clientServerActiveTargets(channelName),
       pendingRequestCount: this.outbound.pendingRequestCount(channelName)
     };
@@ -139,13 +135,17 @@ export class ZLinkChannelRuntimeManager {
   observeClientServerTopology(channelName: string, changed: () => void): () => void {
     const monitor = this.sockets.clientServerMonitoringSource(channelName);
     monitor.onEvent(changed);
-    return () => { void monitor.dispose(); };
+    return () => {
+      void monitor.dispose();
+    };
   }
 
   observeFanoutTopology(channelName: string, changed: () => void): () => void {
     const source = this.sockets.fanoutTopologyMonitoringSource(channelName);
     source.onChange(changed);
-    return () => { void source.dispose(); };
+    return () => {
+      void source.dispose();
+    };
   }
 
   configureLocationAutoConnect(
@@ -181,7 +181,10 @@ export class ZLinkChannelRuntimeManager {
     this.lifecycle.bindRouteMeshRouters();
   }
 
-  openMonitoringSource(sourceName: string, adapter: ZLinkMonitoringBackendAdapter): ZLinkBackendSocketMonitor {
+  openMonitoringSource(
+    sourceName: string,
+    adapter: ZLinkMonitoringBackendAdapter
+  ): ZLinkBackendSocketMonitor {
     const [channelName, role] = splitMonitoringSocketSourceName(sourceName);
     switch (role) {
       case 'server':
@@ -195,7 +198,9 @@ export class ZLinkChannelRuntimeManager {
       case 'router':
         return adapter.openSocketMonitor(this.sockets.routeRouter(channelName));
       default:
-        throw new ZLinkConfigurationException(`Monitoring socket source '${sourceName}' is not registered.`);
+        throw new ZLinkConfigurationException(
+          `Monitoring socket source '${sourceName}' is not registered.`
+        );
     }
   }
 
@@ -207,15 +212,15 @@ export class ZLinkChannelRuntimeManager {
     this.lifecycle.prepareMeshDispatch(taskRunner);
   }
 
-  dispatchMeshChannel(meshName: string, record: ReceiveRecord, signal?: AbortSignal): Promise<void> {
-    return this.lifecycle.dispatchMeshChannel(meshName, record, signal);
-  }
-
-  dispatchMeshRoute(
+  dispatchMeshChannel(
     meshName: string,
     record: ReceiveRecord,
     signal?: AbortSignal
   ): Promise<void> {
+    return this.lifecycle.dispatchMeshChannel(meshName, record, signal);
+  }
+
+  dispatchMeshRoute(meshName: string, record: ReceiveRecord, signal?: AbortSignal): Promise<void> {
     return this.lifecycle.dispatchMeshRoute(meshName, record, signal);
   }
 
@@ -250,7 +255,14 @@ export class ZLinkChannelRuntimeManager {
     signal?: AbortSignal,
     metadata?: ReadonlyMap<string, string>
   ): Promise<TReply> {
-    return this.outbound.request<TReply>(channelName, packetName, request, timeoutMs, signal, metadata);
+    return this.outbound.request<TReply>(
+      channelName,
+      packetName,
+      request,
+      timeoutMs,
+      signal,
+      metadata
+    );
   }
 
   tryPublish(
@@ -356,7 +368,14 @@ export class ZLinkChannelRuntimeManager {
     timeoutMs: number | undefined,
     signal?: AbortSignal
   ): Promise<TReply> {
-    return this.spotRoutes.routeRequestFromSpotToSpot<TReply>(sourceSpot, spotRouteTarget, packetName, request, timeoutMs, signal);
+    return this.spotRoutes.routeRequestFromSpotToSpot<TReply>(
+      sourceSpot,
+      spotRouteTarget,
+      packetName,
+      request,
+      timeoutMs,
+      signal
+    );
   }
 
   async routeSendFromSpotToSpot(
@@ -386,7 +405,13 @@ export class ZLinkChannelRuntimeManager {
     timeoutMs: number | undefined,
     signal?: AbortSignal
   ): Promise<readonly Message[]> {
-    return this.spotRoutes.routeRequestRawFromSpotToSpot(sourceSpot, spotRouteTarget, request, timeoutMs, signal);
+    return this.spotRoutes.routeRequestRawFromSpotToSpot(
+      sourceSpot,
+      spotRouteTarget,
+      request,
+      timeoutMs,
+      signal
+    );
   }
 
   async routeRequestRawToSpot(
@@ -409,13 +434,14 @@ export class ZLinkChannelRuntimeManager {
   async dispose(signal?: AbortSignal): Promise<void> {
     await this.lifecycle.dispose(signal);
   }
-
 }
 
 function splitMonitoringSocketSourceName(sourceName: string): readonly [string, string] {
   const separator = sourceName.lastIndexOf('.');
   if (separator <= 0 || separator === sourceName.length - 1) {
-    throw new ZLinkConfigurationException(`Monitoring socket source '${sourceName}' is not registered.`);
+    throw new ZLinkConfigurationException(
+      `Monitoring socket source '${sourceName}' is not registered.`
+    );
   }
   return [sourceName.slice(0, separator), sourceName.slice(separator + 1)];
 }

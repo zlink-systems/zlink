@@ -11,15 +11,13 @@ public final class ZLinkServiceOperationIds {
     private static final long PROCESS_PREFIX = processPrefix();
     private static final AtomicLong NEXT_COUNTER = new AtomicLong(1);
 
-    private ZLinkServiceOperationIds() {
-    }
+    private ZLinkServiceOperationIds() {}
 
     public static UUID next() {
         while (true) {
             long current = NEXT_COUNTER.get();
             if (current == 0) {
-                throw new IllegalStateException(
-                    "service operation identity space is exhausted");
+                throw new IllegalStateException("service operation identity space is exhausted");
             }
             long next = current == -1 ? 0 : current + 1;
             if (NEXT_COUNTER.compareAndSet(current, next)) {
@@ -31,7 +29,7 @@ public final class ZLinkServiceOperationIds {
     public static String correlationId(UUID id) {
         UUID value = Objects.requireNonNull(id, "id");
         return HEX.toHexDigits(value.getMostSignificantBits())
-            + HEX.toHexDigits(value.getLeastSignificantBits());
+                + HEX.toHexDigits(value.getLeastSignificantBits());
     }
 
     private static long processPrefix() {

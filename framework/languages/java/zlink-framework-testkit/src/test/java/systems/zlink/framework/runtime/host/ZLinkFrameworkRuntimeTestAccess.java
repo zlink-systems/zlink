@@ -5,12 +5,10 @@ import systems.zlink.framework.runtime.internal.backend.ZLinkBackendAdapterProvi
 
 /** Test-only access from the runtime implementation package. */
 final class ZLinkFrameworkRuntimeTestAccess {
-    private ZLinkFrameworkRuntimeTestAccess() {
-    }
+    private ZLinkFrameworkRuntimeTestAccess() {}
 
     static ZLinkFrameworkRuntime start(
-        DefaultZLinkFrameworkOptions options,
-        ZLinkBackendAdapterProvider backendProvider) {
+            DefaultZLinkFrameworkOptions options, ZLinkBackendAdapterProvider backendProvider) {
         return ZLinkFrameworkRuntime.start(options, backendProvider);
     }
 }

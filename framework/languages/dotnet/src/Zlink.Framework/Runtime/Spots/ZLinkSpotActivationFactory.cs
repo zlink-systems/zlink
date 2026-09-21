@@ -10,46 +10,52 @@ internal sealed class ZLinkSpotActivationFactory(
     ZLinkSpotNodeRegistration registration,
     IZLinkBackendSpotNode node,
     string spotChannelName,
-    ZLinkTimerScheduler timerScheduler)
+    ZLinkTimerScheduler timerScheduler
+)
 {
     public async ValueTask<ZLinkSpotActivationCreateResult> CreateAsync(
         Type spotType,
         IZLinkBackendSpot nativeSpot,
         string spotId,
         ZLinkMessage request,
-        CancellationToken cancellationToken) =>
+        CancellationToken cancellationToken
+    ) =>
         await CreateUserSpotAsync(
                 spotType,
                 nativeSpot,
                 spotId,
                 request,
                 invokeCreate: true,
-                cancellationToken)
+                cancellationToken
+            )
             .ConfigureAwait(false);
 
-    internal async ValueTask<ZLinkSpotActivation>
-        CreateForRelocationAsync(
-            Type spotType,
-            IZLinkBackendSpot nativeSpot,
-            string spotId,
-            CancellationToken cancellationToken) =>
-        (await CreateUserSpotAsync(
-                spotType,
-                nativeSpot,
-                spotId,
-                ZLinkMessage.Empty,
-                invokeCreate: false,
-                cancellationToken)
-            .ConfigureAwait(false)).Activation;
+    internal async ValueTask<ZLinkSpotActivation> CreateForRelocationAsync(
+        Type spotType,
+        IZLinkBackendSpot nativeSpot,
+        string spotId,
+        CancellationToken cancellationToken
+    ) =>
+        (
+            await CreateUserSpotAsync(
+                    spotType,
+                    nativeSpot,
+                    spotId,
+                    ZLinkMessage.Empty,
+                    invokeCreate: false,
+                    cancellationToken
+                )
+                .ConfigureAwait(false)
+        ).Activation;
 
-    private async ValueTask<ZLinkSpotActivationCreateResult>
-        CreateUserSpotAsync(
-            Type spotType,
-            IZLinkBackendSpot nativeSpot,
-            string spotId,
-            ZLinkMessage request,
-            bool invokeCreate,
-            CancellationToken cancellationToken)
+    private async ValueTask<ZLinkSpotActivationCreateResult> CreateUserSpotAsync(
+        Type spotType,
+        IZLinkBackendSpot nativeSpot,
+        string spotId,
+        ZLinkMessage request,
+        bool invokeCreate,
+        CancellationToken cancellationToken
+    )
     {
         AsyncServiceScope spotScope = default;
         var scopeCreated = false;
@@ -68,25 +74,23 @@ internal sealed class ZLinkSpotActivationFactory(
                 spotChannelName,
                 frameworkRegistration.DefaultRequestTimeout,
                 registration.Router?.SocketConfig.SendTimeout
-                ?? frameworkRegistration.DefaultSocketSendTimeout,
-                registration.UserSpotFactoryOptions.TryGetValue(
-                    spotType,
-                    out var userSpotOptions)
+                    ?? frameworkRegistration.DefaultSocketSendTimeout,
+                registration.UserSpotFactoryOptions.TryGetValue(spotType, out var userSpotOptions)
                     ? userSpotOptions.ExecutionMode
                     : ZLinkUserSpotExecutionMode.SpotWide,
                 userSpotOptions?.RelocationCoordinationMode
-                ?? ZLinkSpotRelocationCoordinationMode.FrameworkManaged,
+                    ?? ZLinkSpotRelocationCoordinationMode.FrameworkManaged,
                 restoreLogicalTimers: !invokeCreate,
-                timerScheduler: timerScheduler);
+                timerScheduler: timerScheduler
+            );
 
-            var spot = (IZLinkSpot)ActivatorUtilities.CreateInstance(
-                spotScope.ServiceProvider,
-                spotType,
-                activation);
+            var spot = (IZLinkSpot)
+                ActivatorUtilities.CreateInstance(spotScope.ServiceProvider, spotType, activation);
 
             activation.AttachSpot(spot);
             foreach (var handler in frameworkRegistration.ScannedHandlerCatalog.SpotHandlers)
-                await activation.ApplyScannedHandlerAsync(handler, cancellationToken)
+                await activation
+                    .ApplyScannedHandlerAsync(handler, cancellationToken)
                     .ConfigureAwait(false);
 
             spot.Configure();
@@ -94,8 +98,7 @@ internal sealed class ZLinkSpotActivationFactory(
             if (!invokeCreate)
                 activation.AttachNativeDispatch();
             var response = invokeCreate
-                ? await activation.InitializeAsync(request, cancellationToken)
-                    .ConfigureAwait(false)
+                ? await activation.InitializeAsync(request, cancellationToken).ConfigureAwait(false)
                 : ZLinkSpotCreateResponse.Accept();
             return new ZLinkSpotActivationCreateResult(activation, response);
         }
@@ -114,7 +117,9 @@ internal sealed class ZLinkSpotActivationFactory(
             }
 
             failures.ThrowIfAny();
-            throw new InvalidOperationException("Unreachable after startup cleanup failure propagation.");
+            throw new InvalidOperationException(
+                "Unreachable after startup cleanup failure propagation."
+            );
         }
     }
 
@@ -123,7 +128,8 @@ internal sealed class ZLinkSpotActivationFactory(
         IZLinkBackendSpot nativeSpot,
         string spotId,
         CancellationToken cancellationToken,
-        bool restoreLogicalTimers = false)
+        bool restoreLogicalTimers = false
+    )
     {
         AsyncServiceScope spotScope = default;
         var scopeCreated = false;
@@ -142,16 +148,16 @@ internal sealed class ZLinkSpotActivationFactory(
                 spotChannelName,
                 frameworkRegistration.DefaultRequestTimeout,
                 registration.Router?.SocketConfig.SendTimeout
-                ?? frameworkRegistration.DefaultSocketSendTimeout,
+                    ?? frameworkRegistration.DefaultSocketSendTimeout,
                 restoreLogicalTimers: restoreLogicalTimers,
-                timerScheduler: timerScheduler);
-            var spot = (IZLinkInstanceSpot)ActivatorUtilities.CreateInstance(
-                spotScope.ServiceProvider,
-                spotType,
-                activation);
+                timerScheduler: timerScheduler
+            );
+            var spot = (IZLinkInstanceSpot)
+                ActivatorUtilities.CreateInstance(spotScope.ServiceProvider, spotType, activation);
             activation.AttachInstanceSpot(spot);
             foreach (var handler in frameworkRegistration.ScannedHandlerCatalog.SpotHandlers)
-                await activation.ApplyScannedHandlerAsync(handler, cancellationToken)
+                await activation
+                    .ApplyScannedHandlerAsync(handler, cancellationToken)
                     .ConfigureAwait(false);
             spot.Configure();
             await activation.BindDescriptorsAsync(cancellationToken).ConfigureAwait(false);
@@ -174,11 +180,13 @@ internal sealed class ZLinkSpotActivationFactory(
 
             failures.ThrowIfAny();
             throw new InvalidOperationException(
-                "Unreachable after Instance Spot startup cleanup failure propagation.");
+                "Unreachable after Instance Spot startup cleanup failure propagation."
+            );
         }
     }
 }
 
 internal readonly record struct ZLinkSpotActivationCreateResult(
     ZLinkSpotActivation Activation,
-    ZLinkSpotCreateResponse Response);
+    ZLinkSpotCreateResponse Response
+);

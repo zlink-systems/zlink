@@ -422,8 +422,8 @@ request_builder_t &request_builder_t::body (std::string content, std::string con
     return *this;
 }
 
-request_builder_t &
-request_builder_t::body_stream (body_stream_provider_t provider, std::string content_type)
+request_builder_t &request_builder_t::body_stream (body_stream_provider_t provider,
+                                                   std::string content_type)
 {
     if (!provider) {
         throw zlink::framework::framework_exception_t (
@@ -556,7 +556,8 @@ request_builder_t::dispatch_request (detail::http_request_t request) const
 {
     if (!_client._runtime) {
         return zlink::framework::task_t<raw_http_response_t> (
-          zlink::framework::detail::boundary_failure<raw_http_response_t> (zlink::framework::detail::boundary_error_t::closed, "HTTP client is not initialized"));
+          zlink::framework::detail::boundary_failure<raw_http_response_t> (
+            zlink::framework::detail::boundary_error_t::closed, "HTTP client is not initialized"));
     }
 
     return _client._runtime->submit (std::move (request));

@@ -60,8 +60,8 @@ route_channel_registration_t &route_channel_registration_t::connect (std::string
     return *this;
 }
 
-route_channel_registration_t &
-route_channel_registration_t::connect (zlink::routing_id_t peer_rid, std::string endpoint)
+route_channel_registration_t &route_channel_registration_t::connect (zlink::routing_id_t peer_rid,
+                                                                     std::string endpoint)
 {
     if (peer_rid.size () == 0u) {
         throw framework_exception_t (framework_error_kind_t::protocol_error,

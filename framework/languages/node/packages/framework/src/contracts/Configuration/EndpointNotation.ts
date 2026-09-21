@@ -83,9 +83,11 @@ export function normalizeEndpoint(endpoint: string): string {
   const normalizedHost = normalizeHost(host);
   const normalizedPort = normalizePort(port);
 
-  return `${scheme}://${userInfo}${normalizedHost}`
-    + (normalizedPort.length > 0 ? `:${normalizedPort}` : '')
-    + normalizeSuffix(suffix);
+  return (
+    `${scheme}://${userInfo}${normalizedHost}` +
+    (normalizedPort.length > 0 ? `:${normalizedPort}` : '') +
+    normalizeSuffix(suffix)
+  );
 }
 
 function findAuthorityEnd(rest: string): number {
@@ -212,11 +214,8 @@ export function buildAdvertisedEndpoint(
     const match = ADVERTISE_SOURCE_PATTERN.exec(normalized);
     if (match === null) return normalized;
     const boundHost = unbracketHost(match[2]);
-    const defaultHost = boundHost === '0.0.0.0'
-      ? '127.0.0.1'
-      : boundHost === '::'
-        ? '::1'
-        : undefined;
+    const defaultHost =
+      boundHost === '0.0.0.0' ? '127.0.0.1' : boundHost === '::' ? '::1' : undefined;
     if (defaultHost === undefined) return normalized;
     const host = defaultHost.includes(':') ? `[${defaultHost}]` : defaultHost;
     return normalizeEndpoint(`${match[1].toLowerCase()}://${host}:${match[3]}`);
@@ -225,9 +224,10 @@ export function buildAdvertisedEndpoint(
   if (match === null) return undefined;
   const scheme = match[1].toLowerCase();
   if (restrictToScheme !== undefined && scheme !== restrictToScheme) return undefined;
-  const host = advertiseHost.includes(':') && !advertiseHost.startsWith('[')
-    ? `[${advertiseHost}]`
-    : advertiseHost;
+  const host =
+    advertiseHost.includes(':') && !advertiseHost.startsWith('[')
+      ? `[${advertiseHost}]`
+      : advertiseHost;
   return normalizeEndpoint(`${scheme}://${host}:${match[3]}`);
 }
 

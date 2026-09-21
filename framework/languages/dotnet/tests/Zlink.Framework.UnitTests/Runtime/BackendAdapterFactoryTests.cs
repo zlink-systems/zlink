@@ -38,7 +38,7 @@ public sealed class BackendAdapterFactoryTests
             "Zlink.Framework.Runtime.Backend.DotNet.Wrappers.ZLinkBackendDealerSocketWrapper",
             "Zlink.Framework.Runtime.Backend.DotNet.Wrappers.ZLinkBackendRouterSocketWrapper",
             "Zlink.Framework.Runtime.Backend.DotNet.Wrappers.ZLinkBackendPublisherSocketWrapper",
-            "Zlink.Framework.Runtime.Backend.DotNet.Wrappers.ZLinkBackendSubscriberSocketWrapper"
+            "Zlink.Framework.Runtime.Backend.DotNet.Wrappers.ZLinkBackendSubscriberSocketWrapper",
         ];
 
         Assert.All(removedTypes, typeName => Assert.Null(assembly.GetType(typeName)));
@@ -49,11 +49,9 @@ public sealed class BackendAdapterFactoryTests
     [InlineData(AutoHwmProfile.LowLatency)]
     [InlineData(AutoHwmProfile.Balanced)]
     [InlineData(AutoHwmProfile.Throughput)]
-    public async Task Core_Profile_Is_Applied_To_The_Binding_Context(
-        AutoHwmProfile coreProfile)
+    public async Task Core_Profile_Is_Applied_To_The_Binding_Context(AutoHwmProfile coreProfile)
     {
-        await using var context = new ZLinkDotNetBackendAdapterFactory()
-            .CreateRuntimeContext();
+        await using var context = new ZLinkDotNetBackendAdapterFactory().CreateRuntimeContext();
 
         context.ConfigureCoreHwm(coreProfile, 1024 * 1024, 256 * 1024);
 
@@ -64,13 +62,9 @@ public sealed class BackendAdapterFactoryTests
     [Fact]
     public async Task Core_Hwm_Snapshot_And_Reset_Are_Direct_Binding_Projections()
     {
-        await using var context = new ZLinkDotNetBackendAdapterFactory()
-            .CreateRuntimeContext();
+        await using var context = new ZLinkDotNetBackendAdapterFactory().CreateRuntimeContext();
         const ulong budgetBytes = 1024 * 1024;
-        context.ConfigureCoreHwm(
-            AutoHwmProfile.Balanced,
-            memoryLimitBytes: 0,
-            budgetBytes);
+        context.ConfigureCoreHwm(AutoHwmProfile.Balanced, memoryLimitBytes: 0, budgetBytes);
 
         var before = context.GetCoreHwmBudgetSnapshot();
 
@@ -83,9 +77,7 @@ public sealed class BackendAdapterFactoryTests
         Assert.True(after.MeasurementEpoch > before.MeasurementEpoch);
         Assert.Equal(before.EffectiveCoreBudgetBytes, after.EffectiveCoreBudgetBytes);
         Assert.Equal(after.CurrentAccountedBytes, after.PeakAccountedBytes);
-        Assert.Equal(
-            after.CompletionCurrentAccountedBytes,
-            after.CompletionPeakAccountedBytes);
+        Assert.Equal(after.CompletionCurrentAccountedBytes, after.CompletionPeakAccountedBytes);
     }
 
     [Fact]
@@ -103,25 +95,27 @@ public sealed class BackendAdapterFactoryTests
         Task<IReadOnlyList<Message>> requestTask;
         using (var request = Message.From("request"))
         {
-            requestTask = dealer.Request()
+            requestTask = dealer
+                .Request()
                 .Message(request)
                 .Timeout(TimeSpan.FromSeconds(2))
-                .Async(CancellationToken.None).Reply;
+                .Async(CancellationToken.None)
+                .Reply;
         }
 
         using var received = await ReceiveAsync(router, TimeSpan.FromSeconds(2));
         using (var reply = Message.From("reply"))
-            router.Reply(
+            router
+                .Reply(
                     Assert.IsType<RoutingId>(received.RoutingId),
-                    Assert.IsType<ReplyToken>(received.ReplyToken))
+                    Assert.IsType<ReplyToken>(received.ReplyToken)
+                )
                 .Message(reply)
                 .Submit();
 
         var events = new PollEvent[1];
         Assert.Equal(1, poller.Wait(events, TimeSpan.FromSeconds(2)));
-        Assert.NotEqual(
-            PollEventFlags.None,
-            events[0].Revents & PollEventFlags.PollCompletion);
+        Assert.NotEqual(PollEventFlags.None, events[0].Revents & PollEventFlags.PollCompletion);
         var replyParts = await requestTask.WaitAsync(TimeSpan.FromSeconds(2));
         try
         {
@@ -131,8 +125,11 @@ public sealed class BackendAdapterFactoryTests
         {
             ZLinkMessageParts.DisposeAll(replyParts);
         }
-        Assert.Null(typeof(ZLinkFrameworkRuntime).Assembly.GetType(
-            "Zlink.Framework.Runtime.Messaging.ZLinkRequestCompletionPump"));
+        Assert.Null(
+            typeof(ZLinkFrameworkRuntime).Assembly.GetType(
+                "Zlink.Framework.Runtime.Messaging.ZLinkRequestCompletionPump"
+            )
+        );
     }
 
     [Fact]
@@ -174,19 +171,23 @@ public sealed class BackendAdapterFactoryTests
         Task<IReadOnlyList<Message>> requestTask;
         using (var request = Message.From("request"))
         {
-            requestTask = dealer.Request()
+            requestTask = dealer
+                .Request()
                 .Message(request)
                 .Timeout(TimeSpan.FromSeconds(2))
-                .Async(CancellationToken.None).Reply;
+                .Async(CancellationToken.None)
+                .Reply;
         }
 
         using (var received = Received.Create())
         {
             Assert.True(router.Recv(received));
             using var reply = Message.From("reply");
-            router.Reply(
+            router
+                .Reply(
                     Assert.IsType<RoutingId>(received.RoutingId),
-                    Assert.IsType<ReplyToken>(received.ReplyToken))
+                    Assert.IsType<ReplyToken>(received.ReplyToken)
+                )
                 .Message(reply)
                 .Submit();
         }
@@ -198,8 +199,10 @@ public sealed class BackendAdapterFactoryTests
         var deadlineStarted = Stopwatch.GetTimestamp();
         var subscriberReady = false;
         var dealerCompletionReady = false;
-        while ((!subscriberReady || !dealerCompletionReady)
-               && Stopwatch.GetElapsedTime(deadlineStarted) < deadlineTimeout)
+        while (
+            (!subscriberReady || !dealerCompletionReady)
+            && Stopwatch.GetElapsedTime(deadlineStarted) < deadlineTimeout
+        )
         {
             var remaining = deadlineTimeout - Stopwatch.GetElapsedTime(deadlineStarted);
             if (remaining <= TimeSpan.Zero)
@@ -208,8 +211,7 @@ public sealed class BackendAdapterFactoryTests
             for (var index = 0; index < ready; index++)
             {
                 if (events[index].Slot == subscriberSlot)
-                    subscriberReady =
-                        (events[index].Revents & PollEventFlags.PollIn) != 0;
+                    subscriberReady = (events[index].Revents & PollEventFlags.PollIn) != 0;
                 if (events[index].Slot == dealerSlot)
                     dealerCompletionReady =
                         (events[index].Revents & PollEventFlags.PollCompletion) != 0;
@@ -236,8 +238,7 @@ public sealed class BackendAdapterFactoryTests
         }
     }
 
-    private static async Task AssertSpotBackendAsync(
-        IZLinkBackendRuntimeContext context)
+    private static async Task AssertSpotBackendAsync(IZLinkBackendRuntimeContext context)
     {
         await using var spotNode = context.CreateSpotNode("test-mesh");
 
@@ -264,8 +265,7 @@ public sealed class BackendAdapterFactoryTests
         Assert.Equal(TimeSpan.FromMilliseconds(37), spotNode.NativeNode.SendTimeout);
     }
 
-    private static async Task AssertStreamBackendAsync(
-        IZLinkBackendRuntimeContext context)
+    private static async Task AssertStreamBackendAsync(IZLinkBackendRuntimeContext context)
     {
         await using var streamSocket = context.CreateStreamSocket("test-mesh");
 
@@ -311,23 +311,20 @@ public sealed class BackendAdapterFactoryTests
         spotNode.SetRouterBind("inproc://entry-singleton-node");
         spotNode.AddChannel("test-mesh");
 
-        var accesses = Enumerable.Range(0, 32)
-            .Select(_ => Task.Run(spotNode.EntrySpot))
-            .ToArray();
+        var accesses = Enumerable.Range(0, 32).Select(_ => Task.Run(spotNode.EntrySpot)).ToArray();
         var entrySpots = await Task.WhenAll(accesses);
 
         Assert.All(entrySpots, entrySpot => Assert.Same(entrySpots[0], entrySpot));
     }
 
-    private static async Task<Received> ReceiveAsync(
-        IRouterSocket router,
-        TimeSpan timeout)
+    private static async Task<Received> ReceiveAsync(IRouterSocket router, TimeSpan timeout)
     {
         var deadlineStarted = Stopwatch.GetTimestamp();
         while (Stopwatch.GetElapsedTime(deadlineStarted) < timeout)
         {
             var received = Received.Create();
-            if (router.Recv(received, RecvFlags.DontWait)) return received;
+            if (router.Recv(received, RecvFlags.DontWait))
+                return received;
             received.Dispose();
             await Task.Delay(5);
         }

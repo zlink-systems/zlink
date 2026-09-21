@@ -13,23 +13,26 @@ internal sealed record ZLinkCanonicalParticipantRecovery(
     ReadOnlyMemory<byte> AuthorityPayload,
     ReadOnlyMemory<byte> MembershipMutation,
     ReadOnlyMemory<byte> OperationRecovery = default,
-    ZLinkObjectMaintenancePolicyKind MaintenancePolicy =
-        ZLinkObjectMaintenancePolicyKind.Snapshot);
+    ZLinkObjectMaintenancePolicyKind MaintenancePolicy = ZLinkObjectMaintenancePolicyKind.Snapshot
+);
 
 internal static class ZLinkCanonicalParticipantRecoveryCodec
 {
     private const uint Magic = 0x5a4c5250; // ZLRP
     private const byte Version = 3;
     private const int MaximumFieldBytes = 1024 * 1024;
-    private const int MaximumOperationRecoveryBytes =
-        2 * 1024 * 1024 + 256 * 1024 + 64;
+    private const int MaximumOperationRecoveryBytes = 2 * 1024 * 1024 + 256 * 1024 + 64;
+
     // Current Spot relocation recovery records keep MembershipMutation empty.
     // The three Text16 fields can each contain ushort.MaxValue UTF-8 bytes.
     internal const int MaximumEncodedBytesWithEmptyMembership =
-        sizeof(uint) + sizeof(byte)
+        sizeof(uint)
+        + sizeof(byte)
         + 3 * (sizeof(ushort) + ushort.MaxValue)
-        + sizeof(byte) + 2 * sizeof(ulong)
-        + sizeof(uint) + MaximumFieldBytes
+        + sizeof(byte)
+        + 2 * sizeof(ulong)
+        + sizeof(uint)
+        + MaximumFieldBytes
         + sizeof(uint)
         + sizeof(uint)
         + sizeof(byte);
@@ -38,15 +41,16 @@ internal static class ZLinkCanonicalParticipantRecoveryCodec
     internal static byte[] Encode(ZLinkCanonicalParticipantRecovery value)
     {
         ArgumentNullException.ThrowIfNull(value);
-        if (!Enum.IsDefined(value.ObjectKind)
+        if (
+            !Enum.IsDefined(value.ObjectKind)
             || value.ObjectGeneration == 0
             || value.AuthorityOwnerGeneration == 0
-            || value.MaintenancePolicy
-               == ZLinkObjectMaintenancePolicyKind.Unspecified
+            || value.MaintenancePolicy == ZLinkObjectMaintenancePolicyKind.Unspecified
             || !Enum.IsDefined(value.MaintenancePolicy)
             || value.AuthorityPayload.Length > MaximumFieldBytes
             || value.MembershipMutation.Length > MaximumFieldBytes
-            || value.OperationRecovery.Length > MaximumOperationRecoveryBytes)
+            || value.OperationRecovery.Length > MaximumOperationRecoveryBytes
+        )
             throw new ArgumentOutOfRangeException(nameof(value));
         using var stream = new MemoryStream();
         U32(stream, Magic);
@@ -59,25 +63,21 @@ internal static class ZLinkCanonicalParticipantRecoveryCodec
         Text16(stream, value.StableType);
         Bytes32(stream, value.AuthorityPayload.Span);
         Bytes32(stream, value.MembershipMutation.Span);
-        Bytes32(
-            stream,
-            value.OperationRecovery.Span,
-            MaximumOperationRecoveryBytes);
+        Bytes32(stream, value.OperationRecovery.Span, MaximumOperationRecoveryBytes);
         stream.WriteByte((byte)value.MaintenancePolicy);
         return stream.ToArray();
     }
 
-    internal static ZLinkCanonicalParticipantRecovery Decode(
-        ReadOnlySpan<byte> encoded)
+    internal static ZLinkCanonicalParticipantRecovery Decode(ReadOnlySpan<byte> encoded)
     {
         var reader = new Reader(encoded);
         if (reader.U32() != Magic)
-            throw new InvalidDataException(
-                "The canonical participant recovery header is invalid.");
+            throw new InvalidDataException("The canonical participant recovery header is invalid.");
         var version = reader.U8();
         if (version is not (1 or 2 or Version))
             throw new InvalidDataException(
-                "The canonical participant recovery version is invalid.");
+                "The canonical participant recovery version is invalid."
+            );
         var key = new ZLinkAuthorityKey(reader.Text16());
         var kind = (ZLinkPlacementObjectKind)reader.U8();
         var objectGeneration = reader.U64();
@@ -86,27 +86,39 @@ internal static class ZLinkCanonicalParticipantRecoveryCodec
         var stableType = reader.Text16();
         var authorityPayload = reader.Bytes32();
         var membershipMutation = reader.Bytes32();
-        var operationRecovery = version == 1
-            ? ReadOnlyMemory<byte>.Empty
-            : reader.Bytes32(MaximumOperationRecoveryBytes);
-        var maintenancePolicy = version < Version
-            ? ZLinkObjectMaintenancePolicyKind.Unspecified
-            : (ZLinkObjectMaintenancePolicyKind)reader.U8();
-        if (!reader.End || !Enum.IsDefined(kind)
+        var operationRecovery =
+            version == 1
+                ? ReadOnlyMemory<byte>.Empty
+                : reader.Bytes32(MaximumOperationRecoveryBytes);
+        var maintenancePolicy =
+            version < Version
+                ? ZLinkObjectMaintenancePolicyKind.Unspecified
+                : (ZLinkObjectMaintenancePolicyKind)reader.U8();
+        if (
+            !reader.End
+            || !Enum.IsDefined(kind)
             || !Enum.IsDefined(maintenancePolicy)
             || version == Version
-            && maintenancePolicy
-               == ZLinkObjectMaintenancePolicyKind.Unspecified
-            || objectGeneration == 0 || ownerGeneration == 0
+                && maintenancePolicy == ZLinkObjectMaintenancePolicyKind.Unspecified
+            || objectGeneration == 0
+            || ownerGeneration == 0
             || string.IsNullOrWhiteSpace(key.Value)
             || string.IsNullOrWhiteSpace(storeVersion)
-            || string.IsNullOrWhiteSpace(stableType))
-            throw new InvalidDataException(
-                "The canonical participant recovery record is invalid.");
+            || string.IsNullOrWhiteSpace(stableType)
+        )
+            throw new InvalidDataException("The canonical participant recovery record is invalid.");
         return new ZLinkCanonicalParticipantRecovery(
-            key, kind, objectGeneration, ownerGeneration, storeVersion,
-            stableType, authorityPayload, membershipMutation,
-            operationRecovery, maintenancePolicy);
+            key,
+            kind,
+            objectGeneration,
+            ownerGeneration,
+            storeVersion,
+            stableType,
+            authorityPayload,
+            membershipMutation,
+            operationRecovery,
+            maintenancePolicy
+        );
     }
 
     internal static bool IsEncoded(ReadOnlySpan<byte> encoded)
@@ -116,11 +128,14 @@ internal static class ZLinkCanonicalParticipantRecoveryCodec
             _ = Decode(encoded);
             return true;
         }
-        catch (Exception error) when (error is InvalidDataException
-                                      or EndOfStreamException
-                                      or DecoderFallbackException
-                                      or ArgumentException
-                                      or OverflowException)
+        catch (Exception error)
+            when (error
+                    is InvalidDataException
+                        or EndOfStreamException
+                        or DecoderFallbackException
+                        or ArgumentException
+                        or OverflowException
+            )
         {
             return false;
         }
@@ -139,7 +154,8 @@ internal static class ZLinkCanonicalParticipantRecoveryCodec
     private static void Bytes32(
         Stream stream,
         ReadOnlySpan<byte> value,
-        int maximum = MaximumFieldBytes)
+        int maximum = MaximumFieldBytes
+    )
     {
         if (value.Length > maximum)
             throw new ArgumentOutOfRangeException(nameof(value));
@@ -173,23 +189,32 @@ internal static class ZLinkCanonicalParticipantRecoveryCodec
         private ReadOnlySpan<byte> _value = value;
         private int _offset;
         internal bool End => _offset == _value.Length;
+
         internal byte U8() => Slice(1)[0];
+
         internal ushort U16() => BinaryPrimitives.ReadUInt16BigEndian(Slice(2));
+
         internal uint U32() => BinaryPrimitives.ReadUInt32BigEndian(Slice(4));
+
         internal ulong U64() => BinaryPrimitives.ReadUInt64BigEndian(Slice(8));
+
         internal string Text16()
         {
             var bytes = Slice(U16());
             var result = StrictUtf8.GetString(bytes);
-            if (result.Contains('\0')) throw new InvalidDataException();
+            if (result.Contains('\0'))
+                throw new InvalidDataException();
             return result;
         }
+
         internal byte[] Bytes32(int maximum = MaximumFieldBytes)
         {
             var length = U32();
-            if (length > maximum) throw new InvalidDataException();
+            if (length > maximum)
+                throw new InvalidDataException();
             return Slice(checked((int)length)).ToArray();
         }
+
         private ReadOnlySpan<byte> Slice(int length)
         {
             if (length < 0 || _value.Length - _offset < length)

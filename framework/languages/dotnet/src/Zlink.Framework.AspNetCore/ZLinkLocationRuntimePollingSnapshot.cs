@@ -3,11 +3,13 @@ namespace Zlink.Framework.AspNetCore;
 internal sealed record ZLinkLocationRuntimePollingSnapshot(
     ZLinkLocationRuntimeStatus Status,
     IReadOnlyList<ZLinkLocationTopologyEntry> Topology,
-    IReadOnlyList<ZLinkLocationServiceSummary> ServiceSummary)
+    IReadOnlyList<ZLinkLocationServiceSummary> ServiceSummary
+)
 {
     public static async ValueTask<ZLinkLocationRuntimePollingSnapshot> CaptureAsync(
         IZLinkLocationRuntimeQuery query,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken
+    )
     {
         var status = await query.GetStatusAsync(cancellationToken).ConfigureAwait(false);
 
@@ -15,13 +17,12 @@ internal sealed record ZLinkLocationRuntimePollingSnapshot(
         var page = new ZLinkPageRequest();
         while (true)
         {
-            var result = await query.ListTopologyAsync(
-                    new ZLinkLocationTopologyFilter(),
-                    page,
-                    cancellationToken)
+            var result = await query
+                .ListTopologyAsync(new ZLinkLocationTopologyFilter(), page, cancellationToken)
                 .ConfigureAwait(false);
             topology.AddRange(result.Items);
-            if (result.ContinuationToken is not { } token) break;
+            if (result.ContinuationToken is not { } token)
+                break;
 
             page = new ZLinkPageRequest(ContinuationToken: token);
         }
@@ -30,13 +31,16 @@ internal sealed record ZLinkLocationRuntimePollingSnapshot(
         page = new ZLinkPageRequest();
         while (true)
         {
-            var result = await query.ListServiceSummariesAsync(
+            var result = await query
+                .ListServiceSummariesAsync(
                     new ZLinkLocationServiceSummaryFilter(),
                     page,
-                    cancellationToken)
+                    cancellationToken
+                )
                 .ConfigureAwait(false);
             summary.AddRange(result.Items);
-            if (result.ContinuationToken is not { } token) break;
+            if (result.ContinuationToken is not { } token)
+                break;
             page = new ZLinkPageRequest(ContinuationToken: token);
         }
 
@@ -47,8 +51,7 @@ internal sealed record ZLinkLocationRuntimePollingSnapshot(
                 .ThenBy(static entry => entry.Endpoint, StringComparer.Ordinal)
                 .ThenBy(static entry => entry.NodeRid.ToString(), StringComparer.Ordinal)
                 .ToArray(),
-            summary
-                .OrderBy(static entry => entry.MeshName, StringComparer.Ordinal)
-                .ToArray());
+            summary.OrderBy(static entry => entry.MeshName, StringComparer.Ordinal).ToArray()
+        );
     }
 }

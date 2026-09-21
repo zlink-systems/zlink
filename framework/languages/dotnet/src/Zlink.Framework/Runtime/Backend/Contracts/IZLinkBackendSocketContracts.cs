@@ -10,7 +10,8 @@ internal interface IZLinkBackendStreamSocket : IAsyncDisposable
 
     IZLinkBackendSocketPoller CreateReceivePoller() =>
         throw new NotSupportedException(
-            "The backend stream socket does not provide a receive poller.");
+            "The backend stream socket does not provide a receive poller."
+        );
 
     void ApplySocketConfig(IZLinkSocketConfig config) { }
 
@@ -18,14 +19,13 @@ internal interface IZLinkBackendStreamSocket : IAsyncDisposable
 
     void SetTlsServer(string certPath, string keyPath, bool requireClientCert);
 
-    bool RecvPacket(
-        out ZLinkBackendStreamReceive? received,
-        RecvFlags flags = RecvFlags.None);
+    bool RecvPacket(out ZLinkBackendStreamReceive? received, RecvFlags flags = RecvFlags.None);
 
     Task SendAsync(
         RoutingId routingId,
         Message payload,
-        CancellationToken cancellationToken = default);
+        CancellationToken cancellationToken = default
+    );
 
     void DisconnectPeer(RoutingId routingId);
 
@@ -33,25 +33,29 @@ internal interface IZLinkBackendStreamSocket : IAsyncDisposable
         RoutingId sessionRid,
         ZLinkBackendActorRef actor,
         TimeSpan timeout,
-        CancellationToken cancellationToken);
+        CancellationToken cancellationToken
+    );
 
     ValueTask UnbindActorAsync(
         RoutingId sessionRid,
         string actorId,
         TimeSpan timeout,
-        CancellationToken cancellationToken);
+        CancellationToken cancellationToken
+    );
 
     bool SendBoundActor(
         RoutingId sessionRid,
         string actorId,
         IReadOnlyList<Message> parts,
-        SendFlags flags);
+        SendFlags flags
+    );
 }
 
 internal sealed class ZLinkBackendStreamReceive(
     RoutingId? sourceRoutingId,
     Message? header,
-    Message? payload) : IDisposable
+    Message? payload
+) : IDisposable
 {
     private Message? _header = header;
     private Message? _payload = payload;
@@ -60,14 +64,14 @@ internal sealed class ZLinkBackendStreamReceive(
 
     internal bool HasPacket => _header is not null && _payload is not null;
 
-    internal long ByteLength => checked(
-        (long)(_header?.Size ?? 0) + (_payload?.Size ?? 0));
+    internal long ByteLength => checked((long)(_header?.Size ?? 0) + (_payload?.Size ?? 0));
 
     internal (Message Header, Message Payload) TakePacket()
     {
         if (_header is null || _payload is null)
             throw new InvalidDataException(
-                "A Core STREAM packet must contain one header and one payload.");
+                "A Core STREAM packet must contain one header and one payload."
+            );
         var packet = (_header, _payload);
         _header = null;
         _payload = null;
@@ -84,8 +88,7 @@ internal sealed class ZLinkBackendStreamReceive(
 internal interface IZLinkBackendSocketMonitor : IAsyncDisposable
 {
     bool Wait(TimeSpan timeout) =>
-        throw new NotSupportedException(
-            "The backend socket monitor does not provide a poll wait.");
+        throw new NotSupportedException("The backend socket monitor does not provide a poll wait.");
 
     bool TryRecv(out ZLinkBackendSocketMonitorEvent monitorEvent);
 }

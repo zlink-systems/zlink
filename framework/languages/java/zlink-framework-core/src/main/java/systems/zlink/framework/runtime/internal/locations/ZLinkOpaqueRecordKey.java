@@ -1,18 +1,17 @@
 package systems.zlink.framework.runtime.internal.locations;
 
-import java.util.Objects;
 import systems.zlink.framework.locationprovider.ZLinkStoreKey;
 
+import java.util.Objects;
+
 final class ZLinkOpaqueRecordKey {
-    private ZLinkOpaqueRecordKey() {
-    }
+    private ZLinkOpaqueRecordKey() {}
 
     static ZLinkStoreKey of(String record, String... segments) {
-        StringBuilder preimage = new StringBuilder(
-            requireSegment(record, "record"));
+        StringBuilder preimage = new StringBuilder(requireSegment(record, "record"));
         for (int index = 0; index < segments.length; index++) {
-            preimage.append('\0').append(requireSegment(
-                segments[index], "segments[" + index + "]"));
+            preimage.append('\0')
+                    .append(requireSegment(segments[index], "segments[" + index + "]"));
         }
         return new ZLinkStoreKey(preimage.toString());
     }

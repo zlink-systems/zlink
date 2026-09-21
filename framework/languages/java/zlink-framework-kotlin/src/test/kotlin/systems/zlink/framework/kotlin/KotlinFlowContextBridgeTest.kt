@@ -1,6 +1,5 @@
 package systems.zlink.framework.kotlin
 
-import org.junit.jupiter.api.Assertions
 import java.util.Optional
 import java.util.concurrent.CompletableFuture
 import java.util.concurrent.TimeUnit
@@ -16,14 +15,13 @@ import org.junit.jupiter.api.Assertions.assertNotNull
 import org.junit.jupiter.api.Assertions.assertNull
 import org.junit.jupiter.api.Assertions.assertSame
 import org.junit.jupiter.api.Test
-import systems.zlink.contracts.core.RoutingId
 import systems.zlink.framework.actors.ZLinkActor
 import systems.zlink.framework.actors.ZLinkActorContext
 import systems.zlink.framework.actors.ZLinkActorJoinCall
 import systems.zlink.framework.actors.ZLinkBoundSession
+import systems.zlink.framework.execution.ZLinkSerialExecutionQueue
 import systems.zlink.framework.monitoring.ZLinkFlowOrigin
 import systems.zlink.framework.runtime.internal.diagnostics.ZLinkFlowContext
-import systems.zlink.framework.execution.ZLinkSerialExecutionQueue
 import systems.zlink.framework.runtime.internal.handlers.ZLinkSuspendInvocationContext
 
 class KotlinFlowContextBridgeTest {
@@ -33,17 +31,19 @@ class KotlinFlowContextBridgeTest {
         val remote = CompletableFuture<Void>()
         val yielded = CompletableFuture<Void>()
 
-        val dispatch = queue.enqueue {
-            val completed = CompletableFuture<Void>()
-            CoroutineScope(
-                ZLinkCoroutineInvocationContext.capture(Dispatchers.Default),
-            ).launch {
-                yielded.complete(null)
-                ZLinkSerialExecutionQueue.yieldCurrent(remote).await()
-                completed.complete(null)
-            }
-            completed
-        }.toCompletableFuture()
+        val dispatch =
+            queue
+                .enqueue {
+                    val completed = CompletableFuture<Void>()
+                    CoroutineScope(ZLinkCoroutineInvocationContext.capture(Dispatchers.Default))
+                        .launch {
+                            yielded.complete(null)
+                            ZLinkSerialExecutionQueue.yieldCurrent(remote).await()
+                            completed.complete(null)
+                        }
+                    completed
+                }
+                .toCompletableFuture()
 
         yielded.get(3, TimeUnit.SECONDS)
         val barrier = queue.awaitQuiescence().toCompletableFuture()
@@ -63,44 +63,48 @@ class KotlinFlowContextBridgeTest {
         val secondRemote = CompletableFuture<Void>()
         val firstYieldStarted = CompletableFuture<Void>()
         val secondYieldStarted = CompletableFuture<Void>()
-        val execution = ZLinkSuspendInvocationContext.ApplicationExecution(
-            "room-1",
-            "actor-a",
-            true,
-            true,
-        ) { false }
-
-        val first = queue.enqueue {
-            ZLinkSuspendInvocationContext.enterApplicationExecution(execution).use {
-                beforeTurn.set(ZLinkSuspendInvocationContext.currentSerialExecutionTurn())
-                val completed = CompletableFuture<Void>()
-                CoroutineScope(
-                    ZLinkCoroutineInvocationContext.capture(Dispatchers.Default),
-                ).launch {
-                    firstYieldStarted.complete(null)
-                    ZLinkSerialExecutionQueue.yieldCurrent(firstRemote).await()
-                    assertSame(
-                        execution,
-                        ZLinkSuspendInvocationContext.currentApplicationExecution(),
-                    )
-                    afterTurn.set(
-                        ZLinkSuspendInvocationContext.currentSerialExecutionTurn(),
-                    )
-                    secondYieldStarted.complete(null)
-                    ZLinkSerialExecutionQueue.yieldCurrent(secondRemote).await()
-                    completed.complete(null)
-                }
-                completed
+        val execution =
+            ZLinkSuspendInvocationContext.ApplicationExecution("room-1", "actor-a", true, true) {
+                false
             }
-        }.toCompletableFuture()
+
+        val first =
+            queue
+                .enqueue {
+                    ZLinkSuspendInvocationContext.enterApplicationExecution(execution).use {
+                        beforeTurn.set(ZLinkSuspendInvocationContext.currentSerialExecutionTurn())
+                        val completed = CompletableFuture<Void>()
+                        CoroutineScope(ZLinkCoroutineInvocationContext.capture(Dispatchers.Default))
+                            .launch {
+                                firstYieldStarted.complete(null)
+                                ZLinkSerialExecutionQueue.yieldCurrent(firstRemote).await()
+                                assertSame(
+                                    execution,
+                                    ZLinkSuspendInvocationContext.currentApplicationExecution(),
+                                )
+                                afterTurn.set(
+                                    ZLinkSuspendInvocationContext.currentSerialExecutionTurn()
+                                )
+                                secondYieldStarted.complete(null)
+                                ZLinkSerialExecutionQueue.yieldCurrent(secondRemote).await()
+                                completed.complete(null)
+                            }
+                        completed
+                    }
+                }
+                .toCompletableFuture()
 
         firstYieldStarted.get(3, TimeUnit.SECONDS)
-        queue.enqueue { CompletableFuture.completedFuture(null) }
-            .toCompletableFuture().get(3, TimeUnit.SECONDS)
+        queue
+            .enqueue { CompletableFuture.completedFuture(null) }
+            .toCompletableFuture()
+            .get(3, TimeUnit.SECONDS)
         firstRemote.complete(null)
         secondYieldStarted.get(3, TimeUnit.SECONDS)
-        queue.enqueue { CompletableFuture.completedFuture(null) }
-            .toCompletableFuture().get(3, TimeUnit.SECONDS)
+        queue
+            .enqueue { CompletableFuture.completedFuture(null) }
+            .toCompletableFuture()
+            .get(3, TimeUnit.SECONDS)
         secondRemote.complete(null)
         first.get(3, TimeUnit.SECONDS)
 
@@ -112,9 +116,7 @@ class KotlinFlowContextBridgeTest {
     fun `suspending lifecycle preserves flow across suspension and clears it afterward`() {
         val flow = ZLinkFlowContext.create(ZLinkFlowOrigin.LIFECYCLE)
         val first = RecordingActorFactory()
-        val firstStage = ZLinkFlowContext.enter(flow).use {
-            first.create(context("actor-a"))
-        }
+        val firstStage = ZLinkFlowContext.enter(flow).use { first.create(context("actor-a")) }
 
         firstStage.toCompletableFuture().join()
 
@@ -142,18 +144,26 @@ class KotlinFlowContextBridgeTest {
     }
 
     companion object {
-        private fun context(actorId: String) = object : ZLinkActorContext {
-            override fun actorId(): String = actorId
-            override fun objectGeneration(): Long = 1L
-            override fun meshName(): String = "test"
-            override fun spotId(): Optional<String> = Optional.empty()
-            override fun boundSession(): ZLinkBoundSession = error("not used")
-            override fun joinSpot(spotId: String): ZLinkActorJoinCall =
-                error("not used")
-            override fun joinSpot(spotId: String, request: Any): ZLinkActorJoinCall =
-                error("not used")
-            override fun joinEntrySpot(): ZLinkActorJoinCall = error("not used")
-            override fun joinEntrySpot(request: Any): ZLinkActorJoinCall = error("not used")
-        }
+        private fun context(actorId: String) =
+            object : ZLinkActorContext {
+                override fun actorId(): String = actorId
+
+                override fun objectGeneration(): Long = 1L
+
+                override fun meshName(): String = "test"
+
+                override fun spotId(): Optional<String> = Optional.empty()
+
+                override fun boundSession(): ZLinkBoundSession = error("not used")
+
+                override fun joinSpot(spotId: String): ZLinkActorJoinCall = error("not used")
+
+                override fun joinSpot(spotId: String, request: Any): ZLinkActorJoinCall =
+                    error("not used")
+
+                override fun joinEntrySpot(): ZLinkActorJoinCall = error("not used")
+
+                override fun joinEntrySpot(request: Any): ZLinkActorJoinCall = error("not used")
+            }
     }
 }

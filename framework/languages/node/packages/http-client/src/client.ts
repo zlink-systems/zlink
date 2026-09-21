@@ -112,7 +112,7 @@ export class ZLinkHttpClientBuilder {
     if (!(bytes > 0)) {
       throw new ZLinkFrameworkException(
         ZLinkFrameworkErrorKind.ProtocolError,
-        'HTTP client max response body size must be greater than zero',
+        'HTTP client max response body size must be greater than zero'
       );
     }
     this.maxResponseBodySizeValue = bytes;
@@ -136,7 +136,7 @@ export class ZLinkHttpClientBuilder {
     if (!(maxRedirects > 0)) {
       throw new ZLinkFrameworkException(
         ZLinkFrameworkErrorKind.ProtocolError,
-        'HTTP client follow_redirects must be greater than zero',
+        'HTTP client follow_redirects must be greater than zero'
       );
     }
     this.followRedirectsValue = maxRedirects;
@@ -147,7 +147,7 @@ export class ZLinkHttpClientBuilder {
     if (!(attempts > 0)) {
       throw new ZLinkFrameworkException(
         ZLinkFrameworkErrorKind.ProtocolError,
-        'HTTP client retry attempts must be greater than zero',
+        'HTTP client retry attempts must be greater than zero'
       );
     }
     this.retryAttemptsValue = attempts;
@@ -164,7 +164,7 @@ export class ZLinkHttpClientBuilder {
     if (!url.startsWith('http://')) {
       throw new ZLinkFrameworkException(
         ZLinkFrameworkErrorKind.ProtocolError,
-        'HTTP client proxy url must start with http://',
+        'HTTP client proxy url must start with http://'
       );
     }
     this.proxyValue = url;
@@ -200,7 +200,7 @@ export class ZLinkHttpClientBuilder {
     if (!lower.startsWith('http://') && !lower.startsWith('https://')) {
       throw new ZLinkFrameworkException(
         ZLinkFrameworkErrorKind.ProtocolError,
-        'HTTP client base_url must start with http:// or https://',
+        'HTTP client base_url must start with http:// or https://'
       );
     }
 
@@ -209,14 +209,20 @@ export class ZLinkHttpClientBuilder {
       timeoutMs: this.timeoutMsValue,
       maxResponseBodySize: this.maxResponseBodySizeValue,
       headers: { ...this.headersValue },
-      ...(this.trustCertificateFileValue !== undefined ? { trustCertificateFile: this.trustCertificateFileValue } : {}),
-      ...(this.clientCertificateValue !== undefined ? { clientCertificate: this.clientCertificateValue } : {}),
+      ...(this.trustCertificateFileValue !== undefined
+        ? { trustCertificateFile: this.trustCertificateFileValue }
+        : {}),
+      ...(this.clientCertificateValue !== undefined
+        ? { clientCertificate: this.clientCertificateValue }
+        : {}),
       followRedirects: this.followRedirectsValue,
       retryAttempts: this.retryAttemptsValue,
       cookies: this.cookiesValue,
       ...(this.proxyValue !== undefined ? { proxy: this.proxyValue } : {}),
-      ...(this.proxyAuthorizationValue !== undefined ? { proxyAuthorization: this.proxyAuthorizationValue } : {}),
-      compression: this.compressionValue,
+      ...(this.proxyAuthorizationValue !== undefined
+        ? { proxyAuthorization: this.proxyAuthorizationValue }
+        : {}),
+      compression: this.compressionValue
     };
 
     return new ZLinkHttpClient(new HttpClientRuntime(options), this.executionSchedulerValue);

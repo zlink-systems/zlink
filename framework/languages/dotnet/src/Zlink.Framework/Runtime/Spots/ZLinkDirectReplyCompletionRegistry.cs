@@ -20,7 +20,8 @@ internal sealed class ZLinkDirectReplyCompletionRegistry<TKey, TValue>
     internal ZLinkDirectReplyCompletionRegistry(
         int capacity,
         TimeSpan terminalRetention,
-        TimeProvider? timeProvider = null)
+        TimeProvider? timeProvider = null
+    )
     {
         if (capacity <= 0)
             throw new ArgumentOutOfRangeException(nameof(capacity));
@@ -34,39 +35,45 @@ internal sealed class ZLinkDirectReplyCompletionRegistry<TKey, TValue>
     internal bool TryRegister(TKey key, TValue value)
     {
         ArgumentNullException.ThrowIfNull(value);
-        return AwaitStateLane(_lane.RunAsync(() =>
-        {
-            RemoveExpiredTerminalsUnderLock(_time.GetTimestamp());
-            if (_terminals.ContainsKey(key)
-                || _pending.Count >= _capacity
-                || _pending.ContainsKey(key))
-                return false;
-            _pending.Add(key, value);
-            return true;
-        }));
+        return AwaitStateLane(
+            _lane.RunAsync(() =>
+            {
+                RemoveExpiredTerminalsUnderLock(_time.GetTimestamp());
+                if (
+                    _terminals.ContainsKey(key)
+                    || _pending.Count >= _capacity
+                    || _pending.ContainsKey(key)
+                )
+                    return false;
+                _pending.Add(key, value);
+                return true;
+            })
+        );
     }
 
     internal TValue? TryGet(TKey key)
     {
-        return AwaitStateLane(_lane.RunAsync(() =>
-            _pending.TryGetValue(key, out var value) ? value : null));
+        return AwaitStateLane(
+            _lane.RunAsync(() => _pending.TryGetValue(key, out var value) ? value : null)
+        );
     }
 
-    internal bool TryRemove(
-        TKey key,
-        TValue expected,
-        bool rememberTerminal)
+    internal bool TryRemove(TKey key, TValue expected, bool rememberTerminal)
     {
-        return AwaitStateLane(_lane.RunAsync(() =>
-        {
-            if (!_pending.TryGetValue(key, out var current)
-                || !ReferenceEquals(current, expected))
-                return false;
-            _pending.Remove(key);
-            if (rememberTerminal)
-                RememberTerminalUnderLock(key, _time.GetTimestamp());
-            return true;
-        }));
+        return AwaitStateLane(
+            _lane.RunAsync(() =>
+            {
+                if (
+                    !_pending.TryGetValue(key, out var current)
+                    || !ReferenceEquals(current, expected)
+                )
+                    return false;
+                _pending.Remove(key);
+                if (rememberTerminal)
+                    RememberTerminalUnderLock(key, _time.GetTimestamp());
+                return true;
+            })
+        );
     }
 
     private void RememberTerminalUnderLock(TKey key, long now)
@@ -76,16 +83,19 @@ internal sealed class ZLinkDirectReplyCompletionRegistry<TKey, TValue>
             _terminalOrder.Enqueue(key);
         else
             _terminals[key] = now;
-        while (_terminals.Count > _capacity
-               && _terminalOrder.TryDequeue(out var evicted))
+        while (_terminals.Count > _capacity && _terminalOrder.TryDequeue(out var evicted))
             _terminals.Remove(evicted);
     }
 
     private void RemoveExpiredTerminalsUnderLock(long now)
     {
-        while (_terminalOrder.TryPeek(out var oldest)
-               && (!_terminals.TryGetValue(oldest, out var retainedAt)
-                   || _time.GetElapsedTime(retainedAt, now) >= _terminalRetention))
+        while (
+            _terminalOrder.TryPeek(out var oldest)
+            && (
+                !_terminals.TryGetValue(oldest, out var retainedAt)
+                || _time.GetElapsedTime(retainedAt, now) >= _terminalRetention
+            )
+        )
         {
             _terminalOrder.Dequeue();
             _terminals.Remove(oldest);

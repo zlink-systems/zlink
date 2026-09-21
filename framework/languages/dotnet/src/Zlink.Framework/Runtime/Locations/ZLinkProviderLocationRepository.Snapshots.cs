@@ -12,17 +12,16 @@ internal sealed partial class ZLinkProviderLocationRepository
         string prefix,
         ZLinkPageRequest request,
         Func<ReadOnlyMemory<byte>, T> decode,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken
+    )
     {
         var pageSize = ZLinkPageRequestPolicy.Normalize(request).PageSize;
 
-        ZLinkStoreScanCursor? cursor =
-            request.ContinuationToken is { } continuationToken
+        ZLinkStoreScanCursor? cursor = request.ContinuationToken is { } continuationToken
             ? DecodeContinuationToken(prefix, continuationToken)
             : null;
-        var result = await provider.ScanAsync(
-                new ZLinkStoreScanRequest(prefix, cursor, pageSize),
-                cancellationToken)
+        var result = await provider
+            .ScanAsync(new ZLinkStoreScanRequest(prefix, cursor, pageSize), cancellationToken)
             .ConfigureAwait(false);
         if (result is ZLinkStoreScanResult.Expired)
         {
@@ -32,8 +31,7 @@ internal sealed partial class ZLinkProviderLocationRepository
         var page = ((ZLinkStoreScanResult.Page)result).Value;
         if (page.Items.Count > pageSize)
         {
-            throw new InvalidDataException(
-                "The Location Store returned more rows than requested.");
+            throw new InvalidDataException("The Location Store returned more rows than requested.");
         }
 
         var items = new T[page.Items.Count];
@@ -42,40 +40,35 @@ internal sealed partial class ZLinkProviderLocationRepository
 
         return new ZLinkLocationPage<T>(
             items,
-            page.NextCursor is { } next
-                ? EncodeContinuationToken(prefix, next)
-                : null);
+            page.NextCursor is { } next ? EncodeContinuationToken(prefix, next) : null
+        );
     }
 
-    private static string EncodeContinuationToken(
-        string prefix,
-        ZLinkStoreScanCursor cursor)
+    private static string EncodeContinuationToken(string prefix, ZLinkStoreScanCursor cursor)
     {
         var cursorBytes = Encoding.UTF8.GetBytes(cursor.Value ?? string.Empty);
         if (cursorBytes.Length is < 1 or > 4096)
         {
             throw new InvalidDataException(
-                "The Location Store returned an invalid snapshot cursor.");
+                "The Location Store returned an invalid snapshot cursor."
+            );
         }
 
         return $"{ContinuationTokenVersion}."
-               + $"{Base64Url(SHA256.HashData(Encoding.UTF8.GetBytes(prefix)))}."
-               + Base64Url(cursorBytes);
+            + $"{Base64Url(SHA256.HashData(Encoding.UTF8.GetBytes(prefix)))}."
+            + Base64Url(cursorBytes);
     }
 
-    private static ZLinkStoreScanCursor DecodeContinuationToken(
-        string prefix,
-        string token)
+    private static ZLinkStoreScanCursor DecodeContinuationToken(string prefix, string token)
     {
         if (token.Length is < 1 or > MaximumContinuationTokenCharacters)
             throw InvalidContinuationToken();
         var parts = token.Split('.', 3);
-        if (parts.Length != 3
+        if (
+            parts.Length != 3
             || parts[1].Length != 43
-            || !string.Equals(
-                parts[0],
-                ContinuationTokenVersion,
-                StringComparison.Ordinal))
+            || !string.Equals(parts[0], ContinuationTokenVersion, StringComparison.Ordinal)
+        )
         {
             throw InvalidContinuationToken();
         }
@@ -93,11 +86,11 @@ internal sealed partial class ZLinkProviderLocationRepository
         }
 
         var expectedDigest = SHA256.HashData(Encoding.UTF8.GetBytes(prefix));
-        if (prefixDigest.Length != expectedDigest.Length
-            || !CryptographicOperations.FixedTimeEquals(
-                prefixDigest,
-                expectedDigest)
-            || cursorBytes.Length is < 1 or > 4096)
+        if (
+            prefixDigest.Length != expectedDigest.Length
+            || !CryptographicOperations.FixedTimeEquals(prefixDigest, expectedDigest)
+            || cursorBytes.Length is < 1 or > 4096
+        )
         {
             throw InvalidContinuationToken();
         }
@@ -106,9 +99,9 @@ internal sealed partial class ZLinkProviderLocationRepository
         try
         {
             cursor = new UTF8Encoding(
-                    encoderShouldEmitUTF8Identifier: false,
-                    throwOnInvalidBytes: true)
-                .GetString(cursorBytes);
+                encoderShouldEmitUTF8Identifier: false,
+                throwOnInvalidBytes: true
+            ).GetString(cursorBytes);
         }
         catch (DecoderFallbackException)
         {
@@ -119,30 +112,24 @@ internal sealed partial class ZLinkProviderLocationRepository
     }
 
     private static string Base64Url(ReadOnlySpan<byte> bytes) =>
-        Convert.ToBase64String(bytes)
-            .TrimEnd('=')
-            .Replace('+', '-')
-            .Replace('/', '_');
+        Convert.ToBase64String(bytes).TrimEnd('=').Replace('+', '-').Replace('/', '_');
 
     private static byte[] FromBase64Url(string value)
     {
         var padding = value.Length % 4;
         if (padding == 1)
             throw new FormatException();
-        var normalized = value
-            .Replace('-', '+')
-            .Replace('_', '/');
+        var normalized = value.Replace('-', '+').Replace('_', '/');
         if (padding != 0)
-            normalized = normalized.PadRight(
-                normalized.Length + (4 - padding),
-                '=');
+            normalized = normalized.PadRight(normalized.Length + (4 - padding), '=');
         return Convert.FromBase64String(normalized);
     }
 
     private static ArgumentException InvalidContinuationToken() =>
         new(
             "The Location Store continuation token is invalid.",
-            nameof(ZLinkPageRequest.ContinuationToken));
+            nameof(ZLinkPageRequest.ContinuationToken)
+        );
 }
 
 internal sealed class ZLinkLocationSnapshotExpiredException()

@@ -8,19 +8,19 @@ public enum ZLinkFrameworkRuntimeState
     Relocated = 3,
     Draining = 4,
     Stopped = 5,
-    Error = 6
+    Error = 6,
 }
 
 public enum ZLinkFrameworkRelocationOutcome
 {
     Relocated = 0,
-    Blocked = 1
+    Blocked = 1,
 }
 
 public enum ZLinkFrameworkRelocationMode
 {
     PlannedMaintenance = 0,
-    RollingUpdate = 1
+    RollingUpdate = 1,
 }
 
 public enum ZLinkFrameworkRelocationReason
@@ -35,7 +35,7 @@ public enum ZLinkFrameworkRelocationReason
     RuntimeNotReady = 7,
     ManualTopologyUnsupported = 8,
     ShutdownRequested = 9,
-    OperationInProgress = 10
+    OperationInProgress = 10,
 }
 
 public sealed record ZLinkFrameworkRelocationOptions
@@ -57,34 +57,38 @@ public readonly record struct ZLinkFrameworkRelocationResult(
     ZLinkFrameworkRelocationMode Mode,
     long TargetApplicationVersion,
     ZLinkFrameworkRelocationOutcome Outcome,
-    ZLinkFrameworkRelocationReason Reason);
+    ZLinkFrameworkRelocationReason Reason
+);
 
 public enum ZLinkFrameworkTerminationOutcome
 {
     Stopped = 0,
-    ForceStopped = 1
+    ForceStopped = 1,
 }
 
 public enum ZLinkFrameworkTerminationReason
 {
     None = 0,
     DeadlineExceeded = 1,
-    TeardownFailed = 2
+    TeardownFailed = 2,
 }
 
 public readonly record struct ZLinkFrameworkTerminationResult(
     ZLinkFrameworkTerminationOutcome Outcome,
-    ZLinkFrameworkTerminationReason Reason);
+    ZLinkFrameworkTerminationReason Reason
+);
 
 /// <summary>Counts status updates that were coalesced or discarded for one observer.</summary>
 public readonly record struct ZLinkObservationLoss(
     ulong CoalescedCount,
-    ulong DiscardedTerminalCount);
+    ulong DiscardedTerminalCount
+);
 
 /// <summary>Returns a status snapshot together with loss observed by this subscription.</summary>
 public readonly record struct ZLinkObservedStatus<TStatus>(
     TStatus Status,
-    ZLinkObservationLoss Loss)
+    ZLinkObservationLoss Loss
+)
     where TStatus : notnull;
 
 public readonly record struct ZLinkCoreHwmStatus(
@@ -113,7 +117,8 @@ public readonly record struct ZLinkCoreHwmStatus(
     ulong ActiveReceiveQueueCount,
     ulong OutstandingApplicationLeaseCount,
     ulong RetiredQueueCount,
-    ulong DeferredOriginCreditBytes);
+    ulong DeferredOriginCreditBytes
+);
 
 public readonly record struct ZLinkApplicationJobQueueStatus(
     ZLinkApplicationJobQueueProfile ConfiguredProfile,
@@ -132,12 +137,14 @@ public readonly record struct ZLinkApplicationJobQueueStatus(
     ulong CapacityWaitCount,
     TimeSpan CapacityWaitDuration,
     ZLinkApplicationJobQueuePressureState PressureState,
-    TimeSpan CurrentPauseDuration);
+    TimeSpan CurrentPauseDuration
+);
 
 public readonly record struct ZLinkHostCapacityStatus(
     ulong MeasurementEpoch,
     ZLinkCoreHwmStatus CoreHwm,
-    ZLinkApplicationJobQueueStatus ApplicationJobQueue);
+    ZLinkApplicationJobQueueStatus ApplicationJobQueue
+);
 
 //  SafeToShutdown (spec 30 §11): the source-published observation that
 //  every relocation unit this source started has reached its Message
@@ -154,7 +161,8 @@ public sealed record ZLinkFrameworkRuntimeStatus(
     ulong Sequence,
     DateTimeOffset ObservedAt,
     ZLinkHostCapacityStatus Capacity = default,
-    bool SafeToShutdown = true);
+    bool SafeToShutdown = true
+);
 
 public interface IZLinkFrameworkRuntime
 {
@@ -163,7 +171,8 @@ public interface IZLinkFrameworkRuntime
 
     /// <summary>Observes the latest host status without changing host lifecycle.</summary>
     IAsyncEnumerable<ZLinkObservedStatus<ZLinkFrameworkRuntimeStatus>> ObserveAsync(
-        CancellationToken cancellationToken = default);
+        CancellationToken cancellationToken = default
+    );
 
     /// <summary>
     /// Resets host-capacity epoch counters while preserving configuration and
@@ -177,12 +186,14 @@ public interface IZLinkFrameworkRuntime
     /// </summary>
     ValueTask<ZLinkFrameworkRelocationResult> RelocateAsync(
         ZLinkFrameworkRelocationOptions options,
-        CancellationToken cancellationToken = default);
+        CancellationToken cancellationToken = default
+    );
 
     /// <summary>
     /// Stops this host. It does not implicitly request stateful relocation.
     /// </summary>
     ValueTask<ZLinkFrameworkTerminationResult> ShutdownAsync(
         TimeSpan? deadline = null,
-        CancellationToken cancellationToken = default);
+        CancellationToken cancellationToken = default
+    );
 }

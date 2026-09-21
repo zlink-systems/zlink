@@ -1,11 +1,12 @@
 package systems.zlink.framework.runtime.actors;
-import java.util.Objects;
 
+import systems.zlink.contracts.messaging.Message;
+import systems.zlink.framework.runtime.streams.ZLinkStreamHeader;
+
+import java.util.Objects;
 import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionStage;
-import systems.zlink.contracts.messaging.Message;
-import systems.zlink.framework.runtime.streams.ZLinkStreamHeader;
 
 final class ZLinkActorHandoffPacket implements AutoCloseable {
     private final long arrivalIndex;
@@ -16,20 +17,18 @@ final class ZLinkActorHandoffPacket implements AutoCloseable {
     private final CompletableFuture<Optional<Message>> reply = new CompletableFuture<>();
 
     ZLinkActorHandoffPacket(
-        long arrivalIndex,
-        ZLinkStreamHeader header,
-        Message payload,
-        ZLinkActorReplyRoute replyRoute,
-        byte[] acceptedJournalRecord) {
+            long arrivalIndex,
+            ZLinkStreamHeader header,
+            Message payload,
+            ZLinkActorReplyRoute replyRoute,
+            byte[] acceptedJournalRecord) {
         this.arrivalIndex = arrivalIndex;
         this.header = header;
         this.payload = Message.from(payload);
         this.replyRoute = replyRoute;
-        byte[] journal = Objects.requireNonNull(
-            acceptedJournalRecord, "acceptedJournalRecord");
+        byte[] journal = Objects.requireNonNull(acceptedJournalRecord, "acceptedJournalRecord");
         if (journal.length == 0) {
-            throw new IllegalArgumentException(
-                "accepted Actor handoff journal record is required");
+            throw new IllegalArgumentException("accepted Actor handoff journal record is required");
         }
         this.acceptedJournalRecord = journal.clone();
     }
@@ -74,5 +73,4 @@ final class ZLinkActorHandoffPacket implements AutoCloseable {
     public void close() {
         payload.close();
     }
-
 }

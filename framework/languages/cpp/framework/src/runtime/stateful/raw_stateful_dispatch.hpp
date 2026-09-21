@@ -31,8 +31,7 @@ struct accepted_record_authority_query_t
     std::uint64_t source_node_generation = 0;
     std::vector<std::uint8_t> target_node_routing_id;
     std::uint64_t target_node_generation = 0;
-    protocol::frozen_source_kind_t source_kind =
-      protocol::frozen_source_kind_t::node;
+    protocol::frozen_source_kind_t source_kind = protocol::frozen_source_kind_t::node;
     std::optional<std::string> source_spot_id;
     std::optional<std::pair<std::string, std::uint64_t>> source_actor;
     std::optional<std::vector<std::uint8_t>> source_session_routing_id;
@@ -46,13 +45,12 @@ struct accepted_record_authority_t
     std::uint64_t target_owner_lease_generation = 0;
 };
 
-using accepted_record_authority_resolver_t = std::function<
-  std::optional<accepted_record_authority_t> (
+using accepted_record_authority_resolver_t =
+  std::function<std::optional<accepted_record_authority_t> (
     const accepted_record_authority_query_t &)>;
 
 accepted_record_authority_resolver_t
-make_location_store_authority_resolver (
-  zlink::framework::location_repository_t &store);
+make_location_store_authority_resolver (zlink::framework::location_repository_t &store);
 
 struct stateful_delivery_t
 {
@@ -62,17 +60,15 @@ struct stateful_delivery_t
     protocol::application_payload_t payload;
     bool request = false;
 
-    friend bool operator== (const stateful_delivery_t &,
-                            const stateful_delivery_t &) = default;
+    friend bool operator== (const stateful_delivery_t &, const stateful_delivery_t &) = default;
 };
 
 class raw_stateful_dispatch_t
 {
   public:
-    raw_stateful_dispatch_t (
-      stateful_object_runtime_t &objects,
-      mesh::raw_mesh_node_owner_t &transport,
-      accepted_record_authority_resolver_t authority_resolver = {});
+    raw_stateful_dispatch_t (stateful_object_runtime_t &objects,
+                             mesh::raw_mesh_node_owner_t &transport,
+                             accepted_record_authority_resolver_t authority_resolver = {});
 
     /* Flow-capture provider (flow-correlation §4): gates whether ingest
      * validates/materializes wire flow fields as flow values. Unset keeps
@@ -85,23 +81,20 @@ class raw_stateful_dispatch_t
     stateful_error_t ingest (const object_ref_t &owner);
     std::pair<stateful_error_t, std::optional<stateful_delivery_t>>
     try_claim (const object_ref_t &owner);
-    task_t<stateful_error_t> complete_async (
-      const stateful_delivery_t &delivery,
-      std::optional<protocol::application_payload_t> reply = std::nullopt);
+    task_t<stateful_error_t>
+    complete_async (const stateful_delivery_t &delivery,
+                    std::optional<protocol::application_payload_t> reply = std::nullopt);
     stateful_error_t stage_relocated (
       const object_ref_t &owner,
       turn_record_t turn,
-      std::function<bool (
-        const std::optional<protocol::application_payload_t> &)> terminal);
-    task_t<bool> complete_relocated_source_async (
-      const object_ref_t &owner,
-      std::uint64_t sequence,
-      const protocol::reply_relay_t &relay,
-      const std::optional<protocol::application_payload_t> &reply);
+      std::function<bool (const std::optional<protocol::application_payload_t> &)> terminal);
+    task_t<bool>
+    complete_relocated_source_async (const object_ref_t &owner,
+                                     std::uint64_t sequence,
+                                     const protocol::reply_relay_t &relay,
+                                     const std::optional<protocol::application_payload_t> &reply);
     stateful_error_t discard_pending (const object_ref_t &owner);
-    stateful_error_t discard_pending (
-      const object_ref_t &owner,
-      std::uint64_t sequence);
+    stateful_error_t discard_pending (const object_ref_t &owner, std::uint64_t sequence);
 
   private:
     struct delivery_key_t
@@ -122,42 +115,32 @@ class raw_stateful_dispatch_t
         protocol::frozen_record_t frozen;
         mesh::service_mailbox_record_t transport;
         bool request = false;
-        std::function<bool (
-          const std::optional<protocol::application_payload_t> &)>
+        std::function<bool (const std::optional<protocol::application_payload_t> &)>
           relocated_terminal;
         std::shared_ptr<mesh::service_mailbox_claim_t> mailbox_claim;
         bool relocated_completing = false;
     };
 
     static std::string mailbox_owner (const object_ref_t &owner);
-    static bool matches_application_route (
-      const object_ref_t &owner,
-      const protocol::actor_route_fence_t &route);
-    static bool matches_application_route (
-      const object_ref_t &owner,
-      const protocol::spot_route_fence_t &route);
-    static delivery_key_t delivery_key (
-      const object_ref_t &owner,
-      std::uint64_t sequence);
-    stateful_error_t commit_accepted_ingress (
-      const object_ref_t &owner,
-      turn_record_t turn,
-      pending_delivery_t pending,
-      bool allocate_sequence,
-      stateful_error_t collision_error);
+    static bool matches_application_route (const object_ref_t &owner,
+                                           const protocol::actor_route_fence_t &route);
+    static bool matches_application_route (const object_ref_t &owner,
+                                           const protocol::spot_route_fence_t &route);
+    static delivery_key_t delivery_key (const object_ref_t &owner, std::uint64_t sequence);
+    stateful_error_t commit_accepted_ingress (const object_ref_t &owner,
+                                              turn_record_t turn,
+                                              pending_delivery_t pending,
+                                              bool allocate_sequence,
+                                              stateful_error_t collision_error);
 
-    bool capture_flow () const
-    {
-        return !_flow_capture || _flow_capture ();
-    }
+    bool capture_flow () const { return !_flow_capture || _flow_capture (); }
 
     stateful_object_runtime_t *_objects;
     mesh::raw_mesh_node_owner_t *_transport;
     std::function<bool ()> _flow_capture;
     accepted_record_authority_resolver_t _authority_resolver;
     std::mutex _mutex;
-    std::map<std::pair<object_kind_t, std::string>, std::uint64_t>
-      _next_sequence;
+    std::map<std::pair<object_kind_t, std::string>, std::uint64_t> _next_sequence;
     std::map<delivery_key_t, pending_delivery_t> _pending;
     std::map<delivery_key_t, object_ref_t> _discarding_owners;
 };
@@ -204,9 +187,9 @@ struct raw_relocation_terminal_source_registration_t
     std::uint64_t participant_id = 0;
     std::uint64_t sequence = 0;
     std::uint64_t reply_route_id = 0;
-    std::function<bool (
-      const protocol::reply_relay_t &,
-      const std::optional<protocol::application_payload_t> &)> complete;
+    std::function<bool (const protocol::reply_relay_t &,
+                        const std::optional<protocol::application_payload_t> &)>
+      complete;
 };
 
 struct raw_relocation_terminal_target_registration_t
@@ -225,10 +208,8 @@ class raw_relocation_replay_coordinator_t
     using clock_t = std::chrono::steady_clock;
     explicit raw_relocation_replay_coordinator_t (
       mesh::raw_mesh_node_owner_t &transport,
-      std::chrono::milliseconds relay_retry_interval =
-        std::chrono::seconds (1),
-      std::chrono::milliseconds terminal_tombstone_retention =
-        std::chrono::hours (24));
+      std::chrono::milliseconds relay_retry_interval = std::chrono::seconds (1),
+      std::chrono::milliseconds terminal_tombstone_retention = std::chrono::hours (24));
 
     /* Flow-capture provider (flow-correlation §4): gates whether replayed
      * reply payloads validate/materialize wire flow fields as flow values.
@@ -239,37 +220,30 @@ class raw_relocation_replay_coordinator_t
     }
 
     bool register_target (raw_relocation_target_registration_t registration);
-    bool seal_target (
-      const protocol::relocation_id_t &relocation,
-      std::uint64_t target_attempt_generation,
-      const protocol::relocation_object_t &object);
-    bool drain_target (
-      const protocol::relocation_id_t &relocation,
-      std::uint64_t target_attempt_generation,
-      const protocol::relocation_object_t &object);
-    bool unregister_target (
-      const protocol::relocation_id_t &relocation,
-      std::uint64_t target_attempt_generation,
-      const protocol::relocation_object_t &object);
-    bool register_terminal_source (
-      raw_relocation_terminal_source_registration_t registration);
-    bool unregister_terminal_source (
-      const protocol::relocation_id_t &,
-      const protocol::wire_operation_id_t &);
-    bool register_terminal_target (
-      raw_relocation_terminal_target_registration_t registration);
+    bool seal_target (const protocol::relocation_id_t &relocation,
+                      std::uint64_t target_attempt_generation,
+                      const protocol::relocation_object_t &object);
+    bool drain_target (const protocol::relocation_id_t &relocation,
+                       std::uint64_t target_attempt_generation,
+                       const protocol::relocation_object_t &object);
+    bool unregister_target (const protocol::relocation_id_t &relocation,
+                            std::uint64_t target_attempt_generation,
+                            const protocol::relocation_object_t &object);
+    bool register_terminal_source (raw_relocation_terminal_source_registration_t registration);
+    bool unregister_terminal_source (const protocol::relocation_id_t &,
+                                     const protocol::wire_operation_id_t &);
+    bool register_terminal_target (raw_relocation_terminal_target_registration_t registration);
     task_t<std::size_t> retry_terminal_relays (clock_t::time_point now);
     std::size_t reap_terminal_tombstones (clock_t::time_point now);
     std::optional<clock_t::time_point> next_activity () const;
-    bool confirm_terminal_source_lease_expired (
-      const protocol::relocation_id_t &relocation,
-      const protocol::wire_operation_id_t &operation,
-      const protocol::request_source_fence_t &exact_source);
+    bool
+    confirm_terminal_source_lease_expired (const protocol::relocation_id_t &relocation,
+                                           const protocol::wire_operation_id_t &operation,
+                                           const protocol::request_source_fence_t &exact_source);
     std::size_t pending_terminal_relays () const;
     std::size_t terminal_retained_bytes () const;
     task_t<raw_relocation_replay_result_t> pump_one ();
-    task_t<raw_relocation_replay_result_t> process (
-      const mesh::service_mailbox_record_t &record);
+    task_t<raw_relocation_replay_result_t> process (const mesh::service_mailbox_record_t &record);
 
   private:
     struct key_t
@@ -285,9 +259,7 @@ class raw_relocation_replay_coordinator_t
         key_t target;
         bool active = false;
 
-        target_activity_guard_t (
-          raw_relocation_replay_coordinator_t *owner,
-          key_t target) noexcept;
+        target_activity_guard_t (raw_relocation_replay_coordinator_t *owner, key_t target) noexcept;
         ~target_activity_guard_t () noexcept;
         void activate () noexcept { active = true; }
     };
@@ -325,23 +297,18 @@ class raw_relocation_replay_coordinator_t
                       const protocol::relocation_object_t &object);
     void release_target_activity (const key_t &target) noexcept;
     static std::string mailbox_owner (const std::vector<std::uint8_t> &rid);
-    raw_relocation_replay_result_t process_data (
-      const mesh::service_mailbox_record_t &record,
-      const protocol::relocation_data_t &data);
-    task_t<raw_relocation_replay_result_t> process_reply_relay (
-      const mesh::service_mailbox_record_t &record,
-      const protocol::reply_relay_t &relay);
-    task_t<raw_relocation_replay_result_t> process_reply_relay_ack (
-      const mesh::service_mailbox_record_t &record,
-      const protocol::reply_relay_ack_t &ack);
-    static terminal_key_t terminal_key (
-      const protocol::relocation_id_t &relocation,
-      const protocol::wire_operation_id_t &operation);
+    raw_relocation_replay_result_t process_data (const mesh::service_mailbox_record_t &record,
+                                                 const protocol::relocation_data_t &data);
+    task_t<raw_relocation_replay_result_t>
+    process_reply_relay (const mesh::service_mailbox_record_t &record,
+                         const protocol::reply_relay_t &relay);
+    task_t<raw_relocation_replay_result_t>
+    process_reply_relay_ack (const mesh::service_mailbox_record_t &record,
+                             const protocol::reply_relay_ack_t &ack);
+    static terminal_key_t terminal_key (const protocol::relocation_id_t &relocation,
+                                        const protocol::wire_operation_id_t &operation);
 
-    bool capture_flow () const
-    {
-        return !_flow_capture || _flow_capture ();
-    }
+    bool capture_flow () const { return !_flow_capture || _flow_capture (); }
 
     mesh::raw_mesh_node_owner_t *_transport;
     std::function<bool ()> _flow_capture;

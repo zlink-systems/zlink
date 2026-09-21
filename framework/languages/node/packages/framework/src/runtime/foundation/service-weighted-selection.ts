@@ -59,9 +59,7 @@ export class SmoothWeightedSelection<T> {
     for (let attempts = 0; attempts < this.plan.values.length; attempts += 1) {
       const cursor = this.plan.cursor;
       const selected = this.plan.values[cursor]!;
-      const nextCursor = cursor + 1 < this.plan.values.length
-        ? cursor + 1
-        : this.plan.cycleStart;
+      const nextCursor = cursor + 1 < this.plan.values.length ? cursor + 1 : this.plan.cycleStart;
       this.plan.cursor = nextCursor;
       if (accept(selected)) return selected;
     }
@@ -73,17 +71,14 @@ function buildSelectionPlan<T>(
   eligible: readonly ServiceWeightedSelectionCandidate<T>[],
   current: Map<string, bigint>
 ): SelectionPlan<T> {
-  const candidates: readonly WeightedCandidate<T>[] = eligible.map(candidate => ({
+  const candidates: readonly WeightedCandidate<T>[] = eligible.map((candidate) => ({
     ...candidate,
     weight: BigInt(candidate.weight)
   }));
   const total = candidates.reduce((sum, candidate) => sum + candidate.weight, 0n);
   replaceState(
     current,
-    new Map(candidates.map(candidate => [
-      candidate.id,
-      current.get(candidate.id) ?? 0n
-    ]))
+    new Map(candidates.map((candidate) => [candidate.id, current.get(candidate.id) ?? 0n]))
   );
   if (total === 0n) return emptyCycle();
 
@@ -93,12 +88,14 @@ function buildSelectionPlan<T>(
   const working = new Map(current);
   const startedAt = performance.now();
   for (;;) {
-    if (values.length >= MAX_CYCLE_SEARCH_STEPS
-      || performance.now() - startedAt >= MAX_CYCLE_SEARCH_MS) {
+    if (
+      values.length >= MAX_CYCLE_SEARCH_STEPS ||
+      performance.now() - startedAt >= MAX_CYCLE_SEARCH_MS
+    ) {
       return { kind: 'direct', candidates };
     }
     const stateKey = candidates
-      .map(candidate => `${candidate.id}\u0000${working.get(candidate.id) ?? 0n}`)
+      .map((candidate) => `${candidate.id}\u0000${working.get(candidate.id) ?? 0n}`)
       .join('\u0001');
     const cycleStart = seen.get(stateKey);
     if (cycleStart !== undefined) {
@@ -157,10 +154,7 @@ function selectDirect<T>(
   return selected.value;
 }
 
-function replaceState(
-  target: Map<string, bigint>,
-  source: ReadonlyMap<string, bigint>
-): void {
+function replaceState(target: Map<string, bigint>, source: ReadonlyMap<string, bigint>): void {
   target.clear();
   for (const [key, value] of source) target.set(key, value);
 }

@@ -1,22 +1,18 @@
 package systems.zlink.framework.kotlin
 
-
 import java.util.concurrent.CompletionException
-import java.util.concurrent.ExecutionException
 import java.util.concurrent.CompletionStage
-import kotlinx.coroutines.suspendCancellableCoroutine
+import java.util.concurrent.ExecutionException
 import kotlin.coroutines.resume
 import kotlin.coroutines.resumeWithException
+import kotlinx.coroutines.suspendCancellableCoroutine
 
-public suspend fun <T> CompletionStage<T>.await(): T =
-    awaitFrameworkStage(this)
+public suspend fun <T> CompletionStage<T>.await(): T = awaitFrameworkStage(this)
 
 @PublishedApi
 internal suspend fun <T> awaitFrameworkStage(stage: CompletionStage<T>): T {
     return suspendCancellableCoroutine { continuation ->
-        continuation.invokeOnCancellation {
-            stage.toCompletableFuture().cancel(false)
-        }
+        continuation.invokeOnCancellation { stage.toCompletableFuture().cancel(false) }
         stage.whenComplete { value, error ->
             if (error == null) {
                 continuation.resume(value)
@@ -30,7 +26,6 @@ internal suspend fun <T> awaitFrameworkStage(stage: CompletionStage<T>): T {
 private fun unwrapCompletionError(error: Throwable): Throwable =
     when (error) {
         is CompletionException,
-        is ExecutionException,
-        -> error.cause ?: error
+        is ExecutionException -> error.cause ?: error
         else -> error
     }

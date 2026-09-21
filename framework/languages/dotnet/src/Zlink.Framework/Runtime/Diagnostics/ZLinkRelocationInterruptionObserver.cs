@@ -6,21 +6,26 @@ internal enum ZLinkRelocationUnitKind
 {
     Actor,
     InstanceSpot,
-    UserSpot
+    UserSpot,
 }
 
 internal sealed class ZLinkRelocationInterruptionObserver
 {
     private static readonly Action<
-            ILogger, string, string?, bool, double, Exception?>
-        TargetExceeded = LoggerMessage.Define<
-            string, string?, bool, double>(
-            LogLevel.Warning,
-            new EventId(28001, "zlink.runtime.relocation.changed"),
-            "zlink.runtime.relocation.changed unit_kind={UnitKind} "
+        ILogger,
+        string,
+        string?,
+        bool,
+        double,
+        Exception?
+    > TargetExceeded = LoggerMessage.Define<string, string?, bool, double>(
+        LogLevel.Warning,
+        new EventId(28001, "zlink.runtime.relocation.changed"),
+        "zlink.runtime.relocation.changed unit_kind={UnitKind} "
             + "execution_mode={ExecutionMode} "
             + "interruption_target_exceeded={InterruptionTargetExceeded} "
-            + "duration_seconds={DurationSeconds}");
+            + "duration_seconds={DurationSeconds}"
+    );
 
     private readonly ILogger? _logger;
     private readonly TimeProvider _timeProvider;
@@ -29,7 +34,8 @@ internal sealed class ZLinkRelocationInterruptionObserver
     internal ZLinkRelocationInterruptionObserver(
         ILoggerFactory? loggerFactory,
         TimeProvider? timeProvider = null,
-        TimeSpan? target = null)
+        TimeSpan? target = null
+    )
     {
         _logger = CreateLogger(loggerFactory);
         _timeProvider = timeProvider ?? TimeProvider.System;
@@ -40,8 +46,7 @@ internal sealed class ZLinkRelocationInterruptionObserver
     {
         try
         {
-            return loggerFactory?.CreateLogger(
-                "Zlink.Framework.Relocation");
+            return loggerFactory?.CreateLogger("Zlink.Framework.Relocation");
         }
         catch
         {
@@ -51,42 +56,31 @@ internal sealed class ZLinkRelocationInterruptionObserver
 
     internal ZLinkRelocationInterruptionOperation Start(
         ZLinkRelocationUnitKind unitKind,
-        string? executionMode = null)
+        string? executionMode = null
+    )
     {
-        if (!ZLinkRuntimeMetrics.RelocationInterruptionEnabled
-            && !WarningEnabled())
+        if (!ZLinkRuntimeMetrics.RelocationInterruptionEnabled && !WarningEnabled())
             return ZLinkRelocationInterruptionOperation.Disabled;
 
         return new ZLinkRelocationInterruptionOperation(
             this,
             _timeProvider.GetTimestamp(),
             UnitKind(unitKind),
-            executionMode);
+            executionMode
+        );
     }
 
-    internal void Complete(
-        long startedTimestamp,
-        string unitKind,
-        string? executionMode)
+    internal void Complete(long startedTimestamp, string unitKind, string? executionMode)
     {
         var duration = _timeProvider.GetElapsedTime(startedTimestamp);
-        ZLinkRuntimeMetrics.RecordRelocationInterruption(
-            duration,
-            unitKind,
-            executionMode);
+        ZLinkRuntimeMetrics.RecordRelocationInterruption(duration, unitKind, executionMode);
         var logger = _logger;
         if (duration <= _target || logger is null || !WarningEnabled())
             return;
 
         try
         {
-            TargetExceeded(
-                logger,
-                unitKind,
-                executionMode,
-                true,
-                duration.TotalSeconds,
-                null);
+            TargetExceeded(logger, unitKind, executionMode, true, duration.TotalSeconds, null);
         }
         catch
         {
@@ -106,21 +100,19 @@ internal sealed class ZLinkRelocationInterruptionObserver
         }
     }
 
-    private static string UnitKind(
-        ZLinkRelocationUnitKind unitKind) =>
+    private static string UnitKind(ZLinkRelocationUnitKind unitKind) =>
         unitKind switch
         {
             ZLinkRelocationUnitKind.Actor => "actor",
             ZLinkRelocationUnitKind.InstanceSpot => "instance_spot",
             ZLinkRelocationUnitKind.UserSpot => "user_spot",
-            _ => throw new ArgumentOutOfRangeException(nameof(unitKind))
+            _ => throw new ArgumentOutOfRangeException(nameof(unitKind)),
         };
 }
 
 internal sealed class ZLinkRelocationInterruptionOperation
 {
-    internal static readonly ZLinkRelocationInterruptionOperation Disabled =
-        new(null, 0, "", null);
+    internal static readonly ZLinkRelocationInterruptionOperation Disabled = new(null, 0, "", null);
 
     private readonly ZLinkRelocationInterruptionObserver? _observer;
     private readonly long _startedTimestamp;
@@ -132,7 +124,8 @@ internal sealed class ZLinkRelocationInterruptionOperation
         ZLinkRelocationInterruptionObserver? observer,
         long startedTimestamp,
         string unitKind,
-        string? executionMode)
+        string? executionMode
+    )
     {
         _observer = observer;
         _startedTimestamp = startedTimestamp;
@@ -144,12 +137,8 @@ internal sealed class ZLinkRelocationInterruptionOperation
 
     internal void Complete()
     {
-        if (_observer is null
-            || Interlocked.Exchange(ref _completed, 1) != 0)
+        if (_observer is null || Interlocked.Exchange(ref _completed, 1) != 0)
             return;
-        _observer.Complete(
-            _startedTimestamp,
-            _unitKind,
-            _executionMode);
+        _observer.Complete(_startedTimestamp, _unitKind, _executionMode);
     }
 }

@@ -41,8 +41,7 @@ class owner_lease_time_store_t final : public location_store_t
                 if (!_watched_authority_fragment.empty ()
                     && key.value.find (_watched_authority_fragment) != std::string::npos)
                     ++_watched_authority_reads;
-                if (inject_owner_time
-                    && _watched_authority_reads == _authority_reads_before_owner)
+                if (inject_owner_time && _watched_authority_reads == _authority_reads_before_owner)
                     _owner_read_in_expected_order = true;
             }
         }
@@ -53,8 +52,7 @@ class owner_lease_time_store_t final : public location_store_t
                     found->value.expires_at.reset ();
                 else
                     found->value.expires_at =
-                      found->value.store_now
-                      + (_lease_view == lease_view_t::live ? 1min : 0min);
+                      found->value.store_now + (_lease_view == lease_view_t::live ? 1min : 0min);
             }
         }
         return task_t<store_read_result_t> (

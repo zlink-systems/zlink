@@ -6,7 +6,8 @@ internal static class ZLinkSpotStartupValidator
 {
     public static async ValueTask ValidateAsync(
         IServiceProvider services,
-        ZLinkFrameworkRegistration registration)
+        ZLinkFrameworkRegistration registration
+    )
     {
         foreach (var spotNode in registration.SpotNodes.Values)
         foreach (var spotType in spotNode.SpotFactories)
@@ -15,14 +16,14 @@ internal static class ZLinkSpotStartupValidator
             var context = new StartupConfigurationContext(
                 spotType,
                 spotNode.SpotNodeName,
-                spotNode.SpotMeshChannelName ?? spotNode.SpotNodeName);
-            var spot = (IZLinkSpot)ActivatorUtilities.CreateInstance(
-                scope.ServiceProvider,
-                spotType,
-                context);
+                spotNode.SpotMeshChannelName ?? spotNode.SpotNodeName
+            );
+            var spot = (IZLinkSpot)
+                ActivatorUtilities.CreateInstance(scope.ServiceProvider, spotType, context);
             if (!ReferenceEquals(spot.Context, context))
                 throw new ZLinkConfigurationException(
-                    $"SPOT '{spotType}' must expose the context provided by the runtime.");
+                    $"SPOT '{spotType}' must expose the context provided by the runtime."
+                );
 
             foreach (var handler in registration.ScannedHandlerCatalog.SpotHandlers)
                 context.AddScannedHandler(spotType, handler);
@@ -32,23 +33,21 @@ internal static class ZLinkSpotStartupValidator
         }
     }
 
-    private sealed class StartupConfigurationContext :
-        IZLinkSpotContext,
-        IZLinkSpotHandlerRegistrySink
+    private sealed class StartupConfigurationContext
+        : IZLinkSpotContext,
+            IZLinkSpotHandlerRegistrySink
     {
         private readonly ZLinkSpotActorHandlerRegistry _actorHandlers;
         private readonly ZLinkSpotPacketRegistry _packets = new();
         private readonly string _spotNodeName;
         private readonly ZLinkSpotSubscriptionRegistry _subscriptions = new();
 
-        public StartupConfigurationContext(
-            Type spotType,
-            string spotNodeName,
-            string meshName)
+        public StartupConfigurationContext(Type spotType, string spotNodeName, string meshName)
         {
             _actorHandlers = new ZLinkSpotActorHandlerRegistry(
                 ZLinkSpotActorHandlerSurface.UserSpot,
-                spotType);
+                spotType
+            );
             _spotNodeName = spotNodeName;
             MeshName = meshName;
             Handlers = new ZLinkSpotHandlerRegistrySurface(this);
@@ -70,39 +69,45 @@ internal static class ZLinkSpotStartupValidator
             string name,
             TimeSpan period,
             ZLinkTimerOptions? options = null,
-            CancellationToken cancellationToken = default)
+            CancellationToken cancellationToken = default
+        )
             where THandler : class => throw ConfigurationOnly();
 
         public IZLinkWorkerCall<TResult> RunCpuWorker<TResult>(
-            Func<CancellationToken, TResult> work) => throw ConfigurationOnly();
+            Func<CancellationToken, TResult> work
+        ) => throw ConfigurationOnly();
 
         public IZLinkWorkerCall<TResult> RunIoWorker<TResult>(
-            Func<CancellationToken, ValueTask<TResult>> work) => throw ConfigurationOnly();
+            Func<CancellationToken, ValueTask<TResult>> work
+        ) => throw ConfigurationOnly();
 
-        public IZLinkSpotRelocationReadyCall RelocationReady() =>
-            throw ConfigurationOnly();
+        public IZLinkSpotRelocationReadyCall RelocationReady() => throw ConfigurationOnly();
 
         public ValueTask LeaveActorAsync(
             IZLinkActor actor,
-            CancellationToken cancellationToken = default) => throw ConfigurationOnly();
+            CancellationToken cancellationToken = default
+        ) => throw ConfigurationOnly();
 
-        public ValueTask<bool> CloseAsync(
-            CancellationToken cancellationToken = default) => throw ConfigurationOnly();
+        public ValueTask<bool> CloseAsync(CancellationToken cancellationToken = default) =>
+            throw ConfigurationOnly();
 
-        public void AddPacket<THandler>() where THandler : class =>
-            _packets.Add(typeof(THandler));
+        public void AddPacket<THandler>()
+            where THandler : class => _packets.Add(typeof(THandler));
 
-        public void AddSubscribe<THandler>(string channelName, string topic) where THandler : class
+        public void AddSubscribe<THandler>(string channelName, string topic)
+            where THandler : class
         {
             _subscriptions.Add(channelName, topic, typeof(THandler));
         }
 
-        public void AddHandler<THandler>() where THandler : class
+        public void AddHandler<THandler>()
+            where THandler : class
         {
             _actorHandlers.AddHandler(typeof(THandler), null);
         }
 
-        public void AddHandler<THandler>(string packetName) where THandler : class
+        public void AddHandler<THandler>(string packetName)
+            where THandler : class
         {
             if (string.IsNullOrWhiteSpace(packetName))
                 throw new ZLinkConfigurationException("Actor packet name must not be empty.");
@@ -125,11 +130,10 @@ internal static class ZLinkSpotStartupValidator
             _actorHandlers.AddPacket(typeof(THandler), typeof(TActor), packetName);
         }
 
-        public void AddScannedHandler(
-            Type spotType,
-            ZLinkScannedSpotHandler handler)
+        public void AddScannedHandler(Type spotType, ZLinkScannedSpotHandler handler)
         {
-            if (handler.SpotType != spotType) return;
+            if (handler.SpotType != spotType)
+                return;
 
             switch (handler.Kind)
             {
@@ -137,16 +141,32 @@ internal static class ZLinkSpotStartupValidator
                     _packets.Add(handler);
                     break;
                 case ZLinkScannedSpotHandlerKind.Subscription:
-                    if (handler.SpotNodeName is not null
-                        && !string.Equals(handler.SpotNodeName, _spotNodeName, StringComparison.Ordinal)) break;
-                    var topic = handler.Topic
-                                ?? throw new ZLinkConfigurationException(
-                                    "Scanned SPOT subscription requires a topic.");
-                    var channelName = handler.ChannelName
-                                      ?? throw new ZLinkConfigurationException(
-                                          "Scanned SPOT subscription requires a channel name.");
+                    if (
+                        handler.SpotNodeName is not null
+                        && !string.Equals(
+                            handler.SpotNodeName,
+                            _spotNodeName,
+                            StringComparison.Ordinal
+                        )
+                    )
+                        break;
+                    var topic =
+                        handler.Topic
+                        ?? throw new ZLinkConfigurationException(
+                            "Scanned SPOT subscription requires a topic."
+                        );
+                    var channelName =
+                        handler.ChannelName
+                        ?? throw new ZLinkConfigurationException(
+                            "Scanned SPOT subscription requires a channel name."
+                        );
                     if (handler.Method is { } subscriptionMethod)
-                        _subscriptions.Add(channelName, topic, handler.HandlerType, subscriptionMethod);
+                        _subscriptions.Add(
+                            channelName,
+                            topic,
+                            handler.HandlerType,
+                            subscriptionMethod
+                        );
                     else
                         _subscriptions.Add(channelName, topic, handler.HandlerType);
                     break;
@@ -155,19 +175,23 @@ internal static class ZLinkSpotStartupValidator
                     _actorHandlers.AddPacket(
                         handler.HandlerType,
                         handler.ActorType
-                        ?? throw new ZLinkConfigurationException(
-                            "Scanned SPOT actor handler requires an actor type."),
-                        handler.PacketName);
+                            ?? throw new ZLinkConfigurationException(
+                                "Scanned SPOT actor handler requires an actor type."
+                            ),
+                        handler.PacketName
+                    );
                     break;
                 case ZLinkScannedSpotHandlerKind.Timer:
                     ZLinkSpotTimerRegistry.ValidateRegistration(
                         handler.TimerName ?? string.Empty,
                         handler.TimerPeriod,
-                        null);
+                        null
+                    );
                     break;
                 default:
                     throw new ZLinkConfigurationException(
-                        $"Unsupported scanned SPOT handler kind '{handler.Kind}'.");
+                        $"Unsupported scanned SPOT handler kind '{handler.Kind}'."
+                    );
             }
         }
 
@@ -178,7 +202,9 @@ internal static class ZLinkSpotStartupValidator
             _actorHandlers.Bind();
         }
 
-        private static ZLinkConfigurationException ConfigurationOnly() => new(
-            "SPOT lifecycle operations are not available while startup configuration is being validated.");
+        private static ZLinkConfigurationException ConfigurationOnly() =>
+            new(
+                "SPOT lifecycle operations are not available while startup configuration is being validated."
+            );
     }
 }

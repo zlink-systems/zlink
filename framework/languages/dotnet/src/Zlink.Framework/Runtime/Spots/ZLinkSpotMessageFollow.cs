@@ -1,4 +1,5 @@
 using System.Diagnostics;
+
 namespace Zlink.Framework.Runtime.Spots;
 
 internal enum ZLinkSpotMessageFollowResult
@@ -6,7 +7,7 @@ internal enum ZLinkSpotMessageFollowResult
     NotApplicable,
     Followed,
     StaleRejected,
-    Full
+    Full,
 }
 
 internal sealed class ZLinkSpotMessageFollow(
@@ -19,33 +20,31 @@ internal sealed class ZLinkSpotMessageFollow(
     ZLinkLocationOwnerToken sourceOwner,
     ZLinkLocationOwnerToken targetOwner,
     TimeSpan expiresAt,
-    ZLinkBoundedIngressAdmission? admission = null)
+    ZLinkBoundedIngressAdmission? admission = null
+)
 {
     private readonly ZLinkBoundedIngressAdmission _admission =
         admission ?? new ZLinkBoundedIngressAdmission();
-    private readonly ZLinkMessageFollowSuppressionRegistry _suppression =
-        new(capacity: 1);
+    private readonly ZLinkMessageFollowSuppressionRegistry _suppression = new(capacity: 1);
 
     internal RoutingId TargetNodeRid { get; } = targetNodeRid;
     internal ulong ObjectGeneration { get; } = objectGeneration;
     internal ulong SourceNodeGeneration { get; } = sourceNodeGeneration;
     internal ulong TargetNodeGeneration { get; } = targetNodeGeneration;
-    internal ulong SourceAuthorityOwnerGeneration { get; } =
-        sourceAuthorityOwnerGeneration;
-    internal ulong TargetAuthorityOwnerGeneration { get; } =
-        targetAuthorityOwnerGeneration;
+    internal ulong SourceAuthorityOwnerGeneration { get; } = sourceAuthorityOwnerGeneration;
+    internal ulong TargetAuthorityOwnerGeneration { get; } = targetAuthorityOwnerGeneration;
     internal ZLinkLocationOwnerToken SourceOwner { get; } = sourceOwner;
     internal ZLinkLocationOwnerToken TargetOwner { get; } = targetOwner;
     internal TimeSpan ExpiresAt { get; } = expiresAt;
 
-    internal bool ShouldRemoveAfterRejectedFrame(TimeSpan now) =>
-        ExpiresAt <= now;
+    internal bool ShouldRemoveAfterRejectedFrame(TimeSpan now) => ExpiresAt <= now;
 
     internal bool MatchesSourceRoute(
         ZLinkBackendRouteReceived received,
         ulong currentObjectGeneration,
         ZLinkLocationOwnerToken? currentSourceOwner,
-        TimeSpan now) =>
+        TimeSpan now
+    ) =>
         ExpiresAt > now
         && received.MessageFollowHopCount < 8
         && received.OperationId.High != 0
@@ -56,14 +55,10 @@ internal sealed class ZLinkSpotMessageFollow(
         && received.AuthorityOwnerGeneration == SourceAuthorityOwnerGeneration
         && SourceOwner.LeaseGeneration > 0
         && TargetOwner.LeaseGeneration > 0
-        && received.OwnerLeaseGeneration
-           == checked((ulong)SourceOwner.LeaseGeneration)
-        && SourceAuthorityOwnerGeneration
-           is > 0 and <= long.MaxValue
-        && TargetAuthorityOwnerGeneration
-           is > 0 and <= long.MaxValue
-        && TargetAuthorityOwnerGeneration
-           > SourceAuthorityOwnerGeneration
+        && received.OwnerLeaseGeneration == checked((ulong)SourceOwner.LeaseGeneration)
+        && SourceAuthorityOwnerGeneration is > 0 and <= long.MaxValue
+        && TargetAuthorityOwnerGeneration is > 0 and <= long.MaxValue
+        && TargetAuthorityOwnerGeneration > SourceAuthorityOwnerGeneration
         && currentSourceOwner is { } owner
         && owner == SourceOwner;
 
@@ -79,8 +74,7 @@ internal sealed class ZLinkSpotMessageFollow(
         return true;
     }
 
-    internal (int Records, long Bytes) AdmissionSnapshot() =>
-        _admission.Snapshot();
+    internal (int Records, long Bytes) AdmissionSnapshot() => _admission.Snapshot();
 
     internal bool TryBeginMessageFollowNotice(ZLinkMessageFollowFence fence) =>
         _suppression.TryBegin(fence);
@@ -91,20 +85,17 @@ internal sealed class ZLinkSpotMessageFollow(
     internal void AbortMessageFollowNotice(ZLinkMessageFollowFence fence) =>
         _suppression.Abort(fence);
 
-    internal async ValueTask WaitForExpiryAndDrainAsync(
-        CancellationToken cancellationToken)
+    internal async ValueTask WaitForExpiryAndDrainAsync(CancellationToken cancellationToken)
     {
         var remaining = ExpiresAt - Stopwatch.GetElapsedTime(0);
         if (remaining > TimeSpan.Zero)
             await Task.Delay(remaining, cancellationToken).ConfigureAwait(false);
-        await _admission.CloseAndWaitForEmptyAsync(cancellationToken)
-            .ConfigureAwait(false);
+        await _admission.CloseAndWaitForEmptyAsync(cancellationToken).ConfigureAwait(false);
         _suppression.ExpireAll();
     }
 
-    internal sealed class AdmissionLease(
-        ZLinkBoundedIngressAdmission admission,
-        long bytes) : IDisposable
+    internal sealed class AdmissionLease(ZLinkBoundedIngressAdmission admission, long bytes)
+        : IDisposable
     {
         private int _disposed;
 

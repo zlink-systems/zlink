@@ -7,8 +7,7 @@ import java.util.concurrent.ExecutionException;
 import java.util.concurrent.TimeoutException;
 
 public final class ZLinkStreamAssert {
-    private ZLinkStreamAssert() {
-    }
+    private ZLinkStreamAssert() {}
 
     public static void ensure(boolean condition, String message) {
         if (message == null || message.isBlank()) {
@@ -19,9 +18,7 @@ public final class ZLinkStreamAssert {
         }
     }
 
-    public static ZLinkStreamError expectFailure(
-        ThrowingRunnable action,
-        String errorKind) {
+    public static ZLinkStreamError expectFailure(ThrowingRunnable action, String errorKind) {
         Objects.requireNonNull(action, "action");
         Throwable failure;
         try {
@@ -33,14 +30,15 @@ public final class ZLinkStreamAssert {
         throw new IllegalStateException("Expected action to fail.");
     }
 
-    private static ZLinkStreamError requireKind(
-        ZLinkStreamError streamError,
-        String errorKind) {
+    private static ZLinkStreamError requireKind(ZLinkStreamError streamError, String errorKind) {
         if (errorKind != null && !streamError.code().name().equals(errorKind)) {
             throw new IllegalStateException(
-                "Expected failure kind '" + errorKind + "', got '"
-                    + streamError.code().name() + "'.",
-                streamError.exception());
+                    "Expected failure kind '"
+                            + errorKind
+                            + "', got '"
+                            + streamError.code().name()
+                            + "'.",
+                    streamError.exception());
         }
         return streamError;
     }
@@ -48,7 +46,7 @@ public final class ZLinkStreamAssert {
     public static void expectTimeout(ThrowingRunnable action) {
         ZLinkStreamError error = expectFailure(action, null);
         if (error.code() != ZLinkStreamErrorCode.REQUEST_TIMEOUT
-            && error.code() != ZLinkStreamErrorCode.CONNECT_TIMEOUT) {
+                && error.code() != ZLinkStreamErrorCode.CONNECT_TIMEOUT) {
             rethrow(error.exception());
         }
     }
@@ -61,9 +59,11 @@ public final class ZLinkStreamAssert {
         }
         ZLinkStreamErrorCode code;
         if (failure instanceof TimeoutException) {
-            code = failure.getMessage() != null && failure.getMessage().startsWith("connect timed out")
-                ? ZLinkStreamErrorCode.CONNECT_TIMEOUT
-                : ZLinkStreamErrorCode.REQUEST_TIMEOUT;
+            code =
+                    failure.getMessage() != null
+                                    && failure.getMessage().startsWith("connect timed out")
+                            ? ZLinkStreamErrorCode.CONNECT_TIMEOUT
+                            : ZLinkStreamErrorCode.REQUEST_TIMEOUT;
         } else if (failure instanceof IllegalArgumentException) {
             code = ZLinkStreamErrorCode.VALIDATION_FAILED;
         } else if (failure instanceof IOException) {
@@ -81,7 +81,7 @@ public final class ZLinkStreamAssert {
     private static Throwable unwrap(Throwable error) {
         Throwable current = error;
         while ((current instanceof CompletionException || current instanceof ExecutionException)
-            && current.getCause() != null) {
+                && current.getCause() != null) {
             current = current.getCause();
         }
         return current;

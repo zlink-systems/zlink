@@ -4,21 +4,23 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
-import java.util.List;
-import java.time.Duration;
 import org.junit.jupiter.api.Test;
 import org.springframework.context.annotation.AnnotationConfigApplicationContext;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
+
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendAdapterProvider;
 import systems.zlink.framework.spring.internal.runtime.ZLinkFrameworkLifecycle;
 import systems.zlink.framework.testkit.FakeZLinkBackendAdapterFactory;
 
+import java.time.Duration;
+import java.util.List;
+
 final class HostTest {
     @Test
     void springShutdownUsesFrameworkTerminationDeadline() throws Exception {
-        var field = ZLinkFrameworkLifecycle.class
-            .getDeclaredField("SPRING_SHUTDOWN_DRAIN_DEADLINE");
+        var field =
+                ZLinkFrameworkLifecycle.class.getDeclaredField("SPRING_SHUTDOWN_DRAIN_DEADLINE");
         field.setAccessible(true);
 
         assertEquals(Duration.ofSeconds(30), field.get(null));
@@ -26,14 +28,14 @@ final class HostTest {
 
     @Test
     void host_startsAndStops_frameworkRuntimeContext() throws Exception {
-        FakeZLinkBackendAdapterFactory backendFactory =
-            new FakeZLinkBackendAdapterFactory();
+        FakeZLinkBackendAdapterFactory backendFactory = new FakeZLinkBackendAdapterFactory();
         MonitorRecvProbe monitor = new MonitorRecvProbe();
         ZLinkFrameworkLifecycle lifecycle;
 
         try (AnnotationConfigApplicationContext context =
-                 new AnnotationConfigApplicationContext()) {
-            context.registerBean(ZLinkBackendAdapterProvider.class, () -> monitor.observe(backendFactory));
+                new AnnotationConfigApplicationContext()) {
+            context.registerBean(
+                    ZLinkBackendAdapterProvider.class, () -> monitor.observe(backendFactory));
             context.register(ProfileChannelConfig.class, ZLinkFrameworkAutoConfiguration.class);
             context.refresh();
             monitor.awaitRecv();
@@ -52,22 +54,21 @@ final class HostTest {
         // opened before connect so events are queued for pull consumption, and
         // spec 55 section 6 closes it no later than the connection it observes.
         assertEquals(
-            List.of(
-                "factory.channel",
-                "create.context",
-                "factory.monitoring",
-                "create.dealer",
-                "dealer.setChannelName.profile",
-                "monitoring.open.dealer",
-                "create.socketMonitor",
-                "dealer.connect.inproc://profile-server",
-                "close.socketMonitor",
-                "close.dealer",
-                "close.context"),
-            backendFactory.calls());
-        assertEquals(List.of(
-            "socketMonitor.waitForReadable", "close.socketMonitor"),
-            monitor.calls());
+                List.of(
+                        "factory.channel",
+                        "create.context",
+                        "factory.monitoring",
+                        "create.dealer",
+                        "dealer.setChannelName.profile",
+                        "monitoring.open.dealer",
+                        "create.socketMonitor",
+                        "dealer.connect.inproc://profile-server",
+                        "close.socketMonitor",
+                        "close.dealer",
+                        "close.context"),
+                backendFactory.calls());
+        assertEquals(
+                List.of("socketMonitor.waitForReadable", "close.socketMonitor"), monitor.calls());
     }
 
     @Configuration
@@ -75,10 +76,10 @@ final class HostTest {
     static class ProfileChannelConfig {
         @Bean
         ZLinkFrameworkConfigurer profileChannelConfigurer() {
-            return options -> options.addClientServerChannel("profile")
-                .client()
-                .connect("inproc://profile-server");
+            return options ->
+                    options.addClientServerChannel("profile")
+                            .client()
+                            .connect("inproc://profile-server");
         }
     }
-
 }

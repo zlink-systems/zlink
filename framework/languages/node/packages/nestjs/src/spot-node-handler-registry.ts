@@ -30,13 +30,17 @@ export class SpotNodeHandlerRegistry {
         Object.fromEntries(Object.entries(value).map(([name, node]) => [name, { ...node }]))
       );
     }
-    return new SpotNodeHandlerRegistry(Object.fromEntries(value.map((node) => {
-      if (typeof node === 'string') {
-        return [node, {}];
-      }
-      const { name, ...options } = node;
-      return [name, { ...options }];
-    })));
+    return new SpotNodeHandlerRegistry(
+      Object.fromEntries(
+        value.map((node) => {
+          if (typeof node === 'string') {
+            return [node, {}];
+          }
+          const { name, ...options } = node;
+          return [name, { ...options }];
+        })
+      )
+    );
   }
 
   get isEmpty(): boolean {
@@ -51,10 +55,7 @@ export class SpotNodeHandlerRegistry {
     entrySpotType: NonNullable<ZLinkSpotNodeOptions['entrySpotType']>,
     missingMessage: string
   ): readonly MutableSpotNode[] {
-    return this.requireTargets(
-      (node) => node.entrySpotType === entrySpotType,
-      missingMessage
-    );
+    return this.requireTargets((node) => node.entrySpotType === entrySpotType, missingMessage);
   }
 
   spotTargets(
@@ -62,13 +63,19 @@ export class SpotNodeHandlerRegistry {
     missingMessage: string
   ): readonly MutableSpotNode[] {
     return this.requireTargets(
-      (node) => (node.spotFactories ?? []).includes(spotType as Type<ZLinkSpot>)
-        || Object.values(node.instanceSpotFactories ?? {}).includes(spotType as Type<ZLinkInstanceSpot>),
+      (node) =>
+        (node.spotFactories ?? []).includes(spotType as Type<ZLinkSpot>) ||
+        Object.values(node.instanceSpotFactories ?? {}).includes(
+          spotType as Type<ZLinkInstanceSpot>
+        ),
       missingMessage
     );
   }
 
-  addEntrySpotTimer(node: MutableSpotNode, registration: ZLinkEntrySpotTimerHandlerRegistration): void {
+  addEntrySpotTimer(
+    node: MutableSpotNode,
+    registration: ZLinkEntrySpotTimerHandlerRegistration
+  ): void {
     node.entrySpotTimerHandlers = [...(node.entrySpotTimerHandlers ?? []), registration];
   }
 
@@ -76,43 +83,61 @@ export class SpotNodeHandlerRegistry {
     node.spotTimerHandlers = [...(node.spotTimerHandlers ?? []), registration];
   }
 
-  addEntrySpotPacket(node: MutableSpotNode, registration: ZLinkEntrySpotPacketHandlerRegistration): void {
+  addEntrySpotPacket(
+    node: MutableSpotNode,
+    registration: ZLinkEntrySpotPacketHandlerRegistration
+  ): void {
     const packetName = registration.packetName ?? registration.handlerType.name;
     this.assertUnique(
       node.entrySpotPacketHandlers,
-      (existing) => existing.entrySpotType === registration.entrySpotType &&
+      (existing) =>
+        existing.entrySpotType === registration.entrySpotType &&
         (existing.packetName ?? existing.handlerType.name) === packetName,
       `Duplicate Entry Spot packet handler '${registration.entrySpotType.name}:${packetName}'.`
     );
     node.entrySpotPacketHandlers = [...(node.entrySpotPacketHandlers ?? []), registration];
   }
 
-  addEntrySpotSubscription(node: MutableSpotNode, registration: ZLinkEntrySpotSubscriptionHandlerRegistration): void {
+  addEntrySpotSubscription(
+    node: MutableSpotNode,
+    registration: ZLinkEntrySpotSubscriptionHandlerRegistration
+  ): void {
     this.assertUnique(
       node.entrySpotSubscriptionHandlers,
-      (existing) => existing.entrySpotType === registration.entrySpotType &&
-        existing.channelName === registration.channelName && existing.topic === registration.topic,
+      (existing) =>
+        existing.entrySpotType === registration.entrySpotType &&
+        existing.channelName === registration.channelName &&
+        existing.topic === registration.topic,
       `Duplicate Entry Spot subscription handler '${registration.entrySpotType.name}:${registration.channelName}:${registration.topic}'.`
     );
-    node.entrySpotSubscriptionHandlers = [...(node.entrySpotSubscriptionHandlers ?? []), registration];
+    node.entrySpotSubscriptionHandlers = [
+      ...(node.entrySpotSubscriptionHandlers ?? []),
+      registration
+    ];
   }
 
   addSpotPacket(node: MutableSpotNode, registration: ZLinkSpotPacketHandlerRegistration): void {
     const packetName = registration.packetName ?? registration.handlerType.name;
     this.assertUnique(
       node.spotPacketHandlers,
-      (existing) => existing.spotType === registration.spotType &&
+      (existing) =>
+        existing.spotType === registration.spotType &&
         (existing.packetName ?? existing.handlerType.name) === packetName,
       `Duplicate SPOT packet handler '${registration.spotType.name}:${packetName}'.`
     );
     node.spotPacketHandlers = [...(node.spotPacketHandlers ?? []), registration];
   }
 
-  addSpotSubscription(node: MutableSpotNode, registration: ZLinkSpotSubscriptionHandlerRegistration): void {
+  addSpotSubscription(
+    node: MutableSpotNode,
+    registration: ZLinkSpotSubscriptionHandlerRegistration
+  ): void {
     this.assertUnique(
       node.spotSubscriptionHandlers,
-      (existing) => existing.spotType === registration.spotType &&
-        existing.channelName === registration.channelName && existing.topic === registration.topic,
+      (existing) =>
+        existing.spotType === registration.spotType &&
+        existing.channelName === registration.channelName &&
+        existing.topic === registration.topic,
       `Duplicate SPOT subscription handler '${registration.spotType.name}:${registration.channelName}:${registration.topic}'.`
     );
     node.spotSubscriptionHandlers = [...(node.spotSubscriptionHandlers ?? []), registration];
@@ -121,14 +146,15 @@ export class SpotNodeHandlerRegistry {
   addEntrySpotActor(
     node: MutableSpotNode,
     kind: 'send' | 'request',
-    registration: ZLinkEntrySpotActorSendHandlerRegistration | ZLinkEntrySpotActorRequestHandlerRegistration
+    registration:
+      ZLinkEntrySpotActorSendHandlerRegistration | ZLinkEntrySpotActorRequestHandlerRegistration
   ): void {
-    const existing = kind === 'send'
-      ? node.entrySpotActorSendHandlers
-      : node.entrySpotActorRequestHandlers;
+    const existing =
+      kind === 'send' ? node.entrySpotActorSendHandlers : node.entrySpotActorRequestHandlers;
     this.assertUnique(
       existing,
-      (handler) => handler.entrySpotType === registration.entrySpotType &&
+      (handler) =>
+        handler.entrySpotType === registration.entrySpotType &&
         handler.actorType === registration.actorType &&
         handler.packetName === registration.packetName,
       `Duplicate Entry Spot actor handler '${registration.entrySpotType.name}:${registration.actorType.name}:${registration.packetName}'.`
@@ -136,7 +162,10 @@ export class SpotNodeHandlerRegistry {
     if (kind === 'send') {
       node.entrySpotActorSendHandlers = [...(node.entrySpotActorSendHandlers ?? []), registration];
     } else {
-      node.entrySpotActorRequestHandlers = [...(node.entrySpotActorRequestHandlers ?? []), registration];
+      node.entrySpotActorRequestHandlers = [
+        ...(node.entrySpotActorRequestHandlers ?? []),
+        registration
+      ];
     }
   }
 
@@ -148,7 +177,8 @@ export class SpotNodeHandlerRegistry {
     const existing = kind === 'send' ? node.spotActorSendHandlers : node.spotActorRequestHandlers;
     this.assertUnique(
       existing,
-      (handler) => handler.spotType === registration.spotType &&
+      (handler) =>
+        handler.spotType === registration.spotType &&
         handler.actorType === registration.actorType &&
         handler.packetName === registration.packetName,
       `Duplicate SPOT actor handler '${registration.spotType.name}:${registration.actorType.name}:${registration.packetName}'.`
@@ -160,7 +190,10 @@ export class SpotNodeHandlerRegistry {
     }
   }
 
-  private requireTargets(predicate: (node: MutableSpotNode) => boolean, missingMessage: string): readonly MutableSpotNode[] {
+  private requireTargets(
+    predicate: (node: MutableSpotNode) => boolean,
+    missingMessage: string
+  ): readonly MutableSpotNode[] {
     const matches = Object.values(this.nodes).filter(predicate);
     if (matches.length === 0) {
       throw new framework.ZLinkConfigurationException(missingMessage);

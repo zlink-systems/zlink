@@ -1,18 +1,18 @@
 package systems.zlink.framework.runtime.actors;
 
-import java.nio.ByteBuffer;
-import java.util.ArrayList;
-import java.util.List;
 import systems.zlink.contracts.messaging.Message;
 import systems.zlink.framework.errors.ZLinkFrameworkErrorKind;
 import systems.zlink.framework.errors.ZLinkFrameworkException;
+
+import java.nio.ByteBuffer;
+import java.util.ArrayList;
+import java.util.List;
 
 /** Internal route-mesh envelope for the multipart actor transfer protocol. */
 public final class ZLinkActorEntryTransferEnvelope {
     public static final String PACKET_NAME = "__zlink.actor.transferEntrySpot";
 
-    private ZLinkActorEntryTransferEnvelope() {
-    }
+    private ZLinkActorEntryTransferEnvelope() {}
 
     public static Message encode(List<Message> parts) {
         int size = Integer.BYTES;
@@ -64,7 +64,7 @@ public final class ZLinkActorEntryTransferEnvelope {
         //  Spec 32-framework-error-model:40 — a malformed immediate wire envelope
         //  returned by a route request is a ProtocolError.
         return new ZLinkFrameworkException(
-            ZLinkFrameworkErrorKind.PROTOCOL_ERROR,
-            "invalid Entry Spot actor transfer envelope");
+                ZLinkFrameworkErrorKind.PROTOCOL_ERROR,
+                "invalid Entry Spot actor transfer envelope");
     }
 }

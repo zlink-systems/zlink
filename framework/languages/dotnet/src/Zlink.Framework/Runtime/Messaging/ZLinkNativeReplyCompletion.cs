@@ -7,25 +7,31 @@ namespace Zlink.Framework.Runtime.Messaging;
 /// </summary>
 internal sealed class ZLinkNativeReplyCompletion<TResult> : IDisposable
 {
-    private readonly ZLinkRequestCompletion<(TResult Result, IReadOnlyList<Message> Reply)> _completion;
+    private readonly ZLinkRequestCompletion<(
+        TResult Result,
+        IReadOnlyList<Message> Reply
+    )> _completion;
 
     internal ZLinkNativeReplyCompletion(CancellationToken cancellationToken)
     {
         _completion = new ZLinkRequestCompletion<(TResult, IReadOnlyList<Message>)>(
             cancellationToken,
-            discardResult: static result => ZLinkMessageParts.DisposeAll(result.Item2));
+            discardResult: static result => ZLinkMessageParts.DisposeAll(result.Item2)
+        );
     }
 
     internal ZLinkNativeReplyCompletion(
         CancellationToken cancellationToken,
         TimeSpan timeout,
-        string timeoutMessage)
+        string timeoutMessage
+    )
     {
         _completion = new ZLinkRequestCompletion<(TResult, IReadOnlyList<Message>)>(
             cancellationToken,
             timeout,
             timeoutMessage,
-            static result => ZLinkMessageParts.DisposeAll(result.Item2));
+            static result => ZLinkMessageParts.DisposeAll(result.Item2)
+        );
     }
 
     internal Task<(TResult Result, IReadOnlyList<Message> Reply)> Task => _completion.Task;

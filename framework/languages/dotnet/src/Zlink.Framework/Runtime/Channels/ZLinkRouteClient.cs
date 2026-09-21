@@ -13,7 +13,8 @@ internal sealed class ZLinkChannelRequestTerminalTrace(
     string packetName,
     string? channelName = null,
     string? meshName = null,
-    string? targetRid = null) : IDisposable
+    string? targetRid = null
+) : IDisposable
 {
     private readonly long _started = Stopwatch.GetTimestamp();
     private string? _correlationId;
@@ -31,27 +32,32 @@ internal sealed class ZLinkChannelRequestTerminalTrace(
             OperationCanceledException => ZLinkMessageFlowResult.Cancelled,
             ZLinkFrameworkException { Kind: ZLinkFrameworkErrorKind.ShuttingDown } =>
                 ZLinkMessageFlowResult.Shutdown,
-            _ => ZLinkMessageFlowResult.Failed
+            _ => ZLinkMessageFlowResult.Failed,
         };
     }
 
     public void Dispose()
     {
-        if (Interlocked.Exchange(ref _emitted, 1) != 0) return;
-        if (!tracer.Enabled(ZLinkMessageFlowOutcome.ReplyReceived, _result)) return;
-        tracer.Trace(new ZLinkMessageFlowEvent(
-            ZLinkMessageFlowOutcome.ReplyReceived,
-            surface,
-            ZLinkDispatchMessageKind.Request,
-            packetName,
-            channelName,
-            CorrelationId: _correlationId,
-            MeshName: meshName,
-            TargetRid: targetRid,
-            DurationSeconds: tracer.DetailedEnabled
-                ? Stopwatch.GetElapsedTime(_started).TotalSeconds
-                : null,
-            Result: _result));
+        if (Interlocked.Exchange(ref _emitted, 1) != 0)
+            return;
+        if (!tracer.Enabled(ZLinkMessageFlowOutcome.ReplyReceived, _result))
+            return;
+        tracer.Trace(
+            new ZLinkMessageFlowEvent(
+                ZLinkMessageFlowOutcome.ReplyReceived,
+                surface,
+                ZLinkDispatchMessageKind.Request,
+                packetName,
+                channelName,
+                CorrelationId: _correlationId,
+                MeshName: meshName,
+                TargetRid: targetRid,
+                DurationSeconds: tracer.DetailedEnabled
+                    ? Stopwatch.GetElapsedTime(_started).TotalSeconds
+                    : null,
+                Result: _result
+            )
+        );
     }
 }
 
@@ -60,7 +66,8 @@ internal sealed class ZLinkRouteClient(ZLinkFrameworkRuntime runtime) : IZLinkRo
     public IZLinkSendCall SendToNode<TMessage>(
         string meshName,
         RoutingId targetNodeRid,
-        TMessage message)
+        TMessage message
+    )
     {
         return new ZLinkRouteSendCall<TMessage>(runtime, meshName, targetNodeRid, message);
     }
@@ -68,25 +75,21 @@ internal sealed class ZLinkRouteClient(ZLinkFrameworkRuntime runtime) : IZLinkRo
     public IZLinkRequestCall RequestToNode<TRequest>(
         string meshName,
         RoutingId targetNodeRid,
-        TRequest request)
+        TRequest request
+    )
     {
         return new ZLinkRouteRequestCall<TRequest>(runtime, meshName, targetNodeRid, request);
     }
 
-    public IZLinkSendCall SendToChannel<TMessage>(
-        string channelName,
-        TMessage message)
+    public IZLinkSendCall SendToChannel<TMessage>(string channelName, TMessage message)
     {
         return new ZLinkChannelSendCall<TMessage>(runtime, channelName, message);
     }
 
-    public IZLinkRequestCall RequestToChannel<TRequest>(
-        string channelName,
-        TRequest request)
+    public IZLinkRequestCall RequestToChannel<TRequest>(string channelName, TRequest request)
     {
         return new ZLinkChannelRequestCall<TRequest>(runtime, channelName, request);
     }
-
 }
 
 internal sealed class ZLinkSpotClient(ZLinkFrameworkRuntime runtime) : IZLinkSpotClient
@@ -96,13 +99,13 @@ internal sealed class ZLinkSpotClient(ZLinkFrameworkRuntime runtime) : IZLinkSpo
 
     public IZLinkSpotRequestCall RequestToSpot<TRequest>(string spotId, TRequest request) =>
         new ZLinkInstanceSpotRequestCall<TRequest>(runtime, spotId, request);
-
 }
 
 internal sealed class ZLinkChannelSendCall<TMessage>(
     ZLinkFrameworkRuntime runtime,
     string channelName,
-    TMessage message) : IZLinkSendCall
+    TMessage message
+) : IZLinkSendCall
 {
     private readonly ZLinkCallMetadata _metadata = new();
     private readonly ZLinkOneWayCallGate _submission = new("Channel send");
@@ -119,17 +122,13 @@ internal sealed class ZLinkChannelSendCall<TMessage>(
         return this;
     }
 
-    public async ValueTask Async(
-        CancellationToken cancellationToken = default)
+    public async ValueTask Async(CancellationToken cancellationToken = default)
     {
         _submission.Claim();
         cancellationToken.ThrowIfCancellationRequested();
         var parts = Encode();
-        var result = await runtime.SendToChannelAsync(
-                channelName,
-                parts,
-                cancellationToken,
-                _metadata.Encode())
+        var result = await runtime
+            .SendToChannelAsync(channelName, parts, cancellationToken, _metadata.Encode())
             .ConfigureAwait(false);
         ZLinkOneWaySubmitOutcome.EnsureAccepted(result, "Channel send");
     }
@@ -139,15 +138,21 @@ internal sealed class ZLinkChannelSendCall<TMessage>(
         var header = ZLinkClientCallCodec.CreateEnvelope(
             ZLinkMessageKind.Command,
             channelName,
-            ZLinkMessageNameResolver.ResolveFromMessage(message));
-        return ZLinkClientCallCodec.EncodeEnvelopeParts(header, message, runtime.Registration.Codecs);
+            ZLinkMessageNameResolver.ResolveFromMessage(message)
+        );
+        return ZLinkClientCallCodec.EncodeEnvelopeParts(
+            header,
+            message,
+            runtime.Registration.Codecs
+        );
     }
 }
 
 internal sealed class ZLinkChannelRequestCall<TRequest>(
     ZLinkFrameworkRuntime runtime,
     string channelName,
-    TRequest request) : IZLinkRequestCall
+    TRequest request
+) : IZLinkRequestCall
 {
     private readonly ZLinkCallMetadata _metadata = new();
     private readonly ZLinkSerialTurn? _turn = ZLinkSerialTurn.Current;
@@ -195,8 +200,7 @@ internal sealed class ZLinkChannelRequestCall<TRequest>(
     //  A retry needs enough budget left to complete, not merely a positive
     //  remainder. A near-zero timeout reaching the submit path would either
     //  expire at once or, where zero means "no deadline", wait forever.
-    private static readonly TimeSpan ShuttingDownReselectionFloor =
-        TimeSpan.FromMilliseconds(50);
+    private static readonly TimeSpan ShuttingDownReselectionFloor = TimeSpan.FromMilliseconds(50);
 
     private async ValueTask<TReply> ExecuteAsync<TReply>(CancellationToken cancellationToken)
     {
@@ -207,7 +211,8 @@ internal sealed class ZLinkChannelRequestCall<TRequest>(
         using var encodedBody = ZLinkClientCallCodec.EncodeEnvelopeBody(
             request,
             runtime.Registration.Codecs,
-            out var contentType);
+            out var contentType
+        );
         //  One logical request owns one `reply_received` terminal, even when the
         //  ShuttingDown reselection loop below submits more than once.
         var terminal = runtime.Flow.CaptureEnabled
@@ -217,7 +222,8 @@ internal sealed class ZLinkChannelRequestCall<TRequest>(
                     ? ZLinkDispatchErrorSurface.Channel
                     : ZLinkDispatchErrorSurface.RouteMeshChannel,
                 packetName,
-                channelName)
+                channelName
+            )
             : null;
         try
         {
@@ -227,19 +233,22 @@ internal sealed class ZLinkChannelRequestCall<TRequest>(
                     ZLinkMessageKind.Request,
                     channelName,
                     packetName,
-                    remaining);
+                    remaining
+                );
                 terminal?.SetCorrelation(header.CorrelationId);
                 var parts = ZLinkClientCallCodec.CopyEnvelopeParts(
                     header,
                     encodedBody,
-                    contentType);
+                    contentType
+                );
                 var reply = await runtime
                     .RequestToChannelAsync(
                         channelName,
                         parts,
                         remaining,
                         cancellationToken,
-                        _metadata.Encode())
+                        _metadata.Encode()
+                    )
                     .ConfigureAwait(false);
                 try
                 {
@@ -248,18 +257,21 @@ internal sealed class ZLinkChannelRequestCall<TRequest>(
                         "Channel request reply is empty.",
                         $"Channel request failed for '{packetName}'.",
                         runtime.Registration.Codecs,
-                        runtime.Flow.CaptureEnabled);
+                        runtime.Flow.CaptureEnabled
+                    );
                     terminal?.Succeeded();
                     return decoded;
                 }
                 catch (ZLinkFrameworkException failure)
                     when (failure.Kind == ZLinkFrameworkErrorKind.ShuttingDown
-                          && attempt < ShuttingDownReselectionLimit
-                          && timeout - Stopwatch.GetElapsedTime(started)
-                              >= ShuttingDownReselectionFloor)
+                        && attempt < ShuttingDownReselectionLimit
+                        && timeout - Stopwatch.GetElapsedTime(started)
+                            >= ShuttingDownReselectionFloor
+                    )
                 {
                     remaining = timeout - Stopwatch.GetElapsedTime(started);
-                    if (remaining < ShuttingDownReselectionFloor) throw;
+                    if (remaining < ShuttingDownReselectionFloor)
+                        throw;
                 }
             }
         }
@@ -279,7 +291,8 @@ internal sealed class ZLinkRouteSendCall<TMessage>(
     ZLinkFrameworkRuntime runtime,
     string meshName,
     RoutingId targetNodeRid,
-    TMessage message) : IZLinkSendCall
+    TMessage message
+) : IZLinkSendCall
 {
     private readonly ZLinkCallMetadata _metadata = new();
     private readonly string _messageName = ZLinkMessageNameResolver.ResolveFromMessage(message);
@@ -297,8 +310,7 @@ internal sealed class ZLinkRouteSendCall<TMessage>(
         return this;
     }
 
-    public async ValueTask Async(
-        CancellationToken cancellationToken = default)
+    public async ValueTask Async(CancellationToken cancellationToken = default)
     {
         _submission.Claim();
         cancellationToken.ThrowIfCancellationRequested();
@@ -307,27 +319,28 @@ internal sealed class ZLinkRouteSendCall<TMessage>(
         var handedOff = false;
         try
         {
-            runtime.EnsureKnownRouteMeshPeer(
-                meshName,
-                targetNodeRid,
-                $"packet '{_messageName}'");
+            runtime.EnsureKnownRouteMeshPeer(meshName, targetNodeRid, $"packet '{_messageName}'");
             handedOff = true;
             var result = await nodeRuntime
                 .SendToNodeAsync(targetNodeRid, parts, cancellationToken, _metadata.Encode())
                 .ConfigureAwait(false);
             ZLinkOneWaySubmitOutcome.EnsureAccepted(result, "Node send");
             if (runtime.Flow.Enabled(ZLinkMessageFlowOutcome.Sent))
-                runtime.Flow.Trace(new ZLinkMessageFlowEvent(
-                    ZLinkMessageFlowOutcome.Sent,
-                    ZLinkDispatchErrorSurface.RouteMeshChannel,
-                    ZLinkDispatchMessageKind.Send,
-                    _messageName,
-                    MeshName: meshName,
-                    TargetRid: targetNodeRid.ToString()));
+                runtime.Flow.Trace(
+                    new ZLinkMessageFlowEvent(
+                        ZLinkMessageFlowOutcome.Sent,
+                        ZLinkDispatchErrorSurface.RouteMeshChannel,
+                        ZLinkDispatchMessageKind.Send,
+                        _messageName,
+                        MeshName: meshName,
+                        TargetRid: targetNodeRid.ToString()
+                    )
+                );
         }
         catch
         {
-            if (!handedOff) DisposeBeforeHandoff(parts);
+            if (!handedOff)
+                DisposeBeforeHandoff(parts);
             throw;
         }
     }
@@ -340,11 +353,13 @@ internal sealed class ZLinkRouteSendCall<TMessage>(
         var header = ZLinkClientCallCodec.CreateEnvelope(
             ZLinkMessageKind.Command,
             meshName,
-            _messageName);
+            _messageName
+        );
         return ZLinkClientCallCodec.EncodeEnvelopeParts(
             header,
             message,
-            runtime.Registration.Codecs);
+            runtime.Registration.Codecs
+        );
     }
 }
 
@@ -352,7 +367,8 @@ internal sealed class ZLinkRouteRequestCall<TRequest>(
     ZLinkFrameworkRuntime runtime,
     string meshName,
     RoutingId targetNodeRid,
-    TRequest request) : IZLinkRequestCall
+    TRequest request
+) : IZLinkRequestCall
 {
     private readonly ZLinkCallMetadata _metadata = new();
     private readonly ZLinkSerialTurn? _turn = ZLinkSerialTurn.Current;
@@ -386,13 +402,16 @@ internal sealed class ZLinkRouteRequestCall<TRequest>(
     {
         throw new ZLinkFrameworkException(
             ZLinkFrameworkErrorKind.InvalidOperation,
-            "MeshNode request does not support Yield.");
+            "MeshNode request does not support Yield."
+        );
     }
 
     private async ValueTask<TReply> ExecuteAsync<TReply>(CancellationToken cancellationToken)
     {
         var nodeRuntime = runtime.GetMeshNodeRuntime(meshName);
-        var timeout = _timeout ?? nodeRuntime.Registration.DefaultRequestTimeout
+        var timeout =
+            _timeout
+            ?? nodeRuntime.Registration.DefaultRequestTimeout
             ?? runtime.Registration.DefaultRequestTimeout;
         var packetName = ZLinkMessageNameResolver.ResolveFromMessage(request);
         var terminal = runtime.Flow.CaptureEnabled
@@ -401,7 +420,8 @@ internal sealed class ZLinkRouteRequestCall<TRequest>(
                 ZLinkDispatchErrorSurface.RouteMeshChannel,
                 packetName,
                 meshName: meshName,
-                targetRid: targetNodeRid.ToString())
+                targetRid: targetNodeRid.ToString()
+            )
             : null;
         try
         {
@@ -410,34 +430,42 @@ internal sealed class ZLinkRouteRequestCall<TRequest>(
                 ZLinkMessageKind.Request,
                 meshName,
                 packetName,
-                timeout);
+                timeout
+            );
             terminal?.SetCorrelation(header.CorrelationId);
             var parts = ZLinkClientCallCodec.EncodeEnvelopeParts(
                 header,
                 request,
-                runtime.Registration.Codecs);
+                runtime.Registration.Codecs
+            );
             if (runtime.Flow.Enabled(ZLinkMessageFlowOutcome.Sent))
-                runtime.Flow.Trace(new ZLinkMessageFlowEvent(
-                    ZLinkMessageFlowOutcome.Sent,
-                    ZLinkDispatchErrorSurface.RouteMeshChannel,
-                    ZLinkDispatchMessageKind.Request,
-                    packetName,
-                    CorrelationId: header.CorrelationId,
-                    MeshName: meshName,
-                    TargetRid: targetNodeRid.ToString()));
-            var reply = await nodeRuntime.RequestToNodeAsync(
+                runtime.Flow.Trace(
+                    new ZLinkMessageFlowEvent(
+                        ZLinkMessageFlowOutcome.Sent,
+                        ZLinkDispatchErrorSurface.RouteMeshChannel,
+                        ZLinkDispatchMessageKind.Request,
+                        packetName,
+                        CorrelationId: header.CorrelationId,
+                        MeshName: meshName,
+                        TargetRid: targetNodeRid.ToString()
+                    )
+                );
+            var reply = await nodeRuntime
+                .RequestToNodeAsync(
                     targetNodeRid,
                     parts,
                     timeout,
                     cancellationToken,
-                    _metadata.Encode())
+                    _metadata.Encode()
+                )
                 .ConfigureAwait(false);
             var decoded = ZLinkClientCallCodec.DecodeEnvelopeReplyAndDispose<TReply>(
                 reply,
                 "Node request reply is empty.",
                 $"Node request failed for '{packetName}'.",
                 runtime.Registration.Codecs,
-                runtime.Flow.CaptureEnabled);
+                runtime.Flow.CaptureEnabled
+            );
             terminal?.Succeeded();
             return decoded;
         }
@@ -451,13 +479,13 @@ internal sealed class ZLinkRouteRequestCall<TRequest>(
             terminal?.Dispose();
         }
     }
-
 }
 
 internal sealed class ZLinkRouteSpotSendCall<TMessage>(
     ZLinkFrameworkRuntime runtime,
     ZLinkResolvedSpotHandle target,
-    TMessage message) : IZLinkSendCall
+    TMessage message
+) : IZLinkSendCall
 {
     private readonly ZLinkCallMetadata _metadata = new();
     private readonly ZLinkOneWayCallGate _submission = new("Spot send");
@@ -474,8 +502,7 @@ internal sealed class ZLinkRouteSpotSendCall<TMessage>(
         return this;
     }
 
-    public async ValueTask Async(
-        CancellationToken cancellationToken = default)
+    public async ValueTask Async(CancellationToken cancellationToken = default)
     {
         _submission.Claim();
         cancellationToken.ThrowIfCancellationRequested();
@@ -483,11 +510,17 @@ internal sealed class ZLinkRouteSpotSendCall<TMessage>(
         var header = ZLinkClientCallCodec.CreateEnvelope(
             ZLinkMessageKind.Command,
             snapshot.RouterChannelId,
-            ZLinkMessageNameResolver.ResolveFromMessage(message));
-        var parts = ZLinkClientCallCodec.EncodeEnvelopeParts(header, message, runtime.Registration.Codecs);
+            ZLinkMessageNameResolver.ResolveFromMessage(message)
+        );
+        var parts = ZLinkClientCallCodec.EncodeEnvelopeParts(
+            header,
+            message,
+            runtime.Registration.Codecs
+        );
         try
         {
-            var result = await runtime.SendToSpotViaRouterChannelAsync(
+            var result = await runtime
+                .SendToSpotViaRouterChannelAsync(
                     snapshot.RouterChannelId,
                     snapshot.NodeRid,
                     snapshot.SpotId,
@@ -497,12 +530,14 @@ internal sealed class ZLinkRouteSpotSendCall<TMessage>(
                     snapshot.OwnerLeaseGeneration,
                     parts,
                     cancellationToken,
-                    _metadata.Encode())
+                    _metadata.Encode()
+                )
                 .ConfigureAwait(false);
             ZLinkOneWaySubmitOutcome.EnsureAccepted(
                 result,
                 "Spot send",
-                ZLinkFrameworkErrorKind.NotFound);
+                ZLinkFrameworkErrorKind.NotFound
+            );
         }
         catch (ZLinkFrameworkException error)
             when (ZLinkSpotHandleRequestExecution.IsStaleRoute(error))
@@ -516,7 +551,8 @@ internal sealed class ZLinkRouteSpotSendCall<TMessage>(
 internal sealed class ZLinkRouteSpotRequestCall<TRequest>(
     ZLinkFrameworkRuntime runtime,
     ZLinkResolvedSpotHandle target,
-    TRequest request) : IZLinkRequestCall
+    TRequest request
+) : IZLinkRequestCall
 {
     private readonly ZLinkCallMetadata _metadata = new();
     private readonly ZLinkApplicationExecutionScope? _executionScope =
@@ -547,7 +583,8 @@ internal sealed class ZLinkRouteSpotRequestCall<TRequest>(
     {
         return ExecuteAfterTerminatorAsync<TReply>(
             ZLinkNestedRequestTerminator.Async,
-            cancellationToken);
+            cancellationToken
+        );
     }
 
     public ValueTask<TReply> Yield<TReply>(CancellationToken cancellationToken = default)
@@ -555,7 +592,8 @@ internal sealed class ZLinkRouteSpotRequestCall<TRequest>(
         ZLinkApplicationExecutionContext.ValidateSpotRequest(
             target.Snapshot.SpotId,
             ZLinkNestedRequestTerminator.Yield,
-            _executionScope);
+            _executionScope
+        );
         return ZLinkApplicationExecutionContext
             .RequireYieldTurn(_turn, "Spot request")
             .YieldFrameworkCallAsync(ExecuteAsync<TReply>, cancellationToken);
@@ -563,33 +601,39 @@ internal sealed class ZLinkRouteSpotRequestCall<TRequest>(
 
     internal ValueTask<TReply> ExecuteAfterTerminatorAsync<TReply>(
         ZLinkNestedRequestTerminator terminator,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken
+    )
     {
         ZLinkApplicationExecutionContext.ValidateSpotRequest(
             target.Snapshot.SpotId,
             terminator,
-            _executionScope);
+            _executionScope
+        );
         return ExecuteAsync<TReply>(cancellationToken);
     }
 
     private async ValueTask<TReply> ExecuteAsync<TReply>(CancellationToken cancellationToken)
     {
         var packetName = ZLinkMessageNameResolver.ResolveFromMessage(request);
-        var reply = await ZLinkSpotHandleRequestExecution.ExecuteAsync(
+        var reply = await ZLinkSpotHandleRequestExecution
+            .ExecuteAsync(
                 target,
                 snapshot =>
                 {
-                    var timeout = _timeout ??
-                        runtime.Registration.ResolveMeshRequestTimeout(snapshot.RouterChannelId);
+                    var timeout =
+                        _timeout
+                        ?? runtime.Registration.ResolveMeshRequestTimeout(snapshot.RouterChannelId);
                     var header = ZLinkClientCallCodec.CreateEnvelope(
                         ZLinkMessageKind.Request,
                         snapshot.RouterChannelId,
                         packetName,
-                        timeout);
+                        timeout
+                    );
                     var parts = ZLinkClientCallCodec.EncodeEnvelopeParts(
                         header,
                         request,
-                        runtime.Registration.Codecs);
+                        runtime.Registration.Codecs
+                    );
                     return runtime.RequestToSpotViaRouterChannelAsync(
                         snapshot.RouterChannelId,
                         snapshot.NodeRid,
@@ -601,16 +645,18 @@ internal sealed class ZLinkRouteSpotRequestCall<TRequest>(
                         parts,
                         timeout,
                         cancellationToken,
-                        _metadata.Encode());
+                        _metadata.Encode()
+                    );
                 },
-                cancellationToken)
+                cancellationToken
+            )
             .ConfigureAwait(false);
         return ZLinkClientCallCodec.DecodeEnvelopeReplyAndDispose<TReply>(
             reply,
             "SPOT route request reply is empty.",
             $"SPOT route request failed for '{packetName}'.",
             runtime.Registration.Codecs,
-            runtime.Flow.CaptureEnabled);
+            runtime.Flow.CaptureEnabled
+        );
     }
-
 }

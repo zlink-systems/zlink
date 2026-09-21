@@ -37,9 +37,7 @@ interface ActorRelocationEnvelope {
 }
 
 /** Encodes the durable authority-payload-v1 envelope around one schema body. */
-export function encodeCanonicalAuthorityPayload(
-  value: ZLinkCanonicalAuthorityPayload
-): Buffer {
+export function encodeCanonicalAuthorityPayload(value: ZLinkCanonicalAuthorityPayload): Buffer {
   const body = Buffer.from(value.body);
   const envelope = concat(
     AUTHORITY_MAGIC,
@@ -129,15 +127,16 @@ export function decodeActorAuthorityPayload(
     const currentSpotId = actor.text8();
     const currentSpotGeneration = actor.nonzeroU64();
     const currentSpotKind = zlinkSpotKindFromWire(actor.u8());
-    const state: ZLinkActorAuthorityState | undefined = stateValue === 0 && operation === 1
-      ? 'creating'
-      : stateValue === 1 && operation === 0
-        ? 'ready'
-        : undefined;
+    const state: ZLinkActorAuthorityState | undefined =
+      stateValue === 0 && operation === 1
+        ? 'creating'
+        : stateValue === 1 && operation === 0
+          ? 'ready'
+          : undefined;
     if (
-      !actor.done
-      || state === undefined
-      || currentSpotKind !== ZLinkSpotKind.Entry && currentSpotKind !== ZLinkSpotKind.User
+      !actor.done ||
+      state === undefined ||
+      (currentSpotKind !== ZLinkSpotKind.Entry && currentSpotKind !== ZLinkSpotKind.User)
     ) {
       return undefined;
     }
@@ -146,13 +145,7 @@ export function decodeActorAuthorityPayload(
     const meshName = body.text8();
     const nodeRid = body.rid();
     const nodeGeneration = body.nonzeroU64();
-    if (
-      body.u8() !== 0
-      || body.u32() !== 0
-      || body.u8() !== 0
-      || body.u32() !== 0
-      || !body.done
-    ) {
+    if (body.u8() !== 0 || body.u32() !== 0 || body.u8() !== 0 || body.u32() !== 0 || !body.done) {
       return undefined;
     }
     return {
@@ -209,9 +202,7 @@ export function replaceActorRelocationAuthorityApplicationPayload(
   return encoded;
 }
 
-function decodeActorRelocationEnvelope(
-  payload: Uint8Array
-): ActorRelocationEnvelope | undefined {
+function decodeActorRelocationEnvelope(payload: Uint8Array): ActorRelocationEnvelope | undefined {
   try {
     const bytes = Buffer.from(payload);
     if (bytes.byteLength < 32 || bytes.byteLength > MAXIMUM_BYTES) return undefined;
@@ -223,7 +214,7 @@ function decodeActorRelocationEnvelope(
     reader.expect(ACTOR_RELOCATION_MAGIC);
     const version = reader.u16();
     if (version !== 5 && version !== 6) return undefined;
-    if (reader.take(16).every(byte => byte === 0)) return undefined;
+    if (reader.take(16).every((byte) => byte === 0)) return undefined;
     const phase = reader.u8();
     if (phase < 1 || phase > 4) return undefined;
     const isBound = reader.bool();
@@ -244,12 +235,12 @@ function decodeActorRelocationEnvelope(
         reader.u64();
       }
       if (
-        bindingGeneration === 0n
-        || objectGeneration === 0n
-        || authorityOwnerGeneration === 0n
-        || targetNodeGeneration === 0n
-        || ownerLeaseGeneration === 0n
-        || sessionOwnerNodeGeneration === 0n
+        bindingGeneration === 0n ||
+        objectGeneration === 0n ||
+        authorityOwnerGeneration === 0n ||
+        targetNodeGeneration === 0n ||
+        ownerLeaseGeneration === 0n ||
+        sessionOwnerNodeGeneration === 0n
       ) {
         return undefined;
       }
@@ -315,7 +306,7 @@ function i32le(value: number): Buffer {
 }
 
 function concat(...parts: readonly Uint8Array[]): Buffer {
-  return Buffer.concat(parts.map(part => Buffer.from(part)));
+  return Buffer.concat(parts.map((part) => Buffer.from(part)));
 }
 
 class BigEndianReader {

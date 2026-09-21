@@ -5,16 +5,17 @@ namespace Zlink.Framework.Runtime.Channels;
 
 internal sealed class ZLinkChannelApplicationDispatchQueue<TWork> : IAsyncDisposable
 {
-    private static readonly TimeSpan ShutdownJoinTimeout =
-        TimeSpan.FromSeconds(1);
-    private readonly Channel<DispatchWork<TWork>> _queue =
-        Channel.CreateUnbounded<DispatchWork<TWork>>(
-            new UnboundedChannelOptions
-            {
-                SingleReader = true,
-                SingleWriter = true,
-                AllowSynchronousContinuations = false
-            });
+    private static readonly TimeSpan ShutdownJoinTimeout = TimeSpan.FromSeconds(1);
+    private readonly Channel<DispatchWork<TWork>> _queue = Channel.CreateUnbounded<
+        DispatchWork<TWork>
+    >(
+        new UnboundedChannelOptions
+        {
+            SingleReader = true,
+            SingleWriter = true,
+            AllowSynchronousContinuations = false,
+        }
+    );
     private readonly IZLinkRuntimeFailureReporter _errorSink;
     private readonly CancellationTokenSource _stop;
     private readonly string _name;
@@ -30,22 +31,18 @@ internal sealed class ZLinkChannelApplicationDispatchQueue<TWork> : IAsyncDispos
         IZLinkRuntimeFailureReporter errorSink,
         CancellationToken laneCancellationToken,
         Func<TWork, CancellationToken, ValueTask> dispatch,
-        Action<TWork> reject)
+        Action<TWork> reject
+    )
     {
         _name = name;
         _errorSink = errorSink;
         _dispatch = dispatch ?? throw new ArgumentNullException(nameof(dispatch));
         _reject = reject ?? throw new ArgumentNullException(nameof(reject));
-        _stop = CancellationTokenSource.CreateLinkedTokenSource(
-            laneCancellationToken);
-        _worker = Task.Run(
-            () => RunAsync(_stop.Token).AsTask(),
-            CancellationToken.None);
+        _stop = CancellationTokenSource.CreateLinkedTokenSource(laneCancellationToken);
+        _worker = Task.Run(() => RunAsync(_stop.Token).AsTask(), CancellationToken.None);
     }
 
-    internal ValueTask<bool> PostAsync(
-        TWork payload,
-        CancellationToken cancellationToken)
+    internal ValueTask<bool> PostAsync(TWork payload, CancellationToken cancellationToken)
     {
         var work = new DispatchWork<TWork>(payload);
         if (Volatile.Read(ref _stopped) != 0)
@@ -54,8 +51,7 @@ internal sealed class ZLinkChannelApplicationDispatchQueue<TWork> : IAsyncDispos
             return ValueTask.FromResult(false);
         }
 
-        if (cancellationToken.IsCancellationRequested
-            || !_queue.Writer.TryWrite(work))
+        if (cancellationToken.IsCancellationRequested || !_queue.Writer.TryWrite(work))
         {
             Reject(work);
             return ValueTask.FromResult(false);
@@ -73,9 +69,7 @@ internal sealed class ZLinkChannelApplicationDispatchQueue<TWork> : IAsyncDispos
         _queue.Writer.TryComplete();
         await _stop.CancelAsync().ConfigureAwait(false);
 
-        var completed = await Task.WhenAny(
-                _worker,
-                Task.Delay(ShutdownJoinTimeout))
+        var completed = await Task.WhenAny(_worker, Task.Delay(ShutdownJoinTimeout))
             .ConfigureAwait(false);
         if (ReferenceEquals(completed, _worker))
         {
@@ -85,20 +79,21 @@ internal sealed class ZLinkChannelApplicationDispatchQueue<TWork> : IAsyncDispos
         }
 
         _ = _worker.ContinueWith(
-            static (_, state) =>
-                ((CancellationTokenSource)state!).Dispose(),
+            static (_, state) => ((CancellationTokenSource)state!).Dispose(),
             _stop,
             CancellationToken.None,
             TaskContinuationOptions.ExecuteSynchronously,
-            TaskScheduler.Default);
+            TaskScheduler.Default
+        );
     }
 
     private async ValueTask RunAsync(CancellationToken cancellationToken)
     {
         try
         {
-            await foreach (var work in _queue.Reader.ReadAllAsync(cancellationToken)
-                               .ConfigureAwait(false))
+            await foreach (
+                var work in _queue.Reader.ReadAllAsync(cancellationToken).ConfigureAwait(false)
+            )
             {
                 if (cancellationToken.IsCancellationRequested)
                 {
@@ -109,28 +104,23 @@ internal sealed class ZLinkChannelApplicationDispatchQueue<TWork> : IAsyncDispos
                 }
                 try
                 {
-                    await _dispatch(work.Payload, cancellationToken)
-                        .ConfigureAwait(false);
+                    await _dispatch(work.Payload, cancellationToken).ConfigureAwait(false);
                 }
-                catch (OperationCanceledException)
-                    when (cancellationToken.IsCancellationRequested)
-                {
-                }
+                catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+                { }
                 catch (Exception exception)
                 {
                     Report(exception);
                 }
             }
         }
-        catch (OperationCanceledException)
-            when (cancellationToken.IsCancellationRequested)
-        {
-        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested) { }
         finally
         {
             Interlocked.Exchange(ref _stopped, 1);
             _queue.Writer.TryComplete();
-            while (_queue.Reader.TryRead(out var pending)) Reject(pending);
+            while (_queue.Reader.TryRead(out var pending))
+                Reject(pending);
         }
     }
 
@@ -152,9 +142,7 @@ internal sealed class ZLinkChannelApplicationDispatchQueue<TWork> : IAsyncDispos
         {
             _errorSink.ReportRuntimeTaskException(_name, exception);
         }
-        catch
-        {
-        }
+        catch { }
     }
 
     private readonly record struct DispatchWork<TPayload>(TPayload Payload);
@@ -178,8 +166,7 @@ internal sealed class ZLinkChannelReplyGate
         }
         finally
         {
-            var completed = await _lane.RunAsync(CompleteReply)
-                .ConfigureAwait(false);
+            var completed = await _lane.RunAsync(CompleteReply).ConfigureAwait(false);
             completed?.TrySetResult();
         }
         return true;
@@ -187,15 +174,18 @@ internal sealed class ZLinkChannelReplyGate
 
     internal async ValueTask CloseAsync()
     {
-        var wait = await _lane.RunAsync(() =>
-        {
-            _open = false;
-            if (_activeReplies == 0)
-                return (Task?)null;
-            _repliesDrained ??= new TaskCompletionSource(
-                TaskCreationOptions.RunContinuationsAsynchronously);
-            return _repliesDrained.Task;
-        }).ConfigureAwait(false);
+        var wait = await _lane
+            .RunAsync(() =>
+            {
+                _open = false;
+                if (_activeReplies == 0)
+                    return (Task?)null;
+                _repliesDrained ??= new TaskCompletionSource(
+                    TaskCreationOptions.RunContinuationsAsynchronously
+                );
+                return _repliesDrained.Task;
+            })
+            .ConfigureAwait(false);
         if (wait is not null)
             await wait.ConfigureAwait(false);
     }
@@ -220,14 +210,11 @@ internal sealed class ZLinkChannelReplyGate
         return null;
     }
 
-    internal bool TryInvoke(Action reply) =>
-        AwaitStateLane(TryInvokeAsync(reply));
+    internal bool TryInvoke(Action reply) => AwaitStateLane(TryInvokeAsync(reply));
 
-    internal void Close() =>
-        AwaitStateLane(CloseAsync());
+    internal void Close() => AwaitStateLane(CloseAsync());
 
-    private static void AwaitStateLane(ValueTask operation) =>
-        operation.GetAwaiter().GetResult();
+    private static void AwaitStateLane(ValueTask operation) => operation.GetAwaiter().GetResult();
 
     private static T AwaitStateLane<T>(ValueTask<T> operation) =>
         operation.GetAwaiter().GetResult();

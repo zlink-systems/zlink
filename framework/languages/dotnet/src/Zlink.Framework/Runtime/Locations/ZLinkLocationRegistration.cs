@@ -21,36 +21,37 @@ internal sealed class ZLinkLocationRegistration
     public ZLinkLocationOptions Options { get; } = new();
 
     internal TimeSpan SessionRelocationSealTimeoutAtStartup =>
-        _sessionRelocationSealTimeoutAtStartup
-        ?? Options.SessionRelocationSealTimeout;
+        _sessionRelocationSealTimeoutAtStartup ?? Options.SessionRelocationSealTimeout;
 
-    public bool Enabled =>
-        UseInMemoryStores || StoreInstance is not null;
+    public bool Enabled => UseInMemoryStores || StoreInstance is not null;
 
-    internal bool HasExplicitStore =>
-        StoreInstance is not null;
+    internal bool HasExplicitStore => StoreInstance is not null;
 
     internal void CaptureStartupOptions()
     {
-        _sessionRelocationSealTimeoutAtStartup ??=
-            Options.SessionRelocationSealTimeout;
+        _sessionRelocationSealTimeoutAtStartup ??= Options.SessionRelocationSealTimeout;
     }
 
     internal IZLinkLocationRepository? ResolveStore()
     {
-        if (_repository is not null) return _repository;
+        if (_repository is not null)
+            return _repository;
         if (StoreInstance is not null)
             return _repository ??= new ZLinkProviderLocationRepository(StoreInstance);
-        if (!UseInMemoryStores) return null;
+        if (!UseInMemoryStores)
+            return null;
         _inMemoryStore ??= new ZLinkInMemoryProviderLocationStore();
         return _repository ??= new ZLinkProviderLocationRepository(_inMemoryStore);
     }
 
     internal IZLinkRelocationRepository? ResolveRelocationStore()
     {
-        if (_relocationRepository is not null) return _relocationRepository;
-        if (RelocationStoreInstance is null) return null;
-        return _relocationRepository ??=
-            new ZLinkProviderRelocationRepository(RelocationStoreInstance);
+        if (_relocationRepository is not null)
+            return _relocationRepository;
+        if (RelocationStoreInstance is null)
+            return null;
+        return _relocationRepository ??= new ZLinkProviderRelocationRepository(
+            RelocationStoreInstance
+        );
     }
 }

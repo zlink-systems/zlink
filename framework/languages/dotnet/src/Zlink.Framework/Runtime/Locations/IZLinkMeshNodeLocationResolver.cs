@@ -4,5 +4,6 @@ internal interface IZLinkMeshNodeLocationResolver
 {
     ValueTask<IReadOnlyList<ZLinkMeshNodeDescriptor>> ListLiveMeshNodesAsync(
         string meshName,
-        CancellationToken cancellationToken = default);
+        CancellationToken cancellationToken = default
+    );
 }

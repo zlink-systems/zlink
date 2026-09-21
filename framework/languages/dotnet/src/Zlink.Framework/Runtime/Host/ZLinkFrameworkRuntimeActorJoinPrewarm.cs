@@ -1,4 +1,5 @@
 using System.Diagnostics;
+
 namespace Zlink.Framework.Runtime.Host;
 
 internal sealed partial class ZLinkFrameworkRuntime
@@ -37,22 +38,28 @@ internal sealed partial class ZLinkFrameworkRuntime
             actorRef.ActorId,
             actorRef.Generation,
             captureFrame: () => ZLinkActorHandoffFrames.Capture(frame, arrivalIndex: 0),
-            onFailed: () => RunDetached(
-                "actor-join-prewarm-fail-parked",
-                ct => ZLinkActorBoundSessionRelay.ReplyStaleActorAsync(
-                    this,
-                    actorRef,
-                    sourceNodeRid,
-                    sourceSessionRid,
-                    requestId,
-                    flags,
-                    replyCapability,
-                    header,
-                    new ZLinkFrameworkException(
-                        ZLinkFrameworkErrorKind.NotFound,
-                        $"Actor '{actorRef.ActorId}' relocation admission ended before it completed."),
-                    ct,
-                    directReply)));
+            onFailed: () =>
+                RunDetached(
+                    "actor-join-prewarm-fail-parked",
+                    ct =>
+                        ZLinkActorBoundSessionRelay.ReplyStaleActorAsync(
+                            this,
+                            actorRef,
+                            sourceNodeRid,
+                            sourceSessionRid,
+                            requestId,
+                            flags,
+                            replyCapability,
+                            header,
+                            new ZLinkFrameworkException(
+                                ZLinkFrameworkErrorKind.NotFound,
+                                $"Actor '{actorRef.ActorId}' relocation admission ended before it completed."
+                            ),
+                            ct,
+                            directReply
+                        )
+                )
+        );
         return route == ZLinkActorJoinPrewarmRegistry.IngressRoute.Parked;
     }
 
@@ -69,9 +76,11 @@ internal sealed partial class ZLinkFrameworkRuntime
         string actorId,
         ulong actorGeneration,
         DateTimeOffset deadline,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken
+    )
     {
-        var localDeadline = Stopwatch.GetElapsedTime(0) + (deadline - TimeProvider.System.GetUtcNow());
+        var localDeadline =
+            Stopwatch.GetElapsedTime(0) + (deadline - TimeProvider.System.GetUtcNow());
         _actorJoinPrewarm.Register(
             handoffId,
             actorId,
@@ -88,8 +97,10 @@ internal sealed partial class ZLinkFrameworkRuntime
                 //  installed-stage to abort.
                 _ = _actorHandoffAdmissions.AbortAsync(evictedHandoffId);
                 ZLinkFrameworkDebugLog.SpotDiscovery(
-                    $"actor_join_prewarm_evicted handoff={evictedHandoffId}");
-            });
+                    $"actor_join_prewarm_evicted handoff={evictedHandoffId}"
+                );
+            }
+        );
         //  CompleteMigration removes the temporary queue once PREPARE owns
         //  the real import. The target relocation runtime remains the owner
         //  of that installed stage, including its reservation and transferred
@@ -101,7 +112,8 @@ internal sealed partial class ZLinkFrameworkRuntime
                 actorId,
                 actorGeneration,
                 handoffId,
-                cancellationToken)
+                cancellationToken
+            )
             .ConfigureAwait(false);
         RunDetached(
             "actor-join-prewarm-expiry",
@@ -112,8 +124,7 @@ internal sealed partial class ZLinkFrameworkRuntime
                 {
                     try
                     {
-                        await Task.Delay(remaining, TimeProvider.System, ct)
-                            .ConfigureAwait(false);
+                        await Task.Delay(remaining, TimeProvider.System, ct).ConfigureAwait(false);
                     }
                     catch (OperationCanceledException)
                     {
@@ -121,7 +132,8 @@ internal sealed partial class ZLinkFrameworkRuntime
                     }
                 }
                 _actorJoinPrewarm.Release(handoffId);
-            });
+            }
+        );
     }
 
     /// <summary>
@@ -130,8 +142,7 @@ internal sealed partial class ZLinkFrameworkRuntime
     /// rejected/failed admission that registered the attempt before the
     /// outcome was known.
     /// </summary>
-    internal void ReleaseActorJoinPrewarm(string handoffId) =>
-        _actorJoinPrewarm.Release(handoffId);
+    internal void ReleaseActorJoinPrewarm(string handoffId) => _actorJoinPrewarm.Release(handoffId);
 
     /// <summary>
     /// PREPARE (Restore) hook (spec 15 §4.2): installs the real per-actor
@@ -144,21 +155,22 @@ internal sealed partial class ZLinkFrameworkRuntime
     /// </summary>
     internal bool CompleteActorJoinPrewarmMigration(
         string handoffId,
-        ZLinkActorRuntimeState actorState)
+        ZLinkActorRuntimeState actorState
+    )
     {
         try
         {
             _actorJoinPrewarm.CompleteMigration(
                 handoffId,
-                frames => actorState.Handoff.AppendPreparedImport(
-                    handoffId,
-                    frames));
+                frames => actorState.Handoff.AppendPreparedImport(handoffId, frames)
+            );
             return true;
         }
         catch (InvalidOperationException)
         {
             ZLinkFrameworkDebugLog.SpotDiscovery(
-                $"actor_join_prewarm_migration_discarded handoff={handoffId}");
+                $"actor_join_prewarm_migration_discarded handoff={handoffId}"
+            );
             return false;
         }
     }

@@ -1,6 +1,5 @@
 package systems.zlink.framework.kotlin
 
-import org.junit.jupiter.api.Assertions
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Test
 import systems.zlink.contracts.core.RoutingId
@@ -15,11 +14,12 @@ class KotlinDeferredActorJoinCompletionTest {
     fun suspendingActorReceivesTheDurableAcceptedIdentityAndGeneration() {
         val actor = RecordingSuspendingActor()
         val operation = ZLinkActorJoinOperationId(41, 73)
-        val completion = ZLinkActorJoinCompletion.Accepted(
-            operation,
-            ActorRef("actor-a", 17, "game", RoutingId.from("target-node")),
-            ZLinkMessage.of("accepted"),
-        )
+        val completion =
+            ZLinkActorJoinCompletion.Accepted(
+                operation,
+                ActorRef("actor-a", 17, "game", RoutingId.from("target-node")),
+                ZLinkMessage.of("accepted"),
+            )
 
         actor.onJoinCompleted(completion).toCompletableFuture().join()
 
@@ -34,9 +34,7 @@ class KotlinDeferredActorJoinCompletionTest {
 
         var received: ZLinkActorJoinCompletion.Accepted? = null
 
-        override suspend fun onJoinCompletedSuspending(
-            completion: ZLinkActorJoinCompletion,
-        ) {
+        override suspend fun onJoinCompletedSuspending(completion: ZLinkActorJoinCompletion) {
             received = completion as ZLinkActorJoinCompletion.Accepted
         }
     }

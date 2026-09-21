@@ -1,13 +1,12 @@
 /* SPDX-License-Identifier: Apache-2.0 */
 package systems.zlink.httpclient.kotlin
 
-
 import java.util.concurrent.CompletionException
 import java.util.concurrent.CompletionStage
 import java.util.concurrent.ExecutionException
-import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlin.coroutines.resume
 import kotlin.coroutines.resumeWithException
+import kotlinx.coroutines.suspendCancellableCoroutine
 import systems.zlink.httpclient.HttpResponse
 import systems.zlink.httpclient.RawHttpResponse
 import systems.zlink.httpclient.ZLinkHttpClient
@@ -22,14 +21,15 @@ private annotation class JacocoGenerated
 /**
  * Kotlin coroutine and DSL extensions over the Java [ZLinkHttpClient]. These reuse the Java runtime
  * (the Kotlin module is a thin idiom layer) and expose genuine `suspend` functions that bridge the
- * `CompletionStage` returned by the Java client through a non-blocking coroutine bridge — no
- * thread is blocked. The bridge keeps caller cancellation separate from the submitted HTTP
- * operation.
+ * `CompletionStage` returned by the Java client through a non-blocking coroutine bridge — no thread
+ * is blocked. The bridge keeps caller cancellation separate from the submitted HTTP operation.
  */
 
 /** DSL helper: builds a client by applying [configure] to the fluent builder. */
-fun zlinkHttpClient(baseUrl: String, configure: ZLinkHttpClientBuilder.() -> Unit = {}): ZLinkHttpClient =
-    ZLinkHttpClient.create(baseUrl).apply(configure).build()
+fun zlinkHttpClient(
+    baseUrl: String,
+    configure: ZLinkHttpClientBuilder.() -> Unit = {},
+): ZLinkHttpClient = ZLinkHttpClient.create(baseUrl).apply(configure).build()
 
 /** Suspends until the raw response is available; does not block the calling thread. */
 suspend fun ZLinkHttpRequestBuilder.awaitRaw(): RawHttpResponse =
@@ -66,27 +66,25 @@ suspend inline fun <reified T> ZLinkHttpServerRequestBuilder.yield(): HttpRespon
     yield(T::class.java).awaitWithoutCancellingOperation()
 
 /**
- * Bridges a CompletionStage without registering a cancellation handler on it.
- * Coroutine cancellation ends the caller's wait, while the already submitted
- * HTTP operation keeps its retry, body-read, and client-lease ownership.
+ * Bridges a CompletionStage without registering a cancellation handler on it. Coroutine
+ * cancellation ends the caller's wait, while the already submitted HTTP operation keeps its retry,
+ * body-read, and client-lease ownership.
  */
 @PublishedApi
-internal suspend fun <T> CompletionStage<T>
-    .awaitWithoutCancellingOperation(): T = suspendCancellableCoroutine { continuation ->
-    whenComplete { value, error ->
-        if (error == null) {
-            continuation.resume(value)
-        } else {
-            continuation.resumeWithException(unwrapCompletionFailure(error))
+internal suspend fun <T> CompletionStage<T>.awaitWithoutCancellingOperation(): T =
+    suspendCancellableCoroutine { continuation ->
+        whenComplete { value, error ->
+            if (error == null) {
+                continuation.resume(value)
+            } else {
+                continuation.resumeWithException(unwrapCompletionFailure(error))
+            }
         }
     }
-}
 
 private fun unwrapCompletionFailure(error: Throwable): Throwable {
     var cause = error
-    while ((cause is CompletionException
-        || cause is ExecutionException)
-        && cause.cause != null) {
+    while ((cause is CompletionException || cause is ExecutionException) && cause.cause != null) {
         cause = cause.cause!!
     }
     return cause

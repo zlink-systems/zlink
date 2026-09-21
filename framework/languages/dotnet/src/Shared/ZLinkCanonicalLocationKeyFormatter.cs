@@ -5,8 +5,10 @@ using Zlink.Framework.Contracts.Locations;
 
 #if ZLINK_REDIS_LOCATION_KEY_FORMATTER
 namespace Zlink.Framework.Locations.Redis.Internal;
+
 #else
 namespace Zlink.Framework.Internal.Locations;
+
 #endif
 
 /// <summary>
@@ -31,47 +33,57 @@ internal static class ZLinkCanonicalLocationKeyFormatter
         return Encode(key.ActorId);
     }
 
-    internal static string EncodeClientServerKey(
-        ZLinkClientServerServerDescriptorKey key) =>
+    internal static string EncodeClientServerKey(ZLinkClientServerServerDescriptorKey key) =>
         Encode(key.ChannelName, key.ServerRid.ToHex());
 
-    internal static string EncodeFanoutKey(
-        ZLinkFanoutPublisherDescriptorKey key) =>
+    internal static string EncodeFanoutKey(ZLinkFanoutPublisherDescriptorKey key) =>
         Encode(key.ChannelName, key.PublisherRid.ToHex());
 
-    internal static string CanonicalName(ZLinkLocationAutoConnectType type) => type switch
-    {
-        ZLinkLocationAutoConnectType.RouteMesh => "route-mesh",
-        ZLinkLocationAutoConnectType.ClientServer => "client-server",
-        ZLinkLocationAutoConnectType.DealerMesh => "dealer-mesh",
-        ZLinkLocationAutoConnectType.Fanout => "fanout",
-        ZLinkLocationAutoConnectType.SpotMesh => "spot-mesh",
-        _ => throw new ArgumentOutOfRangeException(nameof(type), type, "Unknown auto-connect type.")
-    };
+    internal static string CanonicalName(ZLinkLocationAutoConnectType type) =>
+        type switch
+        {
+            ZLinkLocationAutoConnectType.RouteMesh => "route-mesh",
+            ZLinkLocationAutoConnectType.ClientServer => "client-server",
+            ZLinkLocationAutoConnectType.DealerMesh => "dealer-mesh",
+            ZLinkLocationAutoConnectType.Fanout => "fanout",
+            ZLinkLocationAutoConnectType.SpotMesh => "spot-mesh",
+            _ => throw new ArgumentOutOfRangeException(
+                nameof(type),
+                type,
+                "Unknown auto-connect type."
+            ),
+        };
 
-    internal static string CanonicalName(ZLinkLocationRole role) => role switch
-    {
-        ZLinkLocationRole.Spot => "spot",
-        ZLinkLocationRole.Router => "router",
-        ZLinkLocationRole.Dealer => "dealer",
-        ZLinkLocationRole.Pub => "pub",
-        ZLinkLocationRole.Sub => "sub",
-        _ => throw new ArgumentOutOfRangeException(nameof(role), role, "Unknown location role.")
-    };
+    internal static string CanonicalName(ZLinkLocationRole role) =>
+        role switch
+        {
+            ZLinkLocationRole.Spot => "spot",
+            ZLinkLocationRole.Router => "router",
+            ZLinkLocationRole.Dealer => "dealer",
+            ZLinkLocationRole.Pub => "pub",
+            ZLinkLocationRole.Sub => "sub",
+            _ => throw new ArgumentOutOfRangeException(
+                nameof(role),
+                role,
+                "Unknown location role."
+            ),
+        };
 
-    internal static bool IsKnown(ZLinkLocationAutoConnectType type) => type is
-        ZLinkLocationAutoConnectType.RouteMesh
-        or ZLinkLocationAutoConnectType.ClientServer
-        or ZLinkLocationAutoConnectType.DealerMesh
-        or ZLinkLocationAutoConnectType.Fanout
-        or ZLinkLocationAutoConnectType.SpotMesh;
+    internal static bool IsKnown(ZLinkLocationAutoConnectType type) =>
+        type
+            is ZLinkLocationAutoConnectType.RouteMesh
+                or ZLinkLocationAutoConnectType.ClientServer
+                or ZLinkLocationAutoConnectType.DealerMesh
+                or ZLinkLocationAutoConnectType.Fanout
+                or ZLinkLocationAutoConnectType.SpotMesh;
 
-    internal static bool IsKnown(ZLinkLocationRole role) => role is
-        ZLinkLocationRole.Spot
-        or ZLinkLocationRole.Router
-        or ZLinkLocationRole.Dealer
-        or ZLinkLocationRole.Pub
-        or ZLinkLocationRole.Sub;
+    internal static bool IsKnown(ZLinkLocationRole role) =>
+        role
+            is ZLinkLocationRole.Spot
+                or ZLinkLocationRole.Router
+                or ZLinkLocationRole.Dealer
+                or ZLinkLocationRole.Pub
+                or ZLinkLocationRole.Sub;
 
     private static string NormalizePeerIdentity(RoutingId? nodeRid, string? endpoint) =>
         nodeRid is { } rid ? rid.ToHex() : endpoint ?? string.Empty;
@@ -90,8 +102,7 @@ internal static class ZLinkCanonicalLocationKeyFormatter
         return builder.ToString();
     }
 
-    private static void RequireSpotId(string spotId)
-        => RequireGlobalId(spotId, nameof(spotId));
+    private static void RequireSpotId(string spotId) => RequireGlobalId(spotId, nameof(spotId));
 
     private static void RequireGlobalId(string value, string parameterName)
     {
@@ -100,21 +111,24 @@ internal static class ZLinkCanonicalLocationKeyFormatter
         {
             size = new UTF8Encoding(
                 encoderShouldEmitUTF8Identifier: false,
-                throwOnInvalidBytes: true).GetByteCount(value);
+                throwOnInvalidBytes: true
+            ).GetByteCount(value);
         }
         catch (EncoderFallbackException exception)
         {
             throw new ArgumentException(
                 "The logical ID must contain valid UTF-8 text.",
                 parameterName,
-                exception);
+                exception
+            );
         }
 
         if (size is < 1 or > 255 || value.Contains('\0'))
         {
             throw new ArgumentOutOfRangeException(
                 parameterName,
-                "The logical ID must be 1 to 255 UTF-8 bytes without NUL.");
+                "The logical ID must be 1 to 255 UTF-8 bytes without NUL."
+            );
         }
     }
 }

@@ -8,7 +8,9 @@ namespace Zlink.Framework.Runtime.Backend.DotNet;
 internal sealed class ZLinkMeshCompletionTable
 {
     internal delegate void CompletionHandler(
-        MeshReceiveRecord record, IReadOnlyList<Message> parts);
+        MeshReceiveRecord record,
+        IReadOnlyList<Message> parts
+    );
 
     private readonly object _gate = new();
     private readonly Dictionary<MeshOperationId, PendingCompletion> _pending = new();
@@ -17,8 +19,7 @@ internal sealed class ZLinkMeshCompletionTable
     private int _outstandingOperations;
     private bool _closed;
 
-    internal ZLinkMeshCompletionTable(
-        ZLinkCompletionDispatcher? dispatcher = null)
+    internal ZLinkMeshCompletionTable(ZLinkCompletionDispatcher? dispatcher = null)
     {
         _dispatcher = dispatcher ?? ZLinkCompletionDispatcher.Shared;
     }
@@ -27,33 +28,32 @@ internal sealed class ZLinkMeshCompletionTable
     {
         get
         {
-            lock (_gate) return _drained.Task;
+            lock (_gate)
+                return _drained.Task;
         }
     }
 
     public bool Register(MeshOperationId correlationId, CompletionHandler handler)
     {
-        if (correlationId == default) return false;
+        if (correlationId == default)
+            return false;
         ArgumentNullException.ThrowIfNull(handler);
         lock (_gate)
         {
             if (_closed)
                 throw new ZLinkFrameworkException(
                     ZLinkFrameworkErrorKind.ShuttingDown,
-                    "The mesh completion table is closed.");
+                    "The mesh completion table is closed."
+                );
             if (_pending.ContainsKey(correlationId))
-                throw new InvalidOperationException(
-                    "The reply correlation already has a waiter.");
+                throw new InvalidOperationException("The reply correlation already has a waiter.");
             // The dispatcher node exists before the operation becomes visible
             // in the pending table, preserving registration-before-submit.
-            var pending = new PendingCompletion(
-                this,
-                correlationId,
-                handler);
-            var nextDrained = _outstandingOperations == 0
-                ? new TaskCompletionSource(
-                    TaskCreationOptions.RunContinuationsAsynchronously)
-                : null;
+            var pending = new PendingCompletion(this, correlationId, handler);
+            var nextDrained =
+                _outstandingOperations == 0
+                    ? new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously)
+                    : null;
             _pending.Add(correlationId, pending);
             if (nextDrained is not null)
                 _drained = nextDrained;
@@ -62,13 +62,14 @@ internal sealed class ZLinkMeshCompletionTable
         return true;
     }
 
-    public bool RegisterRequest(
-        MeshOperationId correlationId,
-        ZLinkBackendRequestCallback callback)
+    public bool RegisterRequest(MeshOperationId correlationId, ZLinkBackendRequestCallback callback)
     {
         ArgumentNullException.ThrowIfNull(callback);
-        return Register(correlationId, (record, parts) =>
-            callback(MapResult(record.TerminalResult, record.FailureErrno), parts));
+        return Register(
+            correlationId,
+            (record, parts) =>
+                callback(MapResult(record.TerminalResult, record.FailureErrno), parts)
+        );
     }
 
     // This is the only request submission entry point for the pull-dispatch
@@ -77,14 +78,16 @@ internal sealed class ZLinkMeshCompletionTable
     public SubmitResult RegisterBeforeSubmit(
         MeshOperationId correlationId,
         CompletionHandler handler,
-        Func<MeshOperationId, SubmitResult> submit)
+        Func<MeshOperationId, SubmitResult> submit
+    )
     {
         ArgumentNullException.ThrowIfNull(handler);
         ArgumentNullException.ThrowIfNull(submit);
         if (!Register(correlationId, handler))
             throw new ArgumentException(
                 "A non-default reply correlation is required.",
-                nameof(correlationId));
+                nameof(correlationId)
+            );
 
         try
         {
@@ -103,15 +106,16 @@ internal sealed class ZLinkMeshCompletionTable
     public SubmitResult RegisterRequestBeforeSubmit(
         MeshOperationId correlationId,
         ZLinkBackendRequestCallback callback,
-        Func<MeshOperationId, SubmitResult> submit)
+        Func<MeshOperationId, SubmitResult> submit
+    )
     {
         ArgumentNullException.ThrowIfNull(callback);
         return RegisterBeforeSubmit(
             correlationId,
-            (record, parts) => callback(
-                MapResult(record.TerminalResult, record.FailureErrno),
-                parts),
-            submit);
+            (record, parts) =>
+                callback(MapResult(record.TerminalResult, record.FailureErrno), parts),
+            submit
+        );
     }
 
     private bool Unregister(MeshOperationId correlationId)
@@ -127,13 +131,13 @@ internal sealed class ZLinkMeshCompletionTable
 
     // Cancellation competes with reply and shutdown for the same table entry.
     // Only the path that removes the entry may publish its terminal result.
-    internal bool TryCancel(MeshOperationId correlationId) =>
-        Unregister(correlationId);
+    internal bool TryCancel(MeshOperationId correlationId) => Unregister(correlationId);
 
     internal CancellationTokenRegistration RegisterCancellation(
         MeshOperationId correlationId,
         CancellationToken cancellationToken,
-        Action completeCancellation)
+        Action completeCancellation
+    )
     {
         ArgumentNullException.ThrowIfNull(completeCancellation);
         PendingCompletion? pending;
@@ -145,7 +149,8 @@ internal sealed class ZLinkMeshCompletionTable
         }
         return cancellationToken.Register(
             static state => ((PendingCompletion)state!).CancelFromToken(),
-            pending);
+            pending
+        );
     }
 
     public void Complete(MeshReceiveRecord record, IReadOnlyList<Message> parts)
@@ -180,9 +185,7 @@ internal sealed class ZLinkMeshCompletionTable
         }
     }
 
-    private bool TryTake(
-        MeshOperationId correlationId,
-        out PendingCompletion pending)
+    private bool TryTake(MeshOperationId correlationId, out PendingCompletion pending)
     {
         lock (_gate)
             return _pending.Remove(correlationId, out pending!);
@@ -192,8 +195,10 @@ internal sealed class ZLinkMeshCompletionTable
     {
         lock (_gate)
         {
-            if (!_pending.TryGetValue(expected.CorrelationId, out var current)
-                || !ReferenceEquals(current, expected))
+            if (
+                !_pending.TryGetValue(expected.CorrelationId, out var current)
+                || !ReferenceEquals(current, expected)
+            )
                 return;
             _pending.Remove(expected.CorrelationId);
         }
@@ -201,9 +206,7 @@ internal sealed class ZLinkMeshCompletionTable
         _dispatcher.Post(expected);
     }
 
-    private void ReleaseReservation(
-        PendingCompletion pending,
-        Exception? failure)
+    private void ReleaseReservation(PendingCompletion pending, Exception? failure)
     {
         TaskCompletionSource? drained = null;
         lock (_gate)
@@ -219,9 +222,7 @@ internal sealed class ZLinkMeshCompletionTable
         {
             try
             {
-                ZLinkFrameworkDebugLog.TaskFailure(
-                    "mesh-completion-callback",
-                    failure);
+                ZLinkFrameworkDebugLog.TaskFailure("mesh-completion-callback", failure);
             }
             catch
             {
@@ -232,16 +233,14 @@ internal sealed class ZLinkMeshCompletionTable
 
     private static TaskCompletionSource CompletedSignal()
     {
-        var signal = new TaskCompletionSource(
-            TaskCreationOptions.RunContinuationsAsynchronously);
+        var signal = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         signal.TrySetResult();
         return signal;
     }
 
     private sealed class PendingCompletion : ZLinkCompletionDispatcher.WorkItem
     {
-        private static readonly IReadOnlyList<Message> EmptyParts =
-            Array.Empty<Message>();
+        private static readonly IReadOnlyList<Message> EmptyParts = Array.Empty<Message>();
 
         private readonly ZLinkMeshCompletionTable _owner;
         private readonly CompletionHandler _handler;
@@ -253,7 +252,8 @@ internal sealed class ZLinkMeshCompletionTable
         internal PendingCompletion(
             ZLinkMeshCompletionTable owner,
             MeshOperationId correlationId,
-            CompletionHandler handler)
+            CompletionHandler handler
+        )
         {
             _owner = owner;
             CorrelationId = correlationId;
@@ -266,16 +266,14 @@ internal sealed class ZLinkMeshCompletionTable
         {
             if (_cancellationAction is not null)
                 throw new InvalidOperationException(
-                    "A cancellation callback is already registered for this operation.");
+                    "A cancellation callback is already registered for this operation."
+                );
             _cancellationAction = action;
         }
 
-        internal void CancelFromToken() =>
-            _owner.TryDispatchCancellation(this);
+        internal void CancelFromToken() => _owner.TryDispatchCancellation(this);
 
-        internal void PrepareReply(
-            MeshReceiveRecord record,
-            IReadOnlyList<Message> parts)
+        internal void PrepareReply(MeshReceiveRecord record, IReadOnlyList<Message> parts)
         {
             _record = record;
             _parts = parts;
@@ -284,9 +282,7 @@ internal sealed class ZLinkMeshCompletionTable
 
         internal void PrepareFailure(RequestResult result)
         {
-            _record = MeshReceiveRecord.CompletionFailure(
-                CorrelationId,
-                result);
+            _record = MeshReceiveRecord.CompletionFailure(CorrelationId, result);
             _parts = EmptyParts;
             _kind = DispatchKind.Failure;
         }
@@ -309,7 +305,8 @@ internal sealed class ZLinkMeshCompletionTable
                     break;
                 default:
                     throw new InvalidOperationException(
-                        "Completion work was dispatched without a terminal result.");
+                        "Completion work was dispatched without a terminal result."
+                    );
             }
         }
 
@@ -325,14 +322,15 @@ internal sealed class ZLinkMeshCompletionTable
             None = 0,
             Reply = 1,
             Failure = 2,
-            Cancellation = 3
+            Cancellation = 3,
         }
     }
 
     public static RequestResult MapResult(int terminalResult, int failureErrno)
     {
         _ = failureErrno;
-        if (terminalResult == 0) return RequestResult.Ok;
+        if (terminalResult == 0)
+            return RequestResult.Ok;
         var result = (RequestResult)terminalResult;
         return Enum.IsDefined(result) ? result : RequestResult.InternalError;
     }

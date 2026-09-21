@@ -8,5 +8,4 @@ package systems.zlink.framework.runtime.internal.binding.spot;
  * @param high the high 64 bits of the operation id
  * @param low the low 64 bits of the operation id
  */
-public record OperationId(long high, long low) {
-}
+public record OperationId(long high, long low) {}

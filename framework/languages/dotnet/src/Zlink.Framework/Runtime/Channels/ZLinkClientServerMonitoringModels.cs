@@ -10,7 +10,7 @@ internal enum ZLinkClientServerServerState
     Ready = 2,
     Draining = 3,
     Disconnected = 4,
-    Rejected = 5
+    Rejected = 5,
 }
 
 internal sealed record ZLinkClientServerServerSnapshot(
@@ -22,7 +22,8 @@ internal sealed record ZLinkClientServerServerSnapshot(
     bool Ready,
     ZLinkClientServerServerState State,
     string DescriptorSource,
-    string? LastFailure);
+    string? LastFailure
+);
 
 internal sealed record ZLinkClientServerChannelSnapshot(
     string ChannelName,
@@ -34,7 +35,8 @@ internal sealed record ZLinkClientServerChannelSnapshot(
     ulong Sequence,
     DateTimeOffset ObservedAt,
     IReadOnlyList<ZLinkClientServerServerSnapshot> Servers,
-    ZLinkLocationRuntimeSnapshot Location);
+    ZLinkLocationRuntimeSnapshot Location
+);
 
 internal sealed record ZLinkClientServerRuntimeEvent(
     string Identifier,
@@ -48,11 +50,11 @@ internal sealed record ZLinkClientServerRuntimeEvent(
     bool? Ready,
     ZLinkClientServerServerState? State,
     string? Reason,
-    bool IsTerminal = false)
+    bool IsTerminal = false
+)
 {
     internal string SourceKey =>
-        ServerRid is { } serverRid
-        && LifecycleGeneration is { } lifecycleGeneration
+        ServerRid is { } serverRid && LifecycleGeneration is { } lifecycleGeneration
             ? $"{Identifier}:{serverRid.ToHex()}:{lifecycleGeneration}"
             : Identifier;
 }

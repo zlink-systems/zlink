@@ -56,10 +56,7 @@ export function planRelocationChunks(
     throw new RangeError('relocationPayloadChunkLimitBytes must be a positive integer.');
   }
   const totalLength = payload.byteLength;
-  let chunkBytes = Math.min(
-    configuredChunkLimitBytes,
-    RELOCATION_CONSERVATIVE_CHUNK_LIMIT_BYTES
-  );
+  let chunkBytes = Math.min(configuredChunkLimitBytes, RELOCATION_CONSERVATIVE_CHUNK_LIMIT_BYTES);
   if (Math.ceil(totalLength / chunkBytes) > RELOCATION_PAYLOAD_CHUNK_COUNT_MAX) {
     chunkBytes = Math.ceil(totalLength / RELOCATION_PAYLOAD_CHUNK_COUNT_MAX);
   }
@@ -117,9 +114,12 @@ export class ZLinkRelocationPayloadAssembly {
     if (!Number.isSafeInteger(totalLength) || totalLength < 0) {
       throw new RangeError('Relocation payload total length is invalid.');
     }
-    if (!Number.isInteger(chunkCount) || chunkCount < 0
-      || chunkCount > RELOCATION_PAYLOAD_CHUNK_COUNT_MAX
-      || (totalLength > 0 && chunkCount === 0)) {
+    if (
+      !Number.isInteger(chunkCount) ||
+      chunkCount < 0 ||
+      chunkCount > RELOCATION_PAYLOAD_CHUNK_COUNT_MAX ||
+      (totalLength > 0 && chunkCount === 0)
+    ) {
       throw new RangeError('Relocation payload chunk count is invalid.');
     }
     this.buffer = Buffer.alloc(totalLength);
@@ -134,9 +134,9 @@ export class ZLinkRelocationPayloadAssembly {
   accept(ordinal: number, data: Uint8Array): ZLinkRelocationChunkAcceptance {
     if (this.outcome !== undefined) {
       if ('error' in this.outcome) throw this.outcome.error;
-      return ordinal < this.chunkCount ? 'duplicate' : this.conflict(
-        `Relocation chunk ordinal ${ordinal} arrived after assembly completed.`
-      );
+      return ordinal < this.chunkCount
+        ? 'duplicate'
+        : this.conflict(`Relocation chunk ordinal ${ordinal} arrived after assembly completed.`);
     }
     if (ordinal < this.nextOrdinal) return 'duplicate';
     if (ordinal !== this.nextOrdinal || ordinal >= this.chunkCount) {
@@ -147,8 +147,10 @@ export class ZLinkRelocationPayloadAssembly {
     if (this.receivedBytes + data.byteLength > this.totalLength) {
       return this.conflict('Relocation chunks exceed the declared payload length.');
     }
-    if (ordinal === this.chunkCount - 1
-      && this.receivedBytes + data.byteLength !== this.totalLength) {
+    if (
+      ordinal === this.chunkCount - 1 &&
+      this.receivedBytes + data.byteLength !== this.totalLength
+    ) {
       return this.conflict('Relocation chunks do not cover the declared payload length.');
     }
     this.buffer.set(data, this.receivedBytes);
@@ -226,9 +228,7 @@ export class ZLinkRelocationInFlightBudget {
     if (!Number.isSafeInteger(bytes) || bytes < 0) {
       throw new RangeError('Relocation budget charge must be a non-negative integer.');
     }
-    while (this.limitBytes !== 0
-      && this.inFlight > 0
-      && this.inFlight + bytes > this.limitBytes) {
+    while (this.limitBytes !== 0 && this.inFlight > 0 && this.inFlight + bytes > this.limitBytes) {
       await this.waitForRelease(signal);
     }
     this.inFlight += bytes;

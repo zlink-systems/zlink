@@ -1,5 +1,5 @@
-using Xunit;
 using System.Text.RegularExpressions;
+using Xunit;
 
 namespace Zlink.Framework.SampleRegressionTests;
 
@@ -29,13 +29,17 @@ public sealed partial class RegressionTests
     {
         var sourceFiles = EnumerateSourceFiles(ResolveSamplesRoot()).ToArray();
         var clientFiles = sourceFiles
-            .Where(path => path.Contains(
-                $"{Path.DirectorySeparatorChar}Client{Path.DirectorySeparatorChar}",
-                StringComparison.Ordinal))
+            .Where(path =>
+                path.Contains(
+                    $"{Path.DirectorySeparatorChar}Client{Path.DirectorySeparatorChar}",
+                    StringComparison.Ordinal
+                )
+            )
             .ToArray();
         var localAssertion = new Regex(
             @"(?m)^\s*(?:(?:private|public|internal|protected|static)\s+)+(?:async\s+)?(?:void|Task|ValueTask)\s+(?:Ensure|That|RequireContains|RequireNoContains|ExpectFailureAsync|ExpectTimeoutAsync)\s*\(",
-            RegexOptions.CultureInvariant);
+            RegexOptions.CultureInvariant
+        );
         var offenders = sourceFiles
             .Where(path => localAssertion.IsMatch(ReadSource(path)))
             .Select(path => NormalizeRelativePath(Path.GetRelativePath(ResolveDotnetRoot(), path)))
@@ -48,7 +52,11 @@ public sealed partial class RegressionTests
         Assert.Contains("ExpectNone<", clientText, StringComparison.Ordinal);
         Assert.DoesNotContain("ScenarioAssert.That(", clientText, StringComparison.Ordinal);
         Assert.DoesNotContain("ScenarioContext.Require(", clientText, StringComparison.Ordinal);
-        Assert.DoesNotContain("ReceivedCount(nameof(PlayerJoinedNotify))", clientText, StringComparison.Ordinal);
+        Assert.DoesNotContain(
+            "ReceivedCount(nameof(PlayerJoinedNotify))",
+            clientText,
+            StringComparison.Ordinal
+        );
     }
 
     [Fact]
@@ -57,7 +65,9 @@ public sealed partial class RegressionTests
         var samplesRoot = ResolveSamplesRoot();
         var offenders = Directory
             .EnumerateDirectories(samplesRoot)
-            .Where(static path => !string.Equals(Path.GetFileName(path), "TicTacToe", StringComparison.Ordinal))
+            .Where(static path =>
+                !string.Equals(Path.GetFileName(path), "TicTacToe", StringComparison.Ordinal)
+            )
             .SelectMany(EnumerateSourceFiles)
             .Select(path => (Path: path, Text: ReadSource(path)))
             .SelectMany(source =>
@@ -65,21 +75,26 @@ public sealed partial class RegressionTests
                 var violations = new List<string>();
                 if (source.Text.Contains(".PeerConnections.Connect(", StringComparison.Ordinal))
                     violations.Add("manual MeshNode peer connection");
-                if (source.Path.Contains(
+                if (
+                    source.Path.Contains(
                         $"{Path.DirectorySeparatorChar}Server{Path.DirectorySeparatorChar}",
-                        StringComparison.Ordinal))
+                        StringComparison.Ordinal
+                    )
+                )
                 {
                     if (source.Text.Contains("ZLinkHttpClient.Create(", StringComparison.Ordinal))
                         violations.Add("server-to-server ZLinkHttpClient");
                     var withoutRedisConnections = source.Text.Replace(
                         "ConnectionMultiplexer.Connect(",
                         string.Empty,
-                        StringComparison.Ordinal);
+                        StringComparison.Ordinal
+                    );
                     if (withoutRedisConnections.Contains(".Connect(", StringComparison.Ordinal))
                         violations.Add("manual server endpoint connection");
                 }
                 return violations.Select(violation =>
-                    $"{Path.GetRelativePath(samplesRoot, source.Path)}:{violation}");
+                    $"{Path.GetRelativePath(samplesRoot, source.Path)}:{violation}"
+                );
             })
             .Order(StringComparer.Ordinal)
             .ToArray();
@@ -87,8 +102,9 @@ public sealed partial class RegressionTests
         Assert.True(
             offenders.Length == 0,
             "TicTacToe is the only sample allowed to wire servers manually. "
-            + "All other samples must use location-store automatic connections: "
-            + string.Join(", ", offenders));
+                + "All other samples must use location-store automatic connections: "
+                + string.Join(", ", offenders)
+        );
     }
 
     [Theory]
@@ -101,20 +117,28 @@ public sealed partial class RegressionTests
     public void AutomaticSamplesUseAssemblyScanningAndLocationDiscovery(string sampleName)
     {
         var sources = EnumerateSourceFiles(ResolveSampleRoot(sampleName))
-            .Where(path => !path.Contains(
-                $"{Path.DirectorySeparatorChar}Support{Path.DirectorySeparatorChar}SessionRouteBlockProxy{Path.DirectorySeparatorChar}",
-                StringComparison.Ordinal))
+            .Where(path =>
+                !path.Contains(
+                    $"{Path.DirectorySeparatorChar}Support{Path.DirectorySeparatorChar}SessionRouteBlockProxy{Path.DirectorySeparatorChar}",
+                    StringComparison.Ordinal
+                )
+            )
             .Select(ReadSource)
             .ToArray();
         var combined = string.Join('\n', sources);
 
         Assert.Contains("AddHandlersFromAssembly", combined, StringComparison.Ordinal);
-        Assert.DoesNotContain("DisableImplicitHandlerAutoRegistration", combined, StringComparison.Ordinal);
+        Assert.DoesNotContain(
+            "DisableImplicitHandlerAutoRegistration",
+            combined,
+            StringComparison.Ordinal
+        );
         Assert.DoesNotContain(".PeerConnections.Connect(", combined, StringComparison.Ordinal);
         var withoutRedisConnections = combined.Replace(
             "ConnectionMultiplexer.Connect(",
             string.Empty,
-            StringComparison.Ordinal);
+            StringComparison.Ordinal
+        );
         Assert.DoesNotContain(".Connect(", withoutRedisConnections, StringComparison.Ordinal);
     }
 
@@ -123,57 +147,69 @@ public sealed partial class RegressionTests
     {
         var sampleFiles = Directory
             .EnumerateFiles(ResolveSamplesRoot(), "*", SearchOption.AllDirectories)
-            .Where(static path => (path.EndsWith(".cs", StringComparison.Ordinal)
-                                   || path.EndsWith(".proto", StringComparison.Ordinal))
-                                  && !path.Contains(
-                                      $"{Path.DirectorySeparatorChar}bin{Path.DirectorySeparatorChar}",
-                                      StringComparison.Ordinal)
-                                  && !path.Contains(
-                                      $"{Path.DirectorySeparatorChar}obj{Path.DirectorySeparatorChar}",
-                                      StringComparison.Ordinal))
+            .Where(static path =>
+                (
+                    path.EndsWith(".cs", StringComparison.Ordinal)
+                    || path.EndsWith(".proto", StringComparison.Ordinal)
+                )
+                && !path.Contains(
+                    $"{Path.DirectorySeparatorChar}bin{Path.DirectorySeparatorChar}",
+                    StringComparison.Ordinal
+                )
+                && !path.Contains(
+                    $"{Path.DirectorySeparatorChar}obj{Path.DirectorySeparatorChar}",
+                    StringComparison.Ordinal
+                )
+            )
             .ToArray();
         var combined = string.Join('\n', sampleFiles.Select(ReadSource));
 
-        foreach (var obsoleteWireName in new[]
-                 {
-                     "CollectItemReq",
-                     "EnterAreaReq",
-                     "EnterZoneMsg"
-                 })
+        foreach (var obsoleteWireName in new[] { "CollectItemReq", "EnterAreaReq", "EnterZoneMsg" })
             Assert.DoesNotContain(obsoleteWireName, combined, StringComparison.Ordinal);
 
-        foreach (var requiredWireName in new[]
-                 {
-                     "CollectItemMsg",
-                     "EnterAreaMsg",
-                     "MatchBingoReq",
-                     "MatchBingoRes",
-                     "ObserveBingoEventsReq",
-                     "ObserveBingoEventsRes",
-                     "JoinConversationReq",
-                     "JoinConversationRes",
-                     "QuestProgressMsg",
-                     "QuestProgressNotify",
-                     "QuestCompletedMsg",
-                     "QuestCompletedNotify",
-                     "EnterZoneReq",
-                     "EnterZoneRes",
-                     "MessageFollowProbeMsg",
-                     "MessageFollowProbeReq",
-                     "MessageFollowProbeRes",
-                     "PlayerActorCreateReq",
-                     "BingoRoomCreateReq"
-                 })
+        foreach (
+            var requiredWireName in new[]
+            {
+                "CollectItemMsg",
+                "EnterAreaMsg",
+                "MatchBingoReq",
+                "MatchBingoRes",
+                "ObserveBingoEventsReq",
+                "ObserveBingoEventsRes",
+                "JoinConversationReq",
+                "JoinConversationRes",
+                "QuestProgressMsg",
+                "QuestProgressNotify",
+                "QuestCompletedMsg",
+                "QuestCompletedNotify",
+                "EnterZoneReq",
+                "EnterZoneRes",
+                "MessageFollowProbeMsg",
+                "MessageFollowProbeReq",
+                "MessageFollowProbeRes",
+                "PlayerActorCreateReq",
+                "BingoRoomCreateReq",
+            }
+        )
             Assert.Contains(requiredWireName, combined, StringComparison.Ordinal);
 
         var forbiddenWireSuffix = new Regex(
             @"(?m)^\s*(?:(?:public|internal)\s+)?(?:sealed\s+)?(?:record|class|message)\s+\w+(?:Command|Result|Ack)\b",
-            RegexOptions.CultureInvariant);
+            RegexOptions.CultureInvariant
+        );
         var forbiddenSharedContracts = sampleFiles
-            .Select(path => (Path: path, Relative: NormalizeRelativePath(
-                Path.GetRelativePath(ResolveSamplesRoot(), path))))
-            .Where(source => source.Relative.Split('/') is { Length: > 2 } parts
-                             && string.Equals(parts[1], "Shared", StringComparison.Ordinal))
+            .Select(path =>
+                (
+                    Path: path,
+                    Relative: NormalizeRelativePath(
+                        Path.GetRelativePath(ResolveSamplesRoot(), path)
+                    )
+                )
+            )
+            .Where(source =>
+                source.Relative.Split('/') is { Length: > 2 } parts
+                && string.Equals(parts[1], "Shared", StringComparison.Ordinal)
+            )
             .Where(source => forbiddenWireSuffix.IsMatch(ReadSource(source.Path)))
             .Select(source => source.Relative)
             .Order(StringComparer.Ordinal)
@@ -181,29 +217,36 @@ public sealed partial class RegressionTests
         Assert.True(
             forbiddenSharedContracts.Length == 0,
             "Shared wire contracts must use Req/Res, Msg, Notify, or publish-only Event suffixes: "
-            + string.Join(", ", forbiddenSharedContracts));
+                + string.Join(", ", forbiddenSharedContracts)
+        );
     }
 
     [Fact]
     public void SamplePayloadCodecsMatchTheCommonSampleContract()
     {
         var samplesRoot = ResolveSamplesRoot();
-        var bingo = string.Join('\n',
-            EnumerateSourceFiles(Path.Combine(samplesRoot, "Bingo")).Select(ReadSource));
+        var bingo = string.Join(
+            '\n',
+            EnumerateSourceFiles(Path.Combine(samplesRoot, "Bingo")).Select(ReadSource)
+        );
         Assert.Contains("Codecs.Use(ZLinkProtobufCodec.Default)", bingo, StringComparison.Ordinal);
 
-        foreach (var sampleName in new[]
-                 {
-                     "TicTacToe",
-                     "DeliveryDispatch",
-                     "GameQuest",
-                     "ShoppingMall",
-                     "SupportChat",
-                     "ZoneWorld"
-                 })
+        foreach (
+            var sampleName in new[]
+            {
+                "TicTacToe",
+                "DeliveryDispatch",
+                "GameQuest",
+                "ShoppingMall",
+                "SupportChat",
+                "ZoneWorld",
+            }
+        )
         {
-            var source = string.Join('\n',
-                EnumerateSourceFiles(Path.Combine(samplesRoot, sampleName)).Select(ReadSource));
+            var source = string.Join(
+                '\n',
+                EnumerateSourceFiles(Path.Combine(samplesRoot, sampleName)).Select(ReadSource)
+            );
             Assert.DoesNotContain("Codecs.Use(", source, StringComparison.Ordinal);
         }
     }
@@ -217,19 +260,22 @@ public sealed partial class RegressionTests
             "IZLinkLocationStore",
             "IZLinkLocationStore",
             "IZLinkSpotHandleResolver",
-            "IZLinkActorSpotHandleResolver"
+            "IZLinkActorSpotHandleResolver",
         };
 
         var offenders = EnumerateSourceFiles(ResolveSamplesRoot())
-            .SelectMany(file => forbidden
-                .Where(token => ReadSource(file).Contains(token, StringComparison.Ordinal))
-                .Select(token => $"{Path.GetRelativePath(ResolveSamplesRoot(), file)}:{token}"))
+            .SelectMany(file =>
+                forbidden
+                    .Where(token => ReadSource(file).Contains(token, StringComparison.Ordinal))
+                    .Select(token => $"{Path.GetRelativePath(ResolveSamplesRoot(), file)}:{token}")
+            )
             .ToArray();
 
         Assert.True(
             offenders.Length == 0,
             "Samples must not use location stores or actor address resolvers directly: "
-            + string.Join(", ", offenders));
+                + string.Join(", ", offenders)
+        );
     }
 
     [Fact]
@@ -242,15 +288,18 @@ public sealed partial class RegressionTests
             "PreferredOwner",
             "TargetNodeRid",
             ".InNode(",
-            ".OnNode("
+            ".OnNode(",
         ];
         var samplesRoot = ResolveSamplesRoot();
         var sourceFiles = EnumerateSourceFiles(samplesRoot).ToArray();
         var placementOffenders = sourceFiles
-            .SelectMany(file => forbiddenPlacementTokens
-                .Where(token => ReadSource(file).Contains(token, StringComparison.Ordinal))
-                .Select(token =>
-                    $"{NormalizeRelativePath(Path.GetRelativePath(samplesRoot, file))}:{token}"))
+            .SelectMany(file =>
+                forbiddenPlacementTokens
+                    .Where(token => ReadSource(file).Contains(token, StringComparison.Ordinal))
+                    .Select(token =>
+                        $"{NormalizeRelativePath(Path.GetRelativePath(samplesRoot, file))}:{token}"
+                    )
+            )
             .Order(StringComparer.Ordinal)
             .ToArray();
 
@@ -264,7 +313,7 @@ public sealed partial class RegressionTests
             {
                 var source = ReadSource(file);
                 return source.Contains("RequestToNode(", StringComparison.Ordinal)
-                       || source.Contains("SendToNode(", StringComparison.Ordinal);
+                    || source.Contains("SendToNode(", StringComparison.Ordinal);
             })
             .Select(file => NormalizeRelativePath(Path.GetRelativePath(samplesRoot, file)))
             .Order(StringComparer.Ordinal)
@@ -293,15 +342,18 @@ public sealed partial class RegressionTests
         Assert.True(
             bindAsyncOffenders.Length == 0,
             "Session binding should use BindOrGetAsync unless the file intentionally exercises explicit rebinding: "
-            + string.Join(", ", bindAsyncOffenders));
+                + string.Join(", ", bindAsyncOffenders)
+        );
     }
 
     [Fact]
     public void Sample_Health_Checks_Use_Location_Readiness()
     {
         var hostFiles = EnumerateSourceFiles(ResolveSamplesRoot())
-            .Where(static file => file.EndsWith("HostFactory.cs", StringComparison.Ordinal)
-                                  || Path.GetFileName(file).Equals("Program.cs", StringComparison.Ordinal))
+            .Where(static file =>
+                file.EndsWith("HostFactory.cs", StringComparison.Ordinal)
+                || Path.GetFileName(file).Equals("Program.cs", StringComparison.Ordinal)
+            )
             .ToArray();
         Assert.NotEmpty(hostFiles);
 
@@ -309,9 +361,16 @@ public sealed partial class RegressionTests
         // queries can share their host file (08-location-maintenance §3).
         var healthHandler = new Regex(
             "MapGet\\s*\\(\\s*\"/health\"\\s*,(?<handler>(?:[^()]|\\((?<depth>)|\\)(?<-depth>))*)(?(depth)(?!))\\)",
-            RegexOptions.CultureInvariant);
-        var handlers = hostFiles.SelectMany(file => healthHandler.Matches(ReadSource(file))
-            .Cast<Match>().Select(match => match.Groups["handler"].Value)).ToArray();
+            RegexOptions.CultureInvariant
+        );
+        var handlers = hostFiles
+            .SelectMany(file =>
+                healthHandler
+                    .Matches(ReadSource(file))
+                    .Cast<Match>()
+                    .Select(match => match.Groups["handler"].Value)
+            )
+            .ToArray();
         Assert.NotEmpty(handlers);
         var allText = string.Join('\n', handlers);
 
@@ -325,15 +384,24 @@ public sealed partial class RegressionTests
     {
         var hookDeclaration = new Regex(
             @"public\s+(?:async\s+)?(?<return>\S+)\s+OnCreateActorAsync\s*\(",
-            RegexOptions.CultureInvariant);
+            RegexOptions.CultureInvariant
+        );
         var offenders = EnumerateSourceFiles(ResolveSamplesRoot())
-            .SelectMany(path => hookDeclaration.Matches(ReadSource(path))
-                .Cast<Match>()
-                .Where(match => !string.Equals(
-                    match.Groups["return"].Value,
-                    "ValueTask<ZLinkActorCreateResponse>",
-                    StringComparison.Ordinal))
-                .Select(_ => NormalizeRelativePath(Path.GetRelativePath(ResolveDotnetRoot(), path))))
+            .SelectMany(path =>
+                hookDeclaration
+                    .Matches(ReadSource(path))
+                    .Cast<Match>()
+                    .Where(match =>
+                        !string.Equals(
+                            match.Groups["return"].Value,
+                            "ValueTask<ZLinkActorCreateResponse>",
+                            StringComparison.Ordinal
+                        )
+                    )
+                    .Select(_ =>
+                        NormalizeRelativePath(Path.GetRelativePath(ResolveDotnetRoot(), path))
+                    )
+            )
             .Order(StringComparer.Ordinal)
             .ToArray();
 
@@ -344,16 +412,29 @@ public sealed partial class RegressionTests
         string shellRunner,
         string scope,
         string endpointVariable,
-        string containerVariable = "REDIS_CONTAINER")
+        string containerVariable = "REDIS_CONTAINER"
+    )
     {
-        Assert.Contains("source \"${SCRIPT_DIR}/../redis-common.sh\"", shellRunner, StringComparison.Ordinal);
+        Assert.Contains(
+            "source \"${SCRIPT_DIR}/../redis-common.sh\"",
+            shellRunner,
+            StringComparison.Ordinal
+        );
         Assert.Contains(
             $"zlink_redis_start_scoped_assign {containerVariable} {endpointVariable} \"{scope}\" redis:7.2-alpine",
             shellRunner,
-            StringComparison.Ordinal);
-        Assert.Contains($"if [[ -n \"${{{containerVariable}}}\" ]]; then", shellRunner, StringComparison.Ordinal);
-        Assert.Contains($"zlink_redis_remove_by_id \"${{{containerVariable}}}\"", shellRunner,
-            StringComparison.Ordinal);
+            StringComparison.Ordinal
+        );
+        Assert.Contains(
+            $"if [[ -n \"${{{containerVariable}}}\" ]]; then",
+            shellRunner,
+            StringComparison.Ordinal
+        );
+        Assert.Contains(
+            $"zlink_redis_remove_by_id \"${{{containerVariable}}}\"",
+            shellRunner,
+            StringComparison.Ordinal
+        );
         Assert.DoesNotContain("docker rm -fv", shellRunner, StringComparison.Ordinal);
         Assert.DoesNotContain("docker run -d --rm", shellRunner, StringComparison.Ordinal);
         Assert.DoesNotContain("-p \"127.0.0.1::6379\"", shellRunner, StringComparison.Ordinal);
@@ -361,12 +442,21 @@ public sealed partial class RegressionTests
         Assert.Contains("RUN_SUCCEEDED=1", shellRunner, StringComparison.Ordinal);
     }
 
-    private static void AssertPowerShellRunnerUsesRedisDockerHelper(string powershellRunner, string scope)
+    private static void AssertPowerShellRunnerUsesRedisDockerHelper(
+        string powershellRunner,
+        string scope
+    )
     {
-        Assert.Contains($"Start-SampleRedisContainer \"{scope}\"", powershellRunner,
-            StringComparison.Ordinal);
-        Assert.Contains("Remove-SampleRedisContainer $RedisContainer", powershellRunner,
-            StringComparison.Ordinal);
+        Assert.Contains(
+            $"Start-SampleRedisContainer \"{scope}\"",
+            powershellRunner,
+            StringComparison.Ordinal
+        );
+        Assert.Contains(
+            "Remove-SampleRedisContainer $RedisContainer",
+            powershellRunner,
+            StringComparison.Ordinal
+        );
         Assert.DoesNotContain("docker run", powershellRunner, StringComparison.Ordinal);
         Assert.DoesNotContain("docker create", powershellRunner, StringComparison.Ordinal);
         Assert.Contains("$RunSucceeded = $false", powershellRunner, StringComparison.Ordinal);
@@ -380,14 +470,17 @@ public sealed partial class RegressionTests
         var samplesRoot = ResolveSamplesRoot();
         var offenders = Directory
             .EnumerateDirectories(samplesRoot)
-            .Where(static path => !string.Equals(Path.GetFileName(path), "TicTacToe", StringComparison.Ordinal))
+            .Where(static path =>
+                !string.Equals(Path.GetFileName(path), "TicTacToe", StringComparison.Ordinal)
+            )
             .SelectMany(EnumerateSourceFiles)
             .Select(path => (Path: path, Text: ReadSource(path)))
             .Where(static source =>
                 source.Text.Contains("UseDiscovery(", StringComparison.Ordinal)
                 || source.Text.Contains("UseRegistrySpotResolver", StringComparison.Ordinal)
                 || source.Text.Contains("AddZLinkRegistry", StringComparison.Ordinal)
-                || source.Text.Contains("AddRegistryEvents", StringComparison.Ordinal))
+                || source.Text.Contains("AddRegistryEvents", StringComparison.Ordinal)
+            )
             .Select(source => Path.GetRelativePath(samplesRoot, source.Path))
             .Order(StringComparer.Ordinal)
             .ToArray();
@@ -399,7 +492,9 @@ public sealed partial class RegressionTests
     public void DotNet_Docs_Keep_Actor_Destroy_Entry_Owned()
     {
         var dotnetRoot = ResolveDotnetRoot();
-        var frameworkDocRoot = Path.GetFullPath(Path.Combine(dotnetRoot, "..", "..", "doc", "framework"));
+        var frameworkDocRoot = Path.GetFullPath(
+            Path.Combine(dotnetRoot, "..", "..", "doc", "framework")
+        );
         var dotnetDocRoot = Path.Combine(frameworkDocRoot, "dotnet");
         var dotnetContractRoot = Path.Combine(
             frameworkDocRoot,
@@ -407,14 +502,25 @@ public sealed partial class RegressionTests
             "spec",
             "server",
             "languages",
-            "dotnet");
+            "dotnet"
+        );
         var docs = EnumerateMarkdownFiles(Path.Combine(dotnetDocRoot, "guide"))
             .Concat(EnumerateMarkdownFiles(dotnetContractRoot))
             .Concat(EnumerateMarkdownFiles(Path.Combine(dotnetDocRoot, "internals")))
-            .Concat(Directory.EnumerateFiles(Path.Combine(dotnetRoot, "samples"), "README.md",
-                SearchOption.AllDirectories))
-            .Concat(Directory.EnumerateFiles(Path.Combine(dotnetRoot, "samples"), "README.ko.md",
-                SearchOption.AllDirectories))
+            .Concat(
+                Directory.EnumerateFiles(
+                    Path.Combine(dotnetRoot, "samples"),
+                    "README.md",
+                    SearchOption.AllDirectories
+                )
+            )
+            .Concat(
+                Directory.EnumerateFiles(
+                    Path.Combine(dotnetRoot, "samples"),
+                    "README.ko.md",
+                    SearchOption.AllDirectories
+                )
+            )
             .ToArray();
         var offenders = new List<string>();
         (string Needle, string Reason)[] forbidden =
@@ -429,7 +535,7 @@ public sealed partial class RegressionTests
             ("on_actor_created", "legacy snake case create callback"),
             ("onPostActorJoined", "legacy post actor joined callback"),
             ("disconnect -> destroy", "disconnect-to-destroy arrow wording"),
-            ("자동 삭제", "automatic deletion wording")
+            ("자동 삭제", "automatic deletion wording"),
         ];
 
         foreach (var file in docs)
@@ -440,28 +546,43 @@ public sealed partial class RegressionTests
                     offenders.Add($"{Path.GetRelativePath(dotnetRoot, file)}: {reason}");
         }
 
-        var actorSpec = ReadSource(Path.Combine(
-            dotnetContractRoot,
-            "interfaces",
-            "05-spots.ko.md"));
-        var spotModelSpec = ReadSource(Path.Combine(
-            frameworkDocRoot,
-            "common",
-            "spec",
-            "server",
-            "03-spot-actor",
-            "01-spot-model.ko.md"));
-        var ticTacToeSampleSpec = ReadSource(Path.Combine(
-            frameworkDocRoot,
-            "common",
-            "sample",
-            "tictactoe",
-            "README.ko.md"));
+        var actorSpec = ReadSource(
+            Path.Combine(dotnetContractRoot, "interfaces", "05-spots.ko.md")
+        );
+        var spotModelSpec = ReadSource(
+            Path.Combine(
+                frameworkDocRoot,
+                "common",
+                "spec",
+                "server",
+                "03-spot-actor",
+                "01-spot-model.ko.md"
+            )
+        );
+        var ticTacToeSampleSpec = ReadSource(
+            Path.Combine(frameworkDocRoot, "common", "sample", "tictactoe", "README.ko.md")
+        );
         Assert.Contains("ValueTask DestroyActorAsync(", actorSpec, StringComparison.Ordinal);
-        Assert.Contains("Entry Spot은 close operation 대신 Actor destroy", spotModelSpec, StringComparison.Ordinal);
-        Assert.Contains("Entry Spot context의 `destroyActor`를 호출한다", ticTacToeSampleSpec, StringComparison.Ordinal);
-        Assert.Contains("disconnected lifecycle callback을 실행하고 binding을 정리한다", ticTacToeSampleSpec, StringComparison.Ordinal);
-        Assert.Contains("membership 변경이나 destroy를 시작하지 않는다", ticTacToeSampleSpec, StringComparison.Ordinal);
+        Assert.Contains(
+            "Entry Spot은 close operation 대신 Actor destroy",
+            spotModelSpec,
+            StringComparison.Ordinal
+        );
+        Assert.Contains(
+            "Entry Spot context의 `destroyActor`를 호출한다",
+            ticTacToeSampleSpec,
+            StringComparison.Ordinal
+        );
+        Assert.Contains(
+            "disconnected lifecycle callback을 실행하고 binding을 정리한다",
+            ticTacToeSampleSpec,
+            StringComparison.Ordinal
+        );
+        Assert.Contains(
+            "membership 변경이나 destroy를 시작하지 않는다",
+            ticTacToeSampleSpec,
+            StringComparison.Ordinal
+        );
         Assert.Empty(offenders.Order(StringComparer.Ordinal));
     }
 
@@ -470,9 +591,18 @@ public sealed partial class RegressionTests
         Assert.Contains(
             NormalizeWhitespace("AddLocationStore(new ZLinkRedisLocationStore"),
             NormalizeWhitespace(hostFactory),
-            StringComparison.Ordinal);
-        Assert.Contains("redis.ConnectionString = topology.RedisEndpoint", hostFactory, StringComparison.Ordinal);
-        Assert.Contains("redis.KeyPrefix = topology.RedisKeyPrefix", hostFactory, StringComparison.Ordinal);
+            StringComparison.Ordinal
+        );
+        Assert.Contains(
+            "redis.ConnectionString = topology.RedisEndpoint",
+            hostFactory,
+            StringComparison.Ordinal
+        );
+        Assert.Contains(
+            "redis.KeyPrefix = topology.RedisKeyPrefix",
+            hostFactory,
+            StringComparison.Ordinal
+        );
     }
 
     private static void AssertSampleUsesProtobufPayloads(string sampleRoot)
@@ -480,42 +610,77 @@ public sealed partial class RegressionTests
         var sourceFiles = EnumerateSourceFiles(sampleRoot).ToArray();
         var projectFiles = Directory
             .EnumerateFiles(sampleRoot, "*.csproj", SearchOption.AllDirectories)
-            .Where(static path => !path.Contains($"{Path.DirectorySeparatorChar}bin{Path.DirectorySeparatorChar}",
-                                      StringComparison.Ordinal)
-                                  && !path.Contains($"{Path.DirectorySeparatorChar}obj{Path.DirectorySeparatorChar}",
-                                      StringComparison.Ordinal))
+            .Where(static path =>
+                !path.Contains(
+                    $"{Path.DirectorySeparatorChar}bin{Path.DirectorySeparatorChar}",
+                    StringComparison.Ordinal
+                )
+                && !path.Contains(
+                    $"{Path.DirectorySeparatorChar}obj{Path.DirectorySeparatorChar}",
+                    StringComparison.Ordinal
+                )
+            )
             .ToArray();
         var protoFiles = Directory
             .EnumerateFiles(sampleRoot, "*.proto", SearchOption.AllDirectories)
-            .Where(static path => !path.Contains($"{Path.DirectorySeparatorChar}bin{Path.DirectorySeparatorChar}",
-                                      StringComparison.Ordinal)
-                                  && !path.Contains($"{Path.DirectorySeparatorChar}obj{Path.DirectorySeparatorChar}",
-                                      StringComparison.Ordinal))
+            .Where(static path =>
+                !path.Contains(
+                    $"{Path.DirectorySeparatorChar}bin{Path.DirectorySeparatorChar}",
+                    StringComparison.Ordinal
+                )
+                && !path.Contains(
+                    $"{Path.DirectorySeparatorChar}obj{Path.DirectorySeparatorChar}",
+                    StringComparison.Ordinal
+                )
+            )
             .ToArray();
         var allText = string.Join(
             '\n',
-            sourceFiles.Concat(projectFiles).Concat(protoFiles).Select(ReadSource));
+            sourceFiles.Concat(projectFiles).Concat(protoFiles).Select(ReadSource)
+        );
         var sharedProject = Path.Combine(sampleRoot, "Shared", "Bingo.Shared.csproj");
         var sharedProjectText = ReadSource(sharedProject);
         var sharedContractSourceText = string.Join(
             '\n',
             Directory
-                .EnumerateFiles(Path.Combine(sampleRoot, "Shared", "Contracts"), "*.cs", SearchOption.AllDirectories)
-                .Where(static path => !path.Contains($"{Path.DirectorySeparatorChar}bin{Path.DirectorySeparatorChar}",
-                                          StringComparison.Ordinal)
-                                      && !path.Contains(
-                                          $"{Path.DirectorySeparatorChar}obj{Path.DirectorySeparatorChar}",
-                                          StringComparison.Ordinal))
-                .Select(ReadSource));
+                .EnumerateFiles(
+                    Path.Combine(sampleRoot, "Shared", "Contracts"),
+                    "*.cs",
+                    SearchOption.AllDirectories
+                )
+                .Where(static path =>
+                    !path.Contains(
+                        $"{Path.DirectorySeparatorChar}bin{Path.DirectorySeparatorChar}",
+                        StringComparison.Ordinal
+                    )
+                    && !path.Contains(
+                        $"{Path.DirectorySeparatorChar}obj{Path.DirectorySeparatorChar}",
+                        StringComparison.Ordinal
+                    )
+                )
+                .Select(ReadSource)
+        );
 
         Assert.NotEmpty(protoFiles);
         Assert.Contains("Google.Protobuf", sharedProjectText, StringComparison.Ordinal);
         Assert.Contains("Grpc.Tools", sharedProjectText, StringComparison.Ordinal);
-        Assert.Contains("Protobuf Include=\"Contracts\\bingo_messages.proto\"", sharedProjectText, StringComparison.Ordinal);
+        Assert.Contains(
+            "Protobuf Include=\"Contracts\\bingo_messages.proto\"",
+            sharedProjectText,
+            StringComparison.Ordinal
+        );
         Assert.Contains("GrpcServices=\"None\"", sharedProjectText, StringComparison.Ordinal);
         Assert.DoesNotContain("record ", sharedContractSourceText, StringComparison.Ordinal);
-        Assert.DoesNotContain("class AuthenticateReq", sharedContractSourceText, StringComparison.Ordinal);
-        Assert.DoesNotContain("class BingoRoomJoinReq", sharedContractSourceText, StringComparison.Ordinal);
+        Assert.DoesNotContain(
+            "class AuthenticateReq",
+            sharedContractSourceText,
+            StringComparison.Ordinal
+        );
+        Assert.DoesNotContain(
+            "class BingoRoomJoinReq",
+            sharedContractSourceText,
+            StringComparison.Ordinal
+        );
         Assert.Contains("ZLinkProtobufCodec.Default", allText, StringComparison.Ordinal);
         Assert.Contains("Zlink.Framework.Codecs.Protobuf", allText, StringComparison.Ordinal);
         Assert.DoesNotContain("AddProtobuf", allText, StringComparison.Ordinal);
@@ -530,21 +695,31 @@ public sealed partial class RegressionTests
         var sourceFiles = EnumerateSourceFiles(sampleRoot).ToArray();
         var projectFiles = Directory
             .EnumerateFiles(sampleRoot, "*.csproj", SearchOption.AllDirectories)
-            .Where(static path => !path.Contains($"{Path.DirectorySeparatorChar}bin{Path.DirectorySeparatorChar}",
-                                      StringComparison.Ordinal)
-                                  && !path.Contains($"{Path.DirectorySeparatorChar}obj{Path.DirectorySeparatorChar}",
-                                      StringComparison.Ordinal))
+            .Where(static path =>
+                !path.Contains(
+                    $"{Path.DirectorySeparatorChar}bin{Path.DirectorySeparatorChar}",
+                    StringComparison.Ordinal
+                )
+                && !path.Contains(
+                    $"{Path.DirectorySeparatorChar}obj{Path.DirectorySeparatorChar}",
+                    StringComparison.Ordinal
+                )
+            )
             .ToArray();
         var protoFiles = Directory
             .EnumerateFiles(sampleRoot, "*.proto", SearchOption.AllDirectories)
-            .Where(static path => !path.Contains($"{Path.DirectorySeparatorChar}bin{Path.DirectorySeparatorChar}",
-                                      StringComparison.Ordinal)
-                                  && !path.Contains($"{Path.DirectorySeparatorChar}obj{Path.DirectorySeparatorChar}",
-                                      StringComparison.Ordinal))
+            .Where(static path =>
+                !path.Contains(
+                    $"{Path.DirectorySeparatorChar}bin{Path.DirectorySeparatorChar}",
+                    StringComparison.Ordinal
+                )
+                && !path.Contains(
+                    $"{Path.DirectorySeparatorChar}obj{Path.DirectorySeparatorChar}",
+                    StringComparison.Ordinal
+                )
+            )
             .ToArray();
-        var allText = string.Join(
-            '\n',
-            sourceFiles.Concat(projectFiles).Select(ReadSource));
+        var allText = string.Join('\n', sourceFiles.Concat(projectFiles).Select(ReadSource));
 
         Assert.Empty(protoFiles);
         Assert.DoesNotContain("Stream.Connector.Json", allText, StringComparison.Ordinal);
@@ -565,10 +740,12 @@ public sealed partial class RegressionTests
         foreach (var file in EnumerateSourceFiles(sampleRoot))
         {
             var text = ReadSource(file);
-            if (!ContainsRawCodecHelper(text)) continue;
+            if (!ContainsRawCodecHelper(text))
+                continue;
 
             var relative = Path.GetRelativePath(sampleRoot, file).Replace('\\', '/');
-            if (!IsAllowedRawCodecLifecycleFile(sampleName, relative)) violations.Add($"{sampleName}/{relative}");
+            if (!IsAllowedRawCodecLifecycleFile(sampleName, relative))
+                violations.Add($"{sampleName}/{relative}");
         }
 
         Assert.Empty(violations.Order(StringComparer.Ordinal));
@@ -577,9 +754,9 @@ public sealed partial class RegressionTests
     private static bool ContainsRawCodecHelper(string text)
     {
         return text.Contains(".ToJson()", StringComparison.Ordinal)
-               || text.Contains(".FromJson<", StringComparison.Ordinal)
-               || text.Contains(".ToProto()", StringComparison.Ordinal)
-               || text.Contains(".FromProto<", StringComparison.Ordinal);
+            || text.Contains(".FromJson<", StringComparison.Ordinal)
+            || text.Contains(".ToProto()", StringComparison.Ordinal)
+            || text.Contains(".FromProto<", StringComparison.Ordinal);
     }
 
     private static bool IsAllowedRawCodecLifecycleFile(string sampleName, string relative)
@@ -588,18 +765,33 @@ public sealed partial class RegressionTests
         {
             ("Bingo", "Server/Session/Sessions/Handlers/AuthenticateSessionHandler.cs") => true,
             ("Bingo", "Server/Play/Application/RoomAllocation/BingoRoomAllocator.cs") => true,
-            ("Bingo", "Server/Play/Infrastructure/ZLink/Handlers/AllocateBingoRoomHandler.cs") => true,
+            ("Bingo", "Server/Play/Infrastructure/ZLink/Handlers/AllocateBingoRoomHandler.cs") =>
+                true,
             ("Bingo", "Server/Play/Adapters/ZLink/Spots/BingoRoom.cs") => true,
-            ("Bingo", "Server/Play/Adapters/ZLink/Spots/Handlers/MatchBingoActorHandler.cs") => true,
+            ("Bingo", "Server/Play/Adapters/ZLink/Spots/Handlers/MatchBingoActorHandler.cs") =>
+                true,
             ("Bingo", "Server/Play/Infrastructure/ZLink/Spots/BingoRoom.cs") => true,
-            ("Bingo", "Server/Play/Infrastructure/ZLink/Spots/BingoRoomSettingsPayloadMapper.cs") => true,
-            ("Bingo", "Server/Play/Infrastructure/ZLink/Spots/Handlers/MatchBingoActorHandler.cs") => true,
-            ("Bingo", "Server/Play/Infrastructure/ZLink/Spots/Handlers/ObserveBingoEventsHandler.cs") => true,
+            ("Bingo", "Server/Play/Infrastructure/ZLink/Spots/BingoRoomSettingsPayloadMapper.cs") =>
+                true,
+            (
+                "Bingo",
+                "Server/Play/Infrastructure/ZLink/Spots/Handlers/MatchBingoActorHandler.cs"
+            ) => true,
+            (
+                "Bingo",
+                "Server/Play/Infrastructure/ZLink/Spots/Handlers/ObserveBingoEventsHandler.cs"
+            ) => true,
             ("TicTacToe", "Server/Play/Adapters/ZLink/Spots/TicTacToeGame.cs") => true,
-            ("TicTacToe", "Server/Play/Adapters/ZLink/Spots/Handlers/PlayActorJoinGameHandler.cs") => true,
+            (
+                "TicTacToe",
+                "Server/Play/Adapters/ZLink/Spots/Handlers/PlayActorJoinGameHandler.cs"
+            ) => true,
             ("TicTacToe", "Server/Play/Infrastructure/ZLink/Spots/TicTacToeGame.cs") => true,
-            ("TicTacToe", "Server/Play/Infrastructure/ZLink/Spots/Handlers/PlayActorJoinGameHandler.cs") => true,
-            _ => false
+            (
+                "TicTacToe",
+                "Server/Play/Infrastructure/ZLink/Spots/Handlers/PlayActorJoinGameHandler.cs"
+            ) => true,
+            _ => false,
         };
     }
 
@@ -617,11 +809,21 @@ public sealed partial class RegressionTests
             var text = ReadSource(file);
             Assert.DoesNotContain("RegistryRemoteAddressStore", text, StringComparison.Ordinal);
             Assert.DoesNotContain("RegistryRemoteAddressPublisher", text, StringComparison.Ordinal);
-            Assert.DoesNotContain("AddActorRemoteAddressResolver<RegistryRemoteAddressStore>", text,
-                StringComparison.Ordinal);
-            Assert.DoesNotContain("AddSpotRouteRefResolver<RegistryRemoteAddressStore>", text,
-                StringComparison.Ordinal);
-            Assert.DoesNotContain("BindInitialActorRemoteAddressesAsync", text, StringComparison.Ordinal);
+            Assert.DoesNotContain(
+                "AddActorRemoteAddressResolver<RegistryRemoteAddressStore>",
+                text,
+                StringComparison.Ordinal
+            );
+            Assert.DoesNotContain(
+                "AddSpotRouteRefResolver<RegistryRemoteAddressStore>",
+                text,
+                StringComparison.Ordinal
+            );
+            Assert.DoesNotContain(
+                "BindInitialActorRemoteAddressesAsync",
+                text,
+                StringComparison.Ordinal
+            );
         }
     }
 
@@ -640,14 +842,21 @@ public sealed partial class RegressionTests
         foreach (var file in sourceFiles)
         {
             var text = ReadSource(file);
-            Assert.DoesNotContain("RegistryActorSessionLocationStore", text, StringComparison.Ordinal);
+            Assert.DoesNotContain(
+                "RegistryActorSessionLocationStore",
+                text,
+                StringComparison.Ordinal
+            );
             Assert.DoesNotContain("IRegistryDiscoveryMetadata", text, StringComparison.Ordinal);
             Assert.DoesNotContain("FileRegistryDiscoveryMetadata", text, StringComparison.Ordinal);
             Assert.DoesNotContain("OpenRegistryMetadata", text, StringComparison.Ordinal);
             Assert.DoesNotContain("AddActorSessionBindingStore", text, StringComparison.Ordinal);
             Assert.DoesNotContain("IZLinkActorSessionClient", text, StringComparison.Ordinal);
-            Assert.DoesNotContain("AddActorSessionBindingStore<RegistryActorSessionLocationStore>", text,
-                StringComparison.Ordinal);
+            Assert.DoesNotContain(
+                "AddActorSessionBindingStore<RegistryActorSessionLocationStore>",
+                text,
+                StringComparison.Ordinal
+            );
         }
     }
 
@@ -689,7 +898,8 @@ public sealed partial class RegressionTests
 
     private static void AssertUsesAutoRegisteredSessionHandlers(string sampleRoot)
     {
-        var sourceFiles = EnumerateSourceFiles(Path.Combine(sampleRoot, "Server", "Session")).ToArray();
+        var sourceFiles = EnumerateSourceFiles(Path.Combine(sampleRoot, "Server", "Session"))
+            .ToArray();
         var allText = string.Join('\n', sourceFiles.Select(ReadSource));
 
         Assert.Contains("IZLinkSessionPacketHandler<", allText, StringComparison.Ordinal);
@@ -698,7 +908,11 @@ public sealed partial class RegressionTests
         Assert.DoesNotContain("PacketName =>", allText, StringComparison.Ordinal);
         Assert.DoesNotContain("IBingoSessionHandler", allText, StringComparison.Ordinal);
         Assert.DoesNotContain("ISessionRelayPacketHandler", allText, StringComparison.Ordinal);
-        Assert.DoesNotContain("ToDictionary(static handler => handler.PacketName", allText, StringComparison.Ordinal);
+        Assert.DoesNotContain(
+            "ToDictionary(static handler => handler.PacketName",
+            allText,
+            StringComparison.Ordinal
+        );
         Assert.DoesNotContain("BingoSessionContext", allText, StringComparison.Ordinal);
         Assert.DoesNotContain("SessionRelayPacketContext", allText, StringComparison.Ordinal);
         Assert.DoesNotContain("SessionRelayState", allText, StringComparison.Ordinal);
@@ -707,8 +921,11 @@ public sealed partial class RegressionTests
     private static void AssertSessionServerUsesSessionRelay(string sampleRoot)
     {
         var sessionHostFactory = Directory
-            .EnumerateFiles(Path.Combine(sampleRoot, "Server", "Session"), "*HostFactory.cs",
-                SearchOption.AllDirectories)
+            .EnumerateFiles(
+                Path.Combine(sampleRoot, "Server", "Session"),
+                "*HostFactory.cs",
+                SearchOption.AllDirectories
+            )
             .Single();
         var text = ReadSource(sessionHostFactory);
 
@@ -716,7 +933,11 @@ public sealed partial class RegressionTests
         Assert.Contains(".Listen(", text, StringComparison.Ordinal);
         Assert.Contains(".EnableActorDispatch(", text, StringComparison.Ordinal);
         Assert.DoesNotContain("AddScoped<IBingoSessionHandler", text, StringComparison.Ordinal);
-        Assert.DoesNotContain("AddScoped<ISessionRelayPacketHandler", text, StringComparison.Ordinal);
+        Assert.DoesNotContain(
+            "AddScoped<ISessionRelayPacketHandler",
+            text,
+            StringComparison.Ordinal
+        );
     }
 
     private static void AssertSessionHandlersDoNotResolveActorRemoteAddresses(string sampleRoot)
@@ -731,18 +952,25 @@ public sealed partial class RegressionTests
         foreach (var file in sourceFiles)
         {
             var text = ReadSource(file);
-            Assert.DoesNotContain("IZLinkActorRemoteAddressResolver", text, StringComparison.Ordinal);
+            Assert.DoesNotContain(
+                "IZLinkActorRemoteAddressResolver",
+                text,
+                StringComparison.Ordinal
+            );
             Assert.DoesNotContain("ResolveActorRemoteAddressAsync", text, StringComparison.Ordinal);
         }
     }
 
-    private static void AssertEnsureActorHandlersReturnSessionRelayRemoteAddresses(string sampleRoot)
+    private static void AssertEnsureActorHandlersReturnSessionRelayRemoteAddresses(
+        string sampleRoot
+    )
     {
         var sessionRoot = Path.Combine(sampleRoot, "Server", "Session");
         var sourceFiles = EnumerateSourceFiles(sessionRoot)
-            .Where(static file => Path.GetFileName(file).Equals(
-                "AuthenticateSessionHandler.cs",
-                StringComparison.Ordinal))
+            .Where(static file =>
+                Path.GetFileName(file)
+                    .Equals("AuthenticateSessionHandler.cs", StringComparison.Ordinal)
+            )
             .ToArray();
 
         Assert.NotEmpty(sourceFiles);
@@ -750,16 +978,29 @@ public sealed partial class RegressionTests
         foreach (var file in sourceFiles)
         {
             var text = ReadSource(file);
-            Assert.DoesNotContain("IZLinkActorRemoteAddressResolver", text, StringComparison.Ordinal);
+            Assert.DoesNotContain(
+                "IZLinkActorRemoteAddressResolver",
+                text,
+                StringComparison.Ordinal
+            );
             Assert.DoesNotContain("ResolveActorRemoteAddressAsync", text, StringComparison.Ordinal);
             Assert.DoesNotContain("GetRemoteAddressAsync", text, StringComparison.Ordinal);
-            Assert.Contains(".GetOrCreate(authenticated.ActorId, SampleNames.PlayerActorType)", text,
-                StringComparison.Ordinal);
+            Assert.Contains(
+                ".GetOrCreate(authenticated.ActorId, SampleNames.PlayerActorType)",
+                text,
+                StringComparison.Ordinal
+            );
             Assert.Contains("context.Actors.BindOrGetAsync", text, StringComparison.Ordinal);
-            Assert.Contains("ZLinkActorCreateResult.Existing value => value.Actor", text,
-                StringComparison.Ordinal);
-            Assert.Contains("ZLinkActorCreateResult.Created value => value.Actor", text,
-                StringComparison.Ordinal);
+            Assert.Contains(
+                "ZLinkActorCreateResult.Existing value => value.Actor",
+                text,
+                StringComparison.Ordinal
+            );
+            Assert.Contains(
+                "ZLinkActorCreateResult.Created value => value.Actor",
+                text,
+                StringComparison.Ordinal
+            );
             Assert.DoesNotContain("ActorRefWire", text, StringComparison.Ordinal);
         }
     }
@@ -769,7 +1010,8 @@ public sealed partial class RegressionTests
         string entrySpotRelativePath,
         string userSpotRelativePath,
         string actorRelativePath,
-        string sessionRelativePath)
+        string sessionRelativePath
+    )
     {
         var entrySpot = ReadSource(Path.Combine(sampleRoot, entrySpotRelativePath));
         var userSpot = ReadSource(Path.Combine(sampleRoot, userSpotRelativePath));
@@ -808,7 +1050,12 @@ public sealed partial class RegressionTests
         const string needle =
             "Rehydrate(\n        QuestDefinition definition,\n        IReadOnlyList<QuestDomainEvent> stream\n    )";
         var original = Path.Combine(
-            ResolveSampleRoot("GameQuest"), "Server", "QuestMission", "Domain", "QuestDomain.cs");
+            ResolveSampleRoot("GameQuest"),
+            "Server",
+            "QuestMission",
+            "Domain",
+            "QuestDomain.cs"
+        );
         var lfText = ReadSource(original);
         Assert.Contains(needle, lfText, StringComparison.Ordinal);
 
@@ -862,29 +1109,43 @@ public sealed partial class RegressionTests
     {
         return Directory
             .EnumerateFiles(root, "*.cs", SearchOption.AllDirectories)
-            .Where(static path => !path.Contains($"{Path.DirectorySeparatorChar}bin{Path.DirectorySeparatorChar}",
-                                      StringComparison.Ordinal)
-                                  && !path.Contains($"{Path.DirectorySeparatorChar}obj{Path.DirectorySeparatorChar}",
-                                      StringComparison.Ordinal));
+            .Where(static path =>
+                !path.Contains(
+                    $"{Path.DirectorySeparatorChar}bin{Path.DirectorySeparatorChar}",
+                    StringComparison.Ordinal
+                )
+                && !path.Contains(
+                    $"{Path.DirectorySeparatorChar}obj{Path.DirectorySeparatorChar}",
+                    StringComparison.Ordinal
+                )
+            );
     }
 
     private static IEnumerable<string> EnumerateMarkdownFiles(string root)
     {
         return Directory
             .EnumerateFiles(root, "*.md", SearchOption.AllDirectories)
-            .Where(static path => !path.Contains($"{Path.DirectorySeparatorChar}bin{Path.DirectorySeparatorChar}",
-                                      StringComparison.Ordinal)
-                                  && !path.Contains($"{Path.DirectorySeparatorChar}obj{Path.DirectorySeparatorChar}",
-                                      StringComparison.Ordinal));
+            .Where(static path =>
+                !path.Contains(
+                    $"{Path.DirectorySeparatorChar}bin{Path.DirectorySeparatorChar}",
+                    StringComparison.Ordinal
+                )
+                && !path.Contains(
+                    $"{Path.DirectorySeparatorChar}obj{Path.DirectorySeparatorChar}",
+                    StringComparison.Ordinal
+                )
+            );
     }
 
     private static IEnumerable<string> EnumerateSessionRoots(string sampleRoot)
     {
         var sessionRoot = Path.Combine(sampleRoot, "Server", "Session");
-        if (Directory.Exists(sessionRoot)) yield return sessionRoot;
+        if (Directory.Exists(sessionRoot))
+            yield return sessionRoot;
 
         var playSessionsRoot = Path.Combine(sampleRoot, "Server", "Play", "Sessions");
-        if (Directory.Exists(playSessionsRoot)) yield return playSessionsRoot;
+        if (Directory.Exists(playSessionsRoot))
+            yield return playSessionsRoot;
 
         var adapterSessionsRoot = Path.Combine(
             sampleRoot,
@@ -892,8 +1153,10 @@ public sealed partial class RegressionTests
             "Play",
             "Adapters",
             "ZLink",
-            "Sessions");
-        if (Directory.Exists(adapterSessionsRoot)) yield return adapterSessionsRoot;
+            "Sessions"
+        );
+        if (Directory.Exists(adapterSessionsRoot))
+            yield return adapterSessionsRoot;
 
         var infrastructureSessionsRoot = Path.Combine(
             sampleRoot,
@@ -901,8 +1164,10 @@ public sealed partial class RegressionTests
             "Play",
             "Infrastructure",
             "ZLink",
-            "Sessions");
-        if (Directory.Exists(infrastructureSessionsRoot)) yield return infrastructureSessionsRoot;
+            "Sessions"
+        );
+        if (Directory.Exists(infrastructureSessionsRoot))
+            yield return infrastructureSessionsRoot;
     }
 
     private static string ResolveSampleRoot(string sampleName)
@@ -925,11 +1190,18 @@ public sealed partial class RegressionTests
         foreach (var dir in new[] { "samples" })
         {
             var basePath = Path.Combine(root, dir);
-            if (!Directory.Exists(basePath)) continue;
-            foreach (var file in Directory.EnumerateFiles(basePath, "*.cs", SearchOption.AllDirectories))
+            if (!Directory.Exists(basePath))
+                continue;
+            foreach (
+                var file in Directory.EnumerateFiles(basePath, "*.cs", SearchOption.AllDirectories)
+            )
             {
-                if (file.Contains($"{Path.DirectorySeparatorChar}obj{Path.DirectorySeparatorChar}")
-                    || file.Contains($"{Path.DirectorySeparatorChar}bin{Path.DirectorySeparatorChar}"))
+                if (
+                    file.Contains($"{Path.DirectorySeparatorChar}obj{Path.DirectorySeparatorChar}")
+                    || file.Contains(
+                        $"{Path.DirectorySeparatorChar}bin{Path.DirectorySeparatorChar}"
+                    )
+                )
                     continue;
                 if (ReadSource(file).Contains("new HttpClient"))
                     offenders.Add(NormalizeRelativePath(Path.GetRelativePath(root, file)));
@@ -950,20 +1222,22 @@ public sealed partial class RegressionTests
                 "framework",
                 "languages",
                 "dotnet",
-                "samples");
+                "samples"
+            );
 
-            if (Directory.Exists(candidate)) return Directory.GetParent(candidate)!.FullName;
+            if (Directory.Exists(candidate))
+                return Directory.GetParent(candidate)!.FullName;
 
             current = current.Parent;
         }
 
         throw new DirectoryNotFoundException(
-            "Could not find framework/languages/dotnet/samples from test runtime.");
+            "Could not find framework/languages/dotnet/samples from test runtime."
+        );
     }
 
     private static string NormalizeRelativePath(string path)
     {
         return path.Replace(Path.DirectorySeparatorChar, '/');
     }
-
 }

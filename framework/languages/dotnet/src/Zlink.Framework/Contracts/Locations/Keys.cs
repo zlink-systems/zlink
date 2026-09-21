@@ -6,8 +6,7 @@ namespace Zlink.Framework.Contracts.Locations;
 /// </summary>
 public readonly record struct ZLinkPageRequest(
     int PageSize = 100,
-    string? ContinuationToken = null);
+    string? ContinuationToken = null
+);
 
-public sealed record ZLinkLocationPage<T>(
-    IReadOnlyList<T> Items,
-    string? ContinuationToken);
+public sealed record ZLinkLocationPage<T>(IReadOnlyList<T> Items, string? ContinuationToken);

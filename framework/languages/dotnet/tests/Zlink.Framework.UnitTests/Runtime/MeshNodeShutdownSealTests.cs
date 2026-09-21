@@ -22,11 +22,13 @@ public sealed class MeshNodeShutdownSealTests
         Assert.False(gate.IsSealedForShutdown);
 
         // A relocation fence seals application admission but is not a shutdown.
-        Assert.True(gate.TryBeginRelocationFence(_ =>
-        {
-            gate.Seal();
-            return true;
-        }));
+        Assert.True(
+            gate.TryBeginRelocationFence(_ =>
+            {
+                gate.Seal();
+                return true;
+            })
+        );
         Assert.True(gate.IsSealed);
         Assert.False(gate.IsSealedForShutdown);
 
@@ -43,9 +45,15 @@ public sealed class MeshNodeShutdownSealTests
         var scheduler = new GatedTaskScheduler();
         await using var context = Systems.Zlink.Zlink.CreateContext();
         await using var left = new ZLinkManagedMeshNode(
-            context, MeshName, routedSubmitScheduler: scheduler);
+            context,
+            MeshName,
+            routedSubmitScheduler: scheduler
+        );
         await using var right = new ZLinkManagedMeshNode(
-            context, MeshName, routedSubmitScheduler: scheduler);
+            context,
+            MeshName,
+            routedSubmitScheduler: scheduler
+        );
         var suffix = Guid.NewGuid().ToString("N");
         var leftRid = RoutingId.From($"crossed-left-{suffix}");
         var rightRid = RoutingId.From($"crossed-right-{suffix}");
@@ -78,25 +86,25 @@ public sealed class MeshNodeShutdownSealTests
             scheduler.Release();
         }
         await WaitUntilAsync(() =>
-            left.Status().AdmittedPeerCount == 1
-            && right.Status().AdmittedPeerCount == 1);
+            left.Status().AdmittedPeerCount == 1 && right.Status().AdmittedPeerCount == 1
+        );
         // Let the crossed Admit replies and two admission retry intervals pass.
         await Task.Delay(TimeSpan.FromMilliseconds(1200));
 
-        foreach (var (node, monitor, peerRid) in new[]
-                 {
-                     (left, leftMonitor, rightRid),
-                     (right, rightMonitor, leftRid)
-                 })
+        foreach (
+            var (node, monitor, peerRid) in new[]
+            {
+                (left, leftMonitor, rightRid),
+                (right, rightMonitor, leftRid),
+            }
+        )
         {
             var status = monitor.Status();
             Assert.Equal(1UL, status.PeerAdmitted);
             Assert.Equal(0UL, status.ProtocolErrors);
             Assert.Equal(MeshNodeState.Ready, node.Status().State);
             Assert.Equal(1U, node.Status().AdmittedPeerCount);
-            var admitted = Assert.Single(
-                node.Peers(),
-                peer => peer.RoutingId == peerRid);
+            var admitted = Assert.Single(node.Peers(), peer => peer.RoutingId == peerRid);
             Assert.Equal(MeshPeerState.Admitted, admitted.State);
         }
     }
@@ -126,7 +134,8 @@ public sealed class MeshNodeShutdownSealTests
                 lifecycleGeneration: 7,
                 descriptorRevision: 3,
                 new Dictionary<string, uint>(StringComparer.Ordinal),
-                objectRole: (byte)ZLinkMeshNodeObjectRole.Server);
+                objectRole: (byte)ZLinkMeshNodeObjectRole.Server
+            );
 
         await SendAsync(peer, Descriptor(ServiceWireConstants.Command.Hello));
         await WaitUntilAsync(() => node.Status().AdmittedPeerCount == 1);
@@ -161,8 +170,8 @@ public sealed class MeshNodeShutdownSealTests
         await using var node = new ZLinkManagedMeshNode(
             context,
             MeshName,
-            decorateSocketMonitor: monitor =>
-                transportMonitor = new DeferredReadyMonitor(monitor));
+            decorateSocketMonitor: monitor => transportMonitor = new DeferredReadyMonitor(monitor)
+        );
         var suffix = Guid.NewGuid().ToString("N");
         node.SetRoutingId(RoutingId.From($"same-connection-node-{suffix}"));
         node.SetBind(EphemeralTcpEndpoint);
@@ -178,14 +187,16 @@ public sealed class MeshNodeShutdownSealTests
         await transportMonitor.ReadyCaptured;
         await transportMonitor.ReadyApplied;
 
-        byte[] Hello() => ZLinkServiceWireCodec.EncodeRouteAdmission(
-            ServiceWireConstants.Command.Hello,
-            MeshName,
-            $"inproc://same-connection-peer-{suffix}",
-            lifecycleGeneration: 7,
-            descriptorRevision: 3,
-            new Dictionary<string, uint>(StringComparer.Ordinal),
-            objectRole: (byte)ZLinkMeshNodeObjectRole.Server);
+        byte[] Hello() =>
+            ZLinkServiceWireCodec.EncodeRouteAdmission(
+                ServiceWireConstants.Command.Hello,
+                MeshName,
+                $"inproc://same-connection-peer-{suffix}",
+                lifecycleGeneration: 7,
+                descriptorRevision: 3,
+                new Dictionary<string, uint>(StringComparer.Ordinal),
+                objectRole: (byte)ZLinkMeshNodeObjectRole.Server
+            );
 
         await SendAsync(peer, Hello());
         await ReceiveAdmitAsync(peer);
@@ -216,8 +227,8 @@ public sealed class MeshNodeShutdownSealTests
             context,
             MeshName,
             routedSubmitScheduler: scheduler,
-            decorateSocketMonitor: monitor =>
-                transportMonitor = new DeferredReadyMonitor(monitor));
+            decorateSocketMonitor: monitor => transportMonitor = new DeferredReadyMonitor(monitor)
+        );
         var suffix = Guid.NewGuid().ToString("N");
         node.SetRoutingId(RoutingId.From($"late-ready-node-{suffix}"));
         node.SetBind(EphemeralTcpEndpoint);
@@ -231,14 +242,19 @@ public sealed class MeshNodeShutdownSealTests
 
         try
         {
-            using (var hello = Message.From(ZLinkServiceWireCodec.EncodeRouteAdmission(
-                       ServiceWireConstants.Command.Hello,
-                       MeshName,
-                       $"inproc://late-ready-peer-{suffix}",
-                       lifecycleGeneration: 7,
-                       descriptorRevision: 3,
-                       new Dictionary<string, uint>(StringComparer.Ordinal),
-                       objectRole: (byte)ZLinkMeshNodeObjectRole.Server)))
+            using (
+                var hello = Message.From(
+                    ZLinkServiceWireCodec.EncodeRouteAdmission(
+                        ServiceWireConstants.Command.Hello,
+                        MeshName,
+                        $"inproc://late-ready-peer-{suffix}",
+                        lifecycleGeneration: 7,
+                        descriptorRevision: 3,
+                        new Dictionary<string, uint>(StringComparer.Ordinal),
+                        objectRole: (byte)ZLinkMeshNodeObjectRole.Server
+                    )
+                )
+            )
                 peer.Send().Message(hello).Submit();
 
             // Hello validates ingress, but a queued Admit is not a ready route.
@@ -260,22 +276,33 @@ public sealed class MeshNodeShutdownSealTests
             // receive deadline or waiting for an absent message.
             node.PublishDraining();
             scheduler.Release();
-            foreach (var expected in new[]
-                     {
-                         ServiceWireConstants.Command.Admit,
-                         ServiceWireConstants.Command.Update
-                     })
+            foreach (
+                var expected in new[]
+                {
+                    ServiceWireConstants.Command.Admit,
+                    ServiceWireConstants.Command.Update,
+                }
+            )
             {
                 using var received = Received.Create();
                 Assert.True(peer.Recv(received));
-                Assert.True(ZLinkServiceWireCodec.TryDecodeRouteAdmission(
-                    received.FirstPart().AsSpan(), out var command, out _, out _));
+                Assert.True(
+                    ZLinkServiceWireCodec.TryDecodeRouteAdmission(
+                        received.FirstPart().AsSpan(),
+                        out var command,
+                        out _,
+                        out _
+                    )
+                );
                 Assert.Equal(expected, command);
             }
 
-            Assert.True(SpinWait.SpinUntil(
-                () => node.Status().AdmittedPeerCount == 1,
-                TimeSpan.FromSeconds(5)));
+            Assert.True(
+                SpinWait.SpinUntil(
+                    () => node.Status().AdmittedPeerCount == 1,
+                    TimeSpan.FromSeconds(5)
+                )
+            );
             Assert.Equal(1UL, monitor.Status().PeerAdmitted);
             Assert.Equal(0UL, monitor.Status().PeerRejected);
             Assert.Equal(0UL, monitor.Status().ProtocolErrors);
@@ -299,7 +326,8 @@ public sealed class MeshNodeShutdownSealTests
         await using var node = new ZLinkManagedMeshNode(context, MeshName);
         var gate = new ZLinkDrainAdmissionGate();
         var sealObserved = new TaskCompletionSource(
-            TaskCreationOptions.RunContinuationsAsynchronously);
+            TaskCreationOptions.RunContinuationsAsynchronously
+        );
         node.SetPeerAdmissionSealGate(() =>
         {
             sealObserved.TrySetResult();
@@ -322,14 +350,18 @@ public sealed class MeshNodeShutdownSealTests
         peer.SetRoutingId(RoutingId.From($"inbound-peer-{suffix}"));
         peer.Connect(endpoint);
 
-        await SendAsync(peer, ZLinkServiceWireCodec.EncodeRouteAdmission(
-            ServiceWireConstants.Command.Hello,
-            MeshName,
-            $"inproc://inbound-peer-{suffix}",
-            lifecycleGeneration: 7,
-            descriptorRevision: 3,
-            new Dictionary<string, uint>(StringComparer.Ordinal),
-            objectRole: (byte)ZLinkMeshNodeObjectRole.Server));
+        await SendAsync(
+            peer,
+            ZLinkServiceWireCodec.EncodeRouteAdmission(
+                ServiceWireConstants.Command.Hello,
+                MeshName,
+                $"inproc://inbound-peer-{suffix}",
+                lifecycleGeneration: 7,
+                descriptorRevision: 3,
+                new Dictionary<string, uint>(StringComparer.Ordinal),
+                objectRole: (byte)ZLinkMeshNodeObjectRole.Server
+            )
+        );
         // With no outbound intent, only the inbound Hello queries this gate.
         await sealObserved.Task.WaitAsync(TimeSpan.FromSeconds(2));
 
@@ -370,11 +402,15 @@ public sealed class MeshNodeShutdownSealTests
         peer.Connect(endpoint);
         byte[] Descriptor(ServiceWireConstants.Command command, ulong revision, byte state) =>
             ZLinkServiceWireCodec.EncodeRouteAdmission(
-                command, MeshName, $"inproc://update-peer-{suffix}",
-                lifecycleGeneration: 7, descriptorRevision: revision,
+                command,
+                MeshName,
+                $"inproc://update-peer-{suffix}",
+                lifecycleGeneration: 7,
+                descriptorRevision: revision,
                 new Dictionary<string, uint>(StringComparer.Ordinal),
                 objectRole: (byte)ZLinkMeshNodeObjectRole.Server,
-                runtimeState: state);
+                runtimeState: state
+            );
 
         await SendAsync(peer, Descriptor(ServiceWireConstants.Command.Hello, 3, 1));
         await ReceiveAdmitAsync(peer);
@@ -386,8 +422,12 @@ public sealed class MeshNodeShutdownSealTests
         // following revision-4 Update cannot be accepted as the next revision.
         await SendAsync(peer, Descriptor(ServiceWireConstants.Command.Hello, 99, 1));
         await SendAsync(peer, Descriptor(ServiceWireConstants.Command.Update, 4, 2));
-        await WaitUntilAsync(() => node.Peers().Any(remote =>
-            remote.DescriptorRevision == 4 && remote.State == MeshPeerState.Draining));
+        await WaitUntilAsync(() =>
+            node.Peers()
+                .Any(remote =>
+                    remote.DescriptorRevision == 4 && remote.State == MeshPeerState.Draining
+                )
+        );
 
         Assert.Equal(1U, node.Status().AdmittedPeerCount);
         Assert.Equal(MeshNodeState.Draining, node.Status().State);
@@ -416,23 +456,27 @@ public sealed class MeshNodeShutdownSealTests
             node.ConnectPeer(peerEndpoint, peerRid);
             node.Start();
             await WaitUntilAsync(() =>
-                node.Status().AdmittedPeerCount == 1
-                && peer.Status().AdmittedPeerCount == 1);
+                node.Status().AdmittedPeerCount == 1 && peer.Status().AdmittedPeerCount == 1
+            );
 
             // ZLinkFrameworkRuntime shutdown order: seal host admission, then
             // publish Draining. The admitted peer still receives that Update.
             gate.ClaimShutdown();
             node.PublishDraining();
-            await WaitUntilAsync(() => peer.Peers().Any(
-                remote => remote.RoutingId == node.RoutingId
-                          && remote.State == MeshPeerState.Draining));
+            await WaitUntilAsync(() =>
+                peer.Peers()
+                    .Any(remote =>
+                        remote.RoutingId == node.RoutingId && remote.State == MeshPeerState.Draining
+                    )
+            );
         }
 
         // Peer loss demotes the outbound intent to a reconnecting epoch but
         // never moves the sealed node back before Draining.
         await WaitUntilAsync(() =>
             node.Status().AdmittedPeerCount == 0
-            && node.Peers().All(remote => remote.State == MeshPeerState.Connecting));
+            && node.Peers().All(remote => remote.State == MeshPeerState.Connecting)
+        );
         Assert.Equal(MeshNodeState.Draining, node.Status().State);
 
         // The peer restarts at the same endpoint. Core reconnects the pipe,
@@ -445,9 +489,7 @@ public sealed class MeshNodeShutdownSealTests
             Assert.Empty(restarted.Peers());
             Assert.Equal(0U, node.Status().AdmittedPeerCount);
             Assert.Equal(MeshNodeState.Draining, node.Status().State);
-            Assert.Equal(
-                MeshPeerState.Connecting,
-                Assert.Single(node.Peers()).State);
+            Assert.Equal(MeshPeerState.Connecting, Assert.Single(node.Peers()).State);
 
             // Drain completes: the node stops without waiting on the withheld
             // admission.
@@ -477,49 +519,59 @@ public sealed class MeshNodeShutdownSealTests
             node.ConnectPeer(peerEndpoint, peerRid);
             node.Start();
             await WaitUntilAsync(() =>
-                node.Status().AdmittedPeerCount == 1
-                && peer.Status().AdmittedPeerCount == 1);
+                node.Status().AdmittedPeerCount == 1 && peer.Status().AdmittedPeerCount == 1
+            );
             if (relocationDraining)
             {
                 // Relocate publishes Draining without sealing the host: the
                 // node keeps admitting peers.
                 node.PublishDraining();
-                await WaitUntilAsync(() => peer.Peers().Any(
-                    remote => remote.RoutingId == node.RoutingId
-                              && remote.State == MeshPeerState.Draining));
+                await WaitUntilAsync(() =>
+                    peer.Peers()
+                        .Any(remote =>
+                            remote.RoutingId == node.RoutingId
+                            && remote.State == MeshPeerState.Draining
+                        )
+                );
             }
         }
 
         await WaitUntilAsync(() =>
             node.Status().AdmittedPeerCount == 0
-            && node.Peers().All(remote => remote.State == MeshPeerState.Connecting));
+            && node.Peers().All(remote => remote.State == MeshPeerState.Connecting)
+        );
 
         await using var restarted = StartPeer(context, peerRid, peerEndpoint);
         await WaitUntilAsync(
-            () => node.Status().AdmittedPeerCount == 1
-                  && restarted.Status().AdmittedPeerCount == 1,
-            TimeSpan.FromSeconds(15));
+            () => node.Status().AdmittedPeerCount == 1 && restarted.Status().AdmittedPeerCount == 1,
+            TimeSpan.FromSeconds(15)
+        );
         Assert.False(gate.IsSealedForShutdown);
         Assert.Equal(
             relocationDraining ? MeshNodeState.Draining : MeshNodeState.Ready,
-            node.Status().State);
+            node.Status().State
+        );
         Assert.Equal(
             relocationDraining ? MeshPeerState.Draining : MeshPeerState.Admitted,
-            Assert.Single(restarted.Peers()).State);
+            Assert.Single(restarted.Peers()).State
+        );
     }
 
     private sealed class DeferredReadyMonitor(ISocketMonitor inner) : ISocketMonitor
     {
         private readonly Queue<MonitorEvent> _ready = new();
-        private readonly TaskCompletionSource _captured =
-            new(TaskCreationOptions.RunContinuationsAsynchronously);
-        private readonly TaskCompletionSource _applied =
-            new(TaskCreationOptions.RunContinuationsAsynchronously);
+        private readonly TaskCompletionSource _captured = new(
+            TaskCreationOptions.RunContinuationsAsynchronously
+        );
+        private readonly TaskCompletionSource _applied = new(
+            TaskCreationOptions.RunContinuationsAsynchronously
+        );
         private int _release;
         private bool _delivered;
 
         internal Task ReadyCaptured => _captured.Task;
         internal Task ReadyApplied => _applied.Task;
+
         internal void ReleaseReady()
         {
             Volatile.Write(ref _release, 1);
@@ -540,8 +592,10 @@ public sealed class MeshNodeShutdownSealTests
             }
             while (inner.Recv(flags) is { } value)
             {
-                if (value.Event == MonitorEventType.ConnectionReady
-                    && (value.Flags & MonitorEventFlags.ConnectionReadyEdge) != 0)
+                if (
+                    value.Event == MonitorEventType.ConnectionReady
+                    && (value.Flags & MonitorEventFlags.ConnectionReadyEdge) != 0
+                )
                 {
                     _ready.Enqueue(value);
                     _captured.TrySetResult();
@@ -553,15 +607,19 @@ public sealed class MeshNodeShutdownSealTests
         }
 
         public MonitorStatus Status() => inner.Status();
+
         public void Close() => inner.Close();
+
         public void Dispose() => inner.Dispose();
+
         public ValueTask DisposeAsync() => inner.DisposeAsync();
     }
 
     private static ZLinkManagedMeshNode StartPeer(
         IContext context,
         RoutingId routingId,
-        string endpoint)
+        string endpoint
+    )
     {
         var peer = new ZLinkManagedMeshNode(context, MeshName);
         peer.SetRoutingId(routingId);
@@ -583,7 +641,8 @@ public sealed class MeshNodeShutdownSealTests
                 await socket.Send().Message(message).Async(CancellationToken.None).Admitted;
                 return;
             }
-            catch (ZlinkSubmitException) when (Stopwatch.GetElapsedTime(deadlineStarted) < deadlineTimeout)
+            catch (ZlinkSubmitException)
+                when (Stopwatch.GetElapsedTime(deadlineStarted) < deadlineTimeout)
             {
                 await Task.Delay(10);
             }
@@ -600,12 +659,15 @@ public sealed class MeshNodeShutdownSealTests
             using var received = Received.Create();
             if (socket.Recv(received, RecvFlags.DontWait))
             {
-                if (ZLinkServiceWireCodec.TryDecodeRouteAdmission(
+                if (
+                    ZLinkServiceWireCodec.TryDecodeRouteAdmission(
                         received.FirstPart().AsSpan(),
                         out var command,
                         out _,
-                        out _)
-                    && command == ServiceWireConstants.Command.Admit)
+                        out _
+                    )
+                    && command == ServiceWireConstants.Command.Admit
+                )
                     return;
                 continue;
             }
@@ -622,8 +684,14 @@ public sealed class MeshNodeShutdownSealTests
             using var received = Received.Create();
             if (socket.Recv(received, RecvFlags.DontWait))
             {
-                if (ZLinkServiceWireCodec.TryDecodeRouteAdmission(
-                        received.FirstPart().AsSpan(), out var command, out _, out _))
+                if (
+                    ZLinkServiceWireCodec.TryDecodeRouteAdmission(
+                        received.FirstPart().AsSpan(),
+                        out var command,
+                        out _,
+                        out _
+                    )
+                )
                     Assert.NotEqual(ServiceWireConstants.Command.Admit, command);
                 continue;
             }
@@ -631,9 +699,7 @@ public sealed class MeshNodeShutdownSealTests
         }
     }
 
-    private static async Task WaitUntilAsync(
-        Func<bool> condition,
-        TimeSpan? timeout = null)
+    private static async Task WaitUntilAsync(Func<bool> condition, TimeSpan? timeout = null)
     {
         var deadlineTimeout = timeout ?? TimeSpan.FromSeconds(5);
         var deadlineStarted = Stopwatch.GetTimestamp();
@@ -644,5 +710,4 @@ public sealed class MeshNodeShutdownSealTests
             await Task.Delay(10);
         }
     }
-
 }

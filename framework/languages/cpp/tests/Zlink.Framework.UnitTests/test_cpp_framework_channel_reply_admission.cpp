@@ -39,22 +39,19 @@ using zlink::framework::tests::read_text_file;
 std::size_t count_text (std::string_view value, std::string_view needle)
 {
     std::size_t count = 0;
-    for (std::size_t offset = 0;
-         (offset = value.find (needle, offset)) != std::string_view::npos;
+    for (std::size_t offset = 0; (offset = value.find (needle, offset)) != std::string_view::npos;
          offset += needle.size ()) {
         ++count;
     }
     return count;
 }
 
-TEST (ChannelHostReplyAdmissionContract,
-      OwnsOneBindingSubmitTerminalWithoutFrameworkRetry)
+TEST (ChannelHostReplyAdmissionContract, OwnsOneBindingSubmitTerminalWithoutFrameworkRetry)
 {
     const std::filesystem::path root = ZLINK_FRAMEWORK_CPP_SOURCE_DIR;
-    const std::string source = read_text_file (
-      root / "framework/src/runtime/channels/channel_host_service.cpp");
-    const auto owner = source.find (
-      "void reply (completed_reply_t completed)");
+    const std::string source =
+      read_text_file (root / "framework/src/runtime/channels/channel_host_service.cpp");
+    const auto owner = source.find ("void reply (completed_reply_t completed)");
     ASSERT_NE (std::string::npos, owner);
     const auto end = source.find ("void clear_replies", owner);
     ASSERT_NE (std::string::npos, end);
@@ -63,18 +60,15 @@ TEST (ChannelHostReplyAdmissionContract,
     EXPECT_EQ (1u, count_text (admission, ".submit ()"));
     EXPECT_EQ (std::string_view::npos, admission.find (".async ()"));
     EXPECT_EQ (std::string_view::npos, admission.find ("co_await"));
-    EXPECT_NE (std::string_view::npos,
-               admission.find ("std::move (completed)"));
-    EXPECT_EQ (std::string_view::npos,
-               admission.find ("observe_task_completion"));
+    EXPECT_NE (std::string_view::npos, admission.find ("std::move (completed)"));
+    EXPECT_EQ (std::string_view::npos, admission.find ("observe_task_completion"));
     EXPECT_EQ (std::string_view::npos, admission.find ("_replies.push_front"));
     EXPECT_EQ (std::string_view::npos, admission.find ("_replies.push_back"));
 }
 
 struct request_t
 {
-    static constexpr const char *packet_name =
-      "channel.reply.admission.request";
+    static constexpr const char *packet_name = "channel.reply.admission.request";
     int value = 0;
 };
 
@@ -168,10 +162,9 @@ bool wait_until (Predicate predicate, std::chrono::milliseconds timeout)
 class runtime_cleanup_t
 {
   public:
-    runtime_cleanup_t (
-      blocking_request_handler_t &handler,
-      zlink::framework::runtime::channel_host_service_t &host,
-      zlink::router_socket_t &source) :
+    runtime_cleanup_t (blocking_request_handler_t &handler,
+                       zlink::framework::runtime::channel_host_service_t &host,
+                       zlink::router_socket_t &source) :
         _handler (&handler), _host (&host), _source (&source)
     {
     }
@@ -194,32 +187,27 @@ class runtime_cleanup_t
     zlink::router_socket_t *_source;
 };
 
-TEST (ChannelHostReplyAdmission,
-      MissingRouteTerminatesOnceWithOrdinaryEnvelopeOwnership)
+TEST (ChannelHostReplyAdmission, MissingRouteTerminatesOnceWithOrdinaryEnvelopeOwnership)
 {
     auto context = std::make_shared<zlink::context_t> ();
     context->options ().auto_hwm_enabled (false);
 
     const std::string endpoint = unique_inproc_endpoint ();
-    const auto server_rid = zlink::routing_id_t::from (
-      "framework-channel-reply-server");
-    const auto source_rid = zlink::routing_id_t::from (
-      "framework-channel-reply-source");
+    const auto server_rid = zlink::routing_id_t::from ("framework-channel-reply-server");
+    const auto source_rid = zlink::routing_id_t::from ("framework-channel-reply-source");
 
     zlink::framework::zlink_builder_t builder;
     builder.channel ("reply-admission")
       .enable_server ()
       .set_routing_id (server_rid)
       .bind (endpoint);
-    auto runtime = zlink::framework::detail::channel_runtime_t::from (
-      builder.message_bus ());
+    auto runtime = zlink::framework::detail::channel_runtime_t::from (builder.message_bus ());
     runtime.bind_core_context (context);
 
     zlink::framework::serializer_registry_t serializers;
     serializers.add<request_t> (
       [] (const request_t &request) {
-          return zlink::framework::encoded_payload_t::from_string (
-            std::to_string (request.value));
+          return zlink::framework::encoded_payload_t::from_string (std::to_string (request.value));
       },
       [] (const zlink::framework::encoded_payload_t &payload) {
           return request_t{std::stoi (payload.to_string ())};
@@ -227,8 +215,7 @@ TEST (ChannelHostReplyAdmission,
       "application/json");
     serializers.add<reply_t> (
       [] (const reply_t &reply) {
-          return zlink::framework::encoded_payload_t::from_string (
-            std::to_string (reply.value));
+          return zlink::framework::encoded_payload_t::from_string (std::to_string (reply.value));
       },
       [] (const zlink::framework::encoded_payload_t &payload) {
           return reply_t{std::stoi (payload.to_string ())};
@@ -246,58 +233,50 @@ TEST (ChannelHostReplyAdmission,
       {.packet_name = request_t::packet_name});
 
     zlink::framework::runtime::channel_host_service_t host (
-      builder.message_bus (), runtime.channel_snapshots (), handlers,
-      serializers);
+      builder.message_bus (), runtime.channel_snapshots (), handlers, serializers);
     host.start (provider);
 
     zlink::router_socket_t source (*context);
     runtime_cleanup_t cleanup (handler, host, source);
     zlink::framework::test::completion_poller_driver_t completion_owner (source);
     source.set_routing_id (source_rid);
-    auto source_monitor = source.monitor_open (
-      zlink::monitor_event::connection_ready
-      | zlink::monitor_event::disconnected);
+    auto source_monitor = source.monitor_open (zlink::monitor_event::connection_ready
+                                               | zlink::monitor_event::disconnected);
     source.connect (endpoint);
-    ASSERT_TRUE (wait_for_monitor_event (
-      source_monitor, zlink::monitor_event::connection_ready, 2s));
+    ASSERT_TRUE (
+      wait_for_monitor_event (source_monitor, zlink::monitor_event::connection_ready, 2s));
 
     zlink::framework::runtime::messaging::envelope_header_t header;
-    header.kind =
-      zlink::framework::runtime::messaging::message_kind_t::request;
+    header.kind = zlink::framework::runtime::messaging::message_kind_t::request;
     header.channel_name = "reply-admission";
     header.message_name = request_t::packet_name;
     header.topic = "request";
     header.correlation_id = "reply-admission-correlation";
-    auto request_parts =
-      zlink::framework::runtime::messaging::envelope_codec_t{}.encode_parts (
-        header, request_t{41}, serializers);
+    auto request_parts = zlink::framework::runtime::messaging::envelope_codec_t{}.encode_parts (
+      header, request_t{41}, serializers);
     zlink::message_t request_header = request_parts[0];
     zlink::message_t request_body = request_parts[1];
     auto pending_request = source.request (server_rid)
                              .message (request_header)
                              .message (request_body)
                              .timeout (5s)
-                             .async ().reply;
+                             .async ()
+                             .reply;
 
     ASSERT_TRUE (handler.wait_until_entered (2s));
-    EXPECT_EQ (0u,
-               context->core_hwm_budget_snapshot ()
-                 .outstanding_application_lease_count ());
+    EXPECT_EQ (0u, context->core_hwm_budget_snapshot ().outstanding_application_lease_count ());
 
     source.disconnect (endpoint);
     ASSERT_TRUE (wait_until (
       [&] {
-          return context->core_hwm_budget_snapshot ()
-                   .active_completion_directional_queue_count ()
+          return context->core_hwm_budget_snapshot ().active_completion_directional_queue_count ()
                  == 0u;
       },
       2s));
     handler.release ();
     ASSERT_TRUE (handler.wait_until_returned (2s));
 
-    EXPECT_EQ (0u,
-               context->core_hwm_budget_snapshot ()
-                 .outstanding_application_lease_count ());
+    EXPECT_EQ (0u, context->core_hwm_budget_snapshot ().outstanding_application_lease_count ());
 
     // Discard the reply waiter at scope exit; this test observes lease release.
     (void) pending_request;

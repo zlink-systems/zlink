@@ -1,8 +1,5 @@
 import type { RoutingId } from '../../contracts/Common';
-import type {
-  ZLinkFrameworkRuntimeState,
-  ZLinkSpotKind
-} from '../../contracts';
+import type { ZLinkFrameworkRuntimeState, ZLinkSpotKind } from '../../contracts';
 
 export interface ZLinkSpotRouteResolver {
   resolve(spotId: RoutingId, signal?: AbortSignal): Promise<ZLinkSpotRouteTarget>;

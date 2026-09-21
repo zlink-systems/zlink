@@ -4,15 +4,15 @@ import java.time.Instant;
 import java.util.Objects;
 
 public record ZLinkAuthorityStored(
-    String storeVersion,
-    byte[] payload,
-    long objectGeneration,
-    long authorityOwnerGeneration,
-    String ownerId,
-    long ownerLeaseGeneration,
-    ZLinkPlacementAllocation allocation,
-    Instant storeNow)
-    implements ZLinkAuthorityWriteResult {
+        String storeVersion,
+        byte[] payload,
+        long objectGeneration,
+        long authorityOwnerGeneration,
+        String ownerId,
+        long ownerLeaseGeneration,
+        ZLinkPlacementAllocation allocation,
+        Instant storeNow)
+        implements ZLinkAuthorityWriteResult {
     public ZLinkAuthorityStored {
         Objects.requireNonNull(storeVersion, "storeVersion");
         payload = Objects.requireNonNull(payload, "payload").clone();

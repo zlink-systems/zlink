@@ -8,7 +8,11 @@ public enum ZLinkUnhandledDispatchAction {
 
     private final int value;
 
-    ZLinkUnhandledDispatchAction(int value) { this.value = value; }
+    ZLinkUnhandledDispatchAction(int value) {
+        this.value = value;
+    }
 
-    public int value() { return value; }
+    public int value() {
+        return value;
+    }
 }

@@ -2,9 +2,10 @@ package systems.zlink.framework.runtime.spots;
 
 import static org.junit.jupiter.api.Assertions.*;
 
+import org.junit.jupiter.api.Test;
+
 import java.util.List;
 import java.util.concurrent.CompletionException;
-import org.junit.jupiter.api.Test;
 
 final class ZLinkRelocationPayloadTransferTest {
     @Test
@@ -17,13 +18,10 @@ final class ZLinkRelocationPayloadTransferTest {
         var manifest = ZLinkRelocationPayloadTransfer.manifest(payload, 5);
         assertEquals(payload.length, manifest.totalLength());
         assertEquals(4, manifest.chunkCount());
-        assertEquals(
-            ZLinkRelocationPayloadTransfer.crc32c(payload),
-            manifest.checksumCrc32c());
+        assertEquals(ZLinkRelocationPayloadTransfer.crc32c(payload), manifest.checksumCrc32c());
 
         var chunks = ZLinkRelocationPayloadTransfer.chunks(payload, 5);
-        assertEquals(List.of(5, 5, 5, 2),
-            chunks.stream().map(chunk -> chunk.length).toList());
+        assertEquals(List.of(5, 5, 5, 2), chunks.stream().map(chunk -> chunk.length).toList());
         var assembly = new ZLinkRelocationPayloadTransfer.Assembler(manifest);
         for (int index = 0; index < chunks.size(); index++) {
             assembly.accept(index, chunks.get(index));
@@ -34,15 +32,17 @@ final class ZLinkRelocationPayloadTransferTest {
     @Test
     void assemblerRejectsManifestChecksumMismatchWithoutReturningPartialPayload() {
         byte[] payload = {1, 2, 3, 4};
-        var manifest = new ZLinkCanonicalRelocationProtocol.Manifest(
-            payload.length, 1,
-            ZLinkRelocationPayloadTransfer.crc32c(new byte[] {9}));
+        var manifest =
+                new ZLinkCanonicalRelocationProtocol.Manifest(
+                        payload.length, 1, ZLinkRelocationPayloadTransfer.crc32c(new byte[] {9}));
         var assembly = new ZLinkRelocationPayloadTransfer.Assembler(manifest);
 
         assembly.accept(0, payload);
 
-        var failure = assertThrows(CompletionException.class,
-            () -> assembly.assembled().toCompletableFuture().join());
+        var failure =
+                assertThrows(
+                        CompletionException.class,
+                        () -> assembly.assembled().toCompletableFuture().join());
         assertInstanceOf(IllegalStateException.class, failure.getCause());
     }
 
@@ -56,8 +56,8 @@ final class ZLinkRelocationPayloadTransferTest {
         assembly.accept(0, new byte[] {1, 2});
         assembly.accept(0, new byte[] {9, 9});
 
-        assertThrows(CompletionException.class,
-            () -> assembly.assembled().toCompletableFuture().join());
+        assertThrows(
+                CompletionException.class, () -> assembly.assembled().toCompletableFuture().join());
     }
 
     @Test
@@ -76,8 +76,7 @@ final class ZLinkRelocationPayloadTransferTest {
 
     @Test
     void budgetAdmitsOneOversizedChunkWhenIdleAndReleasesTheWaiterOnTerminal() {
-        var budget = new ZLinkRelocationPayloadTransfer.Budget(
-            1024, 4, 4);
+        var budget = new ZLinkRelocationPayloadTransfer.Budget(1024, 4, 4);
         var peer = systems.zlink.contracts.core.RoutingId.from(new byte[] {1});
 
         budget.acquire(peer, 8).toCompletableFuture().join();

@@ -6,26 +6,30 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+
+import org.junit.jupiter.api.Test;
+
+import systems.zlink.framework.runtime.protocol.ServiceWireConstants;
+
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.List;
-import org.junit.jupiter.api.Test;
-import systems.zlink.framework.runtime.protocol.ServiceWireConstants;
 
 final class ZLinkServiceWireCodecTest {
     private final ZLinkServiceWireCodec codec = new ZLinkServiceWireCodec();
 
     @Test
     void livenessProbeRoundTripsAsOneThirteenByteHeadFrame() {
-        List<byte[]> encoded = codec.encode(new ZLinkServiceWireFrame(
-            ServiceWireConstants.COMMAND_LIVENESS_PROBE,
-            0,
-            List.of(new byte[] {0, 0, 0, 0, 0, 0, 0, 7})));
+        List<byte[]> encoded =
+                codec.encode(
+                        new ZLinkServiceWireFrame(
+                                ServiceWireConstants.COMMAND_LIVENESS_PROBE,
+                                0,
+                                List.of(new byte[] {0, 0, 0, 0, 0, 0, 0, 7})));
 
         assertEquals(1, encoded.size());
         assertArrayEquals(
-            new byte[] {0x5a, 0x4d, 1, 5, 0, 0, 0, 0, 0, 0, 0, 0, 7},
-            encoded.getFirst());
+                new byte[] {0x5a, 0x4d, 1, 5, 0, 0, 0, 0, 0, 0, 0, 0, 7}, encoded.getFirst());
         ZLinkServiceWireFrame decoded = codec.decode(encoded);
         assertEquals(ServiceWireConstants.COMMAND_LIVENESS_PROBE, decoded.command());
         assertArrayEquals(new byte[] {0, 0, 0, 0, 0, 0, 0, 7}, decoded.frames().getFirst());
@@ -33,16 +37,21 @@ final class ZLinkServiceWireCodecTest {
 
     @Test
     void rejectsUnknownFlagBeforeMailboxAdmission() {
-        assertThrows(ZLinkServiceWireException.class, () -> codec.decode(List.of(
-            new byte[] {0x5a, 0x4d, 1, 1, 0x10})));
+        assertThrows(
+                ZLinkServiceWireException.class,
+                () -> codec.decode(List.of(new byte[] {0x5a, 0x4d, 1, 1, 0x10})));
     }
 
     @Test
     void rejectsZeroAndTruncatedLivenessProbeIds() {
-        assertThrows(ZLinkServiceWireException.class, () -> codec.decode(List.of(
-            new byte[] {0x5a, 0x4d, 1, 5, 0, 0, 0, 0, 0, 0, 0, 0, 0})));
-        assertThrows(ZLinkServiceWireException.class, () -> codec.decode(List.of(
-            new byte[] {0x5a, 0x4d, 1, 5, 0, 0, 0, 0, 0, 0, 0, 0})));
+        assertThrows(
+                ZLinkServiceWireException.class,
+                () ->
+                        codec.decode(
+                                List.of(new byte[] {0x5a, 0x4d, 1, 5, 0, 0, 0, 0, 0, 0, 0, 0, 0})));
+        assertThrows(
+                ZLinkServiceWireException.class,
+                () -> codec.decode(List.of(new byte[] {0x5a, 0x4d, 1, 5, 0, 0, 0, 0, 0, 0, 0, 0})));
     }
 
     @Test
@@ -63,9 +72,7 @@ final class ZLinkServiceWireCodecTest {
             assertEquals(13, bytes.length);
             ZLinkServiceWireFrame decoded = codec.decode(List.of(bytes));
             assertEquals(canonical.path("commandId").asInt(), decoded.command());
-            assertArrayEquals(
-                new byte[] {1, 2, 3, 4, 5, 6, 7, 8},
-                decoded.frames().getFirst());
+            assertArrayEquals(new byte[] {1, 2, 3, 4, 5, 6, 7, 8}, decoded.frames().getFirst());
         }
         for (JsonNode malformed : fixture.path("malformed")) {
             byte[] bytes = bytes(malformed.path("bytes"));
@@ -84,8 +91,8 @@ final class ZLinkServiceWireCodecTest {
     private static Path sharedFixturePath() {
         Path current = Path.of(System.getProperty("user.dir")).toAbsolutePath();
         while (current != null) {
-            Path candidate = current.resolve(
-                "runtime/protocol/golden/service-decoder-fixtures-v1.json");
+            Path candidate =
+                    current.resolve("runtime/protocol/golden/service-decoder-fixtures-v1.json");
             if (Files.isRegularFile(candidate)) {
                 return candidate;
             }

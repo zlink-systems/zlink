@@ -9,5 +9,4 @@ package systems.zlink.framework.runtime.internal.binding.spot;
  * @param partCount required part capacity
  * @param byteCount required byte capacity
  */
-public record ReceiveRequirements(long messageCount, long partCount, long byteCount) {
-}
+public record ReceiveRequirements(long messageCount, long partCount, long byteCount) {}

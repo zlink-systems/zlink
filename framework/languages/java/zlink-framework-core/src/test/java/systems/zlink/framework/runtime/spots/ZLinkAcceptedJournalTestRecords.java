@@ -1,10 +1,5 @@
 package systems.zlink.framework.runtime.spots;
 
-import java.io.ByteArrayOutputStream;
-import java.io.DataOutputStream;
-import java.io.IOException;
-import java.nio.charset.StandardCharsets;
-import java.util.Map;
 import systems.zlink.contracts.core.RoutingId;
 import systems.zlink.contracts.messaging.Message;
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendActorRef;
@@ -15,131 +10,125 @@ import systems.zlink.framework.runtime.internal.service.ZLinkServiceM6BWireCodec
 import systems.zlink.framework.runtime.streams.ZLinkStreamHeader;
 import systems.zlink.framework.runtime.streams.ZLinkStreamHeaderCodec;
 
+import java.io.ByteArrayOutputStream;
+import java.io.DataOutputStream;
+import java.io.IOException;
+import java.nio.charset.StandardCharsets;
+import java.util.Map;
+
 final class ZLinkAcceptedJournalTestRecords {
-    private ZLinkAcceptedJournalTestRecords() {
-    }
+    private ZLinkAcceptedJournalTestRecords() {}
 
     static byte[] actor(
-        String actorId,
-        long replyRouteId,
-        String packetName,
-        Map<String, String> metadata,
-        byte[] payload) {
+            String actorId,
+            long replyRouteId,
+            String packetName,
+            Map<String, String> metadata,
+            byte[] payload) {
         return actor(
-            actorId,
-            replyRouteId,
-            metadata,
-            new ZLinkServiceM6AWireCodec.ApplicationPayload(
-                packetName,
-                "application/zlink-framework-json-v1",
-                payload));
+                actorId,
+                replyRouteId,
+                metadata,
+                new ZLinkServiceM6AWireCodec.ApplicationPayload(
+                        packetName, "application/zlink-framework-json-v1", payload));
     }
 
-    static byte[] actorMultipart(
-        String actorId,
-        ZLinkStreamHeader header,
-        byte[] payload) {
-        try (Message headerPart = Message.from(
-                 ZLinkStreamHeaderCodec.encode(header));
-             Message payloadPart = Message.from(payload)) {
+    static byte[] actorMultipart(String actorId, ZLinkStreamHeader header, byte[] payload) {
+        try (Message headerPart = Message.from(ZLinkStreamHeaderCodec.encode(header));
+                Message payloadPart = Message.from(payload)) {
             return actor(
-                actorId,
-                header.requestSequence().orElse(0L),
-                Map.of(),
-                ZLinkServiceM6AWireCodec.encodeFrameworkMultipart(
-                    java.util.List.of(headerPart, payloadPart)));
+                    actorId,
+                    header.requestSequence().orElse(0L),
+                    Map.of(),
+                    ZLinkServiceM6AWireCodec.encodeFrameworkMultipart(
+                            java.util.List.of(headerPart, payloadPart)));
         }
     }
 
     private static byte[] actor(
-        String actorId,
-        long replyRouteId,
-        Map<String, String> metadata,
-        ZLinkServiceM6AWireCodec.ApplicationPayload applicationPayload) {
+            String actorId,
+            long replyRouteId,
+            Map<String, String> metadata,
+            ZLinkServiceM6AWireCodec.ApplicationPayload applicationPayload) {
         RoutingId nodeRid = RoutingId.from("journal-node");
-        var owner = new ZLinkInternalMeshNode.PeerAuthorityFence(
-            nodeRid, 1, "journal-owner", 1);
-        var operation = new ZLinkServiceM6BWireCodec.ActorMessage(
-            replyRouteId != 0,
-            metadata.isEmpty() ? 0 : 1,
-            replyRouteId == 0 ? null : replyRouteId,
-            1,
-            2,
-            0,
-            null,
-            new ZLinkServiceM6BWireCodec.ActorRouteFence(
-                new ZLinkBackendActorRef(nodeRid, actorId, 1),
-                1,
-                1,
-                1),
-            new ZLinkServiceM6BWireCodec.BoundSessionTail(
-                RoutingId.from("journal-session"), 1, 1));
+        var owner = new ZLinkInternalMeshNode.PeerAuthorityFence(nodeRid, 1, "journal-owner", 1);
+        var operation =
+                new ZLinkServiceM6BWireCodec.ActorMessage(
+                        replyRouteId != 0,
+                        metadata.isEmpty() ? 0 : 1,
+                        replyRouteId == 0 ? null : replyRouteId,
+                        1,
+                        2,
+                        0,
+                        null,
+                        new ZLinkServiceM6BWireCodec.ActorRouteFence(
+                                new ZLinkBackendActorRef(nodeRid, actorId, 1), 1, 1, 1),
+                        new ZLinkServiceM6BWireCodec.BoundSessionTail(
+                                RoutingId.from("journal-session"), 1, 1));
         var wire = new ZLinkServiceM6AWireCodec();
         return ZLinkServiceFrozenRecordCodec.encodeActor(
-            owner,
-            owner,
-            operation,
-            metadata(metadata),
-            wire.encodeApplicationPayload(applicationPayload));
+                owner,
+                owner,
+                operation,
+                metadata(metadata),
+                wire.encodeApplicationPayload(applicationPayload));
     }
 
     static byte[] spot(
-        String sourceSpotId,
-        String targetSpotId,
-        long replyRouteId,
-        String packetName,
-        Map<String, String> metadata,
-        byte[] payload) {
+            String sourceSpotId,
+            String targetSpotId,
+            long replyRouteId,
+            String packetName,
+            Map<String, String> metadata,
+            byte[] payload) {
         return spot(
-            sourceSpotId,
-            targetSpotId,
-            replyRouteId,
-            metadata,
-            new ZLinkServiceM6AWireCodec.ApplicationPayload(
-                packetName,
-                "application/zlink-framework-json-v1",
-                payload));
+                sourceSpotId,
+                targetSpotId,
+                replyRouteId,
+                metadata,
+                new ZLinkServiceM6AWireCodec.ApplicationPayload(
+                        packetName, "application/zlink-framework-json-v1", payload));
     }
 
     static byte[] spotMultipart(
-        String sourceSpotId,
-        String targetSpotId,
-        long replyRouteId,
-        java.util.List<Message> parts) {
+            String sourceSpotId,
+            String targetSpotId,
+            long replyRouteId,
+            java.util.List<Message> parts) {
         return spot(
-            sourceSpotId,
-            targetSpotId,
-            replyRouteId,
-            Map.of(),
-            ZLinkServiceM6AWireCodec.encodeFrameworkMultipart(parts));
+                sourceSpotId,
+                targetSpotId,
+                replyRouteId,
+                Map.of(),
+                ZLinkServiceM6AWireCodec.encodeFrameworkMultipart(parts));
     }
 
     private static byte[] spot(
-        String sourceSpotId,
-        String targetSpotId,
-        long replyRouteId,
-        Map<String, String> metadata,
-        ZLinkServiceM6AWireCodec.ApplicationPayload applicationPayload) {
+            String sourceSpotId,
+            String targetSpotId,
+            long replyRouteId,
+            Map<String, String> metadata,
+            ZLinkServiceM6AWireCodec.ApplicationPayload applicationPayload) {
         RoutingId nodeRid = RoutingId.from("journal-node");
-        var owner = new ZLinkInternalMeshNode.PeerAuthorityFence(
-            nodeRid, 1, "journal-owner", 1);
-        var operation = new ZLinkServiceM6BWireCodec.SpotMessage(
-            replyRouteId != 0,
-            metadata.isEmpty() ? 0 : 1,
-            replyRouteId == 0 ? null : replyRouteId,
-            1,
-            2,
-            0,
-            sourceSpotId,
-            new ZLinkServiceM6BWireCodec.SpotRouteFence(
-                targetSpotId, 1, nodeRid, 1, 1, 1));
+        var owner = new ZLinkInternalMeshNode.PeerAuthorityFence(nodeRid, 1, "journal-owner", 1);
+        var operation =
+                new ZLinkServiceM6BWireCodec.SpotMessage(
+                        replyRouteId != 0,
+                        metadata.isEmpty() ? 0 : 1,
+                        replyRouteId == 0 ? null : replyRouteId,
+                        1,
+                        2,
+                        0,
+                        sourceSpotId,
+                        new ZLinkServiceM6BWireCodec.SpotRouteFence(
+                                targetSpotId, 1, nodeRid, 1, 1, 1));
         var wire = new ZLinkServiceM6AWireCodec();
         return ZLinkServiceFrozenRecordCodec.encodeSpot(
-            owner,
-            owner,
-            operation,
-            metadata(metadata),
-            wire.encodeApplicationPayload(applicationPayload));
+                owner,
+                owner,
+                operation,
+                metadata(metadata),
+                wire.encodeApplicationPayload(applicationPayload));
     }
 
     private static byte[] metadata(Map<String, String> metadata) {

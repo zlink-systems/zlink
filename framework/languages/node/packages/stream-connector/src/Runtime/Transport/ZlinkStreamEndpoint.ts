@@ -1,7 +1,4 @@
-import {
-  ZlinkStreamErrorCode,
-  ZlinkStreamTransport
-} from '../../Contracts';
+import { ZlinkStreamErrorCode, ZlinkStreamTransport } from '../../Contracts';
 import { connectorError } from '../ZlinkStreamSupport';
 
 export function inferTransport(endpoint: string): ZlinkStreamTransport {

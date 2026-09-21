@@ -11,16 +11,14 @@ import systems.zlink.framework.spots.ZLinkSpotRelocationAdapter;
 public interface ZLinkUserSpotFactoryBuilder<TSpot extends ZLinkSpot<?>> {
     ZLinkUserSpotFactoryBuilder<TSpot> stableTypeLimit(int limit);
 
-    ZLinkUserSpotFactoryBuilder<TSpot> executionMode(
-        ZLinkUserSpotExecutionMode mode);
+    ZLinkUserSpotFactoryBuilder<TSpot> executionMode(ZLinkUserSpotExecutionMode mode);
 
     ZLinkUserSpotFactoryBuilder<TSpot> relocationCoordinationMode(
-        ZLinkSpotRelocationCoordinationMode mode);
+            ZLinkSpotRelocationCoordinationMode mode);
 
     void disableRelocation();
 
     void recreateOnRelocation();
 
-    void preserveStateWith(
-        Class<? extends ZLinkSpotRelocationAdapter<TSpot>> adapterClass);
+    void preserveStateWith(Class<? extends ZLinkSpotRelocationAdapter<TSpot>> adapterClass);
 }

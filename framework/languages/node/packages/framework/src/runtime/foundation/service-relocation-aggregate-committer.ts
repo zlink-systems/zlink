@@ -8,11 +8,11 @@ import type {
   ZLinkLocationOwnerToken,
   ZLinkMeshNodeDescriptorKey
 } from '../locations/internal-location-contracts';
-import type { ZLinkAuthorityStore, ZLinkObjectCreationStore } from '../locations/internal-store-contracts';
-import {
-  inventoryDigest,
-  type ServiceRelocationEnvelope
-} from './service-relocation-runtime';
+import type {
+  ZLinkAuthorityStore,
+  ZLinkObjectCreationStore
+} from '../locations/internal-store-contracts';
+import { inventoryDigest, type ServiceRelocationEnvelope } from './service-relocation-runtime';
 
 export interface ServiceRelocationAggregateParticipantPlan {
   readonly key: ZLinkAuthorityKey;
@@ -39,7 +39,8 @@ export interface ServicePreparedRelocationAggregate {
 type AggregateStore = Pick<
   ZLinkObjectCreationStore,
   'prepareAggregate' | 'commitAggregate' | 'abortAggregate'
-> & Pick<ZLinkAuthorityStore, 'readAuthority'>;
+> &
+  Pick<ZLinkAuthorityStore, 'readAuthority'>;
 
 const MAX_PREPARE_CONFLICT_ATTEMPTS = 8;
 
@@ -76,7 +77,7 @@ export class ServiceRelocationAggregateCommitter {
       // A heartbeat can change one of those versions while every authority
       // row remains the exact Store-confirmed value in this plan. Retry only
       // that coordination loss; a changed authority row leaves immediately.
-      if (!await this.authorityStoreVersionsUnchanged(plan, signal)) break;
+      if (!(await this.authorityStoreVersionsUnchanged(plan, signal))) break;
       signal?.throwIfAborted();
       result = await this.store.prepareAggregate(request, signal);
     }
@@ -84,8 +85,8 @@ export class ServiceRelocationAggregateCommitter {
       throw new Error(`Location Store rejected relocation aggregate prepare: ${result.kind}.`);
     }
     if (
-      result.fence.aggregateId.value !== aggregateId.value
-      || result.fence.aggregateGeneration !== plan.envelope.aggregateGeneration
+      result.fence.aggregateId.value !== aggregateId.value ||
+      result.fence.aggregateGeneration !== plan.envelope.aggregateGeneration
     ) {
       throw new Error('Location Store returned a different relocation aggregate fence.');
     }
@@ -99,8 +100,8 @@ export class ServiceRelocationAggregateCommitter {
     for (const participant of plan.participants) {
       const current = await this.store.readAuthority(participant.key, signal);
       if (
-        current.kind !== 'snapshot'
-        || current.storeVersion.value !== participant.expected.storeVersion.value
+        current.kind !== 'snapshot' ||
+        current.storeVersion.value !== participant.expected.storeVersion.value
       ) {
         return false;
       }
@@ -125,10 +126,7 @@ export class ServiceRelocationAggregateCommitter {
     return await this.readCommittedParticipants(prepared.plan, signal);
   }
 
-  async abort(
-    prepared: ServicePreparedRelocationAggregate,
-    signal?: AbortSignal
-  ): Promise<void> {
+  async abort(prepared: ServicePreparedRelocationAggregate, signal?: AbortSignal): Promise<void> {
     const result = await this.store.abortAggregate(prepared.fence, signal);
     if (result.kind !== 'aborted' && result.kind !== 'alreadyAborted') {
       throw new Error(`Location Store rejected relocation aggregate abort: ${result.kind}.`);
@@ -150,25 +148,27 @@ export class ServiceRelocationAggregateCommitter {
     for (const participant of plan.participants) {
       const current = await this.store.readAuthority(participant.key, signal);
       if (
-        current.kind !== 'snapshot'
-        || current.objectGeneration !== participant.expected.objectGeneration
-        || current.storeVersion.value === participant.expected.storeVersion.value
-        || !Buffer.from(current.payload).equals(Buffer.from(participant.authorityPayload))
+        current.kind !== 'snapshot' ||
+        current.objectGeneration !== participant.expected.objectGeneration ||
+        current.storeVersion.value === participant.expected.storeVersion.value ||
+        !Buffer.from(current.payload).equals(Buffer.from(participant.authorityPayload))
       ) {
-        throw new Error('Committed relocation aggregate does not match its exact participant plan.');
+        throw new Error(
+          'Committed relocation aggregate does not match its exact participant plan.'
+        );
       }
       if (participant.ownerTransition === 'newOwner') {
         if (
-          current.ownerId !== plan.targetOwner.ownerId
-          || current.ownerLeaseGeneration !== plan.targetOwner.leaseGeneration
-          || current.authorityOwnerGeneration <= participant.expected.authorityOwnerGeneration
+          current.ownerId !== plan.targetOwner.ownerId ||
+          current.ownerLeaseGeneration !== plan.targetOwner.leaseGeneration ||
+          current.authorityOwnerGeneration <= participant.expected.authorityOwnerGeneration
         ) {
           throw new Error('Committed relocation participant has a different owner fence.');
         }
       } else if (
-        current.ownerId !== participant.expected.ownerId
-        || current.ownerLeaseGeneration !== participant.expected.ownerLeaseGeneration
-        || current.authorityOwnerGeneration !== participant.expected.authorityOwnerGeneration
+        current.ownerId !== participant.expected.ownerId ||
+        current.ownerLeaseGeneration !== participant.expected.ownerLeaseGeneration ||
+        current.authorityOwnerGeneration !== participant.expected.authorityOwnerGeneration
       ) {
         throw new Error('Preserved relocation participant changed its owner fence.');
       }
@@ -181,21 +181,22 @@ export class ServiceRelocationAggregateCommitter {
 function validateAndEncodeParticipants(
   plan: ServiceRelocationAggregatePlan
 ): readonly ZLinkAggregateParticipant[] {
-  const envelopeByKey = new Map(plan.envelope.participants.map(value => [value.key, value]));
+  const envelopeByKey = new Map(plan.envelope.participants.map((value) => [value.key, value]));
   const ordered = [...plan.participants].sort((left, right) =>
-    left.key.value.localeCompare(right.key.value));
+    left.key.value.localeCompare(right.key.value)
+  );
   if (
-    ordered.length !== plan.envelope.participants.length
-    || new Set(ordered.map(({ key }) => key.value)).size !== ordered.length
+    ordered.length !== plan.envelope.participants.length ||
+    new Set(ordered.map(({ key }) => key.value)).size !== ordered.length
   ) {
     throw new TypeError('Relocation aggregate plan must cover every participant exactly once.');
   }
-  return ordered.map(participant => {
+  return ordered.map((participant) => {
     const envelope = envelopeByKey.get(participant.key.value);
     if (
-      envelope === undefined
-      || envelope.objectGeneration !== participant.expected.objectGeneration
-      || envelope.authorityOwnerGeneration !== participant.expected.authorityOwnerGeneration
+      envelope === undefined ||
+      envelope.objectGeneration !== participant.expected.objectGeneration ||
+      envelope.authorityOwnerGeneration !== participant.expected.authorityOwnerGeneration
     ) {
       throw new TypeError('Relocation aggregate participant fence differs from its envelope.');
     }
@@ -210,8 +211,10 @@ function validateAndEncodeParticipants(
 }
 
 function aggregateIdentity(value: string): ZLinkAggregateId {
-  if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(value)
-    || /^0{8}-0{4}-0{4}-0{4}-0{12}$/.test(value)) {
+  if (
+    !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(value) ||
+    /^0{8}-0{4}-0{4}-0{4}-0{12}$/.test(value)
+  ) {
     throw new TypeError('Relocation aggregate id must be a lowercase non-zero 128-bit identity.');
   }
   return { value } as ZLinkAggregateId;

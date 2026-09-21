@@ -70,24 +70,20 @@ struct actor_delivery_lane_policy_t
 class serial_lane_policy_t
 {
   public:
-    using value_t = std::variant<spot_lane_policy_t,
-                                 session_lane_policy_t,
-                                 actor_delivery_lane_policy_t>;
+    using value_t =
+      std::variant<spot_lane_policy_t, session_lane_policy_t, actor_delivery_lane_policy_t>;
 
     static serial_lane_policy_t entry_spot ()
     {
-        return serial_lane_policy_t (
-          spot_lane_policy_t{spot_lane_execution_t::entry});
+        return serial_lane_policy_t (spot_lane_policy_t{spot_lane_execution_t::entry});
     }
     static serial_lane_policy_t spot_wide ()
     {
-        return serial_lane_policy_t (
-          spot_lane_policy_t{spot_lane_execution_t::spot_wide});
+        return serial_lane_policy_t (spot_lane_policy_t{spot_lane_execution_t::spot_wide});
     }
     static serial_lane_policy_t per_actor_spot ()
     {
-        return serial_lane_policy_t (
-          spot_lane_policy_t{spot_lane_execution_t::per_actor});
+        return serial_lane_policy_t (spot_lane_policy_t{spot_lane_execution_t::per_actor});
     }
     static serial_lane_policy_t session ()
     {
@@ -101,27 +97,21 @@ class serial_lane_policy_t
     bool allows_turn_yield () const noexcept
     {
         const auto *spot = std::get_if<spot_lane_policy_t> (&_value);
-        return spot
-               && spot->execution == spot_lane_execution_t::spot_wide;
+        return spot && spot->execution == spot_lane_execution_t::spot_wide;
     }
 
     const value_t &value () const noexcept { return _value; }
 
   private:
-    template<typename Policy>
-    explicit serial_lane_policy_t (Policy policy) : _value (policy)
-    {
-    }
+    template <typename Policy> explicit serial_lane_policy_t (Policy policy) : _value (policy) {}
 
     value_t _value;
 };
 
 struct serial_execution_queue_options_t
 {
-    std::chrono::milliseconds owner_time_budget =
-      dispatch_limits::owner_time_budget;
-    std::size_t lifecycle_burst_limit =
-      dispatch_limits::lifecycle_burst_limit;
+    std::chrono::milliseconds owner_time_budget = dispatch_limits::owner_time_budget;
+    std::size_t lifecycle_burst_limit = dispatch_limits::lifecycle_burst_limit;
 };
 
 struct serial_work_options_t
@@ -165,30 +155,25 @@ enum class serial_cancel_submission_outcome_t
 class serial_execution_queue_t
 {
   public:
-    static constexpr std::size_t fixed_work_byte_cost =
-      dispatch_limits::fixed_work_byte_cost;
+    static constexpr std::size_t fixed_work_byte_cost = dispatch_limits::fixed_work_byte_cost;
     using error_handler_t = std::function<void (const std::string &, const std::exception_ptr &)>;
     using async_completion_t = std::function<void (std::function<void ()>)>;
     using async_work_t = std::function<void (async_completion_t)>;
 
-    serial_execution_queue_t (offload_executor_t &executor,
-                              serial_execution_queue_options_t options = {},
-                              error_handler_t error_handler = {},
-                              serial_lane_policy_t policy =
-                                serial_lane_policy_t::actor_delivery ());
+    serial_execution_queue_t (
+      offload_executor_t &executor,
+      serial_execution_queue_options_t options = {},
+      error_handler_t error_handler = {},
+      serial_lane_policy_t policy = serial_lane_policy_t::actor_delivery ());
     ~serial_execution_queue_t ();
 
     serial_execution_queue_t (const serial_execution_queue_t &) = delete;
     serial_execution_queue_t &operator= (const serial_execution_queue_t &) = delete;
 
     bool try_post (std::string name, std::function<void ()> work);
-    bool try_post (std::string name,
-                   std::function<void ()> work,
-                   serial_work_options_t options);
+    bool try_post (std::string name, std::function<void ()> work, serial_work_options_t options);
     bool try_post_async (std::string name, async_work_t work);
-    bool try_post_async (std::string name,
-                         async_work_t work,
-                         serial_work_options_t options);
+    bool try_post_async (std::string name, async_work_t work, serial_work_options_t options);
     result_t<serial_submission_id_t>
     try_post_cancellable_async (std::string name,
                                 async_work_t work,
@@ -204,18 +189,13 @@ class serial_execution_queue_t
                           serial_work_options_t options,
                           std::function<bool ()> stop_requested = {});
     bool try_post_deferred (std::string name, std::function<void ()> work);
-    result_t<std::shared_ptr<detail::deferred_barrier_t>>
-    reserve_barrier_next (std::string name);
+    result_t<std::shared_ptr<detail::deferred_barrier_t>> reserve_barrier_next (std::string name);
     result_t<std::shared_ptr<detail::deferred_barrier_t>>
     reserve_handoff_barrier (std::string name);
     void post (std::string name, std::function<void ()> work);
-    void post (std::string name,
-               std::function<void ()> work,
-               serial_work_options_t options);
+    void post (std::string name, std::function<void ()> work, serial_work_options_t options);
     void post_async (std::string name, async_work_t work);
-    void post_async (std::string name,
-                     async_work_t work,
-                     serial_work_options_t options);
+    void post_async (std::string name, async_work_t work, serial_work_options_t options);
     void run (std::string name, std::function<void ()> work);
     void drain ();
     void close ();
@@ -225,10 +205,7 @@ class serial_execution_queue_t
     std::size_t pending_count (serial_work_lane_t lane) const;
     std::size_t pending_bytes () const;
     bool closed () const;
-    bool allows_yield () const noexcept
-    {
-        return _lane_policy.allows_turn_yield ();
-    }
+    bool allows_yield () const noexcept { return _lane_policy.allows_turn_yield (); }
 
   private:
     friend class serial_turn_handle_impl_t;
@@ -286,9 +263,7 @@ class serial_execution_queue_t
                          serial_submission_id_t submission_id = 0,
                          std::function<void ()> cancel = {});
     std::shared_ptr<serial_turn_handle_impl_t>
-    create_turn (const std::string &name,
-                 serial_work_lane_t lane,
-                 bool after_active_phase);
+    create_turn (const std::string &name, serial_work_lane_t lane, bool after_active_phase);
     void activate_turn_locked (work_item_t &item) noexcept;
     bool has_ready_locked () const noexcept;
     work_item_t take_next_locked ();

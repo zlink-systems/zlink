@@ -1,12 +1,11 @@
 package systems.zlink.stream.connector;
-import io.netty.channel.ChannelFuture;
-import java.io.EOFException;
 
 import io.netty.bootstrap.Bootstrap;
-import io.netty.buffer.ByteBufAllocator;
 import io.netty.buffer.ByteBuf;
+import io.netty.buffer.ByteBufAllocator;
 import io.netty.buffer.Unpooled;
 import io.netty.channel.Channel;
+import io.netty.channel.ChannelFuture;
 import io.netty.channel.ChannelHandlerContext;
 import io.netty.channel.ChannelInboundHandlerAdapter;
 import io.netty.channel.ChannelInitializer;
@@ -20,6 +19,8 @@ import io.netty.handler.ssl.SslContext;
 import io.netty.handler.ssl.SslContextBuilder;
 import io.netty.handler.ssl.SslHandler;
 import io.netty.handler.ssl.util.InsecureTrustManagerFactory;
+
+import java.io.EOFException;
 import java.net.URI;
 import java.time.Duration;
 import java.util.ArrayDeque;
@@ -28,27 +29,27 @@ import java.util.Queue;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionStage;
 import java.util.concurrent.ThreadFactory;
-import javax.net.ssl.SSLParameters;
+
 import javax.net.ssl.SSLException;
+import javax.net.ssl.SSLParameters;
 
 final class ZLinkTlsTransportConnection implements ZLinkStreamTransportConnection {
     private static final EventLoopGroup EVENT_LOOP =
-        new NioEventLoopGroup(0, new DaemonThreadFactory());
+            new NioEventLoopGroup(0, new DaemonThreadFactory());
 
     private final Queue<ZLinkStreamWireProtocol.Frame> frames = new ArrayDeque<>();
     private final Queue<CompletableFuture<ZLinkStreamWireProtocol.Frame>> waiters =
-        new ArrayDeque<>();
+            new ArrayDeque<>();
     private volatile Channel channel;
     private volatile Throwable failure;
 
-    private ZLinkTlsTransportConnection() {
-    }
+    private ZLinkTlsTransportConnection() {}
 
     static CompletionStage<ZLinkTlsTransportConnection> connectStage(
-        URI endpoint,
-        Duration connectTimeout,
-        int maxReceivePayloadSize,
-        boolean skipServerCertificateValidation) {
+            URI endpoint,
+            Duration connectTimeout,
+            int maxReceivePayloadSize,
+            boolean skipServerCertificateValidation) {
         CompletableFuture<ZLinkTlsTransportConnection> result = new CompletableFuture<>();
         ZLinkTlsTransportConnection connection = new ZLinkTlsTransportConnection();
         SslContext sslContext;
@@ -63,55 +64,67 @@ final class ZLinkTlsTransportConnection implements ZLinkStreamTransportConnectio
         }
 
         int port = DefaultZLinkStreamConnector.resolvePort(endpoint);
-        Bootstrap bootstrap = new Bootstrap()
-            .group(EVENT_LOOP)
-            .channel(NioSocketChannel.class)
-            .option(ChannelOption.SO_KEEPALIVE, true)
-            .option(ChannelOption.CONNECT_TIMEOUT_MILLIS, Math.toIntExact(connectTimeout.toMillis()))
-            .handler(new ChannelInitializer<SocketChannel>() {
-                @Override
-                protected void initChannel(SocketChannel channel) {
-                    channel.pipeline().addLast(createSslHandler(
-                        sslContext,
-                        channel.alloc(),
-                        endpoint.getHost(),
-                        port,
-                        skipServerCertificateValidation));
-                    channel.pipeline().addLast(new FrameDecoder(maxReceivePayloadSize));
-                    channel.pipeline().addLast(new InboundHandler(connection));
-                }
-            });
+        Bootstrap bootstrap =
+                new Bootstrap()
+                        .group(EVENT_LOOP)
+                        .channel(NioSocketChannel.class)
+                        .option(ChannelOption.SO_KEEPALIVE, true)
+                        .option(
+                                ChannelOption.CONNECT_TIMEOUT_MILLIS,
+                                Math.toIntExact(connectTimeout.toMillis()))
+                        .handler(
+                                new ChannelInitializer<SocketChannel>() {
+                                    @Override
+                                    protected void initChannel(SocketChannel channel) {
+                                        channel.pipeline()
+                                                .addLast(
+                                                        createSslHandler(
+                                                                sslContext,
+                                                                channel.alloc(),
+                                                                endpoint.getHost(),
+                                                                port,
+                                                                skipServerCertificateValidation));
+                                        channel.pipeline()
+                                                .addLast(new FrameDecoder(maxReceivePayloadSize));
+                                        channel.pipeline().addLast(new InboundHandler(connection));
+                                    }
+                                });
 
-        bootstrap.connect(endpoint.getHost(), port).addListener(connect -> {
-            if (!connect.isSuccess()) {
-                connection.fail(connect.cause());
-                result.completeExceptionally(connect.cause());
-                return;
-            }
-            Channel connected = ((ChannelFuture) connect).channel();
-            connection.channel = connected;
-            connected.pipeline()
-                .get(SslHandler.class)
-                .handshakeFuture()
-                .addListener(handshake -> {
-                    if (handshake.isSuccess()) {
-                        result.complete(connection);
-                    } else {
-                        connection.fail(handshake.cause());
-                        connected.close();
-                        result.completeExceptionally(handshake.cause());
-                    }
-                });
-        });
+        bootstrap
+                .connect(endpoint.getHost(), port)
+                .addListener(
+                        connect -> {
+                            if (!connect.isSuccess()) {
+                                connection.fail(connect.cause());
+                                result.completeExceptionally(connect.cause());
+                                return;
+                            }
+                            Channel connected = ((ChannelFuture) connect).channel();
+                            connection.channel = connected;
+                            connected
+                                    .pipeline()
+                                    .get(SslHandler.class)
+                                    .handshakeFuture()
+                                    .addListener(
+                                            handshake -> {
+                                                if (handshake.isSuccess()) {
+                                                    result.complete(connection);
+                                                } else {
+                                                    connection.fail(handshake.cause());
+                                                    connected.close();
+                                                    result.completeExceptionally(handshake.cause());
+                                                }
+                                            });
+                        });
         return result;
     }
 
     static SslHandler createSslHandler(
-        SslContext sslContext,
-        ByteBufAllocator allocator,
-        String host,
-        int port,
-        boolean skipServerCertificateValidation) {
+            SslContext sslContext,
+            ByteBufAllocator allocator,
+            String host,
+            int port,
+            boolean skipServerCertificateValidation) {
         SslHandler handler = sslContext.newHandler(allocator, host, port);
         if (!skipServerCertificateValidation) {
             SSLParameters parameters = handler.engine().getSSLParameters();
@@ -141,16 +154,18 @@ final class ZLinkTlsTransportConnection implements ZLinkStreamTransportConnectio
         Channel current = channel;
         if (current == null || !current.isActive()) {
             return CompletableFuture.failedFuture(
-                ZLinkStreamException.disconnected("tls transport is not connected"));
+                    ZLinkStreamException.disconnected("tls transport is not connected"));
         }
         CompletableFuture<Void> result = new CompletableFuture<>();
-        current.writeAndFlush(Unpooled.wrappedBuffer(frame)).addListener(write -> {
-            if (write.isSuccess()) {
-                result.complete(null);
-            } else {
-                result.completeExceptionally(write.cause());
-            }
-        });
+        current.writeAndFlush(Unpooled.wrappedBuffer(frame))
+                .addListener(
+                        write -> {
+                            if (write.isSuccess()) {
+                                result.complete(null);
+                            } else {
+                                result.completeExceptionally(write.cause());
+                            }
+                        });
         return result;
     }
 
@@ -210,10 +225,9 @@ final class ZLinkTlsTransportConnection implements ZLinkStreamTransportConnectio
             input.markReaderIndex();
             int headerLength = input.readUnsignedShort();
             int payloadLength = input.readInt();
-            int bodyLength = ZLinkStreamWireProtocol.checkedBodyLength(
-                headerLength,
-                payloadLength,
-                maxReceivePayloadSize);
+            int bodyLength =
+                    ZLinkStreamWireProtocol.checkedBodyLength(
+                            headerLength, payloadLength, maxReceivePayloadSize);
             if (input.readableBytes() < bodyLength) {
                 input.resetReaderIndex();
                 return;

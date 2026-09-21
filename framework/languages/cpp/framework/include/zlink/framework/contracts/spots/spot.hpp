@@ -80,7 +80,9 @@ template <typename THandler> struct timer_handler_factory_t
 class actor_context_t;
 class actor_ref_t;
 class actor_t;
-template <typename TActor> requires std::derived_from<TActor, actor_t> class actor_factory_t;
+template <typename TActor>
+    requires std::derived_from<TActor, actor_t>
+class actor_factory_t;
 template <typename TActor> class actor_factory_builder_t;
 class spot_publisher_client_t;
 class spot_manager_t;
@@ -171,10 +173,9 @@ struct spot_accept_reject_result_t
     }
 
     template <typename TReply>
-    requires (!std::is_same_v<std::remove_cvref_t<TReply>, message_t>
-              && !std::is_same_v<std::remove_cvref_t<TReply>,
-                                 zlink::message_t>) static spot_accept_reject_result_t
-      accept (TReply reply)
+        requires (!std::is_same_v<std::remove_cvref_t<TReply>, message_t>
+                  && !std::is_same_v<std::remove_cvref_t<TReply>, zlink::message_t>)
+    static spot_accept_reject_result_t accept (TReply reply)
     {
         return accept (message_t::from (std::move (reply)));
     }
@@ -185,10 +186,9 @@ struct spot_accept_reject_result_t
     }
 
     template <typename TReply>
-    requires (!std::is_same_v<std::remove_cvref_t<TReply>, message_t>
-              && !std::is_same_v<std::remove_cvref_t<TReply>,
-                                 zlink::message_t>) static spot_accept_reject_result_t
-      reject (TReply reply)
+        requires (!std::is_same_v<std::remove_cvref_t<TReply>, message_t>
+                  && !std::is_same_v<std::remove_cvref_t<TReply>, zlink::message_t>)
+    static spot_accept_reject_result_t reject (TReply reply)
     {
         return reject (message_t::from (std::move (reply)));
     }
@@ -207,10 +207,9 @@ struct spot_actor_join_result_t
     }
 
     template <typename TReply>
-    requires (!std::is_same_v<std::remove_cvref_t<TReply>, message_t>
-              && !std::is_same_v<std::remove_cvref_t<TReply>,
-                                 zlink::message_t>) static spot_actor_join_result_t
-      accept (TReply reply)
+        requires (!std::is_same_v<std::remove_cvref_t<TReply>, message_t>
+                  && !std::is_same_v<std::remove_cvref_t<TReply>, zlink::message_t>)
+    static spot_actor_join_result_t accept (TReply reply)
     {
         return accept (message_t::from (std::move (reply)));
     }
@@ -222,10 +221,9 @@ struct spot_actor_join_result_t
     }
 
     template <typename TReply>
-    requires (!std::is_same_v<std::remove_cvref_t<TReply>, message_t>
-              && !std::is_same_v<std::remove_cvref_t<TReply>,
-                                 zlink::message_t>) static spot_actor_join_result_t
-      reject (TReply reply)
+        requires (!std::is_same_v<std::remove_cvref_t<TReply>, message_t>
+                  && !std::is_same_v<std::remove_cvref_t<TReply>, zlink::message_t>)
+    static spot_actor_join_result_t reject (TReply reply)
     {
         return reject (message_t::from (std::move (reply)));
     }
@@ -243,10 +241,9 @@ struct actor_create_response_t
     }
 
     template <typename TReply>
-    requires (!std::is_same_v<std::remove_cvref_t<TReply>, message_t>
-              && !std::is_same_v<std::remove_cvref_t<TReply>,
-                                 zlink::message_t>) static actor_create_response_t
-      accept (TReply reply)
+        requires (!std::is_same_v<std::remove_cvref_t<TReply>, message_t>
+                  && !std::is_same_v<std::remove_cvref_t<TReply>, zlink::message_t>)
+    static actor_create_response_t accept (TReply reply)
     {
         return accept (message_t::from (std::move (reply)));
     }
@@ -258,10 +255,9 @@ struct actor_create_response_t
     }
 
     template <typename TReply>
-    requires (!std::is_same_v<std::remove_cvref_t<TReply>, message_t>
-              && !std::is_same_v<std::remove_cvref_t<TReply>,
-                                 zlink::message_t>) static actor_create_response_t
-      reject (TReply reply)
+        requires (!std::is_same_v<std::remove_cvref_t<TReply>, message_t>
+                  && !std::is_same_v<std::remove_cvref_t<TReply>, zlink::message_t>)
+    static actor_create_response_t reject (TReply reply)
     {
         return reject (message_t::from (std::move (reply)));
     }
@@ -318,10 +314,9 @@ struct spot_create_response_t
     }
 
     template <typename TReply>
-    requires (!std::is_same_v<std::remove_cvref_t<TReply>, message_t>
-              && !std::is_same_v<std::remove_cvref_t<TReply>,
-                                 zlink::message_t>) static spot_create_response_t
-      accept (TReply reply)
+        requires (!std::is_same_v<std::remove_cvref_t<TReply>, message_t>
+                  && !std::is_same_v<std::remove_cvref_t<TReply>, zlink::message_t>)
+    static spot_create_response_t accept (TReply reply)
     {
         return accept (message_t::from (std::move (reply)));
     }
@@ -333,10 +328,9 @@ struct spot_create_response_t
     }
 
     template <typename TReply>
-    requires (!std::is_same_v<std::remove_cvref_t<TReply>, message_t>
-              && !std::is_same_v<std::remove_cvref_t<TReply>,
-                                 zlink::message_t>) static spot_create_response_t
-      reject (TReply reply)
+        requires (!std::is_same_v<std::remove_cvref_t<TReply>, message_t>
+                  && !std::is_same_v<std::remove_cvref_t<TReply>, zlink::message_t>)
+    static spot_create_response_t reject (TReply reply)
     {
         return reject (message_t::from (std::move (reply)));
     }
@@ -707,8 +701,8 @@ template <typename TSpot> class user_spot_factory_builder_t
     }
 
     template <typename TAdapter>
-    requires std::derived_from<TAdapter, spot_relocation_adapter_t<TSpot>> void
-    preserve_state_with ()
+        requires std::derived_from<TAdapter, spot_relocation_adapter_t<TSpot>>
+    void preserve_state_with ()
     {
         ensure_mutable ();
         static_assert (std::is_default_constructible_v<TAdapter>,
@@ -809,8 +803,8 @@ template <typename TSpot> class instance_spot_factory_builder_t
     }
 
     template <typename TAdapter>
-    requires std::derived_from<TAdapter, spot_relocation_adapter_t<TSpot>> void
-    preserve_state_with ()
+        requires std::derived_from<TAdapter, spot_relocation_adapter_t<TSpot>>
+    void preserve_state_with ()
     {
         ensure_mutable ();
         static_assert (std::is_default_constructible_v<TAdapter>,
@@ -1405,17 +1399,13 @@ class instance_spot_t
 
 namespace detail
 {
-template <typename T> concept user_spot_type = requires
-{
-    typename T::actor_type;
-}
-&&std::derived_from<T, spot_t<typename T::actor_type>>;
+template <typename T>
+concept user_spot_type =
+  requires { typename T::actor_type; } && std::derived_from<T, spot_t<typename T::actor_type>>;
 
-template <typename T> concept entry_spot_type = requires
-{
-    typename T::actor_type;
-}
-&&std::derived_from<T, entry_spot_t<typename T::actor_type>>;
+template <typename T>
+concept entry_spot_type = requires { typename T::actor_type; }
+                          && std::derived_from<T, entry_spot_t<typename T::actor_type>>;
 } // namespace detail
 
 struct spot_create_result_t
@@ -1750,9 +1740,9 @@ class spot_create_call_t
     spot_create_call_t &in_mesh (std::string mesh_name);
     spot_create_call_t &creation_request (message_t request);
     template <typename TRequest>
-    requires (!std::is_same_v<std::remove_cvref_t<TRequest>, zlink::message_t>
-              && !std::is_same_v<std::remove_cvref_t<TRequest>, message_t>)
-      spot_create_call_t &creation_request (TRequest request)
+        requires (!std::is_same_v<std::remove_cvref_t<TRequest>, zlink::message_t>
+                  && !std::is_same_v<std::remove_cvref_t<TRequest>, message_t>)
+    spot_create_call_t &creation_request (TRequest request)
     {
         return creation_request (message_t::from (std::move (request)));
     }
@@ -1886,9 +1876,9 @@ class spot_node_builder_t
     // relocation. The default is 30 seconds; zero disables Message Follow.
     spot_node_builder_t &set_message_follow_duration (std::chrono::milliseconds duration);
     template <typename TEntrySpot, typename... TDependencies>
-    requires detail::entry_spot_type<TEntrySpot> &&std::
-      constructible_from<TEntrySpot, entry_spot_context_t, TDependencies &...> spot_node_builder_t &
-      add_entry_spot ()
+        requires detail::entry_spot_type<TEntrySpot>
+                 && std::constructible_from<TEntrySpot, entry_spot_context_t, TDependencies &...>
+    spot_node_builder_t &add_entry_spot ()
     {
         auto &builder = add_spot_factory_erased (
           std::string ("entry"), std::type_index (typeid (TEntrySpot)),
@@ -1899,7 +1889,8 @@ class spot_node_builder_t
     }
 
     template <typename TEntrySpot>
-    requires detail::entry_spot_type<TEntrySpot> spot_node_builder_t &
+        requires detail::entry_spot_type<TEntrySpot>
+    spot_node_builder_t &
     add_entry_spot (std::function<std::shared_ptr<TEntrySpot> (entry_spot_context_t)> factory)
     {
         if (!factory) {
@@ -1918,7 +1909,8 @@ class spot_node_builder_t
     }
 
     template <typename TSpot>
-    requires detail::user_spot_type<TSpot> spot_node_builder_t &
+        requires detail::user_spot_type<TSpot>
+    spot_node_builder_t &
     add_spot_factory (std::string stable_type,
                       std::function<std::shared_ptr<TSpot> (spot_context_t)> factory,
                       std::function<void (user_spot_factory_builder_t<TSpot> &)> configure)
@@ -1957,10 +1949,11 @@ class spot_node_builder_t
     }
 
     template <typename TSpot, typename... TDependencies>
-    requires detail::user_spot_type<TSpot> &&
-      std::constructible_from<TSpot, spot_context_t, TDependencies &...> spot_node_builder_t &
-      add_spot_factory (std::string stable_type,
-                        std::function<void (user_spot_factory_builder_t<TSpot> &)> configure)
+        requires detail::user_spot_type<TSpot>
+                 && std::constructible_from<TSpot, spot_context_t, TDependencies &...>
+    spot_node_builder_t &
+    add_spot_factory (std::string stable_type,
+                      std::function<void (user_spot_factory_builder_t<TSpot> &)> configure)
     {
         if (!configure) {
             throw framework_exception_t (framework_error_kind_t::not_configured,
@@ -1992,8 +1985,8 @@ class spot_node_builder_t
     }
 
     template <typename TSpot>
-    requires std::derived_from<TSpot, instance_spot_t> spot_node_builder_t &
-    add_instance_spot_factory (
+        requires std::derived_from<TSpot, instance_spot_t>
+    spot_node_builder_t &add_instance_spot_factory (
       std::string stable_type,
       std::function<std::shared_ptr<TSpot> (instance_spot_context_t)> factory,
       std::function<void (instance_spot_factory_builder_t<TSpot> &)> configure)
@@ -2030,11 +2023,11 @@ class spot_node_builder_t
     }
 
     template <typename TSpot, typename... TDependencies>
-    requires std::derived_from<TSpot, instance_spot_t> &&std::
-      constructible_from<TSpot, instance_spot_context_t, TDependencies &...> spot_node_builder_t &
-      add_instance_spot_factory (
-        std::string stable_type,
-        std::function<void (instance_spot_factory_builder_t<TSpot> &)> configure)
+        requires std::derived_from<TSpot, instance_spot_t>
+                 && std::constructible_from<TSpot, instance_spot_context_t, TDependencies &...>
+    spot_node_builder_t &add_instance_spot_factory (
+      std::string stable_type,
+      std::function<void (instance_spot_factory_builder_t<TSpot> &)> configure)
     {
         if (!configure) {
             throw framework_exception_t (framework_error_kind_t::not_configured,

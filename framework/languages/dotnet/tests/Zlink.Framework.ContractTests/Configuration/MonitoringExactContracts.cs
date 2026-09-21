@@ -9,34 +9,29 @@ public sealed class MonitoringExactContracts
     public void ClientServerRuntimeHasExactChannelScopedReadOnlySurface()
     {
         Assert.Equal(
-            new string[]
-            {
-                "GetStatus",
-                "ObserveAsync",
-            },
+            new string[] { "GetStatus", "ObserveAsync" },
             typeof(IZLinkClientServerRuntime)
                 .GetMethods()
                 .Select(static method => method.Name)
                 .Order(StringComparer.Ordinal)
-                .ToArray());
+                .ToArray()
+        );
         Assert.DoesNotContain(
-            typeof(IZLinkClientServerRuntime).GetMethods()
+            typeof(IZLinkClientServerRuntime)
+                .GetMethods()
                 .SelectMany(static method => method.GetParameters()),
-            static parameter =>
-                StringComparer.Ordinal.Equals(
-                    parameter.Name,
-                    "meshName"));
+            static parameter => StringComparer.Ordinal.Equals(parameter.Name, "meshName")
+        );
         Assert.Equal(
             typeof(ZLinkClientServerStatus),
             typeof(IZLinkClientServerRuntime)
                 .GetMethod(nameof(IZLinkClientServerRuntime.GetStatus))!
-                .ReturnType);
+                .ReturnType
+        );
     }
 
     [Fact]
-    [ContractExample(
-        typeof(IZLinkDiagnosticsOptions),
-        typeof(IZLinkDiagnosticsRuntime))]
+    [ContractExample(typeof(IZLinkDiagnosticsOptions), typeof(IZLinkDiagnosticsRuntime))]
     public void DiagnosticsConfigurationAndRuntimeFollowExactContract()
     {
         Assert.Equal(
@@ -44,28 +39,26 @@ public sealed class MonitoringExactContracts
                 ZLinkDiagnosticsLevel.Off,
                 ZLinkDiagnosticsLevel.Errors,
                 ZLinkDiagnosticsLevel.Normal,
-                ZLinkDiagnosticsLevel.Detailed
+                ZLinkDiagnosticsLevel.Detailed,
             ],
-            Enum.GetValues<ZLinkDiagnosticsLevel>());
+            Enum.GetValues<ZLinkDiagnosticsLevel>()
+        );
         Assert.Equal(
-            new[]
-            {
-                "IncludeMessageSizes",
-                "SetLevel",
-                "SetSampleRate"
-            },
+            new[] { "IncludeMessageSizes", "SetLevel", "SetSampleRate" },
             typeof(IZLinkDiagnosticsOptions)
                 .GetMethods()
                 .Select(static method => method.Name)
                 .Order(StringComparer.Ordinal)
-                .ToArray());
+                .ToArray()
+        );
         var level = Assert.Single(typeof(IZLinkDiagnosticsRuntime).GetProperties());
         Assert.Equal(nameof(IZLinkDiagnosticsRuntime.Level), level.Name);
         Assert.True(level.CanRead);
         Assert.True(level.CanWrite);
         var setLevelAsync = Assert.Single(
             typeof(IZLinkDiagnosticsRuntime).GetMethods(),
-            static method => method.Name == nameof(IZLinkDiagnosticsRuntime.SetLevelAsync));
+            static method => method.Name == nameof(IZLinkDiagnosticsRuntime.SetLevelAsync)
+        );
         Assert.Equal(typeof(Task), setLevelAsync.ReturnType);
     }
 
@@ -73,12 +66,12 @@ public sealed class MonitoringExactContracts
     public void PublicMonitoringStatusOmitsInternalIdentityAndCapacity()
     {
         var names = new[]
-            {
-                typeof(ZLinkRouteMeshStatus),
-                typeof(ZLinkClientServerStatus),
-                typeof(ZLinkFanoutStatus),
-                typeof(ZLinkPeerStatus)
-            }
+        {
+            typeof(ZLinkRouteMeshStatus),
+            typeof(ZLinkClientServerStatus),
+            typeof(ZLinkFanoutStatus),
+            typeof(ZLinkPeerStatus),
+        }
             .SelectMany(static type => type.GetProperties())
             .Select(static property => property.Name)
             .ToHashSet(StringComparer.Ordinal);

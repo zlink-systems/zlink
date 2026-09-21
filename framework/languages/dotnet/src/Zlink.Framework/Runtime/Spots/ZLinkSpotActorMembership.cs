@@ -14,13 +14,12 @@ internal sealed class ZLinkSpotActorMembership
 
     public void Add(IZLinkActor actor)
     {
-        var actorId = ZLinkActorId.FromBoundary(
-            actor.Context.ActorId,
-            nameof(actor));
+        var actorId = ZLinkActorId.FromBoundary(actor.Context.ActorId, nameof(actor));
         var existing = _actorsById.GetOrAdd(actorId, actor);
         if (!ReferenceEquals(existing, actor))
             throw new InvalidOperationException(
-                $"SPOT already has an actor with id '{actor.Context.ActorId}'.");
+                $"SPOT already has an actor with id '{actor.Context.ActorId}'."
+            );
     }
 
     internal bool TryGetActor(ZLinkActorId actorId, out IZLinkActor? actor)
@@ -30,20 +29,18 @@ internal sealed class ZLinkSpotActorMembership
 
     public bool RemoveIfCurrent(IZLinkActor actor)
     {
-        var actorId = ZLinkActorId.FromBoundary(
-            actor.Context.ActorId,
-            nameof(actor));
-        if (_actorsById.TryGetValue(actorId, out var existing)
-            && ReferenceEquals(existing, actor))
+        var actorId = ZLinkActorId.FromBoundary(actor.Context.ActorId, nameof(actor));
+        if (_actorsById.TryGetValue(actorId, out var existing) && ReferenceEquals(existing, actor))
             return ((ICollection<KeyValuePair<ZLinkActorId, IZLinkActor>>)_actorsById).Remove(
-                new KeyValuePair<ZLinkActorId, IZLinkActor>(actorId, actor));
+                new KeyValuePair<ZLinkActorId, IZLinkActor>(actorId, actor)
+            );
         return false;
     }
 
     public IReadOnlyList<IZLinkActor> Snapshot()
     {
-        return _actorsById.Values
-            .OrderBy(static actor => actor.Context.ActorId, StringComparer.Ordinal)
+        return _actorsById
+            .Values.OrderBy(static actor => actor.Context.ActorId, StringComparer.Ordinal)
             .ToArray();
     }
 }

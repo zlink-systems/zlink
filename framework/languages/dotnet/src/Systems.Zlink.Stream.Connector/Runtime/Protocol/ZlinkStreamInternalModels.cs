@@ -8,7 +8,7 @@ internal enum ZlinkStreamHeaderFlags : byte
     HasMetadata = 0x02,
     PayloadCompressed = 0x04,
     HasCorrelationId = 0x08,
-    HasFlowId = 0x10
+    HasFlowId = 0x10,
 }
 
 internal readonly record struct ZlinkStreamRequestSeq(ulong Value);
@@ -22,4 +22,5 @@ internal sealed record ZlinkStreamHeader(
     ZlinkStreamMetadata Metadata,
     string? CorrelationId = null,
     string? FlowId = null,
-    ZlinkStreamFlowOrigin? FlowOrigin = null);
+    ZlinkStreamFlowOrigin? FlowOrigin = null
+);

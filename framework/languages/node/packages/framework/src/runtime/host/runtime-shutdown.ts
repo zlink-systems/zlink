@@ -47,7 +47,9 @@ export async function stopRuntimeParts(parts: ZLinkRuntimeStopParts): Promise<vo
   state.abortController.abort();
   const errors: unknown[] = [];
   await runShutdownStep(errors, () => parts.streamRuntime?.dispose());
-  await runShutdownStep(errors, () => parts.spotNodeRuntime?.dispose(undefined, parts.cleanupDeadline));
+  await runShutdownStep(errors, () =>
+    parts.spotNodeRuntime?.dispose(undefined, parts.cleanupDeadline)
+  );
   await runShutdownStep(errors, () => parts.channelRuntime?.dispose());
   await runShutdownStep(errors, () => parts.serviceRelocation?.dispose());
   await runShutdownStep(errors, () => parts.locationSnapshot.lifecycle?.dispose());
@@ -96,6 +98,5 @@ async function runShutdownStep(
 
 function isShutdownAbort(error: unknown): boolean {
   if (isAbortError(error)) return true;
-  return error instanceof AggregateError
-    && error.errors.every((nested) => isShutdownAbort(nested));
+  return error instanceof AggregateError && error.errors.every((nested) => isShutdownAbort(nested));
 }

@@ -75,11 +75,8 @@ class configuration_section_t
 };
 
 template <typename T>
-concept configuration_bindable = requires (const configuration_section_t &section)
-{
-    {
-        T::bind (section)
-    } -> std::same_as<T>;
+concept configuration_bindable = requires (const configuration_section_t &section) {
+    { T::bind (section) } -> std::same_as<T>;
 };
 
 class config_builder_t

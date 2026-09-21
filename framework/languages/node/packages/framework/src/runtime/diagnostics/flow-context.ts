@@ -13,9 +13,18 @@ export function currentFlowContext(): ZLinkFlowContextValue | undefined {
   return flowStorage.getStore();
 }
 
-export function currentOrCreateFlow(origin?: ZLinkFlowOrigin, createIfAbsent?: true): ZLinkFlowContextValue;
-export function currentOrCreateFlow(origin: ZLinkFlowOrigin, createIfAbsent: false): ZLinkFlowContextValue | undefined;
-export function currentOrCreateFlow(origin: ZLinkFlowOrigin, createIfAbsent: boolean): ZLinkFlowContextValue | undefined;
+export function currentOrCreateFlow(
+  origin?: ZLinkFlowOrigin,
+  createIfAbsent?: true
+): ZLinkFlowContextValue;
+export function currentOrCreateFlow(
+  origin: ZLinkFlowOrigin,
+  createIfAbsent: false
+): ZLinkFlowContextValue | undefined;
+export function currentOrCreateFlow(
+  origin: ZLinkFlowOrigin,
+  createIfAbsent: boolean
+): ZLinkFlowContextValue | undefined;
 /**
  * Returns the ambient flow context or, when absent and `createIfAbsent`, a
  * fresh flow value. The returned value is NOT installed into the ambient

@@ -10,8 +10,9 @@ internal sealed class ZLinkSerialTurn
     private readonly CancellationToken _executionToken;
     private Task? _ownerTask;
 
-    private TaskCompletionSource _suspended =
-        new(TaskCreationOptions.RunContinuationsAsynchronously);
+    private TaskCompletionSource _suspended = new(
+        TaskCreationOptions.RunContinuationsAsynchronously
+    );
 
     private int _suspendSignaled;
 
@@ -19,7 +20,8 @@ internal sealed class ZLinkSerialTurn
         Func<ZLinkSerialTurn, Action, ZLinkSerialPostAdmission> postResume,
         Func<Func<CancellationToken, ValueTask>, bool> postCallback,
         Action<Exception> reportError,
-        CancellationToken executionToken)
+        CancellationToken executionToken
+    )
     {
         _postResume = postResume;
         _postCallback = postCallback;
@@ -42,7 +44,8 @@ internal sealed class ZLinkSerialTurn
     {
         Volatile.Write(
             ref _suspended,
-            new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously));
+            new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously)
+        );
         Volatile.Write(ref _suspendSignaled, 0);
     }
 
@@ -72,11 +75,13 @@ internal sealed class ZLinkSerialTurn
 
     public async ValueTask<T> YieldFrameworkCallAsync<T>(
         Func<CancellationToken, ValueTask<T>> submit,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken
+    )
     {
         cancellationToken.ThrowIfCancellationRequested();
         var operation = submit(cancellationToken);
-        if (operation.IsCompletedSuccessfully) return operation.Result;
+        if (operation.IsCompletedSuccessfully)
+            return operation.Result;
 
         SignalSuspended();
         try
@@ -97,11 +102,13 @@ internal sealed class ZLinkSerialTurn
 
     public async ValueTask YieldFrameworkCallAsync(
         Func<CancellationToken, ValueTask> submit,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken
+    )
     {
         cancellationToken.ThrowIfCancellationRequested();
         var operation = submit(cancellationToken);
-        if (operation.IsCompletedSuccessfully) return;
+        if (operation.IsCompletedSuccessfully)
+            return;
 
         SignalSuspended();
         try
@@ -117,7 +124,8 @@ internal sealed class ZLinkSerialTurn
 
     private void SignalSuspended()
     {
-        if (Interlocked.Exchange(ref _suspendSignaled, 1) == 0) Volatile.Read(ref _suspended).TrySetResult();
+        if (Interlocked.Exchange(ref _suspendSignaled, 1) == 0)
+            Volatile.Read(ref _suspended).TrySetResult();
     }
 
     private Task AwaitResumePermitAsync()
@@ -128,7 +136,9 @@ internal sealed class ZLinkSerialTurn
             resume.TrySetException(
                 new ZLinkFrameworkException(
                     ZLinkFrameworkErrorKind.ShuttingDown,
-                    "The serial execution queue is closed before a yielded turn can resume."));
+                    "The serial execution queue is closed before a yielded turn can resume."
+                )
+            );
 
         return resume.Task;
     }

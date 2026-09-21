@@ -32,10 +32,7 @@ export type ZLinkExecutionArea = 'application' | 'infrastructure';
 
 const executionAreaStorage = new AsyncLocalStorage<ZLinkExecutionArea>();
 
-export function runZLinkExecutionArea<T>(
-  area: ZLinkExecutionArea,
-  operation: () => T
-): T {
+export function runZLinkExecutionArea<T>(area: ZLinkExecutionArea, operation: () => T): T {
   return executionAreaStorage.run(area, operation);
 }
 
@@ -140,7 +137,10 @@ export class ZLinkSpotSerialTurn {
       return;
     }
     await Promise.race([
-      owner.then(() => undefined, () => undefined),
+      owner.then(
+        () => undefined,
+        () => undefined
+      ),
       this.suspended
     ]);
   }
@@ -169,12 +169,8 @@ export function runZLinkSpotSerialTurn<T>(
   turn: ZLinkSpotSerialTurn,
   operation: () => Promise<T> | T
 ): Promise<T> {
-  return runZLinkExecutionArea(
-    'application',
-    () => spotSerialTurnStorage.run(
-      { executor, turnId, turn },
-      async () => operation()
-    )
+  return runZLinkExecutionArea('application', () =>
+    spotSerialTurnStorage.run({ executor, turnId, turn }, async () => operation())
   );
 }
 
@@ -194,18 +190,13 @@ export function captureZLinkSpotSerialTurn(
 /** Returns the physical Spot owner only while its captured turn owns the gate. */
 export function currentZLinkSpotSerialSourceId(): unknown {
   const current = spotSerialTurnStorage.getStore();
-  if (
-    current === undefined
-    || !current.executor.isActiveTurn(current.turn, current.turnId)
-  ) {
+  if (current === undefined || !current.executor.isActiveTurn(current.turn, current.turnId)) {
     return undefined;
   }
   return current.executor.sourceSpotId;
 }
 
-export function requireZLinkYieldTurn(
-  capturedTurn?: ZLinkSpotSerialTurn
-): ZLinkSpotSerialTurn {
+export function requireZLinkYieldTurn(capturedTurn?: ZLinkSpotSerialTurn): ZLinkSpotSerialTurn {
   const turn = capturedTurn ?? captureZLinkSpotSerialTurn();
   if (turn === undefined || !turn.yieldAllowed) {
     throw new ZLinkConfigurationException(
@@ -227,15 +218,19 @@ export function captureZLinkExecutionTurn(): ZLinkCapturedExecutionTurn | undefi
   }
   return {
     yieldPromise: <T>(pending: Promise<T>) => current.turn.yieldPromise(pending),
-    post: (callback: () => void) => { void current.executor.post(callback); }
+    post: (callback: () => void) => {
+      void current.executor.post(callback);
+    }
   };
 }
 
 export function isCurrentZLinkSpotSerialTurn(executor: ZLinkSpotSerialTurnExecutorLike): boolean {
   const current = spotSerialTurnStorage.getStore();
-  return current !== undefined
-    && current.executor === executor
-    && executor.isActiveTurn(current.turn, current.turnId);
+  return (
+    current !== undefined &&
+    current.executor === executor &&
+    executor.isActiveTurn(current.turn, current.turnId)
+  );
 }
 
 export interface ZLinkExecutionBarrierSeal {
@@ -306,10 +301,7 @@ export class ZLinkExecutionBarrier {
     return seal;
   }
 
-  async waitForQuiescence(
-    seal: ZLinkExecutionBarrierSeal,
-    signal?: AbortSignal
-  ): Promise<void> {
+  async waitForQuiescence(seal: ZLinkExecutionBarrierSeal, signal?: AbortSignal): Promise<void> {
     this.requireCurrent(seal);
     if (this.activeClaims === 0) return;
     if (signal?.aborted === true) throw signal.reason;

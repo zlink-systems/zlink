@@ -41,10 +41,7 @@ namespace zlink::framework::detail
 class message_flow_tracer_t
 {
   public:
-    explicit message_flow_tracer_t (const dispatch_options_t &options) :
-        _options (&options)
-    {
-    }
+    explicit message_flow_tracer_t (const dispatch_options_t &options) : _options (&options) {}
 
     bool enabled (message_flow_log_mode_t min_mode) const noexcept
     {
@@ -72,10 +69,7 @@ class message_flow_tracer_t
 
     /* flow-correlation §2.2: host entry points create new flow ids only when
      * tracing is not fully off. */
-    bool capture_enabled () const noexcept
-    {
-        return enabled (message_flow_log_mode_t::errors);
-    }
+    bool capture_enabled () const noexcept { return enabled (message_flow_log_mode_t::errors); }
 
     // Lazy form: the event (and its string fields) is built only after the cheap
     // mode/sample gate passes, so an "off" dispatch pays nothing but the gate.
@@ -90,8 +84,7 @@ class message_flow_tracer_t
                 std::string_view sampling_flow_id,
                 Fn &&build_event) const noexcept
     {
-        trace_with_sampling_key (required_mode (outcome), outcome,
-                                 sampling_flow_id,
+        trace_with_sampling_key (required_mode (outcome), outcome, sampling_flow_id,
                                  std::forward<Fn> (build_event));
     }
 
@@ -100,8 +93,7 @@ class message_flow_tracer_t
                 message_flow_result_t result,
                 Fn &&build_event) const noexcept
     {
-        const auto effective_mode =
-          dispatch_options_access_t::effective_message_flow (*_options);
+        const auto effective_mode = dispatch_options_access_t::effective_message_flow (*_options);
         const auto required = result == message_flow_result_t::succeeded
                                 ? required_mode (outcome)
                                 : message_flow_log_mode_t::errors;
@@ -140,11 +132,9 @@ class message_flow_tracer_t
                 message_flow_outcome_t outcome,
                 Fn &&build_event) const noexcept
     {
-        const auto effective_mode =
-          dispatch_options_access_t::effective_message_flow (*_options);
-        const auto required = rank (min_mode) > rank (required_mode (outcome))
-                                ? min_mode
-                                : required_mode (outcome);
+        const auto effective_mode = dispatch_options_access_t::effective_message_flow (*_options);
+        const auto required =
+          rank (min_mode) > rank (required_mode (outcome)) ? min_mode : required_mode (outcome);
         if (rank (effective_mode) < rank (required) || !has_sink ()
             || (outcome != message_flow_outcome_t::dropped
                 && outcome != message_flow_outcome_t::backpressured
@@ -169,11 +159,9 @@ class message_flow_tracer_t
                                   std::string_view sampling_flow_id,
                                   Fn &&build_event) const noexcept
     {
-        const auto effective_mode =
-          dispatch_options_access_t::effective_message_flow (*_options);
-        const auto required = rank (min_mode) > rank (required_mode (outcome))
-                                ? min_mode
-                                : required_mode (outcome);
+        const auto effective_mode = dispatch_options_access_t::effective_message_flow (*_options);
+        const auto required =
+          rank (min_mode) > rank (required_mode (outcome)) ? min_mode : required_mode (outcome);
         if (rank (effective_mode) < rank (required) || !has_sink ()
             || (outcome != message_flow_outcome_t::dropped
                 && outcome != message_flow_outcome_t::backpressured
@@ -193,10 +181,8 @@ class message_flow_tracer_t
     // doing any work, but the caller has already paid to build the event.
     void trace (message_flow_event_t event) const noexcept
     {
-        const auto effective_mode =
-          dispatch_options_access_t::effective_message_flow (*_options);
-        const auto required = event.result
-                                  && *event.result != message_flow_result_t::succeeded
+        const auto effective_mode = dispatch_options_access_t::effective_message_flow (*_options);
+        const auto required = event.result && *event.result != message_flow_result_t::succeeded
                                 ? message_flow_log_mode_t::errors
                                 : required_mode (event.outcome);
         if (rank (effective_mode) < rank (required) || !has_sink ()) {
@@ -205,8 +191,7 @@ class message_flow_tracer_t
         stamp_flow (event);
         if (event.outcome != message_flow_outcome_t::dropped
             && event.outcome != message_flow_outcome_t::backpressured
-            && (!event.result
-                || *event.result == message_flow_result_t::succeeded)
+            && (!event.result || *event.result == message_flow_result_t::succeeded)
             && !sample (_options->diagnostics.sample_rate (), event)) {
             return;
         }
@@ -220,8 +205,7 @@ class message_flow_tracer_t
                || dispatch_options_access_t::has_observer (*_options);
     }
 
-    void emit (message_flow_event_t event,
-               message_flow_log_mode_t effective_mode) const noexcept
+    void emit (message_flow_event_t event, message_flow_log_mode_t effective_mode) const noexcept
     {
         traced_count ().fetch_add (1, std::memory_order_relaxed);
         if (dispatch_options_access_t::logger (*_options))
@@ -253,8 +237,7 @@ class message_flow_tracer_t
   private:
     static int rank (message_flow_log_mode_t mode) noexcept { return static_cast<int> (mode); }
 
-    static const char *terminal_outcome_name (
-      message_flow_outcome_t outcome) noexcept
+    static const char *terminal_outcome_name (message_flow_outcome_t outcome) noexcept
     {
         switch (outcome) {
             case message_flow_outcome_t::dropped:
@@ -316,8 +299,7 @@ class message_flow_tracer_t
         return static_cast<double> (hash) / 4294967296.0 < rate;
     }
 
-    bool sample_current (
-      std::optional<std::string_view> explicit_flow_id) const noexcept
+    bool sample_current (std::optional<std::string_view> explicit_flow_id) const noexcept
     {
         const double rate = _options->diagnostics.sample_rate ();
         if (rate >= 1.0)
@@ -362,9 +344,8 @@ class message_flow_tracer_t
             };
             add ("event_id", "zlink.message_flow");
             add ("phase", std::string (enum_name (event.outcome)));
-            add ("outcome", event.result
-                              ? std::string (enum_name (*event.result))
-                              : terminal_outcome_name (event.outcome));
+            add ("outcome", event.result ? std::string (enum_name (*event.result))
+                                         : terminal_outcome_name (event.outcome));
             add ("surface", std::string (enum_name (event.surface)));
             add ("kind", std::string (enum_name (event.message_kind)));
             if (event.packet_name) {
@@ -434,8 +415,8 @@ class message_flow_tracer_t
             // Emit structured fields only through an explicitly configured
             // framework logger; observer-only and no-sink paths stay silent.
             diagnostic_event_sink_t::log_if_configured (
-              dispatch_options_access_t::logger (*_options), log_level_t::info,
-              "message flow", std::move (fields));
+              dispatch_options_access_t::logger (*_options), log_level_t::info, "message flow",
+              std::move (fields));
         }
         catch (...) {
             observer_failure_count ().fetch_add (1, std::memory_order_relaxed);

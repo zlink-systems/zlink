@@ -27,7 +27,8 @@ public sealed class BackendMonitorWrapperTests
             "tcp://127.0.0.1:5002",
             0,
             0,
-            MonitorEventFlags.None);
+            MonitorEventFlags.None
+        );
         var monitor = new RecordingSocketMonitor(nativeEvent);
         var wrapper = new ZLinkBackendSocketMonitorWrapper(monitor);
 
@@ -57,13 +58,9 @@ public sealed class BackendMonitorWrapperTests
             throw new NotSupportedException();
         }
 
-        public void Close()
-        {
-        }
+        public void Close() { }
 
-        public void Dispose()
-        {
-        }
+        public void Dispose() { }
 
         public ValueTask DisposeAsync()
         {

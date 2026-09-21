@@ -8,7 +8,7 @@ import type {
   ZLinkBoundSession,
   ZLinkMessage,
   ZLinkActorCreateResponse,
-  ZLinkMessageSerializer,
+  ZLinkMessageSerializer
 } from '../../contracts';
 import type { Message } from '../../contracts/Common/Message';
 import type { ZLinkBackendMeshNode, ZLinkMeshCompletionTable } from '../backend';
@@ -75,10 +75,7 @@ export interface ZLinkActorManagerOptions {
 }
 
 export interface ZLinkActorRuntimeLocationLookup {
-  resolveActorRef(
-    actorId: string,
-    signal?: AbortSignal
-  ): Promise<ActorRef | undefined>;
+  resolveActorRef(actorId: string, signal?: AbortSignal): Promise<ActorRef | undefined>;
 }
 
 export type ZLinkActorBoundSessionFactory = (actorId: string) => ZLinkBoundSession;

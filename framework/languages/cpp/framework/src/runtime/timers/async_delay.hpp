@@ -50,28 +50,26 @@ class async_delay_timer_t
             registry ()[key] = timer;
         }
         timer->_timer.start (
-          duration > std::chrono::milliseconds::zero ()
-            ? duration
-            : std::chrono::milliseconds (1),
+          duration > std::chrono::milliseconds::zero () ? duration : std::chrono::milliseconds (1),
           1, [key, source] (std::uint64_t) mutable {
-            /* Resuming the coroutine synchronously on the drain loop
+              /* Resuming the coroutine synchronously on the drain loop
              * would run the rest of request_erased's retry loop (another
              * network submit, possibly another delay) on that thread,
              * and destroying this owner from the drain thread would
              * self-join. A fresh, throwaway thread avoids both hazards. */
-            std::thread ([key, source] () mutable {
-                source->complete (result_t<void>::success ());
-                std::shared_ptr<async_delay_timer_t> owner;
-                {
-                    std::lock_guard lock (registry_mutex ());
-                    auto it = registry ().find (key);
-                    if (it != registry ().end ()) {
-                        owner = std::move (it->second);
-                        registry ().erase (it);
-                    }
-                }
-                // owner (and its zlink::timer_t) destructs here.
-            }).detach ();
+              std::thread ([key, source] () mutable {
+                  source->complete (result_t<void>::success ());
+                  std::shared_ptr<async_delay_timer_t> owner;
+                  {
+                      std::lock_guard lock (registry_mutex ());
+                      auto it = registry ().find (key);
+                      if (it != registry ().end ()) {
+                          owner = std::move (it->second);
+                          registry ().erase (it);
+                      }
+                  }
+                  // owner (and its zlink::timer_t) destructs here.
+              }).detach ();
           });
         return pending;
     }
@@ -91,8 +89,7 @@ class async_delay_timer_t
         return *mutex;
     }
 
-    static std::unordered_map<void *, std::shared_ptr<async_delay_timer_t>> &
-    registry ()
+    static std::unordered_map<void *, std::shared_ptr<async_delay_timer_t>> &registry ()
     {
         static auto *const registry =
           new std::unordered_map<void *, std::shared_ptr<async_delay_timer_t>> ();

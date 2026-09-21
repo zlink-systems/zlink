@@ -16,7 +16,7 @@ export const RequestResult = Object.freeze({
   NotSupported: 112,
   Backpressured: 113
 } as const);
-export type RequestResult = typeof RequestResult[keyof typeof RequestResult];
+export type RequestResult = (typeof RequestResult)[keyof typeof RequestResult];
 
 export const SubmitResult = Object.freeze({
   Ok: 0,
@@ -34,7 +34,7 @@ export const SubmitResult = Object.freeze({
   InternalError: 12,
   NotAdmitted: 13
 } as const);
-export type SubmitResult = typeof SubmitResult[keyof typeof SubmitResult];
+export type SubmitResult = (typeof SubmitResult)[keyof typeof SubmitResult];
 
 export type ZLinkBackendSendFlags = number;
 export type ZLinkBackendRecvFlags = number;
@@ -59,8 +59,9 @@ export function isZLinkBackendResultError(error: unknown): error is ZLinkBackend
 
 export function isBackendNotConnectedError(error: unknown): boolean {
   if (isZLinkBackendResultError(error)) {
-    return error.result === SubmitResult.NotConnected
-      || error.result === RequestResult.NotConnected;
+    return (
+      error.result === SubmitResult.NotConnected || error.result === RequestResult.NotConnected
+    );
   }
   if (typeof error !== 'object' || error === null || !('result' in error)) {
     return false;
@@ -70,9 +71,11 @@ export function isBackendNotConnectedError(error: unknown): boolean {
 }
 
 export function isBackendRequestTimeoutError(error: unknown): boolean {
-  return isZLinkBackendResultError(error)
-    && error.operation === 'request'
-    && error.result === RequestResult.TimedOut;
+  return (
+    isZLinkBackendResultError(error) &&
+    error.operation === 'request' &&
+    error.result === RequestResult.TimedOut
+  );
 }
 export type ZLinkBackendMessageLike = Message | Buffer | Uint8Array | string;
 /** Binding의 SendSubmission과 구조적으로 호환된다. binding 타입을 import 하지 않는다. */

@@ -164,10 +164,7 @@ struct spot_actor_t
 /// publish context.
 struct dispatch_spot_t : public zlink::framework::spot_t<spot_actor_t>
 {
-    zlink::framework::spot_context_t &context () noexcept override
-    {
-        std::terminate ();
-    }
+    zlink::framework::spot_context_t &context () noexcept override { std::terminate (); }
 
     const zlink::framework::spot_context_t &context () const noexcept override
     {
@@ -177,23 +174,14 @@ struct dispatch_spot_t : public zlink::framework::spot_t<spot_actor_t>
     void configure () override {}
 
     zlink::framework::task_t<zlink::framework::spot_actor_join_result_t>
-    on_actor_join (std::string_view,
-                   const zlink::framework::message_t &) override
+    on_actor_join (std::string_view, const zlink::framework::message_t &) override
     {
         co_return zlink::framework::spot_actor_join_result_t::accept ();
     }
 
-    zlink::framework::task_t<void>
-    on_actor_joined (spot_actor_t &) override
-    {
-        co_return;
-    }
+    zlink::framework::task_t<void> on_actor_joined (spot_actor_t &) override { co_return; }
 
-    zlink::framework::task_t<void>
-    on_leave_actor (spot_actor_t &) override
-    {
-        co_return;
-    }
+    zlink::framework::task_t<void> on_leave_actor (spot_actor_t &) override { co_return; }
 
     void on_packet (const zlink::framework::message_context_t &context, const request_t &request)
     {
@@ -274,8 +262,7 @@ class short_circuit_filter_t
     invoke (const zlink::framework::handler_filter_context_t &context,
             zlink::framework::handler_next_t next)
     {
-        if (context.packet_name == "blocked"
-            || context.packet_name == "blocked-send"
+        if (context.packet_name == "blocked" || context.packet_name == "blocked-send"
             || context.packet_name == "blocked-event") {
             ++short_circuit_count;
             co_return;
@@ -312,18 +299,18 @@ class duplicate_next_filter_t
 };
 
 template <typename T>
-requires (std::is_same_v<T, request_t> || std::is_same_v<T, reply_t>
-          || std::is_same_v<T, command_t> || std::is_same_v<T, event_t>
-          || std::is_same_v<T, async_request_t> || std::is_same_v<T, delayed_request_t>)
+    requires (std::is_same_v<T, request_t> || std::is_same_v<T, reply_t>
+              || std::is_same_v<T, command_t> || std::is_same_v<T, event_t>
+              || std::is_same_v<T, async_request_t> || std::is_same_v<T, delayed_request_t>)
 void to_json (nlohmann::json &json, const T &value)
 {
     json = value.value;
 }
 
 template <typename T>
-requires (std::is_same_v<T, request_t> || std::is_same_v<T, reply_t>
-          || std::is_same_v<T, command_t> || std::is_same_v<T, event_t>
-          || std::is_same_v<T, async_request_t> || std::is_same_v<T, delayed_request_t>)
+    requires (std::is_same_v<T, request_t> || std::is_same_v<T, reply_t>
+              || std::is_same_v<T, command_t> || std::is_same_v<T, event_t>
+              || std::is_same_v<T, async_request_t> || std::is_same_v<T, delayed_request_t>)
 void from_json (const nlohmann::json &json, T &value)
 {
     value.value = json.get<int> ();
@@ -356,7 +343,8 @@ zlink::framework::task_t<int> await_shared_reply (zlink::framework::task_t<reply
 
 zlink::framework::task_t<int> timeout_task ()
 {
-    co_return zlink::framework::detail::boundary_failure<int> (zlink::framework::detail::boundary_error_t::timed_out, "timeout preserved");
+    co_return zlink::framework::detail::boundary_failure<int> (
+      zlink::framework::detail::boundary_error_t::timed_out, "timeout preserved");
 }
 
 zlink::framework::task_t<int> await_timeout_task ()
@@ -368,17 +356,13 @@ zlink::framework::task_t<int> await_timeout_task ()
 struct filter_copy_probe_t
 {
     explicit filter_copy_probe_t (int &copies) : copies (&copies) {}
-    filter_copy_probe_t (const filter_copy_probe_t &other) : copies (other.copies)
-    {
-        ++*copies;
-    }
+    filter_copy_probe_t (const filter_copy_probe_t &other) : copies (other.copies) { ++*copies; }
     filter_copy_probe_t (filter_copy_probe_t &&) noexcept = default;
 
-    zlink::framework::task_t<void> operator() (
-      zlink::framework::service_provider_t &,
-      zlink::framework::serializer_registry_t &,
-      const zlink::framework::handler_filter_context_t &,
-      zlink::framework::handler_next_t next) const
+    zlink::framework::task_t<void> operator() (zlink::framework::service_provider_t &,
+                                               zlink::framework::serializer_registry_t &,
+                                               const zlink::framework::handler_filter_context_t &,
+                                               zlink::framework::handler_next_t next) const
     {
         co_await next ();
     }
@@ -386,12 +370,12 @@ struct filter_copy_probe_t
 };
 
 bool verify_filter_snapshot_reuse (zlink::framework::service_provider_t &provider,
-                                    zlink::framework::serializer_registry_t &serializers)
+                                   zlink::framework::serializer_registry_t &serializers)
 {
     using namespace zlink::framework;
     handler_registry_t registry;
-    registry.on_request<handler_t, request_t, reply_t> (
-      "game", "snapshot", &handler_t::get_reply, {.packet_name = "request"});
+    registry.on_request<handler_t, request_t, reply_t> ("game", "snapshot", &handler_t::get_reply,
+                                                        {.packet_name = "request"});
     int copies = 0;
     registry.add_filter (filter_copy_probe_t (copies));
     const auto registered_copies = copies;
@@ -404,13 +388,12 @@ bool verify_filter_snapshot_reuse (zlink::framework::service_provider_t &provide
     if (copies != registered_copies)
         return false;
     handler_registry_t no_filters;
-    no_filters.on_request<handler_t, request_t, reply_t> (
-      "game", "snapshot", &handler_t::get_reply, {.packet_name = "request"});
+    no_filters.on_request<handler_t, request_t, reply_t> ("game", "snapshot", &handler_t::get_reply,
+                                                          {.packet_name = "request"});
     detail::inbound_message_context_t inbound;
     inbound.before_application_handler = [] { throw std::runtime_error ("terminal failure"); };
-    const auto failure = no_filters.invoke (
-      "game", "snapshot", "request", provider, serializers,
-      zlink::message_t::from (std::string ("7")), inbound);
+    const auto failure = no_filters.invoke ("game", "snapshot", "request", provider, serializers,
+                                            zlink::message_t::from (std::string ("7")), inbound);
     return !failure && failure.error ()
            && failure.error ()->kind () == framework_error_kind_t::internal_failure
            && std::string (failure.error ()->what ()) == "terminal failure";
@@ -460,14 +443,12 @@ int main ()
                                                         {.packet_name = "throw"});
     handlers.on_request<handler_t, request_t, reply_t> ("game", "blocked", &handler_t::get_reply,
                                                         {.packet_name = "blocked"});
-    handlers.on_request<handler_t, request_t, reply_t> (
-      "game", "duplicate", &handler_t::get_reply, {.packet_name = "duplicate"});
-    handlers.on_send<handler_t, command_t> (
-      "game", "blocked-send", &handler_t::on_command,
-      {.packet_name = "blocked-send"});
-    handlers.on_event<handler_t, event_t> (
-      "game", "blocked-event", &handler_t::on_event,
-      {.packet_name = "blocked-event"});
+    handlers.on_request<handler_t, request_t, reply_t> ("game", "duplicate", &handler_t::get_reply,
+                                                        {.packet_name = "duplicate"});
+    handlers.on_send<handler_t, command_t> ("game", "blocked-send", &handler_t::on_command,
+                                            {.packet_name = "blocked-send"});
+    handlers.on_event<handler_t, event_t> ("game", "blocked-event", &handler_t::on_event,
+                                           {.packet_name = "blocked-event"});
     handlers.use_filter<auditing_filter_t> ()
       .use_filter<short_circuit_filter_t> ()
       .use_filter<duplicate_next_filter_t> ();
@@ -505,8 +486,7 @@ int main ()
     auto blocked_result = handlers.invoke ("game", "blocked", "blocked", provider, serializers,
                                            zlink::message_t::from (std::string ("123")));
     if (blocked_result
-        || blocked_result.error_kind ()
-             != zlink::framework::framework_error_kind_t::rejected) {
+        || blocked_result.error_kind () != zlink::framework::framework_error_kind_t::rejected) {
         return 36;
     }
     if (provider.get_required<handler_t> ().last_request == 123
@@ -530,23 +510,20 @@ int main ()
     }
 
     provider.get_required<handler_t> ().last_command = 0;
-    auto blocked_send =
-      handlers.invoke ("game", "blocked-send", "blocked-send", provider,
-                       serializers, zlink::message_t::from (std::string ("41")));
+    auto blocked_send = handlers.invoke ("game", "blocked-send", "blocked-send", provider,
+                                         serializers, zlink::message_t::from (std::string ("41")));
     if (!blocked_send || provider.get_required<handler_t> ().last_command != 0) {
         return 40;
     }
 
     provider.get_required<handler_t> ().last_event = 0;
-    auto blocked_event =
-      handlers.invoke ("game", "blocked-event", "blocked-event", provider,
-                       serializers, zlink::message_t::from (std::string ("51")));
+    auto blocked_event = handlers.invoke ("game", "blocked-event", "blocked-event", provider,
+                                          serializers, zlink::message_t::from (std::string ("51")));
     if (!blocked_event || provider.get_required<handler_t> ().last_event != 0) {
         return 41;
     }
-    auto isolated_event =
-      handlers.invoke ("game", "event", "event", provider, serializers,
-                       zlink::message_t::from (std::string ("52")));
+    auto isolated_event = handlers.invoke ("game", "event", "event", provider, serializers,
+                                           zlink::message_t::from (std::string ("52")));
     if (!isolated_event || provider.get_required<handler_t> ().last_event != 52
         || audit_filter.last_dispatch_kind
              != zlink::framework::handler_dispatch_kind_t::classic_fanout) {
@@ -557,8 +534,7 @@ int main ()
     inbound.message.mesh_name = "rooms";
     inbound.message.content_type = "application/json";
     inbound.message.correlation_id = "corr-77";
-    inbound.message.metadata =
-      zlink::framework::message_metadata_t ({{"trace-id", "trace-abc"}});
+    inbound.message.metadata = zlink::framework::message_metadata_t ({{"trace-id", "trace-abc"}});
     auto context_request_result =
       handlers.invoke ("game", "context-move", "context-request", provider, serializers,
                        zlink::message_t::from (std::string ("8")), inbound);
@@ -573,8 +549,7 @@ int main ()
         || handler.last_context_packet != "context-request"
         || handler.last_context_content_type != "application/json"
         || handler.last_context_correlation != "corr-77"
-        || handler.last_context_trace != "trace-abc"
-        || handler.last_context_metadata_size != 1) {
+        || handler.last_context_trace != "trace-abc" || handler.last_context_metadata_size != 1) {
         return 39;
     }
 
@@ -612,8 +587,7 @@ int main ()
       handlers.invoke ("game", "context-event", "context-event", provider, serializers,
                        zlink::message_t::from (std::string ("12")), publish_inbound);
     if (!context_event_result || handler.last_event != 12 || handler.last_context_mesh != "rooms"
-        || handler.last_context_channel != "game"
-        || handler.last_context_packet != "context-event"
+        || handler.last_context_channel != "game" || handler.last_context_packet != "context-event"
         || handler.last_context_correlation != "corr-77"
         || handler.last_context_trace != "trace-abc"
         || handler.last_context_topic != "context-event"
@@ -681,15 +655,15 @@ int main ()
     auto preserved_failure = await_timeout_task ().result ();
     if (preserved_failure
         || (preserved_failure.error () != nullptr
-         && zlink::framework::detail::boundary_state (*preserved_failure.error ()) != zlink::framework::detail::boundary_error_t::timed_out)) {
+            && zlink::framework::detail::boundary_state (*preserved_failure.error ())
+                 != zlink::framework::detail::boundary_error_t::timed_out)) {
         return 34;
     }
 
     auto missing_result = handlers.invoke ("game", "missing", "request", provider, serializers,
                                            zlink::message_t::from (std::string ("1")));
     if (missing_result
-        || missing_result.error_kind ()
-             != zlink::framework::framework_error_kind_t::not_found) {
+        || missing_result.error_kind () != zlink::framework::framework_error_kind_t::not_found) {
         return 8;
     }
 
@@ -722,27 +696,24 @@ int main ()
     auto owner_result = handlers.invoke ("game", "move", "request", empty_provider, serializers,
                                          zlink::message_t::from (std::string ("1")));
     if (owner_result
-        || owner_result.error_kind ()
-             != zlink::framework::framework_error_kind_t::not_found) {
+        || owner_result.error_kind () != zlink::framework::framework_error_kind_t::not_found) {
         return 13;
     }
     if (failure_events != 5
-        || last_failure_kind
-             != zlink::framework::framework_error_kind_t::not_found) {
+        || last_failure_kind != zlink::framework::framework_error_kind_t::not_found) {
         return 14;
     }
 
     zlink::framework::detail::inbound_message_context_t mismatched_codec;
     mismatched_codec.message.content_type = "application/avro";
     provider.get_required<handler_t> ().last_command = 0;
-    const auto mismatched_result = handlers.invoke (
-      "game", "command", "command", provider, serializers,
-      zlink::message_t::from (std::string ("91")), mismatched_codec);
+    const auto mismatched_result =
+      handlers.invoke ("game", "command", "command", provider, serializers,
+                       zlink::message_t::from (std::string ("91")), mismatched_codec);
     if (mismatched_result
         || mismatched_result.error_kind ()
              != zlink::framework::framework_error_kind_t::protocol_error
-        || provider.get_required<handler_t> ().last_command != 0
-        || failure_events != 6) {
+        || provider.get_required<handler_t> ().last_command != 0 || failure_events != 6) {
         return 15;
     }
 

@@ -9,7 +9,7 @@ public enum ZLinkTopologyState
     Degraded = 2,
     Stopping = 3,
     Stopped = 4,
-    Failed = 5
+    Failed = 5,
 }
 
 public enum ZLinkTopologyReason
@@ -20,7 +20,7 @@ public enum ZLinkTopologyReason
     LocationUnavailable = 3,
     CapacityExceeded = 4,
     Draining = 5,
-    InternalFailure = 6
+    InternalFailure = 6,
 }
 
 public enum ZLinkPeerState
@@ -29,24 +29,23 @@ public enum ZLinkPeerState
     Ready = 1,
     Draining = 2,
     NotConnected = 3,
-    NotRequired = 4
+    NotRequired = 4,
 }
 
-public sealed record ZLinkChannelStatus(
-    string ChannelName,
-    bool IsReady,
-    int ReadyTargetCount);
+public sealed record ZLinkChannelStatus(string ChannelName, bool IsReady, int ReadyTargetCount);
 
 public sealed record ZLinkPeerStatus(
     RoutingId NodeRid,
     ZLinkPeerState State,
-    ZLinkTopologyReason? UnavailableReason);
+    ZLinkTopologyReason? UnavailableReason
+);
 
 public sealed record ZLinkPlacementStatus(
     bool IsAvailable,
     int ActiveActorCount,
     int ActiveSpotCount,
-    ZLinkTopologyReason? UnavailableReason);
+    ZLinkTopologyReason? UnavailableReason
+);
 
 public sealed record ZLinkRouteMeshStatus(
     string MeshName,
@@ -57,7 +56,8 @@ public sealed record ZLinkRouteMeshStatus(
     IReadOnlyList<ZLinkPeerStatus> Peers,
     ZLinkPlacementStatus Placement,
     ulong Sequence,
-    DateTimeOffset ObservedAt);
+    DateTimeOffset ObservedAt
+);
 
 public interface IZLinkRouteMeshRuntime
 {
@@ -65,21 +65,23 @@ public interface IZLinkRouteMeshRuntime
 
     IAsyncEnumerable<ZLinkObservedStatus<ZLinkRouteMeshStatus>> ObserveAsync(
         string meshName,
-        CancellationToken cancellationToken = default);
+        CancellationToken cancellationToken = default
+    );
 }
 
 public enum ZLinkClientServerRole
 {
     Client = 1,
     Server = 2,
-    ClientAndServer = 3
+    ClientAndServer = 3,
 }
 
 public sealed record ZLinkClientServerTargetStatus(
     RoutingId NodeRid,
     int Weight,
     ZLinkPeerState State,
-    ZLinkTopologyReason? UnavailableReason);
+    ZLinkTopologyReason? UnavailableReason
+);
 
 public sealed record ZLinkClientServerStatus(
     string ChannelName,
@@ -89,7 +91,8 @@ public sealed record ZLinkClientServerStatus(
     int ReadyTargetCount,
     IReadOnlyList<ZLinkClientServerTargetStatus> Targets,
     ulong Sequence,
-    DateTimeOffset ObservedAt);
+    DateTimeOffset ObservedAt
+);
 
 public interface IZLinkClientServerRuntime
 {
@@ -97,5 +100,6 @@ public interface IZLinkClientServerRuntime
 
     IAsyncEnumerable<ZLinkObservedStatus<ZLinkClientServerStatus>> ObserveAsync(
         string channelName,
-        CancellationToken cancellationToken = default);
+        CancellationToken cancellationToken = default
+    );
 }

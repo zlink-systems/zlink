@@ -9,14 +9,11 @@ namespace Zlink.Framework.Locations.Redis;
 /// Official Redis store for immutable relocation roots and participant
 /// payloads. Location authority remains in <see cref="ZLinkRedisLocationStore"/>.
 /// </summary>
-public sealed class ZLinkRedisRelocationStore :
-    IZLinkRelocationStore,
-    IAsyncDisposable
+public sealed class ZLinkRedisRelocationStore : IZLinkRelocationStore, IAsyncDisposable
 {
     // A 64 MiB relocation data chunk is stored with the Framework's 23-byte
     // immutable chunk envelope. The application adapter limit remains 64 MiB.
-    private const int MaximumEncodedBlobSize =
-        64 * 1024 * 1024 + 23;
+    private const int MaximumEncodedBlobSize = 64 * 1024 * 1024 + 23;
 
     private const string PutScript = """
         if redis.replicate_commands then redis.replicate_commands() end
@@ -68,131 +65,157 @@ public sealed class ZLinkRedisRelocationStore :
     private int _disposed;
 
     public ZLinkRedisRelocationStore(ZLinkRedisRelocationOptions options)
-        : this(options, connect: null, useSharedConnection: true)
-    {
-    }
+        : this(options, connect: null, useSharedConnection: true) { }
 
     internal ZLinkRedisRelocationStore(
         ZLinkRedisRelocationOptions options,
-        Func<ConfigurationOptions, ValueTask<IZLinkRedisConnection>> connect)
-        : this(options, connect, useSharedConnection: false)
-    {
-    }
+        Func<ConfigurationOptions, ValueTask<IZLinkRedisConnection>> connect
+    )
+        : this(options, connect, useSharedConnection: false) { }
 
     private ZLinkRedisRelocationStore(
         ZLinkRedisRelocationOptions options,
         Func<ConfigurationOptions, ValueTask<IZLinkRedisConnection>>? connect,
-        bool useSharedConnection)
+        bool useSharedConnection
+    )
     {
         ArgumentNullException.ThrowIfNull(options);
         options.Validate();
         _configuration = options.BuildConfiguration();
         _operationTimeout = options.OperationTimeout;
         _keyPrefix = options.KeyPrefix;
-        _connect = connect
-                   ?? ZLinkRedisConnectionPool.CreateFactory(
-                       _configuration,
-                       useSharedConnection
-                       && options.ConfigurationOptions is null);
+        _connect =
+            connect
+            ?? ZLinkRedisConnectionPool.CreateFactory(
+                _configuration,
+                useSharedConnection && options.ConfigurationOptions is null
+            );
     }
 
     public ZLinkRedisRelocationStore(Action<ZLinkRedisRelocationOptions> configure)
-        : this(Configure(configure))
-    {
-    }
+        : this(Configure(configure)) { }
 
     public async ValueTask<ZLinkBlobPutResult> PutAsync(
         ZLinkBlobReference reference,
         ReadOnlyMemory<byte> payload,
         TimeSpan retention,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default
+    )
     {
         ValidateReference(reference.Value);
         ValidatePayload(payload);
         var retentionMs = ValidateRetention(retention);
         var result = await ExecuteAsync(
-                async database => (RedisResult[])(await database.ScriptEvaluateAsync(
-                    PutScript,
-                    [PayloadKey(reference.Value)],
-                    [payload.ToArray(), retentionMs]).ConfigureAwait(false))!,
-                cancellationToken)
+                async database =>
+                    (RedisResult[])
+                        (
+                            await database
+                                .ScriptEvaluateAsync(
+                                    PutScript,
+                                    [PayloadKey(reference.Value)],
+                                    [payload.ToArray(), retentionMs]
+                                )
+                                .ConfigureAwait(false)
+                        )!,
+                cancellationToken
+            )
             .ConfigureAwait(false);
         var storeNow = DateTimeOffset.FromUnixTimeMilliseconds((long)result[1]);
         return (string)result[0]! switch
         {
             "stored" => new ZLinkBlobPutResult.Stored(
                 storeNow + TimeSpan.FromMilliseconds(retentionMs),
-                storeNow),
+                storeNow
+            ),
             "already" => new ZLinkBlobPutResult.AlreadyStored(
                 storeNow + TimeSpan.FromMilliseconds(retentionMs),
-                storeNow),
+                storeNow
+            ),
             "collision" => new ZLinkBlobPutResult.Conflict(storeNow),
-            _ => throw new InvalidDataException(
-                "Redis returned an unknown relocation put result.")
+            _ => throw new InvalidDataException("Redis returned an unknown relocation put result."),
         };
     }
 
     public async ValueTask<ZLinkBlobReadResult> ReadAsync(
         ZLinkBlobReference reference,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default
+    )
     {
         ValidateReference(reference.Value);
         var result = await ExecuteAsync(
-                async database => (RedisResult[])(await database.ScriptEvaluateAsync(
-                    ReadScript,
-                    [PayloadKey(reference.Value)],
-                    []).ConfigureAwait(false))!,
-                cancellationToken)
+                async database =>
+                    (RedisResult[])
+                        (
+                            await database
+                                .ScriptEvaluateAsync(ReadScript, [PayloadKey(reference.Value)], [])
+                                .ConfigureAwait(false)
+                        )!,
+                cancellationToken
+            )
             .ConfigureAwait(false);
         var storeNow = DateTimeOffset.FromUnixTimeMilliseconds((long)result[1]);
         if ((string)result[0]! == "missing")
             return new ZLinkBlobReadResult.Missing(storeNow);
         var ttl = (long)result[3];
         if (ttl < 0)
-            throw new InvalidDataException(
-                "A relocation payload must have a positive retention.");
+            throw new InvalidDataException("A relocation payload must have a positive retention.");
         return new ZLinkBlobReadResult.Found(
             (byte[])result[2]!,
             storeNow + TimeSpan.FromMilliseconds(ttl),
-            storeNow);
+            storeNow
+        );
     }
 
     public async ValueTask<ZLinkBlobRenewResult> RenewAsync(
         ZLinkBlobReference reference,
         TimeSpan retention,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default
+    )
     {
         ValidateReference(reference.Value);
         var retentionMs = ValidateRetention(retention);
         var result = await ExecuteAsync(
-                async database => (RedisResult[])(await database.ScriptEvaluateAsync(
-                    RenewScript,
-                    [PayloadKey(reference.Value)],
-                    [retentionMs]).ConfigureAwait(false))!,
-                cancellationToken)
+                async database =>
+                    (RedisResult[])
+                        (
+                            await database
+                                .ScriptEvaluateAsync(
+                                    RenewScript,
+                                    [PayloadKey(reference.Value)],
+                                    [retentionMs]
+                                )
+                                .ConfigureAwait(false)
+                        )!,
+                cancellationToken
+            )
             .ConfigureAwait(false);
         var storeNow = DateTimeOffset.FromUnixTimeMilliseconds((long)result[1]);
         return (string)result[0]! switch
         {
             "renewed" => new ZLinkBlobRenewResult.Renewed(
                 storeNow + TimeSpan.FromMilliseconds(retentionMs),
-                storeNow),
+                storeNow
+            ),
             "missing" => new ZLinkBlobRenewResult.Missing(storeNow),
             _ => throw new InvalidDataException(
-                "Redis returned an unknown relocation renew result.")
+                "Redis returned an unknown relocation renew result."
+            ),
         };
     }
 
     public async ValueTask DeleteAsync(
         ZLinkBlobReference reference,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default
+    )
     {
         ValidateReference(reference.Value);
         _ = await ExecuteAsync(
-                async database => await database.KeyDeleteAsync(
-                        PayloadKey(reference.Value))
-                    .ConfigureAwait(false),
-                cancellationToken)
+                async database =>
+                    await database
+                        .KeyDeleteAsync(PayloadKey(reference.Value))
+                        .ConfigureAwait(false),
+                cancellationToken
+            )
             .ConfigureAwait(false);
     }
 
@@ -206,7 +229,8 @@ public sealed class ZLinkRedisRelocationStore :
             {
                 Volatile.Write(ref _disposed, 1);
                 startDispose = new TaskCompletionSource(
-                    TaskCreationOptions.RunContinuationsAsynchronously);
+                    TaskCreationOptions.RunContinuationsAsynchronously
+                );
                 _disposeTask = DisposeCoreAsync(startDispose.Task);
             }
             disposeTask = _disposeTask;
@@ -221,10 +245,14 @@ public sealed class ZLinkRedisRelocationStore :
         Task? operationsDrained;
         lock (_disposeGate)
         {
-            operationsDrained = _activeOperations == 0
-                ? null
-                : (_operationsDrained ??= new TaskCompletionSource(
-                    TaskCreationOptions.RunContinuationsAsynchronously)).Task;
+            operationsDrained =
+                _activeOperations == 0
+                    ? null
+                    : (
+                        _operationsDrained ??= new TaskCompletionSource(
+                            TaskCreationOptions.RunContinuationsAsynchronously
+                        )
+                    ).Task;
         }
         if (operationsDrained is not null)
             await operationsDrained.ConfigureAwait(false);
@@ -253,7 +281,8 @@ public sealed class ZLinkRedisRelocationStore :
 
     private async ValueTask<TResult> ExecuteAsync<TResult>(
         Func<IDatabase, ValueTask<TResult>> operation,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken
+    )
     {
         cancellationToken.ThrowIfCancellationRequested();
         return await ExecuteCoreAsync(operation, cancellationToken)
@@ -264,16 +293,15 @@ public sealed class ZLinkRedisRelocationStore :
 
     private async ValueTask<TResult> ExecuteCoreAsync<TResult>(
         Func<IDatabase, ValueTask<TResult>> operation,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken
+    )
     {
         using var lease = EnterOperation();
-        var database = await GetDatabaseAsync(cancellationToken)
-            .ConfigureAwait(false);
+        var database = await GetDatabaseAsync(cancellationToken).ConfigureAwait(false);
         return await operation(database).ConfigureAwait(false);
     }
 
-    private async ValueTask<IDatabase> GetDatabaseAsync(
-        CancellationToken cancellationToken)
+    private async ValueTask<IDatabase> GetDatabaseAsync(CancellationToken cancellationToken)
     {
         if (Volatile.Read(ref _connection) is { } connected)
             return connected.GetDatabase();
@@ -281,8 +309,7 @@ public sealed class ZLinkRedisRelocationStore :
         await _connectGate.WaitAsync(cancellationToken).ConfigureAwait(false);
         try
         {
-            var connection = _connection ??= await _connect(
-                    _configuration.Clone())
+            var connection = _connection ??= await _connect(_configuration.Clone())
                 .ConfigureAwait(false);
             return connection.GetDatabase();
         }
@@ -318,7 +345,8 @@ public sealed class ZLinkRedisRelocationStore :
     }
 
     private static ZLinkRedisRelocationOptions Configure(
-        Action<ZLinkRedisRelocationOptions> configure)
+        Action<ZLinkRedisRelocationOptions> configure
+    )
     {
         ArgumentNullException.ThrowIfNull(configure);
         var options = new ZLinkRedisRelocationOptions();
@@ -328,12 +356,9 @@ public sealed class ZLinkRedisRelocationStore :
 
     private static long ValidateRetention(TimeSpan retention)
     {
-        if (retention <= TimeSpan.Zero
-            || retention.TotalMilliseconds > long.MaxValue)
+        if (retention <= TimeSpan.Zero || retention.TotalMilliseconds > long.MaxValue)
             throw new ArgumentOutOfRangeException(nameof(retention));
-        return Math.Max(
-            1,
-            checked((long)Math.Ceiling(retention.TotalMilliseconds)));
+        return Math.Max(1, checked((long)Math.Ceiling(retention.TotalMilliseconds)));
     }
 
     private static void ValidatePayload(ReadOnlyMemory<byte> payload)
@@ -348,15 +373,15 @@ public sealed class ZLinkRedisRelocationStore :
         if (bytes is < 1 or > 4096)
             throw new ArgumentException(
                 "Relocation references must contain 1..4096 UTF-8 bytes.",
-                nameof(reference));
+                nameof(reference)
+            );
     }
 
     private sealed class OperationLease(ZLinkRedisRelocationStore owner) : IDisposable
     {
         private ZLinkRedisRelocationStore? _owner = owner;
 
-        public void Dispose() =>
-            Interlocked.Exchange(ref _owner, null)?.ExitOperation();
+        public void Dispose() => Interlocked.Exchange(ref _owner, null)?.ExitOperation();
     }
 }
 

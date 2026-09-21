@@ -17,7 +17,9 @@ import type {
   ZLinkSpotLocationKey
 } from '../../contracts/Locations/Keys';
 
-export interface ZLinkLocationMonitoringRegistration { readonly sourceName: string; }
+export interface ZLinkLocationMonitoringRegistration {
+  readonly sourceName: string;
+}
 
 export interface ZLinkSocketMonitoringRegistration {
   readonly sourceName: string;
@@ -64,22 +66,21 @@ export enum ZLinkLocationRuntimeEventKind {
 
 export type ZLinkLocationRuntimeEvent =
   | (ZLinkRuntimeEvent & {
-    readonly event: ZLinkLocationRuntimeEventKind.StatusChanged;
-    readonly status: ZLinkLocationRuntimeStatus;
-  })
+      readonly event: ZLinkLocationRuntimeEventKind.StatusChanged;
+      readonly status: ZLinkLocationRuntimeStatus;
+    })
   | (ZLinkRuntimeEvent & {
-    readonly event: ZLinkLocationRuntimeEventKind.TopologyChanged;
-    readonly topology: readonly ZLinkLocationTopologyEntry[];
-  })
+      readonly event: ZLinkLocationRuntimeEventKind.TopologyChanged;
+      readonly topology: readonly ZLinkLocationTopologyEntry[];
+    })
   | (ZLinkRuntimeEvent & {
-    readonly event: ZLinkLocationRuntimeEventKind.ServiceSummaryChanged;
-    readonly serviceSummary: readonly ZLinkLocationServiceSummary[];
-  })
+      readonly event: ZLinkLocationRuntimeEventKind.ServiceSummaryChanged;
+      readonly serviceSummary: readonly ZLinkLocationServiceSummary[];
+    })
   | (ZLinkRuntimeEvent & {
-    readonly event:
-      | ZLinkLocationRuntimeEventKind.StoreFailure
-      | ZLinkLocationRuntimeEventKind.StoreRecovered;
-  });
+      readonly event:
+        ZLinkLocationRuntimeEventKind.StoreFailure | ZLinkLocationRuntimeEventKind.StoreRecovered;
+    });
 
 export enum ZLinkSpotEventKind {
   TimerHandlerFailed = 'timerHandlerFailed',
@@ -105,10 +106,26 @@ export enum ZLinkSocketNativeEventType {
   PeerAdmissionChanged = 0x8000
 }
 
-export enum ZLinkLocationPeerEventKind { RowUpdated = 0, RowRemoved = 1, DesiredSetChanged = 2 }
-export enum ZLinkLocationSpotEventKind { RowUpdated = 0, RowRemoved = 1, ResolveMiss = 2 }
-export enum ZLinkLocationActorEventKind { RowUpdated = 0, RowRemoved = 1, ResolveMiss = 2 }
-export enum ZLinkLocationRouteEventKind { RowUpdated = 0, RowRemoved = 1, ResolveMiss = 2 }
+export enum ZLinkLocationPeerEventKind {
+  RowUpdated = 0,
+  RowRemoved = 1,
+  DesiredSetChanged = 2
+}
+export enum ZLinkLocationSpotEventKind {
+  RowUpdated = 0,
+  RowRemoved = 1,
+  ResolveMiss = 2
+}
+export enum ZLinkLocationActorEventKind {
+  RowUpdated = 0,
+  RowRemoved = 1,
+  ResolveMiss = 2
+}
+export enum ZLinkLocationRouteEventKind {
+  RowUpdated = 0,
+  RowRemoved = 1,
+  ResolveMiss = 2
+}
 
 export interface ZLinkAutoConnectDesiredSetChange {
   readonly autoConnectType: ZLinkLocationAutoConnectType;
@@ -118,18 +135,55 @@ export interface ZLinkAutoConnectDesiredSetChange {
 }
 
 export type ZLinkLocationPeerEvent =
-  | (ZLinkRuntimeEvent & { readonly event: ZLinkLocationPeerEventKind.RowUpdated; readonly key: string; readonly peer: ZLinkPeerLocation })
-  | (ZLinkRuntimeEvent & { readonly event: ZLinkLocationPeerEventKind.RowRemoved; readonly key: string })
-  | (ZLinkRuntimeEvent & { readonly event: ZLinkLocationPeerEventKind.DesiredSetChanged; readonly desiredSetChange: ZLinkAutoConnectDesiredSetChange });
-export type ZLinkLocationSpotEvent = ZLinkRuntimeEvent & (
-  | { readonly event: ZLinkLocationSpotEventKind.RowUpdated; readonly key: ZLinkSpotLocationKey; readonly spot: ZLinkSpotLocation }
-  | { readonly event: ZLinkLocationSpotEventKind.RowRemoved | ZLinkLocationSpotEventKind.ResolveMiss; readonly key: ZLinkSpotLocationKey }
-);
-export type ZLinkLocationActorEvent = ZLinkRuntimeEvent & (
-  | { readonly event: ZLinkLocationActorEventKind.RowUpdated; readonly key: ZLinkActorLocationKey; readonly actor: ZLinkActorLocation }
-  | { readonly event: ZLinkLocationActorEventKind.RowRemoved | ZLinkLocationActorEventKind.ResolveMiss; readonly key: ZLinkActorLocationKey }
-);
-export type ZLinkLocationRouteEvent = ZLinkRuntimeEvent & (
-  | { readonly event: ZLinkLocationRouteEventKind.RowUpdated; readonly key: ZLinkRouteLocationKey; readonly route: ZLinkRouteLocation }
-  | { readonly event: ZLinkLocationRouteEventKind.RowRemoved | ZLinkLocationRouteEventKind.ResolveMiss; readonly key: ZLinkRouteLocationKey }
-);
+  | (ZLinkRuntimeEvent & {
+      readonly event: ZLinkLocationPeerEventKind.RowUpdated;
+      readonly key: string;
+      readonly peer: ZLinkPeerLocation;
+    })
+  | (ZLinkRuntimeEvent & {
+      readonly event: ZLinkLocationPeerEventKind.RowRemoved;
+      readonly key: string;
+    })
+  | (ZLinkRuntimeEvent & {
+      readonly event: ZLinkLocationPeerEventKind.DesiredSetChanged;
+      readonly desiredSetChange: ZLinkAutoConnectDesiredSetChange;
+    });
+export type ZLinkLocationSpotEvent = ZLinkRuntimeEvent &
+  (
+    | {
+        readonly event: ZLinkLocationSpotEventKind.RowUpdated;
+        readonly key: ZLinkSpotLocationKey;
+        readonly spot: ZLinkSpotLocation;
+      }
+    | {
+        readonly event:
+          ZLinkLocationSpotEventKind.RowRemoved | ZLinkLocationSpotEventKind.ResolveMiss;
+        readonly key: ZLinkSpotLocationKey;
+      }
+  );
+export type ZLinkLocationActorEvent = ZLinkRuntimeEvent &
+  (
+    | {
+        readonly event: ZLinkLocationActorEventKind.RowUpdated;
+        readonly key: ZLinkActorLocationKey;
+        readonly actor: ZLinkActorLocation;
+      }
+    | {
+        readonly event:
+          ZLinkLocationActorEventKind.RowRemoved | ZLinkLocationActorEventKind.ResolveMiss;
+        readonly key: ZLinkActorLocationKey;
+      }
+  );
+export type ZLinkLocationRouteEvent = ZLinkRuntimeEvent &
+  (
+    | {
+        readonly event: ZLinkLocationRouteEventKind.RowUpdated;
+        readonly key: ZLinkRouteLocationKey;
+        readonly route: ZLinkRouteLocation;
+      }
+    | {
+        readonly event:
+          ZLinkLocationRouteEventKind.RowRemoved | ZLinkLocationRouteEventKind.ResolveMiss;
+        readonly key: ZLinkRouteLocationKey;
+      }
+  );

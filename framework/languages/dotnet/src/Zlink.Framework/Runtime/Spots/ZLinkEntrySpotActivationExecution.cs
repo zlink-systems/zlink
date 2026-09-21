@@ -6,7 +6,8 @@ internal sealed partial class ZLinkEntrySpotActivation
         string name,
         TimeSpan period,
         ZLinkTimerOptions? options = null,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default
+    )
         where THandler : class
     {
         _handlerInstances.Prepare(typeof(THandler));
@@ -20,17 +21,21 @@ internal sealed partial class ZLinkEntrySpotActivation
             async (descriptor, tick, ct) =>
             {
                 await ExecuteQueuedAsync(
-                        static (activation, state, innerCt) => activation._invoker.InvokeTimerAsync(
-                            state.Descriptor,
-                            state.Tick,
-                            innerCt),
+                        static (activation, state, innerCt) =>
+                            activation._invoker.InvokeTimerAsync(
+                                state.Descriptor,
+                                state.Tick,
+                                innerCt
+                            ),
                         (Descriptor: descriptor, Tick: tick),
-                        ct)
+                        ct
+                    )
                     .ConfigureAwait(false);
                 return true;
             },
             PublishTimerFailureAsync,
-            cancellationToken);
+            cancellationToken
+        );
     }
 
     /// <summary>
@@ -41,7 +46,8 @@ internal sealed partial class ZLinkEntrySpotActivation
     /// </summary>
     private async ValueTask ExecuteAsync(
         Func<ZLinkEntrySpotActivation, CancellationToken, ValueTask> operation,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken
+    )
     {
         if (ReferenceEquals(Current.Value, this))
         {
@@ -50,16 +56,16 @@ internal sealed partial class ZLinkEntrySpotActivation
             return;
         }
 
-        await _serial.RunAsync(
-                ct => RunOnLineAsync(operation, ct),
-                cancellationToken)
+        await _serial
+            .RunAsync(ct => RunOnLineAsync(operation, ct), cancellationToken)
             .ConfigureAwait(false);
     }
 
     private async ValueTask ExecuteAsync<TState>(
         Func<ZLinkEntrySpotActivation, TState, CancellationToken, ValueTask> operation,
         TState state,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken
+    )
     {
         if (ReferenceEquals(Current.Value, this))
         {
@@ -70,32 +76,44 @@ internal sealed partial class ZLinkEntrySpotActivation
 
         var capturedOperation = operation;
         var capturedState = state;
-        await _serial.RunAsync(
-                ct => RunOnLineAsync(
-                    (activation, innerCt) => capturedOperation(activation, capturedState, innerCt),
-                    ct),
-                cancellationToken)
+        await _serial
+            .RunAsync(
+                ct =>
+                    RunOnLineAsync(
+                        (activation, innerCt) =>
+                            capturedOperation(activation, capturedState, innerCt),
+                        ct
+                    ),
+                cancellationToken
+            )
             .ConfigureAwait(false);
     }
 
     private async ValueTask ExecuteQueuedAsync<TState>(
         Func<ZLinkEntrySpotActivation, TState, CancellationToken, ValueTask> operation,
         TState state,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken
+    )
     {
         var capturedOperation = operation;
         var capturedState = state;
-        await _serial.RunAsync(
-                ct => RunOnLineAsync(
-                    (activation, innerCt) => capturedOperation(activation, capturedState, innerCt),
-                    ct),
-            cancellationToken)
+        await _serial
+            .RunAsync(
+                ct =>
+                    RunOnLineAsync(
+                        (activation, innerCt) =>
+                            capturedOperation(activation, capturedState, innerCt),
+                        ct
+                    ),
+                cancellationToken
+            )
             .ConfigureAwait(false);
     }
 
     private async ValueTask ExecuteLifecycleAsync(
         Func<ZLinkEntrySpotActivation, CancellationToken, ValueTask> operation,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken
+    )
     {
         if (ReferenceEquals(Current.Value, this))
         {
@@ -104,16 +122,16 @@ internal sealed partial class ZLinkEntrySpotActivation
             return;
         }
 
-        await _serial.RunLifecycleAsync(
-                ct => RunOnLineAsync(operation, ct),
-                cancellationToken)
+        await _serial
+            .RunLifecycleAsync(ct => RunOnLineAsync(operation, ct), cancellationToken)
             .ConfigureAwait(false);
     }
 
     private async ValueTask ExecuteActorPacketAsync<TState>(
         Func<ZLinkEntrySpotActivation, TState, CancellationToken, ValueTask> operation,
         TState state,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken
+    )
     {
         var previous = Current.Value;
         Current.Value = this;
@@ -130,18 +148,19 @@ internal sealed partial class ZLinkEntrySpotActivation
     }
 
     private void QueueSerialized(
-        Func<ZLinkEntrySpotActivation, CancellationToken, ValueTask> operation)
+        Func<ZLinkEntrySpotActivation, CancellationToken, ValueTask> operation
+    )
     {
-        _ = _serial.TryPostApplicationWithAdmission(
-            ct => RunOnLineAsync(operation, ct),
-            out _);
+        _ = _serial.TryPostApplicationWithAdmission(ct => RunOnLineAsync(operation, ct), out _);
     }
 
     private async ValueTask RunOnLineAsync(
         Func<ZLinkEntrySpotActivation, CancellationToken, ValueTask> operation,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken
+    )
     {
-        if (IsDisposed) return;
+        if (IsDisposed)
+            return;
 
         var previous = Current.Value;
         Current.Value = this;
@@ -161,7 +180,8 @@ internal sealed partial class ZLinkEntrySpotActivation
         ZLinkTimerTick tick,
         Exception exception,
         bool stopped,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken
+    )
     {
         cancellationToken.ThrowIfCancellationRequested();
         _runtime.ReportTimerFailure(
@@ -172,7 +192,8 @@ internal sealed partial class ZLinkEntrySpotActivation
             descriptor.HandlerType,
             tick,
             exception,
-            stopped);
+            stopped
+        );
         return ValueTask.CompletedTask;
     }
 
@@ -183,29 +204,37 @@ internal sealed partial class ZLinkEntrySpotActivation
 
     internal ValueTask DispatchRouteDrainAsync(
         CancellationToken cancellationToken,
-        out Func<CancellationToken, ValueTask>? drain)
+        out Func<CancellationToken, ValueTask>? drain
+    )
     {
         return _serial.RunLifecycleAsync(
-            ct => RunOnLineAsync(
-                static (activation, innerCt) => activation.DispatchRouteDrainTurnAsync(innerCt), ct),
+            ct =>
+                RunOnLineAsync(
+                    static (activation, innerCt) => activation.DispatchRouteDrainTurnAsync(innerCt),
+                    ct
+                ),
             cancellationToken,
-            out drain);
+            out drain
+        );
     }
 
     public ValueTask DispatchRouteAsync(
         ZLinkBackendRouteReceived received,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken
+    )
     {
         return ExecuteAsync(
             static (activation, state, ct) => activation._dispatcher.DispatchRouteAsync(state, ct),
             received,
-            cancellationToken);
+            cancellationToken
+        );
     }
 
     internal ValueTask DispatchRouteAsync(
         ZLinkBackendRouteReceived received,
         CancellationToken cancellationToken,
-        out Func<CancellationToken, ValueTask>? drain)
+        out Func<CancellationToken, ValueTask>? drain
+    )
     {
         try
         {
@@ -214,11 +243,15 @@ internal sealed partial class ZLinkEntrySpotActivation
                 {
                     using (received)
                         await RunOnLineAsync(
-                            (activation, innerCt) => activation._dispatcher.DispatchRouteAsync(
-                                received, innerCt), ct).ConfigureAwait(false);
+                                (activation, innerCt) =>
+                                    activation._dispatcher.DispatchRouteAsync(received, innerCt),
+                                ct
+                            )
+                            .ConfigureAwait(false);
                 },
                 cancellationToken,
-                out drain);
+                out drain
+            );
         }
         catch
         {
@@ -232,29 +265,31 @@ internal sealed partial class ZLinkEntrySpotActivation
         return DispatchActorJoinDrainTurnAsync(cancellationToken);
     }
 
-    private async ValueTask DispatchRouteDrainTurnAsync(
-        CancellationToken cancellationToken)
+    private async ValueTask DispatchRouteDrainTurnAsync(CancellationToken cancellationToken)
     {
         var hasMore = false;
         await ExecuteLifecycleAsync(
-                async (activation, ct) => hasMore =
-                    await activation._dispatcher.DispatchRouteDrainAsync(ct)
+                async (activation, ct) =>
+                    hasMore = await activation
+                        ._dispatcher.DispatchRouteDrainAsync(ct)
                         .ConfigureAwait(false),
-                cancellationToken)
+                cancellationToken
+            )
             .ConfigureAwait(false);
         if (hasMore && !cancellationToken.IsCancellationRequested)
             QueueRouteDrainTurn();
     }
 
-    private async ValueTask DispatchActorJoinDrainTurnAsync(
-        CancellationToken cancellationToken)
+    private async ValueTask DispatchActorJoinDrainTurnAsync(CancellationToken cancellationToken)
     {
         var hasMore = false;
         await ExecuteLifecycleAsync(
-                async (activation, ct) => hasMore =
-                    await activation._dispatcher.DispatchActorJoinDrainAsync(ct)
+                async (activation, ct) =>
+                    hasMore = await activation
+                        ._dispatcher.DispatchActorJoinDrainAsync(ct)
                         .ConfigureAwait(false),
-                cancellationToken)
+                cancellationToken
+            )
             .ConfigureAwait(false);
         if (hasMore && !cancellationToken.IsCancellationRequested)
             QueueActorJoinDrainTurn();
@@ -263,32 +298,43 @@ internal sealed partial class ZLinkEntrySpotActivation
     private void QueueRouteDrainTurn()
     {
         _ = _serial.TryPostNextWithAdmission(
-            ct => RunOnLineAsync(
-                static (activation, innerCt) => activation.DispatchRouteDrainTurnAsync(innerCt),
-                ct),
-            out _);
+            ct =>
+                RunOnLineAsync(
+                    static (activation, innerCt) => activation.DispatchRouteDrainTurnAsync(innerCt),
+                    ct
+                ),
+            out _
+        );
     }
 
     private void QueueActorJoinDrainTurn()
     {
         _ = _serial.TryPostNextWithAdmission(
-            ct => RunOnLineAsync(
-                static (activation, innerCt) => activation.DispatchActorJoinDrainTurnAsync(innerCt),
-                ct),
-            out _);
+            ct =>
+                RunOnLineAsync(
+                    static (activation, innerCt) =>
+                        activation.DispatchActorJoinDrainTurnAsync(innerCt),
+                    ct
+                ),
+            out _
+        );
     }
 
     public async ValueTask DispatchSubscriptionsAsync(CancellationToken cancellationToken)
     {
         await ExecuteAsync(
-            static (activation, ct) => activation._dispatcher.DispatchSubscriptionsAsync(ct),
-            cancellationToken).ConfigureAwait(false);
+                static (activation, ct) => activation._dispatcher.DispatchSubscriptionsAsync(ct),
+                cancellationToken
+            )
+            .ConfigureAwait(false);
     }
 
     public async ValueTask DiscardSubscriptionsAsync(CancellationToken cancellationToken)
     {
         await ExecuteAsync(
-            static (activation, ct) => activation._dispatcher.DiscardSubscriptionsAsync(ct),
-            cancellationToken).ConfigureAwait(false);
+                static (activation, ct) => activation._dispatcher.DiscardSubscriptionsAsync(ct),
+                cancellationToken
+            )
+            .ConfigureAwait(false);
     }
 }

@@ -29,12 +29,13 @@ public sealed class RelocationBehaviorConformanceTests
         var trace = new RelocationBehaviorTrace();
         var locationStore = new RecordingLocationStore(
             new ZLinkInMemoryProviderLocationStore(),
-            trace);
+            trace
+        );
         var relocationStore = new SynchronizedRelocationStore();
         var actorIds = new[]
         {
             $"behavior-maintenance-a-{Guid.NewGuid():N}",
-            $"behavior-maintenance-b-{Guid.NewGuid():N}"
+            $"behavior-maintenance-b-{Guid.NewGuid():N}",
         };
 
         await using var source = await RelocationBehaviorHost.StartAsync(
@@ -42,16 +43,19 @@ public sealed class RelocationBehaviorConformanceTests
             trace,
             locationStore,
             relocationStore,
-            registerTargetSpot: false);
+            registerTargetSpot: false
+        );
         var actorManager = source.Services.GetRequiredService<IZLinkActorManager>();
         foreach (var actorId in actorIds)
         {
             _ = Assert.IsType<ZLinkActorCreateResult.Created>(
-                await actorManager.GetOrCreate(actorId, RelocationBehaviorHost.ActorType)
+                await actorManager
+                    .GetOrCreate(actorId, RelocationBehaviorHost.ActorType)
                     .InMesh(RelocationBehaviorHost.MeshName)
                     .Request(new BehaviorCreate(7))
                     .Timeout(TimeSpan.FromSeconds(10))
-                    .Async());
+                    .Async()
+            );
         }
 
         await using var target = await RelocationBehaviorHost.StartAsync(
@@ -59,19 +63,27 @@ public sealed class RelocationBehaviorConformanceTests
             trace,
             locationStore,
             relocationStore,
-            registerTargetSpot: false);
-        await WaitUntilAsync(
-            () => source.Runtime.GetMeshNodeRuntime(RelocationBehaviorHost.MeshName)
-                      .Node.Status().ActivePeerCount == 1
-                  && target.Runtime.GetMeshNodeRuntime(RelocationBehaviorHost.MeshName)
-                      .Node.Status().ActivePeerCount == 1);
+            registerTargetSpot: false
+        );
+        await WaitUntilAsync(() =>
+            source
+                .Runtime.GetMeshNodeRuntime(RelocationBehaviorHost.MeshName)
+                .Node.Status()
+                .ActivePeerCount == 1
+            && target
+                .Runtime.GetMeshNodeRuntime(RelocationBehaviorHost.MeshName)
+                .Node.Status()
+                .ActivePeerCount == 1
+        );
 
         var lifecycle = source.Services.GetRequiredService<IZLinkFrameworkRuntime>();
-        var relocated = await lifecycle.RelocateAsync(new ZLinkFrameworkRelocationOptions
-        {
-            Mode = ZLinkFrameworkRelocationMode.PlannedMaintenance,
-            Deadline = TimeSpan.FromSeconds(30)
-        });
+        var relocated = await lifecycle.RelocateAsync(
+            new ZLinkFrameworkRelocationOptions
+            {
+                Mode = ZLinkFrameworkRelocationMode.PlannedMaintenance,
+                Deadline = TimeSpan.FromSeconds(30),
+            }
+        );
         Assert.Equal(ZLinkFrameworkRelocationOutcome.Relocated, relocated.Outcome);
 
         var shutdown = await lifecycle
@@ -92,9 +104,7 @@ public sealed class RelocationBehaviorConformanceTests
     public void Target_attempt_slot_keeps_identity_until_last_user_quiesces()
     {
         var slots = new ConcurrentDictionary<string, ZLinkRelocationAttemptLeaseState>();
-        var slot = slots.GetOrAdd(
-            "attempt",
-            static _ => new ZLinkRelocationAttemptLeaseState());
+        var slot = slots.GetOrAdd("attempt", static _ => new ZLinkRelocationAttemptLeaseState());
         Assert.True(slot.TryAcquire());
         Assert.True(slot.TryAcquire());
 
@@ -107,13 +117,15 @@ public sealed class RelocationBehaviorConformanceTests
 
         Assert.True(slot.Release());
         Assert.True(slot.CanRemove);
-        Assert.True(slots.TryRemove(
-            new KeyValuePair<string, ZLinkRelocationAttemptLeaseState>(
-                "attempt",
-                slot)));
+        Assert.True(
+            slots.TryRemove(
+                new KeyValuePair<string, ZLinkRelocationAttemptLeaseState>("attempt", slot)
+            )
+        );
         var replacement = slots.GetOrAdd(
             "attempt",
-            static _ => new ZLinkRelocationAttemptLeaseState());
+            static _ => new ZLinkRelocationAttemptLeaseState()
+        );
         Assert.NotSame(slot, replacement);
         Assert.True(slot.Quiesced.IsCompletedSuccessfully);
     }
@@ -122,12 +134,11 @@ public sealed class RelocationBehaviorConformanceTests
     public async Task ActorJoin_overlapping_prepare_timeout_keeps_original_waiter_owned()
     {
         var trace = new RelocationBehaviorTrace();
-        var transport = new CanonicalRelocationTransportProbe(
-            trace,
-            holdTargetReady: true);
+        var transport = new CanonicalRelocationTransportProbe(trace, holdTargetReady: true);
         var locationStore = new RecordingLocationStore(
             new ZLinkInMemoryProviderLocationStore(),
-            trace);
+            trace
+        );
         var relocationStore = new SynchronizedRelocationStore();
         var actorId = $"behavior-overlap-actor-{Guid.NewGuid():N}";
         var targetSpotId = $"behavior-overlap-spot-{Guid.NewGuid():N}";
@@ -139,14 +150,17 @@ public sealed class RelocationBehaviorConformanceTests
             locationStore,
             relocationStore,
             registerTargetSpot: false,
-            canonicalTransportProbe: transport);
+            canonicalTransportProbe: transport
+        );
         var actorManager = source.Services.GetRequiredService<IZLinkActorManager>();
         var created = Assert.IsType<ZLinkActorCreateResult.Created>(
-            await actorManager.GetOrCreate(actorId, RelocationBehaviorHost.ActorType)
+            await actorManager
+                .GetOrCreate(actorId, RelocationBehaviorHost.ActorType)
                 .InMesh(RelocationBehaviorHost.MeshName)
                 .Request(new BehaviorCreate(7))
                 .Timeout(TimeSpan.FromSeconds(10))
-                .Async());
+                .Async()
+        );
         trace.SourceObjectGeneration = created.Actor.ObjectGeneration;
         trace.SourceNodeRid = created.Actor.NodeRid;
         await locationStore.ObserveActorAuthorityAsync(actorId);
@@ -157,14 +171,21 @@ public sealed class RelocationBehaviorConformanceTests
             locationStore,
             relocationStore,
             registerTargetSpot: true,
-            canonicalTransportProbe: transport);
-        await WaitUntilAsync(
-            () => source.Runtime.GetMeshNodeRuntime(RelocationBehaviorHost.MeshName)
-                      .Node.Status().ActivePeerCount == 1
-                  && target.Runtime.GetMeshNodeRuntime(RelocationBehaviorHost.MeshName)
-                      .Node.Status().ActivePeerCount == 1);
+            canonicalTransportProbe: transport
+        );
+        await WaitUntilAsync(() =>
+            source
+                .Runtime.GetMeshNodeRuntime(RelocationBehaviorHost.MeshName)
+                .Node.Status()
+                .ActivePeerCount == 1
+            && target
+                .Runtime.GetMeshNodeRuntime(RelocationBehaviorHost.MeshName)
+                .Node.Status()
+                .ActivePeerCount == 1
+        );
 
-        var spot = await source.Services.GetRequiredService<IZLinkSpotManager>()
+        var spot = await source
+            .Services.GetRequiredService<IZLinkSpotManager>()
             .GetOrCreate(targetSpotId, RelocationBehaviorHost.SpotType)
             .InMesh(RelocationBehaviorHost.MeshName)
             .Request(ZLinkMessage.Empty)
@@ -173,7 +194,8 @@ public sealed class RelocationBehaviorConformanceTests
         trace.TargetNodeRid = target.LocalNodeRid;
         Assert.Equal(target.LocalNodeRid, spot.Spot.NodeRid);
 
-        var join = source.Services.GetRequiredService<IZLinkActorClient>()
+        var join = source
+            .Services.GetRequiredService<IZLinkActorClient>()
             .RequestToActor(actorId, new BeginBehaviorJoin(targetSpotId))
             .Timeout(TimeSpan.FromSeconds(15))
             .Async<BehaviorAck>()
@@ -185,25 +207,21 @@ public sealed class RelocationBehaviorConformanceTests
 
         try
         {
-            await transport.PrepareCallStarted.Task.WaitAsync(
-                TimeSpan.FromSeconds(3));
+            await transport.PrepareCallStarted.Task.WaitAsync(TimeSpan.FromSeconds(3));
             transport.ReleasePrepareCall.TrySetResult();
-            await transport.TargetPreparedBeforeReadySend.Task.WaitAsync(
-                TimeSpan.FromSeconds(3));
+            await transport.TargetPreparedBeforeReadySend.Task.WaitAsync(TimeSpan.FromSeconds(3));
 
-            var overlapping = transport.RetryPrepareAsync(
-                    CancellationToken.None,
-                    TimeSpan.FromMilliseconds(250))
+            var overlapping = transport
+                .RetryPrepareAsync(CancellationToken.None, TimeSpan.FromMilliseconds(250))
                 .AsTask();
-            var timeout = await Assert.ThrowsAsync<ZLinkFrameworkException>(
-                async () => await overlapping);
+            var timeout = await Assert.ThrowsAsync<ZLinkFrameworkException>(async () =>
+                await overlapping
+            );
             Assert.Equal(ZLinkFrameworkErrorKind.DeadlineExceeded, timeout.Kind);
 
             transport.ReleaseTargetReadySend.TrySetResult();
-            await transport.ReadyReplyReceived.Task.WaitAsync(
-                TimeSpan.FromSeconds(3));
-            await transport.CutoverSendStarted.Task.WaitAsync(
-                TimeSpan.FromSeconds(3));
+            await transport.ReadyReplyReceived.Task.WaitAsync(TimeSpan.FromSeconds(3));
+            await transport.CutoverSendStarted.Task.WaitAsync(TimeSpan.FromSeconds(3));
         }
         finally
         {
@@ -219,12 +237,11 @@ public sealed class RelocationBehaviorConformanceTests
     public async Task ActorJoin_cancelled_target_drain_rejects_new_prepare_and_preserves_active_slot()
     {
         var trace = new RelocationBehaviorTrace();
-        var transport = new CanonicalRelocationTransportProbe(
-            trace,
-            holdTargetReady: true);
+        var transport = new CanonicalRelocationTransportProbe(trace, holdTargetReady: true);
         var locationStore = new RecordingLocationStore(
             new ZLinkInMemoryProviderLocationStore(),
-            trace);
+            trace
+        );
         var relocationStore = new SynchronizedRelocationStore();
         var actorId = $"behavior-drain-race-actor-{Guid.NewGuid():N}";
         var targetSpotId = $"behavior-drain-race-spot-{Guid.NewGuid():N}";
@@ -236,14 +253,17 @@ public sealed class RelocationBehaviorConformanceTests
             locationStore,
             relocationStore,
             registerTargetSpot: false,
-            canonicalTransportProbe: transport);
+            canonicalTransportProbe: transport
+        );
         var actorManager = source.Services.GetRequiredService<IZLinkActorManager>();
         var created = Assert.IsType<ZLinkActorCreateResult.Created>(
-            await actorManager.GetOrCreate(actorId, RelocationBehaviorHost.ActorType)
+            await actorManager
+                .GetOrCreate(actorId, RelocationBehaviorHost.ActorType)
                 .InMesh(RelocationBehaviorHost.MeshName)
                 .Request(new BehaviorCreate(7))
                 .Timeout(TimeSpan.FromSeconds(10))
-                .Async());
+                .Async()
+        );
         trace.SourceObjectGeneration = created.Actor.ObjectGeneration;
         trace.SourceNodeRid = created.Actor.NodeRid;
         await locationStore.ObserveActorAuthorityAsync(actorId);
@@ -254,13 +274,20 @@ public sealed class RelocationBehaviorConformanceTests
             locationStore,
             relocationStore,
             registerTargetSpot: true,
-            canonicalTransportProbe: transport);
-        await WaitUntilAsync(
-            () => source.Runtime.GetMeshNodeRuntime(RelocationBehaviorHost.MeshName)
-                      .Node.Status().ActivePeerCount == 1
-                  && target.Runtime.GetMeshNodeRuntime(RelocationBehaviorHost.MeshName)
-                      .Node.Status().ActivePeerCount == 1);
-        var spot = await source.Services.GetRequiredService<IZLinkSpotManager>()
+            canonicalTransportProbe: transport
+        );
+        await WaitUntilAsync(() =>
+            source
+                .Runtime.GetMeshNodeRuntime(RelocationBehaviorHost.MeshName)
+                .Node.Status()
+                .ActivePeerCount == 1
+            && target
+                .Runtime.GetMeshNodeRuntime(RelocationBehaviorHost.MeshName)
+                .Node.Status()
+                .ActivePeerCount == 1
+        );
+        var spot = await source
+            .Services.GetRequiredService<IZLinkSpotManager>()
             .GetOrCreate(targetSpotId, RelocationBehaviorHost.SpotType)
             .InMesh(RelocationBehaviorHost.MeshName)
             .Request(ZLinkMessage.Empty)
@@ -269,7 +296,8 @@ public sealed class RelocationBehaviorConformanceTests
         trace.TargetNodeRid = target.LocalNodeRid;
         Assert.Equal(target.LocalNodeRid, spot.Spot.NodeRid);
 
-        var join = source.Services.GetRequiredService<IZLinkActorClient>()
+        var join = source
+            .Services.GetRequiredService<IZLinkActorClient>()
             .RequestToActor(actorId, new BeginBehaviorJoin(targetSpotId))
             .Timeout(TimeSpan.FromSeconds(15))
             .Async<BehaviorAck>()
@@ -281,51 +309,48 @@ public sealed class RelocationBehaviorConformanceTests
 
         try
         {
-            await transport.PrepareCallStarted.Task.WaitAsync(
-                TimeSpan.FromSeconds(3));
+            await transport.PrepareCallStarted.Task.WaitAsync(TimeSpan.FromSeconds(3));
             transport.ReleasePrepareCall.TrySetResult();
-            await transport.TargetPreparedBeforeReadySend.Task.WaitAsync(
-                TimeSpan.FromSeconds(3));
+            await transport.TargetPreparedBeforeReadySend.Task.WaitAsync(TimeSpan.FromSeconds(3));
             transport.ReleaseTargetReadySend.TrySetResult();
-            await transport.ReadyReplyReceived.Task.WaitAsync(
-                TimeSpan.FromSeconds(3));
-            await transport.CutoverSendStarted.Task.WaitAsync(
-                TimeSpan.FromSeconds(3));
+            await transport.ReadyReplyReceived.Task.WaitAsync(TimeSpan.FromSeconds(3));
+            await transport.CutoverSendStarted.Task.WaitAsync(TimeSpan.FromSeconds(3));
             var before = GetTargetAttemptState(target.Runtime);
             Assert.Equal(1, before.Count);
             Assert.Equal(1, before.Staged);
             var rejectedDistinctAttempt = await Assert.ThrowsAsync<InvalidOperationException>(
-                async () => await transport.PrepareNextTargetAttemptAsync(
-                    CancellationToken.None));
+                async () =>
+                    await transport.PrepareNextTargetAttemptAsync(CancellationToken.None)
+            );
             Assert.Contains(
                 "already has an active local instance",
                 rejectedDistinctAttempt.Message,
-                StringComparison.Ordinal);
+                StringComparison.Ordinal
+            );
             Assert.Equal(before.Count, GetTargetAttemptState(target.Runtime).Count);
             transport.ReleaseCutoverSend.TrySetResult();
             await trace.WaitAsync("targetLifecycleStarted");
 
             using var drainCancellation = new CancellationTokenSource();
-            var drain = InvokeActorGenerationResetAsync(
-                target.Runtime,
-                drainCancellation.Token);
-            Assert.True(SpinWait.SpinUntil(
-                () => GetTargetAttemptState(target.Runtime).Closing == 1,
-                TimeSpan.FromSeconds(3)));
+            var drain = InvokeActorGenerationResetAsync(target.Runtime, drainCancellation.Token);
+            Assert.True(
+                SpinWait.SpinUntil(
+                    () => GetTargetAttemptState(target.Runtime).Closing == 1,
+                    TimeSpan.FromSeconds(3)
+                )
+            );
 
-            var newAttemptFailure = await Assert.ThrowsAsync<ZLinkFrameworkException>(
-                async () => await transport.PrepareNextTargetAttemptAsync(
-                        CancellationToken.None)
+            var newAttemptFailure = await Assert.ThrowsAsync<ZLinkFrameworkException>(async () =>
+                await transport
+                    .PrepareNextTargetAttemptAsync(CancellationToken.None)
                     .AsTask()
-                    .WaitAsync(TimeSpan.FromSeconds(3)));
-            Assert.Equal(
-                ZLinkFrameworkErrorKind.Unavailable,
-                newAttemptFailure.Kind);
+                    .WaitAsync(TimeSpan.FromSeconds(3))
+            );
+            Assert.Equal(ZLinkFrameworkErrorKind.Unavailable, newAttemptFailure.Kind);
             Assert.Equal(before.Count, GetTargetAttemptState(target.Runtime).Count);
 
             drainCancellation.Cancel();
-            await Assert.ThrowsAnyAsync<OperationCanceledException>(
-                async () => await drain);
+            await Assert.ThrowsAnyAsync<OperationCanceledException>(async () => await drain);
             var after = GetTargetAttemptState(target.Runtime);
             Assert.Equal(before.Count, after.Count);
             Assert.Equal(before.Staged, after.Staged);
@@ -347,7 +372,8 @@ public sealed class RelocationBehaviorConformanceTests
         var cutover = new CanonicalRelocationTransportProbe(trace);
         var locationStore = new RecordingLocationStore(
             new ZLinkInMemoryProviderLocationStore(),
-            trace);
+            trace
+        );
         var relocationStore = new SynchronizedRelocationStore();
         var actorId = $"behavior-cutover-actor-{Guid.NewGuid():N}";
         var targetSpotId = $"behavior-cutover-spot-{Guid.NewGuid():N}";
@@ -359,14 +385,17 @@ public sealed class RelocationBehaviorConformanceTests
             locationStore,
             relocationStore,
             registerTargetSpot: false,
-            canonicalTransportProbe: cutover);
+            canonicalTransportProbe: cutover
+        );
         var actorManager = source.Services.GetRequiredService<IZLinkActorManager>();
         var created = Assert.IsType<ZLinkActorCreateResult.Created>(
-            await actorManager.GetOrCreate(actorId, RelocationBehaviorHost.ActorType)
+            await actorManager
+                .GetOrCreate(actorId, RelocationBehaviorHost.ActorType)
                 .InMesh(RelocationBehaviorHost.MeshName)
                 .Request(new BehaviorCreate(7))
                 .Timeout(TimeSpan.FromSeconds(10))
-                .Async());
+                .Async()
+        );
         trace.SourceObjectGeneration = created.Actor.ObjectGeneration;
         trace.SourceNodeRid = created.Actor.NodeRid;
         await locationStore.ObserveActorAuthorityAsync(actorId);
@@ -377,14 +406,21 @@ public sealed class RelocationBehaviorConformanceTests
             locationStore,
             relocationStore,
             registerTargetSpot: true,
-            canonicalTransportProbe: cutover);
-        await WaitUntilAsync(
-            () => source.Runtime.GetMeshNodeRuntime(RelocationBehaviorHost.MeshName)
-                      .Node.Status().ActivePeerCount == 1
-                  && target.Runtime.GetMeshNodeRuntime(RelocationBehaviorHost.MeshName)
-                      .Node.Status().ActivePeerCount == 1);
+            canonicalTransportProbe: cutover
+        );
+        await WaitUntilAsync(() =>
+            source
+                .Runtime.GetMeshNodeRuntime(RelocationBehaviorHost.MeshName)
+                .Node.Status()
+                .ActivePeerCount == 1
+            && target
+                .Runtime.GetMeshNodeRuntime(RelocationBehaviorHost.MeshName)
+                .Node.Status()
+                .ActivePeerCount == 1
+        );
 
-        var spot = await source.Services.GetRequiredService<IZLinkSpotManager>()
+        var spot = await source
+            .Services.GetRequiredService<IZLinkSpotManager>()
             .GetOrCreate(targetSpotId, RelocationBehaviorHost.SpotType)
             .InMesh(RelocationBehaviorHost.MeshName)
             .Request(ZLinkMessage.Empty)
@@ -394,12 +430,14 @@ public sealed class RelocationBehaviorConformanceTests
         Assert.Equal(target.LocalNodeRid, spot.Spot.NodeRid);
 
         var client = source.Services.GetRequiredService<IZLinkActorClient>();
-        var join = client.RequestToActor(actorId, new BeginBehaviorJoin(targetSpotId))
+        var join = client
+            .RequestToActor(actorId, new BeginBehaviorJoin(targetSpotId))
             .Timeout(TimeSpan.FromSeconds(15))
             .Async<BehaviorAck>()
             .AsTask();
         await trace.WaitAsync("relocationRequested");
-        var saved = client.RequestToActor(actorId, new BehaviorWork("saved"))
+        var saved = client
+            .RequestToActor(actorId, new BehaviorWork("saved"))
             .Timeout(TimeSpan.FromSeconds(15))
             .Async<BehaviorAck>()
             .AsTask();
@@ -413,7 +451,8 @@ public sealed class RelocationBehaviorConformanceTests
             Assert.False(trace.HasTargetAuthorityMutation);
             Assert.DoesNotContain("targetLifecycleStarted", trace.Events);
 
-            var prefix = client.RequestToActor(actorId, new BehaviorWork("prefix"))
+            var prefix = client
+                .RequestToActor(actorId, new BehaviorWork("prefix"))
                 .Timeout(TimeSpan.FromSeconds(15))
                 .Async<BehaviorAck>()
                 .AsTask();
@@ -429,9 +468,8 @@ public sealed class RelocationBehaviorConformanceTests
             cutover.ReleaseCutoverSend.TrySetResult();
             await cutover.CutoverSendSubmitted.Task.WaitAsync(TimeSpan.FromSeconds(3));
             await trace.WaitAsync("targetLifecycleStarted");
-            var temporary = client.RequestToActor(
-                    actorId,
-                    new BehaviorWork("temporary"))
+            var temporary = client
+                .RequestToActor(actorId, new BehaviorWork("temporary"))
                 .Timeout(TimeSpan.FromSeconds(15))
                 .Async<BehaviorAck>()
                 .AsTask();
@@ -441,8 +479,7 @@ public sealed class RelocationBehaviorConformanceTests
 
             trace.ReleaseTargetLifecycle.TrySetResult();
             await trace.WaitAsync("targetLifecycleCompleted");
-            await cutover.SourceLeaveSubmitted.Task.WaitAsync(
-                TimeSpan.FromSeconds(3));
+            await cutover.SourceLeaveSubmitted.Task.WaitAsync(TimeSpan.FromSeconds(3));
             await trace.WaitAsync("publicJoinCompleted");
             Assert.False(trace.ReleaseSourceLeave.Task.IsCompleted);
             await trace.WaitAsync("sourceMembershipLeaveStarted");
@@ -450,34 +487,33 @@ public sealed class RelocationBehaviorConformanceTests
             _ = await saved.WaitAsync(TimeSpan.FromSeconds(10));
             _ = await prefix.WaitAsync(TimeSpan.FromSeconds(10));
             _ = await temporary.WaitAsync(TimeSpan.FromSeconds(10));
-            await target.Runtime.WaitForAcceptedActorHandoffsAsync(
-                    CancellationToken.None)
+            await target
+                .Runtime.WaitForAcceptedActorHandoffsAsync(CancellationToken.None)
                 .WaitAsync(TimeSpan.FromSeconds(2));
 
-            Assert.Equal(
-                new[] { "saved", "prefix", "temporary" },
-                trace.DeliveredMarkers);
+            Assert.Equal(new[] { "saved", "prefix", "temporary" }, trace.DeliveredMarkers);
             Assert.Equal("target", trace.PublicJoinCompletionNode);
             Assert.Equal(1, trace.TargetLifecycleAttemptCount);
             var orderedEvents = trace.Events;
             Assert.True(
                 Array.IndexOf(orderedEvents.ToArray(), "targetLifecycleCompleted")
-                < Array.IndexOf(orderedEvents.ToArray(), "sourceLeaveOneWaySubmitted"));
+                    < Array.IndexOf(orderedEvents.ToArray(), "sourceLeaveOneWaySubmitted")
+            );
             Assert.True(
                 Array.IndexOf(orderedEvents.ToArray(), "sourceLeaveOneWaySubmitted")
-                < Array.IndexOf(orderedEvents.ToArray(), "publicJoinCompleted"));
+                    < Array.IndexOf(orderedEvents.ToArray(), "publicJoinCompleted")
+            );
             Assert.True(
                 Array.IndexOf(orderedEvents.ToArray(), "publicJoinCompleted")
-                < Array.IndexOf(orderedEvents.ToArray(), "savedWorkAdmitted"));
-            Assert.Equal(1, trace.Events.Count(
-                static value => value == "publicJoinCompleted"));
+                    < Array.IndexOf(orderedEvents.ToArray(), "savedWorkAdmitted")
+            );
+            Assert.Equal(1, trace.Events.Count(static value => value == "publicJoinCompleted"));
             var authorityMutations = trace.TargetAuthorityMutationCount;
             await cutover.ReplayCutoverAsync(CancellationToken.None);
             await Task.Delay(100);
             Assert.Equal(authorityMutations, trace.TargetAuthorityMutationCount);
             Assert.Equal(1, trace.TargetLifecycleAttemptCount);
-            Assert.Equal(1, trace.Events.Count(
-                static value => value == "publicJoinCompleted"));
+            Assert.Equal(1, trace.Events.Count(static value => value == "publicJoinCompleted"));
         }
         finally
         {
@@ -493,12 +529,11 @@ public sealed class RelocationBehaviorConformanceTests
     {
         var trace = new RelocationBehaviorTrace();
         var targetTime = new ControllableTimeProvider();
-        var cutover = new CanonicalRelocationTransportProbe(
-            trace,
-            holdTargetReady: true);
+        var cutover = new CanonicalRelocationTransportProbe(trace, holdTargetReady: true);
         var locationStore = new RecordingLocationStore(
             new ZLinkInMemoryProviderLocationStore(),
-            trace);
+            trace
+        );
         var relocationStore = new SynchronizedRelocationStore();
         var actorId = $"behavior-fallback-actor-{Guid.NewGuid():N}";
         var targetSpotId = $"behavior-fallback-spot-{Guid.NewGuid():N}";
@@ -510,14 +545,17 @@ public sealed class RelocationBehaviorConformanceTests
             locationStore,
             relocationStore,
             registerTargetSpot: false,
-            canonicalTransportProbe: cutover);
+            canonicalTransportProbe: cutover
+        );
         var actorManager = source.Services.GetRequiredService<IZLinkActorManager>();
         var created = Assert.IsType<ZLinkActorCreateResult.Created>(
-            await actorManager.GetOrCreate(actorId, RelocationBehaviorHost.ActorType)
+            await actorManager
+                .GetOrCreate(actorId, RelocationBehaviorHost.ActorType)
                 .InMesh(RelocationBehaviorHost.MeshName)
                 .Request(new BehaviorCreate(7))
                 .Timeout(TimeSpan.FromSeconds(10))
-                .Async());
+                .Async()
+        );
         trace.SourceObjectGeneration = created.Actor.ObjectGeneration;
         trace.SourceNodeRid = created.Actor.NodeRid;
         await locationStore.ObserveActorAuthorityAsync(actorId);
@@ -529,14 +567,21 @@ public sealed class RelocationBehaviorConformanceTests
             relocationStore,
             registerTargetSpot: true,
             timeProvider: targetTime,
-            canonicalTransportProbe: cutover);
-        await WaitUntilAsync(
-            () => source.Runtime.GetMeshNodeRuntime(RelocationBehaviorHost.MeshName)
-                      .Node.Status().ActivePeerCount == 1
-                  && target.Runtime.GetMeshNodeRuntime(RelocationBehaviorHost.MeshName)
-                      .Node.Status().ActivePeerCount == 1);
+            canonicalTransportProbe: cutover
+        );
+        await WaitUntilAsync(() =>
+            source
+                .Runtime.GetMeshNodeRuntime(RelocationBehaviorHost.MeshName)
+                .Node.Status()
+                .ActivePeerCount == 1
+            && target
+                .Runtime.GetMeshNodeRuntime(RelocationBehaviorHost.MeshName)
+                .Node.Status()
+                .ActivePeerCount == 1
+        );
 
-        var spot = await source.Services.GetRequiredService<IZLinkSpotManager>()
+        var spot = await source
+            .Services.GetRequiredService<IZLinkSpotManager>()
             .GetOrCreate(targetSpotId, RelocationBehaviorHost.SpotType)
             .InMesh(RelocationBehaviorHost.MeshName)
             .Request(ZLinkMessage.Empty)
@@ -546,12 +591,14 @@ public sealed class RelocationBehaviorConformanceTests
         Assert.Equal(target.LocalNodeRid, spot.Spot.NodeRid);
 
         var client = source.Services.GetRequiredService<IZLinkActorClient>();
-        var join = client.RequestToActor(actorId, new BeginBehaviorJoin(targetSpotId))
+        var join = client
+            .RequestToActor(actorId, new BeginBehaviorJoin(targetSpotId))
             .Timeout(TimeSpan.FromSeconds(15))
             .Async<BehaviorAck>()
             .AsTask();
         await trace.WaitAsync("relocationRequested");
-        var saved = client.RequestToActor(actorId, new BehaviorWork("saved"))
+        var saved = client
+            .RequestToActor(actorId, new BehaviorWork("saved"))
             .Timeout(TimeSpan.FromSeconds(15))
             .Async<BehaviorAck>()
             .AsTask();
@@ -574,9 +621,8 @@ public sealed class RelocationBehaviorConformanceTests
             Assert.False(trace.HasTargetAuthorityMutation);
 
             cutover.FailNextTargetReadySend();
-            var duplicate = cutover.RetryPrepareAsync(
-                    CancellationToken.None,
-                    TimeSpan.FromMilliseconds(500))
+            var duplicate = cutover
+                .RetryPrepareAsync(CancellationToken.None, TimeSpan.FromMilliseconds(500))
                 .AsTask();
             await cutover.TargetReadyFailureInjected.Task;
 
@@ -584,11 +630,10 @@ public sealed class RelocationBehaviorConformanceTests
             Assert.False(trace.HasTargetAuthorityMutation);
             Assert.DoesNotContain("targetLifecycleStarted", trace.Events);
 
-            var duplicateFailure = await Assert.ThrowsAsync<ZLinkFrameworkException>(
-                async () => await duplicate);
-            Assert.Equal(
-                ZLinkFrameworkErrorKind.DeadlineExceeded,
-                duplicateFailure.Kind);
+            var duplicateFailure = await Assert.ThrowsAsync<ZLinkFrameworkException>(async () =>
+                await duplicate
+            );
+            Assert.Equal(ZLinkFrameworkErrorKind.DeadlineExceeded, duplicateFailure.Kind);
 
             targetTime.AdvanceMonotonic(TimeSpan.FromMilliseconds(100));
             await trace.WaitForTargetAuthorityMutationAsync();
@@ -602,8 +647,9 @@ public sealed class RelocationBehaviorConformanceTests
 
             var authorityMutations = trace.TargetAuthorityMutationCount;
             var lifecycleAttempts = trace.TargetLifecycleAttemptCount;
-            var publicCompletions = trace.Events.Count(
-                static value => value == "publicJoinCompleted");
+            var publicCompletions = trace.Events.Count(static value =>
+                value == "publicJoinCompleted"
+            );
 
             cutover.ReleaseCutoverSend.TrySetResult();
             await cutover.CutoverSendSubmitted.Task;
@@ -611,14 +657,16 @@ public sealed class RelocationBehaviorConformanceTests
             Assert.Equal(lifecycleAttempts, trace.TargetLifecycleAttemptCount);
             Assert.Equal(
                 publicCompletions,
-                trace.Events.Count(static value => value == "publicJoinCompleted"));
+                trace.Events.Count(static value => value == "publicJoinCompleted")
+            );
 
             await cutover.ReplayCutoverAsync(CancellationToken.None);
             Assert.Equal(authorityMutations, trace.TargetAuthorityMutationCount);
             Assert.Equal(lifecycleAttempts, trace.TargetLifecycleAttemptCount);
             Assert.Equal(
                 publicCompletions,
-                trace.Events.Count(static value => value == "publicJoinCompleted"));
+                trace.Events.Count(static value => value == "publicJoinCompleted")
+            );
 
             trace.ReleaseSourceLeave.TrySetResult();
             _ = await saved.WaitAsync(TimeSpan.FromSeconds(10));
@@ -640,10 +688,12 @@ public sealed class RelocationBehaviorConformanceTests
         var transport = new CanonicalRelocationTransportProbe(
             trace,
             holdTargetReady: true,
-            failTargetReadyOnce: true);
+            failTargetReadyOnce: true
+        );
         var locationStore = new RecordingLocationStore(
             new ZLinkInMemoryProviderLocationStore(),
-            trace);
+            trace
+        );
         var relocationStore = new SynchronizedRelocationStore();
         var actorId = $"behavior-ready-failure-actor-{Guid.NewGuid():N}";
         var targetSpotId = $"behavior-ready-failure-spot-{Guid.NewGuid():N}";
@@ -655,14 +705,17 @@ public sealed class RelocationBehaviorConformanceTests
             locationStore,
             relocationStore,
             registerTargetSpot: false,
-            canonicalTransportProbe: transport);
+            canonicalTransportProbe: transport
+        );
         var actorManager = source.Services.GetRequiredService<IZLinkActorManager>();
         var created = Assert.IsType<ZLinkActorCreateResult.Created>(
-            await actorManager.GetOrCreate(actorId, RelocationBehaviorHost.ActorType)
+            await actorManager
+                .GetOrCreate(actorId, RelocationBehaviorHost.ActorType)
                 .InMesh(RelocationBehaviorHost.MeshName)
                 .Request(new BehaviorCreate(7))
                 .Timeout(TimeSpan.FromSeconds(10))
-                .Async());
+                .Async()
+        );
         trace.SourceObjectGeneration = created.Actor.ObjectGeneration;
         trace.SourceNodeRid = created.Actor.NodeRid;
         await locationStore.ObserveActorAuthorityAsync(actorId);
@@ -673,14 +726,21 @@ public sealed class RelocationBehaviorConformanceTests
             locationStore,
             relocationStore,
             registerTargetSpot: true,
-            canonicalTransportProbe: transport);
-        await WaitUntilAsync(
-            () => source.Runtime.GetMeshNodeRuntime(RelocationBehaviorHost.MeshName)
-                      .Node.Status().ActivePeerCount == 1
-                  && target.Runtime.GetMeshNodeRuntime(RelocationBehaviorHost.MeshName)
-                      .Node.Status().ActivePeerCount == 1);
+            canonicalTransportProbe: transport
+        );
+        await WaitUntilAsync(() =>
+            source
+                .Runtime.GetMeshNodeRuntime(RelocationBehaviorHost.MeshName)
+                .Node.Status()
+                .ActivePeerCount == 1
+            && target
+                .Runtime.GetMeshNodeRuntime(RelocationBehaviorHost.MeshName)
+                .Node.Status()
+                .ActivePeerCount == 1
+        );
 
-        var spot = await source.Services.GetRequiredService<IZLinkSpotManager>()
+        var spot = await source
+            .Services.GetRequiredService<IZLinkSpotManager>()
             .GetOrCreate(targetSpotId, RelocationBehaviorHost.SpotType)
             .InMesh(RelocationBehaviorHost.MeshName)
             .Request(ZLinkMessage.Empty)
@@ -689,7 +749,8 @@ public sealed class RelocationBehaviorConformanceTests
         trace.TargetNodeRid = target.LocalNodeRid;
         Assert.Equal(target.LocalNodeRid, spot.Spot.NodeRid);
 
-        var join = source.Services.GetRequiredService<IZLinkActorClient>()
+        var join = source
+            .Services.GetRequiredService<IZLinkActorClient>()
             .RequestToActor(actorId, new BeginBehaviorJoin(targetSpotId))
             .Timeout(TimeSpan.FromSeconds(15))
             .Async<BehaviorAck>()
@@ -703,22 +764,23 @@ public sealed class RelocationBehaviorConformanceTests
         {
             await transport.PrepareCallStarted.Task;
             await Assert.ThrowsAsync<IOException>(async () =>
-                await transport.RetryGatedTargetPrepareAsync(
-                    CancellationToken.None));
+                await transport.RetryGatedTargetPrepareAsync(CancellationToken.None)
+            );
             Assert.Equal(0, transport.TargetAbortCallCount);
             Assert.False(trace.HasTargetAuthorityMutation);
-            var retry = transport.RetryGatedTargetPrepareAsync(
-                    CancellationToken.None)
-                .AsTask();
+            var retry = transport.RetryGatedTargetPrepareAsync(CancellationToken.None).AsTask();
             await transport.TargetPreparedBeforeReadySend.Task;
             transport.ReleaseTargetReadySend.TrySetResult();
             _ = await retry;
             transport.SubmitRetriedTargetReady();
             Assert.False(trace.HasTargetAuthorityMutation);
-            Assert.True(target.Runtime.TryGetCreatedActorState(
-                actorId,
-                RelocationBehaviorHost.ActorType,
-                out _));
+            Assert.True(
+                target.Runtime.TryGetCreatedActorState(
+                    actorId,
+                    RelocationBehaviorHost.ActorType,
+                    out _
+                )
+            );
             await trace.WaitAsync("targetLifecycleStarted");
         }
         finally
@@ -743,10 +805,12 @@ public sealed class RelocationBehaviorConformanceTests
             trace,
             holdTargetReady: true,
             failTargetReadyOnce: true,
-            holdRetriedTargetRollbackDestroy: true);
+            holdRetriedTargetRollbackDestroy: true
+        );
         var locationStore = new RecordingLocationStore(
             new ZLinkInMemoryProviderLocationStore(),
-            trace);
+            trace
+        );
         var relocationStore = new SynchronizedRelocationStore();
         var actorId = $"behavior-force-abort-actor-{Guid.NewGuid():N}";
         var targetSpotId = $"behavior-force-abort-spot-{Guid.NewGuid():N}";
@@ -758,14 +822,17 @@ public sealed class RelocationBehaviorConformanceTests
             locationStore,
             relocationStore,
             registerTargetSpot: false,
-            canonicalTransportProbe: transport);
+            canonicalTransportProbe: transport
+        );
         var actorManager = source.Services.GetRequiredService<IZLinkActorManager>();
         var created = Assert.IsType<ZLinkActorCreateResult.Created>(
-            await actorManager.GetOrCreate(actorId, RelocationBehaviorHost.ActorType)
+            await actorManager
+                .GetOrCreate(actorId, RelocationBehaviorHost.ActorType)
                 .InMesh(RelocationBehaviorHost.MeshName)
                 .Request(new BehaviorCreate(7))
                 .Timeout(TimeSpan.FromSeconds(10))
-                .Async());
+                .Async()
+        );
         trace.SourceObjectGeneration = created.Actor.ObjectGeneration;
         trace.SourceNodeRid = created.Actor.NodeRid;
         await locationStore.ObserveActorAuthorityAsync(actorId);
@@ -776,13 +843,20 @@ public sealed class RelocationBehaviorConformanceTests
             locationStore,
             relocationStore,
             registerTargetSpot: true,
-            canonicalTransportProbe: transport);
-        await WaitUntilAsync(
-            () => source.Runtime.GetMeshNodeRuntime(RelocationBehaviorHost.MeshName)
-                      .Node.Status().ActivePeerCount == 1
-                  && target.Runtime.GetMeshNodeRuntime(RelocationBehaviorHost.MeshName)
-                      .Node.Status().ActivePeerCount == 1);
-        var spot = await source.Services.GetRequiredService<IZLinkSpotManager>()
+            canonicalTransportProbe: transport
+        );
+        await WaitUntilAsync(() =>
+            source
+                .Runtime.GetMeshNodeRuntime(RelocationBehaviorHost.MeshName)
+                .Node.Status()
+                .ActivePeerCount == 1
+            && target
+                .Runtime.GetMeshNodeRuntime(RelocationBehaviorHost.MeshName)
+                .Node.Status()
+                .ActivePeerCount == 1
+        );
+        var spot = await source
+            .Services.GetRequiredService<IZLinkSpotManager>()
             .GetOrCreate(targetSpotId, RelocationBehaviorHost.SpotType)
             .InMesh(RelocationBehaviorHost.MeshName)
             .Request(ZLinkMessage.Empty)
@@ -791,7 +865,8 @@ public sealed class RelocationBehaviorConformanceTests
         trace.TargetNodeRid = target.LocalNodeRid;
         Assert.Equal(target.LocalNodeRid, spot.Spot.NodeRid);
 
-        var join = source.Services.GetRequiredService<IZLinkActorClient>()
+        var join = source
+            .Services.GetRequiredService<IZLinkActorClient>()
             .RequestToActor(actorId, new BeginBehaviorJoin(targetSpotId))
             .Timeout(TimeSpan.FromSeconds(15))
             .Async<BehaviorAck>()
@@ -803,11 +878,9 @@ public sealed class RelocationBehaviorConformanceTests
 
         try
         {
-            await transport.PrepareCallStarted.Task.WaitAsync(
-                TimeSpan.FromSeconds(3));
+            await transport.PrepareCallStarted.Task.WaitAsync(TimeSpan.FromSeconds(3));
             transport.ReleasePrepareCall.TrySetResult();
-            await transport.TargetReadyFailureInjected.Task.WaitAsync(
-                TimeSpan.FromSeconds(3));
+            await transport.TargetReadyFailureInjected.Task.WaitAsync(TimeSpan.FromSeconds(3));
             //  Spec 15 §4.2 / spec 52 §3.2: a failed READY submission is
             //  retryable submission state, not a relocation failure — the
             //  target keeps the exact prepared stage (removed only by an
@@ -815,31 +888,24 @@ public sealed class RelocationBehaviorConformanceTests
             //  destroy may start here.
             Assert.False(transport.TargetRollbackDestroyStarted.Task.IsCompleted);
             transport.ReleaseTargetReadySend.TrySetResult();
-            using var retryDeadline = new CancellationTokenSource(
-                TimeSpan.FromSeconds(3));
-            _ = await RetryTargetPrepareAfterCleanupAsync(
-                transport,
-                retryDeadline.Token);
+            using var retryDeadline = new CancellationTokenSource(TimeSpan.FromSeconds(3));
+            _ = await RetryTargetPrepareAfterCleanupAsync(transport, retryDeadline.Token);
             //  Explicit abort of the retained stage drives the target
             //  rollback destroy, which the probe holds (this constructor
             //  keeps ReleaseTargetRollbackDestroy unset) so force stop finds
             //  it in flight.
             await transport.AbortRetriedTargetPrepareAsync();
-            await transport.TargetRollbackDestroyStarted.Task.WaitAsync(
-                TimeSpan.FromSeconds(3));
+            await transport.TargetRollbackDestroyStarted.Task.WaitAsync(TimeSpan.FromSeconds(3));
 
-            var forceStop = target.Services
-                .GetRequiredService<IZLinkFrameworkRuntime>()
+            var forceStop = target
+                .Services.GetRequiredService<IZLinkFrameworkRuntime>()
                 .ShutdownAsync(TimeSpan.FromMilliseconds(100))
                 .AsTask();
             var result = await forceStop.WaitAsync(TimeSpan.FromSeconds(5));
 
-            Assert.Equal(
-                ZLinkFrameworkTerminationOutcome.ForceStopped,
-                result.Outcome);
+            Assert.Equal(ZLinkFrameworkTerminationOutcome.ForceStopped, result.Outcome);
             Assert.False(target.Runtime.IsStarted);
-            Assert.False(
-                transport.TargetRollbackDestroyCompleted.Task.IsCompleted);
+            Assert.False(transport.TargetRollbackDestroyCompleted.Task.IsCompleted);
         }
         finally
         {
@@ -858,14 +924,12 @@ public sealed class RelocationBehaviorConformanceTests
     [Fact]
     public async Task ActorJoin_target_callback_push_converges_after_completed_without_waiting_for_discovery_poll()
     {
-        var trace = new RelocationBehaviorTrace
-        {
-            SendTargetLifecyclePush = true
-        };
+        var trace = new RelocationBehaviorTrace { SendTargetLifecyclePush = true };
         var transport = new CanonicalRelocationTransportProbe(trace);
         var locationStore = new RecordingLocationStore(
             new ZLinkInMemoryProviderLocationStore(),
-            trace);
+            trace
+        );
         var relocationStore = new SynchronizedRelocationStore();
         var actorId = $"behavior-push-actor-{Guid.NewGuid():N}";
         var targetSpotId = $"behavior-push-spot-{Guid.NewGuid():N}";
@@ -876,26 +940,32 @@ public sealed class RelocationBehaviorConformanceTests
             trace,
             locationStore,
             relocationStore,
-            registerTargetSpot: false);
+            registerTargetSpot: false
+        );
         var sourceFailure = new TaskCompletionSource<Exception>(
-            TaskCreationOptions.RunContinuationsAsynchronously);
-        source.Runtime.ErrorSink.UnhandledCallbackException +=
-            exception => sourceFailure.TrySetResult(exception);
+            TaskCreationOptions.RunContinuationsAsynchronously
+        );
+        source.Runtime.ErrorSink.UnhandledCallbackException += exception =>
+            sourceFailure.TrySetResult(exception);
         var actorManager = source.Services.GetRequiredService<IZLinkActorManager>();
         var created = Assert.IsType<ZLinkActorCreateResult.Created>(
-            await actorManager.GetOrCreate(actorId, RelocationBehaviorHost.ActorType)
+            await actorManager
+                .GetOrCreate(actorId, RelocationBehaviorHost.ActorType)
                 .InMesh(RelocationBehaviorHost.MeshName)
                 .Request(new BehaviorCreate(7))
                 .Timeout(TimeSpan.FromSeconds(10))
-                .Async());
+                .Async()
+        );
         var stream = new RelocationBehaviorStream(
-            RoutingId.From($"behavior-session-{Guid.NewGuid():N}"));
+            RoutingId.From($"behavior-session-{Guid.NewGuid():N}")
+        );
         var session = new ZLinkSessionContext(
             source.Runtime,
             stream,
             new RelocationBehaviorSessionHandlers(),
             static () => ValueTask.CompletedTask,
-            static _ => ValueTask.CompletedTask);
+            static _ => ValueTask.CompletedTask
+        );
         _ = await session.Actors.BindAsync(created.Actor);
 
         await using var target = await RelocationBehaviorHost.StartAsync(
@@ -905,14 +975,21 @@ public sealed class RelocationBehaviorConformanceTests
             relocationStore,
             registerTargetSpot: true,
             pollingInterval: TimeSpan.FromSeconds(3),
-            canonicalTransportProbe: transport);
-        await WaitUntilAsync(
-            () => source.Runtime.GetMeshNodeRuntime(RelocationBehaviorHost.MeshName)
-                      .Node.Status().ActivePeerCount == 1
-                  && target.Runtime.GetMeshNodeRuntime(RelocationBehaviorHost.MeshName)
-                      .Node.Status().ActivePeerCount == 1);
+            canonicalTransportProbe: transport
+        );
+        await WaitUntilAsync(() =>
+            source
+                .Runtime.GetMeshNodeRuntime(RelocationBehaviorHost.MeshName)
+                .Node.Status()
+                .ActivePeerCount == 1
+            && target
+                .Runtime.GetMeshNodeRuntime(RelocationBehaviorHost.MeshName)
+                .Node.Status()
+                .ActivePeerCount == 1
+        );
 
-        var spot = await source.Services.GetRequiredService<IZLinkSpotManager>()
+        var spot = await source
+            .Services.GetRequiredService<IZLinkSpotManager>()
             .GetOrCreate(targetSpotId, RelocationBehaviorHost.SpotType)
             .InMesh(RelocationBehaviorHost.MeshName)
             .Request(ZLinkMessage.Empty)
@@ -927,13 +1004,13 @@ public sealed class RelocationBehaviorConformanceTests
         //  committed and the cross-node push (actor node != session node)
         //  vanished without any error. The target monitor must therefore end
         //  this join with no new protocol errors.
-        using var targetMonitor = target.Runtime
-            .GetMeshNodeRuntime(RelocationBehaviorHost.MeshName)
+        using var targetMonitor = target
+            .Runtime.GetMeshNodeRuntime(RelocationBehaviorHost.MeshName)
             .Node.OpenMeshMonitor();
-        var targetProtocolErrorsBeforeJoin =
-            targetMonitor.Status().ProtocolErrors;
+        var targetProtocolErrorsBeforeJoin = targetMonitor.Status().ProtocolErrors;
 
-        var join = source.Services.GetRequiredService<IZLinkActorClient>()
+        var join = source
+            .Services.GetRequiredService<IZLinkActorClient>()
             .RequestToActor(actorId, new BeginBehaviorJoin(targetSpotId))
             .Timeout(TimeSpan.FromSeconds(15))
             .Async<BehaviorAck>()
@@ -944,52 +1021,40 @@ public sealed class RelocationBehaviorConformanceTests
         await trace.WaitAsync("targetLifecycleStarted");
         trace.ReleaseTargetLifecycle.TrySetResult();
         await trace.WaitAsync("publicJoinCompleted");
-        Assert.Equal(
-            1,
-            trace.Events.Count(static value => value == "publicJoinCompleted"));
-        await target.Runtime.WaitForAcceptedActorHandoffsAsync(
-                CancellationToken.None)
+        Assert.Equal(1, trace.Events.Count(static value => value == "publicJoinCompleted"));
+        await target
+            .Runtime.WaitForAcceptedActorHandoffsAsync(CancellationToken.None)
             .WaitAsync(TimeSpan.FromSeconds(1));
 
         try
         {
-            await transport.RemoteSessionPushSubmitted.Task.WaitAsync(
-                TimeSpan.FromSeconds(1));
-            await transport.SessionRouteStarted.Task.WaitAsync(
-                TimeSpan.FromSeconds(1));
-            await transport.SessionRouteCompleted.Task.WaitAsync(
-                TimeSpan.FromSeconds(1));
+            await transport.RemoteSessionPushSubmitted.Task.WaitAsync(TimeSpan.FromSeconds(1));
+            await transport.SessionRouteStarted.Task.WaitAsync(TimeSpan.FromSeconds(1));
+            await transport.SessionRouteCompleted.Task.WaitAsync(TimeSpan.FromSeconds(1));
             var submittedPush = Assert.IsType<ZLinkRemoteSessionPushRelay>(
-                transport.RemoteSessionPush);
-            var appliedRoute = Assert.IsType<
-                ZLinkServiceWireCodec.SessionRelocationRouteRecord>(
-                transport.SessionRoute);
-            Assert.Equal(
-                appliedRoute.Actor.ObjectGeneration,
-                submittedPush.ObjectGeneration);
+                transport.RemoteSessionPush
+            );
+            var appliedRoute = Assert.IsType<ZLinkServiceWireCodec.SessionRelocationRouteRecord>(
+                transport.SessionRoute
+            );
+            Assert.Equal(appliedRoute.Actor.ObjectGeneration, submittedPush.ObjectGeneration);
             Assert.Equal(
                 appliedRoute.Route.TargetNodeGeneration,
-                submittedPush.TargetNodeGeneration);
+                submittedPush.TargetNodeGeneration
+            );
             Assert.Equal(
                 appliedRoute.Route.TargetAuthorityOwnerGeneration,
-                submittedPush.AuthorityOwnerGeneration);
-            Assert.Equal(
-                appliedRoute.Session.BindingGeneration,
-                submittedPush.BindingGeneration);
-            var delivery = await Task.WhenAny(
-                    stream.FirstWrite.Task,
-                    sourceFailure.Task)
+                submittedPush.AuthorityOwnerGeneration
+            );
+            Assert.Equal(appliedRoute.Session.BindingGeneration, submittedPush.BindingGeneration);
+            var delivery = await Task.WhenAny(stream.FirstWrite.Task, sourceFailure.Task)
                 .WaitAsync(TimeSpan.FromSeconds(1));
             if (ReferenceEquals(delivery, sourceFailure.Task))
                 throw await sourceFailure.Task;
             Assert.Equal(1, stream.WriteCount);
-            Assert.True(source.Runtime.TryGetSessionActorBinding(
-                actorId,
-                out var routedBinding));
+            Assert.True(source.Runtime.TryGetSessionActorBinding(actorId, out var routedBinding));
             Assert.NotNull(routedBinding.AppliedCanonicalRelocationRoute);
-            Assert.Equal(
-                targetProtocolErrorsBeforeJoin,
-                targetMonitor.Status().ProtocolErrors);
+            Assert.Equal(targetProtocolErrorsBeforeJoin, targetMonitor.Status().ProtocolErrors);
         }
         finally
         {
@@ -1000,13 +1065,17 @@ public sealed class RelocationBehaviorConformanceTests
     [Fact]
     public async Task ActorJoin_runtime_preserves_observable_order_and_exact_callback_counts()
     {
-        using var flowListener = Environment.GetEnvironmentVariable("ZLINK_RELOCATION_TEST_FLOW_PATH") is { } flowPath
+        using var flowListener = Environment.GetEnvironmentVariable(
+            "ZLINK_RELOCATION_TEST_FLOW_PATH"
+        )
+            is { } flowPath
             ? new TestHostMessageFlowListener(flowPath)
             : null;
         using var fixture = LoadBehaviorFixture();
         Assert.Equal(
             "zlink.framework.relocation-behavior",
-            fixture.RootElement.GetProperty("fixture").GetString());
+            fixture.RootElement.GetProperty("fixture").GetString()
+        );
 
         var trace = new RelocationBehaviorTrace();
         //  A pass-through probe: every gate is released up front, so the
@@ -1018,7 +1087,8 @@ public sealed class RelocationBehaviorConformanceTests
         transport.ReleaseCutoverSend.TrySetResult();
         var locationStore = new RecordingLocationStore(
             new ZLinkInMemoryProviderLocationStore(),
-            trace);
+            trace
+        );
         var relocationStore = new SynchronizedRelocationStore();
         var actorId = $"behavior-actor-{Guid.NewGuid():N}";
         var targetSpotId = $"behavior-spot-{Guid.NewGuid():N}";
@@ -1030,14 +1100,17 @@ public sealed class RelocationBehaviorConformanceTests
             locationStore,
             relocationStore,
             registerTargetSpot: false,
-            canonicalTransportProbe: transport);
+            canonicalTransportProbe: transport
+        );
         var actorManager = source.Services.GetRequiredService<IZLinkActorManager>();
         var created = Assert.IsType<ZLinkActorCreateResult.Created>(
-            await actorManager.GetOrCreate(actorId, RelocationBehaviorHost.ActorType)
+            await actorManager
+                .GetOrCreate(actorId, RelocationBehaviorHost.ActorType)
                 .InMesh(RelocationBehaviorHost.MeshName)
                 .Request(new BehaviorCreate(7))
                 .Timeout(TimeSpan.FromSeconds(10))
-                .Async());
+                .Async()
+        );
         trace.SourceObjectGeneration = created.Actor.ObjectGeneration;
         trace.SourceNodeRid = created.Actor.NodeRid;
         await locationStore.ObserveActorAuthorityAsync(actorId);
@@ -1048,14 +1121,21 @@ public sealed class RelocationBehaviorConformanceTests
             locationStore,
             relocationStore,
             registerTargetSpot: true,
-            canonicalTransportProbe: transport);
-        await WaitUntilAsync(
-            () => source.Runtime.GetMeshNodeRuntime(RelocationBehaviorHost.MeshName)
-                      .Node.Status().ActivePeerCount == 1
-                  && target.Runtime.GetMeshNodeRuntime(RelocationBehaviorHost.MeshName)
-                      .Node.Status().ActivePeerCount == 1);
+            canonicalTransportProbe: transport
+        );
+        await WaitUntilAsync(() =>
+            source
+                .Runtime.GetMeshNodeRuntime(RelocationBehaviorHost.MeshName)
+                .Node.Status()
+                .ActivePeerCount == 1
+            && target
+                .Runtime.GetMeshNodeRuntime(RelocationBehaviorHost.MeshName)
+                .Node.Status()
+                .ActivePeerCount == 1
+        );
 
-        var spot = await source.Services.GetRequiredService<IZLinkSpotManager>()
+        var spot = await source
+            .Services.GetRequiredService<IZLinkSpotManager>()
             .GetOrCreate(targetSpotId, RelocationBehaviorHost.SpotType)
             .InMesh(RelocationBehaviorHost.MeshName)
             .Request(ZLinkMessage.Empty)
@@ -1065,15 +1145,15 @@ public sealed class RelocationBehaviorConformanceTests
         trace.TargetNodeRid = target.LocalNodeRid;
 
         var client = source.Services.GetRequiredService<IZLinkActorClient>();
-        var join = client.RequestToActor(
-                actorId,
-                new BeginBehaviorJoin(targetSpotId))
+        var join = client
+            .RequestToActor(actorId, new BeginBehaviorJoin(targetSpotId))
             .Timeout(TimeSpan.FromSeconds(15))
             .Async<BehaviorAck>()
             .AsTask();
         await trace.WaitAsync("relocationRequested");
 
-        var saved = client.RequestToActor(actorId, new BehaviorWork("saved"))
+        var saved = client
+            .RequestToActor(actorId, new BehaviorWork("saved"))
             .Timeout(TimeSpan.FromSeconds(15))
             .Async<BehaviorAck>()
             .AsTask();
@@ -1082,86 +1162,90 @@ public sealed class RelocationBehaviorConformanceTests
         _ = await join.WaitAsync(TimeSpan.FromSeconds(15));
 
         await trace.WaitAsync("targetLifecycleStarted");
-        var temporary = client.RequestToActor(
-                actorId,
-                new BehaviorWork("temporary"))
+        var temporary = client
+            .RequestToActor(actorId, new BehaviorWork("temporary"))
             .Timeout(TimeSpan.FromSeconds(15))
             .Async<BehaviorAck>()
             .AsTask();
         try
         {
-        await Task.Delay(50);
-        Assert.DoesNotContain(
-            trace.Events,
-            value => value is "sourceMembershipLeaveSubmitted"
-                or "publicJoinCompleted"
-                or "savedWorkAdmitted"
-                or "temporaryWorkAdmitted");
+            await Task.Delay(50);
+            Assert.DoesNotContain(
+                trace.Events,
+                value =>
+                    value
+                        is "sourceMembershipLeaveSubmitted"
+                            or "publicJoinCompleted"
+                            or "savedWorkAdmitted"
+                            or "temporaryWorkAdmitted"
+            );
 
-        trace.ReleaseTargetLifecycle.TrySetResult();
-        await trace.WaitAsync("sourceMembershipLeaveSubmitted");
-        var completionLeftCanonicalAuthority = false;
-        try
-        {
-            await trace.WaitAsync("publicJoinCompleted");
-            var completedAuthority = Assert.IsType<ZLinkAuthorityReadResult.Found>(
-                await new ZLinkProviderLocationRepository(locationStore)
-                    .ReadAuthorityAsync(
-                        ZLinkActorAuthorityPayloadCodec.AuthorityKey(actorId)));
-            completionLeftCanonicalAuthority =
-                ZLinkCanonicalRelocationAuthorityStateCodec.TryRead(
-                    completedAuthority.Snapshot.Payload.Span,
-                    out _);
-            Assert.False(trace.ReleaseSourceLeave.Task.IsCompleted);
-            _ = await saved.WaitAsync(TimeSpan.FromSeconds(15));
-            _ = await temporary.WaitAsync(TimeSpan.FromSeconds(15));
-            await trace.WaitForTargetAuthorityAsync();
-            Assert.Equal(1, trace.TargetLifecycleAttemptCount);
-            Assert.False(trace.ReleaseSourceLeave.Task.IsCompleted);
+            trace.ReleaseTargetLifecycle.TrySetResult();
+            await trace.WaitAsync("sourceMembershipLeaveSubmitted");
+            var completionLeftCanonicalAuthority = false;
+            try
+            {
+                await trace.WaitAsync("publicJoinCompleted");
+                var completedAuthority = Assert.IsType<ZLinkAuthorityReadResult.Found>(
+                    await new ZLinkProviderLocationRepository(locationStore).ReadAuthorityAsync(
+                        ZLinkActorAuthorityPayloadCodec.AuthorityKey(actorId)
+                    )
+                );
+                completionLeftCanonicalAuthority =
+                    ZLinkCanonicalRelocationAuthorityStateCodec.TryRead(
+                        completedAuthority.Snapshot.Payload.Span,
+                        out _
+                    );
+                Assert.False(trace.ReleaseSourceLeave.Task.IsCompleted);
+                _ = await saved.WaitAsync(TimeSpan.FromSeconds(15));
+                _ = await temporary.WaitAsync(TimeSpan.FromSeconds(15));
+                await trace.WaitForTargetAuthorityAsync();
+                Assert.Equal(1, trace.TargetLifecycleAttemptCount);
+                Assert.False(trace.ReleaseSourceLeave.Task.IsCompleted);
 
-            var direct = await client.RequestToActor(
-                    actorId,
-                    new BehaviorWork("direct"))
-                .Timeout(TimeSpan.FromSeconds(15))
-                .Async<BehaviorAck>();
-            Assert.Equal("direct", direct.Marker);
-            await trace.WaitAsync("sourceMembershipLeaveStarted");
-            Assert.True(source.Runtime.TryGetCreatedActorState(actorId, out var retainedSource));
-            Assert.NotNull(retainedSource.Actor);
-            Assert.NotNull(retainedSource.Context);
-            Assert.True(retainedSource.Handoff.IsSourceMigrationInProgress);
-        }
-        finally
-        {
-            trace.ReleaseSourceLeave.TrySetResult();
-        }
+                var direct = await client
+                    .RequestToActor(actorId, new BehaviorWork("direct"))
+                    .Timeout(TimeSpan.FromSeconds(15))
+                    .Async<BehaviorAck>();
+                Assert.Equal("direct", direct.Marker);
+                await trace.WaitAsync("sourceMembershipLeaveStarted");
+                Assert.True(
+                    source.Runtime.TryGetCreatedActorState(actorId, out var retainedSource)
+                );
+                Assert.NotNull(retainedSource.Actor);
+                Assert.NotNull(retainedSource.Context);
+                Assert.True(retainedSource.Handoff.IsSourceMigrationInProgress);
+            }
+            finally
+            {
+                trace.ReleaseSourceLeave.TrySetResult();
+            }
 
-        await WaitUntilAsync(async () =>
-        {
-            var current = await actorManager.FindAsync(actorId);
-            return current is { } actor && actor.NodeRid == target.LocalNodeRid;
-        });
+            await WaitUntilAsync(async () =>
+            {
+                var current = await actorManager.FindAsync(actorId);
+                return current is { } actor && actor.NodeRid == target.LocalNodeRid;
+            });
 
-        Assert.Equal(
-            ["saved", "temporary", "direct"],
-            trace.DeliveredMarkers);
-        Assert.Equal(
-            1,
-            trace.Events.Count(static value =>
-                value == "sourceMembershipLeaveStarted"));
-        Assert.Equal(trace.SourceObjectGeneration, trace.TargetObjectGeneration);
-        Assert.True(trace.TargetOwnerGeneration > trace.SourceOwnerGeneration);
-        Assert.False(
-            completionLeftCanonicalAuthority,
-            "An unbound ActorJoin must normalize the completed relocation "
-            + "before the public join completion can outlive its target process.");
-        AssertObservedBehavior(fixture.RootElement, trace.Events);
-        var retiredSource = source.Runtime.GetOrCreateActorState(actorId);
-        await WaitUntilAsync(() => retiredSource.Actor is null);
-        Assert.Null(retiredSource.Context);
-        Assert.Null(retiredSource.Activation);
-        Assert.Null(retiredSource.Handoff.SourceMembershipLeaveCompletion);
-        Assert.False(retiredSource.Handoff.IsSourceMigrationInProgress);
+            Assert.Equal(["saved", "temporary", "direct"], trace.DeliveredMarkers);
+            Assert.Equal(
+                1,
+                trace.Events.Count(static value => value == "sourceMembershipLeaveStarted")
+            );
+            Assert.Equal(trace.SourceObjectGeneration, trace.TargetObjectGeneration);
+            Assert.True(trace.TargetOwnerGeneration > trace.SourceOwnerGeneration);
+            Assert.False(
+                completionLeftCanonicalAuthority,
+                "An unbound ActorJoin must normalize the completed relocation "
+                    + "before the public join completion can outlive its target process."
+            );
+            AssertObservedBehavior(fixture.RootElement, trace.Events);
+            var retiredSource = source.Runtime.GetOrCreateActorState(actorId);
+            await WaitUntilAsync(() => retiredSource.Actor is null);
+            Assert.Null(retiredSource.Context);
+            Assert.Null(retiredSource.Activation);
+            Assert.Null(retiredSource.Handoff.SourceMembershipLeaveCompletion);
+            Assert.False(retiredSource.Handoff.IsSourceMigrationInProgress);
         }
         finally
         {
@@ -1179,10 +1263,17 @@ public sealed class RelocationBehaviorConformanceTests
         trace.ReleaseTargetLifecycle.TrySetResult();
         trace.ReleaseSourceLeave.TrySetResult();
         var locationStore = new RecordingLocationStore(
-            new ZLinkInMemoryProviderLocationStore(), trace);
+            new ZLinkInMemoryProviderLocationStore(),
+            trace
+        );
         var relocationStore = new SynchronizedRelocationStore();
         await using var source = await RelocationBehaviorHost.StartAsync(
-            "source", trace, locationStore, relocationStore, registerTargetSpot: false);
+            "source",
+            trace,
+            locationStore,
+            relocationStore,
+            registerTargetSpot: false
+        );
         var actorManager = source.Services.GetRequiredService<IZLinkActorManager>();
         var actorIds = new string[iterations];
         // Create the workload before the target joins placement discovery,
@@ -1191,25 +1282,38 @@ public sealed class RelocationBehaviorConformanceTests
         {
             var actorId = actorIds[iteration] = $"cleanup-actor-{Guid.NewGuid():N}";
             var created = Assert.IsType<ZLinkActorCreateResult.Created>(
-                await actorManager.GetOrCreate(actorId, RelocationBehaviorHost.ActorType)
+                await actorManager
+                    .GetOrCreate(actorId, RelocationBehaviorHost.ActorType)
                     .InMesh(RelocationBehaviorHost.MeshName)
                     .Request(new BehaviorCreate(iteration))
                     .Timeout(TimeSpan.FromSeconds(10))
-                    .Async());
+                    .Async()
+            );
             Assert.Equal(source.LocalNodeRid, created.Actor.NodeRid);
         }
         Assert.Equal(iterations, source.Runtime.GetDrainRemainderCounts().Actors);
         await using var target = await RelocationBehaviorHost.StartAsync(
-            "target", trace, locationStore, relocationStore, registerTargetSpot: true);
+            "target",
+            trace,
+            locationStore,
+            relocationStore,
+            registerTargetSpot: true
+        );
         trace.SourceNodeRid = source.LocalNodeRid;
         trace.TargetNodeRid = target.LocalNodeRid;
         await WaitUntilAsync(() =>
-            source.Runtime.GetMeshNodeRuntime(RelocationBehaviorHost.MeshName)
-                .Node.Status().ActivePeerCount == 1
-            && target.Runtime.GetMeshNodeRuntime(RelocationBehaviorHost.MeshName)
-                .Node.Status().ActivePeerCount == 1);
+            source
+                .Runtime.GetMeshNodeRuntime(RelocationBehaviorHost.MeshName)
+                .Node.Status()
+                .ActivePeerCount == 1
+            && target
+                .Runtime.GetMeshNodeRuntime(RelocationBehaviorHost.MeshName)
+                .Node.Status()
+                .ActivePeerCount == 1
+        );
         var targetSpotId = $"cleanup-spot-{Guid.NewGuid():N}";
-        var spot = await source.Services.GetRequiredService<IZLinkSpotManager>()
+        var spot = await source
+            .Services.GetRequiredService<IZLinkSpotManager>()
             .GetOrCreate(targetSpotId, RelocationBehaviorHost.SpotType)
             .InMesh(RelocationBehaviorHost.MeshName)
             .Request(ZLinkMessage.Empty)
@@ -1223,11 +1327,13 @@ public sealed class RelocationBehaviorConformanceTests
             var actorId = actorIds[iteration];
             trace.ActorId = actorId;
             var sourceState = source.Runtime.GetOrCreateActorState(actorId);
-            _ = await client.RequestToActor(actorId, new BeginBehaviorJoin(targetSpotId))
+            _ = await client
+                .RequestToActor(actorId, new BeginBehaviorJoin(targetSpotId))
                 .Timeout(TimeSpan.FromSeconds(15))
                 .Async<BehaviorAck>();
             await WaitUntilAsync(() => sourceState.Actor is null);
-            _ = await client.RequestToActor(actorId, new BehaviorWork("direct"))
+            _ = await client
+                .RequestToActor(actorId, new BehaviorWork("direct"))
                 .Timeout(TimeSpan.FromSeconds(15))
                 .Async<BehaviorAck>();
 
@@ -1239,17 +1345,20 @@ public sealed class RelocationBehaviorConformanceTests
             Assert.False(sourceState.IsConfigured);
             Assert.Null(sourceState.Handoff.SourceMembershipLeaveCompletion);
             Assert.False(sourceState.Handoff.IsSourceMigrationInProgress);
-            Assert.Equal(iterations - iteration - 1, source.Runtime.GetDrainRemainderCounts().Actors);
+            Assert.Equal(
+                iterations - iteration - 1,
+                source.Runtime.GetDrainRemainderCounts().Actors
+            );
             Assert.Equal(iteration + 1, target.Runtime.GetDrainRemainderCounts().Actors);
-            Assert.Equal(iteration + 1, trace.Events.Count(
-                value => value == "sourceMembershipLeaveStarted"));
+            Assert.Equal(
+                iteration + 1,
+                trace.Events.Count(value => value == "sourceMembershipLeaveStarted")
+            );
         }
         Assert.Equal(iterations, trace.Events.Count(value => value == "publicJoinCompleted"));
     }
 
-    private static void AssertObservedBehavior(
-        JsonElement fixture,
-        IReadOnlyList<string> events)
+    private static void AssertObservedBehavior(JsonElement fixture, IReadOnlyList<string> events)
     {
         string[] observedRequired =
         [
@@ -1260,60 +1369,66 @@ public sealed class RelocationBehaviorConformanceTests
             "sourceMembershipLeaveSubmitted",
             "publicJoinCompleted",
             "savedWorkAdmitted",
-            "temporaryWorkAdmitted"
+            "temporaryWorkAdmitted",
         ];
-        var actorJoin = fixture.GetProperty("profiles")
+        var actorJoin = fixture
+            .GetProperty("profiles")
             .EnumerateArray()
             .Single(item => item.GetProperty("name").GetString() == "actorJoin");
-        var required = fixture.GetProperty("commonLifecycle")
+        var required = fixture
+            .GetProperty("commonLifecycle")
             .GetProperty("requiredEvents")
             .EnumerateArray()
             .Select(static item => item.GetString()!)
-            .Concat(actorJoin.GetProperty("requiredEvents")
-                .EnumerateArray()
-                .Select(static item => item.GetString()!))
+            .Concat(
+                actorJoin
+                    .GetProperty("requiredEvents")
+                    .EnumerateArray()
+                    .Select(static item => item.GetString()!)
+            )
             .ToArray();
         Assert.All(observedRequired, name => Assert.Contains(name, required));
-        Assert.All(
-            observedRequired,
-            name => Assert.Equal(1, events.Count(value => value == name)));
+        Assert.All(observedRequired, name => Assert.Equal(1, events.Count(value => value == name)));
 
-        var order = fixture.GetProperty("commonLifecycle")
+        var order = fixture
+            .GetProperty("commonLifecycle")
             .GetProperty("requiredOrder")
             .EnumerateArray()
             .Concat(actorJoin.GetProperty("additionalOrder").EnumerateArray())
-            .Select(edge => edge.EnumerateArray()
-                .Select(static item => item.GetString()!)
-                .ToArray())
+            .Select(edge =>
+                edge.EnumerateArray().Select(static item => item.GetString()!).ToArray()
+            )
             .ToArray();
         foreach (var before in observedRequired)
         {
             foreach (var after in observedRequired)
             {
-                if (!IsRequiredBefore(before, after, order)) continue;
+                if (!IsRequiredBefore(before, after, order))
+                    continue;
                 Assert.True(
                     events.IndexOf(before) < events.IndexOf(after),
-                    $"Expected {before} before {after}: {string.Join(',', events)}");
+                    $"Expected {before} before {after}: {string.Join(',', events)}"
+                );
             }
         }
 
         var counts = actorJoin.GetProperty("callbackCounts");
         Assert.Equal(
             counts.GetProperty("targetMembershipJoin").GetInt32(),
-            events.Count(value => value == "targetMembershipJoinCallback"));
+            events.Count(value => value == "targetMembershipJoinCallback")
+        );
         Assert.Equal(
             counts.GetProperty("sourceMembershipLeave").GetInt32(),
-            events.Count(value => value == "sourceMembershipLeaveSubmitted"));
+            events.Count(value => value == "sourceMembershipLeaveSubmitted")
+        );
         var terminal = actorJoin.GetProperty("terminalEvent").GetString()!;
         Assert.Equal(1, events.Count(value => value == terminal));
     }
 
-    private static bool IsRequiredBefore(
-        string before,
-        string after,
-        IReadOnlyList<string[]> order)
+    private static bool IsRequiredBefore(string before, string after, IReadOnlyList<string[]> order)
     {
-        if (string.Equals(before, after, StringComparison.Ordinal)) return false;
+        if (string.Equals(before, after, StringComparison.Ordinal))
+            return false;
         var pending = new Queue<string>();
         var visited = new HashSet<string>(StringComparer.Ordinal) { before };
         pending.Enqueue(before);
@@ -1321,8 +1436,10 @@ public sealed class RelocationBehaviorConformanceTests
         {
             foreach (var edge in order.Where(edge => edge[0] == current))
             {
-                if (edge[1] == after) return true;
-                if (visited.Add(edge[1])) pending.Enqueue(edge[1]);
+                if (edge[1] == after)
+                    return true;
+                if (visited.Add(edge[1]))
+                    pending.Enqueue(edge[1]);
             }
         }
         return false;
@@ -1335,7 +1452,8 @@ public sealed class RelocationBehaviorConformanceTests
             "framework",
             "runtime",
             "conformance",
-            "relocation-behavior-v1.json");
+            "relocation-behavior-v1.json"
+        );
         return JsonDocument.Parse(File.ReadAllText(path));
     }
 
@@ -1344,70 +1462,76 @@ public sealed class RelocationBehaviorConformanceTests
 
     private static Task InvokeActorGenerationResetAsync(
         ZLinkFrameworkRuntime runtime,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken
+    )
     {
-        var reset = typeof(ZLinkFrameworkRuntime).GetMethod(
-            "ResetActorRuntimeGenerationAsync",
-            BindingFlags.Instance | BindingFlags.NonPublic)
-            ?? throw new InvalidOperationException(
-                "Actor generation reset owner was not found.");
-        var operation = Assert.IsType<ValueTask>(reset.Invoke(
-            runtime,
-            [cancellationToken, null]));
+        var reset =
+            typeof(ZLinkFrameworkRuntime).GetMethod(
+                "ResetActorRuntimeGenerationAsync",
+                BindingFlags.Instance | BindingFlags.NonPublic
+            ) ?? throw new InvalidOperationException("Actor generation reset owner was not found.");
+        var operation = Assert.IsType<ValueTask>(reset.Invoke(runtime, [cancellationToken, null]));
         return operation.AsTask();
     }
 
     private static (int Count, int Staged, int Closing) GetTargetAttemptState(
-        ZLinkFrameworkRuntime runtime)
+        ZLinkFrameworkRuntime runtime
+    )
     {
         var owner = runtime.StandaloneActorRelocationRuntime;
-        var attemptsField = owner.GetType().GetField(
-            "_targetAttempts",
-            BindingFlags.Instance | BindingFlags.NonPublic)
-            ?? throw new InvalidOperationException(
-                "Target attempt owner was not found.");
-        var attempts = attemptsField.GetValue(owner)
-                       ?? throw new InvalidOperationException(
-                           "Target attempt owner is unavailable.");
+        var attemptsField =
+            owner
+                .GetType()
+                .GetField("_targetAttempts", BindingFlags.Instance | BindingFlags.NonPublic)
+            ?? throw new InvalidOperationException("Target attempt owner was not found.");
+        var attempts =
+            attemptsField.GetValue(owner)
+            ?? throw new InvalidOperationException("Target attempt owner is unavailable.");
         var type = attempts.GetType();
         var count = Assert.IsType<int>(type.GetProperty("Count")!.GetValue(attempts));
         var values = Assert.IsAssignableFrom<System.Collections.IEnumerable>(
-            type.GetProperty("Values")!.GetValue(attempts));
+            type.GetProperty("Values")!.GetValue(attempts)
+        );
         var staged = 0;
         var closing = 0;
         foreach (var slot in values)
         {
             var slotType = slot!.GetType();
-            if (slotType.GetProperty(
-                    "Stage",
-                    BindingFlags.Instance | BindingFlags.NonPublic)!
-                .GetValue(slot) is not null)
+            if (
+                slotType
+                    .GetProperty("Stage", BindingFlags.Instance | BindingFlags.NonPublic)!
+                    .GetValue(slot)
+                is not null
+            )
                 staged++;
-            var leases = slotType.GetField(
-                    "_leases",
-                    BindingFlags.Instance | BindingFlags.NonPublic)!
+            var leases = slotType
+                .GetField("_leases", BindingFlags.Instance | BindingFlags.NonPublic)!
                 .GetValue(slot)!;
-            if (Assert.IsType<bool>(leases.GetType().GetField(
-                        "_closing",
-                        BindingFlags.Instance | BindingFlags.NonPublic)!
-                    .GetValue(leases)))
+            if (
+                Assert.IsType<bool>(
+                    leases
+                        .GetType()
+                        .GetField("_closing", BindingFlags.Instance | BindingFlags.NonPublic)!
+                        .GetValue(leases)
+                )
+            )
                 closing++;
         }
         return (count, staged, closing);
     }
 
-    private static async Task<ZLinkServiceWireCodec.RelocationReadyRecord>
-        RetryTargetPrepareAfterCleanupAsync(
-            CanonicalRelocationTransportProbe transport,
-            CancellationToken cancellationToken)
+    private static async Task<ZLinkServiceWireCodec.RelocationReadyRecord> RetryTargetPrepareAfterCleanupAsync(
+        CanonicalRelocationTransportProbe transport,
+        CancellationToken cancellationToken
+    )
     {
         while (true)
         {
             cancellationToken.ThrowIfCancellationRequested();
             try
             {
-                return await transport.RetryTargetPrepareAsync(
-                        cancellationToken)
+                return await transport
+                    .RetryTargetPrepareAsync(cancellationToken)
                     .ConfigureAwait(false);
             }
             catch (ZLinkFrameworkException exception)
@@ -1424,7 +1548,8 @@ public sealed class RelocationBehaviorConformanceTests
         var deadlineStarted = Stopwatch.GetTimestamp();
         while (Stopwatch.GetElapsedTime(deadlineStarted) < deadlineTimeout)
         {
-            if (await predicate()) return;
+            if (await predicate())
+                return;
             await Task.Delay(10);
         }
         Assert.True(await predicate(), "The runtime did not reach the expected behavior state.");
@@ -1437,8 +1562,9 @@ internal sealed class RelocationBehaviorTrace
     private readonly List<string> _events = [];
     private readonly List<string> _deliveredMarkers = [];
     private readonly HashSet<string> _targetAuthorityVersions = [];
-    private readonly ConcurrentDictionary<string, TaskCompletionSource> _signals =
-        new(StringComparer.Ordinal);
+    private readonly ConcurrentDictionary<string, TaskCompletionSource> _signals = new(
+        StringComparer.Ordinal
+    );
 
     internal string? ActorId { get; set; }
     internal RoutingId SourceNodeRid { get; set; }
@@ -1462,37 +1588,50 @@ internal sealed class RelocationBehaviorTrace
 
     internal IReadOnlyList<string> Events
     {
-        get { lock (_gate) return _events.ToArray(); }
+        get
+        {
+            lock (_gate)
+                return _events.ToArray();
+        }
     }
 
     internal IReadOnlyList<string> DeliveredMarkers
     {
-        get { lock (_gate) return _deliveredMarkers.ToArray(); }
+        get
+        {
+            lock (_gate)
+                return _deliveredMarkers.ToArray();
+        }
     }
 
     internal void Record(string name)
     {
-        lock (_gate) _events.Add(name);
+        lock (_gate)
+            _events.Add(name);
         _signals.GetOrAdd(name, static _ => Signal()).TrySetResult();
     }
 
     internal void RecordDelivery(string marker, string node)
     {
         Assert.Equal("target", node);
-        lock (_gate) _deliveredMarkers.Add(marker);
-        Record(marker switch
-        {
-            "saved" => "savedWorkAdmitted",
-            "prefix" => "prefixWorkAdmitted",
-            "temporary" => "temporaryWorkAdmitted",
-            "direct" => "directWorkAdmitted",
-            _ => throw new InvalidOperationException($"Unknown marker '{marker}'.")
-        });
+        lock (_gate)
+            _deliveredMarkers.Add(marker);
+        Record(
+            marker switch
+            {
+                "saved" => "savedWorkAdmitted",
+                "prefix" => "prefixWorkAdmitted",
+                "temporary" => "temporaryWorkAdmitted",
+                "direct" => "directWorkAdmitted",
+                _ => throw new InvalidOperationException($"Unknown marker '{marker}'."),
+            }
+        );
     }
 
     internal async Task WaitAsync(string name) =>
-        await _signals.GetOrAdd(name, static _ => Signal()).Task
-            .WaitAsync(TimeSpan.FromSeconds(15));
+        await _signals
+            .GetOrAdd(name, static _ => Signal())
+            .Task.WaitAsync(TimeSpan.FromSeconds(15));
 
     internal async Task WaitForTargetAuthorityAsync() =>
         await TargetAuthorityObserved.Task.WaitAsync(TimeSpan.FromSeconds(15));
@@ -1502,51 +1641,60 @@ internal sealed class RelocationBehaviorTrace
 
     internal void RecordPublicJoinCompletion(string node)
     {
-        lock (_gate) PublicJoinCompletionNode = node;
+        lock (_gate)
+            PublicJoinCompletionNode = node;
         Record("publicJoinCompleted");
     }
 
     internal void ObserveActorAuthority(ZLinkAuthoritySnapshot snapshot)
     {
         ObserveReadyActorAuthority(snapshot);
-        if (SourceOwnerGeneration == 0
-            || snapshot.AuthorityOwnerGeneration <= SourceOwnerGeneration)
+        if (
+            SourceOwnerGeneration == 0
+            || snapshot.AuthorityOwnerGeneration <= SourceOwnerGeneration
+        )
             return;
-        if ((!ZLinkActorAuthorityPayloadCodec.TryDecode(
+        if (
+            (
+                !ZLinkActorAuthorityPayloadCodec.TryDecode(snapshot.Payload.Span, out var authority)
+                && !ZLinkActorAuthorityPayloadCodec.TryDecodeRelocating(
                     snapshot.Payload.Span,
-                    out var authority)
-             && !ZLinkActorAuthorityPayloadCodec.TryDecodeRelocating(
-                    snapshot.Payload.Span,
-                    out authority))
+                    out authority
+                )
+            )
             || authority.ActorId != ActorId
-            || authority.NodeRid != TargetNodeRid)
+            || authority.NodeRid != TargetNodeRid
+        )
             return;
         lock (_gate)
         {
-            if (!_targetAuthorityVersions.Add(snapshot.StoreVersion)) return;
+            if (!_targetAuthorityVersions.Add(snapshot.StoreVersion))
+                return;
             Interlocked.Increment(ref TargetAuthorityMutationCount);
             Interlocked.CompareExchange(
                 ref TargetAuthorityMutationTimestamp,
                 Stopwatch.GetTimestamp(),
-                0);
+                0
+            );
             TargetAuthorityMutationObserved.TrySetResult();
         }
     }
 
     internal void ObserveReadyActorAuthority(ZLinkAuthoritySnapshot snapshot)
     {
-        if (!ZLinkActorAuthorityPayloadCodec.TryDecode(
-                snapshot.Payload.Span,
-                out var authority)
+        if (
+            !ZLinkActorAuthorityPayloadCodec.TryDecode(snapshot.Payload.Span, out var authority)
             || authority.State != ZLinkActorAuthorityState.Ready
-            || authority.ActorId != ActorId)
+            || authority.ActorId != ActorId
+        )
             return;
         if (authority.NodeRid == SourceNodeRid)
         {
             SourceOwnerGeneration = snapshot.AuthorityOwnerGeneration;
             return;
         }
-        if (authority.NodeRid != TargetNodeRid) return;
+        if (authority.NodeRid != TargetNodeRid)
+            return;
         TargetObjectGeneration = snapshot.ObjectGeneration;
         TargetOwnerGeneration = snapshot.AuthorityOwnerGeneration;
         TargetAuthorityObserved.TrySetResult();
@@ -1558,25 +1706,28 @@ internal sealed class RelocationBehaviorTrace
 
 internal sealed class RecordingLocationStore(
     IZLinkLocationStore inner,
-    RelocationBehaviorTrace trace) : IZLinkLocationStore
+    RelocationBehaviorTrace trace
+) : IZLinkLocationStore
 {
     private readonly ZLinkProviderLocationRepository _reader = new(inner);
 
     public ValueTask<ZLinkStoreReadResult> ReadAsync(
         ZLinkStoreKey key,
-        CancellationToken cancellationToken = default) =>
-        inner.ReadAsync(key, cancellationToken);
+        CancellationToken cancellationToken = default
+    ) => inner.ReadAsync(key, cancellationToken);
 
     public async ValueTask<ZLinkStoreWriteResult> WriteAsync(
         ZLinkStoreWriteRequest request,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default
+    )
     {
         var result = await inner.WriteAsync(request, cancellationToken);
         if (result is ZLinkStoreWriteResult.Applied && trace.ActorId is { } actorId)
         {
             var read = await _reader.ReadAuthorityAsync(
                 ZLinkActorAuthorityPayloadCodec.AuthorityKey(actorId),
-                cancellationToken);
+                cancellationToken
+            );
             if (read is ZLinkAuthorityReadResult.Found found)
                 trace.ObserveActorAuthority(found.Snapshot);
         }
@@ -1585,46 +1736,117 @@ internal sealed class RecordingLocationStore(
 
     internal async ValueTask ObserveActorAuthorityAsync(
         string actorId,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default
+    )
     {
         var read = await _reader.ReadAuthorityAsync(
             ZLinkActorAuthorityPayloadCodec.AuthorityKey(actorId),
-            cancellationToken);
+            cancellationToken
+        );
         if (read is ZLinkAuthorityReadResult.Found found)
             trace.ObserveActorAuthority(found.Snapshot);
     }
 
     public ValueTask<ZLinkStoreScanResult> ScanAsync(
         ZLinkStoreScanRequest request,
-        CancellationToken cancellationToken = default) =>
-        inner.ScanAsync(request, cancellationToken);
+        CancellationToken cancellationToken = default
+    ) => inner.ScanAsync(request, cancellationToken);
 }
 
-internal sealed class SynchronizedRelocationStore :
-    IZLinkRelocationRepository,
-    IZLinkRelocationStore
+internal sealed class SynchronizedRelocationStore
+    : IZLinkRelocationRepository,
+        IZLinkRelocationStore
 {
     private readonly object _gate = new();
     private readonly InMemoryRelocationStore _inner = new();
 
-    public ValueTask<ZLinkBlobPutResult> PutAsync(ZLinkBlobReference reference, ReadOnlyMemory<byte> payload, TimeSpan retention, CancellationToken cancellationToken = default)
-    { lock (_gate) return _inner.PutAsync(reference, payload, retention, cancellationToken); }
-    public ValueTask<ZLinkBlobReadResult> ReadAsync(ZLinkBlobReference reference, CancellationToken cancellationToken = default)
-    { lock (_gate) return _inner.ReadAsync(reference, cancellationToken); }
-    public ValueTask<ZLinkBlobRenewResult> RenewAsync(ZLinkBlobReference reference, TimeSpan retention, CancellationToken cancellationToken = default)
-    { lock (_gate) return _inner.RenewAsync(reference, retention, cancellationToken); }
-    public ValueTask DeleteAsync(ZLinkBlobReference reference, CancellationToken cancellationToken = default)
-    { lock (_gate) return _inner.DeleteAsync(reference, cancellationToken); }
-    public ValueTask<ZLinkRelocationStored> PutRelocationAsync(ReadOnlyMemory<byte> payload, TimeSpan retention, CancellationToken cancellationToken = default)
-    { lock (_gate) return _inner.PutRelocationAsync(payload, retention, cancellationToken); }
-    public ValueTask<ZLinkRelocationStored> PutRelocationAtAsync(string reference, ReadOnlyMemory<byte> payload, TimeSpan retention, CancellationToken cancellationToken = default)
-    { lock (_gate) return _inner.PutRelocationAtAsync(reference, payload, retention, cancellationToken); }
-    public ValueTask<ZLinkRelocationReadResult> GetRelocationAsync(string reference, CancellationToken cancellationToken = default)
-    { lock (_gate) return _inner.GetRelocationAsync(reference, cancellationToken); }
-    public ValueTask<ZLinkRelocationRenewResult> RenewRelocationAsync(string reference, TimeSpan retention, CancellationToken cancellationToken = default)
-    { lock (_gate) return _inner.RenewRelocationAsync(reference, retention, cancellationToken); }
-    public ValueTask<ZLinkRelocationDeleteResult> DeleteRelocationAsync(string reference, CancellationToken cancellationToken = default)
-    { lock (_gate) return _inner.DeleteRelocationAsync(reference, cancellationToken); }
+    public ValueTask<ZLinkBlobPutResult> PutAsync(
+        ZLinkBlobReference reference,
+        ReadOnlyMemory<byte> payload,
+        TimeSpan retention,
+        CancellationToken cancellationToken = default
+    )
+    {
+        lock (_gate)
+            return _inner.PutAsync(reference, payload, retention, cancellationToken);
+    }
+
+    public ValueTask<ZLinkBlobReadResult> ReadAsync(
+        ZLinkBlobReference reference,
+        CancellationToken cancellationToken = default
+    )
+    {
+        lock (_gate)
+            return _inner.ReadAsync(reference, cancellationToken);
+    }
+
+    public ValueTask<ZLinkBlobRenewResult> RenewAsync(
+        ZLinkBlobReference reference,
+        TimeSpan retention,
+        CancellationToken cancellationToken = default
+    )
+    {
+        lock (_gate)
+            return _inner.RenewAsync(reference, retention, cancellationToken);
+    }
+
+    public ValueTask DeleteAsync(
+        ZLinkBlobReference reference,
+        CancellationToken cancellationToken = default
+    )
+    {
+        lock (_gate)
+            return _inner.DeleteAsync(reference, cancellationToken);
+    }
+
+    public ValueTask<ZLinkRelocationStored> PutRelocationAsync(
+        ReadOnlyMemory<byte> payload,
+        TimeSpan retention,
+        CancellationToken cancellationToken = default
+    )
+    {
+        lock (_gate)
+            return _inner.PutRelocationAsync(payload, retention, cancellationToken);
+    }
+
+    public ValueTask<ZLinkRelocationStored> PutRelocationAtAsync(
+        string reference,
+        ReadOnlyMemory<byte> payload,
+        TimeSpan retention,
+        CancellationToken cancellationToken = default
+    )
+    {
+        lock (_gate)
+            return _inner.PutRelocationAtAsync(reference, payload, retention, cancellationToken);
+    }
+
+    public ValueTask<ZLinkRelocationReadResult> GetRelocationAsync(
+        string reference,
+        CancellationToken cancellationToken = default
+    )
+    {
+        lock (_gate)
+            return _inner.GetRelocationAsync(reference, cancellationToken);
+    }
+
+    public ValueTask<ZLinkRelocationRenewResult> RenewRelocationAsync(
+        string reference,
+        TimeSpan retention,
+        CancellationToken cancellationToken = default
+    )
+    {
+        lock (_gate)
+            return _inner.RenewRelocationAsync(reference, retention, cancellationToken);
+    }
+
+    public ValueTask<ZLinkRelocationDeleteResult> DeleteRelocationAsync(
+        string reference,
+        CancellationToken cancellationToken = default
+    )
+    {
+        lock (_gate)
+            return _inner.DeleteRelocationAsync(reference, cancellationToken);
+    }
 }
 
 internal sealed class RelocationBehaviorHost : IAsyncDisposable
@@ -1655,14 +1877,17 @@ internal sealed class RelocationBehaviorHost : IAsyncDisposable
         bool registerTargetSpot,
         TimeSpan? pollingInterval = null,
         TimeProvider? timeProvider = null,
-        CanonicalRelocationTransportProbe? canonicalTransportProbe = null)
+        CanonicalRelocationTransportProbe? canonicalTransportProbe = null
+    )
     {
         var services = new ServiceCollection();
         if (canonicalTransportProbe is not null)
             services.AddSingleton<IZLinkBackendAdapterFactory>(
                 new ProbedBackendAdapterFactory(
                     new ZLinkDotNetBackendAdapterFactory(),
-                    canonicalTransportProbe));
+                    canonicalTransportProbe
+                )
+            );
         services.AddSingleton(trace);
         services.AddSingleton(new BehaviorNode(node));
         services.AddTransient<BeginBehaviorJoinHandler>();
@@ -1676,7 +1901,8 @@ internal sealed class RelocationBehaviorHost : IAsyncDisposable
             options.AddRelocationStore(relocationStore);
             options.ConfigureLocations().PollingInterval =
                 pollingInterval ?? TimeSpan.FromMilliseconds(10);
-            var objects = options.AddRouteMesh(MeshName)
+            var objects = options
+                .AddRouteMesh(MeshName)
                 .Listen(ReserveTcpEndpoint())
                 .SetRoutingIdPrefix($"behavior-{node}")
                 .SetActorLimit(100)
@@ -1686,18 +1912,22 @@ internal sealed class RelocationBehaviorHost : IAsyncDisposable
                 .AddEntrySpot<BehaviorEntrySpot>()
                 .AddActorFactory<BehaviorActor, BehaviorActorFactory>(
                     ActorType,
-                    factory => factory.PreserveStateWith<BehaviorActorRelocationAdapter>());
+                    factory => factory.PreserveStateWith<BehaviorActorRelocationAdapter>()
+                );
             if (registerTargetSpot)
                 objects.AddSpotFactory<BehaviorTargetSpot>(
                     SpotType,
-                    factory => factory.DisableRelocation());
+                    factory => factory.DisableRelocation()
+                );
         });
         var provider = services.BuildServiceProvider();
         if (Environment.GetEnvironmentVariable("ZLINK_RELOCATION_TEST_FLOW_PATH") is not null)
-            provider.GetRequiredService<ZLinkFrameworkRuntime>().Registration
-                .DispatchOptions.Diagnostics.SetLevel(ZLinkDiagnosticsLevel.Normal);
-        var hosted = provider.GetServices<IHostedService>().Single(
-            static service => service is ZLinkFrameworkHostedService);
+            provider
+                .GetRequiredService<ZLinkFrameworkRuntime>()
+                .Registration.DispatchOptions.Diagnostics.SetLevel(ZLinkDiagnosticsLevel.Normal);
+        var hosted = provider
+            .GetServices<IHostedService>()
+            .Single(static service => service is ZLinkFrameworkHostedService);
         try
         {
             await hosted.StartAsync(CancellationToken.None);
@@ -1717,8 +1947,7 @@ internal sealed class RelocationBehaviorHost : IAsyncDisposable
         await _provider.DisposeAsync();
     }
 
-    internal Task StopAsync() =>
-        _hosted.StopAsync(CancellationToken.None);
+    internal Task StopAsync() => _hosted.StopAsync(CancellationToken.None);
 
     private static string ReserveTcpEndpoint()
     {
@@ -1731,17 +1960,23 @@ internal sealed class RelocationBehaviorHost : IAsyncDisposable
 }
 
 internal sealed record BehaviorNode(string Name);
+
 internal sealed record BehaviorCreate(int State);
+
 internal sealed record BeginBehaviorJoin(string TargetSpotId);
+
 internal sealed record BehaviorWork(string Marker);
+
 internal sealed record BehaviorAck(string Marker);
+
 internal sealed record BehaviorLifecyclePush(string Marker);
 
 internal sealed class BehaviorActor(
     string actorId,
     IZLinkActorContext context,
     RelocationBehaviorTrace trace,
-    BehaviorNode node) : IZLinkActor
+    BehaviorNode node
+) : IZLinkActor
 {
     internal int State { get; set; }
     public string ActorId { get; } = actorId;
@@ -1749,7 +1984,8 @@ internal sealed class BehaviorActor(
 
     public ValueTask OnJoinCompletedAsync(
         ZLinkActorJoinCompletion completion,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken
+    )
     {
         Assert.IsType<ZLinkActorJoinCompletion.Accepted>(completion);
         trace.RecordPublicJoinCompletion(node.Name);
@@ -1757,24 +1993,21 @@ internal sealed class BehaviorActor(
     }
 }
 
-internal sealed class BehaviorActorFactory(
-    RelocationBehaviorTrace trace,
-    BehaviorNode node)
+internal sealed class BehaviorActorFactory(RelocationBehaviorTrace trace, BehaviorNode node)
     : IZLinkActorFactory<BehaviorActor>
 {
     public ValueTask<BehaviorActor> CreateAsync(
         IZLinkActorContext context,
-        CancellationToken cancellationToken = default) =>
-        ValueTask.FromResult(new BehaviorActor(context.ActorId, context, trace, node));
+        CancellationToken cancellationToken = default
+    ) => ValueTask.FromResult(new BehaviorActor(context.ActorId, context, trace, node));
 }
 
 internal sealed class BehaviorActorRelocationAdapter(
     RelocationBehaviorTrace trace,
-    BehaviorNode node) : IZLinkActorRelocationAdapter<BehaviorActor>
+    BehaviorNode node
+) : IZLinkActorRelocationAdapter<BehaviorActor>
 {
-    public ValueTask<byte[]> CaptureAsync(
-        BehaviorActor actor,
-        CancellationToken cancellationToken)
+    public ValueTask<byte[]> CaptureAsync(BehaviorActor actor, CancellationToken cancellationToken)
     {
         Assert.Equal("source", node.Name);
         trace.Record("sourceStateCaptured");
@@ -1784,7 +2017,8 @@ internal sealed class BehaviorActorRelocationAdapter(
     public ValueTask RestoreAsync(
         BehaviorActor actor,
         ReadOnlyMemory<byte> payload,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken
+    )
     {
         Assert.Equal("target", node.Name);
         actor.State = BitConverter.ToInt32(payload.Span);
@@ -1796,22 +2030,26 @@ internal sealed class BehaviorActorRelocationAdapter(
 internal sealed class BehaviorEntrySpot(
     IZLinkEntrySpotContext context,
     RelocationBehaviorTrace trace,
-    BehaviorNode node) : IZLinkEntrySpot<BehaviorActor>
+    BehaviorNode node
+) : IZLinkEntrySpot<BehaviorActor>
 {
     public IZLinkEntrySpotContext Context { get; } = context;
 
     public void Configure()
     {
         Context.Handlers.AddActorPacket<BeginBehaviorJoinHandler, BehaviorActor>(
-            nameof(BeginBehaviorJoin));
+            nameof(BeginBehaviorJoin)
+        );
         Context.Handlers.AddActorPacket<EntryBehaviorWorkHandler, BehaviorActor>(
-            nameof(BehaviorWork));
+            nameof(BehaviorWork)
+        );
     }
 
     public ValueTask<ZLinkActorCreateResponse> OnCreateActorAsync(
         BehaviorActor actor,
         ZLinkMessage request,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken
+    )
     {
         actor.State = request.Decode<BehaviorCreate>().State;
         return ValueTask.FromResult(ZLinkActorCreateResponse.Accept());
@@ -1820,7 +2058,8 @@ internal sealed class BehaviorEntrySpot(
     public ValueTask<ZLinkSpotActorJoinResult> OnActorJoinAsync(
         string actorId,
         ZLinkMessage request,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken
+    )
     {
         trace.Record("targetAdmissionReplied");
         return ValueTask.FromResult(ZLinkSpotActorJoinResult.Accept(request));
@@ -1829,7 +2068,10 @@ internal sealed class BehaviorEntrySpot(
     public ValueTask OnJoinedActorAsync(BehaviorActor actor, CancellationToken cancellationToken) =>
         ValueTask.CompletedTask;
 
-    public async ValueTask OnLeaveActorAsync(BehaviorActor actor, CancellationToken cancellationToken)
+    public async ValueTask OnLeaveActorAsync(
+        BehaviorActor actor,
+        CancellationToken cancellationToken
+    )
     {
         Assert.Equal("source", node.Name);
         trace.Record("sourceMembershipLeaveStarted");
@@ -1837,25 +2079,35 @@ internal sealed class BehaviorEntrySpot(
     }
 }
 
-internal sealed class BehaviorTargetSpot(
-    IZLinkSpotContext context,
-    RelocationBehaviorTrace trace) : IZLinkSpot<BehaviorActor>
+internal sealed class BehaviorTargetSpot(IZLinkSpotContext context, RelocationBehaviorTrace trace)
+    : IZLinkSpot<BehaviorActor>
 {
     public IZLinkSpotContext Context { get; } = context;
 
     public void Configure() =>
         Context.Handlers.AddActorPacket<TargetBehaviorWorkHandler, BehaviorActor>(
-            nameof(BehaviorWork));
+            nameof(BehaviorWork)
+        );
 
-    public ValueTask<ZLinkSpotCreateResponse> OnCreateAsync(ZLinkMessage request, CancellationToken cancellationToken) =>
-        ValueTask.FromResult(ZLinkSpotCreateResponse.Accept());
-    public ValueTask<ZLinkSpotActorJoinResult> OnActorJoinAsync(string actorId, ZLinkMessage request, CancellationToken cancellationToken)
+    public ValueTask<ZLinkSpotCreateResponse> OnCreateAsync(
+        ZLinkMessage request,
+        CancellationToken cancellationToken
+    ) => ValueTask.FromResult(ZLinkSpotCreateResponse.Accept());
+
+    public ValueTask<ZLinkSpotActorJoinResult> OnActorJoinAsync(
+        string actorId,
+        ZLinkMessage request,
+        CancellationToken cancellationToken
+    )
     {
         trace.Record("targetAdmissionReplied");
         return ValueTask.FromResult(ZLinkSpotActorJoinResult.Accept(request));
     }
 
-    public async ValueTask OnJoinedActorAsync(BehaviorActor actor, CancellationToken cancellationToken)
+    public async ValueTask OnJoinedActorAsync(
+        BehaviorActor actor,
+        CancellationToken cancellationToken
+    )
     {
         _ = Interlocked.Increment(ref trace.TargetLifecycleAttemptCount);
         trace.Record("targetMembershipJoinCallback");
@@ -1863,8 +2115,8 @@ internal sealed class BehaviorTargetSpot(
         await trace.ReleaseTargetLifecycle.Task.WaitAsync(cancellationToken);
         trace.Record("targetLifecycleCompleted");
         if (trace.SendTargetLifecyclePush)
-            await actor.Context.BoundSession
-                .Send(new BehaviorLifecyclePush("target-ready"))
+            await actor
+                .Context.BoundSession.Send(new BehaviorLifecyclePush("target-ready"))
                 .Async(cancellationToken);
     }
 
@@ -1873,17 +2125,24 @@ internal sealed class BehaviorTargetSpot(
 }
 
 internal sealed class BeginBehaviorJoinHandler(RelocationBehaviorTrace trace)
-    : IZLinkEntrySpotActorRequestHandler<BehaviorEntrySpot, BehaviorActor, BeginBehaviorJoin, BehaviorAck>
+    : IZLinkEntrySpotActorRequestHandler<
+        BehaviorEntrySpot,
+        BehaviorActor,
+        BeginBehaviorJoin,
+        BehaviorAck
+    >
 {
     public async ValueTask<BehaviorAck> HandleAsync(
         BehaviorEntrySpot spot,
         BehaviorActor actor,
         IZLinkMessageContext context,
         BeginBehaviorJoin request,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken
+    )
     {
         trace.Record("relocationRequested");
-        actor.Context.JoinSpot(request.TargetSpotId, request)
+        actor
+            .Context.JoinSpot(request.TargetSpotId, request)
             .Timeout(TimeSpan.FromSeconds(15))
             .Defer();
         await trace.ReleaseJoinHandler.Task.WaitAsync(cancellationToken);
@@ -1892,9 +2151,20 @@ internal sealed class BeginBehaviorJoinHandler(RelocationBehaviorTrace trace)
 }
 
 internal sealed class EntryBehaviorWorkHandler(RelocationBehaviorTrace trace, BehaviorNode node)
-    : IZLinkEntrySpotActorRequestHandler<BehaviorEntrySpot, BehaviorActor, BehaviorWork, BehaviorAck>
+    : IZLinkEntrySpotActorRequestHandler<
+        BehaviorEntrySpot,
+        BehaviorActor,
+        BehaviorWork,
+        BehaviorAck
+    >
 {
-    public ValueTask<BehaviorAck> HandleAsync(BehaviorEntrySpot spot, BehaviorActor actor, IZLinkMessageContext context, BehaviorWork request, CancellationToken cancellationToken)
+    public ValueTask<BehaviorAck> HandleAsync(
+        BehaviorEntrySpot spot,
+        BehaviorActor actor,
+        IZLinkMessageContext context,
+        BehaviorWork request,
+        CancellationToken cancellationToken
+    )
     {
         trace.RecordDelivery(request.Marker, node.Name);
         return ValueTask.FromResult(new BehaviorAck(request.Marker));
@@ -1904,7 +2174,13 @@ internal sealed class EntryBehaviorWorkHandler(RelocationBehaviorTrace trace, Be
 internal sealed class TargetBehaviorWorkHandler(RelocationBehaviorTrace trace, BehaviorNode node)
     : IZLinkSpotActorRequestHandler<BehaviorTargetSpot, BehaviorActor, BehaviorWork, BehaviorAck>
 {
-    public ValueTask<BehaviorAck> HandleAsync(BehaviorTargetSpot spot, BehaviorActor actor, IZLinkMessageContext context, BehaviorWork request, CancellationToken cancellationToken)
+    public ValueTask<BehaviorAck> HandleAsync(
+        BehaviorTargetSpot spot,
+        BehaviorActor actor,
+        IZLinkMessageContext context,
+        BehaviorWork request,
+        CancellationToken cancellationToken
+    )
     {
         trace.RecordDelivery(request.Marker, node.Name);
         return ValueTask.FromResult(new BehaviorAck(request.Marker));
@@ -1968,7 +2244,8 @@ internal sealed class CanonicalRelocationTransportProbe
         bool holdTargetReady = false,
         bool failTargetReadyOnce = false,
         bool holdTargetAbortRegistration = false,
-        bool holdRetriedTargetRollbackDestroy = false)
+        bool holdRetriedTargetRollbackDestroy = false
+    )
     {
         _trace = trace;
         _holdTargetReady = holdTargetReady;
@@ -1985,11 +2262,9 @@ internal sealed class CanonicalRelocationTransportProbe
             ReleaseTargetReadySend.TrySetResult();
     }
 
-    internal void FailNextTargetReadySend() =>
-        Interlocked.Exchange(ref _failTargetReadyOnce, 1);
+    internal void FailNextTargetReadySend() => Interlocked.Exchange(ref _failTargetReadyOnce, 1);
 
-    internal ICanonicalRelocationTarget WrapTarget(
-        ICanonicalRelocationTarget target)
+    internal ICanonicalRelocationTarget WrapTarget(ICanonicalRelocationTarget target)
     {
         _target = target;
         _gatedTarget = _holdTargetReady
@@ -1998,81 +2273,110 @@ internal sealed class CanonicalRelocationTransportProbe
         return _gatedTarget;
     }
 
-    internal ValueTask<ZLinkServiceWireCodec.RelocationReadyRecord>
-        RetryGatedTargetPrepareAsync(CancellationToken cancellationToken) =>
-        (_gatedTarget ?? throw new InvalidOperationException(
-            "No canonical relocation target was captured."))
-        .PrepareAsync(
-            _prepare ?? throw new InvalidOperationException(
-                "No canonical prepare was captured."),
+    internal ValueTask<ZLinkServiceWireCodec.RelocationReadyRecord> RetryGatedTargetPrepareAsync(
+        CancellationToken cancellationToken
+    ) =>
+        (
+            _gatedTarget
+            ?? throw new InvalidOperationException("No canonical relocation target was captured.")
+        ).PrepareAsync(
+            _prepare ?? throw new InvalidOperationException("No canonical prepare was captured."),
             ZLinkRelocationTransferPayload.DecodeEnvelope(
-                (_preparePayload ?? throw new InvalidOperationException(
-                    "No canonical prepare payload was captured.")).Encoded),
-            (_prepare ?? throw new InvalidOperationException(
-                "No canonical prepare was captured.")).SourceNodeRid,
+                (
+                    _preparePayload
+                    ?? throw new InvalidOperationException(
+                        "No canonical prepare payload was captured."
+                    )
+                ).Encoded
+            ),
+            (
+                _prepare
+                ?? throw new InvalidOperationException("No canonical prepare was captured.")
+            ).SourceNodeRid,
             new ZLinkCanonicalRelocationPreparationLease(),
-            cancellationToken);
+            cancellationToken
+        );
 
-    internal ValueTask<ZLinkServiceWireCodec.RelocationReadyRecord>
-        RetryTargetPrepareAsync(CancellationToken cancellationToken) =>
-        (_target ?? throw new InvalidOperationException(
-            "No canonical relocation target was captured."))
-        .PrepareAsync(
-            _prepare ?? throw new InvalidOperationException(
-                "No canonical prepare was captured."),
+    internal ValueTask<ZLinkServiceWireCodec.RelocationReadyRecord> RetryTargetPrepareAsync(
+        CancellationToken cancellationToken
+    ) =>
+        (
+            _target
+            ?? throw new InvalidOperationException("No canonical relocation target was captured.")
+        ).PrepareAsync(
+            _prepare ?? throw new InvalidOperationException("No canonical prepare was captured."),
             //  Direct transfer carries the schema relocation-envelope-v1
             //  logical stream. Decode it through the transfer payload codec
             //  so the probe follows the production wire boundary.
             ZLinkRelocationTransferPayload.DecodeEnvelope(
-                (_preparePayload ?? throw new InvalidOperationException(
-                    "No canonical prepare payload was captured.")).Encoded),
-            (_prepare ?? throw new InvalidOperationException(
-                "No canonical prepare was captured.")).SourceNodeRid,
+                (
+                    _preparePayload
+                    ?? throw new InvalidOperationException(
+                        "No canonical prepare payload was captured."
+                    )
+                ).Encoded
+            ),
+            (
+                _prepare
+                ?? throw new InvalidOperationException("No canonical prepare was captured.")
+            ).SourceNodeRid,
             new ZLinkCanonicalRelocationPreparationLease(),
-            cancellationToken);
+            cancellationToken
+        );
 
-    internal ValueTask<ZLinkServiceWireCodec.RelocationReadyRecord>
-        PrepareNextTargetAttemptAsync(CancellationToken cancellationToken) =>
-        (_target ?? throw new InvalidOperationException(
-            "No canonical relocation target was captured."))
-        .PrepareAsync(
-            (_prepare ?? throw new InvalidOperationException(
-                "No canonical prepare was captured.")) with
+    internal ValueTask<ZLinkServiceWireCodec.RelocationReadyRecord> PrepareNextTargetAttemptAsync(
+        CancellationToken cancellationToken
+    ) =>
+        (
+            _target
+            ?? throw new InvalidOperationException("No canonical relocation target was captured.")
+        ).PrepareAsync(
+            (
+                _prepare
+                ?? throw new InvalidOperationException("No canonical prepare was captured.")
+            ) with
             {
-                TargetAttemptGeneration = checked(
-                    _prepare.TargetAttemptGeneration + 1)
+                TargetAttemptGeneration = checked(_prepare.TargetAttemptGeneration + 1),
             },
             ZLinkRelocationTransferPayload.DecodeEnvelope(
-                (_preparePayload ?? throw new InvalidOperationException(
-                    "No canonical prepare payload was captured.")).Encoded),
+                (
+                    _preparePayload
+                    ?? throw new InvalidOperationException(
+                        "No canonical prepare payload was captured."
+                    )
+                ).Encoded
+            ),
             _prepareSourceNodeRid,
             new ZLinkCanonicalRelocationPreparationLease(),
-            cancellationToken);
+            cancellationToken
+        );
 
     internal ValueTask AbortRetriedTargetPrepareAsync() =>
-        (_target ?? throw new InvalidOperationException(
-            "No canonical relocation target was captured."))
-        .AbortPreparedAsync(
-            _prepare ?? throw new InvalidOperationException(
-                "No canonical prepare was captured."),
-            _prepareSourceNodeRid);
+        (
+            _target
+            ?? throw new InvalidOperationException("No canonical relocation target was captured.")
+        ).AbortPreparedAsync(
+            _prepare ?? throw new InvalidOperationException("No canonical prepare was captured."),
+            _prepareSourceNodeRid
+        );
 
     internal void SubmitRetriedTargetReady() =>
-        (_target ?? throw new InvalidOperationException(
-            "No canonical relocation target was captured."))
-        .ReadySubmitted(
-            _prepare ?? throw new InvalidOperationException(
-                "No canonical prepare was captured."),
-            _prepareSourceNodeRid);
+        (
+            _target
+            ?? throw new InvalidOperationException("No canonical relocation target was captured.")
+        ).ReadySubmitted(
+            _prepare ?? throw new InvalidOperationException("No canonical prepare was captured."),
+            _prepareSourceNodeRid
+        );
 
-    internal async ValueTask<ZLinkServiceWireCodec.RelocationReadyRecord>
-        PrepareAsync(
-            IZLinkBackendCanonicalRelocation transport,
-            RoutingId targetNodeRid,
-            ZLinkServiceWireCodec.RelocationPrepareRecord prepare,
-            ZLinkRelocationTransferPayload payload,
-            TimeSpan timeout,
-            CancellationToken cancellationToken)
+    internal async ValueTask<ZLinkServiceWireCodec.RelocationReadyRecord> PrepareAsync(
+        IZLinkBackendCanonicalRelocation transport,
+        RoutingId targetNodeRid,
+        ZLinkServiceWireCodec.RelocationPrepareRecord prepare,
+        ZLinkRelocationTransferPayload payload,
+        TimeSpan timeout,
+        CancellationToken cancellationToken
+    )
     {
         _prepareTransport = transport;
         _prepareTargetNodeRid = targetNodeRid;
@@ -2081,43 +2385,44 @@ internal sealed class CanonicalRelocationTransportProbe
         _prepareTimeout = timeout;
         PrepareCallStarted.TrySetResult();
         await ReleasePrepareCall.Task.WaitAsync(cancellationToken);
-        var ready = await transport.PrepareCanonicalRelocationAsync(
+        var ready = await transport
+            .PrepareCanonicalRelocationAsync(
                 targetNodeRid,
                 prepare,
                 payload,
                 timeout,
-                cancellationToken)
+                cancellationToken
+            )
             .ConfigureAwait(false);
         Volatile.Write(ref ReadyReplyTimestamp, Stopwatch.GetTimestamp());
         ReadyReplyReceived.TrySetResult();
         return ready;
     }
 
-    internal ValueTask<ZLinkServiceWireCodec.RelocationReadyRecord>
-        RetryPrepareAsync(
-            CancellationToken cancellationToken,
-            TimeSpan? timeout = null) =>
+    internal ValueTask<ZLinkServiceWireCodec.RelocationReadyRecord> RetryPrepareAsync(
+        CancellationToken cancellationToken,
+        TimeSpan? timeout = null
+    ) =>
         _prepareTransport?.PrepareCanonicalRelocationAsync(
             _prepareTargetNodeRid,
-            _prepare ?? throw new InvalidOperationException(
-                "No canonical prepare was captured."),
-            _preparePayload ?? throw new InvalidOperationException(
-                "No canonical prepare payload was captured."),
+            _prepare ?? throw new InvalidOperationException("No canonical prepare was captured."),
+            _preparePayload
+                ?? throw new InvalidOperationException(
+                    "No canonical prepare payload was captured."
+                ),
             timeout ?? _prepareTimeout,
-            cancellationToken)
-        ?? throw new InvalidOperationException(
-            "No canonical prepare transport was captured.");
+            cancellationToken
+        ) ?? throw new InvalidOperationException("No canonical prepare transport was captured.");
 
     internal async ValueTask SendDataAsync(
         IZLinkBackendCanonicalRelocation transport,
         RoutingId targetNodeRid,
         ZLinkServiceWireCodec.RelocationDataRecord data,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken
+    )
     {
-        await transport.SendCanonicalRelocationDataAsync(
-                targetNodeRid,
-                data,
-                cancellationToken)
+        await transport
+            .SendCanonicalRelocationDataAsync(targetNodeRid, data, cancellationToken)
             .ConfigureAwait(false);
         Interlocked.Increment(ref DataSendCount);
     }
@@ -2126,17 +2431,16 @@ internal sealed class CanonicalRelocationTransportProbe
         IZLinkBackendCanonicalRelocation transport,
         RoutingId targetNodeRid,
         ZLinkServiceWireCodec.RelocationCutoverRecord cutover,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken
+    )
     {
         _transport = transport;
         _targetNodeRid = targetNodeRid;
         _cutover = cutover;
         CutoverSendStarted.TrySetResult();
         await ReleaseCutoverSend.Task.WaitAsync(cancellationToken);
-        await transport.SendCanonicalRelocationCutoverAsync(
-                targetNodeRid,
-                cutover,
-                cancellationToken)
+        await transport
+            .SendCanonicalRelocationCutoverAsync(targetNodeRid, cutover, cancellationToken)
             .ConfigureAwait(false);
         CutoverSendSubmitted.TrySetResult();
     }
@@ -2144,11 +2448,9 @@ internal sealed class CanonicalRelocationTransportProbe
     internal ValueTask ReplayCutoverAsync(CancellationToken cancellationToken) =>
         _transport?.SendCanonicalRelocationCutoverAsync(
             _targetNodeRid,
-            _cutover ?? throw new InvalidOperationException(
-                "No canonical cutover was captured."),
-            cancellationToken)
-        ?? throw new InvalidOperationException(
-            "No canonical cutover transport was captured.");
+            _cutover ?? throw new InvalidOperationException("No canonical cutover was captured."),
+            cancellationToken
+        ) ?? throw new InvalidOperationException("No canonical cutover transport was captured.");
 
     internal void RecordSourceLeaveSubmission()
     {
@@ -2162,8 +2464,7 @@ internal sealed class CanonicalRelocationTransportProbe
         SourceLeaveSubmitted.TrySetResult();
     }
 
-    internal void RecordRemoteSessionPushSubmission() =>
-        RemoteSessionPushSubmitted.TrySetResult();
+    internal void RecordRemoteSessionPushSubmission() => RemoteSessionPushSubmitted.TrySetResult();
 
     internal async ValueTask SendNodeAsync(
         IZLinkBackendSpotNode transport,
@@ -2171,22 +2472,20 @@ internal sealed class CanonicalRelocationTransportProbe
         IReadOnlyList<Message> parts,
         SendFlags flags,
         CancellationToken cancellationToken,
-        ReadOnlyMemory<byte> metadata)
+        ReadOnlyMemory<byte> metadata
+    )
     {
-        await transport.SendToNodeAsync(
-                targetNodeRid,
-                parts,
-                flags,
-                cancellationToken,
-                metadata)
+        await transport
+            .SendToNodeAsync(targetNodeRid, parts, flags, cancellationToken, metadata)
             .ConfigureAwait(false);
-        if (ZLinkEnvelopeCodec.DecodeHeader(parts).MessageName
-            == ZLinkRemoteSessionPushProtocol.PacketName)
+        if (
+            ZLinkEnvelopeCodec.DecodeHeader(parts).MessageName
+            == ZLinkRemoteSessionPushProtocol.PacketName
+        )
         {
             RemoteSessionPush = Assert.IsType<ZLinkRemoteSessionPushRelay>(
-                ZLinkEnvelopeCodec.DecodeBody(
-                    parts,
-                    typeof(ZLinkRemoteSessionPushRelay)));
+                ZLinkEnvelopeCodec.DecodeBody(parts, typeof(ZLinkRemoteSessionPushRelay))
+            );
             RecordRemoteSessionPushSubmission();
         }
     }
@@ -2195,14 +2494,13 @@ internal sealed class CanonicalRelocationTransportProbe
         IZLinkBackendSessionRelocationBarrier transport,
         RoutingId targetNodeRid,
         ZLinkServiceWireCodec.SessionRelocationRouteRecord route,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken
+    )
     {
         SessionRoute = route;
         SessionRouteStarted.TrySetResult();
-        await transport.RouteSessionRelocationAsync(
-                targetNodeRid,
-                route,
-                cancellationToken)
+        await transport
+            .RouteSessionRelocationAsync(targetNodeRid, route, cancellationToken)
             .ConfigureAwait(false);
         SessionRouteCompleted.TrySetResult();
     }
@@ -2211,18 +2509,19 @@ internal sealed class CanonicalRelocationTransportProbe
         IZLinkBackendSpotNode transport,
         ZLinkBackendActorRef actor,
         TimeSpan timeout,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken
+    )
     {
         var attempt = Interlocked.Increment(ref _targetRollbackDestroyCount);
         TargetRollbackDestroyStarted.TrySetResult();
         if (attempt == 2)
             RetriedTargetRollbackDestroyStarted.TrySetResult();
-        await (attempt == 2 && _holdRetriedTargetRollbackDestroy
+        await (
+            attempt == 2 && _holdRetriedTargetRollbackDestroy
                 ? ReleaseRetriedTargetRollbackDestroy.Task
-                : ReleaseTargetRollbackDestroy.Task)
-            .WaitAsync(cancellationToken);
-        await transport.DestroyActorAsync(actor, timeout, cancellationToken)
-            .ConfigureAwait(false);
+                : ReleaseTargetRollbackDestroy.Task
+        ).WaitAsync(cancellationToken);
+        await transport.DestroyActorAsync(actor, timeout, cancellationToken).ConfigureAwait(false);
         TargetRollbackDestroyCompleted.TrySetResult();
         if (attempt == 2)
             RetriedTargetRollbackDestroyCompleted.TrySetResult();
@@ -2233,32 +2532,34 @@ internal sealed class CanonicalRelocationTransportProbe
 
     private sealed class ReadyGatedCanonicalRelocationTarget(
         ICanonicalRelocationTarget inner,
-        CanonicalRelocationTransportProbe probe) : ICanonicalRelocationTarget
+        CanonicalRelocationTransportProbe probe
+    ) : ICanonicalRelocationTarget
     {
-        public async ValueTask<ZLinkServiceWireCodec.RelocationReadyRecord>
-            PrepareAsync(
-                ZLinkServiceWireCodec.RelocationPrepareRecord prepare,
-                ZLinkRelocationEnvelope envelope,
-                RoutingId authenticatedSourceNodeRid,
-                ZLinkCanonicalRelocationPreparationLease lease,
-                CancellationToken cancellationToken)
+        public async ValueTask<ZLinkServiceWireCodec.RelocationReadyRecord> PrepareAsync(
+            ZLinkServiceWireCodec.RelocationPrepareRecord prepare,
+            ZLinkRelocationEnvelope envelope,
+            RoutingId authenticatedSourceNodeRid,
+            ZLinkCanonicalRelocationPreparationLease lease,
+            CancellationToken cancellationToken
+        )
         {
             var call = Interlocked.Increment(ref probe._targetPrepareCallCount);
             probe._prepareSourceNodeRid = authenticatedSourceNodeRid;
             ZLinkServiceWireCodec.RelocationReadyRecord ready;
             try
             {
-                ready = await inner.PrepareAsync(
+                ready = await inner
+                    .PrepareAsync(
                         prepare,
                         envelope,
                         authenticatedSourceNodeRid,
                         lease,
-                        cancellationToken)
+                        cancellationToken
+                    )
                     .ConfigureAwait(false);
             }
             catch (ZLinkFrameworkException exception)
-                when (call > 1
-                      && exception.Kind == ZLinkFrameworkErrorKind.Unavailable)
+                when (call > 1 && exception.Kind == ZLinkFrameworkErrorKind.Unavailable)
             {
                 probe.DuplicateTargetPrepareRejected.TrySetResult();
                 throw;
@@ -2271,7 +2572,8 @@ internal sealed class CanonicalRelocationTransportProbe
             probe.TargetPreparedBeforeReadySend.TrySetResult();
             var readyTerminal = await Task.WhenAny(
                     probe.ReleaseTargetReadySend.Task,
-                    probe.FailHeldTargetReadySend.Task)
+                    probe.FailHeldTargetReadySend.Task
+                )
                 .WaitAsync(cancellationToken);
             if (ReferenceEquals(readyTerminal, probe.FailHeldTargetReadySend.Task))
                 throw new IOException("Injected held READY terminal failure.");
@@ -2280,31 +2582,31 @@ internal sealed class CanonicalRelocationTransportProbe
 
         public void ReadySubmitted(
             ZLinkServiceWireCodec.RelocationPrepareRecord prepare,
-            RoutingId authenticatedSourceNodeRid) =>
-            inner.ReadySubmitted(prepare, authenticatedSourceNodeRid);
+            RoutingId authenticatedSourceNodeRid
+        ) => inner.ReadySubmitted(prepare, authenticatedSourceNodeRid);
 
         public void ReadySubmissionFailed(
             ZLinkServiceWireCodec.RelocationPrepareRecord prepare,
-            RoutingId authenticatedSourceNodeRid) =>
-            inner.ReadySubmissionFailed(prepare, authenticatedSourceNodeRid);
+            RoutingId authenticatedSourceNodeRid
+        ) => inner.ReadySubmissionFailed(prepare, authenticatedSourceNodeRid);
 
         public ValueTask AbortPreparedAsync(
             ZLinkServiceWireCodec.RelocationPrepareRecord prepare,
-            RoutingId authenticatedSourceNodeRid) =>
-            AbortAsync(prepare, authenticatedSourceNodeRid);
+            RoutingId authenticatedSourceNodeRid
+        ) => AbortAsync(prepare, authenticatedSourceNodeRid);
 
         private async ValueTask AbortAsync(
             ZLinkServiceWireCodec.RelocationPrepareRecord prepare,
-            RoutingId authenticatedSourceNodeRid)
+            RoutingId authenticatedSourceNodeRid
+        )
         {
             var call = Interlocked.Increment(ref probe._targetAbortCallCount);
             if (call == 1)
                 probe.TargetAbortCallStarted.TrySetResult();
             if (call == 1 && probe._holdTargetAbortRegistration)
                 await probe.ReleaseTargetAbortRegistration.Task;
-            await inner.AbortPreparedAsync(
-                    prepare,
-                    authenticatedSourceNodeRid)
+            await inner
+                .AbortPreparedAsync(prepare, authenticatedSourceNodeRid)
                 .ConfigureAwait(false);
             probe.TargetPrepareAborted.TrySetResult();
         }
@@ -2312,26 +2614,21 @@ internal sealed class CanonicalRelocationTransportProbe
         public ValueTask StageDataAsync(
             ZLinkServiceWireCodec.RelocationDataRecord data,
             RoutingId authenticatedSourceNodeRid,
-            CancellationToken cancellationToken) =>
-            inner.StageDataAsync(
-                data,
-                authenticatedSourceNodeRid,
-                cancellationToken);
+            CancellationToken cancellationToken
+        ) => inner.StageDataAsync(data, authenticatedSourceNodeRid, cancellationToken);
 
         public ValueTask CutoverAsync(
             ZLinkServiceWireCodec.RelocationCutoverRecord cutover,
             RoutingId authenticatedSourceNodeRid,
-            CancellationToken cancellationToken) =>
-            inner.CutoverAsync(
-                cutover,
-                authenticatedSourceNodeRid,
-                cancellationToken);
+            CancellationToken cancellationToken
+        ) => inner.CutoverAsync(cutover, authenticatedSourceNodeRid, cancellationToken);
     }
 }
 
 internal sealed class ProbedBackendAdapterFactory(
     IZLinkBackendAdapterFactory inner,
-    CanonicalRelocationTransportProbe probe) : IZLinkBackendAdapterFactory
+    CanonicalRelocationTransportProbe probe
+) : IZLinkBackendAdapterFactory
 {
     public IZLinkBackendRuntimeContext CreateRuntimeContext() =>
         new ProbedBackendRuntimeContext(inner.CreateRuntimeContext(), probe);
@@ -2342,7 +2639,8 @@ internal sealed class ProbedBackendAdapterFactory(
 
 internal sealed class ProbedBackendRuntimeContext(
     IZLinkBackendRuntimeContext inner,
-    CanonicalRelocationTransportProbe probe) : IZLinkBackendRuntimeContext
+    CanonicalRelocationTransportProbe probe
+) : IZLinkBackendRuntimeContext
 {
     private IZLinkBackendSpotNode? _innerSpotNode;
     private IZLinkBackendSpotNode? _probedSpotNode;
@@ -2350,22 +2648,23 @@ internal sealed class ProbedBackendRuntimeContext(
     public void ConfigureCoreHwm(
         AutoHwmProfile profile,
         ulong memoryLimitBytes,
-        ulong budgetBytes) =>
-        inner.ConfigureCoreHwm(profile, memoryLimitBytes, budgetBytes);
+        ulong budgetBytes
+    ) => inner.ConfigureCoreHwm(profile, memoryLimitBytes, budgetBytes);
 
-    public CoreHwmBudgetSnapshot GetCoreHwmBudgetSnapshot() =>
-        inner.GetCoreHwmBudgetSnapshot();
+    public CoreHwmBudgetSnapshot GetCoreHwmBudgetSnapshot() => inner.GetCoreHwmBudgetSnapshot();
 
-    public void ResetCoreHwmBudgetMetrics() =>
-        inner.ResetCoreHwmBudgetMetrics();
+    public void ResetCoreHwmBudgetMetrics() => inner.ResetCoreHwmBudgetMetrics();
 
     public void ConfigureApplicationJobQueue(
-        Zlink.Framework.Runtime.Dispatch.ZLinkApplicationJobQueue applicationJobQueue) =>
-        inner.ConfigureApplicationJobQueue(applicationJobQueue);
+        Zlink.Framework.Runtime.Dispatch.ZLinkApplicationJobQueue applicationJobQueue
+    ) => inner.ConfigureApplicationJobQueue(applicationJobQueue);
 
     public IDealerSocket CreateDealerSocket() => inner.CreateDealerSocket();
+
     public IRouterSocket CreateRouterSocket() => inner.CreateRouterSocket();
+
     public IPubSocket CreatePublisherSocket() => inner.CreatePublisherSocket();
+
     public ISubSocket CreateSubscriberSocket() => inner.CreateSubscriberSocket();
 
     public IZLinkBackendSpotNode CreateSpotNode(string meshName)
@@ -2377,27 +2676,27 @@ internal sealed class ProbedBackendRuntimeContext(
 
     public IZLinkBackendStreamSocket CreateStreamSocket(
         string standaloneMeshName,
-        IZLinkBackendSpotNode? actorDispatchNode = null) =>
+        IZLinkBackendSpotNode? actorDispatchNode = null
+    ) =>
         inner.CreateStreamSocket(
             standaloneMeshName,
-            ReferenceEquals(actorDispatchNode, _probedSpotNode)
-                ? _innerSpotNode
-                : actorDispatchNode);
+            ReferenceEquals(actorDispatchNode, _probedSpotNode) ? _innerSpotNode : actorDispatchNode
+        );
 
     public ValueTask DisposeAsync() => inner.DisposeAsync();
 }
 
-internal interface IProbedBackendSpotNode :
-    IZLinkBackendSpotNode,
-    IZLinkBackendRelocationReplyRelay,
-    IZLinkBackendCanonicalRelocation,
-    IZLinkBackendSessionRelocationBarrier,
-    IZLinkBackendAuthorityObserver,
-    IZLinkBackendRequestSourceFenceObserver,
-    IZLinkBackendLocalActorAuthorityReader,
-    IZLinkBackendActorMessageFollowIngress,
-    IZLinkBackendMessageFollowNotifications,
-    IZLinkBackendBoundSessionReplacementNotifications;
+internal interface IProbedBackendSpotNode
+    : IZLinkBackendSpotNode,
+        IZLinkBackendRelocationReplyRelay,
+        IZLinkBackendCanonicalRelocation,
+        IZLinkBackendSessionRelocationBarrier,
+        IZLinkBackendAuthorityObserver,
+        IZLinkBackendRequestSourceFenceObserver,
+        IZLinkBackendLocalActorAuthorityReader,
+        IZLinkBackendActorMessageFollowIngress,
+        IZLinkBackendMessageFollowNotifications,
+        IZLinkBackendBoundSessionReplacementNotifications;
 
 internal class ProbedBackendSpotNode : DispatchProxy
 {
@@ -2406,7 +2705,8 @@ internal class ProbedBackendSpotNode : DispatchProxy
 
     internal static IZLinkBackendSpotNode Create(
         IZLinkBackendSpotNode target,
-        CanonicalRelocationTransportProbe probe)
+        CanonicalRelocationTransportProbe probe
+    )
     {
         var proxy = Create<IProbedBackendSpotNode, ProbedBackendSpotNode>();
         var state = (ProbedBackendSpotNode)(object)proxy;
@@ -2420,36 +2720,48 @@ internal class ProbedBackendSpotNode : DispatchProxy
         ArgumentNullException.ThrowIfNull(targetMethod);
         args ??= [];
         var canonical = (IZLinkBackendCanonicalRelocation)_target;
-        if (targetMethod.Name == nameof(
-                IZLinkBackendCanonicalRelocation.SetCanonicalRelocationTarget))
+        if (
+            targetMethod.Name
+            == nameof(IZLinkBackendCanonicalRelocation.SetCanonicalRelocationTarget)
+        )
         {
             canonical.SetCanonicalRelocationTarget(
-                _probe.WrapTarget((ICanonicalRelocationTarget)args[0]!));
+                _probe.WrapTarget((ICanonicalRelocationTarget)args[0]!)
+            );
             return null;
         }
-        if (targetMethod.Name == nameof(
-                IZLinkBackendCanonicalRelocation.PrepareCanonicalRelocationAsync))
+        if (
+            targetMethod.Name
+            == nameof(IZLinkBackendCanonicalRelocation.PrepareCanonicalRelocationAsync)
+        )
             return _probe.PrepareAsync(
                 canonical,
                 (RoutingId)args[0]!,
                 (ZLinkServiceWireCodec.RelocationPrepareRecord)args[1]!,
                 (ZLinkRelocationTransferPayload)args[2]!,
                 (TimeSpan)args[3]!,
-                (CancellationToken)args[4]!);
-        if (targetMethod.Name == nameof(
-                IZLinkBackendCanonicalRelocation.SendCanonicalRelocationDataAsync))
+                (CancellationToken)args[4]!
+            );
+        if (
+            targetMethod.Name
+            == nameof(IZLinkBackendCanonicalRelocation.SendCanonicalRelocationDataAsync)
+        )
             return _probe.SendDataAsync(
                 canonical,
                 (RoutingId)args[0]!,
                 (ZLinkServiceWireCodec.RelocationDataRecord)args[1]!,
-                (CancellationToken)args[2]!);
-        if (targetMethod.Name == nameof(
-                IZLinkBackendCanonicalRelocation.SendCanonicalRelocationCutoverAsync))
+                (CancellationToken)args[2]!
+            );
+        if (
+            targetMethod.Name
+            == nameof(IZLinkBackendCanonicalRelocation.SendCanonicalRelocationCutoverAsync)
+        )
             return _probe.SendCutoverAsync(
                 canonical,
                 (RoutingId)args[0]!,
                 (ZLinkServiceWireCodec.RelocationCutoverRecord)args[1]!,
-                (CancellationToken)args[2]!);
+                (CancellationToken)args[2]!
+            );
         if (targetMethod.Name == nameof(IZLinkBackendSpotNode.SendToNodeAsync))
             return _probe.SendNodeAsync(
                 (IZLinkBackendSpotNode)_target,
@@ -2457,27 +2769,34 @@ internal class ProbedBackendSpotNode : DispatchProxy
                 (IReadOnlyList<Message>)args[1]!,
                 (SendFlags)args[2]!,
                 (CancellationToken)args[3]!,
-                (ReadOnlyMemory<byte>)args[4]!);
-        if (targetMethod.Name == nameof(
-                IZLinkBackendSessionRelocationBarrier.RouteSessionRelocationAsync))
+                (ReadOnlyMemory<byte>)args[4]!
+            );
+        if (
+            targetMethod.Name
+            == nameof(IZLinkBackendSessionRelocationBarrier.RouteSessionRelocationAsync)
+        )
             return _probe.RouteSessionAsync(
                 (IZLinkBackendSessionRelocationBarrier)_target,
                 (RoutingId)args[0]!,
                 (ZLinkServiceWireCodec.SessionRelocationRouteRecord)args[1]!,
-                (CancellationToken)args[2]!);
+                (CancellationToken)args[2]!
+            );
         if (targetMethod.Name == nameof(IZLinkBackendSpotNode.DestroyActorAsync))
             return _probe.DestroyActorAsync(
                 (IZLinkBackendSpotNode)_target,
                 (ZLinkBackendActorRef)args[0]!,
                 (TimeSpan)args[1]!,
-                (CancellationToken)args[2]!);
+                (CancellationToken)args[2]!
+            );
 
         try
         {
             var result = targetMethod.Invoke(_target, args);
-            if (targetMethod.Name == nameof(IZLinkBackendSpotNode.SendToNode)
+            if (
+                targetMethod.Name == nameof(IZLinkBackendSpotNode.SendToNode)
                 && result is SubmitResult.Ok
-                && args[1] is IReadOnlyList<Message> parts)
+                && args[1] is IReadOnlyList<Message> parts
+            )
             {
                 var packetName = ZLinkEnvelopeCodec.DecodeHeader(parts).MessageName;
                 if (packetName == ZLinkRemoteActorSourceLeaveProtocol.PacketName)
@@ -2495,22 +2814,19 @@ internal class ProbedBackendSpotNode : DispatchProxy
     }
 }
 
-internal sealed class RelocationBehaviorSessionHandlers
-    : IZLinkSessionHandlerRegistry
+internal sealed class RelocationBehaviorSessionHandlers : IZLinkSessionHandlerRegistry
 {
-    public void AddHandler<THandler>() where THandler : class
-    {
-    }
+    public void AddHandler<THandler>()
+        where THandler : class { }
 
-    public void AddHandler<THandler>(string packetName) where THandler : class
-    {
-    }
+    public void AddHandler<THandler>(string packetName)
+        where THandler : class { }
 
     public ValueTask<bool> TryHandleAsync(
         ZLinkSessionDispatchContext dispatch,
         ZLinkMessage payload,
-        CancellationToken cancellationToken = default) =>
-        ValueTask.FromResult(false);
+        CancellationToken cancellationToken = default
+    ) => ValueTask.FromResult(false);
 }
 
 internal sealed class RelocationBehaviorStream(RoutingId routingId) : IZLinkStream
@@ -2530,9 +2846,7 @@ internal sealed class RelocationBehaviorStream(RoutingId routingId) : IZLinkStre
 
     public string? RemoteAddr => null;
 
-    public bool Write(
-        ZLinkMessage payload,
-        SendFlags flags = SendFlags.None)
+    public bool Write(ZLinkMessage payload, SendFlags flags = SendFlags.None)
     {
         Interlocked.Increment(ref _writeCount);
         FirstWrite.TrySetResult();

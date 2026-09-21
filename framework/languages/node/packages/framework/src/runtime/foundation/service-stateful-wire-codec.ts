@@ -352,11 +352,10 @@ export type ServiceSessionRelocationRoute =
     };
 
 export function serviceSessionRelocationIdentityKey(
-  value: ServiceSessionRelocationSeal | ServiceSessionRelocationSealed | ServiceSessionRelocationRoute
+  value:
+    ServiceSessionRelocationSeal | ServiceSessionRelocationSealed | ServiceSessionRelocationRoute
 ): string {
-  const actor = 'targetNodeGeneration' in value.actor
-    ? value.actor.actor
-    : value.actor;
+  const actor = 'targetNodeGeneration' in value.actor ? value.actor.actor : value.actor;
   //  Session owner가 seal을 대조할 때 쓰는 값만 넣는다 — Session과 Actor binding
   //  §8.1 "Session owner는 다음 값만 검증한다". coordinator identity는 transport가
   //  검증하는 wire fence이므로 여기서 다시 대조하지 않는다.
@@ -434,9 +433,7 @@ function toGeneratedUserSpotClose(
   };
 }
 
-function fromGeneratedUserSpotClose(
-  value: GeneratedUserSpotClose48
-): ServiceUserSpotCloseRecord {
+function fromGeneratedUserSpotClose(value: GeneratedUserSpotClose48): ServiceUserSpotCloseRecord {
   return {
     kind: 'userSpotClose',
     correlation: value.correlation,
@@ -696,12 +693,13 @@ function fromGeneratedSessionRelocationSealed(
 function toGeneratedSessionRelocationRoute(
   value: ServiceSessionRelocationRoute
 ): GeneratedSessionRelocationRoute44 {
-  const route = value.route.action === 'commit'
-    ? {
-        ...value.route,
-        targetNodeRid: toGeneratedRoutingId(value.route.targetNodeRid, 'targetNodeRid')
-      }
-    : value.route;
+  const route =
+    value.route.action === 'commit'
+      ? {
+          ...value.route,
+          targetNodeRid: toGeneratedRoutingId(value.route.targetNodeRid, 'targetNodeRid')
+        }
+      : value.route;
   return {
     relocation: value.relocation,
     coordinator: toGeneratedCoordinatorFence(value.coordinator),
@@ -855,13 +853,15 @@ function toGeneratedReplyRelay(value: ServiceMaintenanceReplyRelay): GeneratedRe
     },
     terminalResult: value.terminalResult,
     failureCode: value.failureCode,
-    ...(value.payload === undefined ? {} : {
-      payload: {
-        packetName: value.payload.packetName,
-        contentType: value.payload.contentType,
-        payload: value.payload.bytes
-      }
-    })
+    ...(value.payload === undefined
+      ? {}
+      : {
+          payload: {
+            packetName: value.payload.packetName,
+            contentType: value.payload.contentType,
+            payload: value.payload.bytes
+          }
+        })
   };
 }
 
@@ -879,13 +879,15 @@ function fromGeneratedReplyRelay(value: GeneratedReplyRelay33): ServiceMaintenan
     sequence: value.context.sequence,
     terminalResult: value.terminalResult,
     failureCode: value.failureCode,
-    ...(value.payload === undefined ? {} : {
-      payload: {
-        packetName: value.payload.packetName,
-        contentType: value.payload.contentType,
-        bytes: Buffer.from(value.payload.payload)
-      }
-    })
+    ...(value.payload === undefined
+      ? {}
+      : {
+          payload: {
+            packetName: value.payload.packetName,
+            contentType: value.payload.contentType,
+            bytes: Buffer.from(value.payload.payload)
+          }
+        })
   };
 }
 
@@ -1142,9 +1144,9 @@ export function encodeSpotHeader(
   correlation?: bigint
 ): Buffer {
   return concat(
-    prefix(kind === 'spotSend'
-      ? M6bServiceWireCommand.spotSend
-      : M6bServiceWireCommand.spotRequest),
+    prefix(
+      kind === 'spotSend' ? M6bServiceWireCommand.spotSend : M6bServiceWireCommand.spotRequest
+    ),
     ...(kind === 'spotRequest' ? [u64(requirePositive(correlation, 'correlation'))] : []),
     rid(sourceSpotId, 'sourceSpotId'),
     directSpotFence(target)
@@ -1158,14 +1160,13 @@ export function encodeActorHeader(
   sourceActor?: ServiceActorRef,
   boundSession?: ServiceBoundSessionSource
 ): Buffer {
-  const flags = boundSession === undefined
-    ? 0
-    : M6bServiceWireFlag.boundSession | M6bServiceWireFlag.sourceSpotId;
+  const flags =
+    boundSession === undefined
+      ? 0
+      : M6bServiceWireFlag.boundSession | M6bServiceWireFlag.sourceSpotId;
   return concat(
     prefix(
-      kind === 'actorSend'
-        ? M6bServiceWireCommand.actorSend
-        : M6bServiceWireCommand.actorRequest,
+      kind === 'actorSend' ? M6bServiceWireCommand.actorSend : M6bServiceWireCommand.actorRequest,
       flags
     ),
     ...(kind === 'actorRequest' ? [u64(requirePositive(correlation, 'correlation'))] : []),
@@ -1226,9 +1227,8 @@ export function encodeBoundSessionBindHeader(
   sessionRid: string,
   binding: ServiceBoundSessionTransition
 ): Buffer {
-  const body = binding.state === 'active'
-    ? u64(binding.generation)
-    : u64(binding.retiredGeneration);
+  const body =
+    binding.state === 'active' ? u64(binding.generation) : u64(binding.retiredGeneration);
   return concat(
     prefix(M6bServiceWireCommand.boundSessionBind),
     u64(correlation),
@@ -1258,9 +1258,9 @@ export function encodeBoundSessionReplacedHeader(
 
 /** Encodes canonical service-wire command 42. */
 export function encodeSessionRelocationSeal(value: ServiceSessionRelocationSeal): Buffer {
-  return Buffer.from(encodeGeneratedSessionRelocationSeal42(
-    toGeneratedSessionRelocationSeal(value)
-  ));
+  return Buffer.from(
+    encodeGeneratedSessionRelocationSeal42(toGeneratedSessionRelocationSeal(value))
+  );
 }
 
 /** Decodes canonical service-wire command 42. */
@@ -1270,9 +1270,9 @@ export function decodeSessionRelocationSeal(frame: Uint8Array): ServiceSessionRe
 
 /** Encodes canonical service-wire command 43. */
 export function encodeSessionRelocationSealed(value: ServiceSessionRelocationSealed): Buffer {
-  return Buffer.from(encodeGeneratedSessionRelocationSealed43(
-    toGeneratedSessionRelocationSealed(value)
-  ));
+  return Buffer.from(
+    encodeGeneratedSessionRelocationSealed43(toGeneratedSessionRelocationSealed(value))
+  );
 }
 
 /** Decodes canonical service-wire command 43. */
@@ -1282,9 +1282,9 @@ export function decodeSessionRelocationSealed(frame: Uint8Array): ServiceSession
 
 /** Encodes canonical service-wire command 44. */
 export function encodeSessionRelocationRoute(value: ServiceSessionRelocationRoute): Buffer {
-  return Buffer.from(encodeGeneratedSessionRelocationRoute44(
-    toGeneratedSessionRelocationRoute(value)
-  ));
+  return Buffer.from(
+    encodeGeneratedSessionRelocationRoute44(toGeneratedSessionRelocationRoute(value))
+  );
 }
 
 /** Decodes canonical service-wire command 44. */
@@ -1313,8 +1313,8 @@ export function encodeInstanceSpotHeader(
     text16(route.storeVersion, 'storeVersion')
   );
   if (
-    operationKind === 'send'
-    && (operation.high !== 0n || operation.low !== 0n || replyRouteId !== undefined)
+    operationKind === 'send' &&
+    (operation.high !== 0n || operation.low !== 0n || replyRouteId !== undefined)
   ) {
     throw new RangeError('Instance Spot send must not carry an operation or reply route.');
   }
@@ -1322,10 +1322,7 @@ export function encodeInstanceSpotHeader(
     throw new RangeError('Instance Spot request requires a non-zero operation.');
   }
   return concat(
-    prefix(
-      M6bServiceWireCommand.instanceSpot,
-      hasMetadata ? M6bServiceWireFlag.metadata : 0
-    ),
+    prefix(M6bServiceWireCommand.instanceSpot, hasMetadata ? M6bServiceWireFlag.metadata : 0),
     Buffer.of(1),
     u16(routeBody.byteLength),
     routeBody,
@@ -1335,9 +1332,7 @@ export function encodeInstanceSpotHeader(
     Buffer.of(operationKind === 'send' ? 1 : 2),
     u64Any(operation.high),
     u64Any(operation.low),
-    ...(operationKind === 'request'
-      ? [u64(requirePositive(replyRouteId, 'replyRouteId'))]
-      : [])
+    ...(operationKind === 'request' ? [u64(requirePositive(replyRouteId, 'replyRouteId'))] : [])
   );
 }
 
@@ -1369,10 +1364,7 @@ export function encodeInstanceSpotActivationHeader(
     text16(target.descriptorVersion, 'descriptorVersion')
   );
   return concat(
-    prefix(
-      M6bServiceWireCommand.instanceSpot,
-      hasMetadata ? M6bServiceWireFlag.metadata : 0
-    ),
+    prefix(M6bServiceWireCommand.instanceSpot, hasMetadata ? M6bServiceWireFlag.metadata : 0),
     Buffer.of(2),
     u16(targetBody.byteLength),
     targetBody,
@@ -1383,13 +1375,13 @@ export function encodeInstanceSpotActivationHeader(
     u64Any(operation.high),
     u64Any(operation.low),
     u64(deadlineUnixMs),
-    ...(operationKind === 'request'
-      ? [u64(requirePositive(replyRouteId, 'replyRouteId'))]
-      : [])
+    ...(operationKind === 'request' ? [u64(requirePositive(replyRouteId, 'replyRouteId'))] : [])
   );
 }
 
-export function encodeUserSpotCreateHeader(record: Omit<ServiceUserSpotCreateRecord, 'kind'>): Buffer {
+export function encodeUserSpotCreateHeader(
+  record: Omit<ServiceUserSpotCreateRecord, 'kind'>
+): Buffer {
   return Buffer.from(encodeGeneratedUserSpotCreate47(toGeneratedUserSpotCreate(record)));
 }
 
@@ -1397,7 +1389,9 @@ export function encodeActorCreateHeader(record: Omit<ServiceActorCreateRecord, '
   return Buffer.from(encodeGeneratedActorCreate49(toGeneratedActorCreate(record)));
 }
 
-export function encodeUserSpotCloseHeader(record: Omit<ServiceUserSpotCloseRecord, 'kind'>): Buffer {
+export function encodeUserSpotCloseHeader(
+  record: Omit<ServiceUserSpotCloseRecord, 'kind'>
+): Buffer {
   return Buffer.from(encodeGeneratedUserSpotClose48(toGeneratedUserSpotClose(record)));
 }
 
@@ -1459,9 +1453,7 @@ export function decodeStatefulHeader(frame: Uint8Array): ServiceStatefulWireReco
       const hasBinding = command.flags !== 0;
       requireFlags(
         command.flags,
-        hasBinding
-          ? M6bServiceWireFlag.boundSession | M6bServiceWireFlag.sourceSpotId
-          : 0
+        hasBinding ? M6bServiceWireFlag.boundSession | M6bServiceWireFlag.sourceSpotId : 0
       );
       const correlation = request ? reader.nonZeroU64('correlation') : undefined;
       const sourceActor = reader.optionalActor();
@@ -1565,9 +1557,10 @@ export function decodeStatefulHeader(frame: Uint8Array): ServiceStatefulWireReco
         correlation,
         actor,
         sessionRid,
-        binding: state === 1
-          ? { state: 'active', generation }
-          : { state: 'tombstone', retiredGeneration: generation }
+        binding:
+          state === 1
+            ? { state: 'active', generation }
+            : { state: 'tombstone', retiredGeneration: generation }
       };
     }
     case M6bServiceWireCommand.boundSessionReplaced: {
@@ -1580,9 +1573,7 @@ export function decodeStatefulHeader(frame: Uint8Array): ServiceStatefulWireReco
         authorityOwnerGeneration: reader.nonZeroU64(
           'actorAuthority.expectedAuthorityOwnerGeneration'
         ),
-        ownerLeaseGeneration: reader.nonZeroU64(
-          'actorAuthority.expectedOwnerLeaseGeneration'
-        )
+        ownerLeaseGeneration: reader.nonZeroU64('actorAuthority.expectedOwnerLeaseGeneration')
       };
       const retiredSession = {
         sessionOwnerNodeRid: reader.rid('sessionOwnerNodeRid'),
@@ -1608,23 +1599,25 @@ export function decodeStatefulHeader(frame: Uint8Array): ServiceStatefulWireReco
         targetNodeGeneration: reader.nonZeroU64('targetNodeGeneration'),
         targetSpotId: reader.rid('targetSpotId')
       };
-      const route: ServiceInstanceRouteFence | undefined = version === 1
-        ? {
-            ...commonTarget,
-            objectGeneration: reader.nonZeroU64('objectGeneration'),
-            ownerId: reader.text8('ownerId'),
-            authorityOwnerGeneration: reader.nonZeroU64('authorityOwnerGeneration'),
-            leaseGeneration: reader.nonZeroU64('leaseGeneration'),
-            storeVersion: reader.text16('storeVersion')
-          }
-        : undefined;
-      const target: ServiceInstanceActivationTarget | undefined = version === 2
-        ? {
-            ...commonTarget,
-            stableType: reader.text16('stableType'),
-            descriptorVersion: reader.text16('descriptorVersion')
-          }
-        : undefined;
+      const route: ServiceInstanceRouteFence | undefined =
+        version === 1
+          ? {
+              ...commonTarget,
+              objectGeneration: reader.nonZeroU64('objectGeneration'),
+              ownerId: reader.text8('ownerId'),
+              authorityOwnerGeneration: reader.nonZeroU64('authorityOwnerGeneration'),
+              leaseGeneration: reader.nonZeroU64('leaseGeneration'),
+              storeVersion: reader.text16('storeVersion')
+            }
+          : undefined;
+      const target: ServiceInstanceActivationTarget | undefined =
+        version === 2
+          ? {
+              ...commonTarget,
+              stableType: reader.text16('stableType'),
+              descriptorVersion: reader.text16('descriptorVersion')
+            }
+          : undefined;
       if (reader.offset !== routeEnd) fail('Invalid Instance route body length.');
       const sourceNodeGeneration = reader.nonZeroU64('sourceNodeGeneration');
       const sourceNodeRid = reader.rid('sourceNodeRid');
@@ -1635,22 +1628,20 @@ export function decodeStatefulHeader(frame: Uint8Array): ServiceStatefulWireReco
         high: reader.u64('operation.high'),
         low: reader.u64('operation.low')
       };
-      const operationKind = operationValue === 1 ? 'send' as const : 'request' as const;
-      if (version === 1 && (
-        (operationKind === 'send' && (operation.high !== 0n || operation.low !== 0n))
-        || (operationKind === 'request' && operation.high === 0n && operation.low === 0n)
-      )) {
+      const operationKind = operationValue === 1 ? ('send' as const) : ('request' as const);
+      if (
+        version === 1 &&
+        ((operationKind === 'send' && (operation.high !== 0n || operation.low !== 0n)) ||
+          (operationKind === 'request' && operation.high === 0n && operation.low === 0n))
+      ) {
         fail('Invalid Instance operation identity.');
       }
       if (version === 2 && operation.high === 0n && operation.low === 0n) {
         fail('Instance activation requires a non-zero operation identity.');
       }
-      const deadlineUnixMs = version === 2
-        ? reader.nonZeroU64('deadlineUnixMs')
-        : undefined;
-      const replyRouteId = operationKind === 'request'
-        ? reader.nonZeroU64('replyRouteId')
-        : undefined;
+      const deadlineUnixMs = version === 2 ? reader.nonZeroU64('deadlineUnixMs') : undefined;
+      const replyRouteId =
+        operationKind === 'request' ? reader.nonZeroU64('replyRouteId') : undefined;
       reader.end();
       const common = {
         kind: 'instanceSpot' as const,
@@ -1722,56 +1713,68 @@ export function encodeMaintenanceRelocationControl(
 ): Buffer {
   switch (value.kind) {
     case 'prepare':
-      return Buffer.from(encodeGeneratedRelocationPrepare40({
-        ...toGeneratedRelocationBase(value),
-        target: toGeneratedTargetFence(value.target),
-        initiatorRole: value.initiatorRole,
-        object: toGeneratedRelocationObject(value.object),
-        sourceNodeRid: toGeneratedRoutingId(value.sourceNodeRid, 'sourceNodeRid'),
-        sourceNodeGeneration: value.sourceNodeGeneration,
-        payloadTotalLength: value.payloadTotalLength,
-        payloadChunkCount: value.payloadChunkCount,
-        payloadChecksumCrc32c: value.payloadChecksumCrc32c,
-        applicationVersion: value.applicationVersion
-      }));
+      return Buffer.from(
+        encodeGeneratedRelocationPrepare40({
+          ...toGeneratedRelocationBase(value),
+          target: toGeneratedTargetFence(value.target),
+          initiatorRole: value.initiatorRole,
+          object: toGeneratedRelocationObject(value.object),
+          sourceNodeRid: toGeneratedRoutingId(value.sourceNodeRid, 'sourceNodeRid'),
+          sourceNodeGeneration: value.sourceNodeGeneration,
+          payloadTotalLength: value.payloadTotalLength,
+          payloadChunkCount: value.payloadChunkCount,
+          payloadChecksumCrc32c: value.payloadChecksumCrc32c,
+          applicationVersion: value.applicationVersion
+        })
+      );
     case 'ready':
-      return Buffer.from(encodeGeneratedRelocationReady30({
-        ...toGeneratedRelocationBase(value),
-        target: toGeneratedTargetFence(value.target),
-        object: toGeneratedRelocationObject(value.object),
-        senderRole: value.senderRole
-      }));
+      return Buffer.from(
+        encodeGeneratedRelocationReady30({
+          ...toGeneratedRelocationBase(value),
+          target: toGeneratedTargetFence(value.target),
+          object: toGeneratedRelocationObject(value.object),
+          senderRole: value.senderRole
+        })
+      );
     case 'failed':
-      return Buffer.from(encodeGeneratedRelocationFailed53({
-        ...toGeneratedRelocationBase(value),
-        target: toGeneratedTargetFence(value.target),
-        object: toGeneratedRelocationObject(value.object),
-        senderRole: value.senderRole,
-        failureCode: value.failureCode
-      }));
+      return Buffer.from(
+        encodeGeneratedRelocationFailed53({
+          ...toGeneratedRelocationBase(value),
+          target: toGeneratedTargetFence(value.target),
+          object: toGeneratedRelocationObject(value.object),
+          senderRole: value.senderRole,
+          failureCode: value.failureCode
+        })
+      );
     case 'data':
-      return Buffer.from(encodeGeneratedRelocationData31({
-        ...toGeneratedRelocationBase(value),
-        senderRole: value.senderRole,
-        object: toGeneratedRelocationObject(value.object),
-        record: encodeServiceWireFrozenRecord(value.frozenRecord)
-      }));
+      return Buffer.from(
+        encodeGeneratedRelocationData31({
+          ...toGeneratedRelocationBase(value),
+          senderRole: value.senderRole,
+          object: toGeneratedRelocationObject(value.object),
+          record: encodeServiceWireFrozenRecord(value.frozenRecord)
+        })
+      );
     case 'cutover':
-      return Buffer.from(encodeGeneratedRelocationCutover34({
-        ...toGeneratedRelocationBase(value),
-        senderRole: value.senderRole,
-        object: toGeneratedRelocationObject(value.object),
-        boundaryRecordCount: value.boundaryRecordCount,
-        boundaryChecksumCrc32c: value.boundaryChecksumCrc32c
-      }));
+      return Buffer.from(
+        encodeGeneratedRelocationCutover34({
+          ...toGeneratedRelocationBase(value),
+          senderRole: value.senderRole,
+          object: toGeneratedRelocationObject(value.object),
+          boundaryRecordCount: value.boundaryRecordCount,
+          boundaryChecksumCrc32c: value.boundaryChecksumCrc32c
+        })
+      );
     case 'state':
-      return Buffer.from(encodeGeneratedRelocationState52({
-        ...toGeneratedRelocationBase(value),
-        senderRole: value.senderRole,
-        object: toGeneratedRelocationObject(value.object),
-        chunkOrdinal: value.chunkOrdinal,
-        chunkData: value.chunkData
-      }));
+      return Buffer.from(
+        encodeGeneratedRelocationState52({
+          ...toGeneratedRelocationBase(value),
+          senderRole: value.senderRole,
+          object: toGeneratedRelocationObject(value.object),
+          chunkOrdinal: value.chunkOrdinal,
+          chunkData: value.chunkData
+        })
+      );
   }
 }
 
@@ -1813,14 +1816,16 @@ export function decodeMaintenanceReplyRelay(
 
 /** Encodes canonical service-wire command 46. */
 export function encodeMaintenanceReplyRelayAck(value: ServiceMaintenanceReplyRelayAck): Buffer {
-  return Buffer.from(encodeGeneratedReplyRelayAck46({
-    relocation: value.relocation,
-    coordinator: toGeneratedCoordinatorFence(value.coordinator),
-    operation: value.operation,
-    replyRouteId: value.replyRouteId,
-    requestSource: toGeneratedRequestSourceFence(value.requestSource),
-    status: value.status
-  }));
+  return Buffer.from(
+    encodeGeneratedReplyRelayAck46({
+      relocation: value.relocation,
+      coordinator: toGeneratedCoordinatorFence(value.coordinator),
+      operation: value.operation,
+      replyRouteId: value.replyRouteId,
+      requestSource: toGeneratedRequestSourceFence(value.requestSource),
+      status: value.status
+    })
+  );
 }
 
 /** Decodes canonical service-wire command 46. */
@@ -1839,9 +1844,18 @@ export function decodeMaintenanceReplyRelayAck(frame: Uint8Array): ServiceMainte
 export function decodeStatefulReply(
   frame: Uint8Array,
   expectedCorrelation: bigint,
-  operationKind: 'spotRequest' | 'actorRequest' | 'actorLookup' | 'actorDestroy' | 'actorJoin' | 'streamBind'
+  operationKind:
+    | 'spotRequest'
+    | 'actorRequest'
+    | 'actorLookup'
+    | 'actorDestroy'
+    | 'actorJoin'
+    | 'streamBind'
     | 'streamUnbind'
-    | 'instanceSpotRequest' | 'userSpotCreate' | 'userSpotClose' | 'actorCreate',
+    | 'instanceSpotRequest'
+    | 'userSpotCreate'
+    | 'userSpotClose'
+    | 'actorCreate',
   hasPayload = false
 ): ServiceStatefulReply {
   const reader = new Reader(frame);
@@ -1876,15 +1890,16 @@ export function decodeStatefulReply(
         const membershipEpoch = reader.nonZeroU64('membershipEpoch');
         // Tolerant of frames from an unpatched encoder that stops after
         // membershipEpoch: 0 means "not advertised".
-        const receiveChunkLimitBytes = reader.offset === bodyEnd
-          ? 0
-          : (() => {
-              const value = reader.u32('receiveChunkLimitBytes');
-              if (value > RELOCATION_STATE_CHUNK_DATA_MAX_BYTES) {
-                fail('receiveChunkLimitBytes exceeds the relocation state chunk data bound.');
-              }
-              return value;
-            })();
+        const receiveChunkLimitBytes =
+          reader.offset === bodyEnd
+            ? 0
+            : (() => {
+                const value = reader.u32('receiveChunkLimitBytes');
+                if (value > RELOCATION_STATE_CHUNK_DATA_MAX_BYTES) {
+                  fail('receiveChunkLimitBytes exceeds the relocation state chunk data bound.');
+                }
+                return value;
+              })();
         if (reader.offset !== bodyEnd) fail('Invalid actor join body length.');
         tail = { kind: 'actorJoin', joinResult, spot, membershipEpoch, receiveChunkLimitBytes };
       } else {
@@ -1923,13 +1938,14 @@ export function decodeStatefulReply(
       const end = reader.offset + length;
       if (end > reader.bytes.byteLength) fail('Truncated Actor create terminal.');
       const result = (['existing', 'created', 'rejected'] as const)[createResult - 1]!;
-      const actor = result === 'rejected'
-        ? undefined
-        : {
-            nodeRid: reader.rid('actor.nodeRid'),
-            actorId: reader.text8('actor.actorId'),
-            generation: reader.nonZeroU64('actor.objectGeneration')
-          };
+      const actor =
+        result === 'rejected'
+          ? undefined
+          : {
+              nodeRid: reader.rid('actor.nodeRid'),
+              actorId: reader.text8('actor.actorId'),
+              generation: reader.nonZeroU64('actor.objectGeneration')
+            };
       if (reader.offset !== end) fail('Invalid Actor create terminal length.');
       tail = {
         kind: 'actorCreate',
@@ -1986,8 +2002,10 @@ function encodeReplyTail(tail: ServiceStatefulReplyTail): Buffer {
           fail('Accepted actor join requires a membership epoch.');
         }
         const receiveChunkLimitBytes = tail.receiveChunkLimitBytes ?? 0;
-        if (receiveChunkLimitBytes < 0
-          || receiveChunkLimitBytes > RELOCATION_STATE_CHUNK_DATA_MAX_BYTES) {
+        if (
+          receiveChunkLimitBytes < 0 ||
+          receiveChunkLimitBytes > RELOCATION_STATE_CHUNK_DATA_MAX_BYTES
+        ) {
           fail('receiveChunkLimitBytes exceeds the relocation state chunk data bound.');
         }
         const body = concat(
@@ -1997,12 +2015,13 @@ function encodeReplyTail(tail: ServiceStatefulReplyTail): Buffer {
         );
         return concat(u32(0, 'joinResult'), u16(body.byteLength), body);
       }
-      const optional = tail.spot === undefined
-        ? concat(Buffer.of(0), u16(0))
-        : (() => {
-            const body = spotRef(tail.spot);
-            return concat(Buffer.of(1), u16(body.byteLength), body);
-          })();
+      const optional =
+        tail.spot === undefined
+          ? concat(Buffer.of(0), u16(0))
+          : (() => {
+              const body = spotRef(tail.spot);
+              return concat(Buffer.of(1), u16(body.byteLength), body);
+            })();
       return concat(u32(1, 'joinResult'), u16(optional.byteLength), optional);
     }
     case 'streamBind':
@@ -2016,13 +2035,14 @@ function encodeReplyTail(tail: ServiceStatefulReplyTail): Buffer {
     case 'userSpotClose':
       return Buffer.of(tail.closed ? 1 : 0);
     case 'actorCreate': {
-      const selected = tail.actor === undefined
-        ? Buffer.alloc(0)
-        : concat(
-            rid(tail.actor.nodeRid, 'actor.nodeRid'),
-            text8(tail.actor.actorId, 'actor.actorId'),
-            u64(tail.actor.generation)
-          );
+      const selected =
+        tail.actor === undefined
+          ? Buffer.alloc(0)
+          : concat(
+              rid(tail.actor.nodeRid, 'actor.nodeRid'),
+              text8(tail.actor.actorId, 'actor.actorId'),
+              u64(tail.actor.generation)
+            );
       return concat(
         Buffer.of((['existing', 'created', 'rejected'] as const).indexOf(tail.createResult) + 1),
         u16(selected.byteLength),
@@ -2053,8 +2073,18 @@ function validateReplyTerminal(
 }
 
 function validateRelocationPhase(value: number): void {
-  const phases = ['none', 'preparing', 'captured', 'prepared', 'committed',
-    'activating', 'activated', 'cleaning', 'completed', 'aborted'] as const;
+  const phases = [
+    'none',
+    'preparing',
+    'captured',
+    'prepared',
+    'committed',
+    'activating',
+    'activated',
+    'cleaning',
+    'completed',
+    'aborted'
+  ] as const;
   if (!Number.isInteger(value) || value < 0 || value >= phases.length) {
     fail('Invalid relocationData control phase.');
   }
@@ -2105,64 +2135,68 @@ function spotFence(value: ServiceSpotRouteFence): Buffer {
 }
 
 function directSpotFence(value: ServiceDirectSpotRouteFence): Buffer {
-  return concat(
-    spotFence(value),
-    text16(value.storeVersion, 'storeVersion')
-  );
+  return concat(spotFence(value), text16(value.storeVersion, 'storeVersion'));
 }
 
 function messageFollowRoute(value: ServiceMessageFollowRoute): Buffer {
-  const body = value.kind === 'actor'
-    ? concat(
-        actorRef(value.actor),
-        rid(value.targetNodeRid, 'targetNodeRid'),
-        u64(value.targetNodeGeneration),
-        u64(value.authorityOwnerGeneration),
-        u64(value.ownerLeaseGeneration)
-      )
-    : concat(
-        spotRef(value.spot),
-        rid(value.targetNodeRid, 'targetNodeRid'),
-        u64(value.targetNodeGeneration),
-        u64(value.authorityOwnerGeneration),
-        u64(value.ownerLeaseGeneration)
-      );
+  const body =
+    value.kind === 'actor'
+      ? concat(
+          actorRef(value.actor),
+          rid(value.targetNodeRid, 'targetNodeRid'),
+          u64(value.targetNodeGeneration),
+          u64(value.authorityOwnerGeneration),
+          u64(value.ownerLeaseGeneration)
+        )
+      : concat(
+          spotRef(value.spot),
+          rid(value.targetNodeRid, 'targetNodeRid'),
+          u64(value.targetNodeGeneration),
+          u64(value.authorityOwnerGeneration),
+          u64(value.ownerLeaseGeneration)
+        );
   return concat(Buffer.of(value.kind === 'actor' ? 1 : 2), u16(body.byteLength), body);
 }
 
 function validateMessageFollowRecord(
   value: Omit<ServiceMessageFollowRecord, 'kind'>,
-  invalid: (message: string) => never = (message) => { throw new RangeError(message); }
+  invalid: (message: string) => never = (message) => {
+    throw new RangeError(message);
+  }
 ): void {
   if (value.source.kind !== value.target.kind) {
     invalid('Message Follow source and target object kinds differ.');
   }
-  const sameObject = value.source.kind === 'actor' && value.target.kind === 'actor'
-    ? value.source.actor.actorId === value.target.actor.actorId
-      && value.source.actor.generation === value.target.actor.generation
-    : value.source.kind === 'spot' && value.target.kind === 'spot'
-      ? value.source.spot.spotId === value.target.spot.spotId
-        && value.source.spot.generation === value.target.spot.generation
-      : false;
+  const sameObject =
+    value.source.kind === 'actor' && value.target.kind === 'actor'
+      ? value.source.actor.actorId === value.target.actor.actorId &&
+        value.source.actor.generation === value.target.actor.generation
+      : value.source.kind === 'spot' && value.target.kind === 'spot'
+        ? value.source.spot.spotId === value.target.spot.spotId &&
+          value.source.spot.generation === value.target.spot.generation
+        : false;
   if (!sameObject) invalid('Message Follow source and target object identities differ.');
   if (!Number.isInteger(value.hopCount) || value.hopCount < 1 || value.hopCount > 8) {
     invalid('Message Follow hopCount must be in 1..8.');
   }
-  if (!Number.isInteger(value.queuedMessages)
-      || value.queuedMessages < 0
-      || value.queuedMessages > 0xffff_ffff) {
+  if (
+    !Number.isInteger(value.queuedMessages) ||
+    value.queuedMessages < 0 ||
+    value.queuedMessages > 0xffff_ffff
+  ) {
     invalid('Message Follow queuedMessages must be a u32.');
   }
-  if (!Number.isInteger(value.queuedBytes)
-      || value.queuedBytes < 0
-      || value.queuedBytes > 0xffff_ffff) {
+  if (
+    !Number.isInteger(value.queuedBytes) ||
+    value.queuedBytes < 0 ||
+    value.queuedBytes > 0xffff_ffff
+  ) {
     invalid('Message Follow queuedBytes must be a u32.');
   }
   if (value.originalOperation.high === 0n && value.originalOperation.low === 0n) {
     invalid('Message Follow originalOperation must not be zero.');
   }
-  if (value.originalReplyRouteId < 0n
-      || value.originalReplyRouteId > 0xffff_ffff_ffff_ffffn) {
+  if (value.originalReplyRouteId < 0n || value.originalReplyRouteId > 0xffff_ffff_ffff_ffffn) {
     invalid('Message Follow originalReplyRouteId must be a u64.');
   }
 }
@@ -2248,7 +2282,7 @@ function requireFlags(actual: number, expected: number): void {
 }
 
 function concat(...parts: readonly Uint8Array[]): Buffer {
-  return Buffer.concat(parts.map(part => Buffer.from(part)));
+  return Buffer.concat(parts.map((part) => Buffer.from(part)));
 }
 
 function fail(message: string): never {
@@ -2280,9 +2314,9 @@ class Reader {
   prefix(): { readonly command: number; readonly flags: number } {
     this.need(PREFIX_SIZE, 'prefix');
     if (
-      this.bytes[this.offset] !== MAGIC_0
-      || this.bytes[this.offset + 1] !== MAGIC_1
-      || this.bytes[this.offset + 2] !== MAJOR
+      this.bytes[this.offset] !== MAGIC_0 ||
+      this.bytes[this.offset + 1] !== MAGIC_1 ||
+      this.bytes[this.offset + 2] !== MAJOR
     ) {
       fail('Invalid service wire prefix.');
     }
@@ -2506,7 +2540,10 @@ export function decodeServiceWireFrozenRecordPrefix(
   const reader = new FrozenReader(bytes.subarray(offset));
   const record = decodeServiceWireFrozenRecordFrom(reader);
   return {
-    record: { ...record, canonicalBytes: Buffer.from(bytes.subarray(offset, offset + reader.position)) },
+    record: {
+      ...record,
+      canonicalBytes: Buffer.from(bytes.subarray(offset, offset + reader.position))
+    },
     length: reader.position
   };
 }
@@ -2547,8 +2584,12 @@ function decodeServiceWireFrozenRecordFrom(reader: FrozenReader): ServiceWireFro
   }
   const hasMetadata = reader.bool8('hasMetadata');
   if (hasMetadata) {
-    if (!((recordKind >= 1 && recordKind <= 7)
-      || recordKind === 9 || recordKind === 10 || recordKind === 14)) {
+    if (!(
+      (recordKind >= 1 && recordKind <= 7) ||
+      recordKind === 9 ||
+      recordKind === 10 ||
+      recordKind === 14
+    )) {
       fail('Metadata is forbidden for this frozen record kind.');
     }
     reader.metadata();
@@ -2561,13 +2602,16 @@ function decodeServiceWireFrozenRecordFrom(reader: FrozenReader): ServiceWireFro
   if (operationKind > 15) fail('Invalid frozen operation kind.');
   const replyReader = reader.body16('frozen reply route');
   const requiresReply = operationRequiresReply(operationKind);
-  const replyRouteId = requiresReply
-    ? replyReader.nonZeroU64('replyRouteId')
-    : undefined;
+  const replyRouteId = requiresReply ? replyReader.nonZeroU64('replyRouteId') : undefined;
   replyReader.end('frozen reply route');
   const body = reader.frozenBody(recordKind);
-  validateFrozenOperationMatrix(recordKind, operationKind, operationId, replyRouteId,
-    body.instanceOperationKind);
+  validateFrozenOperationMatrix(
+    recordKind,
+    operationKind,
+    operationId,
+    replyRouteId,
+    body.instanceOperationKind
+  );
   return {
     recordKind,
     sourceKind,
@@ -2624,11 +2668,14 @@ export function encodeServiceWireFrozenActorApplicationRecord(input: {
   const replyBody = request ? u64(input.replyRouteId!) : Buffer.alloc(0);
   const bytes = concat(
     Buffer.of(request ? 10 : 9),
-    Buffer.of(1), u16(sourceBody.byteLength), sourceBody,
+    Buffer.of(1),
+    u16(sourceBody.byteLength),
+    sourceBody,
     Buffer.of(0),
     wireId(input.operationId, 'operationId'),
     u32(request ? 4 : 0, 'operationKind'),
-    u16(replyBody.byteLength), replyBody,
+    u16(replyBody.byteLength),
+    replyBody,
     text8(input.target.actorId, 'targetActorId'),
     u64(input.target.objectGeneration),
     rid(input.target.nodeRid, 'targetNodeRid'),
@@ -2640,25 +2687,30 @@ export function encodeServiceWireFrozenActorApplicationRecord(input: {
   return decodeServiceWireFrozenRecord(bytes);
 }
 
-function sameFrozenRecordSummary(left: ServiceWireFrozenRecord, right: ServiceWireFrozenRecord): boolean {
-  return left.recordKind === right.recordKind
-    && left.sourceKind === right.sourceKind
-    && routingIdsEqual(left.source.nodeRid, right.source.nodeRid)
-    && left.source.nodeGeneration === right.source.nodeGeneration
-    && left.source.ownerId === right.source.ownerId
-    && left.source.leaseGeneration === right.source.leaseGeneration
-    && left.sourceSpotId === right.sourceSpotId
-    && left.sourceActor?.actorId === right.sourceActor?.actorId
-    && left.sourceActor?.generation === right.sourceActor?.generation
-    && left.sourceSessionRid === right.sourceSessionRid
-    && left.sourceBindingGeneration === right.sourceBindingGeneration
-    && left.sourceSessionSequence === right.sourceSessionSequence
-    && left.hasMetadata === right.hasMetadata
-    && left.operationId.high === right.operationId.high
-    && left.operationId.low === right.operationId.low
-    && left.operationKind === right.operationKind
-    && left.replyRouteId === right.replyRouteId
-    && left.canonicalBytes.equals(right.canonicalBytes);
+function sameFrozenRecordSummary(
+  left: ServiceWireFrozenRecord,
+  right: ServiceWireFrozenRecord
+): boolean {
+  return (
+    left.recordKind === right.recordKind &&
+    left.sourceKind === right.sourceKind &&
+    routingIdsEqual(left.source.nodeRid, right.source.nodeRid) &&
+    left.source.nodeGeneration === right.source.nodeGeneration &&
+    left.source.ownerId === right.source.ownerId &&
+    left.source.leaseGeneration === right.source.leaseGeneration &&
+    left.sourceSpotId === right.sourceSpotId &&
+    left.sourceActor?.actorId === right.sourceActor?.actorId &&
+    left.sourceActor?.generation === right.sourceActor?.generation &&
+    left.sourceSessionRid === right.sourceSessionRid &&
+    left.sourceBindingGeneration === right.sourceBindingGeneration &&
+    left.sourceSessionSequence === right.sourceSessionSequence &&
+    left.hasMetadata === right.hasMetadata &&
+    left.operationId.high === right.operationId.high &&
+    left.operationId.low === right.operationId.low &&
+    left.operationKind === right.operationKind &&
+    left.replyRouteId === right.replyRouteId &&
+    left.canonicalBytes.equals(right.canonicalBytes)
+  );
 }
 
 function validateFrozenOperationMatrix(
@@ -2677,13 +2729,11 @@ function validateFrozenOperationMatrix(
   else if (recordKind === 6) valid = operationKind === 3 && !zero;
   else if (recordKind === 10) valid = operationKind === 4 && !zero;
   else if (recordKind === 8) {
-    valid = operationKind === 0 && zero
-      || [6, 7, 8].includes(operationKind) && !zero;
+    valid = (operationKind === 0 && zero) || ([6, 7, 8].includes(operationKind) && !zero);
   } else if (recordKind === 11) valid = operationKind >= 1 && operationKind <= 15 && !zero;
   else if (recordKind === 14 && instanceOperationKind !== undefined) {
-    valid = instanceOperationKind === 1
-      ? operationKind === 0 && zero
-      : operationKind === 12 && !zero;
+    valid =
+      instanceOperationKind === 1 ? operationKind === 0 && zero : operationKind === 12 && !zero;
   }
   if (!valid) fail('Frozen record kind, operation kind, and operation ID do not match.');
   if (operationRequiresReply(operationKind) !== (replyRouteId !== undefined)) {
@@ -2810,8 +2860,7 @@ class FrozenReader {
   } {
     if (recordKind === 1 || recordKind === 2) {
       return { applicationPayload: this.applicationPayload() };
-    }
-    else if (recordKind === 3 || recordKind === 4) {
+    } else if (recordKind === 3 || recordKind === 4) {
       this.text8('channelName');
       return { applicationPayload: this.applicationPayload() };
     } else if (recordKind === 5 || recordKind === 6) {
@@ -2834,9 +2883,7 @@ class FrozenReader {
       const failureCode = this.u32('failureCode');
       const hasPayload = this.bool8('hasPayload');
       validateReplyTerminal(terminalResult, failureCode, hasPayload);
-      return hasPayload
-        ? { applicationPayload: this.applicationPayload() }
-        : {};
+      return hasPayload ? { applicationPayload: this.applicationPayload() } : {};
     } else if (recordKind === 12) this.sendReadyDestination();
     else if (recordKind === 13) {
       validateRelocationPhase(this.u8('phase'));
@@ -2850,7 +2897,8 @@ class FrozenReader {
       this.instanceRoute();
       this.nonZeroU64('instanceSourceNodeGeneration');
       const operationKind = this.u8('instanceOperationKind');
-      if (operationKind < 1 || operationKind > 2) fail('Invalid Instance activation operation kind.');
+      if (operationKind < 1 || operationKind > 2)
+        fail('Invalid Instance activation operation kind.');
       const applicationPayload = this.applicationPayload();
       return { instanceOperationKind: operationKind, applicationPayload };
     }

@@ -16,7 +16,8 @@ public sealed partial class StreamConnectorTests
             ZlinkStreamHeaderFlags.HasRequestSeq,
             new ZlinkStreamRequestSeq(42),
             "profile.get",
-            ZlinkStreamMetadata.Empty.With("traceId", "abc"));
+            ZlinkStreamMetadata.Empty.With("traceId", "abc")
+        );
 
         var decoded = codec.Decode(codec.Encode(source));
 
@@ -37,7 +38,8 @@ public sealed partial class StreamConnectorTests
             ZlinkStreamHeaderFlags.None,
             null,
             "profile.update",
-            ZlinkStreamMetadata.Empty.With("optional", ""));
+            ZlinkStreamMetadata.Empty.With("optional", "")
+        );
 
         var decoded = codec.Decode(codec.Encode(source));
 
@@ -60,7 +62,8 @@ public sealed partial class StreamConnectorTests
             ZlinkStreamMetadata.Empty.With("k", "v"),
             "a1b2",
             flowId,
-            ZlinkStreamFlowOrigin.Application);
+            ZlinkStreamFlowOrigin.Application
+        );
 
         var encoded = codec.Encode(source);
         var decoded = codec.Decode(encoded);
@@ -77,7 +80,9 @@ public sealed partial class StreamConnectorTests
         Assert.Equal(
             "a1b2",
             Encoding.UTF8.GetString(
-                span.Slice(span.Length - ZlinkStreamFlowId.EncodedLength - 5, 4)));
+                span.Slice(span.Length - ZlinkStreamFlowId.EncodedLength - 5, 4)
+            )
+        );
     }
 
     [Fact]
@@ -88,12 +93,13 @@ public sealed partial class StreamConnectorTests
             new ZlinkStreamConnectorOptions
             {
                 Endpoint = new Uri("tcp://127.0.0.1:1"),
-                Compression = ZlinkStreamCompression.None
+                Compression = ZlinkStreamCompression.None,
             },
             codec,
             null,
             new SemaphoreSlim(1, 1),
-            static () => null);
+            static () => null
+        );
 
         var frame = sender.BuildOutboundFrame(
             ZlinkStreamMessageKind.Send,
@@ -101,7 +107,8 @@ public sealed partial class StreamConnectorTests
             new ZlinkStreamEncodedPayload(ZlinkStreamCodec.Raw, ReadOnlyMemory<byte>.Empty),
             ZlinkStreamMetadata.Empty,
             false,
-            null);
+            null
+        );
         var header = codec.Decode(frame.HeaderBytes);
 
         // One-way sends have no reply, so no correlation id is created (flow-correlation spec §2).
@@ -116,25 +123,28 @@ public sealed partial class StreamConnectorTests
     public void OutboundRequestFrameKeepsCorrelationIdAtEveryDiagnosticsLevel()
     {
         var codec = new ZlinkStreamHeaderCodec();
-        foreach (var level in new[]
-                 {
-                     ZlinkStreamDiagnosticsLevel.Off,
-                     ZlinkStreamDiagnosticsLevel.Errors,
-                     ZlinkStreamDiagnosticsLevel.Normal,
-                     ZlinkStreamDiagnosticsLevel.Detailed
-                 })
+        foreach (
+            var level in new[]
+            {
+                ZlinkStreamDiagnosticsLevel.Off,
+                ZlinkStreamDiagnosticsLevel.Errors,
+                ZlinkStreamDiagnosticsLevel.Normal,
+                ZlinkStreamDiagnosticsLevel.Detailed,
+            }
+        )
         {
             var sender = new ZlinkStreamFrameSender(
                 new ZlinkStreamConnectorOptions
                 {
                     Endpoint = new Uri("tcp://127.0.0.1:1"),
                     Compression = ZlinkStreamCompression.None,
-                    DiagnosticsLevel = level
+                    DiagnosticsLevel = level,
                 },
                 codec,
                 null,
                 new SemaphoreSlim(1, 1),
-                static () => null);
+                static () => null
+            );
 
             var frame = sender.BuildOutboundFrame(
                 ZlinkStreamMessageKind.Request,
@@ -142,7 +152,8 @@ public sealed partial class StreamConnectorTests
                 new ZlinkStreamEncodedPayload(ZlinkStreamCodec.Raw, ReadOnlyMemory<byte>.Empty),
                 ZlinkStreamMetadata.Empty,
                 false,
-                new ZlinkStreamRequestSeq(1));
+                new ZlinkStreamRequestSeq(1)
+            );
             var header = codec.Decode(frame.HeaderBytes);
 
             // Correlation ids are protocol information: kept per request even at Off.
@@ -160,30 +171,42 @@ public sealed partial class StreamConnectorTests
             {
                 Endpoint = new Uri("tcp://127.0.0.1:1"),
                 Compression = ZlinkStreamCompression.None,
-                DiagnosticsLevel = ZlinkStreamDiagnosticsLevel.Off
+                DiagnosticsLevel = ZlinkStreamDiagnosticsLevel.Off,
             },
             codec,
             null,
             new SemaphoreSlim(1, 1),
-            static () => null);
+            static () => null
+        );
 
         using var ambient = ZlinkStreamFlowContext.Enter(
             ZlinkStreamFlowId.Create(),
-            ZlinkStreamFlowOrigin.Inbound);
-        var send = codec.Decode(sender.BuildOutboundFrame(
-            ZlinkStreamMessageKind.Send,
-            "flow.off",
-            new ZlinkStreamEncodedPayload(ZlinkStreamCodec.Raw, ReadOnlyMemory<byte>.Empty),
-            ZlinkStreamMetadata.Empty,
-            false,
-            null).HeaderBytes);
-        var request = codec.Decode(sender.BuildOutboundFrame(
-            ZlinkStreamMessageKind.Request,
-            "flow.off",
-            new ZlinkStreamEncodedPayload(ZlinkStreamCodec.Raw, ReadOnlyMemory<byte>.Empty),
-            ZlinkStreamMetadata.Empty,
-            false,
-            new ZlinkStreamRequestSeq(2)).HeaderBytes);
+            ZlinkStreamFlowOrigin.Inbound
+        );
+        var send = codec.Decode(
+            sender
+                .BuildOutboundFrame(
+                    ZlinkStreamMessageKind.Send,
+                    "flow.off",
+                    new ZlinkStreamEncodedPayload(ZlinkStreamCodec.Raw, ReadOnlyMemory<byte>.Empty),
+                    ZlinkStreamMetadata.Empty,
+                    false,
+                    null
+                )
+                .HeaderBytes
+        );
+        var request = codec.Decode(
+            sender
+                .BuildOutboundFrame(
+                    ZlinkStreamMessageKind.Request,
+                    "flow.off",
+                    new ZlinkStreamEncodedPayload(ZlinkStreamCodec.Raw, ReadOnlyMemory<byte>.Empty),
+                    ZlinkStreamMetadata.Empty,
+                    false,
+                    new ZlinkStreamRequestSeq(2)
+                )
+                .HeaderBytes
+        );
 
         Assert.False(send.Flags.HasFlag(ZlinkStreamHeaderFlags.HasFlowId));
         Assert.Null(send.FlowId);
@@ -198,15 +221,18 @@ public sealed partial class StreamConnectorTests
     public void HeaderDecodeWithoutFlowCaptureKeepsStructuralChecks()
     {
         var codec = new ZlinkStreamHeaderCodec();
-        var encoded = codec.Encode(new ZlinkStreamHeader(
-            ZlinkStreamMessageKind.Send,
-            ZlinkStreamCodec.Json,
-            ZlinkStreamHeaderFlags.None,
-            null,
-            "flow.test",
-            ZlinkStreamMetadata.Empty,
-            FlowId: ZlinkStreamFlowId.Create(),
-            FlowOrigin: ZlinkStreamFlowOrigin.Inbound));
+        var encoded = codec.Encode(
+            new ZlinkStreamHeader(
+                ZlinkStreamMessageKind.Send,
+                ZlinkStreamCodec.Json,
+                ZlinkStreamHeaderFlags.None,
+                null,
+                "flow.test",
+                ZlinkStreamMetadata.Empty,
+                FlowId: ZlinkStreamFlowId.Create(),
+                FlowOrigin: ZlinkStreamFlowOrigin.Inbound
+            )
+        );
 
         var decoded = codec.Decode(encoded, false);
         Assert.Null(decoded.FlowId);
@@ -222,14 +248,14 @@ public sealed partial class StreamConnectorTests
     public async Task InboundFlowIsReusedAndExpiresAfterCallbackScope()
     {
         var flowId = ZlinkStreamFlowId.Create();
-        var releaseDetached = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var releaseDetached = new TaskCompletionSource(
+            TaskCreationOptions.RunContinuationsAsynchronously
+        );
         Task<(string FlowId, ZlinkStreamFlowOrigin Origin)?> detached;
 
         using (ZlinkStreamFlowContext.Enter(flowId, ZlinkStreamFlowOrigin.Inbound))
         {
-            Assert.Equal(
-                (flowId, ZlinkStreamFlowOrigin.Inbound),
-                ZlinkStreamFlowContext.Current);
+            Assert.Equal((flowId, ZlinkStreamFlowOrigin.Inbound), ZlinkStreamFlowContext.Current);
             detached = Task.Run(async () =>
             {
                 await releaseDetached.Task.ConfigureAwait(false);
@@ -255,7 +281,8 @@ public sealed partial class StreamConnectorTests
             "flow.test",
             ZlinkStreamMetadata.Empty,
             FlowId: flowId,
-            FlowOrigin: ZlinkStreamFlowOrigin.Timer);
+            FlowOrigin: ZlinkStreamFlowOrigin.Timer
+        );
 
         var decoded = codec.Decode(codec.Encode(source));
 
@@ -267,7 +294,9 @@ public sealed partial class StreamConnectorTests
     public void HeaderProtocolRejectsMissingMarkerAndInvalidFlowFields()
     {
         var codec = new ZlinkStreamHeaderCodec();
-        Assert.Throws<ZlinkStreamException>(() => codec.Decode(new byte[] { 1, 1, 0, 1, (byte)'x' }));
+        Assert.Throws<ZlinkStreamException>(() =>
+            codec.Decode(new byte[] { 1, 1, 0, 1, (byte)'x' })
+        );
 
         var invalid = new ZlinkStreamHeader(
             ZlinkStreamMessageKind.Send,
@@ -277,7 +306,8 @@ public sealed partial class StreamConnectorTests
             "flow.test",
             ZlinkStreamMetadata.Empty,
             FlowId: "00000000-0000-4000-8000-000000000000",
-            FlowOrigin: ZlinkStreamFlowOrigin.Application);
+            FlowOrigin: ZlinkStreamFlowOrigin.Application
+        );
         Assert.Throws<ZlinkStreamException>(() => codec.Encode(invalid));
     }
 
@@ -292,7 +322,7 @@ public sealed partial class StreamConnectorTests
             (byte)ZlinkStreamCodec.Json,
             0x80,
             1,
-            (byte)'x'
+            (byte)'x',
         };
 
         var exception = Assert.Throws<ZlinkStreamException>(() => codec.Decode(bytes));
@@ -323,7 +353,7 @@ public sealed partial class StreamConnectorTests
             (byte)ZlinkStreamCodec.Json,
             0,
             1,
-            (byte)'x'
+            (byte)'x',
         };
 
         Assert.Throws<ZlinkStreamException>(() => codec.Decode(responseWithoutRequestSeq));
@@ -335,7 +365,7 @@ public sealed partial class StreamConnectorTests
             (byte)ZlinkStreamCodec.Raw,
             0,
             1,
-            (byte)'x'
+            (byte)'x',
         };
 
         Assert.Throws<ZlinkStreamException>(() => codec.Decode(errorWithRawCodec));
@@ -352,50 +382,76 @@ public sealed partial class StreamConnectorTests
             ZlinkStreamHeaderFlags.None,
             null,
             "$zlink.heartbeat.ping",
-            ZlinkStreamMetadata.Empty);
+            ZlinkStreamMetadata.Empty
+        );
         var decoded = codec.Decode(codec.Encode(control));
         Assert.Equal(ZlinkStreamMessageKind.Control, decoded.Kind);
         Assert.Equal("$zlink.heartbeat.ping", decoded.Name);
 
-        Assert.Throws<ZlinkStreamException>(() => codec.Encode(new ZlinkStreamHeader(
-            ZlinkStreamMessageKind.Control,
-            ZlinkStreamCodec.Json,
-            ZlinkStreamHeaderFlags.None,
-            null,
-            "$zlink.heartbeat.ping",
-            ZlinkStreamMetadata.Empty)));
+        Assert.Throws<ZlinkStreamException>(() =>
+            codec.Encode(
+                new ZlinkStreamHeader(
+                    ZlinkStreamMessageKind.Control,
+                    ZlinkStreamCodec.Json,
+                    ZlinkStreamHeaderFlags.None,
+                    null,
+                    "$zlink.heartbeat.ping",
+                    ZlinkStreamMetadata.Empty
+                )
+            )
+        );
 
-        Assert.Throws<ZlinkStreamException>(() => codec.Encode(new ZlinkStreamHeader(
-            ZlinkStreamMessageKind.Control,
-            ZlinkStreamCodec.Raw,
-            ZlinkStreamHeaderFlags.PayloadCompressed,
-            null,
-            "$zlink.heartbeat.ping",
-            ZlinkStreamMetadata.Empty)));
+        Assert.Throws<ZlinkStreamException>(() =>
+            codec.Encode(
+                new ZlinkStreamHeader(
+                    ZlinkStreamMessageKind.Control,
+                    ZlinkStreamCodec.Raw,
+                    ZlinkStreamHeaderFlags.PayloadCompressed,
+                    null,
+                    "$zlink.heartbeat.ping",
+                    ZlinkStreamMetadata.Empty
+                )
+            )
+        );
 
-        Assert.Throws<ZlinkStreamException>(() => codec.Encode(new ZlinkStreamHeader(
-            ZlinkStreamMessageKind.Control,
-            ZlinkStreamCodec.Raw,
-            ZlinkStreamHeaderFlags.None,
-            new ZlinkStreamRequestSeq(1),
-            "$zlink.heartbeat.ping",
-            ZlinkStreamMetadata.Empty)));
+        Assert.Throws<ZlinkStreamException>(() =>
+            codec.Encode(
+                new ZlinkStreamHeader(
+                    ZlinkStreamMessageKind.Control,
+                    ZlinkStreamCodec.Raw,
+                    ZlinkStreamHeaderFlags.None,
+                    new ZlinkStreamRequestSeq(1),
+                    "$zlink.heartbeat.ping",
+                    ZlinkStreamMetadata.Empty
+                )
+            )
+        );
 
-        Assert.Throws<ZlinkStreamException>(() => codec.Encode(new ZlinkStreamHeader(
-            ZlinkStreamMessageKind.Control,
-            ZlinkStreamCodec.Raw,
-            ZlinkStreamHeaderFlags.None,
-            null,
-            "$zlink.heartbeat.ping",
-            ZlinkStreamMetadata.Empty.With("traceId", "abc"))));
+        Assert.Throws<ZlinkStreamException>(() =>
+            codec.Encode(
+                new ZlinkStreamHeader(
+                    ZlinkStreamMessageKind.Control,
+                    ZlinkStreamCodec.Raw,
+                    ZlinkStreamHeaderFlags.None,
+                    null,
+                    "$zlink.heartbeat.ping",
+                    ZlinkStreamMetadata.Empty.With("traceId", "abc")
+                )
+            )
+        );
 
-        Assert.Throws<ZlinkStreamException>(() => codec.Encode(new ZlinkStreamHeader(
-            ZlinkStreamMessageKind.Send,
-            ZlinkStreamCodec.Raw,
-            ZlinkStreamHeaderFlags.None,
-            null,
-            "$zlink.user",
-            ZlinkStreamMetadata.Empty)));
+        Assert.Throws<ZlinkStreamException>(() =>
+            codec.Encode(
+                new ZlinkStreamHeader(
+                    ZlinkStreamMessageKind.Send,
+                    ZlinkStreamCodec.Raw,
+                    ZlinkStreamHeaderFlags.None,
+                    null,
+                    "$zlink.user",
+                    ZlinkStreamMetadata.Empty
+                )
+            )
+        );
     }
 
     [Fact]
@@ -422,7 +478,8 @@ public sealed partial class StreamConnectorTests
     public void SessionClosingCodecEncodesAndDecodesServerReasons(
         string producer,
         ZlinkStreamCloseReason expectedReason,
-        byte expectedWireReason)
+        byte expectedWireReason
+    )
     {
         var payload = producer switch
         {
@@ -430,7 +487,7 @@ public sealed partial class StreamConnectorTests
             "heartbeat" => ZlinkStreamSessionClosingCodec.EncodeHeartbeatTimeout("done"),
             "drain" => ZlinkStreamSessionClosingCodec.EncodeServerDrain("done"),
             "protocol" => ZlinkStreamSessionClosingCodec.EncodeProtocolError("done"),
-            _ => throw new ArgumentOutOfRangeException(nameof(producer))
+            _ => throw new ArgumentOutOfRangeException(nameof(producer)),
         };
 
         Assert.Equal(new byte[] { 1, expectedWireReason, 0, 4 }, payload[..4]);
@@ -443,9 +500,11 @@ public sealed partial class StreamConnectorTests
     public void SessionClosingCodecRejectsOversizedAndInvalidUtf8Diagnostics()
     {
         var oversized = Assert.Throws<ZlinkStreamException>(() =>
-            ZlinkStreamSessionClosingCodec.EncodeServerDrain(new string('x', 513)));
+            ZlinkStreamSessionClosingCodec.EncodeServerDrain(new string('x', 513))
+        );
         var invalidUtf8 = Assert.Throws<ZlinkStreamException>(() =>
-            ZlinkStreamSessionClosingCodec.EncodeProtocolError("\ud800"));
+            ZlinkStreamSessionClosingCodec.EncodeProtocolError("\ud800")
+        );
 
         Assert.Equal(ZlinkStreamErrorCode.ValidationFailed, oversized.Error.Code);
         Assert.Equal(ZlinkStreamErrorCode.ValidationFailed, invalidUtf8.Error.Code);
@@ -459,7 +518,8 @@ public sealed partial class StreamConnectorTests
     public void SessionClosingCodecRejectsInvalidVersionReasonLengthAndUtf8(byte[] payload)
     {
         var exception = Assert.Throws<ZlinkStreamException>(() =>
-            ZlinkStreamSessionClosingCodec.Decode(payload));
+            ZlinkStreamSessionClosingCodec.Decode(payload)
+        );
 
         Assert.Equal(ZlinkStreamErrorCode.FrameDecodeFailed, exception.Error.Code);
     }

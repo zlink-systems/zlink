@@ -44,7 +44,8 @@ public interface IZlinkStreamWaitCall
     IZlinkStreamWaitCall Where(Func<ZlinkStreamMessage<ZlinkStreamEncodedPayload>, bool> predicate);
 
     ValueTask<ZlinkStreamMessage<ZlinkStreamEncodedPayload>> Async(
-        CancellationToken cancellationToken = default);
+        CancellationToken cancellationToken = default
+    );
 }
 
 /// <summary>
@@ -72,7 +73,8 @@ public interface IZlinkStreamSequenceCall
     ///     Appends the next expected message predicate.
     /// </summary>
     IZlinkStreamSequenceCall Expect(
-        Func<ZlinkStreamMessage<ZlinkStreamEncodedPayload>, bool> predicate);
+        Func<ZlinkStreamMessage<ZlinkStreamEncodedPayload>, bool> predicate
+    );
 
     /// <summary>
     ///     Sets the total timeout for the complete sequence.
@@ -83,5 +85,6 @@ public interface IZlinkStreamSequenceCall
     ///     Verifies the sequence and returns the consumed messages in arrival order.
     /// </summary>
     ValueTask<IReadOnlyList<ZlinkStreamMessage<ZlinkStreamEncodedPayload>>> Async(
-        CancellationToken cancellationToken = default);
+        CancellationToken cancellationToken = default
+    );
 }

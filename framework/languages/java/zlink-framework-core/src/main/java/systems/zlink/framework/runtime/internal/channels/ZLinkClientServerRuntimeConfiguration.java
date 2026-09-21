@@ -1,16 +1,15 @@
 package systems.zlink.framework.runtime.internal.channels;
 
+import systems.zlink.framework.locations.ZLinkLocationOptions;
+import systems.zlink.framework.runtime.internal.locations.ZLinkLocationOwnerToken;
+import systems.zlink.framework.runtime.internal.locations.ZLinkLocationRepository;
+
 import java.util.Objects;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionStage;
 import java.util.function.Supplier;
-import systems.zlink.framework.runtime.internal.locations.ZLinkLocationRepository;
-import systems.zlink.framework.locations.ZLinkLocationOptions;
-import systems.zlink.framework.runtime.internal.locations.ZLinkLocationOwnerToken;
 
-/**
- * Internal host-to-channel dependency for the ClientServer location runtime.
- */
+/** Internal host-to-channel dependency for the ClientServer location runtime. */
 public final class ZLinkClientServerRuntimeConfiguration {
     private final ZLinkLocationRepository store;
     private final ZLinkLocationOptions options;
@@ -18,8 +17,7 @@ public final class ZLinkClientServerRuntimeConfiguration {
     private Lifecycle lifecycle;
 
     public ZLinkClientServerRuntimeConfiguration(
-        ZLinkLocationRepository store,
-        ZLinkLocationOptions options) {
+            ZLinkLocationRepository store, ZLinkLocationOptions options) {
         this.store = store;
         this.options = Objects.requireNonNull(options, "options");
     }
@@ -32,8 +30,7 @@ public final class ZLinkClientServerRuntimeConfiguration {
         return () -> {
             ZLinkLocationOwnerToken current = owner;
             if (current == null) {
-                throw new IllegalStateException(
-                    "ClientServer owner lease is not ready");
+                throw new IllegalStateException("ClientServer owner lease is not ready");
             }
             return current;
         };
@@ -49,31 +46,24 @@ public final class ZLinkClientServerRuntimeConfiguration {
 
     public synchronized void install(Lifecycle value) {
         if (lifecycle != null) {
-            throw new IllegalStateException(
-                "ClientServer runtime lifecycle is already installed");
+            throw new IllegalStateException("ClientServer runtime lifecycle is already installed");
         }
         lifecycle = Objects.requireNonNull(value, "value");
     }
 
     public CompletionStage<Void> start() {
         Lifecycle current = lifecycle;
-        return current == null
-            ? CompletableFuture.completedFuture(null)
-            : current.start();
+        return current == null ? CompletableFuture.completedFuture(null) : current.start();
     }
 
     public CompletionStage<Void> markDraining() {
         Lifecycle current = lifecycle;
-        return current == null
-            ? CompletableFuture.completedFuture(null)
-            : current.markDraining();
+        return current == null ? CompletableFuture.completedFuture(null) : current.markDraining();
     }
 
     public CompletionStage<Void> stop() {
         Lifecycle current = lifecycle;
-        return current == null
-            ? CompletableFuture.completedFuture(null)
-            : current.stop();
+        return current == null ? CompletableFuture.completedFuture(null) : current.stop();
     }
 
     public interface Lifecycle {

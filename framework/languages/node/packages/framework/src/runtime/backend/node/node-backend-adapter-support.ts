@@ -54,10 +54,13 @@ function isNonBlockingRecvEmpty(error: unknown): boolean {
 }
 
 export function isRouteRecvRetryable(error: unknown): boolean {
-  return isNonBlockingRecvEmpty(error) ||
+  return (
+    isNonBlockingRecvEmpty(error) ||
     (error instanceof zlink.RecvError &&
-      (error.result === zlink.RecvResult.InternalError || error.result === zlink.RecvResult.InvalidHandle) &&
-      isNativeBadAddress(error));
+      (error.result === zlink.RecvResult.InternalError ||
+        error.result === zlink.RecvResult.InvalidHandle) &&
+      isNativeBadAddress(error))
+  );
 }
 
 export function isPollerInterruptedError(error: unknown): boolean {
@@ -82,10 +85,12 @@ export function submitBindingPublish(
     current!.submit();
   } catch (error) {
     const translated = translateBindingResultError(error);
-    if (translated instanceof ZLinkBackendResultError
-        && translated.operation === 'submit'
-        && (translated.result === SubmitResult.Backpressured
-          || translated.result === SubmitResult.NotAdmitted)) {
+    if (
+      translated instanceof ZLinkBackendResultError &&
+      translated.operation === 'submit' &&
+      (translated.result === SubmitResult.Backpressured ||
+        translated.result === SubmitResult.NotAdmitted)
+    ) {
       requireOneWayCompletion(
         { status: ZLinkSubmitStatus.Backpressured },
         'Classic fanout publish'
@@ -95,10 +100,7 @@ export function submitBindingPublish(
   }
 }
 
-export function submitBindingReply(
-  operation: ZLinkBindingReplyOperation,
-  payload: unknown
-): void {
+export function submitBindingReply(operation: ZLinkBindingReplyOperation, payload: unknown): void {
   try {
     let current: ZLinkBindingReplySubmitOperation | undefined;
     const parts = Array.isArray(payload) ? payload : [payload];
@@ -158,7 +160,8 @@ export async function submitBindingRequest(
     if (Array.isArray(payload)) {
       for (const part of payload) {
         const nativePart = toNativeMessageLike(part);
-        current = current === undefined ? operation.message(nativePart) : current.message(nativePart);
+        current =
+          current === undefined ? operation.message(nativePart) : current.message(nativePart);
       }
     } else {
       current = operation.message(toNativeMessageLike(payload));
@@ -187,19 +190,26 @@ export async function closeWithBusyRetry(target: { close(): void }): Promise<voi
         throw error;
       }
       lastError = error;
-      await new Promise<void>(resolve => setImmediate(resolve));
+      await new Promise<void>((resolve) => setImmediate(resolve));
     }
   }
   throw lastError;
 }
 
 function isBusyCloseError(error: unknown): boolean {
-  return error instanceof Error && 'code' in error && [401, 404].includes((error as { code: number }).code);
+  return (
+    error instanceof Error &&
+    'code' in error &&
+    [401, 404].includes((error as { code: number }).code)
+  );
 }
 
 function isSuccessfulOrAlreadyShutdownCloseError(error: unknown): boolean {
-  return isContextTerminatedError(error) || (
-    error instanceof Error && 'code' in error && [0, 402, 403].includes((error as { code: number }).code)
+  return (
+    isContextTerminatedError(error) ||
+    (error instanceof Error &&
+      'code' in error &&
+      [0, 402, 403].includes((error as { code: number }).code))
   );
 }
 
@@ -229,14 +239,16 @@ export function disableSocketLinger(target: unknown): void {
 export function toNativeRoutingId(routingId: unknown): unknown {
   if (typeof routingId === 'string') return zlink.RoutingId.from(routingId);
   const toHex = (routingId as { readonly toHex?: unknown } | null)?.toHex;
-  return typeof toHex === 'function'
-    ? zlink.RoutingId.fromHex(toHex.call(routingId))
-    : routingId;
+  return typeof toHex === 'function' ? zlink.RoutingId.fromHex(toHex.call(routingId)) : routingId;
 }
 
 function toNativeMessageLike(message: unknown): unknown {
-  if (message instanceof zlink.Message || Buffer.isBuffer(message)
-      || message instanceof Uint8Array || typeof message === 'string') {
+  if (
+    message instanceof zlink.Message ||
+    Buffer.isBuffer(message) ||
+    message instanceof Uint8Array ||
+    typeof message === 'string'
+  ) {
     return message;
   }
   const data = (message as { readonly data?: unknown } | null)?.data;
@@ -252,7 +264,9 @@ export function translateBindingResultError(error: unknown): unknown {
     return new ZLinkBackendResultError('submit', error.result, error.nativeErrno, { cause: error });
   }
   if (error instanceof zlink.RequestError) {
-    return new ZLinkBackendResultError('request', error.result, error.nativeErrno, { cause: error });
+    return new ZLinkBackendResultError('request', error.result, error.nativeErrno, {
+      cause: error
+    });
   }
   return error;
 }

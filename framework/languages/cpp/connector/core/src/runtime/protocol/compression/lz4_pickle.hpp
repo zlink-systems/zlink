@@ -115,9 +115,8 @@ inline std::string unpickle (std::span<const std::byte> input, std::size_t max_d
         return std::string (data, compressed_size);
     }
     std::string output (static_cast<std::size_t> (decompressed_size), '\0');
-    const int decoded = LZ4_decompress_safe (data, output.data (),
-                                             static_cast<int> (compressed_size),
-                                             static_cast<int> (output.size ()));
+    const int decoded = LZ4_decompress_safe (
+      data, output.data (), static_cast<int> (compressed_size), static_cast<int> (output.size ()));
     if (decoded != static_cast<int> (output.size ())) {
         throw std::runtime_error ("LZ4 decompression failed");
     }

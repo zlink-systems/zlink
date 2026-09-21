@@ -10,11 +10,9 @@ public interface ZLinkStreamWaitCall {
     ZLinkStreamWaitCall where(Predicate<ZLinkStreamMessage<ZLinkStreamEncodedPayload>> predicate);
 
     <TPayload> ZLinkStreamWaitCall where(
-        Class<TPayload> payloadType,
-        Predicate<ZLinkStreamMessage<TPayload>> predicate);
+            Class<TPayload> payloadType, Predicate<ZLinkStreamMessage<TPayload>> predicate);
 
     CompletionStage<ZLinkStreamMessage<ZLinkStreamEncodedPayload>> submit();
 
     <TPayload> CompletionStage<ZLinkStreamMessage<TPayload>> submit(Class<TPayload> payloadType);
-
 }

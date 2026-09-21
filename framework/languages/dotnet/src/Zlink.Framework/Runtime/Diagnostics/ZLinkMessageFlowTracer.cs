@@ -27,15 +27,15 @@ internal sealed class ZLinkMessageFlowTracer
         ZLinkDispatchOptionsModel options,
         ILogger? logger = null,
         ZLinkFrameworkRuntime? runtime = null,
-        IZLinkRuntimeFailureReporter? errorSink = null)
+        IZLinkRuntimeFailureReporter? errorSink = null
+    )
     {
         _options = options;
         _errorSink = errorSink ?? (runtime is null ? null : runtime.ErrorSink);
         _logger = logger ?? NullLogger.Instance;
     }
 
-    public bool CaptureEnabled =>
-        _options.Diagnostics.EffectiveLevel != ZLinkDiagnosticsLevel.Off;
+    public bool CaptureEnabled => _options.Diagnostics.EffectiveLevel != ZLinkDiagnosticsLevel.Off;
 
     internal bool DetailedEnabled =>
         _options.Diagnostics.EffectiveLevel >= ZLinkDiagnosticsLevel.Detailed;
@@ -47,14 +47,14 @@ internal sealed class ZLinkMessageFlowTracer
         return ShouldLog(outcome);
     }
 
-    internal bool Enabled(
-        ZLinkMessageFlowOutcome outcome,
-        ZLinkMessageFlowResult? result) => ShouldLog(outcome, result);
+    internal bool Enabled(ZLinkMessageFlowOutcome outcome, ZLinkMessageFlowResult? result) =>
+        ShouldLog(outcome, result);
 
     public void Trace(ZLinkMessageFlowEvent flow)
     {
         var logEnabled = ShouldLog(flow.Outcome, flow.Result);
-        if (!logEnabled) return;
+        if (!logEnabled)
+            return;
 
         flow = NormalizeFlowPair(flow);
         if (string.IsNullOrEmpty(flow.FlowId))
@@ -65,12 +65,18 @@ internal sealed class ZLinkMessageFlowTracer
         }
 
         var diagnostics = _options.Diagnostics;
-        if (flow.MessageSize is not null
-            && (diagnostics.EffectiveLevel < ZLinkDiagnosticsLevel.Detailed
-                || !diagnostics.MessageSizesIncluded))
+        if (
+            flow.MessageSize is not null
+            && (
+                diagnostics.EffectiveLevel < ZLinkDiagnosticsLevel.Detailed
+                || !diagnostics.MessageSizesIncluded
+            )
+        )
             flow = flow with { MessageSize = null };
-        if (flow.DurationSeconds is not null
-            && diagnostics.EffectiveLevel < ZLinkDiagnosticsLevel.Detailed)
+        if (
+            flow.DurationSeconds is not null
+            && diagnostics.EffectiveLevel < ZLinkDiagnosticsLevel.Detailed
+        )
             flow = flow with { DurationSeconds = null };
 
         // Sampling thins healthy traffic; failures, drops, and backpressure always pass through.
@@ -79,8 +85,10 @@ internal sealed class ZLinkMessageFlowTracer
             || flow.Result is not null and not ZLinkMessageFlowResult.Succeeded
             || Sample(
                 ZLinkTraceFormat.FlowIdKey(flow),
-                flow.SourceMeshGeneration ?? _options.Diagnostics.SourceMeshGeneration);
-        if (!logSampled) return;
+                flow.SourceMeshGeneration ?? _options.Diagnostics.SourceMeshGeneration
+            );
+        if (!logSampled)
+            return;
 
         try
         {
@@ -95,7 +103,8 @@ internal sealed class ZLinkMessageFlowTracer
 
     public void TraceDispatchError(ZLinkDispatchFailure error)
     {
-        if (_options.Diagnostics.EffectiveLevel == ZLinkDiagnosticsLevel.Off) return;
+        if (_options.Diagnostics.EffectiveLevel == ZLinkDiagnosticsLevel.Off)
+            return;
 
         var flowId = error.FlowId;
         var flowOrigin = error.FlowOrigin;
@@ -128,13 +137,13 @@ internal sealed class ZLinkMessageFlowTracer
     internal bool ShouldLog(ZLinkMessageFlowOutcome outcome) =>
         (int)_options.Diagnostics.EffectiveLevel >= (int)RequiredLevel(outcome);
 
-    private bool ShouldLog(
-        ZLinkMessageFlowOutcome outcome,
-        ZLinkMessageFlowResult? result) =>
-        (int)_options.Diagnostics.EffectiveLevel >= (int)(result is not null
-            and not ZLinkMessageFlowResult.Succeeded
-            ? ZLinkDiagnosticsLevel.Errors
-            : RequiredLevel(outcome));
+    private bool ShouldLog(ZLinkMessageFlowOutcome outcome, ZLinkMessageFlowResult? result) =>
+        (int)_options.Diagnostics.EffectiveLevel
+        >= (int)(
+            result is not null and not ZLinkMessageFlowResult.Succeeded
+                ? ZLinkDiagnosticsLevel.Errors
+                : RequiredLevel(outcome)
+        );
 
     internal static ILogger CreateLogger(ILoggerFactory? factory, ILogger? fallback = null) =>
         factory?.CreateLogger(LoggerCategory) ?? fallback ?? NullLogger.Instance;
@@ -149,9 +158,11 @@ internal sealed class ZLinkMessageFlowTracer
     private bool Sample(string? flowId, ulong sourceMeshGeneration)
     {
         var rate = _options.Diagnostics.SampleRate;
-        if (rate >= 1.0d) return true;
+        if (rate >= 1.0d)
+            return true;
 
-        if (rate <= 0.0d) return false;
+        if (rate <= 0.0d)
+            return false;
 
         const uint offset = 2166136261u;
         const uint prime = 16777619u;
@@ -186,32 +197,43 @@ internal sealed class ZLinkMessageFlowTracer
     private void LogDefault(ZLinkMessageFlowEvent flow)
     {
         var level = ZLinkTraceFormat.ResolveLogLevel(flow);
-        if (!_logger.IsEnabled(level)) return;
+        if (!_logger.IsEnabled(level))
+            return;
 
         var fields = ZLinkTraceFormat.StructuredFields(flow, flow.MessageSize);
-        _logger.Log(level, default, new ZLinkStructuredLogState(fields), null,
-            static (state, _) => state.ToString());
+        _logger.Log(
+            level,
+            default,
+            new ZLinkStructuredLogState(fields),
+            null,
+            static (state, _) => state.ToString()
+        );
     }
 
-    private void LogDefault(
-        ZLinkDispatchFailure error,
-        string? flowId,
-        ZLinkFlowOrigin? flowOrigin)
+    private void LogDefault(ZLinkDispatchFailure error, string? flowId, ZLinkFlowOrigin? flowOrigin)
     {
-        var level = error.Reason == ZLinkDispatchErrorReason.HandlerException
-            ? LogLevel.Error
-            : LogLevel.Warning;
-        if (!_logger.IsEnabled(level)) return;
+        var level =
+            error.Reason == ZLinkDispatchErrorReason.HandlerException
+                ? LogLevel.Error
+                : LogLevel.Warning;
+        if (!_logger.IsEnabled(level))
+            return;
         var fields = ZLinkTraceFormat.StructuredFields(error, flowId, flowOrigin);
-        _logger.Log(level, default, new ZLinkStructuredLogState(fields), null,
-            static (state, _) => state.ToString());
+        _logger.Log(
+            level,
+            default,
+            new ZLinkStructuredLogState(fields),
+            null,
+            static (state, _) => state.ToString()
+        );
     }
 
     private static ZLinkMessageFlowEvent NormalizeFlowPair(ZLinkMessageFlowEvent flow)
     {
         var hasFlowId = !string.IsNullOrEmpty(flow.FlowId);
         var hasFlowOrigin = flow.FlowOrigin is not null;
-        if (hasFlowId == hasFlowOrigin) return flow;
+        if (hasFlowId == hasFlowOrigin)
+            return flow;
         return flow with { FlowId = string.Empty, FlowOrigin = null };
     }
 }
@@ -240,66 +262,72 @@ internal static class ZLinkTraceFormat
             ZLinkMessageFlowOutcome.Admitted => "admitted",
             ZLinkMessageFlowOutcome.Completed => "completed",
             ZLinkMessageFlowOutcome.Backpressured => "backpressured",
-            _ => outcome.ToString().ToLowerInvariant()
+            _ => outcome.ToString().ToLowerInvariant(),
         };
     }
 
     public static string ResultKey(ZLinkMessageFlowEvent flow) =>
-        ResultKey(flow.Result ?? flow.Outcome switch
-        {
-            ZLinkMessageFlowOutcome.Dropped => ZLinkMessageFlowResult.Dropped,
-            ZLinkMessageFlowOutcome.Backpressured => ZLinkMessageFlowResult.Backpressured,
-            _ => ZLinkMessageFlowResult.Succeeded
-        });
+        ResultKey(
+            flow.Result
+                ?? flow.Outcome switch
+                {
+                    ZLinkMessageFlowOutcome.Dropped => ZLinkMessageFlowResult.Dropped,
+                    ZLinkMessageFlowOutcome.Backpressured => ZLinkMessageFlowResult.Backpressured,
+                    _ => ZLinkMessageFlowResult.Succeeded,
+                }
+        );
 
-    public static string ResultKey(ZLinkMessageFlowResult result) => result switch
-    {
-        ZLinkMessageFlowResult.Succeeded => "succeeded",
-        ZLinkMessageFlowResult.Failed => "failed",
-        ZLinkMessageFlowResult.Backpressured => "backpressured",
-        ZLinkMessageFlowResult.Dropped => "dropped",
-        ZLinkMessageFlowResult.Cancelled => "cancelled",
-        ZLinkMessageFlowResult.Shutdown => "shutdown",
-        _ => result.ToString().ToLowerInvariant()
-    };
+    public static string ResultKey(ZLinkMessageFlowResult result) =>
+        result switch
+        {
+            ZLinkMessageFlowResult.Succeeded => "succeeded",
+            ZLinkMessageFlowResult.Failed => "failed",
+            ZLinkMessageFlowResult.Backpressured => "backpressured",
+            ZLinkMessageFlowResult.Dropped => "dropped",
+            ZLinkMessageFlowResult.Cancelled => "cancelled",
+            ZLinkMessageFlowResult.Shutdown => "shutdown",
+            _ => result.ToString().ToLowerInvariant(),
+        };
 
     public static string? FlowIdKey(ZLinkMessageFlowEvent flow) =>
-        !string.IsNullOrEmpty(flow.FlowId) && flow.FlowOrigin is not null
-            ? flow.FlowId
-            : null;
+        !string.IsNullOrEmpty(flow.FlowId) && flow.FlowOrigin is not null ? flow.FlowId : null;
 
     public static string? FlowOriginKey(ZLinkMessageFlowEvent flow) =>
-        FlowIdKey(flow) is not null
-            ? flow.FlowOrigin!.Value.ToString().ToLowerInvariant()
-            : null;
+        FlowIdKey(flow) is not null ? flow.FlowOrigin!.Value.ToString().ToLowerInvariant() : null;
 
-    public static string SurfaceKey(ZLinkDispatchErrorSurface surface) => surface switch
-    {
-        ZLinkDispatchErrorSurface.Node => "node",
-        ZLinkDispatchErrorSurface.Channel or ZLinkDispatchErrorSurface.RouteMeshChannel => "channel",
-        ZLinkDispatchErrorSurface.SpotRoute or ZLinkDispatchErrorSurface.SpotSubscription => "spot",
-        ZLinkDispatchErrorSurface.InstanceSpot => "instance_spot",
-        ZLinkDispatchErrorSurface.SpotActor => "actor",
-        ZLinkDispatchErrorSurface.StreamSession => "stream",
-        ZLinkDispatchErrorSurface.ActorRelocation => "actor_relocation",
-        ZLinkDispatchErrorSurface.ClassicFanout => "classic_fanout",
-        _ => throw new ArgumentOutOfRangeException(nameof(surface))
-    };
+    public static string SurfaceKey(ZLinkDispatchErrorSurface surface) =>
+        surface switch
+        {
+            ZLinkDispatchErrorSurface.Node => "node",
+            ZLinkDispatchErrorSurface.Channel or ZLinkDispatchErrorSurface.RouteMeshChannel =>
+                "channel",
+            ZLinkDispatchErrorSurface.SpotRoute or ZLinkDispatchErrorSurface.SpotSubscription =>
+                "spot",
+            ZLinkDispatchErrorSurface.InstanceSpot => "instance_spot",
+            ZLinkDispatchErrorSurface.SpotActor => "actor",
+            ZLinkDispatchErrorSurface.StreamSession => "stream",
+            ZLinkDispatchErrorSurface.ActorRelocation => "actor_relocation",
+            ZLinkDispatchErrorSurface.ClassicFanout => "classic_fanout",
+            _ => throw new ArgumentOutOfRangeException(nameof(surface)),
+        };
 
-    public static string MessageKindKey(ZLinkDispatchMessageKind kind) => kind switch
-    {
-        ZLinkDispatchMessageKind.Request or ZLinkDispatchMessageKind.ActorRequest => "request",
-        ZLinkDispatchMessageKind.Send or ZLinkDispatchMessageKind.ActorSend => "send",
-        ZLinkDispatchMessageKind.Response => "response",
-        ZLinkDispatchMessageKind.Error => "error",
-        ZLinkDispatchMessageKind.Control => "control",
-        ZLinkDispatchMessageKind.Publish => "send",
-        _ => throw new ArgumentOutOfRangeException(nameof(kind))
-    };
+    public static string MessageKindKey(ZLinkDispatchMessageKind kind) =>
+        kind switch
+        {
+            ZLinkDispatchMessageKind.Request or ZLinkDispatchMessageKind.ActorRequest => "request",
+            ZLinkDispatchMessageKind.Send or ZLinkDispatchMessageKind.ActorSend => "send",
+            ZLinkDispatchMessageKind.Response => "response",
+            ZLinkDispatchMessageKind.Error => "error",
+            ZLinkDispatchMessageKind.Control => "control",
+            ZLinkDispatchMessageKind.Publish => "send",
+            _ => throw new ArgumentOutOfRangeException(nameof(kind)),
+        };
 
     public static string? ChannelRouteKind(
         ZLinkDispatchErrorSurface surface,
-        string? explicitKind = null) => surface switch
+        string? explicitKind = null
+    ) =>
+        surface switch
         {
             ZLinkDispatchErrorSurface.RouteMeshChannel => "route_mesh",
             ZLinkDispatchErrorSurface.Channel => explicitKind switch
@@ -307,58 +335,63 @@ internal static class ZLinkTraceFormat
                 null or "" => "client_server",
                 "route_mesh" or "RouteMesh" or "route-mesh" => "route_mesh",
                 "client_server" or "ClientServer" or "client-server" => "client_server",
-                _ => throw new ArgumentOutOfRangeException(nameof(explicitKind))
+                _ => throw new ArgumentOutOfRangeException(nameof(explicitKind)),
             },
-            _ => null
+            _ => null,
         };
 
-    public static string? ActivationStateKey(string? activationState) => activationState switch
-    {
-        null or "" => null,
-        "activating" or "Activating" => "activating",
-        "ready" or "Ready" => "ready",
-        "closing" or "Closing" => "closing",
-        _ => throw new ArgumentOutOfRangeException(nameof(activationState))
-    };
+    public static string? ActivationStateKey(string? activationState) =>
+        activationState switch
+        {
+            null or "" => null,
+            "activating" or "Activating" => "activating",
+            "ready" or "Ready" => "ready",
+            "closing" or "Closing" => "closing",
+            _ => throw new ArgumentOutOfRangeException(nameof(activationState)),
+        };
 
-    public static string DispatchReasonKey(ZLinkDispatchErrorReason reason) => reason switch
-    {
-        ZLinkDispatchErrorReason.HandlerMissing => "no_handler",
-        ZLinkDispatchErrorReason.PayloadDecodeFailed => "decode_error",
-        ZLinkDispatchErrorReason.HandlerException => "handler_exception",
-        ZLinkDispatchErrorReason.InvalidFrame => "invalid_frame",
-        ZLinkDispatchErrorReason.ReplyPathMissing => "reply_path_missing",
-        ZLinkDispatchErrorReason.UnexpectedReply => "unexpected_reply",
-        ZLinkDispatchErrorReason.Backpressure => "backpressure",
-        ZLinkDispatchErrorReason.StaleTarget => "stale_target",
-        ZLinkDispatchErrorReason.Shutdown => "shutdown",
-        _ => throw new ArgumentOutOfRangeException(nameof(reason))
-    };
+    public static string DispatchReasonKey(ZLinkDispatchErrorReason reason) =>
+        reason switch
+        {
+            ZLinkDispatchErrorReason.HandlerMissing => "no_handler",
+            ZLinkDispatchErrorReason.PayloadDecodeFailed => "decode_error",
+            ZLinkDispatchErrorReason.HandlerException => "handler_exception",
+            ZLinkDispatchErrorReason.InvalidFrame => "invalid_frame",
+            ZLinkDispatchErrorReason.ReplyPathMissing => "reply_path_missing",
+            ZLinkDispatchErrorReason.UnexpectedReply => "unexpected_reply",
+            ZLinkDispatchErrorReason.Backpressure => "backpressure",
+            ZLinkDispatchErrorReason.StaleTarget => "stale_target",
+            ZLinkDispatchErrorReason.Shutdown => "shutdown",
+            _ => throw new ArgumentOutOfRangeException(nameof(reason)),
+        };
 
-    public static string DispatchActionKey(ZLinkDispatchErrorAction action) => action switch
-    {
-        ZLinkDispatchErrorAction.ReplyError => "reply_error",
-        ZLinkDispatchErrorAction.FailCaller => "fail_caller",
-        ZLinkDispatchErrorAction.Drop => "drop",
-        _ => throw new ArgumentOutOfRangeException(nameof(action))
-    };
+    public static string DispatchActionKey(ZLinkDispatchErrorAction action) =>
+        action switch
+        {
+            ZLinkDispatchErrorAction.ReplyError => "reply_error",
+            ZLinkDispatchErrorAction.FailCaller => "fail_caller",
+            ZLinkDispatchErrorAction.Drop => "drop",
+            _ => throw new ArgumentOutOfRangeException(nameof(action)),
+        };
 
-    public static string? MessageReasonKey(ZLinkMessageFlowReason? reason) => reason switch
-    {
-        null => null,
-        ZLinkMessageFlowReason.Backpressure => "backpressure",
-        ZLinkMessageFlowReason.StaleTarget => "stale_target",
-        ZLinkMessageFlowReason.TargetClosed => "target_closed",
-        ZLinkMessageFlowReason.Shutdown => "shutdown",
-        ZLinkMessageFlowReason.LocationUnavailable => "location_unavailable",
-        ZLinkMessageFlowReason.ActivationRejected => "activation_rejected",
-        ZLinkMessageFlowReason.ActivationTimeout => "activation_timeout",
-        _ => throw new ArgumentOutOfRangeException(nameof(reason))
-    };
+    public static string? MessageReasonKey(ZLinkMessageFlowReason? reason) =>
+        reason switch
+        {
+            null => null,
+            ZLinkMessageFlowReason.Backpressure => "backpressure",
+            ZLinkMessageFlowReason.StaleTarget => "stale_target",
+            ZLinkMessageFlowReason.TargetClosed => "target_closed",
+            ZLinkMessageFlowReason.Shutdown => "shutdown",
+            ZLinkMessageFlowReason.LocationUnavailable => "location_unavailable",
+            ZLinkMessageFlowReason.ActivationRejected => "activation_rejected",
+            ZLinkMessageFlowReason.ActivationTimeout => "activation_timeout",
+            _ => throw new ArgumentOutOfRangeException(nameof(reason)),
+        };
 
     public static IReadOnlyList<KeyValuePair<string, object?>> StructuredFields(
         ZLinkMessageFlowEvent flow,
-        long? size)
+        long? size
+    )
     {
         var fields = new List<KeyValuePair<string, object?>>(22);
         //  Structured log 본문의 key는 관찰 스펙의 "Structured log 대체 표기"가 고정한다 —
@@ -391,7 +424,8 @@ internal static class ZLinkTraceFormat
     public static IReadOnlyList<KeyValuePair<string, object?>> StructuredFields(
         ZLinkDispatchFailure error,
         string? flowId,
-        ZLinkFlowOrigin? flowOrigin)
+        ZLinkFlowOrigin? flowOrigin
+    )
     {
         var fields = new List<KeyValuePair<string, object?>>(20);
         Add(fields, "event", "zlink.dispatch_error");
@@ -411,9 +445,13 @@ internal static class ZLinkTraceFormat
         Add(fields, "actor", error.ActorId);
         Add(fields, "corr", error.CorrelationId);
         Add(fields, "flow", string.IsNullOrEmpty(flowId) || flowOrigin is null ? null : flowId);
-        Add(fields, "origin", string.IsNullOrEmpty(flowId) || flowOrigin is null
-            ? null
-            : flowOrigin.Value.ToString().ToLowerInvariant());
+        Add(
+            fields,
+            "origin",
+            string.IsNullOrEmpty(flowId) || flowOrigin is null
+                ? null
+                : flowOrigin.Value.ToString().ToLowerInvariant()
+        );
         Add(fields, "outcome", "failed");
         Add(fields, "reason", DispatchReasonKey(error.Reason));
         return fields;
@@ -422,16 +460,16 @@ internal static class ZLinkTraceFormat
     private static void Add(
         ICollection<KeyValuePair<string, object?>> fields,
         string key,
-        object? value)
+        object? value
+    )
     {
         if (value is not null and not "")
             fields.Add(new KeyValuePair<string, object?>(key, value));
     }
 }
 
-internal sealed class ZLinkStructuredLogState(
-    IReadOnlyList<KeyValuePair<string, object?>> fields) :
-    IReadOnlyList<KeyValuePair<string, object?>>
+internal sealed class ZLinkStructuredLogState(IReadOnlyList<KeyValuePair<string, object?>> fields)
+    : IReadOnlyList<KeyValuePair<string, object?>>
 {
     public int Count => fields.Count;
 
@@ -448,5 +486,4 @@ internal sealed class ZLinkStructuredLogState(
             message.Append(' ').Append(field.Key).Append('=').Append(field.Value);
         return message.ToString();
     }
-
 }

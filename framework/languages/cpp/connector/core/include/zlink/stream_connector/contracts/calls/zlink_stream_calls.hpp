@@ -34,11 +34,12 @@ struct request_reply_t
 
 /* Applies the connector's typed codec (stream-connector §5.4) to a received
  * payload before the payload type decodes it. */
-zlink::message_t
-encode_typed_payload (const std::shared_ptr<void> &state, const zlink::message_t &payload);
+zlink::message_t encode_typed_payload (const std::shared_ptr<void> &state,
+                                       const zlink::message_t &payload);
 zlink::message_t decode_typed_payload (const std::shared_ptr<void> &state, const packet_t &packet);
-zlink::message_t
-decode_typed_reply (const std::shared_ptr<void> &state, codec_t codec, const zlink::message_t &payload);
+zlink::message_t decode_typed_reply (const std::shared_ptr<void> &state,
+                                     codec_t codec,
+                                     const zlink::message_t &payload);
 
 /* Rebuilds the received message from the packet the connector queued
  * (stream-connector §5.5): the wait surfaces hand the caller a message, not a
@@ -193,16 +194,15 @@ class request_call_t
         auto state = _state;
         auto packet = std::move (_packet);
         const auto timeout = _timeout;
-        detail::submit_request_async (
-          state, std::move (packet), timeout,
-          [state, callback = std::move (callback)] (
-            result_t<detail::request_reply_t> reply) mutable {
-              erased_result_t erased (state, std::move (reply));
-              auto result = erased.template as<TReply> ();
-              if (callback) {
-                  callback (std::move (result));
-              }
-          });
+        detail::submit_request_async (state, std::move (packet), timeout,
+                                      [state, callback = std::move (callback)] (
+                                        result_t<detail::request_reply_t> reply) mutable {
+                                          erased_result_t erased (state, std::move (reply));
+                                          auto result = erased.template as<TReply> ();
+                                          if (callback) {
+                                              callback (std::move (result));
+                                          }
+                                      });
     }
 
   private:
@@ -290,8 +290,8 @@ template <typename TMessage> class wait_call_t
     wait_call_t &where (TValue TMessage::*member, TExpected &&expected)
     {
         auto expected_value = std::decay_t<TExpected> (std::forward<TExpected> (expected));
-        return where ([member, expected_value = std::move (expected_value)] (
-                        const message_t<TMessage> &message) {
+        return where ([member, expected_value =
+                                 std::move (expected_value)] (const message_t<TMessage> &message) {
             return std::invoke (member, message.payload) == expected_value;
         });
     }
@@ -307,9 +307,9 @@ template <typename TMessage> class wait_call_t
 
         auto packet = detail::submit_wait (_state, _packet_name, packet_predicate (), _timeout);
         if (!packet) {
-            return result_type::failure (
-              observation_failure_code (packet.error_code ()),
-              packet.error () ? packet.error ()->message : "stream connector wait failed");
+            return result_type::failure (observation_failure_code (packet.error_code ()),
+                                         packet.error () ? packet.error ()->message
+                                                         : "stream connector wait failed");
         }
         return detail::decode_message<TMessage> (_state, std::move (packet.value ()));
     }
@@ -332,12 +332,12 @@ template <typename TMessage> class wait_call_t
         detail::submit_wait_async (
           state, std::move (packet_name), packet_predicate (), timeout,
           [state, callback = std::move (callback)] (result_t<packet_t> packet) mutable {
-              result_type result = result_type::failure (error_code_t::disconnected,
-                                                         "stream connector wait failed");
+              result_type result =
+                result_type::failure (error_code_t::disconnected, "stream connector wait failed");
               if (!packet) {
-                  result = result_type::failure (
-                    observation_failure_code (packet.error_code ()),
-                    packet.error () ? packet.error ()->message : "stream connector wait failed");
+                  result = result_type::failure (observation_failure_code (packet.error_code ()),
+                                                 packet.error () ? packet.error ()->message
+                                                                 : "stream connector wait failed");
               } else {
                   result = detail::decode_message<TMessage> (state, std::move (packet.value ()));
               }
@@ -397,8 +397,8 @@ template <typename TMessage> class wait_call_t
         /* The connector parks this predicate in its own pending-wait list, so
          * it holds a weak reference back instead of keeping that state alive
          * through the list. */
-        return [weak_state = std::weak_ptr<void> (_state), predicate = _predicate] (
-                 const packet_t &packet) {
+        return [weak_state = std::weak_ptr<void> (_state),
+                predicate = _predicate] (const packet_t &packet) {
             auto message = detail::decode_message<TMessage> (weak_state.lock (), packet);
             if (!message) {
                 return false;
@@ -482,15 +482,15 @@ template <typename TMessage> class expect_none_call_t
               packet.error_code ().value_or (error_code_t::disconnected),
               packet.error () ? packet.error ()->message : "expect-none observation failed");
         }
-        return result_t<void>::failure (error_code_t::validation_failed,
-                                        "an unexpected packet arrived during the observation window");
+        return result_t<void>::failure (
+          error_code_t::validation_failed,
+          "an unexpected packet arrived during the observation window");
     }
 
     std::optional<error_t> validation_error () const
     {
         if (!_state) {
-            return error_t{error_code_t::configuration_error,
-                           "expect-none call has no connector"};
+            return error_t{error_code_t::configuration_error, "expect-none call has no connector"};
         }
         if (!_has_window || _window <= std::chrono::milliseconds::zero ()) {
             return error_t{error_code_t::validation_failed,
@@ -514,8 +514,7 @@ template <typename TMessage> class wait_for_sequence_call_t
     ///
     /// The predicate reads the message, not the payload alone
     /// (stream-connector §10.1).
-    wait_for_sequence_call_t &expect (
-      std::function<bool (const message_t<TMessage> &)> predicate)
+    wait_for_sequence_call_t &expect (std::function<bool (const message_t<TMessage> &)> predicate)
     {
         _predicates.push_back (std::move (predicate));
         return *this;
@@ -565,9 +564,9 @@ template <typename TMessage> class wait_for_sequence_call_t
     /// Waits for the sequence and invokes the callback with the ordered messages.
     void submit (std::function<void (result_t<std::vector<message_t<TMessage>>>)> callback)
     {
-        auto operation = std::make_shared<async_operation_t> (
-          _state, std::move (_packet_name), std::move (_predicates), _timeout,
-          std::move (callback));
+        auto operation = std::make_shared<async_operation_t> (_state, std::move (_packet_name),
+                                                              std::move (_predicates), _timeout,
+                                                              std::move (callback));
         operation->start ();
     }
 
@@ -582,8 +581,8 @@ template <typename TMessage> class wait_for_sequence_call_t
           std::shared_ptr<void> state_value,
           std::string packet_name_value,
           std::vector<std::function<bool (const message_t<TMessage> &)>> predicates_value,
-                           std::chrono::milliseconds timeout_value,
-                           std::function<void (sequence_result_t)> callback_value) :
+          std::chrono::milliseconds timeout_value,
+          std::function<void (sequence_result_t)> callback_value) :
             state (std::move (state_value)),
             packet_name (std::move (packet_name_value)),
             predicates (std::move (predicates_value)),
@@ -682,11 +681,11 @@ template <typename TMessage> class wait_for_sequence_call_t
         return *code;
     }
 
-    static result_t<void> accept_packet (
-      const std::shared_ptr<void> &state,
-      packet_t packet,
-      const std::function<bool (const message_t<TMessage> &)> &predicate,
-      std::vector<message_t<TMessage>> &messages)
+    static result_t<void>
+    accept_packet (const std::shared_ptr<void> &state,
+                   packet_t packet,
+                   const std::function<bool (const message_t<TMessage> &)> &predicate,
+                   std::vector<message_t<TMessage>> &messages)
     {
         auto decoded = detail::decode_message<TMessage> (state, std::move (packet));
         if (!decoded) {
@@ -695,9 +694,8 @@ template <typename TMessage> class wait_for_sequence_call_t
               decoded.error ()->message);
         }
         if (!predicate || !predicate (decoded.value ())) {
-            return result_t<void>::failure (
-              error_code_t::validation_failed,
-              "packet payload arrived out of the expected sequence");
+            return result_t<void>::failure (error_code_t::validation_failed,
+                                            "packet payload arrived out of the expected sequence");
         }
         messages.push_back (std::move (decoded.value ()));
         return result_t<void>::success ();

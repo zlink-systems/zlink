@@ -38,59 +38,99 @@ export class ZLinkChannelRuntimeOptionsFactory {
       internalRouteRequestHandlers: this.internalRouteRequestHandlers(),
       localSpotRouteDispatcher: {
         send: async (spotId, packetName, message, routeContext) => {
-          await this.requireSpotManager().dispatchRoutedSpotSend(spotId, packetName, message, routeContext);
+          await this.requireSpotManager().dispatchRoutedSpotSend(
+            spotId,
+            packetName,
+            message,
+            routeContext
+          );
         },
         request: async (spotId, packetName, request, routeContext) =>
-          await this.requireSpotManager().dispatchRoutedSpotRequest(spotId, packetName, request, routeContext)
+          await this.requireSpotManager().dispatchRoutedSpotRequest(
+            spotId,
+            packetName,
+            request,
+            routeContext
+          )
       }
     };
   }
 
   private internalRouteSendHandlers(): ZLinkChannelRuntimeManagerOptions['internalRouteSendHandlers'] {
     return new Map([
-      [ZLINK_REMOTE_BOUND_SESSION_SEND_PACKET, {
-        handle: async (payload) => {
-          const { ok } = await this.options.boundSessionRelay.boundSessions
-            .receiveRemoteBoundSessionSend(payload);
-          if (!ok) {
-            // A rejected relocation-fenced outbound must not read as a
-            // completed flow: surface it so the dispatch pipeline records
-            // an error terminal instead of silently dropping the notify.
-            throw createInternalFrameworkException(
-              ZLinkFrameworkInternalErrorKind.RelocationFailed,
-              `Bound-session send for '${ZLINK_REMOTE_BOUND_SESSION_SEND_PACKET}' was rejected by the Session binding registry.`
+      [
+        ZLINK_REMOTE_BOUND_SESSION_SEND_PACKET,
+        {
+          handle: async (payload) => {
+            const { ok } =
+              await this.options.boundSessionRelay.boundSessions.receiveRemoteBoundSessionSend(
+                payload
+              );
+            if (!ok) {
+              // A rejected relocation-fenced outbound must not read as a
+              // completed flow: surface it so the dispatch pipeline records
+              // an error terminal instead of silently dropping the notify.
+              throw createInternalFrameworkException(
+                ZLinkFrameworkInternalErrorKind.RelocationFailed,
+                `Bound-session send for '${ZLINK_REMOTE_BOUND_SESSION_SEND_PACKET}' was rejected by the Session binding registry.`
+              );
+            }
+          }
+        }
+      ],
+      [
+        ZLINK_REMOTE_BOUND_SESSION_RESPONSE_PACKET,
+        {
+          handle: async (payload) => {
+            await this.options.boundSessionRelay.boundSessions.receiveRemoteBoundSessionResponse(
+              payload
             );
           }
         }
-      }],
-      [ZLINK_REMOTE_BOUND_SESSION_RESPONSE_PACKET, {
-        handle: async (payload) => {
-          await this.options.boundSessionRelay.boundSessions.receiveRemoteBoundSessionResponse(payload);
+      ],
+      [
+        ZLINK_REMOTE_BOUND_SESSION_ERROR_PACKET,
+        {
+          handle: async (payload) => {
+            await this.options.boundSessionRelay.boundSessions.receiveRemoteBoundSessionError(
+              payload
+            );
+          }
         }
-      }],
-      [ZLINK_REMOTE_BOUND_SESSION_ERROR_PACKET, {
-        handle: async (payload) => {
-          await this.options.boundSessionRelay.boundSessions.receiveRemoteBoundSessionError(payload);
+      ],
+      [
+        ZLINK_REMOTE_ACTOR_PACKET_RELAY_PACKET,
+        {
+          handle: async (payload, routeContext) => {
+            await this.options.boundSessionRelay.actorPackets.receiveRemoteActorPacketRelay(
+              payload,
+              routeContext
+            );
+          }
         }
-      }],
-      [ZLINK_REMOTE_ACTOR_PACKET_RELAY_PACKET, {
-        handle: async (payload, routeContext) => {
-          await this.options.boundSessionRelay.actorPackets.receiveRemoteActorPacketRelay(payload, routeContext);
-        }
-      }]
+      ]
     ]);
   }
 
   private internalRouteRequestHandlers(): ZLinkChannelRuntimeManagerOptions['internalRouteRequestHandlers'] {
     return new Map([
-      [ZLINK_REMOTE_ACTOR_JOIN_PACKET, {
-        handle: (payload, routeContext) =>
-          this.options.boundSessionRelay.actorJoins.receive(payload, routeContext)
-      }],
-      [ZLINK_REMOTE_ACTOR_PACKET_RELAY_PACKET, {
-        handle: (payload, routeContext) =>
-          this.options.boundSessionRelay.actorPackets.receiveRemoteActorPacketRelay(payload, routeContext)
-      }]
+      [
+        ZLINK_REMOTE_ACTOR_JOIN_PACKET,
+        {
+          handle: (payload, routeContext) =>
+            this.options.boundSessionRelay.actorJoins.receive(payload, routeContext)
+        }
+      ],
+      [
+        ZLINK_REMOTE_ACTOR_PACKET_RELAY_PACKET,
+        {
+          handle: (payload, routeContext) =>
+            this.options.boundSessionRelay.actorPackets.receiveRemoteActorPacketRelay(
+              payload,
+              routeContext
+            )
+        }
+      ]
     ]);
   }
 

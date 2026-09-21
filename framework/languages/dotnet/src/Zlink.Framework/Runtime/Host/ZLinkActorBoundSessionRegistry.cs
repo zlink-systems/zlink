@@ -6,12 +6,10 @@ internal sealed class ZLinkActorBoundSessionRegistry(Action<string, string> unbi
 {
     private readonly ConcurrentDictionary<RoutingId, Entry[]> _entries = new();
 
-    public void Register(
-        string actorId,
-        RoutingId sessionRid,
-        string bindingToken)
+    public void Register(string actorId, RoutingId sessionRid, string bindingToken)
     {
-        if (!ZLinkActorBoundSessionBindingToken.IsNative(bindingToken)) return;
+        if (!ZLinkActorBoundSessionBindingToken.IsNative(bindingToken))
+            return;
 
         while (true)
         {
@@ -32,11 +30,10 @@ internal sealed class ZLinkActorBoundSessionRegistry(Action<string, string> unbi
         }
     }
 
-    public void Unregister(
-        string actorId,
-        string bindingToken)
+    public void Unregister(string actorId, string bindingToken)
     {
-        if (!ZLinkActorBoundSessionBindingToken.IsNative(bindingToken)) return;
+        if (!ZLinkActorBoundSessionBindingToken.IsNative(bindingToken))
+            return;
 
         foreach (var (sessionRid, _) in _entries)
         {
@@ -64,7 +61,8 @@ internal sealed class ZLinkActorBoundSessionRegistry(Action<string, string> unbi
 
     public void Cleanup(RoutingId sessionRid)
     {
-        if (!_entries.TryRemove(sessionRid, out var entries)) return;
+        if (!_entries.TryRemove(sessionRid, out var entries))
+            return;
 
         foreach (var entry in entries)
             unbind(entry.ActorId, entry.BindingToken);
@@ -78,19 +76,16 @@ internal sealed class ZLinkActorBoundSessionRegistry(Action<string, string> unbi
     private bool TryRemove(RoutingId sessionRid, Entry[] entries)
     {
         return ((ICollection<KeyValuePair<RoutingId, Entry[]>>)_entries).Remove(
-            new KeyValuePair<RoutingId, Entry[]>(sessionRid, entries));
+            new KeyValuePair<RoutingId, Entry[]>(sessionRid, entries)
+        );
     }
 
-    private sealed record Entry(
-        string ActorId,
-        string BindingToken)
+    private sealed record Entry(string ActorId, string BindingToken)
     {
-        public bool Matches(
-            string actorId,
-            string bindingToken)
+        public bool Matches(string actorId, string bindingToken)
         {
             return string.Equals(ActorId, actorId, StringComparison.Ordinal)
-                   && string.Equals(BindingToken, bindingToken, StringComparison.Ordinal);
+                && string.Equals(BindingToken, bindingToken, StringComparison.Ordinal);
         }
     }
 }

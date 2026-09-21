@@ -5,6 +5,11 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertInstanceOf;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 
+import org.junit.jupiter.api.Test;
+
+import systems.zlink.framework.locationprovider.*;
+import systems.zlink.framework.locations.*;
+
 import java.time.Duration;
 import java.time.Instant;
 import java.util.HashMap;
@@ -12,58 +17,55 @@ import java.util.LinkedHashMap;
 import java.util.Map;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionStage;
-import org.junit.jupiter.api.Test;
-import systems.zlink.framework.locationprovider.*;
-import systems.zlink.framework.locations.*;
-import systems.zlink.framework.runtime.internal.locations.*;
 
 final class ZLinkProviderOwnerLeaseRepositoryTest {
     @Test
-    void generationsRemainMonotonicAcrossReleaseAndReclaim()
-        throws Exception {
-        var repository = new ZLinkProviderOwnerLeaseRepository(
-            new AtomicProvider());
+    void generationsRemainMonotonicAcrossReleaseAndReclaim() throws Exception {
+        var repository = new ZLinkProviderOwnerLeaseRepository(new AtomicProvider());
 
-        var first = assertInstanceOf(
-            ZLinkOwnerLeaseClaimed.class,
-            repository.claim("owner-a", Duration.ofMinutes(1))
-                .toCompletableFuture().get());
+        var first =
+                assertInstanceOf(
+                        ZLinkOwnerLeaseClaimed.class,
+                        repository
+                                .claim("owner-a", Duration.ofMinutes(1))
+                                .toCompletableFuture()
+                                .get());
         assertEquals(
-            ZLinkOwnerLeaseReleaseResult.RELEASED,
-            repository.release(first.token())
-                .toCompletableFuture().get());
-        var second = assertInstanceOf(
-            ZLinkOwnerLeaseClaimed.class,
-            repository.claim("owner-a", Duration.ofMinutes(1))
-                .toCompletableFuture().get());
+                ZLinkOwnerLeaseReleaseResult.RELEASED,
+                repository.release(first.token()).toCompletableFuture().get());
+        var second =
+                assertInstanceOf(
+                        ZLinkOwnerLeaseClaimed.class,
+                        repository
+                                .claim("owner-a", Duration.ofMinutes(1))
+                                .toCompletableFuture()
+                                .get());
 
-        assertEquals(
-            first.token().leaseGeneration() + 1,
-            second.token().leaseGeneration());
+        assertEquals(first.token().leaseGeneration() + 1, second.token().leaseGeneration());
     }
 
     @Test
     void exactLeaseGenerationFencesRenewAndRelease() throws Exception {
-        var repository = new ZLinkProviderOwnerLeaseRepository(
-            new AtomicProvider());
-        var claimed = assertInstanceOf(
-            ZLinkOwnerLeaseClaimed.class,
-            repository.claim("owner-a", Duration.ofMinutes(1))
-                .toCompletableFuture().get());
-        var stale = new ZLinkLocationOwnerToken(
-            claimed.token().ownerId(),
-            claimed.token().leaseGeneration() + 1);
+        var repository = new ZLinkProviderOwnerLeaseRepository(new AtomicProvider());
+        var claimed =
+                assertInstanceOf(
+                        ZLinkOwnerLeaseClaimed.class,
+                        repository
+                                .claim("owner-a", Duration.ofMinutes(1))
+                                .toCompletableFuture()
+                                .get());
+        var stale =
+                new ZLinkLocationOwnerToken(
+                        claimed.token().ownerId(), claimed.token().leaseGeneration() + 1);
 
         assertInstanceOf(
-            ZLinkOwnerLeaseRenewStale.class,
-            repository.renew(stale, Duration.ofMinutes(1))
-                .toCompletableFuture().get());
+                ZLinkOwnerLeaseRenewStale.class,
+                repository.renew(stale, Duration.ofMinutes(1)).toCompletableFuture().get());
         assertEquals(
-            ZLinkOwnerLeaseReleaseResult.STALE,
-            repository.release(stale).toCompletableFuture().get());
+                ZLinkOwnerLeaseReleaseResult.STALE,
+                repository.release(stale).toCompletableFuture().get());
         assertInstanceOf(
-            ZLinkOwnerLeaseFound.class,
-            repository.read("owner-a").toCompletableFuture().get());
+                ZLinkOwnerLeaseFound.class, repository.read("owner-a").toCompletableFuture().get());
     }
 
     @Test
@@ -72,24 +74,22 @@ final class ZLinkProviderOwnerLeaseRepositoryTest {
         // "zlink:v11:owner-counter" as a UTF-8 decimal string. The old
         // 8-byte big-endian encoding broke dotnet's decimal parse
         // (FormatException on raw bytes such as 0x0A / "\n").
-        var provider = new systems.zlink.framework.runtime.locations
-            .ZLinkInMemoryProviderLocationStore();
+        var provider =
+                new systems.zlink.framework.runtime.locations.ZLinkInMemoryProviderLocationStore();
         var repository = new ZLinkProviderOwnerLeaseRepository(provider);
 
         assertInstanceOf(
-            ZLinkOwnerLeaseClaimed.class,
-            repository.claim("owner-a", Duration.ofMinutes(1))
-                .toCompletableFuture().get());
+                ZLinkOwnerLeaseClaimed.class,
+                repository.claim("owner-a", Duration.ofMinutes(1)).toCompletableFuture().get());
 
-        var counter = assertInstanceOf(
-            ZLinkStoreReadFound.class,
-            provider.read(
-                    new ZLinkStoreKey("zlink:v11:owner-counter"),
-                    () -> false)
-                .toCompletableFuture().get());
+        var counter =
+                assertInstanceOf(
+                        ZLinkStoreReadFound.class,
+                        provider.read(new ZLinkStoreKey("zlink:v11:owner-counter"), () -> false)
+                                .toCompletableFuture()
+                                .get());
         assertArrayEquals(
-            "2".getBytes(java.nio.charset.StandardCharsets.UTF_8),
-            counter.value().bytes());
+                "2".getBytes(java.nio.charset.StandardCharsets.UTF_8), counter.value().bytes());
     }
 
     @Test
@@ -97,161 +97,164 @@ final class ZLinkProviderOwnerLeaseRepositoryTest {
         // Mirrors the cpp golden conformance setup: another language
         // pre-seeded the counter with the decimal string "5"; the next
         // java claim must issue leaseGeneration 5 and store "6".
-        var provider = new systems.zlink.framework.runtime.locations
-            .ZLinkInMemoryProviderLocationStore();
+        var provider =
+                new systems.zlink.framework.runtime.locations.ZLinkInMemoryProviderLocationStore();
         var counterKey = new ZLinkStoreKey("zlink:v11:owner-counter");
         assertInstanceOf(
-            ZLinkStoreWriteApplied.class,
-            provider.write(
-                    new ZLinkStoreWriteRequest(
-                        java.util.List.of(
-                            new ZLinkStoreMissingCondition(counterKey)),
-                        java.util.List.of(new ZLinkStorePut(
-                            counterKey,
-                            "5".getBytes(
-                                java.nio.charset.StandardCharsets.UTF_8),
-                            null))),
-                    () -> false)
-                .toCompletableFuture().get());
+                ZLinkStoreWriteApplied.class,
+                provider.write(
+                                new ZLinkStoreWriteRequest(
+                                        java.util.List.of(
+                                                new ZLinkStoreMissingCondition(counterKey)),
+                                        java.util.List.of(
+                                                new ZLinkStorePut(
+                                                        counterKey,
+                                                        "5"
+                                                                .getBytes(
+                                                                        java.nio.charset
+                                                                                .StandardCharsets
+                                                                                .UTF_8),
+                                                        null))),
+                                () -> false)
+                        .toCompletableFuture()
+                        .get());
 
         var repository = new ZLinkProviderOwnerLeaseRepository(provider);
-        var claimed = assertInstanceOf(
-            ZLinkOwnerLeaseClaimed.class,
-            repository.claim("owner-a", Duration.ofMinutes(1))
-                .toCompletableFuture().get());
+        var claimed =
+                assertInstanceOf(
+                        ZLinkOwnerLeaseClaimed.class,
+                        repository
+                                .claim("owner-a", Duration.ofMinutes(1))
+                                .toCompletableFuture()
+                                .get());
         assertEquals(5, claimed.token().leaseGeneration());
 
-        var counter = assertInstanceOf(
-            ZLinkStoreReadFound.class,
-            provider.read(counterKey, () -> false)
-                .toCompletableFuture().get());
+        var counter =
+                assertInstanceOf(
+                        ZLinkStoreReadFound.class,
+                        provider.read(counterKey, () -> false).toCompletableFuture().get());
         assertArrayEquals(
-            "6".getBytes(java.nio.charset.StandardCharsets.UTF_8),
-            counter.value().bytes());
+                "6".getBytes(java.nio.charset.StandardCharsets.UTF_8), counter.value().bytes());
     }
 
     @Test
     void claimsRejectNonCanonicalOwnerCounterRecords() throws Exception {
         for (String invalid : java.util.List.of("01", "+1", "0", "", " 1")) {
-            var provider = new systems.zlink.framework.runtime.locations
-                .ZLinkInMemoryProviderLocationStore();
+            var provider =
+                    new systems.zlink.framework.runtime.locations
+                            .ZLinkInMemoryProviderLocationStore();
             var counterKey = new ZLinkStoreKey("zlink:v11:owner-counter");
             provider.write(
-                    new ZLinkStoreWriteRequest(
-                        java.util.List.of(),
-                        java.util.List.of(new ZLinkStorePut(
-                            counterKey,
-                            invalid.getBytes(java.nio.charset.StandardCharsets.UTF_8),
-                            null))),
-                    () -> false)
-                .toCompletableFuture().get();
+                            new ZLinkStoreWriteRequest(
+                                    java.util.List.of(),
+                                    java.util.List.of(
+                                            new ZLinkStorePut(
+                                                    counterKey,
+                                                    invalid.getBytes(
+                                                            java.nio.charset.StandardCharsets
+                                                                    .UTF_8),
+                                                    null))),
+                            () -> false)
+                    .toCompletableFuture()
+                    .get();
 
-            var failure = assertThrows(
-                java.util.concurrent.ExecutionException.class,
-                () -> new ZLinkProviderOwnerLeaseRepository(provider)
-                    .claim("owner-a", Duration.ofMinutes(1))
-                    .toCompletableFuture().get());
+            var failure =
+                    assertThrows(
+                            java.util.concurrent.ExecutionException.class,
+                            () ->
+                                    new ZLinkProviderOwnerLeaseRepository(provider)
+                                            .claim("owner-a", Duration.ofMinutes(1))
+                                            .toCompletableFuture()
+                                            .get());
             assertInstanceOf(IllegalStateException.class, failure.getCause());
             assertEquals(
-                "Location Store owner counter is invalid",
-                failure.getCause().getMessage());
+                    "Location Store owner counter is invalid", failure.getCause().getMessage());
         }
     }
 
     @Test
     void fullRangeU64LeaseGenerationRoundTripsThroughRecordCodec() {
-        long leaseGeneration =
-            Long.parseUnsignedLong("18282048283864059584");
-        var record = ZLinkOwnerLeaseRecordCodec.decode(
-            ZLinkOwnerLeaseRecordCodec.encode(
-                "owner-a", leaseGeneration));
+        long leaseGeneration = Long.parseUnsignedLong("18282048283864059584");
+        var record =
+                ZLinkOwnerLeaseRecordCodec.decode(
+                        ZLinkOwnerLeaseRecordCodec.encode("owner-a", leaseGeneration));
         assertEquals("owner-a", record.ownerId());
         assertEquals(leaseGeneration, record.leaseGeneration());
-        assertEquals(
-            "18282048283864059584",
-            Long.toUnsignedString(record.leaseGeneration()));
+        assertEquals("18282048283864059584", Long.toUnsignedString(record.leaseGeneration()));
     }
 
     private static final class AtomicProvider
-        implements systems.zlink.framework.locationprovider
-            .ZLinkLocationStore {
+            implements systems.zlink.framework.locationprovider.ZLinkLocationStore {
         private final Map<ZLinkStoreKey, Entry> rows = new HashMap<>();
         private long version;
 
         @Override
         public synchronized CompletionStage<ZLinkStoreReadResult> read(
-            ZLinkStoreKey key,
-            systems.zlink.framework.locationprovider
-                .ZLinkStoreCancellation cancellation) {
+                ZLinkStoreKey key,
+                systems.zlink.framework.locationprovider.ZLinkStoreCancellation cancellation) {
             Instant now = Instant.now();
             Entry entry = rows.get(key);
-            if (entry != null
-                && entry.expiresAt() != null
-                && !entry.expiresAt().isAfter(now)) {
+            if (entry != null && entry.expiresAt() != null && !entry.expiresAt().isAfter(now)) {
                 rows.remove(key);
                 entry = null;
             }
-            return completed(entry == null
-                ? new ZLinkStoreReadMissing(now)
-                : new ZLinkStoreReadFound(new ZLinkStoreValue(
-                    entry.bytes(),
-                    entry.version(),
-                    entry.expiresAt(),
-                    now)));
+            return completed(
+                    entry == null
+                            ? new ZLinkStoreReadMissing(now)
+                            : new ZLinkStoreReadFound(
+                                    new ZLinkStoreValue(
+                                            entry.bytes(),
+                                            entry.version(),
+                                            entry.expiresAt(),
+                                            now)));
         }
 
         @Override
         public synchronized CompletionStage<ZLinkStoreWriteResult> write(
-            ZLinkStoreWriteRequest request,
-            systems.zlink.framework.locationprovider
-                .ZLinkStoreCancellation cancellation) {
+                ZLinkStoreWriteRequest request,
+                systems.zlink.framework.locationprovider.ZLinkStoreCancellation cancellation) {
             Instant now = Instant.now();
             for (ZLinkStoreCondition condition : request.conditions()) {
                 ZLinkStoreKey key =
-                    condition instanceof ZLinkStoreMissingCondition missing
-                        ? missing.key()
-                        : ((ZLinkStoreVersionCondition) condition).key();
+                        condition instanceof ZLinkStoreMissingCondition missing
+                                ? missing.key()
+                                : ((ZLinkStoreVersionCondition) condition).key();
                 Entry current = rows.get(key);
                 boolean matches =
-                    condition instanceof ZLinkStoreMissingCondition
-                        ? current == null
-                        : current != null
-                            && current.version().equals(
-                                ((ZLinkStoreVersionCondition) condition)
-                                    .expected());
+                        condition instanceof ZLinkStoreMissingCondition
+                                ? current == null
+                                : current != null
+                                        && current.version()
+                                                .equals(
+                                                        ((ZLinkStoreVersionCondition) condition)
+                                                                .expected());
                 if (!matches) {
                     return completed(new ZLinkStoreWriteConflict(now));
                 }
             }
-            Map<ZLinkStoreKey, ZLinkStoreVersion> versions =
-                new LinkedHashMap<>();
+            Map<ZLinkStoreKey, ZLinkStoreVersion> versions = new LinkedHashMap<>();
             for (ZLinkStoreMutation mutation : request.mutations()) {
                 if (mutation instanceof ZLinkStoreDelete delete) {
                     rows.remove(delete.key());
                     continue;
                 }
                 ZLinkStorePut put = (ZLinkStorePut) mutation;
-                var next = new ZLinkStoreVersion(
-                    Long.toString(++version));
+                var next = new ZLinkStoreVersion(Long.toString(++version));
                 rows.put(
-                    put.key(),
-                    new Entry(
-                        put.bytes(),
-                        next,
-                        put.retention() == null
-                            ? null
-                            : now.plus(put.retention())));
+                        put.key(),
+                        new Entry(
+                                put.bytes(),
+                                next,
+                                put.retention() == null ? null : now.plus(put.retention())));
                 versions.put(put.key(), next);
             }
-            return completed(new ZLinkStoreWriteApplied(
-                Map.copyOf(versions), now));
+            return completed(new ZLinkStoreWriteApplied(Map.copyOf(versions), now));
         }
 
         @Override
         public CompletionStage<ZLinkStoreScanResult> scan(
-            ZLinkStoreScanRequest request,
-            systems.zlink.framework.locationprovider
-                .ZLinkStoreCancellation cancellation) {
+                ZLinkStoreScanRequest request,
+                systems.zlink.framework.locationprovider.ZLinkStoreCancellation cancellation) {
             throw new UnsupportedOperationException();
         }
 
@@ -259,10 +262,7 @@ final class ZLinkProviderOwnerLeaseRepositoryTest {
             return CompletableFuture.completedFuture(value);
         }
 
-        private record Entry(
-            byte[] bytes,
-            ZLinkStoreVersion version,
-            Instant expiresAt) {
+        private record Entry(byte[] bytes, ZLinkStoreVersion version, Instant expiresAt) {
             private Entry {
                 bytes = bytes.clone();
             }

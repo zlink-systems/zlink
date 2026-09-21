@@ -60,7 +60,11 @@ export function encodeNodeRequestHeader(correlation: bigint): Buffer {
 
 export function decodeNodeRequestHeader(frame: Uint8Array): bigint {
   const header = decodeHeader(frame);
-  if (header.command !== M6aServiceWireCommand.nodeRequest || header.flags !== 0 || frame.byteLength !== 13) {
+  if (
+    header.command !== M6aServiceWireCommand.nodeRequest ||
+    header.flags !== 0 ||
+    frame.byteLength !== 13
+  ) {
     fail('Invalid nodeRequest header.');
   }
   return readNonZeroU64(asBuffer(frame), PREFIX_SIZE, 'correlation');
@@ -88,9 +92,10 @@ export function encodeChannelRequestHeader(correlation: bigint, channelName: str
   );
 }
 
-export function decodeChannelRequestHeader(
-  frame: Uint8Array
-): { readonly correlation: bigint; readonly channelName: string } {
+export function decodeChannelRequestHeader(frame: Uint8Array): {
+  readonly correlation: bigint;
+  readonly channelName: string;
+} {
   const header = decodeHeader(frame);
   if (header.command !== M6aServiceWireCommand.channelRequest || header.flags !== 0) {
     fail('Invalid channelRequest header.');
@@ -126,7 +131,11 @@ export function encodeReplyHeader(
 
 export function decodeReplyHeader(frame: Uint8Array): ServiceReplyHeader {
   const header = decodeHeader(frame);
-  if (header.command !== M6aServiceWireCommand.reply || header.flags !== 0 || frame.byteLength < 21) {
+  if (
+    header.command !== M6aServiceWireCommand.reply ||
+    header.flags !== 0 ||
+    frame.byteLength < 21
+  ) {
     fail('Invalid reply header.');
   }
   const bytes = asBuffer(frame);
@@ -147,10 +156,8 @@ export function encodeApplicationPayload(payload: ServiceApplicationPayload): Bu
   const packetName = encodeText8(payload.packetName, 'packetName');
   const contentType = encodeText8(payload.contentType, 'contentType');
   if (payload.payload.byteLength > MAX_U32) fail('Application payload exceeds u32.');
-  const bodyLength = packetName.byteLength
-    + contentType.byteLength
-    + 4
-    + payload.payload.byteLength;
+  const bodyLength =
+    packetName.byteLength + contentType.byteLength + 4 + payload.payload.byteLength;
   if (bodyLength > MAX_U32) fail('Application payload body exceeds u32.');
   const result = Buffer.alloc(5 + bodyLength);
   result[0] = 1;
@@ -160,11 +167,10 @@ export function encodeApplicationPayload(payload: ServiceApplicationPayload): Bu
   offset += contentType.copy(result, offset);
   result.writeUInt32BE(payload.payload.byteLength, offset);
   offset += 4;
-  Buffer.from(
-    payload.payload.buffer,
-    payload.payload.byteOffset,
-    payload.payload.byteLength
-  ).copy(result, offset);
+  Buffer.from(payload.payload.buffer, payload.payload.byteOffset, payload.payload.byteLength).copy(
+    result,
+    offset
+  );
   return result;
 }
 
@@ -188,10 +194,7 @@ export function encodeMultipartApplicationPayload(
     multipartLength += 4 + part.byteLength;
     if (multipartLength > MAX_U32) fail('Multipart payload exceeds u32.');
   }
-  const bodyLength = packetNameBytes.byteLength
-    + contentTypeBytes.byteLength
-    + 4
-    + multipartLength;
+  const bodyLength = packetNameBytes.byteLength + contentTypeBytes.byteLength + 4 + multipartLength;
   if (bodyLength > MAX_U32) fail('Application payload body exceeds u32.');
   const result = Buffer.alloc(5 + bodyLength);
   result[0] = 1;
@@ -277,10 +280,13 @@ export function encodeRouteMeshAdmission(
   const extension = concat(
     tlv(1, Buffer.of(stateToWire(descriptor.state))),
     tlv(2, encodeU64(descriptor.applicationVersion)),
-    tlv(6, concat(
-      encodeU16(descriptor.protocolCapabilities.length),
-      ...descriptor.protocolCapabilities.map(value => encodeText8(value, 'protocolCapability'))
-    )),
+    tlv(
+      6,
+      concat(
+        encodeU16(descriptor.protocolCapabilities.length),
+        ...descriptor.protocolCapabilities.map((value) => encodeText8(value, 'protocolCapability'))
+      )
+    ),
     tlv(7, Buffer.of(roleToWire(descriptor.objectRole))),
     tlv(8, encodeU32(descriptor.placementWeight)),
     tlv(9, encodeU32(descriptor.activeCapacityLimit)),
@@ -302,7 +308,8 @@ export function decodeRouteMeshAdmission(
 ): ServiceNodeDescriptor {
   validateAdmissionCommand(expectedCommand);
   const header = decodeHeader(frame);
-  if (header.command !== expectedCommand || header.flags !== 0) fail('Unexpected admission header.');
+  if (header.command !== expectedCommand || header.flags !== 0)
+    fail('Unexpected admission header.');
   const reader = new Reader(frame, PREFIX_SIZE);
   if (reader.u8('topologyKind') !== 1) fail('Admission is not RouteMesh topology.');
   const routeLength = reader.u32('routeLength');
@@ -370,11 +377,11 @@ export function decodeRouteMeshAdmission(
   }
   reader.end();
   if (
-    state === undefined
-    || applicationVersion === undefined
-    || protocolCapabilities === undefined
-    || objectRole === undefined
-    || ![8, 9, 10, 11, 12].every(id => capacities.has(id))
+    state === undefined ||
+    applicationVersion === undefined ||
+    protocolCapabilities === undefined ||
+    objectRole === undefined ||
+    ![8, 9, 10, 11, 12].every((id) => capacities.has(id))
   ) {
     fail('Descriptor extension omits a required field.');
   }
@@ -408,7 +415,11 @@ export function encodeReject(reason: number): Buffer {
 
 export function decodeReject(frame: Uint8Array): number {
   const header = decodeHeader(frame);
-  if (header.command !== M6aServiceWireCommand.reject || header.flags !== 0 || frame.byteLength !== 9) {
+  if (
+    header.command !== M6aServiceWireCommand.reject ||
+    header.flags !== 0 ||
+    frame.byteLength !== 9
+  ) {
     fail('Invalid reject record.');
   }
   const reason = asBuffer(frame).readUInt32BE(PREFIX_SIZE);
@@ -476,7 +487,7 @@ function tlv(id: number, value: Buffer): Buffer {
 }
 
 function concat(...parts: readonly Uint8Array[]): Buffer {
-  return Buffer.concat(parts.map(part => Buffer.from(part)));
+  return Buffer.concat(parts.map((part) => Buffer.from(part)));
 }
 
 function readNonZeroU64(bytes: Buffer, offset: number, field: string): bigint {
@@ -491,9 +502,9 @@ function asBuffer(value: Uint8Array): Buffer {
 
 function validateAdmissionCommand(command: number): void {
   if (
-    command !== M6aServiceWireCommand.hello
-    && command !== M6aServiceWireCommand.admit
-    && command !== M6aServiceWireCommand.update
+    command !== M6aServiceWireCommand.hello &&
+    command !== M6aServiceWireCommand.admit &&
+    command !== M6aServiceWireCommand.update
   ) {
     fail('Command is not an admission record.');
   }
@@ -507,9 +518,9 @@ function validateReplyFields(correlation: bigint, terminal: number, failure: num
   //  generated predicate replaces the old broad-category check, which
   //  accepted any typed pairing and wrongly rejected defined codes 33/34.
   if (
-    correlation <= 0n
-    || correlation > MAX_U64
-    || !isValidServiceWireTerminalFailure(terminal, failure)
+    correlation <= 0n ||
+    correlation > MAX_U64 ||
+    !isValidServiceWireTerminalFailure(terminal, failure)
   ) {
     fail('Invalid reply terminal fields.');
   }
@@ -520,23 +531,34 @@ function stateToWire(value: ServiceNodeState): number {
   // is a host-internal transition and has the same remote admission meaning
   // as `draining`; the service wire does not expose a separate retiring value.
   switch (value) {
-    case 'preparing': return 0;
-    case 'serving': return 1;
+    case 'preparing':
+      return 0;
+    case 'serving':
+      return 1;
     case 'retiring':
-    case 'draining': return 2;
-    case 'stopped': return 3;
-    case 'error': return 4;
+    case 'draining':
+      return 2;
+    case 'stopped':
+      return 3;
+    case 'error':
+      return 4;
   }
 }
 
 function stateFromWire(value: number): ServiceNodeState {
   switch (value) {
-    case 0: return 'preparing';
-    case 1: return 'serving';
-    case 2: return 'draining';
-    case 3: return 'stopped';
-    case 4: return 'error';
-    default: fail('Invalid runtime state.');
+    case 0:
+      return 'preparing';
+    case 1:
+      return 'serving';
+    case 2:
+      return 'draining';
+    case 3:
+      return 'stopped';
+    case 4:
+      return 'error';
+    default:
+      fail('Invalid runtime state.');
   }
 }
 

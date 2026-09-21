@@ -3,7 +3,7 @@ package systems.zlink.stream.connector;
 import java.util.concurrent.CompletionException;
 
 final class ConnectorTestAwait {
-    private ConnectorTestAwait() { }
+    private ConnectorTestAwait() {}
 
     static void await(ZLinkStreamLifecycleCall call) throws Exception {
         try {

@@ -2,19 +2,20 @@
 
 package systems.zlink.framework.runtime.internal.binding.spot;
 
-import java.util.Objects;
 import systems.zlink.contracts.core.RoutingId;
+
+import java.util.Objects;
 
 /** Inputs to the formal Core actor transfer prepare operation. */
 public record ActorTransferPrepare(
-    ActorTransferRole role,
-    ActorTransferId transferId,
-    ActorRef actor,
-    long expectedMembershipEpoch,
-    RoutingId peerNodeRid,
-    long finalSequence,
-    long reserveMessageCount,
-    long reserveByteCount) {
+        ActorTransferRole role,
+        ActorTransferId transferId,
+        ActorRef actor,
+        long expectedMembershipEpoch,
+        RoutingId peerNodeRid,
+        long finalSequence,
+        long reserveMessageCount,
+        long reserveByteCount) {
 
     public ActorTransferPrepare {
         Objects.requireNonNull(role, "role");

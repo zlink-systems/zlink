@@ -8,6 +8,19 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+
+import org.junit.jupiter.api.Test;
+
+import systems.zlink.contracts.messaging.Message;
+import systems.zlink.framework.ZLinkEncodedPayload;
+import systems.zlink.framework.ZLinkMessageSerializer;
+import systems.zlink.framework.errors.ZLinkFrameworkErrorKind;
+import systems.zlink.framework.errors.ZLinkFrameworkException;
+import systems.zlink.framework.runtime.internal.backend.ZLinkBackendReceived;
+import systems.zlink.framework.runtime.internal.backend.ZLinkBackendRequestResult;
+import systems.zlink.framework.runtime.internal.backend.ZLinkBackendTopicMessage;
+import systems.zlink.framework.spots.ZLinkSpotSubscriptionHandler;
+
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.List;
@@ -20,16 +33,6 @@ import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
-import org.junit.jupiter.api.Test;
-import systems.zlink.contracts.messaging.Message;
-import systems.zlink.framework.ZLinkEncodedPayload;
-import systems.zlink.framework.ZLinkMessageSerializer;
-import systems.zlink.framework.errors.ZLinkFrameworkErrorKind;
-import systems.zlink.framework.errors.ZLinkFrameworkException;
-import systems.zlink.framework.runtime.internal.backend.ZLinkBackendReceived;
-import systems.zlink.framework.runtime.internal.backend.ZLinkBackendRequestResult;
-import systems.zlink.framework.runtime.internal.backend.ZLinkBackendTopicMessage;
-import systems.zlink.framework.spots.ZLinkSpotSubscriptionHandler;
 
 final class ZLinkPayloadOwnershipConformanceTest {
     @Test
@@ -38,11 +41,10 @@ final class ZLinkPayloadOwnershipConformanceTest {
         assertEquals("zlink.framework.payload-ownership", fixture.path("fixture").asText());
         assertEquals(1, fixture.path("version").asInt());
         List<String> ownershipStates = new java.util.ArrayList<>();
-        fixture.path("ownershipStates").forEach(
-            state -> ownershipStates.add(state.asText()));
+        fixture.path("ownershipStates").forEach(state -> ownershipStates.add(state.asText()));
         assertEquals(
-            List.of("bindingBorrowed", "frameworkOwned", "applicationBorrowed", "released"),
-            ownershipStates);
+                List.of("bindingBorrowed", "frameworkOwned", "applicationBorrowed", "released"),
+                ownershipStates);
         JsonNode copyBudget = fixture.path("copyBudget");
         assertEquals(1, copyBudget.path("bindingWithoutOwnershipHandoff").asInt());
         assertEquals(0, copyBudget.path("frameworkCopiesAfterOwnership").asInt());
@@ -50,33 +52,34 @@ final class ZLinkPayloadOwnershipConformanceTest {
         assertEquals(1, copyBudget.path("maximumDeserializationsAfterAdmission").asInt());
         for (JsonNode scenario : fixture.path("scenarios")) {
             assertTrue(
-                scenario.path("deserializations").asInt() <= 1,
-                scenario.path("name").asText());
+                    scenario.path("deserializations").asInt() <= 1, scenario.path("name").asText());
             assertTrue(
-                scenario.path("frameworkReleases").asInt() <= 1,
-                scenario.path("name").asText());
+                    scenario.path("frameworkReleases").asInt() <= 1,
+                    scenario.path("name").asText());
         }
     }
 
     @Test
     void metadataCopiesOnlyAtAdmissionAndAccessorsReturnOwnerViews() {
         byte[] routeSource = new byte[] {7, 8};
-        ZLinkBackendReceived route = new ZLinkBackendReceived(
-            ZLinkBackendRequestResult.OK,
-            Optional.empty(),
-            Optional.empty(),
-            Optional.empty(),
-            routeSource,
-            List.of(Message.from("route")),
-            null,
-            () -> { });
+        ZLinkBackendReceived route =
+                new ZLinkBackendReceived(
+                        ZLinkBackendRequestResult.OK,
+                        Optional.empty(),
+                        Optional.empty(),
+                        Optional.empty(),
+                        routeSource,
+                        List.of(Message.from("route")),
+                        null,
+                        () -> {});
         byte[] topicSource = new byte[] {9, 10};
-        ZLinkBackendTopicMessage topic = new ZLinkBackendTopicMessage(
-            Optional.empty(),
-            "channel",
-            "topic",
-            topicSource,
-            List.of(Message.from("topic")));
+        ZLinkBackendTopicMessage topic =
+                new ZLinkBackendTopicMessage(
+                        Optional.empty(),
+                        "channel",
+                        "topic",
+                        topicSource,
+                        List.of(Message.from("topic")));
         try {
             routeSource[0] = 1;
             topicSource[0] = 2;
@@ -115,19 +118,23 @@ final class ZLinkPayloadOwnershipConformanceTest {
         Probe decoded = new Probe("decoded");
         CountDownLatch decoderEntered = new CountDownLatch(1);
         CountDownLatch releaseDecoder = new CountDownLatch(1);
-        CountingSerializer serializer = new CountingSerializer(
-            decoded, null, decoderEntered, releaseDecoder);
+        CountingSerializer serializer =
+                new CountingSerializer(decoded, null, decoderEntered, releaseDecoder);
         try (Message payload = Message.from("payload")) {
             ZLinkInboundPayloadOwner owner = new ZLinkInboundPayloadOwner(payload, serializer);
             var executor = Executors.newFixedThreadPool(12);
             try {
                 CountDownLatch start = new CountDownLatch(1);
-                List<Future<Object>> results = java.util.stream.IntStream.range(0, 24)
-                    .mapToObj(ignored -> executor.submit(() -> {
-                        start.await();
-                        return owner.deserialize(Probe.class);
-                    }))
-                    .toList();
+                List<Future<Object>> results =
+                        java.util.stream.IntStream.range(0, 24)
+                                .mapToObj(
+                                        ignored ->
+                                                executor.submit(
+                                                        () -> {
+                                                            start.await();
+                                                            return owner.deserialize(Probe.class);
+                                                        }))
+                                .toList();
                 start.countDown();
                 assertTrue(decoderEntered.await(5, TimeUnit.SECONDS));
                 releaseDecoder.countDown();
@@ -139,9 +146,10 @@ final class ZLinkPayloadOwnershipConformanceTest {
                 executor.shutdownNow();
             }
 
-            ZLinkFrameworkException mismatch = assertThrows(
-                ZLinkFrameworkException.class,
-                () -> owner.deserialize(OtherProbe.class));
+            ZLinkFrameworkException mismatch =
+                    assertThrows(
+                            ZLinkFrameworkException.class,
+                            () -> owner.deserialize(OtherProbe.class));
             assertEquals(ZLinkFrameworkErrorKind.TYPE_MISMATCH, mismatch.kind());
             assertEquals(1, serializer.calls.get());
         }
@@ -149,32 +157,41 @@ final class ZLinkPayloadOwnershipConformanceTest {
 
     @Test
     void malformedFirstDecodeFailureIsSharedAcrossRepeatedAndConcurrentAccessors()
-        throws Exception {
-        ZLinkFrameworkException malformed = new ZLinkFrameworkException(
-            ZLinkFrameworkErrorKind.PROTOCOL_ERROR, "malformed");
+            throws Exception {
+        ZLinkFrameworkException malformed =
+                new ZLinkFrameworkException(ZLinkFrameworkErrorKind.PROTOCOL_ERROR, "malformed");
         CountingSerializer serializer = new CountingSerializer(null, malformed);
         try (Message payload = Message.from("payload")) {
             ZLinkInboundPayloadOwner owner = new ZLinkInboundPayloadOwner(payload, serializer);
             var executor = Executors.newFixedThreadPool(8);
             try {
-                List<Future<Object>> results = java.util.stream.IntStream.range(0, 16)
-                    .mapToObj(index -> executor.submit(() -> owner.deserialize(
-                        index % 2 == 0 ? Probe.class : OtherProbe.class)))
-                    .toList();
+                List<Future<Object>> results =
+                        java.util.stream.IntStream.range(0, 16)
+                                .mapToObj(
+                                        index ->
+                                                executor.submit(
+                                                        () ->
+                                                                owner.deserialize(
+                                                                        index % 2 == 0
+                                                                                ? Probe.class
+                                                                                : OtherProbe
+                                                                                        .class)))
+                                .toList();
                 for (Future<Object> result : results) {
-                    ExecutionException failure = assertThrows(
-                        ExecutionException.class,
-                        () -> result.get(5, TimeUnit.SECONDS));
+                    ExecutionException failure =
+                            assertThrows(
+                                    ExecutionException.class,
+                                    () -> result.get(5, TimeUnit.SECONDS));
                     assertSame(malformed, failure.getCause());
                 }
             } finally {
                 executor.shutdownNow();
             }
             assertSame(
-                malformed,
-                assertThrows(
-                    ZLinkFrameworkException.class,
-                    () -> owner.deserialize(OtherProbe.class)));
+                    malformed,
+                    assertThrows(
+                            ZLinkFrameworkException.class,
+                            () -> owner.deserialize(OtherProbe.class)));
             assertEquals(1, serializer.calls.get());
         }
     }
@@ -193,13 +210,29 @@ final class ZLinkPayloadOwnershipConformanceTest {
             ZLinkInboundPayloadOwner owner = invoker.payloadOwner(payload, null);
             Object value = invoker.deserializeSubscription(firstRegistration, owner);
             invoker.invokeSubscriptionDecoded(
-                    firstRegistration, new Object(), "channel", "topic", Optional.empty(),
-                    value, null, Map.of(), ignored -> first)
-                .toCompletableFuture().join();
+                            firstRegistration,
+                            new Object(),
+                            "channel",
+                            "topic",
+                            Optional.empty(),
+                            value,
+                            null,
+                            Map.of(),
+                            ignored -> first)
+                    .toCompletableFuture()
+                    .join();
             invoker.invokeSubscriptionDecoded(
-                    secondRegistration, new Object(), "channel", "topic", Optional.empty(),
-                    value, null, Map.of(), ignored -> second)
-                .toCompletableFuture().join();
+                            secondRegistration,
+                            new Object(),
+                            "channel",
+                            "topic",
+                            Optional.empty(),
+                            value,
+                            null,
+                            Map.of(),
+                            ignored -> second)
+                    .toCompletableFuture()
+                    .join();
         }
 
         assertSame(decoded, first.received);
@@ -209,7 +242,7 @@ final class ZLinkPayloadOwnershipConformanceTest {
 
     private static SpotSubscriptionHandlerRegistration registration(Class<?> handlerType) {
         return new SpotSubscriptionHandlerRegistration(
-            "topic", handlerType, null, Object.class, Probe.class, "Probe");
+                "topic", handlerType, null, Object.class, Probe.class, "Probe");
     }
 
     private static JsonNode fixture() throws Exception {
@@ -219,8 +252,7 @@ final class ZLinkPayloadOwnershipConformanceTest {
     private static Path sharedFixture() {
         Path current = Path.of(System.getProperty("user.dir")).toAbsolutePath();
         while (current != null) {
-            Path candidate = current.resolve(
-                "runtime/conformance/payload-ownership-v1.json");
+            Path candidate = current.resolve("runtime/conformance/payload-ownership-v1.json");
             if (Files.isRegularFile(candidate)) {
                 return candidate;
             }
@@ -229,14 +261,11 @@ final class ZLinkPayloadOwnershipConformanceTest {
         throw new IllegalStateException("shared payload ownership fixture was not found");
     }
 
-    private record Probe(String value) {
-    }
+    private record Probe(String value) {}
 
-    private record OtherProbe(String value) {
-    }
+    private record OtherProbe(String value) {}
 
-    private static final class FirstHandler
-        implements ZLinkSpotSubscriptionHandler<Object, Probe> {
+    private static final class FirstHandler implements ZLinkSpotSubscriptionHandler<Object, Probe> {
         private Probe received;
 
         @Override
@@ -247,7 +276,7 @@ final class ZLinkPayloadOwnershipConformanceTest {
     }
 
     private static final class SecondHandler
-        implements ZLinkSpotSubscriptionHandler<Object, Probe> {
+            implements ZLinkSpotSubscriptionHandler<Object, Probe> {
         private Probe received;
 
         @Override
@@ -269,10 +298,10 @@ final class ZLinkPayloadOwnershipConformanceTest {
         }
 
         private CountingSerializer(
-            Object decoded,
-            RuntimeException failure,
-            CountDownLatch entered,
-            CountDownLatch release) {
+                Object decoded,
+                RuntimeException failure,
+                CountDownLatch entered,
+                CountDownLatch release) {
             this.decoded = decoded;
             this.failure = failure;
             this.entered = entered;

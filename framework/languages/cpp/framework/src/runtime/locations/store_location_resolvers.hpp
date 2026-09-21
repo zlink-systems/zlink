@@ -29,20 +29,22 @@ class actor_location_observer_t
   public:
     bool accepts (const actor_location_t &row)
     {
-        return _lane.run ([&] {
-            const auto key = location_key_codec_t::encode_actor_key (
-              actor_location_key_t{row.mesh_name, row.actor_id});
-            const auto version = std::pair{
-              row.membership_epoch,
-              row.actor_ref ? row.actor_ref->object_generation () : std::uint64_t{0}};
-            auto &observed = _generations[key];
-            if (version < observed) {
-                return false;
-            }
-            observed = version;
-            return row.actor_ref
-                   && !::zlink::framework::detail::actor_ref_access_t::empty (*row.actor_ref);
-        }).get ();
+        return _lane
+          .run ([&] {
+              const auto key = location_key_codec_t::encode_actor_key (
+                actor_location_key_t{row.mesh_name, row.actor_id});
+              const auto version =
+                std::pair{row.membership_epoch,
+                          row.actor_ref ? row.actor_ref->object_generation () : std::uint64_t{0}};
+              auto &observed = _generations[key];
+              if (version < observed) {
+                  return false;
+              }
+              observed = version;
+              return row.actor_ref
+                     && !::zlink::framework::detail::actor_ref_access_t::empty (*row.actor_ref);
+          })
+          .get ();
     }
 
   private:
@@ -63,7 +65,8 @@ class store_location_resolvers_t final : public spot_address_resolver_t,
         std::make_shared<actor_location_observer_t> (),
       std::string actor_mesh_name = {}) :
         _owned_reader (std::make_unique<live_location_reader_t> (store, options)),
-        _store (_owned_reader.get ()), _options (std::move (options)),
+        _store (_owned_reader.get ()),
+        _options (std::move (options)),
         _actor_locations (std::move (actor_locations)),
         _actor_mesh_name (std::move (actor_mesh_name))
     {
@@ -71,9 +74,7 @@ class store_location_resolvers_t final : public spot_address_resolver_t,
 
     void set_actor_mesh_name (std::string mesh_name)
     {
-        _lane.run ([&] {
-            _actor_mesh_name = std::move (mesh_name);
-        }).get ();
+        _lane.run ([&] { _actor_mesh_name = std::move (mesh_name); }).get ();
     }
 
     explicit store_location_resolvers_t (
@@ -82,14 +83,14 @@ class store_location_resolvers_t final : public spot_address_resolver_t,
       std::shared_ptr<actor_location_observer_t> actor_locations =
         std::make_shared<actor_location_observer_t> (),
       std::string actor_mesh_name = {}) :
-        _store (&store), _options (std::move (options)),
+        _store (&store),
+        _options (std::move (options)),
         _actor_locations (std::move (actor_locations)),
         _actor_mesh_name (std::move (actor_mesh_name))
     {
     }
 
-    task_t<std::vector<mesh_node_descriptor_t>>
-    list_live_mesh_nodes (std::string mesh_name)
+    task_t<std::vector<mesh_node_descriptor_t>> list_live_mesh_nodes (std::string mesh_name)
     {
         try {
             std::vector<mesh_node_descriptor_t> descriptors;
@@ -107,8 +108,7 @@ class store_location_resolvers_t final : public spot_address_resolver_t,
                         || descriptor.state == framework_runtime_state_t::error)
                         continue;
                     if (_store->owner_admission_lifetime (
-                          location_owner_token_t{descriptor.owner_id,
-                                                 descriptor.lease_generation}))
+                          location_owner_token_t{descriptor.owner_id, descriptor.lease_generation}))
                         descriptors.push_back (std::move (descriptor));
                 }
                 page.continuation_token = current.continuation_token;
@@ -122,8 +122,8 @@ class store_location_resolvers_t final : public spot_address_resolver_t,
         }
     }
 
-    task_t<std::optional<spot_address_t>>
-    resolve_spot_address (std::string mesh_name, std::string spot_id) override
+    task_t<std::optional<spot_address_t>> resolve_spot_address (std::string mesh_name,
+                                                                std::string spot_id) override
     {
         if (auto cached = cached_route (_spot_routes, spot_id)) {
             return completed (std::optional<spot_address_t>{std::move (*cached)});
@@ -132,80 +132,80 @@ class store_location_resolvers_t final : public spot_address_resolver_t,
             const auto projected_id = decode_spot_id (authority->payload);
             if (!projected_id || *projected_id != spot_id)
                 return completed (std::optional<spot_address_t>{});
-            auto address = spot_address_t{
-              authority->allocation.target.mesh_name,
-              zlink::routing_id_t::from (
-                std::string (authority->allocation.target.node_rid.value ())),
-              *projected_id,
-              authority->object_generation};
-            address.node_generation =
-              authority->allocation.target.node_lifecycle_generation;
+            auto address = spot_address_t{authority->allocation.target.mesh_name,
+                                          zlink::routing_id_t::from (std::string (
+                                            authority->allocation.target.node_rid.value ())),
+                                          *projected_id, authority->object_generation};
+            address.node_generation = authority->allocation.target.node_lifecycle_generation;
             apply_authority (address, *authority);
             cache_ready_route (_spot_routes, spot_id, address);
             return completed (std::optional<spot_address_t>{std::move (address)});
         }
         if (!mesh_name.empty ()) {
-            const auto descriptors =
-              _store->list_mesh_nodes (mesh_name, {}).result ().value ();
-            const auto found = std::find_if (
-              descriptors.items.begin (), descriptors.items.end (),
-              [&] (const mesh_node_descriptor_t &descriptor) {
-                  return descriptor.entry_spot_id
-                         && *descriptor.entry_spot_id == spot_id
-                         && descriptor.state != framework_runtime_state_t::stopped
-                         && descriptor.state != framework_runtime_state_t::error;
-              });
+            const auto descriptors = _store->list_mesh_nodes (mesh_name, {}).result ().value ();
+            const auto found =
+              std::find_if (descriptors.items.begin (), descriptors.items.end (),
+                            [&] (const mesh_node_descriptor_t &descriptor) {
+                                return descriptor.entry_spot_id
+                                       && *descriptor.entry_spot_id == spot_id
+                                       && descriptor.state != framework_runtime_state_t::stopped
+                                       && descriptor.state != framework_runtime_state_t::error;
+                            });
             if (found != descriptors.items.end ())
-                return completed (std::optional<spot_address_t>{spot_address_t{
-                  found->mesh_name, found->rid, spot_id,
-                  found->lifecycle_generation, {}, 0, 0, {},
-                  found->lifecycle_generation}});
+                return completed (
+                  std::optional<spot_address_t>{spot_address_t{found->mesh_name,
+                                                               found->rid,
+                                                               spot_id,
+                                                               found->lifecycle_generation,
+                                                               {},
+                                                               0,
+                                                               0,
+                                                               {},
+                                                               found->lifecycle_generation}});
         }
         return completed (std::optional<spot_address_t>{});
     }
 
     void invalidate_spot_address (std::string_view spot_id) override
     {
-        _lane.run ([&] {
-            _spot_routes.erase (std::string (spot_id));
-        }).get ();
+        _lane.run ([&] { _spot_routes.erase (std::string (spot_id)); }).get ();
     }
 
-    bool invalidate_spot_address_if_matches (
-      std::string_view spot_id, const spot_address_t &expected) override
+    bool invalidate_spot_address_if_matches (std::string_view spot_id,
+                                             const spot_address_t &expected) override
     {
-        return _lane.run ([&] {
-            const auto found = _spot_routes.find (std::string (spot_id));
-            if (found == _spot_routes.end ())
-                return false;
-            const auto &cached = found->second.address;
-            if (cached.spot_id != spot_id
-                || cached.node_rid != expected.node_rid
-                || cached.node_generation != expected.node_generation
-                || cached.object_generation != expected.object_generation
-                || cached.authority_owner_generation
-                     != expected.authority_owner_generation
-                || (!expected.owner.owner_id.empty ()
-                    && cached.owner.owner_id != expected.owner.owner_id)
-                || cached.owner.lease_generation
-                     != expected.owner.lease_generation)
-                return false;
-            _spot_routes.erase (found);
-            return true;
-        }).get ();
+        return _lane
+          .run ([&] {
+              const auto found = _spot_routes.find (std::string (spot_id));
+              if (found == _spot_routes.end ())
+                  return false;
+              const auto &cached = found->second.address;
+              if (cached.spot_id != spot_id || cached.node_rid != expected.node_rid
+                  || cached.node_generation != expected.node_generation
+                  || cached.object_generation != expected.object_generation
+                  || cached.authority_owner_generation != expected.authority_owner_generation
+                  || (!expected.owner.owner_id.empty ()
+                      && cached.owner.owner_id != expected.owner.owner_id)
+                  || cached.owner.lease_generation != expected.owner.lease_generation)
+                  return false;
+              _spot_routes.erase (found);
+              return true;
+          })
+          .get ();
     }
 
     void invalidate_all_routes_after_store_recovery () override
     {
-        _lane.run ([this] {
-            _spot_routes.clear ();
-            _actor_routes.clear ();
-            ++_store_recovery_generation;
-        }).get ();
+        _lane
+          .run ([this] {
+              _spot_routes.clear ();
+              _actor_routes.clear ();
+              ++_store_recovery_generation;
+          })
+          .get ();
     }
 
-    task_t<std::optional<spot_address_t>>
-    resolve_actor_address (std::string actor_id) override
+    task_t<std::optional<spot_address_t>> resolve_actor_address (std::string actor_id) override
     {
         if (auto cached = cached_route (_actor_routes, actor_id)) {
             return completed (std::optional<spot_address_t>{std::move (*cached)});
@@ -214,18 +214,15 @@ class store_location_resolvers_t final : public spot_address_resolver_t,
         if (!authority) {
             return completed (std::optional<spot_address_t>{});
         }
-        const auto projection = decode_actor_authority_payload (
-          authority->payload, authority->object_generation);
+        const auto projection =
+          decode_actor_authority_payload (authority->payload, authority->object_generation);
         if (!projection || projection->actor.actor_id ().value () != actor_id)
             return completed (std::optional<spot_address_t>{});
         auto address = spot_address_t{
           authority->allocation.target.mesh_name,
-          zlink::routing_id_t::from (
-            std::string (authority->allocation.target.node_rid.value ())),
-          projection->spot_id,
-          projection->spot_generation};
-        address.node_generation =
-          authority->allocation.target.node_lifecycle_generation;
+          zlink::routing_id_t::from (std::string (authority->allocation.target.node_rid.value ())),
+          projection->spot_id, projection->spot_generation};
+        address.node_generation = authority->allocation.target.node_lifecycle_generation;
         apply_authority (address, *authority);
         cache_ready_route (_actor_routes, actor_id, address);
         return completed (std::optional<spot_address_t>{std::move (address)});
@@ -233,32 +230,30 @@ class store_location_resolvers_t final : public spot_address_resolver_t,
 
     void invalidate_actor_address (std::string_view actor_id) override
     {
-        _lane.run ([&] {
-            _actor_routes.erase (std::string (actor_id));
-        }).get ();
+        _lane.run ([&] { _actor_routes.erase (std::string (actor_id)); }).get ();
     }
 
-    bool invalidate_actor_address_if_matches (
-      std::string_view actor_id, const spot_address_t &expected) override
+    bool invalidate_actor_address_if_matches (std::string_view actor_id,
+                                              const spot_address_t &expected) override
     {
-        return _lane.run ([&] {
-            const auto found = _actor_routes.find (std::string (actor_id));
-            if (found == _actor_routes.end ())
-                return false;
-            const auto &cached = found->second.address;
-            if (cached.node_rid != expected.node_rid
-                || cached.node_generation != expected.node_generation
-                || cached.object_generation != expected.object_generation
-                || cached.authority_owner_generation
-                     != expected.authority_owner_generation
-                || (!expected.owner.owner_id.empty ()
-                    && cached.owner.owner_id != expected.owner.owner_id)
-                || cached.owner.lease_generation
-                     != expected.owner.lease_generation)
-                return false;
-            _actor_routes.erase (found);
-            return true;
-        }).get ();
+        return _lane
+          .run ([&] {
+              const auto found = _actor_routes.find (std::string (actor_id));
+              if (found == _actor_routes.end ())
+                  return false;
+              const auto &cached = found->second.address;
+              if (cached.node_rid != expected.node_rid
+                  || cached.node_generation != expected.node_generation
+                  || cached.object_generation != expected.object_generation
+                  || cached.authority_owner_generation != expected.authority_owner_generation
+                  || (!expected.owner.owner_id.empty ()
+                      && cached.owner.owner_id != expected.owner.owner_id)
+                  || cached.owner.lease_generation != expected.owner.lease_generation)
+                  return false;
+              _actor_routes.erase (found);
+              return true;
+          })
+          .get ();
     }
 
     task_t<bool> is_peer_ready (std::string mesh_name,
@@ -269,8 +264,8 @@ class store_location_resolvers_t final : public spot_address_resolver_t,
             auto descriptors = list_live_mesh_nodes (std::move (mesh_name)).result ().value ();
             if (role != location_role_t::router && role != location_role_t::spot)
                 return completed (false);
-            return completed (std::any_of (
-              descriptors.begin (), descriptors.end (), [&] (const auto &descriptor) {
+            return completed (
+              std::any_of (descriptors.begin (), descriptors.end (), [&] (const auto &descriptor) {
                   return !node_rid || descriptor.rid.to_hex () == node_rid->to_hex ();
               }));
         }
@@ -287,25 +282,26 @@ class store_location_resolvers_t final : public spot_address_resolver_t,
         std::uint64_t store_recovery_generation = 0;
     };
 
-    std::optional<spot_address_t>
-    cached_route (std::map<std::string, cached_address_t> &routes,
-                  std::string_view key)
+    std::optional<spot_address_t> cached_route (std::map<std::string, cached_address_t> &routes,
+                                                std::string_view key)
     {
         if (_options.route_cache_max_age <= std::chrono::milliseconds::zero ()) {
             return std::nullopt;
         }
-        return _lane.run ([&] {
-            const auto found = routes.find (std::string (key));
-            if (found == routes.end ()) {
-                return std::optional<spot_address_t>{};
-            }
-            if (std::chrono::steady_clock::now () >= found->second.expires_at
-                || found->second.store_recovery_generation != _store_recovery_generation) {
-                routes.erase (found);
-                return std::optional<spot_address_t>{};
-            }
-            return std::optional<spot_address_t>{found->second.address};
-        }).get ();
+        return _lane
+          .run ([&] {
+              const auto found = routes.find (std::string (key));
+              if (found == routes.end ()) {
+                  return std::optional<spot_address_t>{};
+              }
+              if (std::chrono::steady_clock::now () >= found->second.expires_at
+                  || found->second.store_recovery_generation != _store_recovery_generation) {
+                  routes.erase (found);
+                  return std::optional<spot_address_t>{};
+              }
+              return std::optional<spot_address_t>{found->second.address};
+          })
+          .get ();
     }
 
     void cache_ready_route (std::map<std::string, cached_address_t> &routes,
@@ -318,25 +314,27 @@ class store_location_resolvers_t final : public spot_address_resolver_t,
         }
         const auto measured_at = std::chrono::steady_clock::now ();
         if (address.store_version.empty () || address.object_generation == 0
-            || address.authority_owner_generation == 0
-            || address.owner.owner_id.empty () || address.owner.lease_generation <= 0) {
+            || address.authority_owner_generation == 0 || address.owner.owner_id.empty ()
+            || address.owner.lease_generation <= 0) {
             return;
         }
         const auto lease_lifetime = _store->owner_admission_lifetime (address.owner);
         if (!lease_lifetime) {
             return;
         }
-        const auto lifetime = std::min (
-          std::chrono::duration_cast<std::chrono::steady_clock::duration> (max_age),
-          *lease_lifetime);
+        const auto lifetime =
+          std::min (std::chrono::duration_cast<std::chrono::steady_clock::duration> (max_age),
+                    *lease_lifetime);
         if (lifetime <= std::chrono::steady_clock::duration::zero ()) {
             return;
         }
-        _lane.run ([&] {
-            routes.insert_or_assign (
-              std::move (key), cached_address_t{address, measured_at + lifetime,
-                                                _store_recovery_generation});
-        }).get ();
+        _lane
+          .run ([&] {
+              routes.insert_or_assign (
+                std::move (key),
+                cached_address_t{address, measured_at + lifetime, _store_recovery_generation});
+          })
+          .get ();
     }
 
     struct authority_projection_t
@@ -349,17 +347,16 @@ class store_location_resolvers_t final : public spot_address_resolver_t,
         std::vector<std::byte> payload;
     };
 
-    std::optional<authority_projection_t>
-    read_ready_authority (bool actor, std::string_view object_id)
+    std::optional<authority_projection_t> read_ready_authority (bool actor,
+                                                                std::string_view object_id)
     {
-        const auto key = actor ? actor_authority_key (object_id)
-                               : spot_authority_key (object_id);
+        const auto key = actor ? actor_authority_key (object_id) : spot_authority_key (object_id);
         const auto read = _store->read_authority (key).result ().value ();
         const auto *snapshot = std::get_if<authority_snapshot_t> (&read);
         if (snapshot == nullptr)
             return std::nullopt;
-        const auto expected_kind = actor ? placement_object_kind_t::actor
-                                         : snapshot->allocation.object_kind;
+        const auto expected_kind =
+          actor ? placement_object_kind_t::actor : snapshot->allocation.object_kind;
         if (snapshot->allocation.state != placement_allocation_state_t::active
             || (actor && expected_kind != placement_object_kind_t::actor)
             || (!actor && expected_kind != placement_object_kind_t::user_spot
@@ -370,9 +367,8 @@ class store_location_resolvers_t final : public spot_address_resolver_t,
          * row visible to the failure mapper as bounded Unavailable so callers
          * do not start a cold activation on another node. */
         if (!_store->owner_admission_lifetime (snapshot->owner)) {
-            throw framework_exception_t (
-              framework_error_kind_t::unavailable,
-              "Location authority owner lease is unavailable");
+            throw framework_exception_t (framework_error_kind_t::unavailable,
+                                         "Location authority owner lease is unavailable");
         }
         return authority_projection_t{snapshot->store_version,
                                       snapshot->object_generation,
@@ -392,8 +388,7 @@ class store_location_resolvers_t final : public spot_address_resolver_t,
                && authority.allocation.target.node_rid.value () == node_rid.to_string ();
     }
 
-    static void apply_authority (spot_address_t &address,
-                                 const authority_projection_t &authority)
+    static void apply_authority (spot_address_t &address, const authority_projection_t &authority)
     {
         address.store_version = authority.store_version;
         address.object_generation = authority.object_generation;
@@ -401,16 +396,14 @@ class store_location_resolvers_t final : public spot_address_resolver_t,
         address.owner = authority.owner;
     }
 
-    static std::optional<std::string>
-    decode_spot_id (const std::vector<std::byte> &payload)
+    static std::optional<std::string> decode_spot_id (const std::vector<std::byte> &payload)
     {
         if (const auto user = decode_ready_user_spot_authority_payload (payload))
             return user->spot_id;
         if (const auto instance = decode_instance_spot_authority_payload (payload);
             instance && instance->state == instance_spot_authority_state_t::ready)
             return instance->spot_id;
-        if (payload.size () < 5
-            || std::to_integer<unsigned char> (payload[0]) != 'Z'
+        if (payload.size () < 5 || std::to_integer<unsigned char> (payload[0]) != 'Z'
             || std::to_integer<unsigned char> (payload[1]) != 'L'
             || std::to_integer<unsigned char> (payload[2]) != 'I'
             || std::to_integer<unsigned char> (payload[3]) != 'R'
@@ -422,15 +415,14 @@ class store_location_resolvers_t final : public spot_address_resolver_t,
                 return std::nullopt;
             std::uint32_t size = 0;
             for (int index = 0; index < 4; ++index)
-                size = (size << 8)
-                       | std::to_integer<std::uint8_t> (payload[offset++]);
+                size = (size << 8) | std::to_integer<std::uint8_t> (payload[offset++]);
             if (offset + size > payload.size ())
                 return std::nullopt;
             std::string value;
             value.reserve (size);
             for (std::uint32_t index = 0; index < size; ++index)
-                value.push_back (static_cast<char> (
-                  std::to_integer<unsigned char> (payload[offset++])));
+                value.push_back (
+                  static_cast<char> (std::to_integer<unsigned char> (payload[offset++])));
             return value;
         };
         if (!read_text ())
@@ -444,7 +436,7 @@ class store_location_resolvers_t final : public spot_address_resolver_t,
     }
 
     static std::string router_channel_for (const location_options_t &options,
-                                            const std::string &mesh_name)
+                                           const std::string &mesh_name)
     {
         const auto found = options.spot_router_channels.find (mesh_name);
         return found == options.spot_router_channels.end () ? mesh_name : found->second;
@@ -470,14 +462,15 @@ class store_location_resolvers_t final : public spot_address_resolver_t,
 class store_location_runtime_query_t final : public location_runtime_query_t
 {
   public:
-    store_location_runtime_query_t (
-      location_repository_t &store,
-      location_runtime_t &runtime,
-      const location_options_t &options,
-      std::shared_ptr<actor_location_observer_t> actor_locations =
-        std::make_shared<actor_location_observer_t> ()) :
+    store_location_runtime_query_t (location_repository_t &store,
+                                    location_runtime_t &runtime,
+                                    const location_options_t &options,
+                                    std::shared_ptr<actor_location_observer_t> actor_locations =
+                                      std::make_shared<actor_location_observer_t> ()) :
         _owned_reader (std::make_unique<live_location_reader_t> (store, options)),
-        _store (_owned_reader.get ()), _runtime (&runtime), _options (options),
+        _store (_owned_reader.get ()),
+        _runtime (&runtime),
+        _options (options),
         _actor_locations (std::move (actor_locations))
     {
     }
@@ -487,7 +480,9 @@ class store_location_runtime_query_t final : public location_runtime_query_t
                                     const location_options_t &options,
                                     std::shared_ptr<actor_location_observer_t> actor_locations =
                                       std::make_shared<actor_location_observer_t> ()) :
-        _store (&store), _runtime (&runtime), _options (options),
+        _store (&store),
+        _runtime (&runtime),
+        _options (options),
         _actor_locations (std::move (actor_locations))
     {
     }
@@ -513,13 +508,13 @@ class store_location_runtime_query_t final : public location_runtime_query_t
         entries.reserve (rows.items.size ());
         for (const auto &row : rows.items) {
             const auto state = topology_state (row.state);
-            location_topology_entry_t entry{
-              .mesh_name = row.mesh_name,
-              .node_rid = row.rid,
-              .endpoint = row.endpoint,
-              .draining = row.state == framework_runtime_state_t::draining,
-              .state = state,
-              .updated_at = row.updated_at};
+            location_topology_entry_t entry{.mesh_name = row.mesh_name,
+                                            .node_rid = row.rid,
+                                            .endpoint = row.endpoint,
+                                            .draining =
+                                              row.state == framework_runtime_state_t::draining,
+                                            .state = state,
+                                            .updated_at = row.updated_at};
             if (matches (entry, filter))
                 entries.push_back (std::move (entry));
         }
@@ -551,8 +546,7 @@ class store_location_runtime_query_t final : public location_runtime_query_t
                 default:
                     break;
             }
-            summary.last_updated_at =
-              std::max (summary.last_updated_at, descriptor.updated_at);
+            summary.last_updated_at = std::max (summary.last_updated_at, descriptor.updated_at);
         }
         std::vector<location_service_summary_t> result;
         result.reserve (grouped.size ());
@@ -565,12 +559,11 @@ class store_location_runtime_query_t final : public location_runtime_query_t
     task_t<std::optional<location_object_entry_t>>
     find_actor_location (actor_id_t actor_id) override
     {
-        return find_object (
-          actor_authority_key (actor_id.value ()), std::string (actor_id.value ()));
+        return find_object (actor_authority_key (actor_id.value ()),
+                            std::string (actor_id.value ()));
     }
 
-    task_t<std::optional<location_object_entry_t>>
-    find_spot_location (spot_id_t spot_id) override
+    task_t<std::optional<location_object_entry_t>> find_spot_location (spot_id_t spot_id) override
     {
         zlink::framework::detail::require_spot_id (spot_id);
         auto key = spot_authority_key (spot_id);
@@ -582,8 +575,7 @@ class store_location_runtime_query_t final : public location_runtime_query_t
                            location_page_request_t page = {}) override
     {
         validate_page (page);
-        const auto authority_kind =
-          filter.object_kind == location_object_kind_t::actor ? 'a' : 's';
+        const auto authority_kind = filter.object_kind == location_object_kind_t::actor ? 'a' : 's';
         if (filter.object_kind != location_object_kind_t::actor
             && filter.object_kind != location_object_kind_t::user_spot
             && filter.object_kind != location_object_kind_t::instance_spot) {
@@ -595,26 +587,22 @@ class store_location_runtime_query_t final : public location_runtime_query_t
         location_page_t<location_object_entry_t> output;
         output.items.reserve (static_cast<std::size_t> (page.page_size));
         do {
-            const auto remaining = static_cast<std::size_t> (page.page_size)
-                                   - output.items.size ();
+            const auto remaining = static_cast<std::size_t> (page.page_size) - output.items.size ();
             auto read = _store
-                          ->list_authorities (
-                            std::string ("zla1:") + authority_kind + ":",
-                            std::move (cursor), remaining)
+                          ->list_authorities (std::string ("zla1:") + authority_kind + ":",
+                                              std::move (cursor), remaining)
                           .result ();
             if (!read.has_value ())
                 return unavailable<location_page_t<location_object_entry_t>> (
                   "Location Store object scan failed");
-            const auto *stored_page =
-              std::get_if<authority_page_t> (&read.value ());
+            const auto *stored_page = std::get_if<authority_page_t> (&read.value ());
             if (stored_page == nullptr)
                 return unavailable<location_page_t<location_object_entry_t>> (
                   "Location Store object scan cursor expired");
             for (const auto &item : stored_page->items) {
                 const auto decoded =
                   authority_key_codec_detail::decode_authority_key (item.key.value);
-                if (!decoded || decoded->kind != authority_kind
-                    || !matches (item.snapshot, filter))
+                if (!decoded || decoded->kind != authority_kind || !matches (item.snapshot, filter))
                     continue;
                 auto projected = project_object (decoded->object_id, item.snapshot);
                 if (!projected.has_value ())
@@ -645,8 +633,8 @@ class store_location_runtime_query_t final : public location_runtime_query_t
     location_options_t _options;
     std::shared_ptr<actor_location_observer_t> _actor_locations;
 
-    task_t<std::optional<location_object_entry_t>>
-    find_object (authority_key_t key, std::string global_id)
+    task_t<std::optional<location_object_entry_t>> find_object (authority_key_t key,
+                                                                std::string global_id)
     {
         auto read = _store->read_authority (std::move (key)).result ();
         if (!read.has_value ())
@@ -659,23 +647,20 @@ class store_location_runtime_query_t final : public location_runtime_query_t
         if (!projected.has_value ())
             return unavailable<std::optional<location_object_entry_t>> (
               "Location Store owner lease lookup failed");
-        return completed (
-          std::optional<location_object_entry_t>{std::move (projected.value ())});
+        return completed (std::optional<location_object_entry_t>{std::move (projected.value ())});
     }
 
-    std::optional<location_object_entry_t>
-    project_object (std::string global_id,
-                    const authority_snapshot_t &snapshot)
+    std::optional<location_object_entry_t> project_object (std::string global_id,
+                                                           const authority_snapshot_t &snapshot)
     {
         if (snapshot.allocation.state == placement_allocation_state_t::reserved) {
-            return location_object_entry_t{
-              .global_id = std::move (global_id),
-              .object_generation = snapshot.object_generation,
-              .mesh_name = snapshot.allocation.target.mesh_name,
-              .node_rid = zlink::routing_id_t::from (
-                std::string (snapshot.allocation.target.node_rid.value ())),
-              .state = location_object_state_t::creating,
-              .stable_type = snapshot.allocation.stable_type};
+            return location_object_entry_t{.global_id = std::move (global_id),
+                                           .object_generation = snapshot.object_generation,
+                                           .mesh_name = snapshot.allocation.target.mesh_name,
+                                           .node_rid = zlink::routing_id_t::from (std::string (
+                                             snapshot.allocation.target.node_rid.value ())),
+                                           .state = location_object_state_t::creating,
+                                           .stable_type = snapshot.allocation.stable_type};
         }
         auto owner = _store->owner_available (snapshot.owner).result ();
         if (!owner.has_value ())
@@ -684,15 +669,15 @@ class store_location_runtime_query_t final : public location_runtime_query_t
           .global_id = std::move (global_id),
           .object_generation = snapshot.object_generation,
           .mesh_name = snapshot.allocation.target.mesh_name,
-          .node_rid = zlink::routing_id_t::from (
-            std::string (snapshot.allocation.target.node_rid.value ())),
-          .state = owner.value () ? location_object_state_t::ready
-                                  : location_object_state_t::unavailable,
+          .node_rid =
+            zlink::routing_id_t::from (std::string (snapshot.allocation.target.node_rid.value ())),
+          .state =
+            owner.value () ? location_object_state_t::ready : location_object_state_t::unavailable,
           .stable_type = snapshot.allocation.stable_type};
     }
 
-    static std::size_t encoded_size_upper_bound (
-      const location_page_t<location_object_entry_t> &page)
+    static std::size_t
+    encoded_size_upper_bound (const location_page_t<location_object_entry_t> &page)
     {
         constexpr std::size_t fixed_page_bytes = 256;
         constexpr std::size_t fixed_entry_bytes = 256;
@@ -722,25 +707,22 @@ class store_location_runtime_query_t final : public location_runtime_query_t
                     return placement_object_kind_t::instance_spot;
             }
             return placement_object_kind_t::actor;
-        } ();
+        }();
         return snapshot.allocation.object_kind == expected_kind
-               && (!filter.stable_type
-                   || snapshot.allocation.stable_type == *filter.stable_type)
-               && (!filter.mesh_name
-                   || snapshot.allocation.target.mesh_name == *filter.mesh_name);
+               && (!filter.stable_type || snapshot.allocation.stable_type == *filter.stable_type)
+               && (!filter.mesh_name || snapshot.allocation.target.mesh_name == *filter.mesh_name);
     }
 
     static void validate_page (const location_page_request_t &page)
     {
         if (page.page_size < 1 || page.page_size > 1000)
-            throw std::invalid_argument (
-              "location query page size must be between 1 and 1000");
+            throw std::invalid_argument ("location query page size must be between 1 and 1000");
     }
 
     template <typename T> static task_t<T> unavailable (std::string message)
     {
-        return task_t<T> (result_t<T>::failure (
-          framework_error_kind_t::unavailable, std::move (message)));
+        return task_t<T> (
+          result_t<T>::failure (framework_error_kind_t::unavailable, std::move (message)));
     }
 
     static bool matches (const location_topology_entry_t &entry,
@@ -767,8 +749,8 @@ class store_location_runtime_query_t final : public location_runtime_query_t
     }
 
     template <typename T>
-    static location_page_t<T>
-    page_in_memory (std::vector<T> entries, const location_page_request_t &page)
+    static location_page_t<T> page_in_memory (std::vector<T> entries,
+                                              const location_page_request_t &page)
     {
         location_page_t<T> result;
         const auto offset = page.continuation_token ? parse_offset (*page.continuation_token) : 0;

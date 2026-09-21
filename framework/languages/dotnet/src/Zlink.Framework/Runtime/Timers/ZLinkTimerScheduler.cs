@@ -25,20 +25,20 @@ internal sealed class ZLinkTimerScheduler : IAsyncDisposable
         _pump = RunAsync(_stopSource.Token);
     }
 
-    internal int TimerCount
-        => AwaitStateLane(_lane.RunAsync(() => _timers.Count));
+    internal int TimerCount => AwaitStateLane(_lane.RunAsync(() => _timers.Count));
 
-    internal int ScheduledEntryCount
-        => AwaitStateLane(_lane.RunAsync(() => _queue.Count));
+    internal int ScheduledEntryCount => AwaitStateLane(_lane.RunAsync(() => _queue.Count));
 
     internal void Register(ZLinkTimer timer)
     {
         ArgumentNullException.ThrowIfNull(timer);
-        AwaitStateLane(_lane.RunAsync(() =>
-        {
-            ObjectDisposedException.ThrowIf(_closed, this);
-            _timers.Add(timer);
-        }));
+        AwaitStateLane(
+            _lane.RunAsync(() =>
+            {
+                ObjectDisposedException.ThrowIf(_closed, this);
+                _timers.Add(timer);
+            })
+        );
     }
 
     internal void Unregister(ZLinkTimer timer)
@@ -47,21 +47,19 @@ internal sealed class ZLinkTimerScheduler : IAsyncDisposable
         SignalWake();
     }
 
-    internal void Schedule(
-        ZLinkTimer timer,
-        TimeSpan dueAt,
-        long version)
+    internal void Schedule(ZLinkTimer timer, TimeSpan dueAt, long version)
     {
-        AwaitStateLane(_lane.RunAsync(() =>
-        {
-            if (_closed)
-                return;
-            _queue.Enqueue(
-                new ScheduledTimer(timer, version),
-                new ZLinkTimerScheduleKey(
-                    dueAt.Ticks,
-                    ++_nextSequence));
-        }));
+        AwaitStateLane(
+            _lane.RunAsync(() =>
+            {
+                if (_closed)
+                    return;
+                _queue.Enqueue(
+                    new ScheduledTimer(timer, version),
+                    new ZLinkTimerScheduleKey(dueAt.Ticks, ++_nextSequence)
+                );
+            })
+        );
         SignalWake();
     }
 
@@ -94,11 +92,13 @@ internal sealed class ZLinkTimerScheduler : IAsyncDisposable
         {
             _wake.Dispose();
             _stopSource.Dispose();
-            AwaitStateLane(_lane.RunAsync(() =>
-            {
-                _queue.Clear();
-                _timers.Clear();
-            }));
+            AwaitStateLane(
+                _lane.RunAsync(() =>
+                {
+                    _queue.Clear();
+                    _timers.Clear();
+                })
+            );
         }
     }
 
@@ -123,8 +123,9 @@ internal sealed class ZLinkTimerScheduler : IAsyncDisposable
                     continue;
                 }
 
-                using var waitCancellation =
-                    CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+                using var waitCancellation = CancellationTokenSource.CreateLinkedTokenSource(
+                    cancellationToken
+                );
                 var wake = _wake.WaitAsync(waitCancellation.Token);
                 var deadline = Task.Delay(next.Delay.Value, waitCancellation.Token);
                 await Task.WhenAny(wake, deadline).ConfigureAwait(false);
@@ -133,17 +134,13 @@ internal sealed class ZLinkTimerScheduler : IAsyncDisposable
                 {
                     await Task.WhenAll(wake, deadline).ConfigureAwait(false);
                 }
-                catch (OperationCanceledException)
-                    when (waitCancellation.IsCancellationRequested)
+                catch (OperationCanceledException) when (waitCancellation.IsCancellationRequested)
                 {
                     // The other wait won, or the scheduler is stopping.
                 }
             }
         }
-        catch (OperationCanceledException)
-            when (cancellationToken.IsCancellationRequested)
-        {
-        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested) { }
     }
 
     private (bool HasDue, ScheduledTimer DueTimer, TimeSpan? Delay) TryTakeDue() =>
@@ -167,8 +164,7 @@ internal sealed class ZLinkTimerScheduler : IAsyncDisposable
     private static T AwaitStateLane<T>(ValueTask<T> operation) =>
         operation.GetAwaiter().GetResult();
 
-    private static void AwaitStateLane(ValueTask operation) =>
-        operation.GetAwaiter().GetResult();
+    private static void AwaitStateLane(ValueTask operation) => operation.GetAwaiter().GetResult();
 
     private void SignalWake()
     {
@@ -177,28 +173,19 @@ internal sealed class ZLinkTimerScheduler : IAsyncDisposable
             if (_wake.CurrentCount == 0)
                 _wake.Release();
         }
-        catch (SemaphoreFullException)
-        {
-        }
-        catch (ObjectDisposedException)
-        {
-        }
+        catch (SemaphoreFullException) { }
+        catch (ObjectDisposedException) { }
     }
 
-    private readonly record struct ScheduledTimer(
-        ZLinkTimer Timer,
-        long Version);
+    private readonly record struct ScheduledTimer(ZLinkTimer Timer, long Version);
 
-    private readonly record struct ZLinkTimerScheduleKey(
-        long ElapsedTicks,
-        long Sequence) : IComparable<ZLinkTimerScheduleKey>
+    private readonly record struct ZLinkTimerScheduleKey(long ElapsedTicks, long Sequence)
+        : IComparable<ZLinkTimerScheduleKey>
     {
         public int CompareTo(ZLinkTimerScheduleKey other)
         {
             var byDeadline = ElapsedTicks.CompareTo(other.ElapsedTicks);
-            return byDeadline != 0
-                ? byDeadline
-                : Sequence.CompareTo(other.Sequence);
+            return byDeadline != 0 ? byDeadline : Sequence.CompareTo(other.Sequence);
         }
     }
 }

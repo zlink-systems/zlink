@@ -2,7 +2,8 @@ namespace Zlink.Framework.Runtime.Channels;
 
 internal sealed class ZLinkRouteHandlerInvoker(
     ZLinkHandlerDispatcher dispatcher,
-    ZLinkCodecRegistryBuilder codecs)
+    ZLinkCodecRegistryBuilder codecs
+)
 {
     public async ValueTask InvokeSendAsync(
         ZLinkRouteHandlerDescriptor descriptor,
@@ -11,7 +12,8 @@ internal sealed class ZLinkRouteHandlerInvoker(
         ZLinkEnvelopeHeader header,
         IReadOnlyList<Message> parts,
         CancellationToken cancellationToken,
-        ZLinkMessageMetadata? metadata = null)
+        ZLinkMessageMetadata? metadata = null
+    )
     {
         var message = ZLinkEnvelopeCodec.DecodeBody(parts, descriptor.MessageType, codecs);
 
@@ -22,13 +24,16 @@ internal sealed class ZLinkRouteHandlerInvoker(
             header.MessageName!,
             header.ContentType,
             metadata,
-            header.CorrelationId);
-        await dispatcher.DispatchRouteAsync(
+            header.CorrelationId
+        );
+        await dispatcher
+            .DispatchRouteAsync(
                 descriptor,
                 message,
                 context,
                 ZLinkHandlerDispatchKind.NodeDirectSend,
-                cancellationToken)
+                cancellationToken
+            )
             .ConfigureAwait(false);
     }
 
@@ -39,13 +44,15 @@ internal sealed class ZLinkRouteHandlerInvoker(
         ZLinkEnvelopeHeader header,
         ZLinkMultipartPayloadView parts,
         CancellationToken cancellationToken,
-        ZLinkMessageMetadata? metadata = null)
+        ZLinkMessageMetadata? metadata = null
+    )
     {
         var message = ZLinkEnvelopeCodec.DecodeBody(
             parts,
             descriptor.MessageType,
             header.ContentType,
-            codecs);
+            codecs
+        );
         var ownedMessage = message as Message;
         try
         {
@@ -56,13 +63,16 @@ internal sealed class ZLinkRouteHandlerInvoker(
                 header.MessageName!,
                 header.ContentType,
                 metadata,
-                header.CorrelationId);
-            await dispatcher.DispatchRouteAsync(
+                header.CorrelationId
+            );
+            await dispatcher
+                .DispatchRouteAsync(
                     descriptor,
                     message,
                     context,
                     ZLinkHandlerDispatchKind.NodeDirectSend,
-                    cancellationToken)
+                    cancellationToken
+                )
                 .ConfigureAwait(false);
         }
         finally
@@ -78,7 +88,8 @@ internal sealed class ZLinkRouteHandlerInvoker(
         ZLinkEnvelopeHeader header,
         IReadOnlyList<Message> parts,
         CancellationToken cancellationToken,
-        ZLinkMessageMetadata? metadata = null)
+        ZLinkMessageMetadata? metadata = null
+    )
     {
         var message = ZLinkEnvelopeCodec.DecodeBody(parts, descriptor.MessageType, codecs);
 
@@ -89,23 +100,25 @@ internal sealed class ZLinkRouteHandlerInvoker(
             header.MessageName!,
             header.ContentType,
             metadata,
-            header.CorrelationId);
-        var dispatch = await dispatcher.DispatchRouteAsync(
+            header.CorrelationId
+        );
+        var dispatch = await dispatcher
+            .DispatchRouteAsync(
                 descriptor,
                 message,
                 context,
                 ZLinkHandlerDispatchKind.NodeDirectRequest,
-                cancellationToken)
+                cancellationToken
+            )
             .ConfigureAwait(false);
         if (!dispatch.HandlerInvoked)
             throw new ZLinkFrameworkException(
                 ZLinkFrameworkErrorKind.Rejected,
-                $"A handler filter rejected '{header.MessageName}'.");
+                $"A handler filter rejected '{header.MessageName}'."
+            );
 
         return new ZLinkRouteHandlerReply(dispatch.Value, descriptor.ReplyType);
     }
 }
 
-internal readonly record struct ZLinkRouteHandlerReply(
-    object? Message,
-    Type? MessageType);
+internal readonly record struct ZLinkRouteHandlerReply(object? Message, Type? MessageType);

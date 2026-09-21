@@ -36,7 +36,8 @@ internal sealed class ProviderReadStream(Func<byte[]?> provider) : Stream
 
     public override int Read(Span<byte> buffer)
     {
-        if (!EnsureCurrent()) return 0;
+        if (!EnsureCurrent())
+            return 0;
 
         var take = Math.Min(buffer.Length, _current.Length - _position);
         _current.AsSpan(_position, take).CopyTo(buffer);
@@ -44,13 +45,21 @@ internal sealed class ProviderReadStream(Func<byte[]?> provider) : Stream
         return take;
     }
 
-    public override ValueTask<int> ReadAsync(Memory<byte> buffer, CancellationToken cancellationToken = default)
+    public override ValueTask<int> ReadAsync(
+        Memory<byte> buffer,
+        CancellationToken cancellationToken = default
+    )
     {
         cancellationToken.ThrowIfCancellationRequested();
         return ValueTask.FromResult(Read(buffer.Span));
     }
 
-    public override Task<int> ReadAsync(byte[] buffer, int offset, int count, CancellationToken cancellationToken)
+    public override Task<int> ReadAsync(
+        byte[] buffer,
+        int offset,
+        int count,
+        CancellationToken cancellationToken
+    )
     {
         return ReadAsync(buffer.AsMemory(offset, count), cancellationToken).AsTask();
     }
@@ -60,7 +69,8 @@ internal sealed class ProviderReadStream(Func<byte[]?> provider) : Stream
     {
         while (_position >= _current.Length)
         {
-            if (_completed) return false;
+            if (_completed)
+                return false;
 
             var next = provider();
             if (next is null)
@@ -76,9 +86,7 @@ internal sealed class ProviderReadStream(Func<byte[]?> provider) : Stream
         return true;
     }
 
-    public override void Flush()
-    {
-    }
+    public override void Flush() { }
 
     public override long Seek(long offset, SeekOrigin origin)
     {

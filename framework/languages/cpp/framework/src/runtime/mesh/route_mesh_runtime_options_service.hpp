@@ -13,8 +13,7 @@
 namespace zlink::framework::runtime
 {
 
-class route_mesh_runtime_options_service_t final :
-    public route_mesh_runtime_options_t
+class route_mesh_runtime_options_service_t final : public route_mesh_runtime_options_t
 {
   public:
     explicit route_mesh_runtime_options_service_t (
@@ -23,8 +22,7 @@ class route_mesh_runtime_options_service_t final :
 
     int placement_weight () const override;
     void placement_weight (int value) override;
-    mesh_channel_runtime_options_t &
-    channel (std::string channel_name) override;
+    mesh_channel_runtime_options_t &channel (std::string channel_name) override;
 
   private:
     class channel_options_t;

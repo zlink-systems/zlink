@@ -1,11 +1,12 @@
 package systems.zlink.framework.spring;
 
-import java.util.Optional;
-import java.util.concurrent.CompletionStage;
 import systems.zlink.framework.actors.ActorRef;
 import systems.zlink.framework.actors.ZLinkActorDirectory;
 import systems.zlink.framework.messaging.ZLinkMessage;
 import systems.zlink.framework.spring.internal.runtime.ZLinkFrameworkLifecycle;
+
+import java.util.Optional;
+import java.util.concurrent.CompletionStage;
 
 final class ZLinkFrameworkActorDirectoryBean implements ZLinkActorDirectory {
     private final ZLinkFrameworkLifecycle lifecycle;
@@ -20,9 +21,7 @@ final class ZLinkFrameworkActorDirectoryBean implements ZLinkActorDirectory {
     }
 
     @Override
-    public CompletionStage<ActorRef> ensure(
-        String actorId,
-        ZLinkMessage createRequest) {
+    public CompletionStage<ActorRef> ensure(String actorId, ZLinkMessage createRequest) {
         return lifecycle.actorDirectory().ensure(actorId, createRequest);
     }
 }

@@ -5,59 +5,81 @@ internal sealed class ZLinkChannelRuntimeManager(
     ZLinkFrameworkRegistration registration,
     ZLinkChannelReceiveLoop receiveLoop,
     ZLinkFanoutRuntimeService fanoutRuntime,
-    Func<ZLinkMessageFlowTracer>? outboundFlow = null)
+    Func<ZLinkMessageFlowTracer>? outboundFlow = null
+)
 {
     private readonly ZLinkChannelBundleFactory _bundleFactory = new(registration);
 
     public ZLinkChannelRuntimeBundle GetPublisherBundle(
         ZLinkFrameworkComponentState state,
-        string channelName)
+        string channelName
+    )
     {
-        return state.RunStateAsync(() =>
-        {
-            if (state.PublisherBundles.TryGetValue(channelName, out var existing)) return existing;
-            if (!registration.Channels.TryGetValue(channelName, out var channel)
-                || channel.Publisher is null)
-                throw new ZLinkConfigurationException($"Channel publisher '{channelName}' is not registered.");
+        return state
+            .RunStateAsync(() =>
+            {
+                if (state.PublisherBundles.TryGetValue(channelName, out var existing))
+                    return existing;
+                if (
+                    !registration.Channels.TryGetValue(channelName, out var channel)
+                    || channel.Publisher is null
+                )
+                    throw new ZLinkConfigurationException(
+                        $"Channel publisher '{channelName}' is not registered."
+                    );
 
-            throw new ZLinkConfigurationException($"Channel publisher '{channelName}' is not initialized.");
-        }).GetAwaiter().GetResult();
+                throw new ZLinkConfigurationException(
+                    $"Channel publisher '{channelName}' is not initialized."
+                );
+            })
+            .GetAwaiter()
+            .GetResult();
     }
 
     public ZLinkChannelRuntimeBundle GetClientServerClientBundle(
         ZLinkFrameworkComponentState state,
-        string channelName)
+        string channelName
+    )
     {
-        return state.RunStateAsync(() =>
-        {
-            if (state.ClientServerClientBundles.TryGetValue(channelName, out var bundle))
-                return bundle;
-            if (!registration.Channels.TryGetValue(channelName, out var channel)
-                || !channel.HasClientServerClient)
+        return state
+            .RunStateAsync(() =>
+            {
+                if (state.ClientServerClientBundles.TryGetValue(channelName, out var bundle))
+                    return bundle;
+                if (
+                    !registration.Channels.TryGetValue(channelName, out var channel)
+                    || !channel.HasClientServerClient
+                )
+                    throw new ZLinkConfigurationException(
+                        $"ClientServer client channel '{channelName}' is not registered."
+                    );
                 throw new ZLinkConfigurationException(
-                    $"ClientServer client channel '{channelName}' is not registered.");
-            throw new ZLinkConfigurationException(
-                $"ClientServer client channel '{channelName}' is not initialized.");
-        }).GetAwaiter().GetResult();
+                    $"ClientServer client channel '{channelName}' is not initialized."
+                );
+            })
+            .GetAwaiter()
+            .GetResult();
     }
 
     public ZLinkClientServerClientRuntime GetClientServerClientRuntime(
         ZLinkFrameworkComponentState state,
-        string channelName)
+        string channelName
+    )
     {
-        return state.RunStateAsync(() =>
-        {
-            if (state.ClientServerClientRuntimes.TryGetValue(
-                    channelName,
-                    out var runtime))
-                return runtime;
-            throw new ZLinkConfigurationException(
-                $"ClientServer client channel '{channelName}' is not initialized.");
-        }).GetAwaiter().GetResult();
+        return state
+            .RunStateAsync(() =>
+            {
+                if (state.ClientServerClientRuntimes.TryGetValue(channelName, out var runtime))
+                    return runtime;
+                throw new ZLinkConfigurationException(
+                    $"ClientServer client channel '{channelName}' is not initialized."
+                );
+            })
+            .GetAwaiter()
+            .GetResult();
     }
 
-    public async ValueTask InitializeInboundChannelsAsync(
-        ZLinkFrameworkComponentState state)
+    public async ValueTask InitializeInboundChannelsAsync(ZLinkFrameworkComponentState state)
     {
         foreach (var entry in registration.Channels)
         {
@@ -66,74 +88,93 @@ internal sealed class ZLinkChannelRuntimeManager(
 
             if (channel.HasClientServerServer)
             {
-                var bundle = await _bundleFactory.CreateClientServerServerBundleAsync(
-                        state,
-                        channelName,
-                        channel)
+                var bundle = await _bundleFactory
+                    .CreateClientServerServerBundleAsync(state, channelName, channel)
                     .ConfigureAwait(false);
-                AwaitStateLane(state.RunStateAsync(() =>
-                {
-                    state.ClientServerServerBundles.Add(channelName, bundle);
-                    // The runner starts its callback after registration. Suppress
-                    // the state-lane AsyncLocal at task construction so its
-                    // synchronous callback prefix is an independent caller.
-                    using (ExecutionContext.SuppressFlow())
-                        state.ListenerTasks.Add(state.TaskRunner.RunLongRunning(
-                            $"client-server:{channelName}",
-                            ct => new ValueTask(receiveLoop.RunClientServerLoopAsync(
-                                channelName,
-                                (IRouterSocket)bundle.Socket,
-                                bundle.ClientServerServer
-                                ?? throw new InvalidOperationException(
-                                    "ClientServer server identity is not initialized."),
-                                state.ApplicationJobQueue,
-                                state.ErrorSink,
-                                ct))));
-                }));
+                AwaitStateLane(
+                    state.RunStateAsync(() =>
+                    {
+                        state.ClientServerServerBundles.Add(channelName, bundle);
+                        // The runner starts its callback after registration. Suppress
+                        // the state-lane AsyncLocal at task construction so its
+                        // synchronous callback prefix is an independent caller.
+                        using (ExecutionContext.SuppressFlow())
+                            state.ListenerTasks.Add(
+                                state.TaskRunner.RunLongRunning(
+                                    $"client-server:{channelName}",
+                                    ct => new ValueTask(
+                                        receiveLoop.RunClientServerLoopAsync(
+                                            channelName,
+                                            (IRouterSocket)bundle.Socket,
+                                            bundle.ClientServerServer
+                                                ?? throw new InvalidOperationException(
+                                                    "ClientServer server identity is not initialized."
+                                                ),
+                                            state.ApplicationJobQueue,
+                                            state.ErrorSink,
+                                            ct
+                                        )
+                                    )
+                                )
+                            );
+                    })
+                );
             }
 
             if (channel.Subscriber is not null)
             {
-                if (channel.Subscriber.AcquisitionMode
-                    == ZLinkPeerAcquisitionMode.AutoConnect)
+                if (channel.Subscriber.AcquisitionMode == ZLinkPeerAcquisitionMode.AutoConnect)
                 {
-                    AwaitStateLane(state.RunStateAsync(() =>
-                        state.AutomaticFanoutSubscriberRuntimes.Add(
-                            channelName,
-                            new ZLinkAutomaticFanoutSubscriberRuntime(
+                    AwaitStateLane(
+                        state.RunStateAsync(() =>
+                            state.AutomaticFanoutSubscriberRuntimes.Add(
                                 channelName,
-                                state.Context,
-                                channel.Subscriber.SocketConfig,
-                                channel.Subscriber.Topics,
-                                receiveLoop,
-                                fanoutRuntime,
-                                state.ErrorSink,
-                                state.StopTokenSource.Token,
-                                applicationJobQueue: state.ApplicationJobQueue))));
+                                new ZLinkAutomaticFanoutSubscriberRuntime(
+                                    channelName,
+                                    state.Context,
+                                    channel.Subscriber.SocketConfig,
+                                    channel.Subscriber.Topics,
+                                    receiveLoop,
+                                    fanoutRuntime,
+                                    state.ErrorSink,
+                                    state.StopTokenSource.Token,
+                                    applicationJobQueue: state.ApplicationJobQueue
+                                )
+                            )
+                        )
+                    );
                     continue;
                 }
 
-                var bundle = await _bundleFactory.CreateSubscriberBundleAsync(state, channelName, channel)
+                var bundle = await _bundleFactory
+                    .CreateSubscriberBundleAsync(state, channelName, channel)
                     .ConfigureAwait(false);
-                AwaitStateLane(state.RunStateAsync(() =>
-                {
-                    state.SubscriberBundles.Add(channelName, bundle);
-                    using (ExecutionContext.SuppressFlow())
-                        state.ListenerTasks.Add(state.TaskRunner.RunLongRunning(
-                            $"channel-subscriber:{channelName}",
-                            ct => new ValueTask(receiveLoop.RunSubscriberLoopAsync(
-                                channelName,
-                                (ISubSocket)bundle.Socket,
-                                state.ApplicationJobQueue,
-                                state.ErrorSink,
-                                ct))));
-                }));
+                AwaitStateLane(
+                    state.RunStateAsync(() =>
+                    {
+                        state.SubscriberBundles.Add(channelName, bundle);
+                        using (ExecutionContext.SuppressFlow())
+                            state.ListenerTasks.Add(
+                                state.TaskRunner.RunLongRunning(
+                                    $"channel-subscriber:{channelName}",
+                                    ct => new ValueTask(
+                                        receiveLoop.RunSubscriberLoopAsync(
+                                            channelName,
+                                            (ISubSocket)bundle.Socket,
+                                            state.ApplicationJobQueue,
+                                            state.ErrorSink,
+                                            ct
+                                        )
+                                    )
+                                )
+                            );
+                    })
+                );
             }
         }
     }
 
-    public async ValueTask InitializePublisherChannelsAsync(
-        ZLinkFrameworkComponentState state)
+    public async ValueTask InitializePublisherChannelsAsync(ZLinkFrameworkComponentState state)
     {
         foreach (var entry in registration.Channels)
         {
@@ -146,65 +187,80 @@ internal sealed class ZLinkChannelRuntimeManager(
                     state.Context,
                     channel.Client!.SocketConfig,
                     channel.Client.SocketConfig.SendTimeout
-                    ?? registration.DefaultSocketSendTimeout,
+                        ?? registration.DefaultSocketSendTimeout,
                     state.StopTokenSource.Token,
                     state.ApplicationJobQueue,
                     outboundFlow?.Invoke(),
-                    registration.TimeProvider);
-                AwaitStateLane(state.RunStateAsync(() =>
-                {
-                    state.ClientServerClientRuntimes.Add(entry.Key, runtime);
-                    runtime.OwnManualConnectionAttachment(channel.Client.ManualConnections.Attach(
-                        runtime.AddManual,
-                        runtime.RemoveManual));
-                    if (!registration.Locations.Enabled
-                        && channel.HasClientServerServer
-                        && state.ClientServerServerBundles.TryGetValue(
-                            entry.Key,
-                            out var localServer))
+                    registration.TimeProvider
+                );
+                AwaitStateLane(
+                    state.RunStateAsync(() =>
                     {
-                        runtime.AddLocal(
-                            ((IRouterSocket)localServer.Socket).Options.LastEndpoint,
-                            localServer.ClientServerServer
-                            ?? throw new InvalidOperationException(
-                                "ClientServer server identity is not initialized."));
-                    }
-                }));
+                        state.ClientServerClientRuntimes.Add(entry.Key, runtime);
+                        runtime.OwnManualConnectionAttachment(
+                            channel.Client.ManualConnections.Attach(
+                                runtime.AddManual,
+                                runtime.RemoveManual
+                            )
+                        );
+                        if (
+                            !registration.Locations.Enabled
+                            && channel.HasClientServerServer
+                            && state.ClientServerServerBundles.TryGetValue(
+                                entry.Key,
+                                out var localServer
+                            )
+                        )
+                        {
+                            runtime.AddLocal(
+                                ((IRouterSocket)localServer.Socket).Options.LastEndpoint,
+                                localServer.ClientServerServer
+                                    ?? throw new InvalidOperationException(
+                                        "ClientServer server identity is not initialized."
+                                    )
+                            );
+                        }
+                    })
+                );
             }
 
-            if (entry.Value.Publisher is null) continue;
+            if (entry.Value.Publisher is null)
+                continue;
 
-            var publisherBundle =
-                await _bundleFactory.CreatePublisherBundleAsync(
-                        state,
-                        entry.Key,
-                        entry.Value)
-                    .ConfigureAwait(false);
-            AwaitStateLane(state.RunStateAsync(() =>
-            {
-                state.PublisherBundles.Add(entry.Key, publisherBundle);
-                using (ExecutionContext.SuppressFlow())
-                    state.ListenerTasks.Add(state.TaskRunner.Run(
-                        $"fanout-beacon:{entry.Key}",
-                        cancellationToken => RunFanoutBeaconLoopAsync(
-                            (IPubSocket)publisherBundle.Socket,
-                            cancellationToken)));
-            }));
+            var publisherBundle = await _bundleFactory
+                .CreatePublisherBundleAsync(state, entry.Key, entry.Value)
+                .ConfigureAwait(false);
+            AwaitStateLane(
+                state.RunStateAsync(() =>
+                {
+                    state.PublisherBundles.Add(entry.Key, publisherBundle);
+                    using (ExecutionContext.SuppressFlow())
+                        state.ListenerTasks.Add(
+                            state.TaskRunner.Run(
+                                $"fanout-beacon:{entry.Key}",
+                                cancellationToken =>
+                                    RunFanoutBeaconLoopAsync(
+                                        (IPubSocket)publisherBundle.Socket,
+                                        cancellationToken
+                                    )
+                            )
+                        );
+                })
+            );
         }
     }
 
     private static async ValueTask RunFanoutBeaconLoopAsync(
         IPubSocket publisher,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken
+    )
     {
-        using var timer = new PeriodicTimer(
-            ZLinkFanoutLivenessProtocol.BeaconInterval);
-        while (await timer.WaitForNextTickAsync(cancellationToken)
-                   .ConfigureAwait(false))
+        using var timer = new PeriodicTimer(ZLinkFanoutLivenessProtocol.BeaconInterval);
+        while (await timer.WaitForNextTickAsync(cancellationToken).ConfigureAwait(false))
         {
-            using var payload = Message.From(
-                ZLinkFanoutLivenessProtocol.Payload);
-            _ = publisher.TryPublish(ZLinkFanoutLivenessProtocol.Topic)
+            using var payload = Message.From(ZLinkFanoutLivenessProtocol.Payload);
+            _ = publisher
+                .TryPublish(ZLinkFanoutLivenessProtocol.Topic)
                 .Message(payload)
                 .Flags(SendFlags.DontWait)
                 .Submit();
@@ -213,39 +269,50 @@ internal sealed class ZLinkChannelRuntimeManager(
 
     public IAsyncDisposable GetMonitoringSocket(
         ZLinkFrameworkComponentState state,
-        string sourceName)
+        string sourceName
+    )
     {
         var (channelName, capability) = ParseChannelCapabilitySource(sourceName);
 
         return capability switch
         {
-            "subscriber" => AwaitStateLane(state.RunStateAsync(() =>
-                state.SubscriberBundles.TryGetValue(channelName, out var subscriberBundle)
-                    ? subscriberBundle.Socket
-                    : throw new InvalidOperationException(
-                        $"Socket monitoring source '{sourceName}' is not registered."))),
+            "subscriber" => AwaitStateLane(
+                state.RunStateAsync(() =>
+                    state.SubscriberBundles.TryGetValue(channelName, out var subscriberBundle)
+                        ? subscriberBundle.Socket
+                        : throw new InvalidOperationException(
+                            $"Socket monitoring source '{sourceName}' is not registered."
+                        )
+                )
+            ),
             "publisher" => GetPublisherBundle(state, channelName).Socket,
-            "client" => GetClientServerClientRuntime(
-                state,
-                channelName).GetMonitoringSocket(),
-            "server" => AwaitStateLane(state.RunStateAsync(() =>
-                state.ClientServerServerBundles.TryGetValue(channelName, out var serverBundle)
-                    ? serverBundle.Socket
-                    : throw new InvalidOperationException(
-                        $"Socket monitoring source '{sourceName}' is not registered."))),
+            "client" => GetClientServerClientRuntime(state, channelName).GetMonitoringSocket(),
+            "server" => AwaitStateLane(
+                state.RunStateAsync(() =>
+                    state.ClientServerServerBundles.TryGetValue(channelName, out var serverBundle)
+                        ? serverBundle.Socket
+                        : throw new InvalidOperationException(
+                            $"Socket monitoring source '{sourceName}' is not registered."
+                        )
+                )
+            ),
             _ => throw new InvalidOperationException(
-                $"Socket monitoring source '{sourceName}' is not registered.")
+                $"Socket monitoring source '{sourceName}' is not registered."
+            ),
         };
     }
 
-    private static (string ChannelName, string Capability) ParseChannelCapabilitySource(string sourceName)
+    private static (string ChannelName, string Capability) ParseChannelCapabilitySource(
+        string sourceName
+    )
     {
         ArgumentException.ThrowIfNullOrEmpty(sourceName);
 
         var separatorIndex = sourceName.LastIndexOf('.');
         if (separatorIndex <= 0 || separatorIndex == sourceName.Length - 1)
             throw new InvalidOperationException(
-                $"Socket monitoring source '{sourceName}' must use '<channel>.<capability>'.");
+                $"Socket monitoring source '{sourceName}' must use '<channel>.<capability>'."
+            );
 
         return (sourceName[..separatorIndex], sourceName[(separatorIndex + 1)..]);
     }
@@ -253,6 +320,5 @@ internal sealed class ZLinkChannelRuntimeManager(
     private static T AwaitStateLane<T>(ValueTask<T> operation) =>
         operation.GetAwaiter().GetResult();
 
-    private static void AwaitStateLane(ValueTask operation) =>
-        operation.GetAwaiter().GetResult();
+    private static void AwaitStateLane(ValueTask operation) => operation.GetAwaiter().GetResult();
 }

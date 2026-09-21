@@ -8,18 +8,14 @@
 namespace zlink::framework::detail
 {
 
-template <typename T> concept static_packet_name = requires
-{
-    {
-        T::packet_name
-    } -> std::convertible_to<const char *>;
+template <typename T>
+concept static_packet_name = requires {
+    { T::packet_name } -> std::convertible_to<const char *>;
 };
 
-template <typename T> concept protobuf_descriptor_name = requires
-{
-    {
-        std::string (T::descriptor ()->name ())
-    } -> std::same_as<std::string>;
+template <typename T>
+concept protobuf_descriptor_name = requires {
+    { std::string (T::descriptor ()->name ()) } -> std::same_as<std::string>;
 };
 
 template <typename T> std::string message_name ()

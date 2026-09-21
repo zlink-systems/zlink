@@ -1,14 +1,11 @@
 package systems.zlink.framework.runtime.handlers;
-import java.time.Duration;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
-import java.util.Set;
-import java.util.concurrent.CompletableFuture;
-import java.util.concurrent.CompletionStage;
 import org.junit.jupiter.api.Test;
+
 import systems.zlink.framework.ZLinkMessageContext;
 import systems.zlink.framework.actors.ZLinkActor;
 import systems.zlink.framework.actors.ZLinkActorContext;
@@ -24,50 +21,67 @@ import systems.zlink.framework.handlers.ZLinkSpotActorRequest;
 import systems.zlink.framework.handlers.ZLinkSpotRequest;
 import systems.zlink.framework.handlers.ZLinkSpotSubscription;
 import systems.zlink.framework.handlers.ZLinkSpotTimer;
-import systems.zlink.testfixtures.handlerconflict.ConflictingSpotActorPacketHandler;
-import systems.zlink.framework.spots.ZLinkSpot;
 import systems.zlink.framework.spots.ZLinkEntrySpot;
-import systems.zlink.framework.spots.ZLinkEntrySpotContext;
 import systems.zlink.framework.spots.ZLinkEntrySpotActorRequestHandler;
+import systems.zlink.framework.spots.ZLinkEntrySpotContext;
+import systems.zlink.framework.spots.ZLinkSpot;
 import systems.zlink.framework.spots.ZLinkSpotContext;
 import systems.zlink.framework.spots.ZLinkSpotPacketHandler;
 import systems.zlink.framework.spots.ZLinkSpotSubscriptionHandler;
 import systems.zlink.framework.spots.ZLinkSpotTimerHandler;
 import systems.zlink.framework.spots.ZLinkTimerTick;
 import systems.zlink.testfixtures.handlerasync.CompletionStageAttributedHandler;
+import systems.zlink.testfixtures.handlerconflict.ConflictingSpotActorPacketHandler;
+
+import java.time.Duration;
+import java.util.Set;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CompletionStage;
 
 final class ZLinkHandlerScannerTest {
     @Test
     void scansUngroupedInterfaceHandlersLikeDotnet() {
         ZLinkScannedHandlerCatalog catalog =
-            ZLinkHandlerScanner.scan(Set.of(ZLinkHandlerScannerTest.class));
+                ZLinkHandlerScanner.scan(Set.of(ZLinkHandlerScannerTest.class));
 
-        ZLinkScannedHandler handler = catalog.handlers().stream()
-            .filter(candidate -> candidate.handlerType() == UngroupedInterfaceHandler.class)
-            .findFirst()
-            .orElseThrow();
+        ZLinkScannedHandler handler =
+                catalog.handlers().stream()
+                        .filter(
+                                candidate ->
+                                        candidate.handlerType() == UngroupedInterfaceHandler.class)
+                        .findFirst()
+                        .orElseThrow();
 
         assertEquals(ZLinkScannedHandlerSurface.CHANNEL, handler.surface());
         assertEquals(ZLinkScannedHandlerKind.REQUEST, handler.kind());
         assertEquals(String.class, handler.messageType());
         assertEquals(String.class, handler.replyType());
         assertTrue(handler.groups().isEmpty());
-        assertTrue(catalog.matching(
-            Set.of("missing"),
-            ZLinkScannedHandlerSurface.CHANNEL,
-            ZLinkScannedHandlerKind.REQUEST).stream()
-            .noneMatch(candidate -> candidate.handlerType() == UngroupedInterfaceHandler.class));
+        assertTrue(
+                catalog
+                        .matching(
+                                Set.of("missing"),
+                                ZLinkScannedHandlerSurface.CHANNEL,
+                                ZLinkScannedHandlerKind.REQUEST)
+                        .stream()
+                        .noneMatch(
+                                candidate ->
+                                        candidate.handlerType()
+                                                == UngroupedInterfaceHandler.class));
     }
 
     @Test
     void scansUngroupedAttributedHandlersLikeDotnet() {
         ZLinkScannedHandlerCatalog catalog =
-            ZLinkHandlerScanner.scan(Set.of(ZLinkHandlerScannerTest.class));
+                ZLinkHandlerScanner.scan(Set.of(ZLinkHandlerScannerTest.class));
 
-        ZLinkScannedHandler handler = catalog.handlers().stream()
-            .filter(candidate -> candidate.handlerType() == UngroupedAttributedHandler.class)
-            .findFirst()
-            .orElseThrow();
+        ZLinkScannedHandler handler =
+                catalog.handlers().stream()
+                        .filter(
+                                candidate ->
+                                        candidate.handlerType() == UngroupedAttributedHandler.class)
+                        .findFirst()
+                        .orElseThrow();
 
         assertEquals(ZLinkScannedHandlerSurface.CHANNEL, handler.surface());
         assertEquals(ZLinkScannedHandlerKind.REQUEST, handler.kind());
@@ -78,16 +92,24 @@ final class ZLinkHandlerScannerTest {
     @Test
     void scansAttributedHandlersWithContextParameterLikeDotnet() {
         ZLinkScannedHandlerCatalog catalog =
-            ZLinkHandlerScanner.scan(Set.of(ZLinkHandlerScannerTest.class));
+                ZLinkHandlerScanner.scan(Set.of(ZLinkHandlerScannerTest.class));
 
-        ZLinkScannedHandler requestHandler = catalog.handlers().stream()
-            .filter(candidate -> candidate.handlerType() == ContextAttributedRequestHandler.class)
-            .findFirst()
-            .orElseThrow();
-        ZLinkScannedHandler sendHandler = catalog.handlers().stream()
-            .filter(candidate -> candidate.handlerType() == ContextAttributedSendHandler.class)
-            .findFirst()
-            .orElseThrow();
+        ZLinkScannedHandler requestHandler =
+                catalog.handlers().stream()
+                        .filter(
+                                candidate ->
+                                        candidate.handlerType()
+                                                == ContextAttributedRequestHandler.class)
+                        .findFirst()
+                        .orElseThrow();
+        ZLinkScannedHandler sendHandler =
+                catalog.handlers().stream()
+                        .filter(
+                                candidate ->
+                                        candidate.handlerType()
+                                                == ContextAttributedSendHandler.class)
+                        .findFirst()
+                        .orElseThrow();
 
         assertEquals(ZLinkScannedHandlerKind.REQUEST, requestHandler.kind());
         assertEquals("ContextRequest", requestHandler.packetName());
@@ -98,12 +120,16 @@ final class ZLinkHandlerScannerTest {
     @Test
     void scansAttributedPublishHandlerWithContextParameterLikeDotnet() {
         ZLinkScannedHandlerCatalog catalog =
-            ZLinkHandlerScanner.scan(Set.of(ZLinkHandlerScannerTest.class));
+                ZLinkHandlerScanner.scan(Set.of(ZLinkHandlerScannerTest.class));
 
-        ZLinkScannedHandler handler = catalog.handlers().stream()
-            .filter(candidate -> candidate.handlerType() == ContextAttributedPublishHandler.class)
-            .findFirst()
-            .orElseThrow();
+        ZLinkScannedHandler handler =
+                catalog.handlers().stream()
+                        .filter(
+                                candidate ->
+                                        candidate.handlerType()
+                                                == ContextAttributedPublishHandler.class)
+                        .findFirst()
+                        .orElseThrow();
 
         assertEquals(ZLinkScannedHandlerSurface.CHANNEL, handler.surface());
         assertEquals(ZLinkScannedHandlerKind.PUBLISH, handler.kind());
@@ -115,12 +141,16 @@ final class ZLinkHandlerScannerTest {
     @Test
     void scansAttributedHandlersWithDefaultParameterLikeDotnet() {
         ZLinkScannedHandlerCatalog catalog =
-            ZLinkHandlerScanner.scan(Set.of(ZLinkHandlerScannerTest.class));
+                ZLinkHandlerScanner.scan(Set.of(ZLinkHandlerScannerTest.class));
 
-        ZLinkScannedHandler handler = catalog.handlers().stream()
-            .filter(candidate -> candidate.handlerType() == DefaultParameterAttributedHandler.class)
-            .findFirst()
-            .orElseThrow();
+        ZLinkScannedHandler handler =
+                catalog.handlers().stream()
+                        .filter(
+                                candidate ->
+                                        candidate.handlerType()
+                                                == DefaultParameterAttributedHandler.class)
+                        .findFirst()
+                        .orElseThrow();
 
         assertEquals(ZLinkScannedHandlerKind.REQUEST, handler.kind());
         assertEquals(String.class, handler.messageType());
@@ -130,12 +160,15 @@ final class ZLinkHandlerScannerTest {
     @Test
     void scansRepeatableHandlerGroupsLikeDotnetAllowMultipleAttribute() {
         ZLinkScannedHandlerCatalog catalog =
-            ZLinkHandlerScanner.scan(Set.of(ZLinkHandlerScannerTest.class));
+                ZLinkHandlerScanner.scan(Set.of(ZLinkHandlerScannerTest.class));
 
-        ZLinkScannedHandler handler = catalog.handlers().stream()
-            .filter(candidate -> candidate.handlerType() == RepeatableGroupHandler.class)
-            .findFirst()
-            .orElseThrow();
+        ZLinkScannedHandler handler =
+                catalog.handlers().stream()
+                        .filter(
+                                candidate ->
+                                        candidate.handlerType() == RepeatableGroupHandler.class)
+                        .findFirst()
+                        .orElseThrow();
 
         assertEquals(Set.of("primary", "secondary"), handler.groups());
     }
@@ -143,12 +176,16 @@ final class ZLinkHandlerScannerTest {
     @Test
     void scansSpotActorHandlerWithDotnetAttributedShape() {
         ZLinkScannedHandlerCatalog catalog =
-            ZLinkHandlerScanner.scan(Set.of(ZLinkHandlerScannerTest.class));
+                ZLinkHandlerScanner.scan(Set.of(ZLinkHandlerScannerTest.class));
 
-        ZLinkScannedHandler handler = catalog.handlers().stream()
-            .filter(candidate -> candidate.handlerType() == DotnetShapeSpotActorHandler.class)
-            .findFirst()
-            .orElseThrow();
+        ZLinkScannedHandler handler =
+                catalog.handlers().stream()
+                        .filter(
+                                candidate ->
+                                        candidate.handlerType()
+                                                == DotnetShapeSpotActorHandler.class)
+                        .findFirst()
+                        .orElseThrow();
 
         assertEquals(ZLinkScannedHandlerSurface.SPOT, handler.surface());
         assertEquals(ZLinkScannedHandlerKind.ACTOR_REQUEST, handler.kind());
@@ -161,12 +198,16 @@ final class ZLinkHandlerScannerTest {
     @Test
     void scansSpotActorInterfaceHandlersLikeDotnet() {
         ZLinkScannedHandlerCatalog catalog =
-            ZLinkHandlerScanner.scan(Set.of(ZLinkHandlerScannerTest.class));
+                ZLinkHandlerScanner.scan(Set.of(ZLinkHandlerScannerTest.class));
 
-        ZLinkScannedHandler request = catalog.handlers().stream()
-            .filter(candidate -> candidate.handlerType() == InterfaceEntrySpotActorRequestHandler.class)
-            .findFirst()
-            .orElseThrow();
+        ZLinkScannedHandler request =
+                catalog.handlers().stream()
+                        .filter(
+                                candidate ->
+                                        candidate.handlerType()
+                                                == InterfaceEntrySpotActorRequestHandler.class)
+                        .findFirst()
+                        .orElseThrow();
 
         assertEquals(ZLinkScannedHandlerSurface.SPOT, request.surface());
         assertEquals(ZLinkScannedHandlerKind.ACTOR_REQUEST, request.kind());
@@ -174,33 +215,52 @@ final class ZLinkHandlerScannerTest {
         assertEquals(SpotActorRequest.class, request.messageType());
         assertEquals(SpotActorReply.class, request.replyType());
         assertEquals("InterfaceSpotActorRequest", request.packetName());
-        assertTrue(catalog.handlers().stream()
-            .noneMatch(candidate -> candidate.kind() == ZLinkScannedHandlerKind.ACTOR_JOIN
-                || candidate.kind() == ZLinkScannedHandlerKind.ACTOR_JOINED
-                || candidate.kind() == ZLinkScannedHandlerKind.ACTOR_LEFT));
+        assertTrue(
+                catalog.handlers().stream()
+                        .noneMatch(
+                                candidate ->
+                                        candidate.kind() == ZLinkScannedHandlerKind.ACTOR_JOIN
+                                                || candidate.kind()
+                                                        == ZLinkScannedHandlerKind.ACTOR_JOINED
+                                                || candidate.kind()
+                                                        == ZLinkScannedHandlerKind.ACTOR_LEFT));
     }
 
     @Test
     void scansSpotPacketSubscriptionAndTimerHandlersLikeDotnet() {
         ZLinkScannedHandlerCatalog catalog =
-            ZLinkHandlerScanner.scan(Set.of(ZLinkHandlerScannerTest.class));
+                ZLinkHandlerScanner.scan(Set.of(ZLinkHandlerScannerTest.class));
 
-        ZLinkScannedHandler packet = catalog.handlers().stream()
-            .filter(candidate -> candidate.handlerType() == InterfaceSpotPacketHandler.class)
-            .findFirst()
-            .orElseThrow();
-        ZLinkScannedHandler request = catalog.handlers().stream()
-            .filter(candidate -> candidate.handlerType() == AttributedSpotRequestHandler.class)
-            .findFirst()
-            .orElseThrow();
-        ZLinkScannedHandler subscription = catalog.handlers().stream()
-            .filter(candidate -> candidate.handlerType() == InterfaceSpotSubscriptionHandler.class)
-            .findFirst()
-            .orElseThrow();
-        ZLinkScannedHandler timer = catalog.handlers().stream()
-            .filter(candidate -> candidate.handlerType() == InterfaceSpotTimerHandler.class)
-            .findFirst()
-            .orElseThrow();
+        ZLinkScannedHandler packet =
+                catalog.handlers().stream()
+                        .filter(
+                                candidate ->
+                                        candidate.handlerType() == InterfaceSpotPacketHandler.class)
+                        .findFirst()
+                        .orElseThrow();
+        ZLinkScannedHandler request =
+                catalog.handlers().stream()
+                        .filter(
+                                candidate ->
+                                        candidate.handlerType()
+                                                == AttributedSpotRequestHandler.class)
+                        .findFirst()
+                        .orElseThrow();
+        ZLinkScannedHandler subscription =
+                catalog.handlers().stream()
+                        .filter(
+                                candidate ->
+                                        candidate.handlerType()
+                                                == InterfaceSpotSubscriptionHandler.class)
+                        .findFirst()
+                        .orElseThrow();
+        ZLinkScannedHandler timer =
+                catalog.handlers().stream()
+                        .filter(
+                                candidate ->
+                                        candidate.handlerType() == InterfaceSpotTimerHandler.class)
+                        .findFirst()
+                        .orElseThrow();
 
         assertEquals(ZLinkScannedHandlerSurface.SPOT, packet.surface());
         assertEquals(ZLinkScannedHandlerKind.SEND, packet.kind());
@@ -228,26 +288,24 @@ final class ZLinkHandlerScannerTest {
     @Test
     void rejectsConflictingSpotActorPacketAnnotationsLikeDotnet() {
         assertThrows(
-            ZLinkConfigurationException.class,
-            () -> ZLinkHandlerScanner.scan(Set.of(ConflictingSpotActorPacketHandler.class)));
+                ZLinkConfigurationException.class,
+                () -> ZLinkHandlerScanner.scan(Set.of(ConflictingSpotActorPacketHandler.class)));
     }
 
     @Test
     void acceptsJavaCompletionStageAttributedHandlerReturn() {
-        ZLinkScannedHandler handler = ZLinkHandlerScanner
-            .scan(Set.of(CompletionStageAttributedHandler.class))
-            .handlers()
-            .get(0);
+        ZLinkScannedHandler handler =
+                ZLinkHandlerScanner.scan(Set.of(CompletionStageAttributedHandler.class))
+                        .handlers()
+                        .get(0);
 
         assertEquals(String.class, handler.replyType());
     }
 
     public static final class UngroupedInterfaceHandler
-        implements ZLinkRequestHandler<String, String> {
+            implements ZLinkRequestHandler<String, String> {
         @Override
-        public CompletionStage<String> handle(
-            String request,
-            ZLinkMessageContext context) {
+        public CompletionStage<String> handle(String request, ZLinkMessageContext context) {
             return CompletableFuture.completedFuture(request);
         }
     }
@@ -283,9 +341,7 @@ final class ZLinkHandlerScannerTest {
     public static final class DefaultParameterAttributedHandler {
         @ZLinkRequest(packetName = "DefaultParameterRequest")
         public CompletionStage<String> handle(
-            String request,
-            Object defaultParameter,
-            ZLinkMessageContext context) {
+                String request, Object defaultParameter, ZLinkMessageContext context) {
             return CompletableFuture.completedFuture(request);
         }
     }
@@ -302,10 +358,10 @@ final class ZLinkHandlerScannerTest {
     public static final class DotnetShapeSpotActorHandler {
         @ZLinkSpotActorRequest(packetName = "SpotActorRequest")
         public CompletionStage<SpotActorReply> handle(
-            TestSpot spot,
-            TestActor actor,
-            ZLinkMessageContext context,
-            SpotActorRequest request) {
+                TestSpot spot,
+                TestActor actor,
+                ZLinkMessageContext context,
+                SpotActorRequest request) {
             return CompletableFuture.completedFuture(new SpotActorReply());
         }
     }
@@ -316,10 +372,13 @@ final class ZLinkHandlerScannerTest {
             throw new UnsupportedOperationException();
         }
 
-        @Override public CompletionStage<Void> onJoinedActor(ZLinkActor actor) {
+        @Override
+        public CompletionStage<Void> onJoinedActor(ZLinkActor actor) {
             return CompletableFuture.completedFuture(null);
         }
-        @Override public CompletionStage<Void> onLeaveActor(ZLinkActor actor) {
+
+        @Override
+        public CompletionStage<Void> onLeaveActor(ZLinkActor actor) {
             return CompletableFuture.completedFuture(null);
         }
     }
@@ -330,32 +389,32 @@ final class ZLinkHandlerScannerTest {
             throw new UnsupportedOperationException();
         }
 
-        @Override public CompletionStage<Void> onJoinedActor(ZLinkActor actor) {
+        @Override
+        public CompletionStage<Void> onJoinedActor(ZLinkActor actor) {
             return CompletableFuture.completedFuture(null);
         }
-        @Override public CompletionStage<Void> onLeaveActor(ZLinkActor actor) {
+
+        @Override
+        public CompletionStage<Void> onLeaveActor(ZLinkActor actor) {
             return CompletableFuture.completedFuture(null);
         }
     }
 
     public static final class InterfaceEntrySpotActorRequestHandler
-        implements ZLinkEntrySpotActorRequestHandler<
-            TestEntrySpot,
-            TestActor,
-            SpotActorRequest,
-            SpotActorReply> {
+            implements ZLinkEntrySpotActorRequestHandler<
+                    TestEntrySpot, TestActor, SpotActorRequest, SpotActorReply> {
         @Override
         public CompletionStage<SpotActorReply> handle(
-            TestEntrySpot entrySpot,
-            TestActor actor,
-            ZLinkMessageContext context,
-            SpotActorRequest request) {
+                TestEntrySpot entrySpot,
+                TestActor actor,
+                ZLinkMessageContext context,
+                SpotActorRequest request) {
             return CompletableFuture.completedFuture(new SpotActorReply());
         }
     }
 
     public static final class InterfaceSpotPacketHandler
-        implements ZLinkSpotPacketHandler<TestSpot, SpotPacket> {
+            implements ZLinkSpotPacketHandler<TestSpot, SpotPacket> {
         @Override
         public CompletionStage<Void> handle(TestSpot spot, SpotPacket message) {
             return CompletableFuture.completedFuture(null);
@@ -371,7 +430,7 @@ final class ZLinkHandlerScannerTest {
 
     @ZLinkSpotSubscription(topic = "room.events")
     public static final class InterfaceSpotSubscriptionHandler
-        implements ZLinkSpotSubscriptionHandler<TestSpot, SpotEvent> {
+            implements ZLinkSpotSubscriptionHandler<TestSpot, SpotEvent> {
         @Override
         public CompletionStage<Void> handle(TestSpot spot, SpotEvent message) {
             return CompletableFuture.completedFuture(null);
@@ -379,8 +438,7 @@ final class ZLinkHandlerScannerTest {
     }
 
     @ZLinkSpotTimer(name = "heartbeat", periodMillis = 250)
-    public static final class InterfaceSpotTimerHandler
-        implements ZLinkSpotTimerHandler<TestSpot> {
+    public static final class InterfaceSpotTimerHandler implements ZLinkSpotTimerHandler<TestSpot> {
         @Override
         public CompletionStage<Void> handle(TestSpot spot, ZLinkTimerTick tick) {
             return CompletableFuture.completedFuture(null);
@@ -395,21 +453,15 @@ final class ZLinkHandlerScannerTest {
     }
 
     @ZLinkPacket("InterfaceSpotActorRequest")
-    public record SpotActorRequest() {
-    }
+    public record SpotActorRequest() {}
 
-    public record SpotActorReply() {
-    }
+    public record SpotActorReply() {}
 
-    public record SpotPacket() {
-    }
+    public record SpotPacket() {}
 
-    public record SpotRequest() {
-    }
+    public record SpotRequest() {}
 
-    public record SpotReply() {
-    }
+    public record SpotReply() {}
 
-    public record SpotEvent() {
-    }
+    public record SpotEvent() {}
 }

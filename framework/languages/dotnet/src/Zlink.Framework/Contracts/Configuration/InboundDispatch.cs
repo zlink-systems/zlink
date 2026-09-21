@@ -5,7 +5,7 @@ public enum ZLinkCoreHwmProfile
     Compact = 0,
     LowLatency = 1,
     Balanced = 2,
-    Throughput = 3
+    Throughput = 3,
 }
 
 public enum ZLinkApplicationJobQueueProfile
@@ -13,13 +13,13 @@ public enum ZLinkApplicationJobQueueProfile
     Compact = 0,
     LowLatency = 1,
     Balanced = 2,
-    Throughput = 3
+    Throughput = 3,
 }
 
 public enum ZLinkApplicationJobQueuePressureState
 {
     Running = 0,
-    Paused = 1
+    Paused = 1,
 }
 
 /// <summary>

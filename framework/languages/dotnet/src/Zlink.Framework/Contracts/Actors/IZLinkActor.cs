@@ -4,13 +4,12 @@ public interface IZLinkActor
 {
     IZLinkActorContext Context { get; }
 
-    void Configure()
-    {
-    }
+    void Configure() { }
 
     ValueTask OnJoinCompletedAsync(
         ZLinkActorJoinCompletion completion,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken
+    )
     {
         return ValueTask.CompletedTask;
     }

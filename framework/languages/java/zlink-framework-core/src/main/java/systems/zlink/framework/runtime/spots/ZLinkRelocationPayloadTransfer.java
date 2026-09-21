@@ -1,5 +1,7 @@
 package systems.zlink.framework.runtime.spots;
 
+import systems.zlink.contracts.core.RoutingId;
+
 import java.time.Duration;
 import java.util.ArrayDeque;
 import java.util.ArrayList;
@@ -11,58 +13,46 @@ import java.util.Objects;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionStage;
 import java.util.zip.CRC32C;
-import systems.zlink.contracts.core.RoutingId;
 
 /**
  * Deep module for the direct relocation payload transfer (spec 28 §4.2-§4.3).
  *
- * <p>It owns everything a caller would otherwise need to know about moving a
- * captured payload from source memory to a target: the CRC-32C manifest, the
- * chunk split, the in-flight payload budget with its Phase-1 conservative
- * bound, and the target-side ordinal assembly with its explicit-failure
- * verification rules. Callers see four operations — {@link #manifest},
- * {@link #chunks}, {@link Budget} and {@link Assembler}.
+ * <p>It owns everything a caller would otherwise need to know about moving a captured payload from
+ * source memory to a target: the CRC-32C manifest, the chunk split, the in-flight payload budget
+ * with its Phase-1 conservative bound, and the target-side ordinal assembly with its
+ * explicit-failure verification rules. Callers see four operations — {@link #manifest}, {@link
+ * #chunks}, {@link Budget} and {@link Assembler}.
  */
 final class ZLinkRelocationPayloadTransfer {
     /**
-     * Phase-1 conservative effective-budget bound. Until the Core exposes an
-     * observation API for per-pipe applied HWM and accounted charge, the
-     * effective budget is min(configured, this constant) — a value safe for
-     * every pipe role floor (spec 28 §5.3 implementation note).
+     * Phase-1 conservative effective-budget bound. Until the Core exposes an observation API for
+     * per-pipe applied HWM and accounted charge, the effective budget is min(configured, this
+     * constant) — a value safe for every pipe role floor (spec 28 §5.3 implementation note).
      */
     static final long CONSERVATIVE_BUDGET_BYTES = 4L * 1024 * 1024;
 
-    private ZLinkRelocationPayloadTransfer() {
-    }
+    private ZLinkRelocationPayloadTransfer() {}
 
     /** Builds the PREPARE manifest for one captured payload. */
-    static ZLinkCanonicalRelocationProtocol.Manifest manifest(
-        byte[] payload,
-        int chunkLimitBytes) {
+    static ZLinkCanonicalRelocationProtocol.Manifest manifest(byte[] payload, int chunkLimitBytes) {
         Objects.requireNonNull(payload, "payload");
         if (chunkLimitBytes <= 0) {
-            throw new IllegalArgumentException(
-                "relocation chunk limit must be positive");
+            throw new IllegalArgumentException("relocation chunk limit must be positive");
         }
-        int chunkCount = payload.length == 0
-            ? 0
-            : (payload.length + chunkLimitBytes - 1) / chunkLimitBytes;
+        int chunkCount =
+                payload.length == 0 ? 0 : (payload.length + chunkLimitBytes - 1) / chunkLimitBytes;
         return new ZLinkCanonicalRelocationProtocol.Manifest(
-            payload.length,
-            chunkCount,
-            crc32c(payload));
+                payload.length, chunkCount, crc32c(payload));
     }
 
     /** Splits the payload into ordinal-ordered chunks of the given size. */
     static List<byte[]> chunks(byte[] payload, int chunkLimitBytes) {
         Objects.requireNonNull(payload, "payload");
         List<byte[]> result = new ArrayList<>();
-        for (int offset = 0; offset < payload.length;
-            offset += chunkLimitBytes) {
-            result.add(Arrays.copyOfRange(
-                payload,
-                offset,
-                Math.min(payload.length, offset + chunkLimitBytes)));
+        for (int offset = 0; offset < payload.length; offset += chunkLimitBytes) {
+            result.add(
+                    Arrays.copyOfRange(
+                            payload, offset, Math.min(payload.length, offset + chunkLimitBytes)));
         }
         return result;
     }
@@ -74,11 +64,10 @@ final class ZLinkRelocationPayloadTransfer {
     }
 
     /**
-     * Phase-1 in-flight payload budget (spec 28 §5.3). Charges are counted
-     * from chunk submission to its transport terminal. A full budget delays
-     * the next chunk and new unit admission; it never fails a started
-     * relocation, and a payload larger than the budget still flows because
-     * one chunk never exceeds the effective budget.
+     * Phase-1 in-flight payload budget (spec 28 §5.3). Charges are counted from chunk submission to
+     * its transport terminal. A full budget delays the next chunk and new unit admission; it never
+     * fails a started relocation, and a payload larger than the budget still flows because one
+     * chunk never exceeds the effective budget.
      */
     static final class Budget {
         private final long peerBudgetBytes;
@@ -88,15 +77,10 @@ final class ZLinkRelocationPayloadTransfer {
         private long nodeInFlight;
         private final ArrayDeque<Waiter> waiters = new ArrayDeque<>();
 
-        Budget(
-            long chunkLimitBytes,
-            long peerBudgetBytes,
-            long nodeBudgetBytes) {
-            if (chunkLimitBytes <= 0
-                || peerBudgetBytes < 0
-                || nodeBudgetBytes < 0) {
+        Budget(long chunkLimitBytes, long peerBudgetBytes, long nodeBudgetBytes) {
+            if (chunkLimitBytes <= 0 || peerBudgetBytes < 0 || nodeBudgetBytes < 0) {
                 throw new IllegalArgumentException(
-                    "relocation transfer budget configuration is invalid");
+                        "relocation transfer budget configuration is invalid");
             }
             this.peerBudgetBytes = effectiveBudget(peerBudgetBytes);
             this.nodeBudgetBytes = effectiveBudget(nodeBudgetBytes);
@@ -107,14 +91,11 @@ final class ZLinkRelocationPayloadTransfer {
             if (this.nodeBudgetBytes > 0) {
                 chunk = Math.min(chunk, this.nodeBudgetBytes);
             }
-            this.effectiveChunkBytes = (int) Math.min(
-                chunk, Integer.MAX_VALUE);
+            this.effectiveChunkBytes = (int) Math.min(chunk, Integer.MAX_VALUE);
         }
 
         private static long effectiveBudget(long configured) {
-            return configured == 0
-                ? 0
-                : Math.min(configured, CONSERVATIVE_BUDGET_BYTES);
+            return configured == 0 ? 0 : Math.min(configured, CONSERVATIVE_BUDGET_BYTES);
         }
 
         /** The effective chunk size after all budget bounds. */
@@ -123,22 +104,20 @@ final class ZLinkRelocationPayloadTransfer {
         }
 
         /**
-         * The effective chunk size additionally bounded by one relocation's
-         * advertised receive limit (spec 15 §4.2) — {@code 0} means not
-         * advertised, so only the node-local budget bound applies.
+         * The effective chunk size additionally bounded by one relocation's advertised receive
+         * limit (spec 15 §4.2) — {@code 0} means not advertised, so only the node-local budget
+         * bound applies.
          */
         int effectiveChunkBytes(long advertisedReceiveChunkLimitBytes) {
             if (advertisedReceiveChunkLimitBytes <= 0) {
                 return effectiveChunkBytes;
             }
-            return (int) Math.min(
-                effectiveChunkBytes, advertisedReceiveChunkLimitBytes);
+            return (int) Math.min(effectiveChunkBytes, advertisedReceiveChunkLimitBytes);
         }
 
         /**
-         * Waits until a new relocation unit may apply its source admission
-         * seal — the seal-side wait of spec 28 §5.3. The unit keeps handling
-         * messages while it waits.
+         * Waits until a new relocation unit may apply its source admission seal — the seal-side
+         * wait of spec 28 §5.3. The unit keeps handling messages while it waits.
          */
         CompletionStage<Void> awaitUnitAdmission() {
             return acquire(null, 0);
@@ -147,8 +126,7 @@ final class ZLinkRelocationPayloadTransfer {
         /** Waits for headroom, then charges the chunk submission. */
         CompletionStage<Void> acquire(RoutingId peer, int bytes) {
             if (bytes < 0) {
-                throw new IllegalArgumentException(
-                    "budget charge must not be negative");
+                throw new IllegalArgumentException("budget charge must not be negative");
             }
             synchronized (this) {
                 if (hasHeadroom(peer, bytes)) {
@@ -182,23 +160,22 @@ final class ZLinkRelocationPayloadTransfer {
         }
 
         private boolean hasHeadroom(RoutingId peer, int bytes) {
-            long peerCurrent = peer == null
-                ? 0L
-                : peerInFlight.getOrDefault(peer, 0L);
-            boolean peerFits = peer == null
-                || peerBudgetBytes == 0
-                || peerCurrent == 0
-                || peerCurrent + bytes <= peerBudgetBytes;
-            boolean nodeFits = nodeBudgetBytes == 0
-                || nodeInFlight == 0
-                || nodeInFlight + bytes <= nodeBudgetBytes;
+            long peerCurrent = peer == null ? 0L : peerInFlight.getOrDefault(peer, 0L);
+            boolean peerFits =
+                    peer == null
+                            || peerBudgetBytes == 0
+                            || peerCurrent == 0
+                            || peerCurrent + bytes <= peerBudgetBytes;
+            boolean nodeFits =
+                    nodeBudgetBytes == 0
+                            || nodeInFlight == 0
+                            || nodeInFlight + bytes <= nodeBudgetBytes;
             return peerFits && nodeFits;
         }
 
         private void charge(RoutingId peer, long bytes) {
             if (peer != null) {
-                long next = Math.max(
-                    0L, peerInFlight.getOrDefault(peer, 0L) + bytes);
+                long next = Math.max(0L, peerInFlight.getOrDefault(peer, 0L) + bytes);
                 if (next == 0) {
                     peerInFlight.remove(peer);
                 } else {
@@ -208,10 +185,7 @@ final class ZLinkRelocationPayloadTransfer {
             nodeInFlight = Math.max(0L, nodeInFlight + bytes);
         }
 
-        private record Waiter(
-            RoutingId peer,
-            int bytes,
-            CompletableFuture<Void> admitted) {
+        private record Waiter(RoutingId peer, int bytes, CompletableFuture<Void> admitted) {
             Waiter(RoutingId peer, int bytes) {
                 this(peer, bytes, new CompletableFuture<>());
             }
@@ -219,19 +193,16 @@ final class ZLinkRelocationPayloadTransfer {
     }
 
     /**
-     * Target-side ordinal assembly for one exact relocation identity
-     * (spec 28 §4.3). Every accepted chunk is copied immediately; the
-     * assembled payload is verified against the PREPARE manifest and a
-     * mismatch is an explicit, non-retriable failure — never a partial
-     * restore.
+     * Target-side ordinal assembly for one exact relocation identity (spec 28 §4.3). Every accepted
+     * chunk is copied immediately; the assembled payload is verified against the PREPARE manifest
+     * and a mismatch is an explicit, non-retriable failure — never a partial restore.
      */
     static final class Assembler {
         private final ZLinkCanonicalRelocationProtocol.Manifest manifest;
         private final byte[][] chunks;
         private int receivedChunks;
         private long receivedBytes;
-        private final CompletableFuture<byte[]> assembled =
-            new CompletableFuture<>();
+        private final CompletableFuture<byte[]> assembled = new CompletableFuture<>();
 
         Assembler(ZLinkCanonicalRelocationProtocol.Manifest manifest) {
             this.manifest = Objects.requireNonNull(manifest, "manifest");
@@ -247,9 +218,8 @@ final class ZLinkRelocationPayloadTransfer {
         }
 
         /**
-         * Accepts one state chunk. An identical duplicate is idempotent; a
-         * conflicting duplicate or out-of-range ordinal is an explicit
-         * failure of the whole assembly.
+         * Accepts one state chunk. An identical duplicate is idempotent; a conflicting duplicate or
+         * out-of-range ordinal is an explicit failure of the whole assembly.
          */
         synchronized void accept(long chunkOrdinal, byte[] chunkData) {
             Objects.requireNonNull(chunkData, "chunkData");
@@ -264,8 +234,7 @@ final class ZLinkRelocationPayloadTransfer {
             byte[] existing = chunks[ordinal];
             if (existing != null) {
                 if (!Arrays.equals(existing, chunkData)) {
-                    fail("relocation state chunk conflicts with"
-                        + " an already staged chunk");
+                    fail("relocation state chunk conflicts with" + " an already staged chunk");
                 }
                 return;
             }
@@ -280,8 +249,8 @@ final class ZLinkRelocationPayloadTransfer {
         }
 
         /**
-         * Discards partially staged chunks so a retransmitted batch replaces
-         * the whole section (spec 28 §4.4). A completed assembly is kept.
+         * Discards partially staged chunks so a retransmitted batch replaces the whole section
+         * (spec 28 §4.4). A completed assembly is kept.
          */
         synchronized void discardPartial() {
             if (assembled.isDone()) {
@@ -293,8 +262,7 @@ final class ZLinkRelocationPayloadTransfer {
         }
 
         private void completeEmpty() {
-            if (manifest.totalLength() != 0
-                || manifest.checksumCrc32c() != crc32c(new byte[0])) {
+            if (manifest.totalLength() != 0 || manifest.checksumCrc32c() != crc32c(new byte[0])) {
                 fail("relocation manifest of an empty payload is invalid");
                 return;
             }
@@ -303,8 +271,7 @@ final class ZLinkRelocationPayloadTransfer {
 
         private void verifyAndComplete() {
             if (receivedBytes != manifest.totalLength()) {
-                fail("assembled relocation payload length differs"
-                    + " from the manifest");
+                fail("assembled relocation payload length differs" + " from the manifest");
                 return;
             }
             byte[] payload = new byte[(int) receivedBytes];
@@ -316,51 +283,42 @@ final class ZLinkRelocationPayloadTransfer {
             if (crc32c(payload) != manifest.checksumCrc32c()) {
                 //  A CRC-32C mismatch over TCP signals a defect, not a
                 //  transient loss — no retry, no partial restore.
-                fail("assembled relocation payload checksum differs"
-                    + " from the manifest");
+                fail("assembled relocation payload checksum differs" + " from the manifest");
                 return;
             }
             assembled.complete(payload);
         }
 
         private void fail(String message) {
-            assembled.completeExceptionally(
-                new IllegalStateException(message));
+            assembled.completeExceptionally(new IllegalStateException(message));
         }
     }
 
     /** Startup-only transfer configuration snapshot. */
     record Options(
-        long chunkLimitBytes,
-        long inFlightPayloadBudgetBytes,
-        long nodeInFlightPayloadBudgetBytes,
-        Duration cutoverWaitTimeout,
-        Duration messageFollowDuration) {
+            long chunkLimitBytes,
+            long inFlightPayloadBudgetBytes,
+            long nodeInFlightPayloadBudgetBytes,
+            Duration cutoverWaitTimeout,
+            Duration messageFollowDuration) {
         Options {
             if (chunkLimitBytes <= 0
-                || inFlightPayloadBudgetBytes < 0
-                || nodeInFlightPayloadBudgetBytes < 0) {
-                throw new IllegalArgumentException(
-                    "relocation transfer options are invalid");
+                    || inFlightPayloadBudgetBytes < 0
+                    || nodeInFlightPayloadBudgetBytes < 0) {
+                throw new IllegalArgumentException("relocation transfer options are invalid");
             }
             Objects.requireNonNull(cutoverWaitTimeout, "cutoverWaitTimeout");
-            Objects.requireNonNull(
-                messageFollowDuration, "messageFollowDuration");
+            Objects.requireNonNull(messageFollowDuration, "messageFollowDuration");
             if (cutoverWaitTimeout.isZero()
-                || cutoverWaitTimeout.isNegative()
-                || messageFollowDuration.isNegative()) {
-                throw new IllegalArgumentException(
-                    "relocation transfer timeouts are invalid");
+                    || cutoverWaitTimeout.isNegative()
+                    || messageFollowDuration.isNegative()) {
+                throw new IllegalArgumentException("relocation transfer timeouts are invalid");
             }
         }
 
         static Options defaults() {
             return new Options(
-                262_144L,
-                16_777_216L,
-                0L,
-                Duration.ofMillis(1_000),
-                Duration.ofSeconds(30));
+                    262_144L, 16_777_216L, 0L, Duration.ofMillis(1_000), Duration.ofSeconds(30));
         }
     }
 }

@@ -33,24 +33,21 @@ public sealed class GenerationTokenRangeTests
     [Fact]
     public void ManagedMeshNodeLifecycleTokenStaysWithinNonzeroU64Range()
     {
-        AssertIssuerStaysInRange(
-            typeof(ZLinkManagedMeshNode),
-            "NewNonZeroToken");
+        AssertIssuerStaysInRange(typeof(ZLinkManagedMeshNode), "NewNonZeroToken");
     }
 
     [Fact]
     public void LocationAutoConnectHostLifecycleNonceStaysWithinNonzeroU64Range()
     {
-        AssertIssuerStaysInRange(
-            typeof(ZLinkLocationAutoConnectHost),
-            "CreateLifecycleNonce");
+        AssertIssuerStaysInRange(typeof(ZLinkLocationAutoConnectHost), "CreateLifecycleNonce");
     }
 
     private static void AssertIssuerStaysInRange(Type declaringType, string methodName)
     {
         var method = declaringType.GetMethod(
             methodName,
-            BindingFlags.NonPublic | BindingFlags.Static);
+            BindingFlags.NonPublic | BindingFlags.Static
+        );
         Assert.NotNull(method);
 
         for (var i = 0; i < Iterations; i++)
@@ -59,9 +56,10 @@ public sealed class GenerationTokenRangeTests
             Assert.NotEqual(0UL, value);
             Assert.True(
                 value <= long.MaxValue,
-                $"{declaringType.Name}.{methodName} issued {value:X16}, " +
-                "which has the top bit set and violates the nonzero-u64 " +
-                "wire bound of [1, 2^63-1].");
+                $"{declaringType.Name}.{methodName} issued {value:X16}, "
+                    + "which has the top bit set and violates the nonzero-u64 "
+                    + "wire bound of [1, 2^63-1]."
+            );
         }
     }
 }

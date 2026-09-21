@@ -28,29 +28,27 @@ namespace
 
 using queue_t = zlink::framework::runtime::application_job_queue_t;
 
-zlink::framework::runtime::application_job_queue_configuration_t
-limit_one_configuration ()
+zlink::framework::runtime::application_job_queue_configuration_t limit_one_configuration ()
 {
-    return {zlink::framework::application_job_queue_profile_t::balanced,
-            std::uint32_t{1}, 1, 1};
+    return {zlink::framework::application_job_queue_profile_t::balanced, std::uint32_t{1}, 1, 1};
 }
 
-zlink::framework::runtime::application_job_queue_configuration_t
-pressure_configuration (
-  std::uint32_t maximum,
-  std::uint32_t pause_percent = 80,
-  std::uint32_t resume_percent = 60)
+zlink::framework::runtime::application_job_queue_configuration_t pressure_configuration (
+  std::uint32_t maximum, std::uint32_t pause_percent = 80, std::uint32_t resume_percent = 60)
 {
     return {zlink::framework::application_job_queue_profile_t::balanced,
-            maximum, 1, maximum, pause_percent, resume_percent};
+            maximum,
+            1,
+            maximum,
+            pause_percent,
+            resume_percent};
 }
 
 } // namespace
 
 //  §8: with limit 1, while the first job waits before callback start, the
 //  next ordinary record is not received first.
-TEST (ZLinkFrameworkApplicationJobQueue,
-      LimitOneHoldsNextOrdinaryRecordUntilHandlerEntry)
+TEST (ZLinkFrameworkApplicationJobQueue, LimitOneHoldsNextOrdinaryRecordUntilHandlerEntry)
 {
     queue_t queue (limit_one_configuration ());
 
@@ -65,12 +63,11 @@ TEST (ZLinkFrameworkApplicationJobQueue,
     //  queued before its handler's first instruction.
     bool granted = false;
     std::optional<queue_t::permit_t> second;
-    auto waiter = queue.wait_for_supply (
-      [&] (std::optional<queue_t::permit_t> permit) {
-          granted = true;
-          if (permit)
-              second.emplace (std::move (*permit));
-      });
+    auto waiter = queue.wait_for_supply ([&] (std::optional<queue_t::permit_t> permit) {
+        granted = true;
+        if (permit)
+            second.emplace (std::move (*permit));
+    });
     EXPECT_FALSE (granted);
     const auto parked = queue.snapshot ();
     EXPECT_EQ (1u, parked.capacity_waiters);
@@ -93,8 +90,7 @@ TEST (ZLinkFrameworkApplicationJobQueue,
 //  §8: an asynchronous activation or materialization that outlives its
 //  parent call retains the permit (the fanout/mesh shared_ptr capture
 //  pattern), and the release stays exactly-once.
-TEST (ZLinkFrameworkApplicationJobQueue,
-      PermitMovedIntoDeferredContinuationOutlivesParentCall)
+TEST (ZLinkFrameworkApplicationJobQueue, PermitMovedIntoDeferredContinuationOutlivesParentCall)
 {
     queue_t queue (limit_one_configuration ());
 
@@ -105,8 +101,7 @@ TEST (ZLinkFrameworkApplicationJobQueue,
         auto permit = queue.try_reserve_supply ();
         ASSERT_TRUE (permit);
         permit->mark_queued ();
-        auto shared =
-          std::make_shared<queue_t::permit_t> (std::move (*permit));
+        auto shared = std::make_shared<queue_t::permit_t> (std::move (*permit));
         deferred = [shared] { shared->release_for_handler_entry (); };
     }
 
@@ -136,8 +131,7 @@ TEST (ZLinkFrameworkApplicationJobQueue,
 //  §8: 1:N dispatch does not materialize more children than secured
 //  permits — with limit 1 the children materialize strictly one at a time,
 //  in FIFO order, and the concurrent peak never exceeds the limit.
-TEST (ZLinkFrameworkApplicationJobQueue,
-      OneToManyChildrenNeverExceedSecuredPermits)
+TEST (ZLinkFrameworkApplicationJobQueue, OneToManyChildrenNeverExceedSecuredPermits)
 {
     queue_t queue (limit_one_configuration ());
     queue.reset_metrics ();
@@ -149,20 +143,18 @@ TEST (ZLinkFrameworkApplicationJobQueue,
     std::vector<int> materialized;
     std::optional<queue_t::permit_t> child_two;
     std::optional<queue_t::permit_t> child_three;
-    auto second_waiter = queue.wait_for_supply (
-      [&] (std::optional<queue_t::permit_t> permit) {
-          if (permit) {
-              materialized.push_back (2);
-              child_two.emplace (std::move (*permit));
-          }
-      });
-    auto third_waiter = queue.wait_for_supply (
-      [&] (std::optional<queue_t::permit_t> permit) {
-          if (permit) {
-              materialized.push_back (3);
-              child_three.emplace (std::move (*permit));
-          }
-      });
+    auto second_waiter = queue.wait_for_supply ([&] (std::optional<queue_t::permit_t> permit) {
+        if (permit) {
+            materialized.push_back (2);
+            child_two.emplace (std::move (*permit));
+        }
+    });
+    auto third_waiter = queue.wait_for_supply ([&] (std::optional<queue_t::permit_t> permit) {
+        if (permit) {
+            materialized.push_back (3);
+            child_three.emplace (std::move (*permit));
+        }
+    });
 
     //  Both children stay unmaterialized while the parent holds the only
     //  permit.
@@ -189,8 +181,7 @@ TEST (ZLinkFrameworkApplicationJobQueue,
 
 //  §8: shutdown releases waiters and permits exactly once, and a second
 //  stop (or a cancel after stop) does not release anything twice.
-TEST (ZLinkFrameworkApplicationJobQueue,
-      StopReleasesParkedWaitersExactlyOnceAndStaysIdempotent)
+TEST (ZLinkFrameworkApplicationJobQueue, StopReleasesParkedWaitersExactlyOnceAndStaysIdempotent)
 {
     queue_t queue (limit_one_configuration ());
 
@@ -200,11 +191,10 @@ TEST (ZLinkFrameworkApplicationJobQueue,
 
     int waiter_signals = 0;
     bool waiter_granted = false;
-    auto waiter = queue.wait_for_supply (
-      [&] (std::optional<queue_t::permit_t> permit) {
-          ++waiter_signals;
-          waiter_granted = static_cast<bool> (permit);
-      });
+    auto waiter = queue.wait_for_supply ([&] (std::optional<queue_t::permit_t> permit) {
+        ++waiter_signals;
+        waiter_granted = static_cast<bool> (permit);
+    });
     EXPECT_EQ (0, waiter_signals);
     EXPECT_EQ (1u, queue.snapshot ().capacity_waiters);
 
@@ -223,11 +213,10 @@ TEST (ZLinkFrameworkApplicationJobQueue,
     EXPECT_FALSE (queue.try_reserve_supply ());
     int late_signals = 0;
     bool late_granted = false;
-    auto late = queue.wait_for_supply (
-      [&] (std::optional<queue_t::permit_t> permit) {
-          ++late_signals;
-          late_granted = static_cast<bool> (permit);
-      });
+    auto late = queue.wait_for_supply ([&] (std::optional<queue_t::permit_t> permit) {
+        ++late_signals;
+        late_granted = static_cast<bool> (permit);
+    });
     EXPECT_EQ (1, late_signals);
     EXPECT_FALSE (late_granted);
 
@@ -242,8 +231,7 @@ TEST (ZLinkFrameworkApplicationJobQueue,
     EXPECT_EQ (1, waiter_signals);
 }
 
-TEST (ZLinkFrameworkApplicationJobQueue,
-      PressureThresholdsUseCeilingFloorDefaultsAndValidation)
+TEST (ZLinkFrameworkApplicationJobQueue, PressureThresholdsUseCeilingFloorDefaultsAndValidation)
 {
     queue_t queue (pressure_configuration (7));
     const auto status = queue.snapshot ();
@@ -251,49 +239,32 @@ TEST (ZLinkFrameworkApplicationJobQueue,
     EXPECT_EQ (60u, status.configured_resume_threshold_percent);
     EXPECT_EQ (6u, status.pause_permit_count);
     EXPECT_EQ (4u, status.resume_permit_count);
-    EXPECT_EQ (
-      zlink::framework::application_job_queue_pressure_state_t::running,
-      status.pressure_state);
+    EXPECT_EQ (zlink::framework::application_job_queue_pressure_state_t::running,
+               status.pressure_state);
 
-    constexpr auto maximum = static_cast<std::uint32_t> (
-      std::numeric_limits<std::int32_t>::max ());
+    constexpr auto maximum = static_cast<std::uint32_t> (std::numeric_limits<std::int32_t>::max ());
     queue_t large (pressure_configuration (maximum, 100, 99));
     const auto large_status = large.snapshot ();
     EXPECT_EQ (maximum, large_status.pause_permit_count);
-    EXPECT_EQ (
-      static_cast<std::uint32_t> (
-        (static_cast<std::uint64_t> (maximum) * 99u) / 100u),
-      large_status.resume_permit_count);
+    EXPECT_EQ (static_cast<std::uint32_t> ((static_cast<std::uint64_t> (maximum) * 99u) / 100u),
+               large_status.resume_permit_count);
 
-    EXPECT_THROW (
-      queue_t (pressure_configuration (7, 0, 0)),
-      std::invalid_argument);
-    EXPECT_THROW (
-      queue_t (pressure_configuration (7, 101, 60)),
-      std::invalid_argument);
-    EXPECT_THROW (
-      queue_t (pressure_configuration (7, 80, 100)),
-      std::invalid_argument);
-    EXPECT_THROW (
-      queue_t (pressure_configuration (7, 60, 60)),
-      std::invalid_argument);
+    EXPECT_THROW (queue_t (pressure_configuration (7, 0, 0)), std::invalid_argument);
+    EXPECT_THROW (queue_t (pressure_configuration (7, 101, 60)), std::invalid_argument);
+    EXPECT_THROW (queue_t (pressure_configuration (7, 80, 100)), std::invalid_argument);
+    EXPECT_THROW (queue_t (pressure_configuration (7, 60, 60)), std::invalid_argument);
 }
 
-TEST (ZLinkFrameworkApplicationJobQueue,
-      PressureHysteresisCountsReservedAndQueuedPermitOnce)
+TEST (ZLinkFrameworkApplicationJobQueue, PressureHysteresisCountsReservedAndQueuedPermitOnce)
 {
     queue_t queue (pressure_configuration (7));
-    std::vector<zlink::framework::application_job_queue_pressure_state_t>
-      applied;
-    auto registration = queue.register_receive_flow_socket (
-      [&] (auto state) {
-          applied.push_back (state);
-          return zlink::framework::runtime::receive_flow_state_apply_result_t::applied;
-      });
+    std::vector<zlink::framework::application_job_queue_pressure_state_t> applied;
+    auto registration = queue.register_receive_flow_socket ([&] (auto state) {
+        applied.push_back (state);
+        return zlink::framework::runtime::receive_flow_state_apply_result_t::applied;
+    });
     ASSERT_EQ (1u, applied.size ());
-    EXPECT_EQ (
-      zlink::framework::application_job_queue_pressure_state_t::running,
-      applied.back ());
+    EXPECT_EQ (zlink::framework::application_job_queue_pressure_state_t::running, applied.back ());
 
     std::vector<queue_t::permit_t> permits;
     for (int index = 0; index < 6; ++index) {
@@ -302,9 +273,7 @@ TEST (ZLinkFrameworkApplicationJobQueue,
         permits.push_back (std::move (*permit));
     }
     ASSERT_EQ (2u, applied.size ());
-    EXPECT_EQ (
-      zlink::framework::application_job_queue_pressure_state_t::paused,
-      applied.back ());
+    EXPECT_EQ (zlink::framework::application_job_queue_pressure_state_t::paused, applied.back ());
 
     for (auto &permit : permits)
         permit.mark_queued ();
@@ -316,20 +285,16 @@ TEST (ZLinkFrameworkApplicationJobQueue,
 
     permits.back ().release_for_handler_entry ();
     permits.pop_back ();
-    EXPECT_EQ (
-      zlink::framework::application_job_queue_pressure_state_t::paused,
-      queue.snapshot ().pressure_state);
+    EXPECT_EQ (zlink::framework::application_job_queue_pressure_state_t::paused,
+               queue.snapshot ().pressure_state);
     EXPECT_EQ (2u, applied.size ());
 
     permits.back ().release_for_handler_entry ();
     permits.pop_back ();
-    EXPECT_EQ (
-      zlink::framework::application_job_queue_pressure_state_t::running,
-      queue.snapshot ().pressure_state);
+    EXPECT_EQ (zlink::framework::application_job_queue_pressure_state_t::running,
+               queue.snapshot ().pressure_state);
     ASSERT_EQ (3u, applied.size ());
-    EXPECT_EQ (
-      zlink::framework::application_job_queue_pressure_state_t::running,
-      applied.back ());
+    EXPECT_EQ (zlink::framework::application_job_queue_pressure_state_t::running, applied.back ());
 }
 
 // §6: host pressure is a single absolute receive-flow state.  A permit
@@ -339,20 +304,16 @@ TEST (ZLinkFrameworkApplicationJobQueue,
       PressureTransitionAppliesToEveryRegisteredReceiveFlowSocket)
 {
     queue_t queue (pressure_configuration (2, 100, 50));
-    std::vector<zlink::framework::application_job_queue_pressure_state_t>
-      first_socket_states;
-    std::vector<zlink::framework::application_job_queue_pressure_state_t>
-      second_socket_states;
-    auto first_socket = queue.register_receive_flow_socket (
-      [&] (auto state) {
-          first_socket_states.push_back (state);
-          return zlink::framework::runtime::receive_flow_state_apply_result_t::applied;
-      });
-    auto second_socket = queue.register_receive_flow_socket (
-      [&] (auto state) {
-          second_socket_states.push_back (state);
-          return zlink::framework::runtime::receive_flow_state_apply_result_t::applied;
-      });
+    std::vector<zlink::framework::application_job_queue_pressure_state_t> first_socket_states;
+    std::vector<zlink::framework::application_job_queue_pressure_state_t> second_socket_states;
+    auto first_socket = queue.register_receive_flow_socket ([&] (auto state) {
+        first_socket_states.push_back (state);
+        return zlink::framework::runtime::receive_flow_state_apply_result_t::applied;
+    });
+    auto second_socket = queue.register_receive_flow_socket ([&] (auto state) {
+        second_socket_states.push_back (state);
+        return zlink::framework::runtime::receive_flow_state_apply_result_t::applied;
+    });
 
     ASSERT_EQ (1u, first_socket_states.size ());
     ASSERT_EQ (1u, second_socket_states.size ());
@@ -383,23 +344,19 @@ TEST (ZLinkFrameworkApplicationJobQueue,
                second_socket_states.back ());
 }
 
-TEST (ZLinkFrameworkApplicationJobQueue,
-      CapacityWaiterAndPermitHandoffDoNotIncreasePressureCount)
+TEST (ZLinkFrameworkApplicationJobQueue, CapacityWaiterAndPermitHandoffDoNotIncreasePressureCount)
 {
     queue_t queue (pressure_configuration (2, 100, 50));
     auto first = queue.try_reserve_supply ();
     auto second = queue.try_reserve_supply ();
     ASSERT_TRUE (first);
     ASSERT_TRUE (second);
-    EXPECT_EQ (
-      zlink::framework::application_job_queue_pressure_state_t::paused,
-      queue.snapshot ().pressure_state);
+    EXPECT_EQ (zlink::framework::application_job_queue_pressure_state_t::paused,
+               queue.snapshot ().pressure_state);
 
     std::optional<queue_t::permit_t> handed_off;
     auto waiter = queue.wait_for_supply (
-      [&] (std::optional<queue_t::permit_t> permit) {
-          handed_off = std::move (permit);
-      });
+      [&] (std::optional<queue_t::permit_t> permit) { handed_off = std::move (permit); });
     EXPECT_FALSE (handed_off);
     EXPECT_EQ (2u, queue.snapshot ().permits_in_use);
     EXPECT_EQ (1u, queue.snapshot ().capacity_waiters);
@@ -407,15 +364,13 @@ TEST (ZLinkFrameworkApplicationJobQueue,
     first->release_without_handler ();
     ASSERT_TRUE (handed_off);
     EXPECT_EQ (2u, queue.snapshot ().permits_in_use);
-    EXPECT_EQ (
-      zlink::framework::application_job_queue_pressure_state_t::paused,
-      queue.snapshot ().pressure_state);
+    EXPECT_EQ (zlink::framework::application_job_queue_pressure_state_t::paused,
+               queue.snapshot ().pressure_state);
 
     handed_off->release_without_handler ();
     EXPECT_EQ (1u, queue.snapshot ().permits_in_use);
-    EXPECT_EQ (
-      zlink::framework::application_job_queue_pressure_state_t::running,
-      queue.snapshot ().pressure_state);
+    EXPECT_EQ (zlink::framework::application_job_queue_pressure_state_t::running,
+               queue.snapshot ().pressure_state);
 }
 
 TEST (ZLinkFrameworkApplicationJobQueue,
@@ -424,26 +379,20 @@ TEST (ZLinkFrameworkApplicationJobQueue,
     queue_t queue (pressure_configuration (1, 100, 0));
     auto permit = queue.try_reserve_supply ();
     ASSERT_TRUE (permit);
-    ASSERT_EQ (
-      zlink::framework::application_job_queue_pressure_state_t::paused,
-      queue.snapshot ().pressure_state);
+    ASSERT_EQ (zlink::framework::application_job_queue_pressure_state_t::paused,
+               queue.snapshot ().pressure_state);
 
-    std::vector<zlink::framework::application_job_queue_pressure_state_t>
-      applied;
-    auto registration = queue.register_receive_flow_socket (
-      [&] (auto state) {
-          applied.push_back (state);
-          return zlink::framework::runtime::receive_flow_state_apply_result_t::applied;
-      });
+    std::vector<zlink::framework::application_job_queue_pressure_state_t> applied;
+    auto registration = queue.register_receive_flow_socket ([&] (auto state) {
+        applied.push_back (state);
+        return zlink::framework::runtime::receive_flow_state_apply_result_t::applied;
+    });
     ASSERT_TRUE (registration);
     ASSERT_EQ (1u, applied.size ());
-    EXPECT_EQ (
-      zlink::framework::application_job_queue_pressure_state_t::paused,
-      applied.front ());
+    EXPECT_EQ (zlink::framework::application_job_queue_pressure_state_t::paused, applied.front ());
 }
 
-TEST (ZLinkFrameworkApplicationJobQueue,
-      RegistrationRetrySkipsDuplicateSameStateNativeApply)
+TEST (ZLinkFrameworkApplicationJobQueue, RegistrationRetrySkipsDuplicateSameStateNativeApply)
 {
     queue_t queue (pressure_configuration (1, 100, 0));
     std::mutex mutex;
@@ -457,26 +406,20 @@ TEST (ZLinkFrameworkApplicationJobQueue,
 
     std::thread register_thread ([&] {
         try {
-            registration.emplace (
-              queue.register_receive_flow_socket (
-                [&] (auto state) {
-                    std::unique_lock lock (mutex);
-                    if (state
-                        == zlink::framework::application_job_queue_pressure_state_t::running) {
-                        ++running_apply_count;
-                        if (!initial_running_entered) {
-                            initial_running_entered = true;
-                            changed.notify_all ();
-                            changed.wait (
-                              lock,
-                              [&] { return release_initial_running; });
-                        }
+            registration.emplace (queue.register_receive_flow_socket ([&] (auto state) {
+                std::unique_lock lock (mutex);
+                if (state == zlink::framework::application_job_queue_pressure_state_t::running) {
+                    ++running_apply_count;
+                    if (!initial_running_entered) {
+                        initial_running_entered = true;
+                        changed.notify_all ();
+                        changed.wait (lock, [&] { return release_initial_running; });
                     }
-                    else {
-                        ++paused_apply_count;
-                    }
-                    return zlink::framework::runtime::receive_flow_state_apply_result_t::applied;
-                }));
+                } else {
+                    ++paused_apply_count;
+                }
+                return zlink::framework::runtime::receive_flow_state_apply_result_t::applied;
+            }));
         }
         catch (...) {
             registration_error = std::current_exception ();
@@ -490,9 +433,8 @@ TEST (ZLinkFrameworkApplicationJobQueue,
     auto permit = queue.try_reserve_supply ();
     ASSERT_TRUE (permit);
     permit->release_without_handler ();
-    EXPECT_EQ (
-      zlink::framework::application_job_queue_pressure_state_t::running,
-      queue.snapshot ().pressure_state);
+    EXPECT_EQ (zlink::framework::application_job_queue_pressure_state_t::running,
+               queue.snapshot ().pressure_state);
 
     {
         std::lock_guard lock (mutex);
@@ -508,8 +450,7 @@ TEST (ZLinkFrameworkApplicationJobQueue,
     EXPECT_EQ (0u, paused_apply_count);
 }
 
-TEST (ZLinkFrameworkApplicationJobQueue,
-      StopFencesRegistrationThatIsApplyingItsInitialState)
+TEST (ZLinkFrameworkApplicationJobQueue, StopFencesRegistrationThatIsApplyingItsInitialState)
 {
     queue_t queue (pressure_configuration (1, 100, 0));
     std::mutex mutex;
@@ -521,15 +462,13 @@ TEST (ZLinkFrameworkApplicationJobQueue,
 
     std::thread register_thread ([&] {
         try {
-            registration.emplace (
-              queue.register_receive_flow_socket (
-                [&] (auto) {
-                    std::unique_lock lock (mutex);
-                    apply_entered = true;
-                    changed.notify_all ();
-                    changed.wait (lock, [&] { return release_apply; });
-                    return zlink::framework::runtime::receive_flow_state_apply_result_t::invalid_state;
-                }));
+            registration.emplace (queue.register_receive_flow_socket ([&] (auto) {
+                std::unique_lock lock (mutex);
+                apply_entered = true;
+                changed.notify_all ();
+                changed.wait (lock, [&] { return release_apply; });
+                return zlink::framework::runtime::receive_flow_state_apply_result_t::invalid_state;
+            }));
         }
         catch (...) {
             registration_error = std::current_exception ();
@@ -550,21 +489,14 @@ TEST (ZLinkFrameworkApplicationJobQueue,
 
     EXPECT_FALSE (registration);
     ASSERT_TRUE (registration_error);
-    EXPECT_THROW (std::rethrow_exception (registration_error),
-                  std::logic_error);
-    EXPECT_EQ (
-      0u,
-      queue.pressure_metrics_snapshot ()
-        .flow_state_config_failure_count);
+    EXPECT_THROW (std::rethrow_exception (registration_error), std::logic_error);
+    EXPECT_EQ (0u, queue.pressure_metrics_snapshot ().flow_state_config_failure_count);
 }
 
-TEST (ZLinkFrameworkApplicationJobQueue,
-      StopDoesNotSuppressAConfigFailureDuringInitialStateApply)
+TEST (ZLinkFrameworkApplicationJobQueue, StopDoesNotSuppressAConfigFailureDuringInitialStateApply)
 {
     std::size_t diagnostic_count = 0;
-    queue_t queue (
-      pressure_configuration (1, 100, 0),
-      [&] { ++diagnostic_count; });
+    queue_t queue (pressure_configuration (1, 100, 0), [&] { ++diagnostic_count; });
     std::mutex mutex;
     std::condition_variable changed;
     bool apply_entered = false;
@@ -574,15 +506,13 @@ TEST (ZLinkFrameworkApplicationJobQueue,
 
     std::thread register_thread ([&] {
         try {
-            registration.emplace (
-              queue.register_receive_flow_socket (
-                [&] (auto) {
-                    std::unique_lock lock (mutex);
-                    apply_entered = true;
-                    changed.notify_all ();
-                    changed.wait (lock, [&] { return release_apply; });
-                    return zlink::framework::runtime::receive_flow_state_apply_result_t::failed;
-                }));
+            registration.emplace (queue.register_receive_flow_socket ([&] (auto) {
+                std::unique_lock lock (mutex);
+                apply_entered = true;
+                changed.notify_all ();
+                changed.wait (lock, [&] { return release_apply; });
+                return zlink::framework::runtime::receive_flow_state_apply_result_t::failed;
+            }));
         }
         catch (...) {
             registration_error = std::current_exception ();
@@ -603,74 +533,58 @@ TEST (ZLinkFrameworkApplicationJobQueue,
 
     EXPECT_FALSE (registration);
     ASSERT_TRUE (registration_error);
-    EXPECT_THROW (std::rethrow_exception (registration_error),
-                  std::logic_error);
+    EXPECT_THROW (std::rethrow_exception (registration_error), std::logic_error);
     EXPECT_EQ (1u, diagnostic_count);
-    EXPECT_EQ (
-      1u,
-      queue.pressure_metrics_snapshot ()
-        .flow_state_config_failure_count);
+    EXPECT_EQ (1u, queue.pressure_metrics_snapshot ().flow_state_config_failure_count);
 }
 
-TEST (ZLinkFrameworkApplicationJobQueue,
-      StopDetachesReceiveFlowBeforeAQueuedPermitReleases)
+TEST (ZLinkFrameworkApplicationJobQueue, StopDetachesReceiveFlowBeforeAQueuedPermitReleases)
 {
     queue_t queue (pressure_configuration (1, 100, 0));
-    std::vector<zlink::framework::application_job_queue_pressure_state_t>
-      applied;
-    auto registration = queue.register_receive_flow_socket (
-      [&] (auto state) {
-          applied.push_back (state);
-          return zlink::framework::runtime::receive_flow_state_apply_result_t::applied;
-      });
+    std::vector<zlink::framework::application_job_queue_pressure_state_t> applied;
+    auto registration = queue.register_receive_flow_socket ([&] (auto state) {
+        applied.push_back (state);
+        return zlink::framework::runtime::receive_flow_state_apply_result_t::applied;
+    });
     auto permit = queue.try_reserve_supply ();
     ASSERT_TRUE (permit);
     ASSERT_EQ (2u, applied.size ());
-    EXPECT_EQ (
-      zlink::framework::application_job_queue_pressure_state_t::paused,
-      applied.back ());
+    EXPECT_EQ (zlink::framework::application_job_queue_pressure_state_t::paused, applied.back ());
 
     queue.stop ();
     permit->release_without_handler ();
 
     EXPECT_EQ (2u, applied.size ());
-    EXPECT_EQ (
-      zlink::framework::application_job_queue_pressure_state_t::running,
-      queue.snapshot ().pressure_state);
+    EXPECT_EQ (zlink::framework::application_job_queue_pressure_state_t::running,
+               queue.snapshot ().pressure_state);
 }
 
-TEST (ZLinkFrameworkApplicationJobQueue,
-      StopDoesNotWaitForAnInFlightReceiveFlowApply)
+TEST (ZLinkFrameworkApplicationJobQueue, StopDoesNotWaitForAnInFlightReceiveFlowApply)
 {
     queue_t queue (pressure_configuration (1, 100, 0));
     std::mutex mutex;
     std::condition_variable changed;
     bool pause_entered = false;
     bool release_pause = false;
-    auto registration = queue.register_receive_flow_socket (
-      [&] (auto state) {
-          if (state
-              != zlink::framework::application_job_queue_pressure_state_t::paused)
-              return zlink::framework::runtime::receive_flow_state_apply_result_t::applied;
-          std::unique_lock lock (mutex);
-          pause_entered = true;
-          changed.notify_all ();
-          changed.wait (lock, [&] { return release_pause; });
-          return zlink::framework::runtime::receive_flow_state_apply_result_t::applied;
-      });
+    auto registration = queue.register_receive_flow_socket ([&] (auto state) {
+        if (state != zlink::framework::application_job_queue_pressure_state_t::paused)
+            return zlink::framework::runtime::receive_flow_state_apply_result_t::applied;
+        std::unique_lock lock (mutex);
+        pause_entered = true;
+        changed.notify_all ();
+        changed.wait (lock, [&] { return release_pause; });
+        return zlink::framework::runtime::receive_flow_state_apply_result_t::applied;
+    });
 
     std::optional<queue_t::permit_t> permit;
-    std::thread reserve_thread ([&] {
-        permit = queue.try_reserve_supply ();
-    });
+    std::thread reserve_thread ([&] { permit = queue.try_reserve_supply (); });
     {
         std::unique_lock lock (mutex);
         changed.wait (lock, [&] { return pause_entered; });
     }
 
     auto stopped = std::async (std::launch::async, [&] { queue.stop (); });
-    const auto stop_status =
-      stopped.wait_for (std::chrono::seconds (1));
+    const auto stop_status = stopped.wait_for (std::chrono::seconds (1));
     if (stop_status != std::future_status::ready) {
         {
             std::lock_guard lock (mutex);
@@ -684,55 +598,43 @@ TEST (ZLinkFrameworkApplicationJobQueue,
     }
     stopped.get ();
 
-    auto closed = std::async (
-      std::launch::async, [&] { registration.close (); });
-    EXPECT_EQ (
-      std::future_status::timeout,
-      closed.wait_for (std::chrono::milliseconds (100)));
+    auto closed = std::async (std::launch::async, [&] { registration.close (); });
+    EXPECT_EQ (std::future_status::timeout, closed.wait_for (std::chrono::milliseconds (100)));
     {
         std::lock_guard lock (mutex);
         release_pause = true;
     }
     changed.notify_all ();
     reserve_thread.join ();
-    EXPECT_EQ (
-      std::future_status::ready,
-      closed.wait_for (std::chrono::seconds (1)));
+    EXPECT_EQ (std::future_status::ready, closed.wait_for (std::chrono::seconds (1)));
     closed.get ();
 }
 
-TEST (ZLinkFrameworkApplicationJobQueue,
-      StopBlocksAStaleTransitionBeforeItsNextSocketApply)
+TEST (ZLinkFrameworkApplicationJobQueue, StopBlocksAStaleTransitionBeforeItsNextSocketApply)
 {
     queue_t queue (pressure_configuration (1, 100, 0));
     std::mutex mutex;
     std::condition_variable changed;
     bool first_pause_entered = false;
     bool release_first_pause = false;
-    auto first = queue.register_receive_flow_socket (
-      [&] (auto state) {
-          if (state
-              != zlink::framework::application_job_queue_pressure_state_t::paused)
-              return zlink::framework::runtime::receive_flow_state_apply_result_t::applied;
-          std::unique_lock lock (mutex);
-          first_pause_entered = true;
-          changed.notify_all ();
-          changed.wait (lock, [&] { return release_first_pause; });
-          return zlink::framework::runtime::receive_flow_state_apply_result_t::applied;
-      });
+    auto first = queue.register_receive_flow_socket ([&] (auto state) {
+        if (state != zlink::framework::application_job_queue_pressure_state_t::paused)
+            return zlink::framework::runtime::receive_flow_state_apply_result_t::applied;
+        std::unique_lock lock (mutex);
+        first_pause_entered = true;
+        changed.notify_all ();
+        changed.wait (lock, [&] { return release_first_pause; });
+        return zlink::framework::runtime::receive_flow_state_apply_result_t::applied;
+    });
     std::size_t second_pause_apply_count = 0;
-    auto second = queue.register_receive_flow_socket (
-      [&] (auto state) {
-          if (state
-              == zlink::framework::application_job_queue_pressure_state_t::paused)
-              ++second_pause_apply_count;
-          return zlink::framework::runtime::receive_flow_state_apply_result_t::applied;
-      });
+    auto second = queue.register_receive_flow_socket ([&] (auto state) {
+        if (state == zlink::framework::application_job_queue_pressure_state_t::paused)
+            ++second_pause_apply_count;
+        return zlink::framework::runtime::receive_flow_state_apply_result_t::applied;
+    });
 
     std::optional<queue_t::permit_t> permit;
-    std::thread reserve_thread ([&] {
-        permit = queue.try_reserve_supply ();
-    });
+    std::thread reserve_thread ([&] { permit = queue.try_reserve_supply (); });
     {
         std::unique_lock lock (mutex);
         changed.wait (lock, [&] { return first_pause_entered; });
@@ -748,63 +650,48 @@ TEST (ZLinkFrameworkApplicationJobQueue,
     EXPECT_EQ (0u, second_pause_apply_count);
 }
 
-TEST (ZLinkFrameworkApplicationJobQueue,
-      NonClosingInvalidStateIsAConfigFailure)
+TEST (ZLinkFrameworkApplicationJobQueue, NonClosingInvalidStateIsAConfigFailure)
 {
     queue_t queue (pressure_configuration (1, 100, 0));
-    EXPECT_THROW (
-      queue.register_receive_flow_socket (
-        [] (auto) {
-            return zlink::framework::runtime::receive_flow_state_apply_result_t::invalid_state;
-        }),
-      std::runtime_error);
-    EXPECT_EQ (
-      1u,
-      queue.pressure_metrics_snapshot ()
-        .flow_state_config_failure_count);
+    EXPECT_THROW (queue.register_receive_flow_socket ([] (auto) {
+        return zlink::framework::runtime::receive_flow_state_apply_result_t::invalid_state;
+    }),
+                  std::runtime_error);
+    EXPECT_EQ (1u, queue.pressure_metrics_snapshot ().flow_state_config_failure_count);
 }
 
-TEST (ZLinkFrameworkApplicationJobQueue,
-      ConcurrentTransitionsRejectAStaleOutOfOrderFinalState)
+TEST (ZLinkFrameworkApplicationJobQueue, ConcurrentTransitionsRejectAStaleOutOfOrderFinalState)
 {
     queue_t queue (pressure_configuration (2, 100, 50));
     std::mutex mutex;
     std::condition_variable changed;
     bool pause_entered = false;
     bool release_pause = false;
-    std::vector<zlink::framework::application_job_queue_pressure_state_t>
-      applied;
-    auto registration = queue.register_receive_flow_socket (
-      [&] (auto state) {
-          std::unique_lock lock (mutex);
-          applied.push_back (state);
-          if (state
-              == zlink::framework::application_job_queue_pressure_state_t::paused) {
-              pause_entered = true;
-              changed.notify_all ();
-              changed.wait (lock, [&] { return release_pause; });
-          }
-          return zlink::framework::runtime::receive_flow_state_apply_result_t::applied;
-      });
+    std::vector<zlink::framework::application_job_queue_pressure_state_t> applied;
+    auto registration = queue.register_receive_flow_socket ([&] (auto state) {
+        std::unique_lock lock (mutex);
+        applied.push_back (state);
+        if (state == zlink::framework::application_job_queue_pressure_state_t::paused) {
+            pause_entered = true;
+            changed.notify_all ();
+            changed.wait (lock, [&] { return release_pause; });
+        }
+        return zlink::framework::runtime::receive_flow_state_apply_result_t::applied;
+    });
 
     auto first = queue.try_reserve_supply ();
     ASSERT_TRUE (first);
-    EXPECT_EQ (
-      zlink::framework::application_job_queue_pressure_state_t::running,
-      queue.snapshot ().pressure_state);
+    EXPECT_EQ (zlink::framework::application_job_queue_pressure_state_t::running,
+               queue.snapshot ().pressure_state);
 
     std::optional<queue_t::permit_t> second;
-    std::thread pause_thread ([&] {
-        second = queue.try_reserve_supply ();
-    });
+    std::thread pause_thread ([&] { second = queue.try_reserve_supply (); });
     {
         std::unique_lock lock (mutex);
         changed.wait (lock, [&] { return pause_entered; });
     }
 
-    std::thread resume_thread ([&] {
-        first->release_without_handler ();
-    });
+    std::thread resume_thread ([&] { first->release_without_handler (); });
     {
         std::lock_guard lock (mutex);
         release_pause = true;
@@ -815,19 +702,13 @@ TEST (ZLinkFrameworkApplicationJobQueue,
 
     ASSERT_TRUE (second);
     ASSERT_EQ (3u, applied.size ());
-    EXPECT_EQ (
-      zlink::framework::application_job_queue_pressure_state_t::paused,
-      applied[1]);
-    EXPECT_EQ (
-      zlink::framework::application_job_queue_pressure_state_t::running,
-      applied[2]);
-    EXPECT_EQ (
-      zlink::framework::application_job_queue_pressure_state_t::running,
-      queue.snapshot ().pressure_state);
+    EXPECT_EQ (zlink::framework::application_job_queue_pressure_state_t::paused, applied[1]);
+    EXPECT_EQ (zlink::framework::application_job_queue_pressure_state_t::running, applied[2]);
+    EXPECT_EQ (zlink::framework::application_job_queue_pressure_state_t::running,
+               queue.snapshot ().pressure_state);
 }
 
-TEST (ZLinkFrameworkApplicationJobQueue,
-      DeregistrationWaitsForInFlightApplyBeforeSocketClose)
+TEST (ZLinkFrameworkApplicationJobQueue, DeregistrationWaitsForInFlightApplyBeforeSocketClose)
 {
     queue_t queue (pressure_configuration (1, 100, 0));
     std::mutex mutex;
@@ -836,24 +717,20 @@ TEST (ZLinkFrameworkApplicationJobQueue,
     bool release_pause = false;
     bool socket_closed = false;
     std::size_t apply_count = 0;
-    auto registration = queue.register_receive_flow_socket (
-      [&] (auto state) {
-          std::unique_lock lock (mutex);
-          EXPECT_FALSE (socket_closed);
-          ++apply_count;
-          if (state
-              == zlink::framework::application_job_queue_pressure_state_t::paused) {
-              pause_entered = true;
-              changed.notify_all ();
-              changed.wait (lock, [&] { return release_pause; });
-          }
-          return zlink::framework::runtime::receive_flow_state_apply_result_t::applied;
-      });
+    auto registration = queue.register_receive_flow_socket ([&] (auto state) {
+        std::unique_lock lock (mutex);
+        EXPECT_FALSE (socket_closed);
+        ++apply_count;
+        if (state == zlink::framework::application_job_queue_pressure_state_t::paused) {
+            pause_entered = true;
+            changed.notify_all ();
+            changed.wait (lock, [&] { return release_pause; });
+        }
+        return zlink::framework::runtime::receive_flow_state_apply_result_t::applied;
+    });
 
     std::optional<queue_t::permit_t> permit;
-    std::thread pause_thread ([&] {
-        permit = queue.try_reserve_supply ();
-    });
+    std::thread pause_thread ([&] { permit = queue.try_reserve_supply (); });
     {
         std::unique_lock lock (mutex);
         changed.wait (lock, [&] { return pause_entered; });
@@ -873,9 +750,8 @@ TEST (ZLinkFrameworkApplicationJobQueue,
 
     ASSERT_TRUE (permit);
     permit->release_without_handler ();
-    EXPECT_EQ (
-      zlink::framework::application_job_queue_pressure_state_t::running,
-      queue.snapshot ().pressure_state);
+    EXPECT_EQ (zlink::framework::application_job_queue_pressure_state_t::running,
+               queue.snapshot ().pressure_state);
 
     auto after_close = queue.try_reserve_supply ();
     ASSERT_TRUE (after_close);
@@ -885,66 +761,51 @@ TEST (ZLinkFrameworkApplicationJobQueue,
     EXPECT_EQ (2u, apply_count);
 }
 
-TEST (ZLinkFrameworkApplicationJobQueue,
-      MetricResetRetainsPausedStateAndCurrentDurationOnly)
+TEST (ZLinkFrameworkApplicationJobQueue, MetricResetRetainsPausedStateAndCurrentDurationOnly)
 {
     queue_t queue (pressure_configuration (1, 100, 0));
-    auto registration = queue.register_receive_flow_socket (
-      [] (auto state) {
-          return state
-                     == zlink::framework::application_job_queue_pressure_state_t::paused
-                   ? zlink::framework::runtime::receive_flow_state_apply_result_t::failed
-                   : zlink::framework::runtime::receive_flow_state_apply_result_t::applied;
-      });
+    auto registration = queue.register_receive_flow_socket ([] (auto state) {
+        return state == zlink::framework::application_job_queue_pressure_state_t::paused
+                 ? zlink::framework::runtime::receive_flow_state_apply_result_t::failed
+                 : zlink::framework::runtime::receive_flow_state_apply_result_t::applied;
+    });
     auto permit = queue.try_reserve_supply ();
     ASSERT_TRUE (permit);
     std::this_thread::sleep_for (std::chrono::milliseconds (2));
     const auto before = queue.snapshot ();
     const auto metrics_before = queue.pressure_metrics_snapshot ();
-    EXPECT_EQ (
-      zlink::framework::application_job_queue_pressure_state_t::paused,
-      before.pressure_state);
-    EXPECT_GT (before.current_pause_duration,
-               std::chrono::nanoseconds::zero ());
+    EXPECT_EQ (zlink::framework::application_job_queue_pressure_state_t::paused,
+               before.pressure_state);
+    EXPECT_GT (before.current_pause_duration, std::chrono::nanoseconds::zero ());
     EXPECT_EQ (1u, metrics_before.paused_transition_count);
     EXPECT_EQ (1u, metrics_before.flow_state_config_failure_count);
 
     queue.reset_metrics ();
     const auto after = queue.snapshot ();
     const auto metrics_after = queue.pressure_metrics_snapshot ();
-    EXPECT_EQ (
-      zlink::framework::application_job_queue_pressure_state_t::paused,
-      after.pressure_state);
-    EXPECT_GE (after.current_pause_duration,
-               before.current_pause_duration);
+    EXPECT_EQ (zlink::framework::application_job_queue_pressure_state_t::paused,
+               after.pressure_state);
+    EXPECT_GE (after.current_pause_duration, before.current_pause_duration);
     EXPECT_EQ (0u, metrics_after.running_transition_count);
     EXPECT_EQ (0u, metrics_after.paused_transition_count);
     EXPECT_EQ (0u, metrics_after.flow_state_config_failure_count);
-    EXPECT_LT (metrics_after.cumulative_pause_duration,
-               after.current_pause_duration);
+    EXPECT_LT (metrics_after.cumulative_pause_duration, after.current_pause_duration);
 }
 
-TEST (ZLinkFrameworkApplicationJobQueue,
-      FlowStateConfigFailureInvokesDiagnosticSinkAndMetric)
+TEST (ZLinkFrameworkApplicationJobQueue, FlowStateConfigFailureInvokesDiagnosticSinkAndMetric)
 {
     std::size_t failure_count = 0;
-    queue_t queue (
-      pressure_configuration (1, 100, 0),
-      [&] { ++failure_count; });
-    auto registration = queue.register_receive_flow_socket (
-      [] (auto state) {
-          return state
-                     == zlink::framework::application_job_queue_pressure_state_t::paused
-                   ? zlink::framework::runtime::receive_flow_state_apply_result_t::failed
-                   : zlink::framework::runtime::receive_flow_state_apply_result_t::applied;
-      });
+    queue_t queue (pressure_configuration (1, 100, 0), [&] { ++failure_count; });
+    auto registration = queue.register_receive_flow_socket ([] (auto state) {
+        return state == zlink::framework::application_job_queue_pressure_state_t::paused
+                 ? zlink::framework::runtime::receive_flow_state_apply_result_t::failed
+                 : zlink::framework::runtime::receive_flow_state_apply_result_t::applied;
+    });
 
     auto permit = queue.try_reserve_supply ();
     ASSERT_TRUE (permit);
     EXPECT_EQ (1u, failure_count);
-    EXPECT_EQ (
-      1u,
-      queue.pressure_metrics_snapshot ().flow_state_config_failure_count);
+    EXPECT_EQ (1u, queue.pressure_metrics_snapshot ().flow_state_config_failure_count);
 }
 
 TEST (ZLinkFrameworkApplicationJobQueue, ImmediateSupplyNeedsNoWakeAndWaitersRemainFifo)

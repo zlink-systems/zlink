@@ -12,10 +12,7 @@ import { ZLinkSpotKind } from '../../contracts/Spots';
 import { ZLinkLocationKeyCodec } from './key-codec';
 import { encodeAuthorityKey } from './authority-key-codec';
 import { routingIdsEqual } from '../routing-id';
-import type {
-  IZLinkLocationLifecycleRuntime,
-  ZLinkOwnershipLostEvent
-} from './lifecycle-runtime';
+import type { IZLinkLocationLifecycleRuntime, ZLinkOwnershipLostEvent } from './lifecycle-runtime';
 
 export enum ZLinkActorClaimStatus {
   Claimed = 'claimed',
@@ -145,7 +142,8 @@ export class ZLinkActorLocationClaims {
       ownerNodeRid: actorRef.nodeRid,
       ownerNodeGeneration,
       spotId: row.spotKind === ZLinkSpotKind.Entry ? actorRef.nodeRid : row.spotId,
-      spotGeneration: row.spotKind === ZLinkSpotKind.Entry ? ownerNodeGeneration : row.spotGeneration
+      spotGeneration:
+        row.spotKind === ZLinkSpotKind.Entry ? ownerNodeGeneration : row.spotGeneration
     }));
   }
 
@@ -264,17 +262,21 @@ export class ZLinkActorLocationClaims {
   }
 
   owns(_actorType: string, actorId: string): boolean {
-    return this.actors.has(ZLinkLocationKeyCodec.encodeActorKey({
-      meshName: this.entryMeshName,
-      actorId
-    }));
+    return this.actors.has(
+      ZLinkLocationKeyCodec.encodeActorKey({
+        meshName: this.entryMeshName,
+        actorId
+      })
+    );
   }
 
   snapshot(actorId: string): ZLinkActorLocation | undefined {
-    const tracked = this.actors.get(ZLinkLocationKeyCodec.encodeActorKey({
-      meshName: this.entryMeshName,
-      actorId
-    }));
+    const tracked = this.actors.get(
+      ZLinkLocationKeyCodec.encodeActorKey({
+        meshName: this.entryMeshName,
+        actorId
+      })
+    );
     return tracked === undefined ? undefined : { ...tracked.row };
   }
 
@@ -289,10 +291,12 @@ export class ZLinkActorLocationClaims {
       try {
         const current = await this.actorStore.resolveActor(key);
         if (this.actors.get(canonical) !== tracked) continue;
-        if (current === undefined
-          || current.ownerId !== owner.ownerId
-          || (current.leaseGeneration !== tracked.row.leaseGeneration
-            && current.leaseGeneration !== owner.leaseGeneration)) {
+        if (
+          current === undefined ||
+          current.ownerId !== owner.ownerId ||
+          (current.leaseGeneration !== tracked.row.leaseGeneration &&
+            current.leaseGeneration !== owner.leaseGeneration)
+        ) {
           if (this.actors.get(canonical) !== tracked) continue;
           this.actors.delete(canonical);
           await tracked.deactivate?.();
@@ -304,14 +308,13 @@ export class ZLinkActorLocationClaims {
           continue;
         }
         if (this.actors.get(canonical) !== tracked) continue;
-        const result = await this.runtime.writeActor(
-          current,
-          ZLinkLocationWriteIntent.Takeover
-        );
+        const result = await this.runtime.writeActor(current, ZLinkLocationWriteIntent.Takeover);
         if (result.status !== ZLinkLocationWriteStatus.Stored) {
-          failures.push(new Error(
-            `Actor location recovery for '${tracked.row.actorId}' was rejected with status ${result.status}.`
-          ));
+          failures.push(
+            new Error(
+              `Actor location recovery for '${tracked.row.actorId}' was rejected with status ${result.status}.`
+            )
+          );
           continue;
         }
         if (this.actors.get(canonical) !== tracked) continue;
@@ -360,14 +363,16 @@ export class ZLinkActorLocationClaims {
     if (result.status === ZLinkLocationWriteStatus.Stored) {
       tracked.row = {
         ...candidate,
-        leaseGeneration: this.runtime.currentOwnerToken?.leaseGeneration
-          ?? candidate.leaseGeneration,
+        leaseGeneration:
+          this.runtime.currentOwnerToken?.leaseGeneration ?? candidate.leaseGeneration,
         updatedAt: result.updatedAt
       };
       tracked.generation = result.generation;
       return;
     }
-    throw new Error(`Actor location renewal for '${actorId}' was rejected with status ${result.status}.`);
+    throw new Error(
+      `Actor location renewal for '${actorId}' was rejected with status ${result.status}.`
+    );
   }
 
   private async releaseAuthority(
@@ -382,22 +387,27 @@ export class ZLinkActorLocationClaims {
     const current = await store.readAuthority(key);
     if (!matchesActorAuthority(current, actorRef, ownerToken)) return;
 
-    const result = await store.compareExchangeAuthority(
-      key,
-      current.storeVersion,
-      { kind: 'delete' }
-    );
-    if (result.kind === 'deleted' || (result.kind === 'conflict' && result.current.kind === 'missing')) {
+    const result = await store.compareExchangeAuthority(key, current.storeVersion, {
+      kind: 'delete'
+    });
+    if (
+      result.kind === 'deleted' ||
+      (result.kind === 'conflict' && result.current.kind === 'missing')
+    ) {
       return;
     }
-    if (result.kind === 'conflict' && result.current.kind === 'snapshot'
-      && matchesActorAuthority(result.current, actorRef, ownerToken)) {
-      const retry = await store.compareExchangeAuthority(
-        key,
-        result.current.storeVersion,
-        { kind: 'delete' }
-      );
-      if (retry.kind === 'deleted' || (retry.kind === 'conflict' && retry.current.kind === 'missing')) {
+    if (
+      result.kind === 'conflict' &&
+      result.current.kind === 'snapshot' &&
+      matchesActorAuthority(result.current, actorRef, ownerToken)
+    ) {
+      const retry = await store.compareExchangeAuthority(key, result.current.storeVersion, {
+        kind: 'delete'
+      });
+      if (
+        retry.kind === 'deleted' ||
+        (retry.kind === 'conflict' && retry.current.kind === 'missing')
+      ) {
         return;
       }
     }
@@ -415,12 +425,14 @@ function matchesActorAuthority(
   actorRef: ActorRef,
   ownerToken: ZLinkLocationOwnerToken
 ): current is ZLinkAuthoritySnapshot {
-  return current.kind === 'snapshot'
-    && current.ownerId === ownerToken.ownerId
-    && current.ownerLeaseGeneration === ownerToken.leaseGeneration
-    && current.allocation.state === 'active'
-    && current.allocation.objectKind === 'actor'
-    && current.objectGeneration === actorRef.objectGeneration
-    && current.allocation.descriptor.meshName === actorRef.meshName
-    && routingIdsEqual(current.allocation.descriptor.rid, actorRef.nodeRid);
+  return (
+    current.kind === 'snapshot' &&
+    current.ownerId === ownerToken.ownerId &&
+    current.ownerLeaseGeneration === ownerToken.leaseGeneration &&
+    current.allocation.state === 'active' &&
+    current.allocation.objectKind === 'actor' &&
+    current.objectGeneration === actorRef.objectGeneration &&
+    current.allocation.descriptor.meshName === actorRef.meshName &&
+    routingIdsEqual(current.allocation.descriptor.rid, actorRef.nodeRid)
+  );
 }

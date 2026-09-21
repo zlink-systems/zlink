@@ -6,11 +6,7 @@ import {
   decodeRemoteBoundSessionResponse,
   decodeRemoteBoundSessionSend
 } from './spot-remote-route-codec';
-import {
-  hasReplyToken,
-  submitRoutePayloadReply,
-  submitRouteReply
-} from './spot-route-replies';
+import { hasReplyToken, submitRoutePayloadReply, submitRouteReply } from './spot-route-replies';
 import type { ZLinkActorResponseOptions } from './spot-actor-packet-dispatch';
 import { createInboundFlow, runWithFlow } from '../diagnostics/flow-context';
 import type { ZLinkDispatchErrorReporter } from '../channels';
@@ -63,14 +59,15 @@ export class ZLinkSpotRoutedBoundSessionDispatch {
           boundSessionSend.flowOrigin ?? boundSessionSend.envelope?.header.flowOrigin,
           this.options.dispatchErrors?.flow.flowCreationEnabled() ?? true
         ),
-        () => this.options.routedBoundSessionReceiver?.(
-          boundSessionSend.actorId,
-          boundSessionSend.message,
-          boundSessionSend.packetName,
-          boundSessionSend.metadata,
-          boundSessionSend.actorRef,
-          boundSessionSend.actorPacketTarget
-        )
+        () =>
+          this.options.routedBoundSessionReceiver?.(
+            boundSessionSend.actorId,
+            boundSessionSend.message,
+            boundSessionSend.packetName,
+            boundSessionSend.metadata,
+            boundSessionSend.actorRef,
+            boundSessionSend.actorPacketTarget
+          )
       );
       if (hasReplyToken(received.replyToken)) {
         submitRoutePayloadReply(received, boundSessionSend.envelope, { ok: true });
@@ -124,9 +121,6 @@ export class ZLinkSpotRoutedBoundSessionDispatch {
     if (!hasReplyToken(received.replyToken)) {
       return;
     }
-    submitRouteReply(
-      received.reply()
-        .message(Buffer.from(JSON.stringify({ ok: true })))
-    );
+    submitRouteReply(received.reply().message(Buffer.from(JSON.stringify({ ok: true }))));
   }
 }

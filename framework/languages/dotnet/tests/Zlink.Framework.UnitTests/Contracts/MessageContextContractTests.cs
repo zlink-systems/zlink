@@ -15,7 +15,7 @@ public sealed class MessageContextContractTests
         "ZLinkSendContext",
         "ZLinkPublishContext",
         "ZLinkSpotActorRequestContext",
-        "ZLinkSpotActorSendContext"
+        "ZLinkSpotActorSendContext",
     ];
 
     [Fact]
@@ -36,7 +36,8 @@ public sealed class MessageContextContractTests
 
         Assert.DoesNotContain(
             typeof(IZLinkMessageContext).Assembly.GetTypes(),
-            static type => RemovedContextTypeNames.Contains(type.Name));
+            static type => RemovedContextTypeNames.Contains(type.Name)
+        );
     }
 
     [Fact]
@@ -47,35 +48,39 @@ public sealed class MessageContextContractTests
             typeof(IZLinkHandlerFilter)
                 .GetMethod(nameof(IZLinkHandlerFilter.InvokeAsync))!
                 .GetParameters()[0]
-                .ParameterType);
+                .ParameterType
+        );
         Assert.DoesNotContain(
             typeof(IZLinkHandlerFilter).Assembly.GetTypes(),
-            static type => type.Name == "ZLinkHandlerInvocation");
+            static type => type.Name == "ZLinkHandlerInvocation"
+        );
     }
 
     [Fact]
     public void HandlerSignatures_UseExactMessageContexts()
     {
-        Assert.Equal(
-            typeof(IZLinkMessageContext),
-            Parameters(typeof(IZLinkSendHandler<>))[1]);
-        Assert.Equal(
-            typeof(IZLinkMessageContext),
-            Parameters(typeof(IZLinkRequestHandler<,>))[1]);
+        Assert.Equal(typeof(IZLinkMessageContext), Parameters(typeof(IZLinkSendHandler<>))[1]);
+        Assert.Equal(typeof(IZLinkMessageContext), Parameters(typeof(IZLinkRequestHandler<,>))[1]);
         Assert.Equal(
             typeof(ZLinkRouteMessageContext),
-            Parameters(typeof(IZLinkRouteSendHandler<>))[1]);
+            Parameters(typeof(IZLinkRouteSendHandler<>))[1]
+        );
         Assert.Equal(
             typeof(ZLinkRouteMessageContext),
-            Parameters(typeof(IZLinkRouteRequestHandler<,>))[1]);
+            Parameters(typeof(IZLinkRouteRequestHandler<,>))[1]
+        );
         Assert.Equal(
             typeof(ZLinkPublishMessageContext),
-            Parameters(typeof(IZLinkSpotSubscriptionHandler<,>))[2]);
+            Parameters(typeof(IZLinkSpotSubscriptionHandler<,>))[2]
+        );
 
         AssertActorHandlerSignature(typeof(IZLinkSpotActorSendHandler<,,>), messageIndex: 3);
         AssertActorHandlerSignature(typeof(IZLinkSpotActorRequestHandler<,,,>), messageIndex: 3);
         AssertActorHandlerSignature(typeof(IZLinkEntrySpotActorSendHandler<,,>), messageIndex: 3);
-        AssertActorHandlerSignature(typeof(IZLinkEntrySpotActorRequestHandler<,,,>), messageIndex: 3);
+        AssertActorHandlerSignature(
+            typeof(IZLinkEntrySpotActorRequestHandler<,,,>),
+            messageIndex: 3
+        );
     }
 
     [Fact]
@@ -95,42 +100,42 @@ public sealed class MessageContextContractTests
             .BuildServiceProvider();
         var dispatcher = new ZLinkHandlerDispatcher(
             services.GetRequiredService<IServiceScopeFactory>(),
-            registration);
+            registration
+        );
         var endpoint = ZLinkHandlerEndpointDescriptorFactory.CreateInterface(
             typeof(FilteredRequestHandler),
             typeof(IZLinkRequestHandler<FilterRequest, FilterReply>),
             ZLinkMessageKind.Request,
             new HashSet<string>(StringComparer.Ordinal),
             "channel-a",
-            "filter.request");
+            "filter.request"
+        );
         var metadata = new ZLinkMessageMetadata(
-            new Dictionary<string, string>(StringComparer.Ordinal)
-            {
-                ["tenant"] = "alpha"
-            });
+            new Dictionary<string, string>(StringComparer.Ordinal) { ["tenant"] = "alpha" }
+        );
         var context = new ZLinkMessageContext(
             "mesh-a",
             "channel-a",
             "filter.request",
             "application/json",
             metadata,
-            "correlation-a");
+            "correlation-a"
+        );
 
         var dispatch = await dispatcher.DispatchAsync(
             endpoint,
             new FilterRequest("value"),
             context,
             ZLinkHandlerDispatchKind.ChannelRequest,
-            CancellationToken.None);
+            CancellationToken.None
+        );
         var result = Assert.IsType<FilterReply>(dispatch.Value);
 
         Assert.Equal("VALUE", result.Value);
-        var filterContext =
-            Assert.IsAssignableFrom<IZLinkHandlerFilterContext>(
-                probe.FilterContext);
-        Assert.Equal(
-            ZLinkHandlerDispatchKind.ChannelRequest,
-            filterContext.DispatchKind);
+        var filterContext = Assert.IsAssignableFrom<IZLinkHandlerFilterContext>(
+            probe.FilterContext
+        );
+        Assert.Equal(ZLinkHandlerDispatchKind.ChannelRequest, filterContext.DispatchKind);
         Assert.Equal(context.MeshName, filterContext.MeshName);
         Assert.Equal(context.ChannelName, filterContext.ChannelName);
         var handlerContext = Assert.IsAssignableFrom<IZLinkMessageContext>(probe.HandlerContext);
@@ -153,9 +158,14 @@ public sealed class MessageContextContractTests
             .AddSingleton(lifetime)
             .AddScoped<PreparedDependency>()
             .BuildServiceProvider();
-        var available = new AvailabilityProbe(services.GetRequiredService<IServiceProviderIsService>());
+        var available = new AvailabilityProbe(
+            services.GetRequiredService<IServiceProviderIsService>()
+        );
         var root = new ProbedProvider(services, available);
-        ZLinkScopedHandlerInstanceOwner.Prepare(root, [typeof(PreparedFilter), typeof(PreparedHandler)]);
+        ZLinkScopedHandlerInstanceOwner.Prepare(
+            root,
+            [typeof(PreparedFilter), typeof(PreparedHandler)]
+        );
         var preparationCalls = available.Calls;
         Assert.True(preparationCalls > 0);
         Assert.Equal(0, lifetime.DependencyConstructions);
@@ -164,8 +174,11 @@ public sealed class MessageContextContractTests
         for (var index = 0; index < 2; index++)
         {
             await using var scope = services.CreateAsyncScope();
-            await using (var instances = new ZLinkScopedHandlerInstanceOwner(
-                             new ProbedProvider(scope.ServiceProvider, available)))
+            await using (
+                var instances = new ZLinkScopedHandlerInstanceOwner(
+                    new ProbedProvider(scope.ServiceProvider, available)
+                )
+            )
             {
                 var filter = instances.Resolve<PreparedFilter>();
                 var handler = instances.Resolve<PreparedHandler>();
@@ -179,8 +192,10 @@ public sealed class MessageContextContractTests
 
         Assert.Equal(preparationCalls, available.Calls);
         Assert.Equal(2, lifetime.DependencyConstructions);
-        Assert.Equal(["handler", "filter", "dependency", "handler", "filter", "dependency"],
-            lifetime.Disposals);
+        Assert.Equal(
+            ["handler", "filter", "dependency", "handler", "filter", "dependency"],
+            lifetime.Disposals
+        );
     }
 
     [Theory]
@@ -191,19 +206,24 @@ public sealed class MessageContextContractTests
     [InlineData(typeof(OptionalActivation), true)]
     [InlineData(typeof(KeyedActivation), false)]
     public async Task PreparedActivation_PreservesContainerSpecificConstructorSelection(
-        Type handlerType, bool registerDependency)
+        Type handlerType,
+        bool registerDependency
+    )
     {
         var registrations = new ServiceCollection();
-        if (registerDependency) registrations.AddScoped<DispatchDependency>();
+        if (registerDependency)
+            registrations.AddScoped<DispatchDependency>();
         registrations.AddKeyedScoped<DispatchDependency>("activation");
         await using var services = registrations.BuildServiceProvider();
         await using var expectedScope = services.CreateAsyncScope();
-        var expected = (ConstructorChoice)ActivatorUtilities.CreateInstance(
-            expectedScope.ServiceProvider, handlerType);
+        var expected = (ConstructorChoice)
+            ActivatorUtilities.CreateInstance(expectedScope.ServiceProvider, handlerType);
         ZLinkScopedHandlerInstanceOwner.Prepare(services, [handlerType]);
 
         await using var actualScope = services.CreateAsyncScope();
-        await using var instances = new ZLinkScopedHandlerInstanceOwner(actualScope.ServiceProvider);
+        await using var instances = new ZLinkScopedHandlerInstanceOwner(
+            actualScope.ServiceProvider
+        );
         var actual = (ConstructorChoice)instances.Resolve(handlerType);
 
         Assert.Equal(expected.Choice, actual.Choice);
@@ -221,7 +241,8 @@ public sealed class MessageContextContractTests
             .BuildServiceProvider();
         await using var scope = services.CreateAsyncScope();
         var expected = Assert.Throws<InvalidOperationException>(() =>
-            ActivatorUtilities.CreateInstance(scope.ServiceProvider, handlerType));
+            ActivatorUtilities.CreateInstance(scope.ServiceProvider, handlerType)
+        );
 
         ZLinkScopedHandlerInstanceOwner.Prepare(services, [handlerType]);
         await using var instances = new ZLinkScopedHandlerInstanceOwner(scope.ServiceProvider);
@@ -241,14 +262,16 @@ public sealed class MessageContextContractTests
             .BuildServiceProvider();
         var dispatcher = new ZLinkHandlerDispatcher(
             services.GetRequiredService<IServiceScopeFactory>(),
-            registration);
+            registration
+        );
 
         var result = await dispatcher.DispatchAsync(
             CreateControlEndpoint(),
             new FilterRequest("value"),
             CreateControlContext(),
             ZLinkHandlerDispatchKind.ChannelRequest,
-            CancellationToken.None);
+            CancellationToken.None
+        );
 
         Assert.False(result.HandlerInvoked);
         Assert.Null(result.Value);
@@ -266,16 +289,20 @@ public sealed class MessageContextContractTests
             .BuildServiceProvider();
         var dispatcher = new ZLinkHandlerDispatcher(
             services.GetRequiredService<IServiceScopeFactory>(),
-            registration);
+            registration
+        );
 
-        var error = await Assert.ThrowsAsync<ZLinkFrameworkException>(
-            () => dispatcher.DispatchAsync(
+        var error = await Assert.ThrowsAsync<ZLinkFrameworkException>(() =>
+            dispatcher
+                .DispatchAsync(
                     CreateControlEndpoint(),
                     new FilterRequest("value"),
                     CreateControlContext(),
                     ZLinkHandlerDispatchKind.ChannelRequest,
-                    CancellationToken.None)
-                .AsTask());
+                    CancellationToken.None
+                )
+                .AsTask()
+        );
 
         Assert.Equal(ZLinkFrameworkErrorKind.InvalidOperation, error.Kind);
         Assert.Equal(1, probe.HandlerCalls);
@@ -292,16 +319,20 @@ public sealed class MessageContextContractTests
             .BuildServiceProvider();
         var dispatcher = new ZLinkHandlerDispatcher(
             services.GetRequiredService<IServiceScopeFactory>(),
-            registration);
+            registration
+        );
 
-        var error = await Assert.ThrowsAsync<ZLinkFrameworkException>(
-            () => dispatcher.DispatchAsync(
+        var error = await Assert.ThrowsAsync<ZLinkFrameworkException>(() =>
+            dispatcher
+                .DispatchAsync(
                     CreateControlEndpoint(),
                     new FilterRequest("value"),
                     CreateControlContext(),
                     ZLinkHandlerDispatchKind.ChannelRequest,
-                    CancellationToken.None)
-                .AsTask());
+                    CancellationToken.None
+                )
+                .AsTask()
+        );
 
         Assert.Equal(ZLinkFrameworkErrorKind.InvalidOperation, error.Kind);
         Assert.Equal(1, probe.HandlerCalls);
@@ -319,28 +350,33 @@ public sealed class MessageContextContractTests
             .BuildServiceProvider();
         var dispatcher = new ZLinkHandlerDispatcher(
             services.GetRequiredService<IServiceScopeFactory>(),
-            registration);
+            registration
+        );
 
         await dispatcher.DispatchAsync(
             CreateControlEndpoint(),
             new FilterRequest("value"),
             CreateControlContext(),
             ZLinkHandlerDispatchKind.ChannelRequest,
-            CancellationToken.None);
+            CancellationToken.None
+        );
 
         Assert.Equal(1, probe.FilterDisposeCount);
         Assert.Equal(1, probe.Dependency!.DisposeCount);
 
         using var cancellation = new CancellationTokenSource();
         cancellation.Cancel();
-        await Assert.ThrowsAnyAsync<OperationCanceledException>(
-            () => dispatcher.DispatchAsync(
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() =>
+            dispatcher
+                .DispatchAsync(
                     CreateControlEndpoint(),
                     new FilterRequest("value"),
                     CreateControlContext(),
                     ZLinkHandlerDispatchKind.ChannelRequest,
-                    cancellation.Token)
-                .AsTask());
+                    cancellation.Token
+                )
+                .AsTask()
+        );
 
         Assert.Equal(2, probe.FilterDisposeCount);
         Assert.Equal(1, probe.Dependency.DisposeCount);
@@ -359,14 +395,16 @@ public sealed class MessageContextContractTests
         var endpoint = CreateControlEndpoint();
         var dispatcher = new ZLinkHandlerDispatcher(
             services.GetRequiredService<IServiceScopeFactory>(),
-            registration);
+            registration
+        );
         var pipeline = new ZLinkChannelRequestDispatchPipeline(
             "mesh-a",
             new ZLinkHandlerRegistry([endpoint]),
             dispatcher,
             static _ => new HashSet<string>(StringComparer.Ordinal),
             registration.Codecs,
-            new ZLinkDispatchErrorReporter(new ZLinkDispatchOptionsModel()));
+            new ZLinkDispatchErrorReporter(new ZLinkDispatchOptionsModel())
+        );
         var header = new ZLinkEnvelopeHeader(
             ZLinkMessageKind.Request,
             "channel-a",
@@ -376,12 +414,14 @@ public sealed class MessageContextContractTests
             null,
             null,
             null,
-            null);
+            null
+        );
         var parts = ZLinkEnvelopeCodec.EncodeParts(
             header,
             new FilterRequest("value"),
             typeof(FilterRequest),
-            registration.Codecs);
+            registration.Codecs
+        );
         ZLinkEnvelopeHeader? errorReply = null;
         var normalReply = false;
         try
@@ -401,7 +441,8 @@ public sealed class MessageContextContractTests
                     errorReply = reply;
                     return ValueTask.CompletedTask;
                 },
-                CancellationToken.None);
+                CancellationToken.None
+            );
         }
         finally
         {
@@ -410,9 +451,7 @@ public sealed class MessageContextContractTests
 
         Assert.False(normalReply);
         Assert.NotNull(errorReply);
-        Assert.Equal(
-            "rejected",
-            errorReply!.ErrorCode);
+        Assert.Equal("rejected", errorReply!.ErrorCode);
         Assert.Equal(0, probe.HandlerCalls);
     }
 
@@ -424,7 +463,8 @@ public sealed class MessageContextContractTests
             ZLinkMessageKind.Request,
             new HashSet<string>(StringComparer.Ordinal),
             "channel-a",
-            "filter.request");
+            "filter.request"
+        );
     }
 
     private static ZLinkMessageContext CreateControlContext()
@@ -435,7 +475,8 @@ public sealed class MessageContextContractTests
             "filter.request",
             "application/json",
             metadata: null,
-            "correlation-a");
+            "correlation-a"
+        );
     }
 
     private static Type[] Parameters(Type handlerType)
@@ -464,7 +505,8 @@ public sealed class MessageContextContractTests
     private sealed record FilterReply(string Value);
 
     private sealed class AvailabilityProbe(IServiceProviderIsService available)
-        : IServiceProviderIsService, IServiceProviderIsKeyedService
+        : IServiceProviderIsService,
+            IServiceProviderIsKeyedService
     {
         public int Calls { get; private set; }
 
@@ -477,7 +519,10 @@ public sealed class MessageContextContractTests
         public bool IsKeyedService(Type serviceType, object? serviceKey)
         {
             Calls++;
-            return ((IServiceProviderIsKeyedService)available).IsKeyedService(serviceType, serviceKey);
+            return ((IServiceProviderIsKeyedService)available).IsKeyedService(
+                serviceType,
+                serviceKey
+            );
         }
     }
 
@@ -485,7 +530,9 @@ public sealed class MessageContextContractTests
         : IServiceProvider
     {
         public object? GetService(Type serviceType) =>
-            serviceType == typeof(IServiceProviderIsService) ? available : services.GetService(serviceType);
+            serviceType == typeof(IServiceProviderIsService)
+                ? available
+                : services.GetService(serviceType);
     }
 
     private sealed class PreparedLifetime
@@ -507,15 +554,19 @@ public sealed class MessageContextContractTests
         public void Dispose() => _lifetime.Disposals.Add("dependency");
     }
 
-    private sealed class PreparedFilter(PreparedDependency dependency, PreparedLifetime lifetime) : IDisposable
+    private sealed class PreparedFilter(PreparedDependency dependency, PreparedLifetime lifetime)
+        : IDisposable
     {
         public PreparedDependency Dependency { get; } = dependency;
+
         public void Dispose() => lifetime.Disposals.Add("filter");
     }
 
-    private sealed class PreparedHandler(PreparedDependency dependency, PreparedLifetime lifetime) : IDisposable
+    private sealed class PreparedHandler(PreparedDependency dependency, PreparedLifetime lifetime)
+        : IDisposable
     {
         public PreparedDependency Dependency { get; } = dependency;
+
         public void Dispose() => lifetime.Disposals.Add("handler");
     }
 
@@ -526,36 +577,47 @@ public sealed class MessageContextContractTests
 
     private sealed class OverloadedActivation : ConstructorChoice
     {
-        public OverloadedActivation() : base("empty") { }
-        public OverloadedActivation(DispatchDependency dependency) : base("dependency") { }
-        public OverloadedActivation(DispatchDependency dependency, FilterProbe absent) : base("unavailable") { }
+        public OverloadedActivation()
+            : base("empty") { }
+
+        public OverloadedActivation(DispatchDependency dependency)
+            : base("dependency") { }
+
+        public OverloadedActivation(DispatchDependency dependency, FilterProbe absent)
+            : base("unavailable") { }
     }
 
     private sealed class PreferredActivation : ConstructorChoice
     {
-        public PreferredActivation() : base("empty") { }
+        public PreferredActivation()
+            : base("empty") { }
+
         [ActivatorUtilitiesConstructor]
-        public PreferredActivation(DispatchDependency dependency) : base("preferred") { }
+        public PreferredActivation(DispatchDependency dependency)
+            : base("preferred") { }
     }
 
     private sealed class OptionalActivation(
         DispatchDependency? dependency = null,
         DateTime date = default,
-        DayOfWeek? day = DayOfWeek.Monday)
-        : ConstructorChoice($"{dependency is null}:{date.Ticks}:{day}");
+        DayOfWeek? day = DayOfWeek.Monday
+    ) : ConstructorChoice($"{dependency is null}:{date.Ticks}:{day}");
 
-    private sealed class KeyedActivation([FromKeyedServices("activation")] DispatchDependency dependency)
-        : ConstructorChoice(dependency is not null ? "keyed" : "missing");
+    private sealed class KeyedActivation(
+        [FromKeyedServices("activation")] DispatchDependency dependency
+    ) : ConstructorChoice(dependency is not null ? "keyed" : "missing");
 
     private sealed class AmbiguousActivation
     {
         public AmbiguousActivation(DispatchDependency dependency) { }
+
         public AmbiguousActivation(FilterProbe probe) { }
     }
 
     private sealed class UnavailablePreferredActivation
     {
         public UnavailablePreferredActivation() { }
+
         [ActivatorUtilitiesConstructor]
         public UnavailablePreferredActivation(PreparedLifetime absent) { }
     }
@@ -564,6 +626,7 @@ public sealed class MessageContextContractTests
     {
         [ActivatorUtilitiesConstructor]
         public MultiplePreferredActivation() { }
+
         [ActivatorUtilitiesConstructor]
         public MultiplePreferredActivation(DispatchDependency dependency) { }
     }
@@ -609,7 +672,8 @@ public sealed class MessageContextContractTests
         public ValueTask InvokeAsync(
             IZLinkHandlerFilterContext context,
             ZLinkHandlerFilterNext next,
-            CancellationToken cancellationToken)
+            CancellationToken cancellationToken
+        )
         {
             _ = context;
             _ = next;
@@ -623,7 +687,8 @@ public sealed class MessageContextContractTests
         public async ValueTask InvokeAsync(
             IZLinkHandlerFilterContext context,
             ZLinkHandlerFilterNext next,
-            CancellationToken cancellationToken)
+            CancellationToken cancellationToken
+        )
         {
             _ = context;
             cancellationToken.ThrowIfCancellationRequested();
@@ -637,7 +702,8 @@ public sealed class MessageContextContractTests
         public async ValueTask InvokeAsync(
             IZLinkHandlerFilterContext context,
             ZLinkHandlerFilterNext next,
-            CancellationToken cancellationToken)
+            CancellationToken cancellationToken
+        )
         {
             _ = context;
             cancellationToken.ThrowIfCancellationRequested();
@@ -647,14 +713,15 @@ public sealed class MessageContextContractTests
         }
     }
 
-    private sealed class LifetimeFilter(
-        FilterLifetimeProbe probe,
-        DispatchDependency dependency) : IZLinkHandlerFilter, IDisposable
+    private sealed class LifetimeFilter(FilterLifetimeProbe probe, DispatchDependency dependency)
+        : IZLinkHandlerFilter,
+            IDisposable
     {
         public ValueTask InvokeAsync(
             IZLinkHandlerFilterContext context,
             ZLinkHandlerFilterNext next,
-            CancellationToken cancellationToken)
+            CancellationToken cancellationToken
+        )
         {
             _ = context;
             _ = next;
@@ -673,7 +740,8 @@ public sealed class MessageContextContractTests
         public ValueTask<FilterReply> HandleAsync(
             FilterRequest request,
             IZLinkMessageContext context,
-            CancellationToken cancellationToken)
+            CancellationToken cancellationToken
+        )
         {
             _ = context;
             cancellationToken.ThrowIfCancellationRequested();
@@ -682,16 +750,17 @@ public sealed class MessageContextContractTests
         }
     }
 
-    private sealed class CapturingFilter(
-        FilterProbe probe,
-        DispatchDependency dependency) : IZLinkHandlerFilter, IDisposable
+    private sealed class CapturingFilter(FilterProbe probe, DispatchDependency dependency)
+        : IZLinkHandlerFilter,
+            IDisposable
     {
         public int DisposeCount { get; private set; }
 
         public async ValueTask InvokeAsync(
             IZLinkHandlerFilterContext context,
             ZLinkHandlerFilterNext next,
-            CancellationToken cancellationToken)
+            CancellationToken cancellationToken
+        )
         {
             cancellationToken.ThrowIfCancellationRequested();
             probe.FilterContext = context;
@@ -703,24 +772,23 @@ public sealed class MessageContextContractTests
         public void Dispose() => DisposeCount++;
     }
 
-    private sealed class FilteredRequestHandler(
-        FilterProbe probe,
-        DispatchDependency dependency)
-        : IZLinkRequestHandler<FilterRequest, FilterReply>, IDisposable
+    private sealed class FilteredRequestHandler(FilterProbe probe, DispatchDependency dependency)
+        : IZLinkRequestHandler<FilterRequest, FilterReply>,
+            IDisposable
     {
         public int DisposeCount { get; private set; }
 
         public ValueTask<FilterReply> HandleAsync(
             FilterRequest request,
             IZLinkMessageContext context,
-            CancellationToken cancellationToken)
+            CancellationToken cancellationToken
+        )
         {
             cancellationToken.ThrowIfCancellationRequested();
             probe.HandlerContext = context;
             probe.Handler = this;
             probe.HandlerDependency = dependency;
-            return ValueTask.FromResult(
-                new FilterReply(request.Value.ToUpperInvariant()));
+            return ValueTask.FromResult(new FilterReply(request.Value.ToUpperInvariant()));
         }
 
         public void Dispose() => DisposeCount++;

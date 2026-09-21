@@ -4,21 +4,25 @@ internal sealed class ZLinkEntrySpotActorRouter(ZLinkFrameworkRuntime runtime)
 {
     private readonly ZLinkDispatchErrorReporter _dispatchErrors = new(
         runtime.Registration.DispatchOptions,
-        runtime: runtime);
+        runtime: runtime
+    );
 
     public async ValueTask<bool> TryAsync(
         ZLinkFrameworkComponentState state,
         IZLinkActor actor,
         ZlinkStreamHeader header,
         Message body,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken
+    )
     {
         foreach (var node in state.SpotNodes.Values)
         {
             var activation = node.EntrySpotActivation;
-            if (activation is null
+            if (
+                activation is null
                 || !activation.TryResolveActorPacket(actor.GetType(), header, out var descriptor)
-                || descriptor is null)
+                || descriptor is null
+            )
                 continue;
 
             // The only caller (the dispatch router's send path) already
@@ -26,24 +30,18 @@ internal sealed class ZLinkEntrySpotActorRouter(ZLinkFrameworkRuntime runtime)
             // here deadlocks the actor permanently.
             try
             {
-                await activation.InvokeActorPacketAsync(
-                        descriptor,
-                        actor,
-                        header,
-                        body,
-                        cancellationToken)
+                await activation
+                    .InvokeActorPacketAsync(descriptor, actor, header, body, cancellationToken)
                     .ConfigureAwait(false);
             }
             catch (ZLinkStreamPayloadDecodeException ex)
             {
-                CreateActorFlow(
-                        actor,
-                        header,
-                        ZLinkDispatchMessageKind.ActorSend)
+                CreateActorFlow(actor, header, ZLinkDispatchMessageKind.ActorSend)
                     .PayloadDecodeFailed(
                         _dispatchErrors,
                         ZLinkDispatchErrorAction.Drop,
-                        ex.DecodeException);
+                        ex.DecodeException
+                    );
             }
 
             return true;
@@ -60,20 +58,20 @@ internal sealed class ZLinkEntrySpotActorRouter(ZLinkFrameworkRuntime runtime)
         Message body,
         bool callerOwnsDispatchTurn,
         bool relocationReplay,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken
+    )
     {
         foreach (var node in state.SpotNodes.Values)
         {
             var activation = node.EntrySpotActivation;
-            if (activation is null
+            if (
+                activation is null
                 || !activation.TryResolveActorPacket(actor.GetType(), header, out var descriptor)
-                || descriptor is null)
+                || descriptor is null
+            )
                 continue;
 
-            var flow = CreateActorFlow(
-                actor,
-                header,
-                ZLinkDispatchMessageKind.ActorRequest);
+            var flow = CreateActorFlow(actor, header, ZLinkDispatchMessageKind.ActorRequest);
             flow.Trace(_dispatchErrors, ZLinkMessageFlowOutcome.Received);
 
             // A caller inside the actor's dispatch turn (the dispatch
@@ -83,24 +81,30 @@ internal sealed class ZLinkEntrySpotActorRouter(ZLinkFrameworkRuntime runtime)
             try
             {
                 var reply = callerOwnsDispatchTurn
-                    ? await activation.InvokeActorPacketForReplyAsync(
+                    ? await activation
+                        .InvokeActorPacketForReplyAsync(
                             descriptor,
                             actor,
                             header,
                             body,
-                            cancellationToken: cancellationToken)
+                            cancellationToken: cancellationToken
+                        )
                         .ConfigureAwait(false)
-                    : await runtimeState.ExecuteDispatchAsync(
+                    : await runtimeState
+                        .ExecuteDispatchAsync(
                             header,
-                            ct => activation.InvokeActorPacketForReplyAsync(
-                                descriptor,
-                                actor,
-                                header,
-                            body,
-                            ct),
+                            ct =>
+                                activation.InvokeActorPacketForReplyAsync(
+                                    descriptor,
+                                    actor,
+                                    header,
+                                    body,
+                                    ct
+                                ),
                             countAsPendingRequest: true,
                             cancellationToken: cancellationToken,
-                            allowRelocationReplay: relocationReplay)
+                            allowRelocationReplay: relocationReplay
+                        )
                         .ConfigureAwait(false);
                 flow.Trace(_dispatchErrors, ZLinkMessageFlowOutcome.Replied);
                 return new EntrySpotActorReplyDispatchResult(true, reply);
@@ -110,23 +114,28 @@ internal sealed class ZLinkEntrySpotActorRouter(ZLinkFrameworkRuntime runtime)
                 flow.PayloadDecodeFailed(
                     _dispatchErrors,
                     ZLinkDispatchErrorAction.ReplyError,
-                    ex.DecodeException);
+                    ex.DecodeException
+                );
                 return new EntrySpotActorReplyDispatchResult(
                     true,
-                    ZLinkActorReply.FromError(ex.DecodeException));
+                    ZLinkActorReply.FromError(ex.DecodeException)
+                );
             }
             catch (Exception ex)
             {
                 if (_dispatchErrors.Enabled)
-                    _dispatchErrors.Report(new ZLinkDispatchFailure(
-                        ZLinkDispatchErrorSurface.SpotActor,
-                        ZLinkDispatchMessageKind.ActorRequest,
-                        ZLinkDispatchErrorReason.HandlerException,
-                        ZLinkDispatchErrorAction.ReplyError,
-                        header.Name,
-                        ActorId: actor.Context.ActorId,
-                        CorrelationId: header.CorrelationId,
-                        Exception: ex));
+                    _dispatchErrors.Report(
+                        new ZLinkDispatchFailure(
+                            ZLinkDispatchErrorSurface.SpotActor,
+                            ZLinkDispatchMessageKind.ActorRequest,
+                            ZLinkDispatchErrorReason.HandlerException,
+                            ZLinkDispatchErrorAction.ReplyError,
+                            header.Name,
+                            ActorId: actor.Context.ActorId,
+                            CorrelationId: header.CorrelationId,
+                            Exception: ex
+                        )
+                    );
                 return new EntrySpotActorReplyDispatchResult(true, ZLinkActorReply.FromError(ex));
             }
         }
@@ -137,7 +146,8 @@ internal sealed class ZLinkEntrySpotActorRouter(ZLinkFrameworkRuntime runtime)
     private ZLinkDispatchFlowScope CreateActorFlow(
         IZLinkActor actor,
         ZlinkStreamHeader header,
-        ZLinkDispatchMessageKind messageKind)
+        ZLinkDispatchMessageKind messageKind
+    )
     {
         return new ZLinkDispatchFlowScope(
             ZLinkDispatchErrorSurface.SpotActor,
@@ -145,43 +155,53 @@ internal sealed class ZLinkEntrySpotActorRouter(ZLinkFrameworkRuntime runtime)
             messageKind,
             header.Name,
             correlationId: header.CorrelationId,
-            actorId: actor.Context.ActorId);
+            actorId: actor.Context.ActorId
+        );
     }
 
     public async ValueTask NotifyJoinedAsync(
         ZLinkFrameworkComponentState state,
         IZLinkActor actor,
         RoutingId? targetNodeRid,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken
+    )
     {
         await NotifyLifecycleAsync(
-            state,
-            actor,
-            targetNodeRid,
-            static (ZLinkEntrySpotActivation activation, Type actorType,
-                    out ZLinkSpotActorLifecycleDescriptor? descriptor) =>
-                activation.TryResolveActorJoined(actorType, out descriptor),
-            acquireActorTurn: true,
-            throwOnFailure: false,
-            cancellationToken).ConfigureAwait(false);
+                state,
+                actor,
+                targetNodeRid,
+                static (
+                    ZLinkEntrySpotActivation activation,
+                    Type actorType,
+                    out ZLinkSpotActorLifecycleDescriptor? descriptor
+                ) => activation.TryResolveActorJoined(actorType, out descriptor),
+                acquireActorTurn: true,
+                throwOnFailure: false,
+                cancellationToken
+            )
+            .ConfigureAwait(false);
     }
 
     public async ValueTask NotifyJoinedForRelocationAsync(
         ZLinkFrameworkComponentState state,
         IZLinkActor actor,
         RoutingId targetNodeRid,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken
+    )
     {
         await NotifyLifecycleAsync(
                 state,
                 actor,
                 targetNodeRid,
-                static (ZLinkEntrySpotActivation activation, Type actorType,
-                        out ZLinkSpotActorLifecycleDescriptor? descriptor) =>
-                    activation.TryResolveActorJoined(actorType, out descriptor),
+                static (
+                    ZLinkEntrySpotActivation activation,
+                    Type actorType,
+                    out ZLinkSpotActorLifecycleDescriptor? descriptor
+                ) => activation.TryResolveActorJoined(actorType, out descriptor),
                 acquireActorTurn: false,
                 throwOnFailure: true,
-                cancellationToken)
+                cancellationToken
+            )
             .ConfigureAwait(false);
     }
 
@@ -190,24 +210,22 @@ internal sealed class ZLinkEntrySpotActorRouter(ZLinkFrameworkRuntime runtime)
         IZLinkActor actor,
         ZLinkMessage createRequest,
         RoutingId? targetNodeRid,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken
+    )
     {
         foreach (var node in state.SpotNodes.Values)
         {
             if (targetNodeRid is not null && node.Node.RoutingId != targetNodeRid)
                 continue;
-            if (node.EntrySpotActivation is not { } activation
-                || !activation.TryResolveActorCreated(
-                    actor.GetType(),
-                    out var descriptor)
-                || descriptor is null)
+            if (
+                node.EntrySpotActivation is not { } activation
+                || !activation.TryResolveActorCreated(actor.GetType(), out var descriptor)
+                || descriptor is null
+            )
                 continue;
 
-            return await activation.InvokeActorCreateAsync(
-                    descriptor,
-                    actor,
-                    createRequest,
-                    cancellationToken)
+            return await activation
+                .InvokeActorCreateAsync(descriptor, actor, createRequest, cancellationToken)
                 .ConfigureAwait(false);
         }
 
@@ -218,48 +236,54 @@ internal sealed class ZLinkEntrySpotActorRouter(ZLinkFrameworkRuntime runtime)
         ZLinkFrameworkComponentState state,
         IZLinkActor actor,
         RoutingId? targetNodeRid,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken
+    )
     {
         await NotifyLifecycleAsync(
-            state,
-            actor,
-            targetNodeRid,
-            static (ZLinkEntrySpotActivation activation, Type actorType,
-                    out ZLinkSpotActorLifecycleDescriptor? descriptor) =>
-                activation.TryResolveActorLeft(actorType, out descriptor),
-            acquireActorTurn: false,
-            throwOnFailure: true,
-            cancellationToken).ConfigureAwait(false);
+                state,
+                actor,
+                targetNodeRid,
+                static (
+                    ZLinkEntrySpotActivation activation,
+                    Type actorType,
+                    out ZLinkSpotActorLifecycleDescriptor? descriptor
+                ) => activation.TryResolveActorLeft(actorType, out descriptor),
+                acquireActorTurn: false,
+                throwOnFailure: true,
+                cancellationToken
+            )
+            .ConfigureAwait(false);
     }
 
     public async ValueTask<bool> TryNotifyDisconnectedAsync(
         ZLinkFrameworkComponentState state,
         IZLinkActor actor,
         RoutingId? targetNodeRid,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken
+    )
     {
         var handled = false;
         foreach (var node in state.SpotNodes.Values)
         {
-            if (targetNodeRid is not null && node.Node.RoutingId != targetNodeRid) continue;
-
-            var activation = node.EntrySpotActivation;
-            if (activation is null
-                || !activation.TryResolveActorDisconnected(actor.GetType(), out var descriptor)
-                || descriptor is null)
+            if (targetNodeRid is not null && node.Node.RoutingId != targetNodeRid)
                 continue;
 
-            await activation.InvokeActorDisconnectedAsync(
-                    descriptor,
-                    actor,
-                    cancellationToken)
+            var activation = node.EntrySpotActivation;
+            if (
+                activation is null
+                || !activation.TryResolveActorDisconnected(actor.GetType(), out var descriptor)
+                || descriptor is null
+            )
+                continue;
+
+            await activation
+                .InvokeActorDisconnectedAsync(descriptor, actor, cancellationToken)
                 .ConfigureAwait(false);
             handled = true;
         }
 
         return handled;
     }
-
 
     private static async ValueTask NotifyLifecycleAsync(
         ZLinkFrameworkComponentState state,
@@ -268,7 +292,8 @@ internal sealed class ZLinkEntrySpotActorRouter(ZLinkFrameworkRuntime runtime)
         TryResolveLifecycle resolve,
         bool acquireActorTurn,
         bool throwOnFailure,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken
+    )
     {
         await NotifyLifecycleAsync(
                 state,
@@ -278,7 +303,8 @@ internal sealed class ZLinkEntrySpotActorRouter(ZLinkFrameworkRuntime runtime)
                 resolve,
                 acquireActorTurn,
                 throwOnFailure,
-                cancellationToken)
+                cancellationToken
+            )
             .ConfigureAwait(false);
     }
 
@@ -290,23 +316,30 @@ internal sealed class ZLinkEntrySpotActorRouter(ZLinkFrameworkRuntime runtime)
         TryResolveLifecycle resolve,
         bool acquireActorTurn,
         bool throwOnFailure,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken
+    )
     {
         foreach (var node in state.SpotNodes.Values)
         {
-            if (targetNodeRid is not null && node.Node.RoutingId != targetNodeRid) continue;
-            if (node.EntrySpotActivation is not { } activation) continue;
+            if (targetNodeRid is not null && node.Node.RoutingId != targetNodeRid)
+                continue;
+            if (node.EntrySpotActivation is not { } activation)
+                continue;
 
             try
             {
-                if (resolve(activation, actor.GetType(), out var descriptor)
-                    && descriptor is not null)
-                    await activation.InvokeActorLifecycleAsync(
+                if (
+                    resolve(activation, actor.GetType(), out var descriptor)
+                    && descriptor is not null
+                )
+                    await activation
+                        .InvokeActorLifecycleAsync(
                             descriptor,
                             actor,
                             request,
                             acquireActorTurn,
-                            cancellationToken)
+                            cancellationToken
+                        )
                         .ConfigureAwait(false);
             }
             catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
@@ -315,7 +348,8 @@ internal sealed class ZLinkEntrySpotActorRouter(ZLinkFrameworkRuntime runtime)
             }
             catch
             {
-                if (throwOnFailure) throw;
+                if (throwOnFailure)
+                    throw;
             }
         }
     }
@@ -323,5 +357,6 @@ internal sealed class ZLinkEntrySpotActorRouter(ZLinkFrameworkRuntime runtime)
     private delegate bool TryResolveLifecycle(
         ZLinkEntrySpotActivation activation,
         Type actorType,
-        out ZLinkSpotActorLifecycleDescriptor? descriptor);
+        out ZLinkSpotActorLifecycleDescriptor? descriptor
+    );
 }

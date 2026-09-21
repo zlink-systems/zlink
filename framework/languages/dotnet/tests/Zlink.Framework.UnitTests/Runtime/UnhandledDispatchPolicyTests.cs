@@ -5,11 +5,11 @@ using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 using Systems.Zlink.Stream.Connector.Contracts;
-using Zlink.Framework.Runtime.Messaging;
 using Zlink.Framework.Runtime.Backend.Contracts;
 using Zlink.Framework.Runtime.Codecs;
 using Zlink.Framework.Runtime.Dispatch;
 using Zlink.Framework.Runtime.Handlers;
+using Zlink.Framework.Runtime.Messaging;
 using Zlink.Framework.Runtime.Messaging;
 
 namespace Zlink.Framework.UnitTests;
@@ -27,7 +27,8 @@ public sealed partial class UnhandledDispatchPolicyTests
             new TestSubscriptionSpot(),
             nativeSpot,
             TimeSpan.FromSeconds(1),
-            CancellationToken.None);
+            CancellationToken.None
+        );
 
         Assert.Equal(3, nativeSpot.SubscriptionAttempts);
     }
@@ -61,7 +62,10 @@ public sealed partial class UnhandledDispatchPolicyTests
         var options = new ZLinkDispatchOptionsModel();
         options.Diagnostics.SetLevel(ZLinkDiagnosticsLevel.Detailed);
         var services = new ServiceCollection().BuildServiceProvider();
-        var runner = new ZLinkRuntimeTaskRunner(new ZLinkRuntimeErrorSink(), CancellationToken.None);
+        var runner = new ZLinkRuntimeTaskRunner(
+            new ZLinkRuntimeErrorSink(),
+            CancellationToken.None
+        );
         var reporter = new ZLinkDispatchErrorReporter(options);
         var logger = new CapturingLogger<ZLinkSpotSubscriptionRegistry>();
         var registryA = new ZLinkSpotSubscriptionRegistry();
@@ -100,10 +104,11 @@ public sealed partial class UnhandledDispatchPolicyTests
             "events.child",
             null,
             null,
-            "source-rid")
+            "source-rid"
+        )
         {
             FlowId = TestFlowId,
-            FlowOrigin = ZLinkFlowOrigin.Application
+            FlowOrigin = ZLinkFlowOrigin.Application,
         };
         var dispatchA = 0;
         var dispatchB = 0;
@@ -115,7 +120,8 @@ public sealed partial class UnhandledDispatchPolicyTests
                     header,
                     new TestSubscriptionEvent("payload"),
                     typeof(TestSubscriptionEvent),
-                    null);
+                    null
+                );
                 try
                 {
                     TryPublishParts(publisher, "events.child", parts);
@@ -138,9 +144,11 @@ public sealed partial class UnhandledDispatchPolicyTests
                             owner,
                             Assert.IsType<TestSubscriptionEvent>(body),
                             context,
-                            cancellationToken);
+                            cancellationToken
+                        );
                     },
-                    CancellationToken.None);
+                    CancellationToken.None
+                );
                 await registryB.DrainAsync(
                     spotB,
                     null,
@@ -153,9 +161,11 @@ public sealed partial class UnhandledDispatchPolicyTests
                             nonOwner,
                             Assert.IsType<TestSubscriptionEvent>(body),
                             context,
-                            cancellationToken);
+                            cancellationToken
+                        );
                     },
-                    CancellationToken.None);
+                    CancellationToken.None
+                );
             }
 
             Assert.True(dispatchA > 0);
@@ -176,7 +186,8 @@ public sealed partial class UnhandledDispatchPolicyTests
         using var listener = new ActivityListener
         {
             ShouldListenTo = source => source.Name == ZLinkTelemetry.ActivitySourceName,
-            Sample = (ref ActivityCreationOptions<ActivityContext> _) => ActivitySamplingResult.AllDataAndRecorded
+            Sample = (ref ActivityCreationOptions<ActivityContext> _) =>
+                ActivitySamplingResult.AllDataAndRecorded,
         };
         var activities = new List<Activity>();
         listener.ActivityStopped = activities.Add;
@@ -194,7 +205,8 @@ public sealed partial class UnhandledDispatchPolicyTests
             new ZLinkSpotActorMembership(),
             static () => throw new InvalidOperationException("Handler invoker should not be used."),
             logger,
-            dispatchErrors: new ZLinkDispatchErrorReporter(options));
+            dispatchErrors: new ZLinkDispatchErrorReporter(options)
+        );
         var parts = ZLinkEnvelopeCodec.EncodeParts(
             new ZLinkEnvelopeHeader(
                 ZLinkMessageKind.Request,
@@ -205,10 +217,12 @@ public sealed partial class UnhandledDispatchPolicyTests
                 null,
                 null,
                 null,
-                null),
+                null
+            ),
             new { Value = "join" },
             typeof(object),
-            null);
+            null
+        );
         var request = new ZLinkBackendActorJoinRequest(
             new ZLinkBackendActorRef(RoutingId.From("source-node"), "source-actor", 1),
             new ZLinkBackendActorRef(RoutingId.From("target-node"), "target-actor", 1),
@@ -216,7 +230,8 @@ public sealed partial class UnhandledDispatchPolicyTests
             "target-spot",
             1,
             parts[0],
-            parts);
+            parts
+        );
 
         try
         {
@@ -245,7 +260,8 @@ public sealed partial class UnhandledDispatchPolicyTests
             new ZLinkSpotActorJoinRegistry(),
             new ZLinkSpotActorMembership(),
             static () => throw new InvalidOperationException("Handler invoker should not be used."),
-            logger);
+            logger
+        );
         var parts = ZLinkEnvelopeCodec.EncodeParts(
             new ZLinkEnvelopeHeader(
                 ZLinkMessageKind.Request,
@@ -256,10 +272,12 @@ public sealed partial class UnhandledDispatchPolicyTests
                 null,
                 null,
                 null,
-                null),
+                null
+            ),
             new { Value = "join" },
             typeof(object),
-            null);
+            null
+        );
         var request = new ZLinkBackendActorJoinRequest(
             new ZLinkBackendActorRef(RoutingId.From("source-node"), "source-actor", 1),
             new ZLinkBackendActorRef(RoutingId.From("target-node"), "target-actor", 1),
@@ -267,7 +285,8 @@ public sealed partial class UnhandledDispatchPolicyTests
             "target-spot",
             1,
             parts[0],
-            parts);
+            parts
+        );
 
         try
         {
@@ -279,7 +298,10 @@ public sealed partial class UnhandledDispatchPolicyTests
         }
 
         Assert.Equal(1, nativeSpot.LastJoinResultCode);
-        Assert.Contains(logger.Messages, message => message.Contains("no_handler", StringComparison.Ordinal));
+        Assert.Contains(
+            logger.Messages,
+            message => message.Contains("no_handler", StringComparison.Ordinal)
+        );
     }
 
     [Fact]
@@ -288,7 +310,8 @@ public sealed partial class UnhandledDispatchPolicyTests
         using var listener = new ActivityListener
         {
             ShouldListenTo = source => source.Name == ZLinkTelemetry.ActivitySourceName,
-            Sample = (ref ActivityCreationOptions<ActivityContext> _) => ActivitySamplingResult.AllDataAndRecorded
+            Sample = (ref ActivityCreationOptions<ActivityContext> _) =>
+                ActivitySamplingResult.AllDataAndRecorded,
         };
         var activities = new List<Activity>();
         listener.ActivityStopped = activities.Add;
@@ -305,7 +328,8 @@ public sealed partial class UnhandledDispatchPolicyTests
             new ZLinkSpotActorMembership(),
             static () => throw new InvalidOperationException("Handler invoker should not be used."),
             new CapturingLogger<ZLinkSpotActorJoinDispatcher>(),
-            dispatchErrors: new ZLinkDispatchErrorReporter(options));
+            dispatchErrors: new ZLinkDispatchErrorReporter(options)
+        );
         var parts = ZLinkEnvelopeCodec.EncodeParts(
             new ZLinkEnvelopeHeader(
                 ZLinkMessageKind.Request,
@@ -316,10 +340,12 @@ public sealed partial class UnhandledDispatchPolicyTests
                 null,
                 null,
                 null,
-                null),
+                null
+            ),
             new { Value = "join" },
             typeof(object),
-            null);
+            null
+        );
         var request = new ZLinkBackendActorJoinRequest(
             new ZLinkBackendActorRef(RoutingId.From("source-node"), "source-actor", 1),
             new ZLinkBackendActorRef(RoutingId.From("target-node"), "target-actor", 1),
@@ -327,7 +353,8 @@ public sealed partial class UnhandledDispatchPolicyTests
             "target-spot",
             1,
             parts[0],
-            parts);
+            parts
+        );
 
         try
         {
@@ -338,10 +365,12 @@ public sealed partial class UnhandledDispatchPolicyTests
             ZLinkMessageParts.DisposeAll(parts);
         }
 
-        Assert.Contains(activities, activity =>
-            activity.OperationName == "zlink.dispatch_error"
-            && activity.Tags.Any(tag =>
-                tag.Key == "reason" && tag.Value == "no_handler"));
+        Assert.Contains(
+            activities,
+            activity =>
+                activity.OperationName == "zlink.dispatch_error"
+                && activity.Tags.Any(tag => tag.Key == "reason" && tag.Value == "no_handler")
+        );
     }
 
     [Fact]
@@ -352,17 +381,21 @@ public sealed partial class UnhandledDispatchPolicyTests
         {
             InstrumentPublished = (instrument, listener) =>
             {
-                if (instrument.Meter.Name == ZLinkMeters.Framework
-                    && instrument.Name == "zlink.mesh_node.messages.dropped")
+                if (
+                    instrument.Meter.Name == ZLinkMeters.Framework
+                    && instrument.Name == "zlink.mesh_node.messages.dropped"
+                )
                     listener.EnableMeasurementEvents(instrument);
-            }
+            },
         };
-        metricListener.SetMeasurementEventCallback<long>((_, _, tags, _) =>
-        {
-            foreach (var tag in tags)
-                if (tag.Key == "reason" && tag.Value is string reason)
-                    dropReasons.Enqueue(reason);
-        });
+        metricListener.SetMeasurementEventCallback<long>(
+            (_, _, tags, _) =>
+            {
+                foreach (var tag in tags)
+                    if (tag.Key == "reason" && tag.Value is string reason)
+                        dropReasons.Enqueue(reason);
+            }
+        );
         metricListener.Start();
 
         var probe = new PublishProbe();
@@ -374,7 +407,10 @@ public sealed partial class UnhandledDispatchPolicyTests
         registration.Filters.Add(typeof(CapturingFanoutFilter));
         var observer = new CapturingMessageFlowObserver();
         registration.DispatchOptions.Diagnostics.SetLevel(ZLinkDiagnosticsLevel.Detailed);
-        var runner = new ZLinkRuntimeTaskRunner(new ZLinkRuntimeErrorSink(), CancellationToken.None);
+        var runner = new ZLinkRuntimeTaskRunner(
+            new ZLinkRuntimeErrorSink(),
+            CancellationToken.None
+        );
         var registry = new ZLinkHandlerRegistry([
             new ZLinkHandlerEndpointDescriptor(
                 ZLinkMessageKind.Publish,
@@ -387,7 +423,8 @@ public sealed partial class UnhandledDispatchPolicyTests
                 null,
                 false,
                 new HashSet<string>(StringComparer.Ordinal),
-                "play"),
+                "play"
+            ),
             new ZLinkHandlerEndpointDescriptor(
                 ZLinkMessageKind.Publish,
                 "SharedEvent",
@@ -400,16 +437,19 @@ public sealed partial class UnhandledDispatchPolicyTests
                 null,
                 false,
                 new HashSet<string>(StringComparer.Ordinal),
-                "play")
+                "play"
+            ),
         ]);
         var pipeline = new ZLinkChannelPublishDispatchPipeline(
             registry,
             new ZLinkHandlerDispatcher(
                 services.GetRequiredService<IServiceScopeFactory>(),
-                registration),
+                registration
+            ),
             static _ => new HashSet<string>(StringComparer.Ordinal),
             new ZLinkDispatchErrorReporter(registration.DispatchOptions),
-            registration.Codecs);
+            registration.Codecs
+        );
         var header = new ZLinkEnvelopeHeader(
             ZLinkMessageKind.Publish,
             "play",
@@ -419,7 +459,8 @@ public sealed partial class UnhandledDispatchPolicyTests
             null,
             "events",
             null,
-            null);
+            null
+        );
         var backendFactory = new ZLinkDotNetBackendAdapterFactory();
         await using var context = backendFactory.CreateRuntimeContext();
         await using var publisher = context.CreatePublisherSocket();
@@ -438,7 +479,8 @@ public sealed partial class UnhandledDispatchPolicyTests
                 header,
                 new TestPublishedEvent("delivered"),
                 typeof(TestPublishedEvent),
-                null);
+                null
+            );
             try
             {
                 TryPublishParts(publisher, "events", parts);
@@ -461,9 +503,7 @@ public sealed partial class UnhandledDispatchPolicyTests
         await pipeline.DispatchAsync("play", topicMessage, header, CancellationToken.None);
 
         Assert.Equal("delivered", probe.Value);
-        Assert.Equal(
-            ZLinkHandlerDispatchKind.ClassicFanout,
-            probe.FilterDispatchKind);
+        Assert.Equal(ZLinkHandlerDispatchKind.ClassicFanout, probe.FilterDispatchKind);
         Assert.Null(probe.FilterMeshName);
         Assert.Empty(observer.Events);
         Assert.Empty(dropReasons);
@@ -477,9 +517,11 @@ public sealed partial class UnhandledDispatchPolicyTests
         var options = new ZLinkDispatchOptionsModel();
         options.Diagnostics.SetLevel(ZLinkDiagnosticsLevel.Detailed);
         var services = new ServiceCollection().BuildServiceProvider();
-        var runner = new ZLinkRuntimeTaskRunner(new ZLinkRuntimeErrorSink(), CancellationToken.None);
-        var reporter = new ZLinkDispatchErrorReporter(
-            options);
+        var runner = new ZLinkRuntimeTaskRunner(
+            new ZLinkRuntimeErrorSink(),
+            CancellationToken.None
+        );
+        var reporter = new ZLinkDispatchErrorReporter(options);
         var error = new ZLinkDispatchFailure(
             ZLinkDispatchErrorSurface.Channel,
             ZLinkDispatchMessageKind.Request,
@@ -487,7 +529,8 @@ public sealed partial class UnhandledDispatchPolicyTests
             ZLinkDispatchErrorAction.ReplyError,
             "MissingReq",
             "api",
-            CorrelationId: "corr-1");
+            CorrelationId: "corr-1"
+        );
 
         reporter.Report(error);
 
@@ -510,18 +553,23 @@ public sealed partial class UnhandledDispatchPolicyTests
         var options = new ZLinkDispatchOptionsModel();
         options.Diagnostics.SetLevel(ZLinkDiagnosticsLevel.Detailed);
         var services = new ServiceCollection().BuildServiceProvider();
-        var runner = new ZLinkRuntimeTaskRunner(new ZLinkRuntimeErrorSink(), CancellationToken.None);
+        var runner = new ZLinkRuntimeTaskRunner(
+            new ZLinkRuntimeErrorSink(),
+            CancellationToken.None
+        );
         var reporter = new ZLinkDispatchErrorReporter(options);
         var scope = new ZLinkDispatchFlowScope(
             ZLinkDispatchErrorSurface.SpotActor,
             reporter.Flow.CaptureEnabled,
             ZLinkDispatchMessageKind.ActorRequest,
             "MissingReply",
-            actorId: "actor-1");
+            actorId: "actor-1"
+        );
 
         scope.ReplyPathMissing(
             reporter,
-            new InvalidOperationException("The handler returned no reply."));
+            new InvalidOperationException("The handler returned no reply.")
+        );
 
         var observed = await observer.WaitAsync(TimeSpan.FromSeconds(2));
         Assert.Equal("failed", observed.Outcome);
@@ -538,14 +586,16 @@ public sealed partial class UnhandledDispatchPolicyTests
         var options = new ZLinkDispatchOptionsModel();
         options.Diagnostics.SetLevel(ZLinkDiagnosticsLevel.Detailed);
         var services = new ServiceCollection().BuildServiceProvider();
-        var runner = new ZLinkRuntimeTaskRunner(new ZLinkRuntimeErrorSink(), CancellationToken.None);
+        var runner = new ZLinkRuntimeTaskRunner(
+            new ZLinkRuntimeErrorSink(),
+            CancellationToken.None
+        );
         var logger = new CapturingLogger<ZLinkSpotActorPacketDispatcher>();
         var dispatcher = new ZLinkSpotActorPacketDispatcher(
             static () => new ZLinkSpotActorHandlerRegistry(ZLinkSpotActorHandlerSurface.UserSpot),
             static () => throw new InvalidOperationException("Handler invoker should not be used."),
-            new ZLinkDispatchErrorReporter(
-                options,
-                logger));
+            new ZLinkDispatchErrorReporter(options, logger)
+        );
         var actor = new TestActor("actor-1");
         var runtimeState = new ZLinkActorRuntimeState(actor.ActorId);
         runtimeState.BindActorInstance(actor);
@@ -556,19 +606,23 @@ public sealed partial class UnhandledDispatchPolicyTests
             ZlinkStreamHeaderFlags.None,
             null,
             "missing-actor-send",
-            ZlinkStreamMetadata.Empty);
+            ZlinkStreamMetadata.Empty
+        );
 
         await dispatcher.DispatchAsync(actor, runtimeState, header, body, CancellationToken.None);
 
-        Assert.Contains(logger.Messages, message =>
-            message.StartsWith("zlink flow: ", StringComparison.Ordinal)
-            && message.Contains("event=zlink.dispatch_error", StringComparison.Ordinal)
-            && message.Contains("surface=actor", StringComparison.Ordinal)
-            && message.Contains("kind=send", StringComparison.Ordinal)
-            && message.Contains("packet=missing-actor-send", StringComparison.Ordinal)
-            && message.Contains("actor=actor-1", StringComparison.Ordinal)
-            && message.Contains("outcome=failed", StringComparison.Ordinal)
-            && message.Contains("reason=no_handler", StringComparison.Ordinal));
+        Assert.Contains(
+            logger.Messages,
+            message =>
+                message.StartsWith("zlink flow: ", StringComparison.Ordinal)
+                && message.Contains("event=zlink.dispatch_error", StringComparison.Ordinal)
+                && message.Contains("surface=actor", StringComparison.Ordinal)
+                && message.Contains("kind=send", StringComparison.Ordinal)
+                && message.Contains("packet=missing-actor-send", StringComparison.Ordinal)
+                && message.Contains("actor=actor-1", StringComparison.Ordinal)
+                && message.Contains("outcome=failed", StringComparison.Ordinal)
+                && message.Contains("reason=no_handler", StringComparison.Ordinal)
+        );
         await runner.StopAsync();
     }
 
@@ -578,31 +632,30 @@ public sealed partial class UnhandledDispatchPolicyTests
         var options = new ZLinkDispatchOptionsModel();
         options.Diagnostics.SetLevel(ZLinkDiagnosticsLevel.Detailed);
         var probe = new TestActorSendProbe();
-        using var services = new ServiceCollection()
-            .AddSingleton(probe)
-            .BuildServiceProvider();
-        var runner = new ZLinkRuntimeTaskRunner(new ZLinkRuntimeErrorSink(), CancellationToken.None);
+        using var services = new ServiceCollection().AddSingleton(probe).BuildServiceProvider();
+        var runner = new ZLinkRuntimeTaskRunner(
+            new ZLinkRuntimeErrorSink(),
+            CancellationToken.None
+        );
         var logger = new CapturingLogger<ZLinkSpotActorPacketDispatcher>();
         var registry = new ZLinkSpotActorHandlerRegistry(
             ZLinkSpotActorHandlerSurface.UserSpot,
-            typeof(TestActorSpot));
-        registry.AddPacket(
-            typeof(TestActorSendHandler),
-            typeof(TestActor),
-            "malformed-actor-send");
+            typeof(TestActorSpot)
+        );
+        registry.AddPacket(typeof(TestActorSendHandler), typeof(TestActor), "malformed-actor-send");
         registry.Bind();
         await using var handlerInstances = new ZLinkScopedHandlerInstanceOwner(services);
         var invoker = new ZLinkSpotHandlerInvoker(
             handlerInstances,
             new TestActorSpot(),
             new ZLinkCodecRegistryBuilder(),
-            null);
+            null
+        );
         var dispatcher = new ZLinkSpotActorPacketDispatcher(
             () => registry,
             () => invoker,
-            new ZLinkDispatchErrorReporter(
-                options,
-                logger));
+            new ZLinkDispatchErrorReporter(options, logger)
+        );
         var actor = new TestActor("actor-1");
         var runtimeState = new ZLinkActorRuntimeState(actor.ActorId);
         runtimeState.BindActorInstance(actor);
@@ -613,19 +666,23 @@ public sealed partial class UnhandledDispatchPolicyTests
             ZlinkStreamHeaderFlags.None,
             null,
             "malformed-actor-send",
-            ZlinkStreamMetadata.Empty);
+            ZlinkStreamMetadata.Empty
+        );
 
         await dispatcher.DispatchAsync(actor, runtimeState, header, body, CancellationToken.None);
 
-        Assert.Contains(logger.Messages, message =>
-            message.StartsWith("zlink flow: ", StringComparison.Ordinal)
-            && message.Contains("event=zlink.dispatch_error", StringComparison.Ordinal)
-            && message.Contains("surface=actor", StringComparison.Ordinal)
-            && message.Contains("kind=send", StringComparison.Ordinal)
-            && message.Contains("packet=malformed-actor-send", StringComparison.Ordinal)
-            && message.Contains("actor=actor-1", StringComparison.Ordinal)
-            && message.Contains("outcome=failed", StringComparison.Ordinal)
-            && message.Contains("reason=decode_error", StringComparison.Ordinal));
+        Assert.Contains(
+            logger.Messages,
+            message =>
+                message.StartsWith("zlink flow: ", StringComparison.Ordinal)
+                && message.Contains("event=zlink.dispatch_error", StringComparison.Ordinal)
+                && message.Contains("surface=actor", StringComparison.Ordinal)
+                && message.Contains("kind=send", StringComparison.Ordinal)
+                && message.Contains("packet=malformed-actor-send", StringComparison.Ordinal)
+                && message.Contains("actor=actor-1", StringComparison.Ordinal)
+                && message.Contains("outcome=failed", StringComparison.Ordinal)
+                && message.Contains("reason=decode_error", StringComparison.Ordinal)
+        );
         Assert.Equal(0, probe.InvocationCount);
         await runner.StopAsync();
     }
@@ -633,7 +690,8 @@ public sealed partial class UnhandledDispatchPolicyTests
     private static bool TryPublishParts(
         IPublisherSocket publisher,
         string topic,
-        IReadOnlyList<Message> parts)
+        IReadOnlyList<Message> parts
+    )
     {
         if (parts.Count == 0)
             throw new ArgumentException("At least one message part is required.", nameof(parts));
@@ -643,15 +701,14 @@ public sealed partial class UnhandledDispatchPolicyTests
         return submit.Submit();
     }
 
-    private static async Task<Received> ReceiveAsync(
-        IRouterSocket router,
-        TimeSpan timeout)
+    private static async Task<Received> ReceiveAsync(IRouterSocket router, TimeSpan timeout)
     {
         var deadlineStarted = Stopwatch.GetTimestamp();
         while (Stopwatch.GetElapsedTime(deadlineStarted) < timeout)
         {
             var received = Received.Create();
-            if (router.Recv(received, RecvFlags.DontWait)) return received;
+            if (router.Recv(received, RecvFlags.DontWait))
+                return received;
             received.Dispose();
 
             await Task.Yield();
@@ -663,13 +720,17 @@ public sealed partial class UnhandledDispatchPolicyTests
     private const string TestFlowId = "0196f7c2-4cb4-7cc8-89d4-2d6aee6fca2d";
 
     private static async Task<SpotSubscriptionObservation> ObserveUnknownSpotSubscriptionAsync(
-        bool malformed)
+        bool malformed
+    )
     {
         var observer = new CapturingMessageFlowObserver();
         var options = new ZLinkDispatchOptionsModel();
         options.Diagnostics.SetLevel(ZLinkDiagnosticsLevel.Detailed);
         var services = new ServiceCollection().BuildServiceProvider();
-        var runner = new ZLinkRuntimeTaskRunner(new ZLinkRuntimeErrorSink(), CancellationToken.None);
+        var runner = new ZLinkRuntimeTaskRunner(
+            new ZLinkRuntimeErrorSink(),
+            CancellationToken.None
+        );
         var reporter = new ZLinkDispatchErrorReporter(options);
         var logger = new CapturingLogger<ZLinkSpotSubscriptionRegistry>();
         var registry = new ZLinkSpotSubscriptionRegistry();
@@ -679,7 +740,8 @@ public sealed partial class UnhandledDispatchPolicyTests
             new TestSubscriptionSpot(),
             nativeSpot,
             TimeSpan.FromSeconds(1),
-            CancellationToken.None);
+            CancellationToken.None
+        );
 
         var backendFactory = new ZLinkDotNetBackendAdapterFactory();
         await using var context = backendFactory.CreateRuntimeContext();
@@ -701,10 +763,11 @@ public sealed partial class UnhandledDispatchPolicyTests
             "events.child",
             null,
             null,
-            "source-rid")
+            "source-rid"
+        )
         {
             FlowId = TestFlowId,
-            FlowOrigin = ZLinkFlowOrigin.Application
+            FlowOrigin = ZLinkFlowOrigin.Application,
         };
         IReadOnlyList<Message> CreateParts()
         {
@@ -713,14 +776,18 @@ public sealed partial class UnhandledDispatchPolicyTests
                     header,
                     new TestSubscriptionEvent("payload"),
                     typeof(TestSubscriptionEvent),
-                    null);
+                    null
+                );
 
             return
             [
-                Message.From(System.Text.Json.JsonSerializer.SerializeToUtf8Bytes(
-                    header,
-                    ZLinkJsonSerializerOptions.Default)),
-                Message.From("{}")
+                Message.From(
+                    System.Text.Json.JsonSerializer.SerializeToUtf8Bytes(
+                        header,
+                        ZLinkJsonSerializerOptions.Default
+                    )
+                ),
+                Message.From("{}"),
             ];
         }
 
@@ -750,7 +817,8 @@ public sealed partial class UnhandledDispatchPolicyTests
                         dispatchCount++;
                         return ValueTask.CompletedTask;
                     },
-                    CancellationToken.None);
+                    CancellationToken.None
+                );
             }
 
             var error = observer.Events.FirstOrDefault();
@@ -759,7 +827,8 @@ public sealed partial class UnhandledDispatchPolicyTests
                 received,
                 error,
                 dispatchCount,
-                logger.Messages.ToArray());
+                logger.Messages.ToArray()
+            );
         }
         finally
         {
@@ -767,8 +836,7 @@ public sealed partial class UnhandledDispatchPolicyTests
         }
     }
 
-    private static string GetInprocEndpoint() =>
-        $"inproc://unhandled-dispatch-{Guid.NewGuid():N}";
+    private static string GetInprocEndpoint() => $"inproc://unhandled-dispatch-{Guid.NewGuid():N}";
 
     private sealed class NeverInvokedHandler;
 
@@ -782,7 +850,8 @@ public sealed partial class UnhandledDispatchPolicyTests
 
     private sealed class TestSubscriptionSpot(
         bool ownsMessage = true,
-        TestSubscriptionProbe? probe = null) : IZLinkSpot
+        TestSubscriptionProbe? probe = null
+    ) : IZLinkSpot
     {
         public bool OwnsMessage { get; } = ownsMessage;
 
@@ -805,7 +874,8 @@ public sealed partial class UnhandledDispatchPolicyTests
             TestSubscriptionSpot spot,
             TestSubscriptionEvent message,
             ZLinkPublishMessageContext context,
-            CancellationToken cancellationToken)
+            CancellationToken cancellationToken
+        )
         {
             _ = message;
             cancellationToken.ThrowIfCancellationRequested();
@@ -825,7 +895,8 @@ public sealed partial class UnhandledDispatchPolicyTests
         ObservedMessageFlow? Received,
         ObservedMessageFlow? Terminal,
         int DispatchCount,
-        IReadOnlyList<string> LogMessages);
+        IReadOnlyList<string> LogMessages
+    );
 
     private sealed class PublishProbe
     {
@@ -836,13 +907,13 @@ public sealed partial class UnhandledDispatchPolicyTests
         public string? FilterMeshName { get; set; }
     }
 
-    private sealed class CapturingFanoutFilter(PublishProbe probe)
-        : IZLinkHandlerFilter
+    private sealed class CapturingFanoutFilter(PublishProbe probe) : IZLinkHandlerFilter
     {
         public async ValueTask InvokeAsync(
             IZLinkHandlerFilterContext context,
             ZLinkHandlerFilterNext next,
-            CancellationToken cancellationToken)
+            CancellationToken cancellationToken
+        )
         {
             cancellationToken.ThrowIfCancellationRequested();
             probe.FilterDispatchKind = context.DispatchKind;
@@ -875,7 +946,8 @@ public sealed partial class UnhandledDispatchPolicyTests
             TestActor actor,
             IZLinkMessageContext context,
             TestRequest message,
-            CancellationToken cancellationToken)
+            CancellationToken cancellationToken
+        )
         {
             Interlocked.Increment(ref probe.InvocationCount);
             return ValueTask.CompletedTask;
@@ -886,8 +958,9 @@ public sealed partial class UnhandledDispatchPolicyTests
     {
         private readonly ActivityListener _listener;
         private readonly ConcurrentQueue<ObservedMessageFlow> _events = new();
-        private readonly TaskCompletionSource<ObservedMessageFlow> _observed =
-            new(TaskCreationOptions.RunContinuationsAsynchronously);
+        private readonly TaskCompletionSource<ObservedMessageFlow> _observed = new(
+            TaskCreationOptions.RunContinuationsAsynchronously
+        );
 
         public CapturingMessageFlowObserver()
         {
@@ -896,7 +969,7 @@ public sealed partial class UnhandledDispatchPolicyTests
                 ShouldListenTo = source => source.Name == ZLinkTelemetry.ActivitySourceName,
                 Sample = (ref ActivityCreationOptions<ActivityContext> _) =>
                     ActivitySamplingResult.AllDataAndRecorded,
-                ActivityStopped = Capture
+                ActivityStopped = Capture,
             };
             ActivitySource.AddActivityListener(_listener);
         }
@@ -930,10 +1003,10 @@ public sealed partial class UnhandledDispatchPolicyTests
                 Tag("correlation_id"),
                 Tag("actor_id") ?? Tag("zlink.actor.id"),
                 Normalize(Tag("reason") ?? Tag("zlink.reason")),
-                Normalize(Tag("action") ?? Tag("zlink.action")));
+                Normalize(Tag("action") ?? Tag("zlink.action"))
+            );
             _events.Enqueue(flow);
-            if (flow.Phase == "dropped"
-                || flow.Outcome == "failed" && flow.Action != "drop")
+            if (flow.Phase == "dropped" || flow.Outcome == "failed" && flow.Action != "drop")
                 _observed.TrySetResult(flow);
         }
 
@@ -950,7 +1023,7 @@ public sealed partial class UnhandledDispatchPolicyTests
                 "FailCaller" => "fail_caller",
                 "ActorSend" => "send",
                 "ActorRequest" => "request",
-                _ => value?.ToLowerInvariant()
+                _ => value?.ToLowerInvariant(),
             };
     }
 
@@ -964,13 +1037,15 @@ public sealed partial class UnhandledDispatchPolicyTests
         string? CorrelationId,
         string? ActorId,
         string? Reason,
-        string? Action);
+        string? Action
+    );
 
     private sealed class CapturingLogger<T> : ILogger<T>
     {
         public List<string> Messages { get; } = [];
 
-        public IDisposable? BeginScope<TState>(TState state) where TState : notnull
+        public IDisposable? BeginScope<TState>(TState state)
+            where TState : notnull
         {
             return null;
         }
@@ -985,7 +1060,8 @@ public sealed partial class UnhandledDispatchPolicyTests
             EventId eventId,
             TState state,
             Exception? exception,
-            Func<TState, Exception?, string> formatter)
+            Func<TState, Exception?, string> formatter
+        )
         {
             Messages.Add(formatter(state, exception));
         }
@@ -1004,7 +1080,9 @@ public sealed partial class UnhandledDispatchPolicyTests
             new ZLinkHandlerRegistry([]),
             new ZLinkHandlerDispatcher(
                 provider.GetRequiredService<IServiceScopeFactory>(),
-                registration));
+                registration
+            )
+        );
         return provider;
     }
 
@@ -1027,9 +1105,7 @@ public sealed partial class UnhandledDispatchPolicyTests
             return ValueTask.CompletedTask;
         }
 
-        public void SetRoutingId(RoutingId routingId)
-        {
-        }
+        public void SetRoutingId(RoutingId routingId) { }
 
         public void SetSubscription(string channelName, string topic)
         {
@@ -1040,13 +1116,15 @@ public sealed partial class UnhandledDispatchPolicyTests
 
         public ZLinkBackendSubscribeMessage? Subscribe(RecvFlags flags)
         {
-            if (SubscribeHandler is null) return null;
+            if (SubscribeHandler is null)
+                return null;
             var topicMessage = new TopicMessage();
             try
             {
-                if (!SubscribeHandler(topicMessage)) return null;
-                var parts = topicMessage.Parts
-                    .Select(static part => Message.From(part.AsReadOnlySpan()))
+                if (!SubscribeHandler(topicMessage))
+                    return null;
+                var parts = topicMessage
+                    .Parts.Select(static part => Message.From(part.AsReadOnlySpan()))
                     .ToArray();
                 return new ZLinkBackendSubscribeMessage("events", topicMessage.Topic, parts);
             }
@@ -1058,9 +1136,12 @@ public sealed partial class UnhandledDispatchPolicyTests
 
         public ZLinkBackendRouteReceived? RecvRoute(RecvFlags flags) => null;
 
-        public void OnDispatchEvent(Func<ZLinkBackendSpotDispatchInfo, (ValueTask Completion, Func<CancellationToken, ValueTask>? Drain)> handler)
-        {
-        }
+        public void OnDispatchEvent(
+            Func<
+                ZLinkBackendSpotDispatchInfo,
+                (ValueTask Completion, Func<CancellationToken, ValueTask>? Drain)
+            > handler
+        ) { }
 
         public bool RequestToChannel(
             string channelName,
@@ -1068,7 +1149,8 @@ public sealed partial class UnhandledDispatchPolicyTests
             ZLinkBackendRequestCallback callback,
             SendFlags flags,
             TimeSpan? timeout,
-            ReadOnlyMemory<byte> metadata)
+            ReadOnlyMemory<byte> metadata
+        )
         {
             return false;
         }
@@ -1079,40 +1161,56 @@ public sealed partial class UnhandledDispatchPolicyTests
             ZLinkBackendRequestCallback callback,
             SendFlags flags,
             TimeSpan? timeout,
-            ReadOnlyMemory<byte> metadata)
+            ReadOnlyMemory<byte> metadata
+        )
         {
             return false;
         }
 
         public SubmitResult SendToChannel(
-            string channelName, Message message, SendFlags flags,
-            ReadOnlyMemory<byte> metadata)
+            string channelName,
+            Message message,
+            SendFlags flags,
+            ReadOnlyMemory<byte> metadata
+        )
         {
             return SubmitResult.Backpressured;
         }
 
         public SubmitResult SendToChannel(
-            string channelName, IReadOnlyList<Message> parts, SendFlags flags,
-            ReadOnlyMemory<byte> metadata)
+            string channelName,
+            IReadOnlyList<Message> parts,
+            SendFlags flags,
+            ReadOnlyMemory<byte> metadata
+        )
         {
             return SubmitResult.Backpressured;
         }
 
         public void Publish(
-            string channelName, string topic, Message message, SendFlags flags,
-            ReadOnlyMemory<byte> metadata)
-        {
-        }
+            string channelName,
+            string topic,
+            Message message,
+            SendFlags flags,
+            ReadOnlyMemory<byte> metadata
+        ) { }
 
         public void Publish(
-            string channelName, string topic, IReadOnlyList<Message> parts, SendFlags flags,
-            ReadOnlyMemory<byte> metadata)
-        {
-        }
+            string channelName,
+            string topic,
+            IReadOnlyList<Message> parts,
+            SendFlags flags,
+            ReadOnlyMemory<byte> metadata
+        ) { }
 
         public SubmitResult SendToSpot(
-            RoutingId targetRid, string targetSpotId, ulong spotGeneration,
-            Message message, SendFlags flags, ReadOnlyMemory<byte> metadata)
+            RoutingId targetRid,
+            string targetSpotId,
+            ulong spotGeneration,
+            Message message,
+            SendFlags flags,
+            ReadOnlyMemory<byte> metadata
+        )
         {
             return SubmitResult.Backpressured;
         }
@@ -1123,7 +1221,8 @@ public sealed partial class UnhandledDispatchPolicyTests
             ulong spotGeneration,
             IReadOnlyList<Message> parts,
             SendFlags flags,
-            ReadOnlyMemory<byte> metadata)
+            ReadOnlyMemory<byte> metadata
+        )
         {
             return SubmitResult.Backpressured;
         }
@@ -1136,7 +1235,8 @@ public sealed partial class UnhandledDispatchPolicyTests
             ZLinkBackendRequestCallback callback,
             SendFlags flags,
             TimeSpan? timeout,
-            ReadOnlyMemory<byte> metadata)
+            ReadOnlyMemory<byte> metadata
+        )
         {
             return false;
         }
@@ -1149,7 +1249,8 @@ public sealed partial class UnhandledDispatchPolicyTests
             ZLinkBackendRequestCallback callback,
             SendFlags flags,
             TimeSpan? timeout,
-            ReadOnlyMemory<byte> metadata)
+            ReadOnlyMemory<byte> metadata
+        )
         {
             return false;
         }
@@ -1167,7 +1268,8 @@ public sealed partial class UnhandledDispatchPolicyTests
         public void ReplyActorJoin(
             ZLinkBackendActorJoinRequest request,
             int joinResultCode,
-            Message reply)
+            Message reply
+        )
         {
             LastJoinResultCode = joinResultCode;
         }
@@ -1175,15 +1277,15 @@ public sealed partial class UnhandledDispatchPolicyTests
         public void ReplyActorJoin(
             ZLinkBackendActorJoinRequest request,
             int joinResultCode,
-            IReadOnlyList<Message> parts)
+            IReadOnlyList<Message> parts
+        )
         {
             LastJoinResultCode = joinResultCode;
         }
 
         public void OnActorLifecycle(
             Action<ZLinkBackendSpotActorLifecycleInfo>? onJoin,
-            Action<ZLinkBackendSpotActorLifecycleInfo>? onLeave)
-        {
-        }
+            Action<ZLinkBackendSpotActorLifecycleInfo>? onLeave
+        ) { }
     }
 }

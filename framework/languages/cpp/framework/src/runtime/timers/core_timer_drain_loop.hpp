@@ -55,15 +55,9 @@ class core_timer_drain_loop_t
         _worker = std::thread ([this] { run (); });
     }
 
-    bool valid () const noexcept
-    {
-        return _timer.valid ();
-    }
+    bool valid () const noexcept { return _timer.valid (); }
 
-    void stop ()
-    {
-        _timer.stop ();
-    }
+    void stop () { _timer.stop (); }
 
     void close ()
     {
@@ -104,8 +98,8 @@ class core_timer_drain_loop_t
         std::array<zlink::poll_event_t, 1> events{};
         while (!_stop.load (std::memory_order_acquire)) {
             try {
-                if (_poller.wait (events.data (), events.size (),
-                                  std::chrono::milliseconds (50)) == 0)
+                if (_poller.wait (events.data (), events.size (), std::chrono::milliseconds (50))
+                    == 0)
                     continue;
                 const auto fire_count = _timer.recv ();
                 if (fire_count && _drain)

@@ -19,30 +19,18 @@ struct message_follow_suppression_key_t
 
     bool operator< (const message_follow_suppression_key_t &other) const noexcept
     {
-        return std::tie (source.actor_id,
-                         source.object_generation,
-                         source.target_node_routing_id,
-                         source.target_node_generation,
-                         source.authority_owner_generation,
-                         source.owner_lease_generation,
-                         target.actor_id,
-                         target.object_generation,
-                         target.target_node_routing_id,
-                         target.target_node_generation,
-                         target.authority_owner_generation,
-                         target.owner_lease_generation)
-               < std::tie (other.source.actor_id,
-                           other.source.object_generation,
-                           other.source.target_node_routing_id,
-                           other.source.target_node_generation,
-                           other.source.authority_owner_generation,
-                           other.source.owner_lease_generation,
-                           other.target.actor_id,
-                           other.target.object_generation,
-                           other.target.target_node_routing_id,
-                           other.target.target_node_generation,
-                           other.target.authority_owner_generation,
-                           other.target.owner_lease_generation);
+        return std::tie (source.actor_id, source.object_generation, source.target_node_routing_id,
+                         source.target_node_generation, source.authority_owner_generation,
+                         source.owner_lease_generation, target.actor_id, target.object_generation,
+                         target.target_node_routing_id, target.target_node_generation,
+                         target.authority_owner_generation, target.owner_lease_generation)
+               < std::tie (
+                 other.source.actor_id, other.source.object_generation,
+                 other.source.target_node_routing_id, other.source.target_node_generation,
+                 other.source.authority_owner_generation, other.source.owner_lease_generation,
+                 other.target.actor_id, other.target.object_generation,
+                 other.target.target_node_routing_id, other.target.target_node_generation,
+                 other.target.authority_owner_generation, other.target.owner_lease_generation);
     }
 };
 
@@ -83,15 +71,9 @@ class message_follow_suppression_registry_t
         return true;
     }
 
-    void erase (const message_follow_suppression_key_t &key) noexcept
-    {
-        _states.erase (key);
-    }
+    void erase (const message_follow_suppression_key_t &key) noexcept { _states.erase (key); }
 
-    std::size_t size () const noexcept
-    {
-        return _states.size ();
-    }
+    std::size_t size () const noexcept { return _states.size (); }
 
   private:
     enum class state_t

@@ -17,18 +17,20 @@ export class ZLinkSourceSpotRouter {
     signal?: AbortSignal
   ): Promise<TReply> {
     throwIfAborted(signal);
-    const parts = [encodeSpotDirectEnvelope(
-      ZLinkChannelMessageKind.Request,
-      target.routerChannelId,
-      packetName,
-      request
-    )] as readonly Message[];
+    const parts = [
+      encodeSpotDirectEnvelope(
+        ZLinkChannelMessageKind.Request,
+        target.routerChannelId,
+        packetName,
+        request
+      )
+    ] as readonly Message[];
     const operation = sourceSpot.requestToSpot(
-        target.targetNodeRid,
-        target.spotId,
-        parts,
-        timeoutMs ?? this.defaultRequestTimeoutMs
-      );
+      target.targetNodeRid,
+      target.spotId,
+      parts,
+      timeoutMs ?? this.defaultRequestTimeoutMs
+    );
     const replyParts = await awaitWithAbort(operation, signal, () => {
       void operation.then(closeMessages, () => undefined);
     });
@@ -50,13 +52,15 @@ export class ZLinkSourceSpotRouter {
     timeoutMs?: number
   ): Promise<void> {
     throwIfAborted(signal);
-    const parts = [encodeSpotDirectEnvelope(
-      ZLinkChannelMessageKind.Command,
-      target.routerChannelId,
-      packetName,
-      message,
-      metadata
-    )] as readonly Message[];
+    const parts = [
+      encodeSpotDirectEnvelope(
+        ZLinkChannelMessageKind.Command,
+        target.routerChannelId,
+        packetName,
+        message,
+        metadata
+      )
+    ] as readonly Message[];
     try {
       void timeoutMs;
       await awaitWithAbort(
@@ -77,10 +81,10 @@ export class ZLinkSourceSpotRouter {
   ): Promise<readonly Message[]> {
     throwIfAborted(signal);
     const operation = sourceSpot.requestToSpot(
-        target.targetNodeRid,
-        target.spotId,
-        request,
-        timeoutMs ?? this.defaultRequestTimeoutMs
+      target.targetNodeRid,
+      target.spotId,
+      request,
+      timeoutMs ?? this.defaultRequestTimeoutMs
     );
     return await awaitWithAbort(operation, signal, () => {
       void operation.then(closeMessages, () => undefined);

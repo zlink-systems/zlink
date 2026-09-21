@@ -44,8 +44,7 @@ public sealed class SubmitAdmissionRuntimeTests
             using var received = Received.Create();
             Assert.True(pair.Server.Recv(received));
             pair.DrainCompletions();
-            Assert.Equal(AdmissionPair.Payload(sequence),
-                received.SinglePartOrThrow().ToArray());
+            Assert.Equal(AdmissionPair.Payload(sequence), received.SinglePartOrThrow().ToArray());
         }
         await producer.WaitAsync(TimeSpan.FromSeconds(5));
         Assert.Equal(recordCount, attempts);
@@ -84,8 +83,9 @@ public sealed class SubmitAdmissionRuntimeTests
 
             Assert.False(admission.IsCompleted);
             cancellation.Cancel();
-            var error = await Assert.ThrowsAnyAsync<OperationCanceledException>(
-                () => admission.WaitAsync(TimeSpan.FromSeconds(5)));
+            var error = await Assert.ThrowsAnyAsync<OperationCanceledException>(() =>
+                admission.WaitAsync(TimeSpan.FromSeconds(5))
+            );
             Assert.Equal(cancellation.Token, error.CancellationToken);
             return;
         }
@@ -102,8 +102,11 @@ public sealed class SubmitAdmissionRuntimeTests
         server.SetRoutingId(serverRid);
         server.Options.ReceiveTimeout = TimeSpan.FromSeconds(5);
         server.Bind(endpoint);
-        using var client = new ZLinkRawRouterServicePort(context,
-            RoutingId.From("independent-requests"), endpoint + "-source");
+        using var client = new ZLinkRawRouterServicePort(
+            context,
+            RoutingId.From("independent-requests"),
+            endpoint + "-source"
+        );
         client.Start();
         client.Connect(endpoint, serverRid);
 
@@ -113,9 +116,11 @@ public sealed class SubmitAdmissionRuntimeTests
         try
         {
             for (var sequence = 0; sequence < recordCount; sequence++)
-                requests[sequence] = client.RequestAsync(serverRid,
+                requests[sequence] = client.RequestAsync(
+                    serverRid,
                     new ReadOnlyMemory<byte>[] { new byte[] { (byte)sequence } },
-                    TimeSpan.FromSeconds(5));
+                    TimeSpan.FromSeconds(5)
+                );
 
             for (var sequence = 0; sequence < recordCount; sequence++)
             {
@@ -132,14 +137,17 @@ public sealed class SubmitAdmissionRuntimeTests
             {
                 using var payload = Message.From(new byte[] { (byte)sequence });
                 received[sequence]!.Reply().Message(payload).Submit();
-                Assert.True(SpinWait.SpinUntil(
-                    () =>
-                    {
-                        client.TryReceive(out var unexpected);
-                        unexpected?.Dispose();
-                        return requests[sequence].IsCompleted;
-                    },
-                    TimeSpan.FromSeconds(5)));
+                Assert.True(
+                    SpinWait.SpinUntil(
+                        () =>
+                        {
+                            client.TryReceive(out var unexpected);
+                            unexpected?.Dispose();
+                            return requests[sequence].IsCompleted;
+                        },
+                        TimeSpan.FromSeconds(5)
+                    )
+                );
                 using var reply = await requests[sequence].WaitAsync(TimeSpan.FromSeconds(5));
                 Assert.Equal(new byte[] { (byte)sequence }, Assert.Single(reply.Parts).ToArray());
                 for (var pending = 0; pending < sequence; pending++)
@@ -161,7 +169,9 @@ public sealed class SubmitAdmissionRuntimeTests
                 runtime: null!,
                 meshName: "mesh",
                 targetNodeRid: RoutingId.From("target"),
-                message: null!));
+                message: null!
+            )
+        );
     }
 
     [Fact]
@@ -187,7 +197,8 @@ public sealed class SubmitAdmissionRuntimeTests
         {
             var parts = ZLinkMessageParts.Create(
                 Message.From(new byte[] { 1, 2, 3 }),
-                Message.From(new byte[] { 4, 5, 6 }));
+                Message.From(new byte[] { 4, 5, 6 })
+            );
             disposed.Add(parts[0]);
             disposed.Add(parts[1]);
 
@@ -195,8 +206,10 @@ public sealed class SubmitAdmissionRuntimeTests
         }
 
         Assert.Equal(200, disposed.Count);
-        Assert.All(disposed, message =>
-            Assert.Throws<ObjectDisposedException>(() => _ = message.Size));
+        Assert.All(
+            disposed,
+            message => Assert.Throws<ObjectDisposedException>(() => _ = message.Size)
+        );
     }
 
     private sealed class AdmissionPair : IDisposable

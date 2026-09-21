@@ -13,6 +13,7 @@ internal sealed class ZLinkSpotMonitoringSnapshotProvider(IZLinkBackendSpotNode 
             node.Subjects()
                 .OrderBy(static entry => entry.Subject, StringComparer.Ordinal)
                 .ThenBy(static entry => entry.Role)
-                .ToArray());
+                .ToArray()
+        );
     }
 }

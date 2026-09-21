@@ -12,17 +12,20 @@ internal readonly record struct ZLinkCanonicalActorJoinWireAttemptKey(
     string ActorId,
     ulong ActorGeneration,
     ZLinkServiceWireCodec.RequestSourceFence Source,
-    ulong Correlation);
+    ulong Correlation
+);
 
 internal sealed record ZLinkCanonicalActorJoinApplicationReply(
     string ContentType,
-    ReadOnlyMemory<byte> Payload);
+    ReadOnlyMemory<byte> Payload
+);
 
 internal sealed record ZLinkCanonicalActorJoinAdmissionAccepted(
     ZLinkSpotHandleSnapshot Spot,
     ulong MembershipEpoch,
     ulong ReceiveChunkLimitBytes,
-    ZLinkCanonicalActorJoinApplicationReply? ApplicationReply);
+    ZLinkCanonicalActorJoinApplicationReply? ApplicationReply
+);
 
 internal enum ZLinkCanonicalActorJoinAttemptPhase
 {
@@ -31,22 +34,22 @@ internal enum ZLinkCanonicalActorJoinAttemptPhase
     TargetOnlyCasCommitted = 2,
     AbortedBeforeCommit = 3,
     ReconciliationRequired = 4,
-    PublicCompletionDelivered = 5
+    PublicCompletionDelivered = 5,
 }
 
 internal enum ZLinkCanonicalActorJoinSourceSealState
 {
     NotSealed = 0,
     Sealed = 1,
-    RollbackRequired = 2
+    RollbackRequired = 2,
 }
 
-internal readonly record struct ZLinkCanonicalActorJoinPreCommitAbort(
-    bool RollbackSourceSeal);
+internal readonly record struct ZLinkCanonicalActorJoinPreCommitAbort(bool RollbackSourceSeal);
 
 internal readonly record struct ZLinkCanonicalActorJoinPostCasReconciliation(
     bool ReconcileCurrentAuthority,
-    bool ReplaySource);
+    bool ReplaySource
+);
 
 /// <summary>
 /// Local continuity context between canonical actorJoin admission and the
@@ -59,7 +62,8 @@ internal sealed class ZLinkCanonicalActorJoinAttempt
         Guid relocationId,
         ZLinkActorJoinOperationId publicCompletionId,
         ZLinkAuthoritySnapshot sourceAuthority,
-        ZLinkAuthoritySnapshot targetAuthority)
+        ZLinkAuthoritySnapshot targetAuthority
+    )
     {
         WireAttemptKey = wireAttemptKey;
         RelocationId = relocationId;
@@ -76,17 +80,16 @@ internal sealed class ZLinkCanonicalActorJoinAttempt
     internal ZLinkAuthoritySnapshot SourceAuthority { get; }
     internal ZLinkAuthoritySnapshot TargetAuthority { get; }
     internal ZLinkCanonicalActorJoinAdmissionAccepted? Admission { get; private set; }
-    internal ZLinkCanonicalActorJoinAttemptPhase Phase { get; private set; }
-        = ZLinkCanonicalActorJoinAttemptPhase.Created;
-    internal ZLinkCanonicalActorJoinSourceSealState SourceSealState { get; private set; }
-        = ZLinkCanonicalActorJoinSourceSealState.NotSealed;
+    internal ZLinkCanonicalActorJoinAttemptPhase Phase { get; private set; } =
+        ZLinkCanonicalActorJoinAttemptPhase.Created;
+    internal ZLinkCanonicalActorJoinSourceSealState SourceSealState { get; private set; } =
+        ZLinkCanonicalActorJoinSourceSealState.NotSealed;
     internal bool IsPublicCompletionTerminal { get; private set; }
 
     // The cap is deliberately projected only from the canonical accepted tail.
     // The effective payload chunk size is calculated later with the local
     // server and in-flight limits (28-relocation-flow.md §4.2).
-    internal ulong TargetReceiveChunkLimitBytes =>
-        Admission?.ReceiveChunkLimitBytes ?? 0;
+    internal ulong TargetReceiveChunkLimitBytes => Admission?.ReceiveChunkLimitBytes ?? 0;
 
     internal static ZLinkCanonicalActorJoinAttempt Create(
         string actorId,
@@ -96,27 +99,30 @@ internal sealed class ZLinkCanonicalActorJoinAttempt
         ZLinkActorJoinOperationId publicCompletionId,
         ZLinkAuthoritySnapshot sourceAuthority,
         ZLinkAuthoritySnapshot targetAuthority,
-        Guid? relocationId = null)
+        Guid? relocationId = null
+    )
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(actorId);
         ArgumentNullException.ThrowIfNull(sourceAuthority);
         ArgumentNullException.ThrowIfNull(targetAuthority);
-        if (actorGeneration == 0
+        if (
+            actorGeneration == 0
             || source.NodeRid.IsEmpty
             || source.NodeGeneration == 0
             || string.IsNullOrWhiteSpace(source.OwnerId)
             || source.LeaseGeneration == 0
             || canonicalCorrelation == 0
-            || publicCompletionId == default)
+            || publicCompletionId == default
+        )
             throw new ArgumentOutOfRangeException(nameof(canonicalCorrelation));
 
         // Do not collapse a one-word wire correlation into the two-word public
         // completion identity.  Both are opaque equality tokens.
-        if (publicCompletionId.High == 0
-            && publicCompletionId.Low == canonicalCorrelation)
+        if (publicCompletionId.High == 0 && publicCompletionId.Low == canonicalCorrelation)
             throw new ArgumentException(
                 "The canonical correlation cannot be the public completion identity.",
-                nameof(publicCompletionId));
+                nameof(publicCompletionId)
+            );
 
         var id = relocationId ?? Guid.NewGuid();
         if (id == Guid.Empty)
@@ -126,20 +132,22 @@ internal sealed class ZLinkCanonicalActorJoinAttempt
                 actorId,
                 actorGeneration,
                 source,
-                canonicalCorrelation),
+                canonicalCorrelation
+            ),
             id,
             publicCompletionId,
             sourceAuthority,
-            targetAuthority);
+            targetAuthority
+        );
     }
 
-    internal void RecordAdmissionAccepted(
-        ZLinkCanonicalActorJoinAdmissionAccepted accepted)
+    internal void RecordAdmissionAccepted(ZLinkCanonicalActorJoinAdmissionAccepted accepted)
     {
         ArgumentNullException.ThrowIfNull(accepted);
         if (Phase != ZLinkCanonicalActorJoinAttemptPhase.Created)
             throw new InvalidOperationException(
-                "Canonical Actor Join admission can only be recorded once.");
+                "Canonical Actor Join admission can only be recorded once."
+            );
         Admission = accepted;
         Phase = ZLinkCanonicalActorJoinAttemptPhase.AdmissionAccepted;
     }
@@ -148,7 +156,8 @@ internal sealed class ZLinkCanonicalActorJoinAttempt
     {
         if (Phase != ZLinkCanonicalActorJoinAttemptPhase.AdmissionAccepted)
             throw new InvalidOperationException(
-                "The source can only seal after admission is accepted.");
+                "The source can only seal after admission is accepted."
+            );
         SourceSealState = ZLinkCanonicalActorJoinSourceSealState.Sealed;
     }
 
@@ -159,9 +168,9 @@ internal sealed class ZLinkCanonicalActorJoinAttempt
     {
         if (Phase is not ZLinkCanonicalActorJoinAttemptPhase.AdmissionAccepted)
             throw new InvalidOperationException(
-                "Only an admitted, pre-commit attempt can be aborted.");
-        var rollbackSourceSeal =
-            SourceSealState == ZLinkCanonicalActorJoinSourceSealState.Sealed;
+                "Only an admitted, pre-commit attempt can be aborted."
+            );
+        var rollbackSourceSeal = SourceSealState == ZLinkCanonicalActorJoinSourceSealState.Sealed;
         Phase = ZLinkCanonicalActorJoinAttemptPhase.AbortedBeforeCommit;
         if (rollbackSourceSeal)
             SourceSealState = ZLinkCanonicalActorJoinSourceSealState.RollbackRequired;
@@ -172,29 +181,32 @@ internal sealed class ZLinkCanonicalActorJoinAttempt
     {
         if (Phase != ZLinkCanonicalActorJoinAttemptPhase.AdmissionAccepted)
             throw new InvalidOperationException(
-                "Target-only CAS can only follow accepted admission.");
+                "Target-only CAS can only follow accepted admission."
+            );
         Phase = ZLinkCanonicalActorJoinAttemptPhase.TargetOnlyCasCommitted;
     }
 
     // After target-only CAS, the source must never replay.  The caller uses
     // this signal to re-read/reconcile current authority instead.
-    internal ZLinkCanonicalActorJoinPostCasReconciliation
-        RequirePostCasReconciliation()
+    internal ZLinkCanonicalActorJoinPostCasReconciliation RequirePostCasReconciliation()
     {
         if (Phase != ZLinkCanonicalActorJoinAttemptPhase.TargetOnlyCasCommitted)
             throw new InvalidOperationException(
-                "Post-CAS reconciliation requires a committed target authority.");
+                "Post-CAS reconciliation requires a committed target authority."
+            );
         Phase = ZLinkCanonicalActorJoinAttemptPhase.ReconciliationRequired;
         return new ZLinkCanonicalActorJoinPostCasReconciliation(
             ReconcileCurrentAuthority: true,
-            ReplaySource: false);
+            ReplaySource: false
+        );
     }
 
     internal void DeliverPublicCompletion()
     {
         if (Phase != ZLinkCanonicalActorJoinAttemptPhase.TargetOnlyCasCommitted)
             throw new InvalidOperationException(
-                "Public completion requires the relocation commit path to finish.");
+                "Public completion requires the relocation commit path to finish."
+            );
         Phase = ZLinkCanonicalActorJoinAttemptPhase.PublicCompletionDelivered;
         IsPublicCompletionTerminal = true;
     }

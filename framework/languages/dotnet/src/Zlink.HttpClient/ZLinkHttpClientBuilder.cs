@@ -74,7 +74,8 @@ public sealed class ZLinkHttpClientBuilder
         if (bytes <= 0)
             throw new ZLinkFrameworkException(
                 ZLinkFrameworkErrorKind.ProtocolError,
-                "HTTP client max response body size must be greater than zero");
+                "HTTP client max response body size must be greater than zero"
+            );
 
         _maxResponseBodySize = bytes;
         return this;
@@ -100,7 +101,8 @@ public sealed class ZLinkHttpClientBuilder
         if (maxRedirects <= 0)
             throw new ZLinkFrameworkException(
                 ZLinkFrameworkErrorKind.ProtocolError,
-                "HTTP client follow_redirects must be greater than zero");
+                "HTTP client follow_redirects must be greater than zero"
+            );
 
         _followRedirects = maxRedirects;
         return this;
@@ -111,7 +113,8 @@ public sealed class ZLinkHttpClientBuilder
         if (attempts <= 0)
             throw new ZLinkFrameworkException(
                 ZLinkFrameworkErrorKind.ProtocolError,
-                "HTTP client retry attempts must be greater than zero");
+                "HTTP client retry attempts must be greater than zero"
+            );
 
         _retryAttempts = attempts;
         return this;
@@ -129,7 +132,8 @@ public sealed class ZLinkHttpClientBuilder
         if (!url.StartsWith("http://", StringComparison.Ordinal))
             throw new ZLinkFrameworkException(
                 ZLinkFrameworkErrorKind.ProtocolError,
-                "HTTP client proxy url must start with http://");
+                "HTTP client proxy url must start with http://"
+            );
 
         _proxy = url;
         return this;
@@ -172,12 +176,15 @@ public sealed class ZLinkHttpClientBuilder
     private static void ValidateBaseUrl(string value)
     {
         HttpClientText.RequireNonBlank(value, "HTTP client base_url is required");
-        if (!Uri.TryCreate(value, UriKind.Absolute, out var uri)
+        if (
+            !Uri.TryCreate(value, UriKind.Absolute, out var uri)
             || (uri.Scheme != Uri.UriSchemeHttp && uri.Scheme != Uri.UriSchemeHttps)
-            || string.IsNullOrWhiteSpace(uri.Host))
+            || string.IsNullOrWhiteSpace(uri.Host)
+        )
             throw new ZLinkFrameworkException(
                 ZLinkFrameworkErrorKind.ProtocolError,
-                "HTTP client base_url must be an absolute http or https URL");
+                "HTTP client base_url must be an absolute http or https URL"
+            );
     }
 
     private HttpClientOptions BuildOptions(IZLinkHttpExecutionScheduler? scheduler)
@@ -197,9 +204,8 @@ public sealed class ZLinkHttpClientBuilder
             Cookies = _cookies,
             Proxy = _proxy,
             ProxyCredentials = _proxyCredentials,
-            Compression = _compression
+            Compression = _compression,
         };
-
     }
 
     public ZLinkHttpRequestBuilder Get(string path)

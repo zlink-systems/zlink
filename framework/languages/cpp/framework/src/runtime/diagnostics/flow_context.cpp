@@ -18,7 +18,7 @@ namespace
 
 std::uint64_t random_u64 ()
 {
-    thread_local std::mt19937_64 engine{std::random_device{} ()};
+    thread_local std::mt19937_64 engine{std::random_device{}()};
     return engine ();
 }
 
@@ -88,10 +88,9 @@ std::string flow_id_t::create ()
         bytes[static_cast<std::size_t> (i)] = static_cast<std::uint8_t> (high >> (56 - i * 8));
         bytes[static_cast<std::size_t> (8 + i)] = static_cast<std::uint8_t> (low >> (56 - i * 8));
     }
-    const auto milliseconds =
-      std::chrono::duration_cast<std::chrono::milliseconds> (
-        std::chrono::system_clock::now ().time_since_epoch ())
-        .count ();
+    const auto milliseconds = std::chrono::duration_cast<std::chrono::milliseconds> (
+                                std::chrono::system_clock::now ().time_since_epoch ())
+                                .count ();
     bytes[0] = static_cast<std::uint8_t> (milliseconds >> 40);
     bytes[1] = static_cast<std::uint8_t> (milliseconds >> 32);
     bytes[2] = static_cast<std::uint8_t> (milliseconds >> 24);

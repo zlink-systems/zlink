@@ -51,7 +51,8 @@ internal sealed record ZLinkRemoteActorFrameRelay(
     ulong DeadlineUnixMs,
     byte[] ApplicationMetadata,
     byte[] Header,
-    byte[] Body);
+    byte[] Body
+);
 
 internal sealed record ZLinkRemoteActorReplyRelay(
     string ActorId,
@@ -59,14 +60,16 @@ internal sealed record ZLinkRemoteActorReplyRelay(
     uint Flags,
     string ReplyCapability,
     string ResponderNodeRid,
-    byte[] Frame);
+    byte[] Frame
+);
 
 internal sealed record ZLinkRemoteActorSourceLeave(
     string ActorId,
     string HandoffId,
     ulong ActorGeneration,
     string TargetNodeRid,
-    ulong TargetAuthorityOwnerGeneration);
+    ulong TargetAuthorityOwnerGeneration
+);
 
 internal sealed class ZLinkRemoteActorFrameRelayHandler(ZLinkFrameworkRuntime runtime)
     : IZLinkRouteSendHandler<ZLinkRemoteActorFrameRelay>
@@ -74,10 +77,12 @@ internal sealed class ZLinkRemoteActorFrameRelayHandler(ZLinkFrameworkRuntime ru
     public async ValueTask HandleAsync(
         ZLinkRemoteActorFrameRelay message,
         ZLinkRouteMessageContext context,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken
+    )
     {
         var requestSource = DecodeRequestSource(message);
-        await runtime.DispatchRemoteActorFrameAsync(
+        await runtime
+            .DispatchRemoteActorFrameAsync(
                 message.ActorId,
                 message.ActorGeneration,
                 RoutingId.FromHex(message.TargetNodeRid),
@@ -96,9 +101,7 @@ internal sealed class ZLinkRemoteActorFrameRelayHandler(ZLinkFrameworkRuntime ru
                     : default,
                 requestSource,
                 message.ApplicationMetadata,
-                new MeshOperationId(
-                    message.OperationIdHigh,
-                    message.OperationIdLow),
+                new MeshOperationId(message.OperationIdHigh, message.OperationIdLow),
                 message.MessageFollowHopCount,
                 message.ReplyRequestId,
                 message.ReplyFlags,
@@ -106,30 +109,40 @@ internal sealed class ZLinkRemoteActorFrameRelayHandler(ZLinkFrameworkRuntime ru
                 message.DeadlineUnixMs,
                 message.Header,
                 message.Body,
-                cancellationToken)
+                cancellationToken
+            )
             .ConfigureAwait(false);
     }
 
     private static ZLinkServiceWireCodec.RequestSourceFence? DecodeRequestSource(
-        ZLinkRemoteActorFrameRelay message)
+        ZLinkRemoteActorFrameRelay message
+    )
     {
         var hasOwner = !string.IsNullOrWhiteSpace(message.RequestSourceOwnerId);
         var hasNode = !string.IsNullOrWhiteSpace(message.RequestSourceNodeRid);
-        var hasFence = hasOwner
-                       || message.RequestSourceLeaseGeneration != 0
-                       || hasNode
-                       || message.RequestSourceNodeGeneration != 0;
-        if (!hasFence) return null;
-        if (!hasOwner || message.RequestSourceLeaseGeneration == 0
-            || !hasNode || message.RequestSourceNodeGeneration == 0)
+        var hasFence =
+            hasOwner
+            || message.RequestSourceLeaseGeneration != 0
+            || hasNode
+            || message.RequestSourceNodeGeneration != 0;
+        if (!hasFence)
+            return null;
+        if (
+            !hasOwner
+            || message.RequestSourceLeaseGeneration == 0
+            || !hasNode
+            || message.RequestSourceNodeGeneration == 0
+        )
             throw new ZLinkFrameworkException(
                 ZLinkFrameworkErrorKind.Unavailable,
-                $"Actor '{message.ActorId}' relay request-source fence is incomplete.");
+                $"Actor '{message.ActorId}' relay request-source fence is incomplete."
+            );
         return new ZLinkServiceWireCodec.RequestSourceFence(
             message.RequestSourceOwnerId!,
             message.RequestSourceLeaseGeneration,
             RoutingId.FromHex(message.RequestSourceNodeRid!),
-            message.RequestSourceNodeGeneration);
+            message.RequestSourceNodeGeneration
+        );
     }
 }
 
@@ -145,7 +158,8 @@ internal sealed record ZLinkRemoteSessionPushRelay(
     ulong BindingGeneration,
     ulong SessionOwnerNodeGeneration,
     string SessionRid,
-    byte[] Frame);
+    byte[] Frame
+);
 
 internal sealed class ZLinkRemoteSessionPushRelayHandler(ZLinkFrameworkRuntime runtime)
     : IZLinkRouteSendHandler<ZLinkRemoteSessionPushRelay>
@@ -153,12 +167,11 @@ internal sealed class ZLinkRemoteSessionPushRelayHandler(ZLinkFrameworkRuntime r
     public async ValueTask HandleAsync(
         ZLinkRemoteSessionPushRelay message,
         ZLinkRouteMessageContext context,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken
+    )
     {
-        await runtime.AdmitRemoteSessionPushOneWayAsync(
-                message,
-                context.SourceNodeRid,
-                cancellationToken)
+        await runtime
+            .AdmitRemoteSessionPushOneWayAsync(message, context.SourceNodeRid, cancellationToken)
             .ConfigureAwait(false);
     }
 }
@@ -169,13 +182,16 @@ internal sealed class ZLinkRemoteActorReplyRelayHandler(ZLinkFrameworkRuntime ru
     public async ValueTask HandleAsync(
         ZLinkRemoteActorReplyRelay message,
         ZLinkRouteMessageContext context,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken
+    )
     {
         cancellationToken.ThrowIfCancellationRequested();
         ZLinkFrameworkDebugLog.SpotDiscovery(
             $"remote_actor_reply_handler actor={message.ActorId} request_id={message.RequestId} "
-            + $"source_node={context.SourceNodeRid} responder_node={message.ResponderNodeRid}");
-        await runtime.DeliverRemoteActorReplyAsync(
+                + $"source_node={context.SourceNodeRid} responder_node={message.ResponderNodeRid}"
+        );
+        await runtime
+            .DeliverRemoteActorReplyAsync(
                 message.ActorId,
                 message.RequestId,
                 message.Flags,
@@ -183,7 +199,8 @@ internal sealed class ZLinkRemoteActorReplyRelayHandler(ZLinkFrameworkRuntime ru
                 context.SourceNodeRid,
                 RoutingId.FromHex(message.ResponderNodeRid),
                 message.Frame,
-                cancellationToken)
+                cancellationToken
+            )
             .ConfigureAwait(false);
     }
 }
@@ -194,16 +211,20 @@ internal sealed class ZLinkRemoteActorSourceLeaveHandler(ZLinkFrameworkRuntime r
     public ValueTask HandleAsync(
         ZLinkRemoteActorSourceLeave message,
         ZLinkRouteMessageContext context,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken
+    )
     {
         cancellationToken.ThrowIfCancellationRequested();
         var authenticatedTargetNodeRid = context.SourceNodeRid;
         runtime.RunDetached(
             $"actor-source-leave:{message.ActorId}:{message.HandoffId}",
-            token => runtime.DeliverRemoteActorSourceLeaveAsync(
-                message,
-                authenticatedTargetNodeRid,
-                token));
+            token =>
+                runtime.DeliverRemoteActorSourceLeaveAsync(
+                    message,
+                    authenticatedTargetNodeRid,
+                    token
+                )
+        );
         return ValueTask.CompletedTask;
     }
 }

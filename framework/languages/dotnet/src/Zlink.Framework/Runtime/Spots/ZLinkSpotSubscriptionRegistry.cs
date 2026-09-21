@@ -1,19 +1,23 @@
-using Microsoft.Extensions.Logging;
 using System.Diagnostics;
+using Microsoft.Extensions.Logging;
 
 namespace Zlink.Framework.Runtime.Spots;
 
 internal sealed class ZLinkSpotSubscriptionRegistry
 {
-    private readonly Dictionary<ZLinkSpotSubscriptionKey, List<ZLinkSpotSubscriptionDescriptor>>
-        _descriptorsByTarget = new();
+    private readonly Dictionary<
+        ZLinkSpotSubscriptionKey,
+        List<ZLinkSpotSubscriptionDescriptor>
+    > _descriptorsByTarget = new();
 
     private readonly List<ZLinkSpotSubscriptionRegistration> _registrations = [];
 
     public void Add(string channelName, string topic, Type handlerType)
     {
         if (string.IsNullOrWhiteSpace(channelName))
-            throw new ZLinkConfigurationException("SPOT subscription channel name must not be empty.");
+            throw new ZLinkConfigurationException(
+                "SPOT subscription channel name must not be empty."
+            );
         if (string.IsNullOrWhiteSpace(topic))
             throw new ZLinkConfigurationException("SPOT subscription topic must not be empty.");
 
@@ -24,26 +28,37 @@ internal sealed class ZLinkSpotSubscriptionRegistry
         string channelName,
         string topic,
         Type spotType,
-        System.Reflection.MethodInfo method)
+        System.Reflection.MethodInfo method
+    )
     {
         if (string.IsNullOrWhiteSpace(channelName))
-            throw new ZLinkConfigurationException("SPOT subscription channel name must not be empty.");
+            throw new ZLinkConfigurationException(
+                "SPOT subscription channel name must not be empty."
+            );
         if (string.IsNullOrWhiteSpace(topic))
             throw new ZLinkConfigurationException("SPOT subscription topic must not be empty.");
-        _registrations.Add(new ZLinkSpotSubscriptionRegistration(channelName, topic, spotType, method));
+        _registrations.Add(
+            new ZLinkSpotSubscriptionRegistration(channelName, topic, spotType, method)
+        );
     }
 
     public async ValueTask BindAsync(
         object spot,
         IZLinkBackendSpot nativeSpot,
         TimeSpan timeout,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken
+    )
     {
         foreach (var (target, handlers) in BuildDescriptors(spot))
         {
             _descriptorsByTarget.Add(target, handlers);
             await SetSubscriptionAsync(
-                    nativeSpot, target.ChannelName, target.Topic, timeout, cancellationToken)
+                    nativeSpot,
+                    target.ChannelName,
+                    target.Topic,
+                    timeout,
+                    cancellationToken
+                )
                 .ConfigureAwait(false);
         }
     }
@@ -62,7 +77,8 @@ internal sealed class ZLinkSpotSubscriptionRegistry
         string channelName,
         string topic,
         TimeSpan timeout,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken
+    )
     {
         var started = Stopwatch.GetTimestamp();
         while (true)
@@ -75,14 +91,16 @@ internal sealed class ZLinkSpotSubscriptionRegistry
             }
             catch (ZlinkConfigException error)
                 when (error.Result == ZlinkConfigException.ErrorCode.InternalError
-                      && Stopwatch.GetElapsedTime(started) < timeout)
+                    && Stopwatch.GetElapsedTime(started) < timeout
+                )
             {
                 var remaining = timeout - Stopwatch.GetElapsedTime(started);
                 await Task.Delay(
                         remaining < TimeSpan.FromMilliseconds(25)
                             ? remaining
                             : TimeSpan.FromMilliseconds(25),
-                        cancellationToken)
+                        cancellationToken
+                    )
                     .ConfigureAwait(false);
             }
         }
@@ -93,8 +111,10 @@ internal sealed class ZLinkSpotSubscriptionRegistry
         _ = BuildDescriptors(spot);
     }
 
-    private Dictionary<ZLinkSpotSubscriptionKey, List<ZLinkSpotSubscriptionDescriptor>> BuildDescriptors(
-        object spot)
+    private Dictionary<
+        ZLinkSpotSubscriptionKey,
+        List<ZLinkSpotSubscriptionDescriptor>
+    > BuildDescriptors(object spot)
     {
         var descriptorsByTarget =
             new Dictionary<ZLinkSpotSubscriptionKey, List<ZLinkSpotSubscriptionDescriptor>>();
@@ -102,13 +122,19 @@ internal sealed class ZLinkSpotSubscriptionRegistry
         {
             var descriptor = subscription.Method is { } method
                 ? ZLinkSpotDescriptorFactory.CreateAttributedSubscriptionDescriptor(
-                    subscription.ChannelName, subscription.Topic, subscription.HandlerType, method)
+                    subscription.ChannelName,
+                    subscription.Topic,
+                    subscription.HandlerType,
+                    method
+                )
                 : ZLinkSpotDescriptorFactory.CreateSubscriptionDescriptor(
-                    subscription.ChannelName, subscription.Topic, subscription.HandlerType, spot.GetType());
+                    subscription.ChannelName,
+                    subscription.Topic,
+                    subscription.HandlerType,
+                    spot.GetType()
+                );
 
-            var target = new ZLinkSpotSubscriptionKey(
-                subscription.ChannelName,
-                subscription.Topic);
+            var target = new ZLinkSpotSubscriptionKey(subscription.ChannelName, subscription.Topic);
 
             if (!descriptorsByTarget.TryGetValue(target, out var handlers))
             {
@@ -118,13 +144,17 @@ internal sealed class ZLinkSpotSubscriptionRegistry
 
             foreach (var existing in handlers)
             {
-                if (!string.Equals(
+                if (
+                    !string.Equals(
                         existing.MessageName,
                         descriptor.MessageName,
-                        StringComparison.Ordinal))
+                        StringComparison.Ordinal
+                    )
+                )
                     continue;
                 throw new ZLinkConfigurationException(
-                    $"SPOT subscription handler for channel '{subscription.ChannelName}', topic '{subscription.Topic}' and packet '{descriptor.MessageName}' is already registered.");
+                    $"SPOT subscription handler for channel '{subscription.ChannelName}', topic '{subscription.Topic}' and packet '{descriptor.MessageName}' is already registered."
+                );
             }
             handlers.Add(descriptor);
         }
@@ -137,9 +167,15 @@ internal sealed class ZLinkSpotSubscriptionRegistry
         ZLinkCodecRegistryBuilder? codecs,
         ZLinkDispatchErrorReporter dispatchErrors,
         ILogger logger,
-        Func<ZLinkSpotSubscriptionDescriptor, object?, ZLinkPublishMessageContext, CancellationToken, ValueTask>
-            dispatchAsync,
-        CancellationToken cancellationToken)
+        Func<
+            ZLinkSpotSubscriptionDescriptor,
+            object?,
+            ZLinkPublishMessageContext,
+            CancellationToken,
+            ValueTask
+        > dispatchAsync,
+        CancellationToken cancellationToken
+    )
     {
         while (!cancellationToken.IsCancellationRequested)
         {
@@ -149,21 +185,29 @@ internal sealed class ZLinkSpotSubscriptionRegistry
                 message = nativeSpot.Subscribe(RecvFlags.DontWait);
             }
             catch (ZlinkRecvException ex)
-                when (ex.Result is ZlinkRecvException.ErrorCode.NoData
-                          or ZlinkRecvException.ErrorCode.Busy)
+                when (ex.Result
+                        is ZlinkRecvException.ErrorCode.NoData
+                            or ZlinkRecvException.ErrorCode.Busy
+                )
             {
                 return;
             }
 
-            if (message is null) return;
+            if (message is null)
+                return;
 
-            using var applicationAdmission =
-                message.ApplicationJobAdmission is { } admission
-                    ? ZLinkApplicationJobQueueInvocation.Enter(admission)
-                    : null;
+            using var applicationAdmission = message.ApplicationJobAdmission is { } admission
+                ? ZLinkApplicationJobQueueInvocation.Enter(admission)
+                : null;
             using (message)
                 await DispatchMessageAsync(
-                        message, codecs, dispatchErrors, logger, dispatchAsync, cancellationToken)
+                        message,
+                        codecs,
+                        dispatchErrors,
+                        logger,
+                        dispatchAsync,
+                        cancellationToken
+                    )
                     .ConfigureAwait(false);
         }
     }
@@ -173,9 +217,15 @@ internal sealed class ZLinkSpotSubscriptionRegistry
         ZLinkCodecRegistryBuilder? codecs,
         ZLinkDispatchErrorReporter dispatchErrors,
         ILogger logger,
-        Func<ZLinkSpotSubscriptionDescriptor, object?, ZLinkPublishMessageContext, CancellationToken, ValueTask>
-            dispatchAsync,
-        CancellationToken cancellationToken)
+        Func<
+            ZLinkSpotSubscriptionDescriptor,
+            object?,
+            ZLinkPublishMessageContext,
+            CancellationToken,
+            ValueTask
+        > dispatchAsync,
+        CancellationToken cancellationToken
+    )
     {
         if (message.Parts.Count == 0)
             return;
@@ -185,7 +235,8 @@ internal sealed class ZLinkSpotSubscriptionRegistry
         {
             header = ZLinkEnvelopeCodec.DecodeHeader(
                 message.Parts,
-                dispatchErrors.Flow.CaptureEnabled);
+                dispatchErrors.Flow.CaptureEnabled
+            );
             ZLinkEnvelopeCodec.ValidateDispatchHeader(header);
         }
         catch (ZLinkEnvelopeProtocolException)
@@ -196,11 +247,13 @@ internal sealed class ZLinkSpotSubscriptionRegistry
             header.FlowId,
             header.FlowOrigin,
             dispatchErrors.Flow.CaptureEnabled,
-            ZLinkFlowOrigin.Inbound);
+            ZLinkFlowOrigin.Inbound
+        );
 
         _descriptorsByTarget.TryGetValue(
             new ZLinkSpotSubscriptionKey(message.ChannelName, message.Topic),
-            out var descriptors);
+            out var descriptors
+        );
         if (descriptors is null)
             return;
 
@@ -212,10 +265,14 @@ internal sealed class ZLinkSpotSubscriptionRegistry
             metadata: null,
             header.CorrelationId,
             message.Topic,
-            header.Source);
+            header.Source
+        );
         foreach (var descriptor in descriptors)
         {
-            if (!string.Equals(descriptor.MessageName, header.MessageName, StringComparison.Ordinal)) continue;
+            if (
+                !string.Equals(descriptor.MessageName, header.MessageName, StringComparison.Ordinal)
+            )
+                continue;
 
             var body = ZLinkEnvelopeCodec.DecodeBody(message.Parts, descriptor.MessageType, codecs);
             await dispatchAsync(descriptor, body, context, cancellationToken).ConfigureAwait(false);

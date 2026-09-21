@@ -1,4 +1,2 @@
-/**
- * Handler annotations and scanner-facing marker contracts.
- */
+/** Handler annotations and scanner-facing marker contracts. */
 package systems.zlink.framework.handlers;

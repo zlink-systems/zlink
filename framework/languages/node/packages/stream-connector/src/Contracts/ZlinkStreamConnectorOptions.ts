@@ -66,7 +66,10 @@ export interface ZlinkStreamCompressionCodec {
 }
 
 export interface ZlinkStreamTransportFactory {
-  connect(options: RequiredZlinkStreamConnectorOptions, signal?: AbortSignal): Promise<ZlinkStreamConnection>;
+  connect(
+    options: RequiredZlinkStreamConnectorOptions,
+    signal?: AbortSignal
+  ): Promise<ZlinkStreamConnection>;
 }
 
 export interface ZlinkStreamConnection {

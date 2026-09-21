@@ -24,9 +24,7 @@ import {
 } from './client-server-service-wire';
 import { discoveryAvailabilityForRuntimeState } from '../foundation/runtime-state-projections';
 import { ZLinkStateLane } from '../execution/state-lane';
-import {
-  isBackendRequestTimeoutError
-} from '../backend/runtime-values';
+import { isBackendRequestTimeoutError } from '../backend/runtime-values';
 
 interface ActiveClientServerTarget {
   descriptor: ZLinkClientServerServerDescriptor;
@@ -102,7 +100,7 @@ export class ZLinkClientServerLocationRuntime {
 
   activeTargets(channelName: string): readonly ZLinkClientServerServerDescriptor[] {
     return [...this.connections.values()]
-      .filter(target => target.state === 'ready')
+      .filter((target) => target.state === 'ready')
       .map((target) => target.descriptor)
       .filter((descriptor) => descriptor.channelName === channelName);
   }
@@ -111,8 +109,7 @@ export class ZLinkClientServerLocationRuntime {
     const owner = this.requireOwnerToken();
     const descriptors = await this.lane.run(() => [...this.localDescriptors]);
     for (const [channelName, current] of descriptors) {
-      if (current.ownerId === owner.ownerId
-        && current.leaseGeneration === owner.leaseGeneration) {
+      if (current.ownerId === owner.ownerId && current.leaseGeneration === owner.leaseGeneration) {
         continue;
       }
       const candidate = {
@@ -143,13 +140,14 @@ export class ZLinkClientServerLocationRuntime {
       const current = await this.lane.run(() => this.localDescriptors.get(channelName));
       if (current !== undefined) {
         const runtimeWeight = this.sockets.clientServerServerWeight(channelName);
-        const candidate = runtimeWeight === current.weight
-          ? current
-          : {
-              ...current,
-              descriptorRevision: current.descriptorRevision + 1n,
-              weight: runtimeWeight
-            };
+        const candidate =
+          runtimeWeight === current.weight
+            ? current
+            : {
+                ...current,
+                descriptorRevision: current.descriptorRevision + 1n,
+                weight: runtimeWeight
+              };
         const result = await this.store.updateClientServer(
           candidate,
           ZLinkLocationWriteIntent.Renew,
@@ -201,10 +199,9 @@ export class ZLinkClientServerLocationRuntime {
         continue;
       }
       const rows = await this.listLiveServers(channelName, signal);
-      const desired = new Map(rows.map((descriptor) => [
-        clientServerConnectionId(descriptor),
-        descriptor
-      ]));
+      const desired = new Map(
+        rows.map((descriptor) => [clientServerConnectionId(descriptor), descriptor])
+      );
       const desiredStableKeys = new Set(rows.map(clientServerStableKey));
       for (const [connectionId, descriptor] of desired) {
         const current = await this.lane.run(() => this.connections.get(connectionId));
@@ -233,8 +230,10 @@ export class ZLinkClientServerLocationRuntime {
       const connections = await this.lane.run(() => [...this.connections]);
       for (const [connectionId, current] of connections) {
         if (current.descriptor.channelName !== channelName || desired.has(connectionId)) continue;
-        if (desiredStableKeys.has(clientServerStableKey(current.descriptor))
-          && current.state === 'ready') {
+        if (
+          desiredStableKeys.has(clientServerStableKey(current.descriptor)) &&
+          current.state === 'ready'
+        ) {
           continue;
         }
         await this.closeConnection(connectionId);
@@ -260,17 +259,18 @@ export class ZLinkClientServerLocationRuntime {
 
     const live: ZLinkClientServerServerDescriptor[] = [];
     for (const descriptor of rows) {
-      if (descriptor.state === ZLinkFrameworkRuntimeState.Stopped
-        || descriptor.state === ZLinkFrameworkRuntimeState.Error) {
+      if (
+        descriptor.state === ZLinkFrameworkRuntimeState.Stopped ||
+        descriptor.state === ZLinkFrameworkRuntimeState.Error
+      ) {
         continue;
       }
-      const lease = await this.stores.ownerLeaseStore.readOwnerLease(
-        descriptor.ownerId,
-        signal
-      );
-      if (lease.kind === 'found'
-        && lease.token.leaseGeneration === descriptor.leaseGeneration
-        && lease.leaseExpiresAt.getTime() > lease.storeNow.getTime()) {
+      const lease = await this.stores.ownerLeaseStore.readOwnerLease(descriptor.ownerId, signal);
+      if (
+        lease.kind === 'found' &&
+        lease.token.leaseGeneration === descriptor.leaseGeneration &&
+        lease.leaseExpiresAt.getTime() > lease.storeNow.getTime()
+      ) {
         live.push(descriptor);
       }
     }
@@ -280,7 +280,7 @@ export class ZLinkClientServerLocationRuntime {
   private async disconnectClients(): Promise<void> {
     const connectionIds = await this.lane.run(() => [...this.connections.keys()]);
     await Promise.allSettled(
-      connectionIds.map(connectionId => this.closeConnection(connectionId))
+      connectionIds.map((connectionId) => this.closeConnection(connectionId))
     );
   }
 
@@ -302,8 +302,9 @@ export class ZLinkClientServerLocationRuntime {
         descriptor.endpoint,
         {
           onTransportReady: (routingId, endpoint) => {
-            void this.handleTransportReady(connectionId, routingId, endpoint)
-              .catch(error => this.locationRuntime.reportDiscoveryFailure(error));
+            void this.handleTransportReady(connectionId, routingId, endpoint).catch((error) =>
+              this.locationRuntime.reportDiscoveryFailure(error)
+            );
           },
           onTerminated: () => {
             void this.handleConnectionTerminated(connectionId);
@@ -325,7 +326,8 @@ export class ZLinkClientServerLocationRuntime {
   ): Promise<void> {
     const current = await this.lane.run(() => {
       const target = this.connections.get(connectionId);
-      if (target === undefined || target.state === 'ready' || target.handshakeInFlight) return undefined;
+      if (target === undefined || target.state === 'ready' || target.handshakeInFlight)
+        return undefined;
       const dealer = target.dealer;
       if (dealer === undefined) return undefined;
       target.handshakeInFlight = true;
@@ -354,10 +356,12 @@ export class ZLinkClientServerLocationRuntime {
         return descriptor;
       });
       if (admittedDescriptor === undefined) return;
-      if (!this.sockets.admitClientServerConnection(
-        toDiscoveryDescriptor(admittedDescriptor, admission.normalizedEffectiveMaxMessageBytes),
-        connectionId
-      )) {
+      if (
+        !this.sockets.admitClientServerConnection(
+          toDiscoveryDescriptor(admittedDescriptor, admission.normalizedEffectiveMaxMessageBytes),
+          connectionId
+        )
+      ) {
         throw new ZLinkConfigurationException(
           `ClientServer '${current.target.descriptor.channelName}' admission was stale.`
         );
@@ -367,8 +371,9 @@ export class ZLinkClientServerLocationRuntime {
       });
       await this.removeSupersededConnections(current.target);
     } catch (error) {
-      const isCurrent = await this.lane.run(() =>
-        this.connections.get(connectionId) === current.target);
+      const isCurrent = await this.lane.run(
+        () => this.connections.get(connectionId) === current.target
+      );
       if (!isCurrent) return;
       if (error instanceof ZLinkConfigurationException) {
         current.target.dealer = undefined;
@@ -386,22 +391,23 @@ export class ZLinkClientServerLocationRuntime {
         return retryAdmission;
       });
       if (shouldRetry) {
-        void this.handleTransportReady(connectionId, _routingId, _endpoint)
-          .catch(error => this.locationRuntime.reportDiscoveryFailure(error));
+        void this.handleTransportReady(connectionId, _routingId, _endpoint).catch((error) =>
+          this.locationRuntime.reportDiscoveryFailure(error)
+        );
       }
     }
   }
 
-  private async removeSupersededConnections(
-    admitted: ActiveClientServerTarget
-  ): Promise<void> {
+  private async removeSupersededConnections(admitted: ActiveClientServerTarget): Promise<void> {
     const stableKey = clientServerStableKey(admitted.descriptor);
     const connections = await this.lane.run(() => [...this.connections.values()]);
     const superseded = connections
-      .filter(current =>
-        current.connectionId !== admitted.connectionId
-        && clientServerStableKey(current.descriptor) === stableKey)
-      .map(current => current.connectionId);
+      .filter(
+        (current) =>
+          current.connectionId !== admitted.connectionId &&
+          clientServerStableKey(current.descriptor) === stableKey
+      )
+      .map((current) => current.connectionId);
     for (const connectionId of superseded) {
       await this.closeConnection(connectionId);
     }
@@ -447,10 +453,14 @@ export class ZLinkClientServerLocationRuntime {
       );
       if (result.status === ZLinkLocationWriteStatus.Stored) {
         this.sockets.setClientServerServerDescriptor(draining, channelName);
-        await this.store.removeClientServer({
-          channelName,
-          serverRid: descriptor.serverRid
-        }, owner, signal);
+        await this.store.removeClientServer(
+          {
+            channelName,
+            serverRid: descriptor.serverRid
+          },
+          owner,
+          signal
+        );
       }
       this.sockets.setClientServerServerDescriptor(undefined, channelName);
     }
@@ -494,15 +504,16 @@ function sameDescriptor(
   left: ZLinkClientServerServerDescriptor,
   right: ZLinkClientServerServerDescriptor
 ): boolean {
-  return left.lifecycleGeneration === right.lifecycleGeneration
-    && left.descriptorRevision === right.descriptorRevision
-    && left.endpoint === right.endpoint
-    && left.weight === right.weight
-    && left.state === right.state
-    && left.ownerId === right.ownerId
-    && left.leaseGeneration === right.leaseGeneration;
+  return (
+    left.lifecycleGeneration === right.lifecycleGeneration &&
+    left.descriptorRevision === right.descriptorRevision &&
+    left.endpoint === right.endpoint &&
+    left.weight === right.weight &&
+    left.state === right.state &&
+    left.ownerId === right.ownerId &&
+    left.leaseGeneration === right.leaseGeneration
+  );
 }
-
 
 function toDiscoveryDescriptor(
   descriptor: ZLinkClientServerServerDescriptor,
@@ -526,53 +537,60 @@ function requestAdmission(
   descriptor: ZLinkClientServerServerDescriptor,
   timeoutMs: number
 ): Promise<ZLinkClientServerAdmission> {
-  const message = RuntimeMessage.from(encodeClientServerHello({
-    channelName: descriptor.channelName,
-    securityIdentity: descriptor.securityIdentity,
-    normalizedEffectiveMaxMessageBytes: normalizedMessageLimit(dealer.maxMessageSize)
-  }));
-  return dealer.request(message, timeoutMs).then((parts) => {
-    try {
-      if (parts.length !== 1) {
-        throw new ZLinkConfigurationException(
-          `ClientServer '${descriptor.channelName}' admission reply must contain exactly one part.`
-        );
+  const message = RuntimeMessage.from(
+    encodeClientServerHello({
+      channelName: descriptor.channelName,
+      securityIdentity: descriptor.securityIdentity,
+      normalizedEffectiveMaxMessageBytes: normalizedMessageLimit(dealer.maxMessageSize)
+    })
+  );
+  return dealer.request(message, timeoutMs).then(
+    (parts) => {
+      try {
+        if (parts.length !== 1) {
+          throw new ZLinkConfigurationException(
+            `ClientServer '${descriptor.channelName}' admission reply must contain exactly one part.`
+          );
+        }
+        const first = parts[0]!;
+        const record = decodeClientServerControl(first.data());
+        if (record.kind === 'reject') {
+          throw new ZLinkConfigurationException(
+            `ClientServer '${descriptor.channelName}' admission was rejected (${record.reason}).`
+          );
+        }
+        if (record.kind !== 'admit') {
+          throw new ZLinkConfigurationException(
+            `ClientServer '${descriptor.channelName}' admission reply has an invalid command.`
+          );
+        }
+        return record.admission;
+      } finally {
+        message.close();
+        closeMessages(parts);
       }
-            const first = parts[0]!;
-            const record = decodeClientServerControl(first.data());
-            if (record.kind === 'reject') {
-        throw new ZLinkConfigurationException(
-                `ClientServer '${descriptor.channelName}' admission was rejected (${record.reason}).`
-        );
-            }
-            if (record.kind !== 'admit') {
-        throw new ZLinkConfigurationException(
-                `ClientServer '${descriptor.channelName}' admission reply has an invalid command.`
-        );
-            }
-      return record.admission;
-    } finally {
+    },
+    (error) => {
       message.close();
-      closeMessages(parts);
+      throw error;
     }
-  }, (error) => {
-      message.close();
-    throw error;
-  });
+  );
 }
 
 function requireMatchingAdmission(
   expected: ZLinkClientServerServerDescriptor,
   actual: ZLinkClientServerAdmission
 ): void {
-  if (actual.channelName !== expected.channelName
-    || actual.serverRid !== String(expected.serverRid)
-    || actual.lifecycleGeneration !== expected.lifecycleGeneration
-    || actual.descriptorRevision !== expected.descriptorRevision
-    || actual.weight !== expected.weight
-    || actual.state !== expected.state
-    || actual.securityIdentity !== expected.securityIdentity
-    || actual.advertisedEndpoint !== expected.endpoint) {
+  if (
+    actual.channelName !== expected.channelName ||
+    actual.serverRid !== String(expected.serverRid) ||
+    actual.lifecycleGeneration !== expected.lifecycleGeneration ||
+    actual.descriptorRevision !== expected.descriptorRevision ||
+    actual.weight !== expected.weight ||
+    actual.state !== expected.state ||
+    actual.securityIdentity !== expected.securityIdentity ||
+    actual.advertisedEndpoint !== expected.endpoint
+  ) {
     throw new ZLinkConfigurationException(
       `ClientServer '${expected.channelName}' admission does not match its descriptor.`
     );
@@ -584,7 +602,5 @@ function closeMessages(parts: readonly Message[]): void {
 }
 
 function normalizedMessageLimit(value: number): number {
-  return Number.isSafeInteger(value) && value > 0
-    ? Math.min(value, 0xffff_ffff)
-    : 0x7fff_ffff;
+  return Number.isSafeInteger(value) && value > 0 ? Math.min(value, 0xffff_ffff) : 0x7fff_ffff;
 }

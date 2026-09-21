@@ -7,7 +7,11 @@ public enum ZLinkTimerOverrunPolicy {
 
     private final int value;
 
-    ZLinkTimerOverrunPolicy(int value) { this.value = value; }
+    ZLinkTimerOverrunPolicy(int value) {
+        this.value = value;
+    }
 
-    public int value() { return value; }
+    public int value() {
+        return value;
+    }
 }

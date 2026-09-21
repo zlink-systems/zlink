@@ -16,14 +16,17 @@ public sealed class InMemoryLocationStoreTests
         var first = await CreateAuthorityAsync(store, OwnerA, "actor-1");
         Assert.Equal(1UL, first.ObjectGeneration);
         var existing = Assert.IsType<ZLinkObjectReserveResult.AlreadyExists>(
-            await ReserveAuthorityAsync(store, OwnerB, "actor-1"));
+            await ReserveAuthorityAsync(store, OwnerB, "actor-1")
+        );
         Assert.Equal(first.StoreVersion, existing.Current.StoreVersion);
 
         Assert.IsType<ZLinkAuthorityCompareExchangeResult.Deleted>(
             await store.CompareExchangeAuthorityAsync(
                 AuthorityKey("actor-1"),
                 first.StoreVersion,
-                new ZLinkAuthorityMutation.Delete()));
+                new ZLinkAuthorityMutation.Delete()
+            )
+        );
 
         // Generation counters survive removal so a re-claim can never reuse
         // an old fencing token.
@@ -46,13 +49,16 @@ public sealed class InMemoryLocationStoreTests
         time.Advance(LeaseTtl + TimeSpan.FromSeconds(1));
 
         var existing = Assert.IsType<ZLinkObjectReserveResult.AlreadyExists>(
-            await ReserveAuthorityAsync(store, OwnerB, "actor-1"));
+            await ReserveAuthorityAsync(store, OwnerB, "actor-1")
+        );
         Assert.Equal(first.StoreVersion, existing.Current.StoreVersion);
         Assert.IsType<ZLinkAuthorityCompareExchangeResult.Conflict>(
             await store.CompareExchangeAuthorityAsync(
                 AuthorityKey("actor-1"),
                 first.StoreVersion,
-                new ZLinkAuthorityMutation.Delete()));
+                new ZLinkAuthorityMutation.Delete()
+            )
+        );
     }
 
     [Fact]
@@ -69,16 +75,19 @@ public sealed class InMemoryLocationStoreTests
                     new byte[] { 0x33 },
                     ZLinkAuthorityGenerationTransition.Preserve,
                     null,
-                    null)));
+                    null
+                )
+            )
+        );
         Assert.Equal(claimed.ObjectGeneration, stored.Snapshot.ObjectGeneration);
-        Assert.Equal(
-            claimed.AuthorityOwnerGeneration,
-            stored.Snapshot.AuthorityOwnerGeneration);
+        Assert.Equal(claimed.AuthorityOwnerGeneration, stored.Snapshot.AuthorityOwnerGeneration);
         Assert.IsType<ZLinkAuthorityCompareExchangeResult.Conflict>(
             await store.CompareExchangeAuthorityAsync(
                 AuthorityKey("actor-1"),
                 claimed.StoreVersion,
-                new ZLinkAuthorityMutation.Delete()));
+                new ZLinkAuthorityMutation.Delete()
+            )
+        );
     }
 
     [Fact]
@@ -90,7 +99,9 @@ public sealed class InMemoryLocationStoreTests
             await store.CompareExchangeAuthorityAsync(
                 AuthorityKey("actor-1"),
                 claimed.StoreVersion,
-                new ZLinkAuthorityMutation.Delete()));
+                new ZLinkAuthorityMutation.Delete()
+            )
+        );
         var recreated = await CreateAuthorityAsync(store, OwnerB, "actor-1");
 
         Assert.True(recreated.ObjectGeneration > claimed.ObjectGeneration);
@@ -98,7 +109,9 @@ public sealed class InMemoryLocationStoreTests
             await store.CompareExchangeAuthorityAsync(
                 AuthorityKey("actor-1"),
                 claimed.StoreVersion,
-                new ZLinkAuthorityMutation.Delete()));
+                new ZLinkAuthorityMutation.Delete()
+            )
+        );
     }
 
     [Fact]
@@ -109,24 +122,30 @@ public sealed class InMemoryLocationStoreTests
         await CreateAuthorityAsync(store, OwnerA, "actor-2");
         await CreateAuthorityAsync(store, OwnerB, "actor-3");
 
-        var ownerAToken = Assert.IsType<ZLinkOwnerLeaseReadResult.Found>(
-            await store.ReadOwnerLeaseAsync(OwnerA)).Token;
+        var ownerAToken = Assert
+            .IsType<ZLinkOwnerLeaseReadResult.Found>(await store.ReadOwnerLeaseAsync(OwnerA))
+            .Token;
         Assert.Equal(
             0,
             await store.RemoveAllByOwnerAsync(
                 ownerAToken with
                 {
-                    LeaseGeneration = ownerAToken.LeaseGeneration + 1
-                }));
+                    LeaseGeneration = ownerAToken.LeaseGeneration + 1,
+                }
+            )
+        );
         var removed = await store.RemoveAllByOwnerAsync(ownerAToken);
 
         Assert.Equal(1, removed);
         Assert.IsType<ZLinkAuthorityReadResult.Found>(
-            await store.ReadAuthorityAsync(AuthorityKey("actor-1")));
+            await store.ReadAuthorityAsync(AuthorityKey("actor-1"))
+        );
         Assert.IsType<ZLinkAuthorityReadResult.Found>(
-            await store.ReadAuthorityAsync(AuthorityKey("actor-2")));
+            await store.ReadAuthorityAsync(AuthorityKey("actor-2"))
+        );
         Assert.IsType<ZLinkAuthorityReadResult.Found>(
-            await store.ReadAuthorityAsync(AuthorityKey("actor-3")));
+            await store.ReadAuthorityAsync(AuthorityKey("actor-3"))
+        );
     }
 
     [Fact]
@@ -138,9 +157,11 @@ public sealed class InMemoryLocationStoreTests
             OwnerB,
             endpoint: "tcp://127.0.0.1:5002",
             nodeRid: "node-b",
-            leaseGeneration: 2);
-        var ownerAToken = Assert.IsType<ZLinkOwnerLeaseReadResult.Found>(
-            await store.ReadOwnerLeaseAsync(OwnerA)).Token;
+            leaseGeneration: 2
+        );
+        var ownerAToken = Assert
+            .IsType<ZLinkOwnerLeaseReadResult.Found>(await store.ReadOwnerLeaseAsync(OwnerA))
+            .Token;
 
         await store.UpdateMeshNodeAsync(descriptorA, ZLinkLocationWriteIntent.NewClaim);
         await store.UpdateMeshNodeAsync(descriptorB, ZLinkLocationWriteIntent.NewClaim);
@@ -156,8 +177,10 @@ public sealed class InMemoryLocationStoreTests
                 "test",
                 OwnerA,
                 ownerAToken.LeaseGeneration,
-                default),
-            ZLinkLocationWriteIntent.NewClaim);
+                default
+            ),
+            ZLinkLocationWriteIntent.NewClaim
+        );
         await store.UpdateFanoutPublisherAsync(
             new ZLinkFanoutPublisherDescriptor(
                 "events",
@@ -169,22 +192,32 @@ public sealed class InMemoryLocationStoreTests
                 "test",
                 OwnerA,
                 ownerAToken.LeaseGeneration,
-                default),
-            ZLinkLocationWriteIntent.NewClaim);
+                default
+            ),
+            ZLinkLocationWriteIntent.NewClaim
+        );
         await CreateAuthorityAsync(store, OwnerA, "actor-a");
         await CreateAuthorityAsync(store, OwnerB, "actor-b");
 
         var removed = await store.RemoveAllByOwnerAsync(ownerAToken);
 
         Assert.Equal(4, removed);
-        Assert.DoesNotContain((await store.ListMeshNodesAsync("play", default)).Items, row => row.OwnerId == OwnerA);
-        Assert.Contains((await store.ListMeshNodesAsync("play", default)).Items, row => row.OwnerId == OwnerB);
+        Assert.DoesNotContain(
+            (await store.ListMeshNodesAsync("play", default)).Items,
+            row => row.OwnerId == OwnerA
+        );
+        Assert.Contains(
+            (await store.ListMeshNodesAsync("play", default)).Items,
+            row => row.OwnerId == OwnerB
+        );
         Assert.Empty((await store.ListClientServersAsync("orders", default)).Items);
         Assert.Empty((await store.ListFanoutPublishersAsync("events", default)).Items);
         Assert.IsType<ZLinkAuthorityReadResult.Found>(
-            await store.ReadAuthorityAsync(AuthorityKey("actor-a")));
+            await store.ReadAuthorityAsync(AuthorityKey("actor-a"))
+        );
         Assert.IsType<ZLinkAuthorityReadResult.Found>(
-            await store.ReadAuthorityAsync(AuthorityKey("actor-b")));
+            await store.ReadAuthorityAsync(AuthorityKey("actor-b"))
+        );
     }
 
     [Fact]
@@ -196,16 +229,17 @@ public sealed class InMemoryLocationStoreTests
         var expectedStoreNow = time.GetUtcNow();
 
         var claimed = Assert.IsType<ZLinkOwnerLeaseClaimResult.Claimed>(
-            await store.ClaimOwnerLeaseAsync(OwnerA, ttl));
+            await store.ClaimOwnerLeaseAsync(OwnerA, ttl)
+        );
         Assert.Equal(expectedStoreNow, claimed.StoreNow);
         Assert.Equal(expectedStoreNow + ttl, claimed.LeaseExpiresAt);
         var read = Assert.IsType<ZLinkOwnerLeaseReadResult.Found>(
-            await store.ReadOwnerLeaseAsync(OwnerA));
+            await store.ReadOwnerLeaseAsync(OwnerA)
+        );
         Assert.Equal(claimed.Token, read.Token);
         Assert.Equal(claimed.LeaseExpiresAt, read.LeaseExpiresAt);
         time.AdvanceWallClockOnly(TimeSpan.FromMinutes(10));
-        Assert.IsType<ZLinkOwnerLeaseReadResult.Missing>(
-            await store.ReadOwnerLeaseAsync(OwnerA));
+        Assert.IsType<ZLinkOwnerLeaseReadResult.Missing>(await store.ReadOwnerLeaseAsync(OwnerA));
     }
 
     [Fact]
@@ -213,10 +247,13 @@ public sealed class InMemoryLocationStoreTests
     {
         var (store, _) = await CreateStoreWithLiveOwnersAsync(OwnerA);
         await store.UpdateMeshNodeAsync(
-            MeshNode(OwnerA, nodeRid: "node-a"), ZLinkLocationWriteIntent.NewClaim);
+            MeshNode(OwnerA, nodeRid: "node-a"),
+            ZLinkLocationWriteIntent.NewClaim
+        );
         await store.UpdateMeshNodeAsync(
             MeshNode(OwnerA, nodeRid: "node-b", meshName: "world"),
-            ZLinkLocationWriteIntent.NewClaim);
+            ZLinkLocationWriteIntent.NewClaim
+        );
 
         var play = (await store.ListMeshNodesAsync("play", default)).Items;
 
@@ -229,19 +266,18 @@ public sealed class InMemoryLocationStoreTests
         var (store, _) = await CreateStoreWithLiveOwnersAsync(OwnerA);
         await store.UpdateMeshNodeAsync(
             MeshNode(OwnerA, nodeRid: "node-b"),
-            ZLinkLocationWriteIntent.NewClaim);
+            ZLinkLocationWriteIntent.NewClaim
+        );
         await store.UpdateMeshNodeAsync(
             MeshNode(OwnerA, nodeRid: "node-a"),
-            ZLinkLocationWriteIntent.NewClaim);
+            ZLinkLocationWriteIntent.NewClaim
+        );
 
-        var first = await store.ListMeshNodesAsync(
-            "play",
-            new ZLinkPageRequest(PageSize: 1));
+        var first = await store.ListMeshNodesAsync("play", new ZLinkPageRequest(PageSize: 1));
         var second = await store.ListMeshNodesAsync(
             "play",
-            new ZLinkPageRequest(
-                PageSize: 1,
-                ContinuationToken: first.ContinuationToken));
+            new ZLinkPageRequest(PageSize: 1, ContinuationToken: first.ContinuationToken)
+        );
 
         Assert.Equal(RoutingId.From("node-a"), Assert.Single(first.Items).Rid);
         Assert.NotNull(first.ContinuationToken);
@@ -263,8 +299,10 @@ public sealed class InMemoryLocationStoreTests
         Assert.Equal(afterWrite, afterRead);
     }
 
-    private static async Task<(ZLinkInMemoryLocationStore Store, ManualTimeProvider Time)>
-        CreateStoreWithLiveOwnersAsync(params string[] owners)
+    private static async Task<(
+        ZLinkInMemoryLocationStore Store,
+        ManualTimeProvider Time
+    )> CreateStoreWithLiveOwnersAsync(params string[] owners)
     {
         var time = new ManualTimeProvider();
         var store = new ZLinkInMemoryLocationStore(time);
@@ -274,27 +312,30 @@ public sealed class InMemoryLocationStoreTests
         return (store, time);
     }
 
-    private static ZLinkAuthorityKey AuthorityKey(string objectId) =>
-        new($"test:actor:{objectId}");
+    private static ZLinkAuthorityKey AuthorityKey(string objectId) => new($"test:actor:{objectId}");
 
     private static async ValueTask<ZLinkObjectReserveResult> ReserveAuthorityAsync(
         IZLinkLocationRepository store,
         string ownerId,
-        string objectId)
+        string objectId
+    )
     {
-        var owner = Assert.IsType<ZLinkOwnerLeaseReadResult.Found>(
-            await store.ReadOwnerLeaseAsync(ownerId)).Token;
+        var owner = Assert
+            .IsType<ZLinkOwnerLeaseReadResult.Found>(await store.ReadOwnerLeaseAsync(ownerId))
+            .Token;
         var nodeName = ownerId == OwnerB ? "node-2" : "node-1";
         var nodeRid = RoutingId.From(nodeName);
         var descriptor = MeshNode(
             ownerId,
             nodeRid: nodeName,
-            leaseGeneration: owner.LeaseGeneration) with
+            leaseGeneration: owner.LeaseGeneration
+        ) with
         {
             ObjectRole = ZLinkMeshNodeObjectRole.Server,
-            EntrySpotId = nodeName == "node-2"
-                ? "play-entry-00000000-0000-4000-a000-000000000002"
-                : "play-entry-00000000-0000-4000-a000-000000000001",
+            EntrySpotId =
+                nodeName == "node-2"
+                    ? "play-entry-00000000-0000-4000-a000-000000000002"
+                    : "play-entry-00000000-0000-4000-a000-000000000001",
             ObjectCapabilities =
             [
                 new ZLinkObjectCapability(
@@ -302,12 +343,11 @@ public sealed class InMemoryLocationStoreTests
                     "player",
                     ZLinkObjectMaintenancePolicyKind.Disabled,
                     false,
-                    0)
-            ]
+                    0
+                ),
+            ],
         };
-        _ = await store.UpdateMeshNodeAsync(
-            descriptor,
-            ZLinkLocationWriteIntent.NewClaim);
+        _ = await store.UpdateMeshNodeAsync(descriptor, ZLinkLocationWriteIntent.NewClaim);
         var intent = System.Text.Encoding.UTF8.GetBytes($"create:{objectId}");
         return await store.ReserveAsync(
             new ZLinkObjectReservationRequest(
@@ -321,72 +361,82 @@ public sealed class InMemoryLocationStoreTests
                 descriptor.LifecycleGeneration,
                 owner,
                 new byte[] { 0x11 },
-                new ZLinkCapacityVector(1, 0, null)));
+                new ZLinkCapacityVector(1, 0, null)
+            )
+        );
     }
 
     private static async ValueTask<ZLinkAuthoritySnapshot> CreateAuthorityAsync(
         IZLinkLocationRepository store,
         string ownerId,
-        string objectId)
+        string objectId
+    )
     {
         var reserved = Assert.IsType<ZLinkObjectReserveResult.Reserved>(
-            await ReserveAuthorityAsync(store, ownerId, objectId));
-        return Assert.IsType<ZLinkObjectCommitResult.Committed>(
-            await store.CommitAsync(
-                reserved.Reservation,
-                new byte[] { 0x22 })).Snapshot;
+            await ReserveAuthorityAsync(store, ownerId, objectId)
+        );
+        return Assert
+            .IsType<ZLinkObjectCommitResult.Committed>(
+                await store.CommitAsync(reserved.Reservation, new byte[] { 0x22 })
+            )
+            .Snapshot;
     }
 
-    internal static ZLinkResolvedActorLocation Actor(
-        string ownerId,
-        string actorId = "actor-1") => new(
-        "play",
-        actorId,
-        "player",
-        new ActorRef(actorId, 1, "play", RoutingId.From("node-1")),
-        OwnerNodeRid: RoutingId.From("node-1"),
-        OwnerNodeGeneration: 0,
-        SpotId: string.Empty,
-        SpotGeneration: 0,
-        SpotKind: ZLinkSpotKind.Entry,
-        MembershipEpoch: 0,
-        OwnerId: ownerId,
-        LeaseGeneration: 1,
-        UpdatedAt: default,
-        AuthorityOwnerGeneration: 1);
+    internal static ZLinkResolvedActorLocation Actor(string ownerId, string actorId = "actor-1") =>
+        new(
+            "play",
+            actorId,
+            "player",
+            new ActorRef(actorId, 1, "play", RoutingId.From("node-1")),
+            OwnerNodeRid: RoutingId.From("node-1"),
+            OwnerNodeGeneration: 0,
+            SpotId: string.Empty,
+            SpotGeneration: 0,
+            SpotKind: ZLinkSpotKind.Entry,
+            MembershipEpoch: 0,
+            OwnerId: ownerId,
+            LeaseGeneration: 1,
+            UpdatedAt: default,
+            AuthorityOwnerGeneration: 1
+        );
 
-    internal static ZLinkResolvedSpotLocation Spot(string ownerId, string spotId) => new(
-        "play",
-        spotId,
-        SpotGeneration: 0,
-        OwnerNodeRid: RoutingId.From("node-1"),
-        OwnerNodeGeneration: 0,
-        SpotKind: ZLinkSpotKind.User,
-        SpotType: "game",
-        OwnerId: ownerId,
-        LeaseGeneration: 1,
-        UpdatedAt: default,
-        AuthorityOwnerGeneration: 1);
+    internal static ZLinkResolvedSpotLocation Spot(string ownerId, string spotId) =>
+        new(
+            "play",
+            spotId,
+            SpotGeneration: 0,
+            OwnerNodeRid: RoutingId.From("node-1"),
+            OwnerNodeGeneration: 0,
+            SpotKind: ZLinkSpotKind.User,
+            SpotType: "game",
+            OwnerId: ownerId,
+            LeaseGeneration: 1,
+            UpdatedAt: default,
+            AuthorityOwnerGeneration: 1
+        );
 
     internal static ZLinkMeshNodeDescriptor MeshNode(
         string ownerId,
         string endpoint = "tcp://127.0.0.1:5001",
         string nodeRid = "node-1",
         string meshName = "play",
-        long leaseGeneration = 1) => new(
-        meshName,
-        RoutingId.From(nodeRid),
-        LifecycleGeneration: 1,
-        DescriptorRevision: 1,
-        endpoint,
-        new Dictionary<string, int>(StringComparer.Ordinal) { [meshName] = 100 },
-        SecurityIdentity: string.Empty,
-        OwnerId: ownerId,
-        LeaseGeneration: leaseGeneration,
-        UpdatedAt: default)
-    {
-        State = ZLinkFrameworkRuntimeState.Serving
-    };
+        long leaseGeneration = 1
+    ) =>
+        new(
+            meshName,
+            RoutingId.From(nodeRid),
+            LifecycleGeneration: 1,
+            DescriptorRevision: 1,
+            endpoint,
+            new Dictionary<string, int>(StringComparer.Ordinal) { [meshName] = 100 },
+            SecurityIdentity: string.Empty,
+            OwnerId: ownerId,
+            LeaseGeneration: leaseGeneration,
+            UpdatedAt: default
+        )
+        {
+            State = ZLinkFrameworkRuntimeState.Serving,
+        };
 }
 
 internal static class AuthorityLocationTestFixture
@@ -394,24 +444,26 @@ internal static class AuthorityLocationTestFixture
     internal static async ValueTask<ZLinkAuthoritySnapshot?> PublishActorAsync(
         IZLinkLocationRepository store,
         ZLinkResolvedActorLocation row,
-        bool replace = false)
+        bool replace = false
+    )
     {
         var key = ZLinkActorAuthorityPayloadCodec.AuthorityKey(row.ActorId);
         var current = await store.ReadAuthorityAsync(key);
         if (current is ZLinkAuthorityReadResult.Found found)
         {
-            if (!replace) return null;
+            if (!replace)
+                return null;
             Assert.IsType<ZLinkAuthorityCompareExchangeResult.Deleted>(
                 await store.CompareExchangeAuthorityAsync(
                     key,
                     found.Snapshot.StoreVersion,
-                    new ZLinkAuthorityMutation.Delete()));
+                    new ZLinkAuthorityMutation.Delete()
+                )
+            );
         }
 
         var owner = await RequireOwnerAsync(store, row.OwnerId);
-        var nodeGeneration = row.OwnerNodeGeneration == 0
-            ? 1UL
-            : row.OwnerNodeGeneration;
+        var nodeGeneration = row.OwnerNodeGeneration == 0 ? 1UL : row.OwnerNodeGeneration;
         await PublishDescriptorAsync(
             store,
             row.MeshName,
@@ -419,7 +471,8 @@ internal static class AuthorityLocationTestFixture
             nodeGeneration,
             owner,
             ZLinkPlacementObjectKind.Actor,
-            row.ActorType);
+            row.ActorType
+        );
         var payload = ZLinkActorAuthorityPayloadCodec.Encode(
             new ZLinkActorAuthorityPayload(
                 ZLinkActorAuthorityState.Ready,
@@ -432,7 +485,9 @@ internal static class AuthorityLocationTestFixture
                 checked((ulong)owner.LeaseGeneration),
                 row.MeshName,
                 row.OwnerNodeRid,
-                nodeGeneration));
+                nodeGeneration
+            )
+        );
         return await ReserveAndCommitAsync(
             store,
             key,
@@ -442,30 +497,33 @@ internal static class AuthorityLocationTestFixture
             nodeGeneration,
             owner,
             payload,
-            new ZLinkCapacityVector(1, 0, null));
+            new ZLinkCapacityVector(1, 0, null)
+        );
     }
 
     internal static async ValueTask<ZLinkAuthoritySnapshot?> PublishSpotAsync(
         IZLinkLocationRepository store,
         ZLinkResolvedSpotLocation row,
-        bool replace = false)
+        bool replace = false
+    )
     {
         var key = ZLinkUserSpotAuthorityPayloadCodec.AuthorityKey(row.SpotId);
         var current = await store.ReadAuthorityAsync(key);
         if (current is ZLinkAuthorityReadResult.Found found)
         {
-            if (!replace) return null;
+            if (!replace)
+                return null;
             Assert.IsType<ZLinkAuthorityCompareExchangeResult.Deleted>(
                 await store.CompareExchangeAuthorityAsync(
                     key,
                     found.Snapshot.StoreVersion,
-                    new ZLinkAuthorityMutation.Delete()));
+                    new ZLinkAuthorityMutation.Delete()
+                )
+            );
         }
 
         var owner = await RequireOwnerAsync(store, row.OwnerId);
-        var nodeGeneration = row.OwnerNodeGeneration == 0
-            ? 1UL
-            : row.OwnerNodeGeneration;
+        var nodeGeneration = row.OwnerNodeGeneration == 0 ? 1UL : row.OwnerNodeGeneration;
         var stableType = row.SpotType ?? "test-spot";
         await PublishDescriptorAsync(
             store,
@@ -474,7 +532,8 @@ internal static class AuthorityLocationTestFixture
             nodeGeneration,
             owner,
             ZLinkPlacementObjectKind.UserSpot,
-            stableType);
+            stableType
+        );
         var payload = ZLinkUserSpotAuthorityPayloadCodec.Encode(
             new ZLinkUserSpotAuthorityPayload(
                 ZLinkUserSpotAuthorityState.Ready,
@@ -484,7 +543,9 @@ internal static class AuthorityLocationTestFixture
                 checked((ulong)owner.LeaseGeneration),
                 row.MeshName,
                 row.OwnerNodeRid,
-                nodeGeneration));
+                nodeGeneration
+            )
+        );
         return await ReserveAndCommitAsync(
             store,
             key,
@@ -497,30 +558,29 @@ internal static class AuthorityLocationTestFixture
             new ZLinkCapacityVector(
                 0,
                 1,
-                new ZLinkSpotTypeCapacityDelta(
-                    ZLinkPlacementObjectKind.UserSpot,
-                    stableType,
-                    1)));
+                new ZLinkSpotTypeCapacityDelta(ZLinkPlacementObjectKind.UserSpot, stableType, 1)
+            )
+        );
     }
 
     internal static ValueTask<ZLinkAuthorityReadResult> ReadActorAsync(
         IZLinkLocationRepository store,
-        string actorId) =>
-        store.ReadAuthorityAsync(
-            ZLinkActorAuthorityPayloadCodec.AuthorityKey(actorId));
+        string actorId
+    ) => store.ReadAuthorityAsync(ZLinkActorAuthorityPayloadCodec.AuthorityKey(actorId));
 
     internal static ValueTask<ZLinkAuthorityReadResult> ReadSpotAsync(
         IZLinkLocationRepository store,
-        string spotId) =>
-        store.ReadAuthorityAsync(
-            ZLinkUserSpotAuthorityPayloadCodec.AuthorityKey(spotId));
+        string spotId
+    ) => store.ReadAuthorityAsync(ZLinkUserSpotAuthorityPayloadCodec.AuthorityKey(spotId));
 
     private static async ValueTask<ZLinkLocationOwnerToken> RequireOwnerAsync(
         IZLinkLocationRepository store,
-        string ownerId)
+        string ownerId
+    )
     {
-        return Assert.IsType<ZLinkOwnerLeaseReadResult.Found>(
-            await store.ReadOwnerLeaseAsync(ownerId)).Token;
+        return Assert
+            .IsType<ZLinkOwnerLeaseReadResult.Found>(await store.ReadOwnerLeaseAsync(ownerId))
+            .Token;
     }
 
     private static async ValueTask PublishDescriptorAsync(
@@ -530,7 +590,8 @@ internal static class AuthorityLocationTestFixture
         ulong nodeGeneration,
         ZLinkLocationOwnerToken owner,
         ZLinkPlacementObjectKind objectKind,
-        string stableType)
+        string stableType
+    )
     {
         var descriptor = new ZLinkMeshNodeDescriptor(
             meshName,
@@ -538,14 +599,12 @@ internal static class AuthorityLocationTestFixture
             nodeGeneration,
             1,
             "tcp://127.0.0.1:5001",
-            new Dictionary<string, int>(StringComparer.Ordinal)
-            {
-                [meshName] = 100
-            },
+            new Dictionary<string, int>(StringComparer.Ordinal) { [meshName] = 100 },
             string.Empty,
             owner.OwnerId,
             owner.LeaseGeneration,
-            default)
+            default
+        )
         {
             State = ZLinkFrameworkRuntimeState.Serving,
             ObjectRole = ZLinkMeshNodeObjectRole.Server,
@@ -553,20 +612,18 @@ internal static class AuthorityLocationTestFixture
             [
                 new ZLinkObjectCapability(
                     ZLinkPlacementObjectKind.Actor,
-                    objectKind == ZLinkPlacementObjectKind.Actor
-                        ? stableType
-                        : "player",
+                    objectKind == ZLinkPlacementObjectKind.Actor ? stableType : "player",
                     ZLinkObjectMaintenancePolicyKind.Disabled,
                     false,
-                    0),
+                    0
+                ),
                 new ZLinkObjectCapability(
                     ZLinkPlacementObjectKind.UserSpot,
-                    objectKind == ZLinkPlacementObjectKind.UserSpot
-                        ? stableType
-                        : "game",
+                    objectKind == ZLinkPlacementObjectKind.UserSpot ? stableType : "game",
                     ZLinkObjectMaintenancePolicyKind.Disabled,
                     false,
-                    0)
+                    0
+                ),
             ],
             Capacity = new ZLinkPlacementCapacity(
                 new ZLinkPopulationCapacity(0, 0, 0),
@@ -574,28 +631,32 @@ internal static class AuthorityLocationTestFixture
                 [
                     new ZLinkSpotTypeCapacity(
                         ZLinkPlacementObjectKind.UserSpot,
-                        objectKind == ZLinkPlacementObjectKind.UserSpot
-                            ? stableType
-                            : "game",
+                        objectKind == ZLinkPlacementObjectKind.UserSpot ? stableType : "game",
                         0,
                         0,
-                        0)
-                ]),
-            EntrySpotId = CreateEntrySpotId(meshName, nodeRid)
+                        0
+                    ),
+                ]
+            ),
+            EntrySpotId = CreateEntrySpotId(meshName, nodeRid),
         };
         var current = await store.ListMeshNodesAsync(meshName, default);
         var existing = current.Items.SingleOrDefault(item => item.Rid == nodeRid);
-        if (existing is not null
-            && (existing.OwnerId != owner.OwnerId
-                || existing.LeaseGeneration != owner.LeaseGeneration))
+        if (
+            existing is not null
+            && (
+                existing.OwnerId != owner.OwnerId
+                || existing.LeaseGeneration != owner.LeaseGeneration
+            )
+        )
         {
             Assert.Equal(
                 ZLinkLocationWriteStatus.Stored,
                 await store.RemoveMeshNodeAsync(
                     new ZLinkMeshNodeDescriptorKey(meshName, nodeRid),
-                    new ZLinkLocationOwnerToken(
-                        existing.OwnerId,
-                        existing.LeaseGeneration)));
+                    new ZLinkLocationOwnerToken(existing.OwnerId, existing.LeaseGeneration)
+                )
+            );
             existing = null;
         }
         var intent = existing is null
@@ -604,22 +665,19 @@ internal static class AuthorityLocationTestFixture
         if (existing is not null)
             descriptor = descriptor with
             {
-                DescriptorRevision = checked(existing.DescriptorRevision + 1)
+                DescriptorRevision = checked(existing.DescriptorRevision + 1),
             };
         var written = await store.UpdateMeshNodeAsync(descriptor, intent);
         Assert.Equal(ZLinkLocationWriteStatus.Stored, written.Status);
     }
 
-    private static string CreateEntrySpotId(
-        string meshName,
-        RoutingId nodeRid)
+    private static string CreateEntrySpotId(string meshName, RoutingId nodeRid)
     {
-        var hex = Convert.ToHexString(
-                System.Security.Cryptography.SHA256.HashData(
-                    nodeRid.ToBytes()))
+        var hex = Convert
+            .ToHexString(System.Security.Cryptography.SHA256.HashData(nodeRid.ToBytes()))
             .ToLowerInvariant();
         return $"{meshName}-entry-{hex[..8]}-{hex[8..12]}"
-               + $"-4{hex[13..16]}-a{hex[17..20]}-{hex[20..32]}";
+            + $"-4{hex[13..16]}-a{hex[17..20]}-{hex[20..32]}";
     }
 
     private static async ValueTask<ZLinkAuthoritySnapshot> ReserveAndCommitAsync(
@@ -631,7 +689,8 @@ internal static class AuthorityLocationTestFixture
         ulong nodeGeneration,
         ZLinkLocationOwnerToken owner,
         byte[] payload,
-        ZLinkCapacityVector capacity)
+        ZLinkCapacityVector capacity
+    )
     {
         var intent = System.Text.Encoding.UTF8.GetBytes($"create:{key.Value}");
         var reserved = Assert.IsType<ZLinkObjectReserveResult.Reserved>(
@@ -647,9 +706,15 @@ internal static class AuthorityLocationTestFixture
                     nodeGeneration,
                     owner,
                     payload,
-                    capacity)));
-        return Assert.IsType<ZLinkObjectCommitResult.Committed>(
-            await store.CommitAsync(reserved.Reservation, payload)).Snapshot;
+                    capacity
+                )
+            )
+        );
+        return Assert
+            .IsType<ZLinkObjectCommitResult.Committed>(
+                await store.CommitAsync(reserved.Reservation, payload)
+            )
+            .Snapshot;
     }
 }
 

@@ -1,5 +1,7 @@
 package systems.zlink.framework.runtime.internal.execution;
 
+import systems.zlink.framework.execution.ZLinkSerialExecutionQueue;
+
 import java.util.Objects;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionException;
@@ -10,21 +12,20 @@ import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.function.Supplier;
-import systems.zlink.framework.execution.ZLinkSerialExecutionQueue;
 
 /**
  * Single-owner execution lane for a component's mutable state.
  *
- * <p>Every read and write of a component's state runs through one lane turn. The lane runs at
- * most one turn at a time, so its state can use ordinary, unsynchronized collections. This is
+ * <p>Every read and write of a component's state runs through one lane turn. The lane runs at most
+ * one turn at a time, so its state can use ordinary, unsynchronized collections. This is
  * intentionally separate from {@link ZLinkSerialExecutionQueue}, which owns application execution,
- * relocation, and lifecycle admission.</p>
+ * relocation, and lifecycle admission.
  *
  * <p>A lane is not reentrant. Reentering it from one of its turns would wait behind that turn and
- * hang, so {@link #runAsync(Supplier)} throws at the reentrant call site instead. Java
- * {@link ThreadLocal} values do not automatically flow through arbitrary {@link CompletionStage}
- * continuations; work that schedules an asynchronous continuation on an executor must use
- * {@link #propagateCurrent(Executor)} to retain this diagnostic ownership marker.</p>
+ * hang, so {@link #runAsync(Supplier)} throws at the reentrant call site instead. Java {@link
+ * ThreadLocal} values do not automatically flow through arbitrary {@link CompletionStage}
+ * continuations; work that schedules an asynchronous continuation on an executor must use {@link
+ * #propagateCurrent(Executor)} to retain this diagnostic ownership marker.
  */
 public final class ZLinkStateLane {
     private static final int DRAIN_BATCH_LIMIT = 100;
@@ -32,7 +33,7 @@ public final class ZLinkStateLane {
     // Lane identity and FIFO belong to the mailbox, not to an executor.
     // In particular, a request-scoped handler owner needs no private executor.
     private static final ExecutorService DEFAULT_EXECUTOR =
-        Executors.newVirtualThreadPerTaskExecutor();
+            Executors.newVirtualThreadPerTaskExecutor();
 
     private final ConcurrentLinkedQueue<WorkItem> mailbox = new ConcurrentLinkedQueue<>();
     private final AtomicInteger scheduled = new AtomicInteger();
@@ -62,15 +63,18 @@ public final class ZLinkStateLane {
         throwIfClosed();
 
         CompletableFuture<T> result = new CompletableFuture<>();
-        mailbox.add(() -> {
-            try {
-                result.complete(callWithCurrent(this, work));
-            } catch (RuntimeException | Error error) {
-                result.completeExceptionally(error instanceof CompletionException
-                    ? error : new CompletionException(error));
-            }
-            return CompletableFuture.completedFuture(null);
-        });
+        mailbox.add(
+                () -> {
+                    try {
+                        result.complete(callWithCurrent(this, work));
+                    } catch (RuntimeException | Error error) {
+                        result.completeExceptionally(
+                                error instanceof CompletionException
+                                        ? error
+                                        : new CompletionException(error));
+                    }
+                    return CompletableFuture.completedFuture(null);
+                });
         scheduleDrain();
         // No caller can observe the private result before submission returns.
         // A completed turn needs no completion task; a pending turn must still
@@ -83,10 +87,11 @@ public final class ZLinkStateLane {
 
     public CompletionStage<Void> runAsync(Runnable work) {
         Objects.requireNonNull(work, "work");
-        return runAsync(() -> {
-            work.run();
-            return null;
-        });
+        return runAsync(
+                () -> {
+                    work.run();
+                    return null;
+                });
     }
 
     public boolean tryPost(Supplier<? extends CompletionStage<Void>> work) {
@@ -95,14 +100,15 @@ public final class ZLinkStateLane {
             return false;
         }
 
-        mailbox.add(() -> {
-            try {
-                return callWithCurrent(this,
-                    () -> Objects.requireNonNull(work.get(), "work result"));
-            } catch (RuntimeException | Error error) {
-                return CompletableFuture.failedFuture(error);
-            }
-        });
+        mailbox.add(
+                () -> {
+                    try {
+                        return callWithCurrent(
+                                this, () -> Objects.requireNonNull(work.get(), "work result"));
+                    } catch (RuntimeException | Error error) {
+                        return CompletableFuture.failedFuture(error);
+                    }
+                });
         scheduleDrain();
         return true;
     }
@@ -110,9 +116,9 @@ public final class ZLinkStateLane {
     public void throwIfReentrant() {
         if (isOnLane()) {
             throw new IllegalStateException(
-                "This code already runs on the state lane it is trying to enter. Call the "
-                    + "component's private state method directly instead of re-entering its "
-                    + "public surface.");
+                    "This code already runs on the state lane it is trying to enter. Call the"
+                            + " component's private state method directly instead of re-entering its"
+                            + " public surface.");
         }
     }
 
@@ -174,23 +180,26 @@ public final class ZLinkStateLane {
         } catch (RuntimeException | Error error) {
             execution = CompletableFuture.failedFuture(error);
         }
-        execution.whenComplete((ignored, error) -> {
-            try {
-                executor.execute(() -> runNext(processed + 1));
-            } catch (RuntimeException rejected) {
-                scheduled.set(0);
-                if (closed.get() != 0) {
-                    completed.completeExceptionally(rejected);
-                }
-            }
-        });
+        execution.whenComplete(
+                (ignored, error) -> {
+                    try {
+                        executor.execute(() -> runNext(processed + 1));
+                    } catch (RuntimeException rejected) {
+                        scheduled.set(0);
+                        if (closed.get() != 0) {
+                            completed.completeExceptionally(rejected);
+                        }
+                    }
+                });
     }
 
     private static void runWithCurrent(ZLinkStateLane lane, Runnable command) {
-        callWithCurrent(lane, () -> {
-            command.run();
-            return null;
-        });
+        callWithCurrent(
+                lane,
+                () -> {
+                    command.run();
+                    return null;
+                });
     }
 
     private static <T> T callWithCurrent(ZLinkStateLane lane, Supplier<T> command) {

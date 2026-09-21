@@ -1,5 +1,8 @@
 package systems.zlink.framework.runtime.channels;
-import java.util.Arrays;
+
+import systems.zlink.contracts.core.RoutingId;
+import systems.zlink.framework.runtime.host.ZLinkFrameworkRuntimeState;
+import systems.zlink.framework.runtime.internal.locations.ZLinkClientServerServerDescriptor;
 
 import java.io.ByteArrayOutputStream;
 import java.nio.ByteBuffer;
@@ -7,10 +10,8 @@ import java.nio.ByteOrder;
 import java.nio.charset.CharacterCodingException;
 import java.nio.charset.CodingErrorAction;
 import java.nio.charset.StandardCharsets;
+import java.util.Arrays;
 import java.util.Objects;
-import systems.zlink.contracts.core.RoutingId;
-import systems.zlink.framework.runtime.internal.locations.ZLinkClientServerServerDescriptor;
-import systems.zlink.framework.runtime.host.ZLinkFrameworkRuntimeState;
 
 final class ZLinkClientServerServiceWire {
     private static final int MAGIC_0 = 0x5a;
@@ -28,8 +29,7 @@ final class ZLinkClientServerServiceWire {
     private static final int COMMAND_LIVENESS_ACK = 6;
     private static final int MAX_DESCRIPTOR_BYTES = 1024 * 1024;
 
-    private ZLinkClientServerServiceWire() {
-    }
+    private ZLinkClientServerServiceWire() {}
 
     static byte[] encodeHello(Hello value) {
         Writer body = new Writer();
@@ -37,23 +37,19 @@ final class ZLinkClientServerServiceWire {
         body.u8(DIRECTION_CLIENT_TO_SERVER);
         body.text8(value.securityIdentity(), "securityIdentity");
         body.positiveU32(
-            value.normalizedEffectiveMaxMessageBytes(),
-            "normalizedEffectiveMaxMessageBytes");
+                value.normalizedEffectiveMaxMessageBytes(), "normalizedEffectiveMaxMessageBytes");
         return encodeAdmission(COMMAND_HELLO, ROLE_CLIENT, body.toByteArray());
     }
 
     static byte[] encodeAdmit(
-        ZLinkClientServerServerDescriptor descriptor,
-        int normalizedEffectiveMaxMessageBytes) {
-        return encodeServerAdmission(
-            COMMAND_ADMIT, descriptor, normalizedEffectiveMaxMessageBytes);
+            ZLinkClientServerServerDescriptor descriptor, int normalizedEffectiveMaxMessageBytes) {
+        return encodeServerAdmission(COMMAND_ADMIT, descriptor, normalizedEffectiveMaxMessageBytes);
     }
 
     static byte[] encodeUpdate(
-        ZLinkClientServerServerDescriptor descriptor,
-        int normalizedEffectiveMaxMessageBytes) {
+            ZLinkClientServerServerDescriptor descriptor, int normalizedEffectiveMaxMessageBytes) {
         return encodeServerAdmission(
-            COMMAND_UPDATE, descriptor, normalizedEffectiveMaxMessageBytes);
+                COMMAND_UPDATE, descriptor, normalizedEffectiveMaxMessageBytes);
     }
 
     static byte[] encodeReject(int reason) {
@@ -75,10 +71,10 @@ final class ZLinkClientServerServiceWire {
 
     static boolean isControlFrame(byte[] frame) {
         return frame != null
-            && frame.length >= 5
-            && Byte.toUnsignedInt(frame[0]) == MAGIC_0
-            && Byte.toUnsignedInt(frame[1]) == MAGIC_1
-            && Byte.toUnsignedInt(frame[2]) == WIRE_MAJOR;
+                && frame.length >= 5
+                && Byte.toUnsignedInt(frame[0]) == MAGIC_0
+                && Byte.toUnsignedInt(frame[1]) == MAGIC_1
+                && Byte.toUnsignedInt(frame[2]) == WIRE_MAJOR;
     }
 
     static Control decode(byte[] frame) {
@@ -87,8 +83,8 @@ final class ZLinkClientServerServiceWire {
         }
         Reader reader = new Reader(frame);
         if (reader.u8("magic[0]") != MAGIC_0
-            || reader.u8("magic[1]") != MAGIC_1
-            || reader.u8("wireMajor") != WIRE_MAJOR) {
+                || reader.u8("magic[1]") != MAGIC_1
+                || reader.u8("wireMajor") != WIRE_MAJOR) {
             throw protocol("ClientServer control record prefix is invalid");
         }
         int command = reader.u8("command");
@@ -103,17 +99,14 @@ final class ZLinkClientServerServiceWire {
             }
             return new Reject(reason);
         }
-        if (command == COMMAND_LIVENESS_PROBE
-            || command == COMMAND_LIVENESS_ACK) {
+        if (command == COMMAND_LIVENESS_PROBE || command == COMMAND_LIVENESS_ACK) {
             long probeId = reader.nonzeroU64("probeId");
             reader.end();
             return command == COMMAND_LIVENESS_PROBE
-                ? new LivenessProbe(probeId)
-                : new LivenessAck(probeId);
+                    ? new LivenessProbe(probeId)
+                    : new LivenessAck(probeId);
         }
-        if (command != COMMAND_HELLO
-            && command != COMMAND_ADMIT
-            && command != COMMAND_UPDATE) {
+        if (command != COMMAND_HELLO && command != COMMAND_ADMIT && command != COMMAND_UPDATE) {
             throw protocol("ClientServer control command is invalid");
         }
         if (reader.u8("topologyKind") != TOPOLOGY_CLIENT_SERVER) {
@@ -131,61 +124,54 @@ final class ZLinkClientServerServiceWire {
             if (role != ROLE_CLIENT) {
                 throw protocol("ClientServer hello role is invalid");
             }
-            Hello hello = new Hello(
-                reader.text8("channelName"),
-                requireDirection(reader),
-                reader.text8("securityIdentity"),
-                reader.positiveU32("normalizedEffectiveMaxMessageBytes"));
+            Hello hello =
+                    new Hello(
+                            reader.text8("channelName"),
+                            requireDirection(reader),
+                            reader.text8("securityIdentity"),
+                            reader.positiveU32("normalizedEffectiveMaxMessageBytes"));
             reader.end();
             return hello;
         }
         if (role != ROLE_SERVER) {
             throw protocol("ClientServer server role is invalid");
         }
-        Admission admission = new Admission(
-            reader.text8("channelName"),
-            requireDirection(reader),
-            RoutingId.from(reader.bytes8("serverRid")),
-            reader.nonzeroU64("lifecycleGeneration"),
-            reader.nonzeroU64("descriptorRevision"),
-            requireWeight(reader),
-            stateFromWire(reader.u8("runtimeState")),
-            reader.text8("securityIdentity"),
-            reader.positiveU32("normalizedEffectiveMaxMessageBytes"),
-            reader.text16("advertisedEndpoint"));
+        Admission admission =
+                new Admission(
+                        reader.text8("channelName"),
+                        requireDirection(reader),
+                        RoutingId.from(reader.bytes8("serverRid")),
+                        reader.nonzeroU64("lifecycleGeneration"),
+                        reader.nonzeroU64("descriptorRevision"),
+                        requireWeight(reader),
+                        stateFromWire(reader.u8("runtimeState")),
+                        reader.text8("securityIdentity"),
+                        reader.positiveU32("normalizedEffectiveMaxMessageBytes"),
+                        reader.text16("advertisedEndpoint"));
         reader.end();
-        return command == COMMAND_ADMIT
-            ? new Admit(admission)
-            : new Update(admission);
+        return command == COMMAND_ADMIT ? new Admit(admission) : new Update(admission);
     }
 
     private static byte[] encodeServerAdmission(
-        int command,
-        ZLinkClientServerServerDescriptor descriptor,
-        int normalizedEffectiveMaxMessageBytes) {
+            int command,
+            ZLinkClientServerServerDescriptor descriptor,
+            int normalizedEffectiveMaxMessageBytes) {
         Objects.requireNonNull(descriptor, "descriptor");
         Writer body = new Writer();
         body.text8(descriptor.channelName(), "channelName");
         body.u8(DIRECTION_CLIENT_TO_SERVER);
         body.bytes8(descriptor.serverRid().toBytes(), "serverRid");
-        body.nonzeroU64(
-            descriptor.lifecycleGeneration(), "lifecycleGeneration");
-        body.nonzeroU64(
-            descriptor.descriptorRevision(), "descriptorRevision");
+        body.nonzeroU64(descriptor.lifecycleGeneration(), "lifecycleGeneration");
+        body.nonzeroU64(descriptor.descriptorRevision(), "descriptorRevision");
         body.u32(descriptor.weight());
         body.u8(stateToWire(descriptor.state()));
         body.text8(descriptor.securityIdentity(), "securityIdentity");
-        body.positiveU32(
-            normalizedEffectiveMaxMessageBytes,
-            "normalizedEffectiveMaxMessageBytes");
+        body.positiveU32(normalizedEffectiveMaxMessageBytes, "normalizedEffectiveMaxMessageBytes");
         body.text16(descriptor.endpoint(), "advertisedEndpoint");
         return encodeAdmission(command, ROLE_SERVER, body.toByteArray());
     }
 
-    private static byte[] encodeAdmission(
-        int command,
-        int role,
-        byte[] body) {
+    private static byte[] encodeAdmission(int command, int role, byte[] body) {
         if (body.length > 0xffff) {
             throw protocol("ClientServer role body is oversized");
         }
@@ -256,54 +242,44 @@ final class ZLinkClientServerServiceWire {
         };
     }
 
-    sealed interface Control permits Hello, Admit, Update, Reject,
-        LivenessProbe, LivenessAck {
-    }
+    sealed interface Control permits Hello, Admit, Update, Reject, LivenessProbe, LivenessAck {}
 
     record Hello(
-        String channelName,
-        int direction,
-        String securityIdentity,
-        int normalizedEffectiveMaxMessageBytes) implements Control {
-        Hello(
             String channelName,
+            int direction,
             String securityIdentity,
-            int normalizedEffectiveMaxMessageBytes) {
+            int normalizedEffectiveMaxMessageBytes)
+            implements Control {
+        Hello(String channelName, String securityIdentity, int normalizedEffectiveMaxMessageBytes) {
             this(
-                channelName,
-                DIRECTION_CLIENT_TO_SERVER,
-                securityIdentity,
-                normalizedEffectiveMaxMessageBytes);
+                    channelName,
+                    DIRECTION_CLIENT_TO_SERVER,
+                    securityIdentity,
+                    normalizedEffectiveMaxMessageBytes);
         }
     }
 
     record Admission(
-        String channelName,
-        int direction,
-        RoutingId serverRid,
-        long lifecycleGeneration,
-        long descriptorRevision,
-        int weight,
-        ZLinkFrameworkRuntimeState state,
-        String securityIdentity,
-        int normalizedEffectiveMaxMessageBytes,
-        String advertisedEndpoint) {
-    }
+            String channelName,
+            int direction,
+            RoutingId serverRid,
+            long lifecycleGeneration,
+            long descriptorRevision,
+            int weight,
+            ZLinkFrameworkRuntimeState state,
+            String securityIdentity,
+            int normalizedEffectiveMaxMessageBytes,
+            String advertisedEndpoint) {}
 
-    record Admit(Admission admission) implements Control {
-    }
+    record Admit(Admission admission) implements Control {}
 
-    record Update(Admission admission) implements Control {
-    }
+    record Update(Admission admission) implements Control {}
 
-    record Reject(int reason) implements Control {
-    }
+    record Reject(int reason) implements Control {}
 
-    record LivenessProbe(long probeId) implements Control {
-    }
+    record LivenessProbe(long probeId) implements Control {}
 
-    record LivenessAck(long probeId) implements Control {
-    }
+    record LivenessAck(long probeId) implements Control {}
 
     private static IllegalArgumentException protocol(String message) {
         return new IllegalArgumentException(message);
@@ -323,20 +299,19 @@ final class ZLinkClientServerServiceWire {
             if (value < 0 || value > 0xffff) {
                 throw protocol("value exceeds u16");
             }
-            output.writeBytes(ByteBuffer.allocate(2)
-                .order(ByteOrder.BIG_ENDIAN)
-                .putShort((short) value)
-                .array());
+            output.writeBytes(
+                    ByteBuffer.allocate(2)
+                            .order(ByteOrder.BIG_ENDIAN)
+                            .putShort((short) value)
+                            .array());
         }
 
         void u32(long value) {
             if (value < 0 || value > 0xffff_ffffL) {
                 throw protocol("value exceeds u32");
             }
-            output.writeBytes(ByteBuffer.allocate(4)
-                .order(ByteOrder.BIG_ENDIAN)
-                .putInt((int) value)
-                .array());
+            output.writeBytes(
+                    ByteBuffer.allocate(4).order(ByteOrder.BIG_ENDIAN).putInt((int) value).array());
         }
 
         void positiveU32(int value, String field) {
@@ -350,10 +325,8 @@ final class ZLinkClientServerServiceWire {
             if (value <= 0) {
                 throw protocol(field + " must be non-zero");
             }
-            output.writeBytes(ByteBuffer.allocate(8)
-                .order(ByteOrder.BIG_ENDIAN)
-                .putLong(value)
-                .array());
+            output.writeBytes(
+                    ByteBuffer.allocate(8).order(ByteOrder.BIG_ENDIAN).putLong(value).array());
         }
 
         void text8(String value, String field) {
@@ -405,8 +378,9 @@ final class ZLinkClientServerServiceWire {
         private final ByteBuffer input;
 
         Reader(byte[] value) {
-            input = ByteBuffer.wrap(Objects.requireNonNull(value, "value"))
-                .order(ByteOrder.BIG_ENDIAN);
+            input =
+                    ByteBuffer.wrap(Objects.requireNonNull(value, "value"))
+                            .order(ByteOrder.BIG_ENDIAN);
         }
 
         int u8(String field) {
@@ -494,14 +468,15 @@ final class ZLinkClientServerServiceWire {
 
         private static String decodeText(byte[] bytes, String field) {
             try {
-                String value = StandardCharsets.UTF_8.newDecoder()
-                    .onMalformedInput(CodingErrorAction.REPORT)
-                    .onUnmappableCharacter(CodingErrorAction.REPORT)
-                    .decode(ByteBuffer.wrap(bytes))
-                    .toString();
+                String value =
+                        StandardCharsets.UTF_8
+                                .newDecoder()
+                                .onMalformedInput(CodingErrorAction.REPORT)
+                                .onUnmappableCharacter(CodingErrorAction.REPORT)
+                                .decode(ByteBuffer.wrap(bytes))
+                                .toString();
                 if (value.indexOf('\0') >= 0
-                    || !Arrays.equals(
-                        value.getBytes(StandardCharsets.UTF_8), bytes)) {
+                        || !Arrays.equals(value.getBytes(StandardCharsets.UTF_8), bytes)) {
                     throw protocol(field + " is not canonical UTF-8");
                 }
                 return value;

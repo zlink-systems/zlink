@@ -1,6 +1,6 @@
+using Xunit;
 using ZoneWorld.Server.ZoneNode.Application.Node;
 using ZoneWorld.Shared.Contracts;
-using Xunit;
 
 namespace Zlink.Framework.SampleRegressionTests;
 

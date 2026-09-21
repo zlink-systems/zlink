@@ -1,5 +1,7 @@
 package systems.zlink.framework.runtime.locations;
 
+import systems.zlink.contracts.core.RoutingId;
+
 import java.io.ByteArrayOutputStream;
 import java.nio.ByteBuffer;
 import java.nio.ByteOrder;
@@ -7,11 +9,8 @@ import java.nio.charset.StandardCharsets;
 import java.util.Objects;
 import java.util.Optional;
 import java.util.zip.CRC32C;
-import systems.zlink.contracts.core.RoutingId;
 
-/**
- * Encodes the Actor branch of the durable service authority envelope.
- */
+/** Encodes the Actor branch of the durable service authority envelope. */
 public final class ZLinkActorAuthorityPayloadCodec {
     private static final byte[] MAGIC = {0x5a, 0x4c, 0x41, 0x55};
 
@@ -21,31 +20,30 @@ public final class ZLinkActorAuthorityPayloadCodec {
     }
 
     public record ActorAuthority(
-        State state,
-        String stableType,
-        String actorId,
-        String currentSpotId,
-        long currentSpotGeneration,
-        int currentSpotKind,
-        String ownerId,
-        long ownerLeaseGeneration,
-        String meshName,
-        RoutingId nodeRid,
-        long nodeGeneration) {
-    }
+            State state,
+            String stableType,
+            String actorId,
+            String currentSpotId,
+            long currentSpotGeneration,
+            int currentSpotKind,
+            String ownerId,
+            long ownerLeaseGeneration,
+            String meshName,
+            RoutingId nodeRid,
+            long nodeGeneration) {}
 
     public byte[] encode(
-        State state,
-        String stableType,
-        String actorId,
-        String currentSpotId,
-        long currentSpotGeneration,
-        int currentSpotKind,
-        String ownerId,
-        long ownerLeaseGeneration,
-        String meshName,
-        RoutingId nodeRid,
-        long nodeGeneration) {
+            State state,
+            String stableType,
+            String actorId,
+            String currentSpotId,
+            long currentSpotGeneration,
+            int currentSpotKind,
+            String ownerId,
+            long ownerLeaseGeneration,
+            String meshName,
+            RoutingId nodeRid,
+            long nodeGeneration) {
         Writer actor = new Writer();
         actor.text8(stableType);
         actor.text8(actorId);
@@ -79,9 +77,9 @@ public final class ZLinkActorAuthorityPayloadCodec {
     public Optional<ActorAuthority> decode(byte[] payload) {
         try {
             byte[] authorityPayload =
-                systems.zlink.framework.runtime.internal.locations
-                    .ZLinkCanonicalRelocationAuthorityStateCodec
-                    .applicationPayloadOrOriginal(payload);
+                    systems.zlink.framework.runtime.internal.locations
+                            .ZLinkCanonicalRelocationAuthorityStateCodec
+                            .applicationPayloadOrOriginal(payload);
             Reader reader = new Reader(authorityPayload);
             reader.expect(MAGIC);
             if (reader.u8() != 1 || reader.u16() != 0) {
@@ -90,8 +88,7 @@ public final class ZLinkActorAuthorityPayloadCodec {
             Reader body = reader.reader(reader.u32());
             int checksumOffset = reader.position();
             long checksum = reader.u32();
-            if (!reader.end()
-                || checksum != crc32c(authorityPayload, checksumOffset)) {
+            if (!reader.end() || checksum != crc32c(authorityPayload, checksumOffset)) {
                 return Optional.empty();
             }
             int operationKind = body.u8();
@@ -108,13 +105,11 @@ public final class ZLinkActorAuthorityPayloadCodec {
             if (!object.end()) {
                 return Optional.empty();
             }
-            State state = stateValue == 0 && operationKind == 1
-                ? State.CREATING
-                : stateValue == 1 && operationKind == 0
-                    ? State.READY
-                    : null;
-            if (state == null
-                || (currentSpotKind != 1 && currentSpotKind != 2)) {
+            State state =
+                    stateValue == 0 && operationKind == 1
+                            ? State.CREATING
+                            : stateValue == 1 && operationKind == 0 ? State.READY : null;
+            if (state == null || (currentSpotKind != 1 && currentSpotKind != 2)) {
                 return Optional.empty();
             }
             String ownerId = body.text8();
@@ -122,23 +117,22 @@ public final class ZLinkActorAuthorityPayloadCodec {
             String meshName = body.text8();
             RoutingId nodeRid = body.rid();
             long nodeGeneration = body.opaqueNonzeroU64();
-            if (!body.emptyConditional32()
-                || !body.emptyConditional32()
-                || !body.end()) {
+            if (!body.emptyConditional32() || !body.emptyConditional32() || !body.end()) {
                 return Optional.empty();
             }
-            return Optional.of(new ActorAuthority(
-                state,
-                stableType,
-                actorId,
-                currentSpotId,
-                currentSpotGeneration,
-                currentSpotKind,
-                ownerId,
-                ownerLeaseGeneration,
-                meshName,
-                nodeRid,
-                nodeGeneration));
+            return Optional.of(
+                    new ActorAuthority(
+                            state,
+                            stableType,
+                            actorId,
+                            currentSpotId,
+                            currentSpotGeneration,
+                            currentSpotKind,
+                            ownerId,
+                            ownerLeaseGeneration,
+                            meshName,
+                            nodeRid,
+                            nodeGeneration));
         } catch (RuntimeException invalid) {
             return Optional.empty();
         }
@@ -151,8 +145,7 @@ public final class ZLinkActorAuthorityPayloadCodec {
     }
 
     private static final class Writer {
-        private final ByteArrayOutputStream output =
-            new ByteArrayOutputStream();
+        private final ByteArrayOutputStream output = new ByteArrayOutputStream();
 
         void raw(byte[] value) {
             output.writeBytes(value);
@@ -177,33 +170,26 @@ public final class ZLinkActorAuthorityPayloadCodec {
             if (value < 0 || value > 0xffff_ffffL) {
                 throw new IllegalArgumentException("u32 out of range");
             }
-            raw(ByteBuffer.allocate(4).order(ByteOrder.BIG_ENDIAN)
-                .putInt((int) value).array());
+            raw(ByteBuffer.allocate(4).order(ByteOrder.BIG_ENDIAN).putInt((int) value).array());
         }
 
         void nonzeroU64(long value) {
             if (value <= 0) {
-                throw new IllegalArgumentException(
-                    "nonzero-u64 must be positive");
+                throw new IllegalArgumentException("nonzero-u64 must be positive");
             }
-            raw(ByteBuffer.allocate(8).order(ByteOrder.BIG_ENDIAN)
-                .putLong(value).array());
+            raw(ByteBuffer.allocate(8).order(ByteOrder.BIG_ENDIAN).putLong(value).array());
         }
 
         void opaqueNonzeroU64(long value) {
             if (value == 0) {
-                throw new IllegalArgumentException(
-                    "opaque-nonzero-u64 must not be zero");
+                throw new IllegalArgumentException("opaque-nonzero-u64 must not be zero");
             }
-            raw(ByteBuffer.allocate(8).order(ByteOrder.BIG_ENDIAN)
-                .putLong(value).array());
+            raw(ByteBuffer.allocate(8).order(ByteOrder.BIG_ENDIAN).putLong(value).array());
         }
 
         void text8(String value) {
-            byte[] bytes = Objects.requireNonNull(value, "text")
-                .getBytes(StandardCharsets.UTF_8);
-            if (bytes.length == 0 || bytes.length > 0xff
-                || value.indexOf('\0') >= 0) {
+            byte[] bytes = Objects.requireNonNull(value, "text").getBytes(StandardCharsets.UTF_8);
+            if (bytes.length == 0 || bytes.length > 0xff || value.indexOf('\0') >= 0) {
                 throw new IllegalArgumentException("text8 out of range");
             }
             u8(bytes.length);
@@ -244,9 +230,9 @@ public final class ZLinkActorAuthorityPayloadCodec {
         private final ByteBuffer input;
 
         Reader(byte[] value) {
-            input = ByteBuffer.wrap(
-                Objects.requireNonNull(value, "value"))
-                .order(ByteOrder.BIG_ENDIAN);
+            input =
+                    ByteBuffer.wrap(Objects.requireNonNull(value, "value"))
+                            .order(ByteOrder.BIG_ENDIAN);
         }
 
         int position() {
@@ -281,8 +267,7 @@ public final class ZLinkActorAuthorityPayloadCodec {
             require(8);
             long value = input.getLong();
             if (value == 0) {
-                throw new IllegalArgumentException(
-                    "invalid opaque-nonzero-u64");
+                throw new IllegalArgumentException("invalid opaque-nonzero-u64");
             }
             return value;
         }

@@ -15,8 +15,7 @@ public sealed class CanonicalActorJoinAttemptTests
 
         attempt.RecordAdmissionAccepted(Accepted(chunkLimit: 8192));
 
-        Assert.Equal(ZLinkCanonicalActorJoinAttemptPhase.AdmissionAccepted,
-            attempt.Phase);
+        Assert.Equal(ZLinkCanonicalActorJoinAttemptPhase.AdmissionAccepted, attempt.Phase);
         Assert.False(attempt.IsPublicCompletionTerminal);
         Assert.Equal<ulong>(8192, attempt.TargetReceiveChunkLimitBytes);
     }
@@ -26,14 +25,19 @@ public sealed class CanonicalActorJoinAttemptTests
     {
         var attempt = CreateAttempt(correlation: 0x8000000000000001UL);
 
-        Assert.Equal<ulong>(0x8000000000000001UL,
-            attempt.WireAttemptKey.Correlation);
-        Assert.NotEqual(attempt.WireAttemptKey.Correlation,
-            attempt.PublicCompletionId.Low);
-        Assert.Throws<ArgumentException>(() => ZLinkCanonicalActorJoinAttempt.Create(
-            "actor-1", 7, SourceFence(), 41,
-            new ZLinkActorJoinOperationId(0, 41),
-            Authority("source"), Authority("target")));
+        Assert.Equal<ulong>(0x8000000000000001UL, attempt.WireAttemptKey.Correlation);
+        Assert.NotEqual(attempt.WireAttemptKey.Correlation, attempt.PublicCompletionId.Low);
+        Assert.Throws<ArgumentException>(() =>
+            ZLinkCanonicalActorJoinAttempt.Create(
+                "actor-1",
+                7,
+                SourceFence(),
+                41,
+                new ZLinkActorJoinOperationId(0, 41),
+                Authority("source"),
+                Authority("target")
+            )
+        );
     }
 
     [Fact]
@@ -43,10 +47,8 @@ public sealed class CanonicalActorJoinAttemptTests
         attempt.RecordAdmissionAccepted(Accepted(chunkLimit: 1));
 
         Assert.Equal("11111111222243338444555555555555", attempt.HandoffId);
-        Assert.Equal(Guid.Parse("11111111-2222-4333-8444-555555555555"),
-            attempt.RelocationId);
-        Assert.NotEqual(attempt.PublicCompletionId.Low,
-            attempt.WireAttemptKey.Correlation);
+        Assert.Equal(Guid.Parse("11111111-2222-4333-8444-555555555555"), attempt.RelocationId);
+        Assert.NotEqual(attempt.PublicCompletionId.Low, attempt.WireAttemptKey.Correlation);
     }
 
     [Fact]
@@ -58,10 +60,11 @@ public sealed class CanonicalActorJoinAttemptTests
 
         var abort = attempt.AbortBeforeCommit();
 
-        Assert.Equal(ZLinkCanonicalActorJoinAttemptPhase.AbortedBeforeCommit,
-            attempt.Phase);
-        Assert.Equal(ZLinkCanonicalActorJoinSourceSealState.RollbackRequired,
-            attempt.SourceSealState);
+        Assert.Equal(ZLinkCanonicalActorJoinAttemptPhase.AbortedBeforeCommit, attempt.Phase);
+        Assert.Equal(
+            ZLinkCanonicalActorJoinSourceSealState.RollbackRequired,
+            attempt.SourceSealState
+        );
         Assert.True(abort.RollbackSourceSeal);
     }
 
@@ -74,8 +77,7 @@ public sealed class CanonicalActorJoinAttemptTests
 
         var reconciliation = attempt.RequirePostCasReconciliation();
 
-        Assert.Equal(ZLinkCanonicalActorJoinAttemptPhase.ReconciliationRequired,
-            attempt.Phase);
+        Assert.Equal(ZLinkCanonicalActorJoinAttemptPhase.ReconciliationRequired, attempt.Phase);
         Assert.True(reconciliation.ReconcileCurrentAuthority);
         Assert.False(reconciliation.ReplaySource);
     }
@@ -90,57 +92,58 @@ public sealed class CanonicalActorJoinAttemptTests
 
         Assert.Equal<ulong>(4096, attempt.TargetReceiveChunkLimitBytes);
         Assert.Equal(accepted.Spot, attempt.Admission!.Spot);
-        Assert.Equal<ulong>(accepted.MembershipEpoch,
-            attempt.Admission.MembershipEpoch);
+        Assert.Equal<ulong>(accepted.MembershipEpoch, attempt.Admission.MembershipEpoch);
     }
 
-    private static ZLinkCanonicalActorJoinAttempt CreateAttempt(
-        ulong correlation = 41) => ZLinkCanonicalActorJoinAttempt.Create(
-        "actor-1",
-        7,
-        SourceFence(),
-        correlation,
-        new ZLinkActorJoinOperationId(17, 23),
-        Authority("source"),
-        Authority("target"),
-        Guid.Parse("11111111-2222-4333-8444-555555555555"));
+    private static ZLinkCanonicalActorJoinAttempt CreateAttempt(ulong correlation = 41) =>
+        ZLinkCanonicalActorJoinAttempt.Create(
+            "actor-1",
+            7,
+            SourceFence(),
+            correlation,
+            new ZLinkActorJoinOperationId(17, 23),
+            Authority("source"),
+            Authority("target"),
+            Guid.Parse("11111111-2222-4333-8444-555555555555")
+        );
 
-    private static ZLinkCanonicalActorJoinAdmissionAccepted Accepted(
-        ulong chunkLimit) => new(
-        new ZLinkSpotHandleSnapshot(
-            "mesh",
-            RoutingId.From("target-node"),
-            "target-spot",
+    private static ZLinkCanonicalActorJoinAdmissionAccepted Accepted(ulong chunkLimit) =>
+        new(
+            new ZLinkSpotHandleSnapshot(
+                "mesh",
+                RoutingId.From("target-node"),
+                "target-spot",
+                13,
+                ZLinkSpotKind.Entry,
+                17,
+                19,
+                23
+            ),
+            MembershipEpoch: 29,
+            ReceiveChunkLimitBytes: chunkLimit,
+            new ZLinkCanonicalActorJoinApplicationReply("application/json", new byte[] { 1, 2, 3 })
+        );
+
+    private static ZLinkServiceWireCodec.RequestSourceFence SourceFence() =>
+        new("source-owner", 31, RoutingId.From("source-node"), 37);
+
+    private static ZLinkAuthoritySnapshot Authority(string node) =>
+        new(
+            $"store-{node}",
+            ReadOnlyMemory<byte>.Empty,
+            7,
+            11,
+            $"{node}-owner",
             13,
-            ZLinkSpotKind.Entry,
-            17,
-            19,
-            23),
-        MembershipEpoch: 29,
-        ReceiveChunkLimitBytes: chunkLimit,
-        new ZLinkCanonicalActorJoinApplicationReply(
-            "application/json", new byte[] { 1, 2, 3 }));
-
-    private static ZLinkServiceWireCodec.RequestSourceFence SourceFence() => new(
-        "source-owner",
-        31,
-        RoutingId.From("source-node"),
-        37);
-
-    private static ZLinkAuthoritySnapshot Authority(string node) => new(
-        $"store-{node}",
-        ReadOnlyMemory<byte>.Empty,
-        7,
-        11,
-        $"{node}-owner",
-        13,
-        new ZLinkPlacementAllocation(
-            ZLinkPlacementAllocationState.Active,
-            ZLinkPlacementObjectKind.Actor,
-            "player",
-            new ZLinkMeshNodeDescriptorKey("mesh", RoutingId.From(node)),
-            17,
-            new ZLinkCapacityVector(1, 0, null)),
-        null,
-        DateTimeOffset.UnixEpoch);
+            new ZLinkPlacementAllocation(
+                ZLinkPlacementAllocationState.Active,
+                ZLinkPlacementObjectKind.Actor,
+                "player",
+                new ZLinkMeshNodeDescriptorKey("mesh", RoutingId.From(node)),
+                17,
+                new ZLinkCapacityVector(1, 0, null)
+            ),
+            null,
+            DateTimeOffset.UnixEpoch
+        );
 }

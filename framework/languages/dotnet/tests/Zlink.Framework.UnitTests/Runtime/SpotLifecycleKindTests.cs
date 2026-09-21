@@ -10,7 +10,8 @@ public sealed class SpotLifecycleKindTests
     [InlineData(ZLinkSpotKind.Instance, typeof(ZLinkSpotLifecycleKind.Instance))]
     public void BoundaryTagCreatesOneClosedDomainVariant(
         ZLinkSpotKind boundary,
-        Type expectedVariant)
+        Type expectedVariant
+    )
     {
         var kind = ZLinkSpotLifecycleKind.FromBoundary(boundary);
 
@@ -21,13 +22,13 @@ public sealed class SpotLifecycleKindTests
     public void EntryCannotEnterRelocatableLifecycle()
     {
         Assert.Throws<InvalidOperationException>(() =>
-            ZLinkSpotLifecycleKind.RelocatableFromBoundary(
-                ZLinkSpotKind.Entry));
+            ZLinkSpotLifecycleKind.RelocatableFromBoundary(ZLinkSpotKind.Entry)
+        );
         Assert.IsType<ZLinkSpotLifecycleKind.User>(
-            ZLinkSpotLifecycleKind.RelocatableFromBoundary(
-                ZLinkSpotKind.User));
+            ZLinkSpotLifecycleKind.RelocatableFromBoundary(ZLinkSpotKind.User)
+        );
         Assert.IsType<ZLinkSpotLifecycleKind.Instance>(
-            ZLinkSpotLifecycleKind.RelocatableFromBoundary(
-                ZLinkSpotKind.Instance));
+            ZLinkSpotLifecycleKind.RelocatableFromBoundary(ZLinkSpotKind.Instance)
+        );
     }
 }

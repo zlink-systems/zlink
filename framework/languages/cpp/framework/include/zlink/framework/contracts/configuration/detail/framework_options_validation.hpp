@@ -25,24 +25,20 @@ inline void validate_dispatch_options (const dispatch_options_t &options)
 inline void validate_location_options (const location_options_t &options)
 {
     using namespace std::chrono_literals;
-    if (options.owner_lease_renew_interval <= 0ms
-        || options.owner_lease_ttl <= 0ms
-        || options.polling_interval <= 0ms
-        || options.store_failure_grace <= 0ms
-        || options.owner_lease_fencing_margin <= 0ms
-        || options.owner_lease_renew_timeout <= 0ms) {
-        throw framework_exception_t (
-          framework_error_kind_t::protocol_error,
-          "location lease, polling, failure-grace, fencing, and renewal durations must be greater than zero");
+    if (options.owner_lease_renew_interval <= 0ms || options.owner_lease_ttl <= 0ms
+        || options.polling_interval <= 0ms || options.store_failure_grace <= 0ms
+        || options.owner_lease_fencing_margin <= 0ms || options.owner_lease_renew_timeout <= 0ms) {
+        throw framework_exception_t (framework_error_kind_t::protocol_error,
+                                     "location lease, polling, failure-grace, fencing, and renewal "
+                                     "durations must be greater than zero");
     }
     if (options.owner_lease_renew_interval + options.owner_lease_renew_timeout
         >= options.owner_lease_ttl - options.owner_lease_fencing_margin) {
-        throw framework_exception_t (
-          framework_error_kind_t::protocol_error,
-          "owner lease renewal interval plus timeout must be shorter than the fenced lease lifetime");
+        throw framework_exception_t (framework_error_kind_t::protocol_error,
+                                     "owner lease renewal interval plus timeout must be shorter "
+                                     "than the fenced lease lifetime");
     }
-    if (options.route_cache_max_age < 0ms
-        || options.message_follow_duration < 0ms) {
+    if (options.route_cache_max_age < 0ms || options.message_follow_duration < 0ms) {
         throw framework_exception_t (
           framework_error_kind_t::protocol_error,
           "route cache age and Message Follow duration must not be negative");
@@ -52,10 +48,8 @@ inline void validate_location_options (const location_options_t &options)
           framework_error_kind_t::protocol_error,
           "Session relocation seal timeout must be a positive whole-millisecond duration");
     }
-    if (options.route_cache_max_age > 0ms
-        && options.message_follow_duration > 0ms
-        && options.message_follow_duration
-             < options.route_cache_max_age + 5s) {
+    if (options.route_cache_max_age > 0ms && options.message_follow_duration > 0ms
+        && options.message_follow_duration < options.route_cache_max_age + 5s) {
         throw framework_exception_t (
           framework_error_kind_t::protocol_error,
           "Message Follow duration must be at least five seconds longer than route cache max age");
@@ -66,14 +60,12 @@ inline void validate_location_options (const location_options_t &options)
           "relocation cutover wait timeout must be a positive whole-millisecond duration");
     }
     if (options.relocation_payload_chunk_limit_bytes == 0
-        || options.relocation_payload_chunk_limit_bytes
-             > relocation_chunk_wire_limit_bytes) {
-        throw framework_exception_t (
-          framework_error_kind_t::protocol_error,
-          "relocation payload chunk limit must be greater than zero and within the transport frame limit");
+        || options.relocation_payload_chunk_limit_bytes > relocation_chunk_wire_limit_bytes) {
+        throw framework_exception_t (framework_error_kind_t::protocol_error,
+                                     "relocation payload chunk limit must be greater than zero and "
+                                     "within the transport frame limit");
     }
-    if (options.max_active_outbound_relocations == 0
-        || options.max_active_inbound_relocations == 0
+    if (options.max_active_outbound_relocations == 0 || options.max_active_inbound_relocations == 0
         || options.max_concurrent_relocation_captures == 0
         || options.max_concurrent_relocation_restores == 0
         || options.max_relocation_payload_in_flight_bytes == 0) {
@@ -100,9 +92,8 @@ inline void validate_framework_options (const framework_options_state_t &options
         case core_hwm_profile_t::throughput:
             break;
         default:
-            throw framework_exception_t (
-              framework_error_kind_t::protocol_error,
-              "Core HWM profile is invalid");
+            throw framework_exception_t (framework_error_kind_t::protocol_error,
+                                         "Core HWM profile is invalid");
     }
     switch (options.application_job_queue_profile) {
         case application_job_queue_profile_t::compact:
@@ -111,15 +102,13 @@ inline void validate_framework_options (const framework_options_state_t &options
         case application_job_queue_profile_t::throughput:
             break;
         default:
-            throw framework_exception_t (
-              framework_error_kind_t::protocol_error,
-              "Application Job Queue profile is invalid");
+            throw framework_exception_t (framework_error_kind_t::protocol_error,
+                                         "Application Job Queue profile is invalid");
     }
     if (options.max_queued_application_jobs
         && (*options.max_queued_application_jobs == 0
             || *options.max_queued_application_jobs
-                 > static_cast<std::uint32_t> (
-                   std::numeric_limits<std::int32_t>::max ()))) {
+                 > static_cast<std::uint32_t> (std::numeric_limits<std::int32_t>::max ()))) {
         throw framework_exception_t (
           framework_error_kind_t::protocol_error,
           "maximum queued application jobs must be between 1 and 2147483647");
@@ -137,9 +126,9 @@ inline void validate_framework_options (const framework_options_state_t &options
     }
     if (options.application_job_queue_resume_threshold_percent
         >= options.application_job_queue_pause_threshold_percent) {
-        throw framework_exception_t (
-          framework_error_kind_t::protocol_error,
-          "Application Job Queue resume threshold percent must be less than the pause threshold percent");
+        throw framework_exception_t (framework_error_kind_t::protocol_error,
+                                     "Application Job Queue resume threshold percent must be less "
+                                     "than the pause threshold percent");
     }
     for (const auto &channel_name : options.client_server_channels) {
         if (!options.client_server_channels_with_server.contains (channel_name)
@@ -157,16 +146,14 @@ inline void validate_framework_options (const framework_options_state_t &options
             ? options.client_server_server_registration_counts.at (channel_name)
             : 0;
         if (client_count > 1) {
-            throw framework_exception_t (
-              framework_error_kind_t::protocol_error,
-              "client/server channel '" + channel_name
-                + "' registers the Client role more than once");
+            throw framework_exception_t (framework_error_kind_t::protocol_error,
+                                         "client/server channel '" + channel_name
+                                           + "' registers the Client role more than once");
         }
         if (server_count > 1) {
-            throw framework_exception_t (
-              framework_error_kind_t::protocol_error,
-              "client/server channel '" + channel_name
-                + "' registers the Server role more than once");
+            throw framework_exception_t (framework_error_kind_t::protocol_error,
+                                         "client/server channel '" + channel_name
+                                           + "' registers the Server role more than once");
         }
         if (options.route_mesh_channels.contains (channel_name)
             || options.mesh_node_channel_names.contains (channel_name)) {

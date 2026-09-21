@@ -6,7 +6,8 @@ internal sealed class ZLinkChannelRequestDispatchPipeline(
     ZLinkHandlerDispatcher dispatcher,
     Func<string, IReadOnlySet<string>> resolveMappedGroups,
     ZLinkCodecRegistryBuilder codecs,
-    ZLinkDispatchErrorReporter dispatchErrors)
+    ZLinkDispatchErrorReporter dispatchErrors
+)
 {
     public async Task DispatchAsync<TState>(
         string channelName,
@@ -17,7 +18,8 @@ internal sealed class ZLinkChannelRequestDispatchPipeline(
         Func<TState, ZLinkEnvelopeHeader, ValueTask> replyError,
         CancellationToken cancellationToken,
         ZLinkMessageMetadata? metadata = null,
-        RoutingId? sourceNodeRid = null)
+        RoutingId? sourceNodeRid = null
+    )
     {
         var scope = new ZLinkDispatchFlowScope(
             ZLinkDispatchErrorSurface.Channel,
@@ -26,35 +28,35 @@ internal sealed class ZLinkChannelRequestDispatchPipeline(
             header.MessageName,
             channelName,
             header.ContentType,
-            header.CorrelationId);
-        if (!handlerRegistry.TryGetRequest(
+            header.CorrelationId
+        );
+        if (
+            !handlerRegistry.TryGetRequest(
                 channelName,
                 resolveMappedGroups(channelName),
                 header.MessageName,
-                out var endpoint)
-            || endpoint is null)
+                out var endpoint
+            ) || endpoint is null
+        )
         {
             var error = new ZLinkFrameworkException(
                 ZLinkFrameworkErrorKind.NotFound,
-                $"No request handler is registered for '{channelName}:{header.MessageName}'.")
+                $"No request handler is registered for '{channelName}:{header.MessageName}'."
+            )
             {
-                Origin = ZLinkErrorOrigin.Framework
+                Origin = ZLinkErrorOrigin.Framework,
             };
-            scope.HandlerMissing(
-                dispatchErrors,
-                ZLinkDispatchErrorAction.ReplyError,
-                error);
+            scope.HandlerMissing(dispatchErrors, ZLinkDispatchErrorAction.ReplyError, error);
             await replyError(
                     replyState,
-                    ZLinkChannelReplyWriter.CreateErrorHeader(
-                        channelName,
-                        header,
-                        error))
+                    ZLinkChannelReplyWriter.CreateErrorHeader(channelName, header, error)
+                )
                 .ConfigureAwait(false);
             return;
         }
 
-        if (!scope.TryDecode(
+        if (
+            !scope.TryDecode(
                 parts,
                 endpoint.MessageType,
                 header.ContentType,
@@ -63,14 +65,14 @@ internal sealed class ZLinkChannelRequestDispatchPipeline(
                 ZLinkDispatchErrorAction.ReplyError,
                 "request",
                 out var message,
-                out var decodeError))
+                out var decodeError
+            )
+        )
         {
             await replyError(
                     replyState,
-                    ZLinkChannelReplyWriter.CreateErrorHeader(
-                        channelName,
-                        header,
-                        decodeError!))
+                    ZLinkChannelReplyWriter.CreateErrorHeader(channelName, header, decodeError!)
+                )
                 .ConfigureAwait(false);
             return;
         }
@@ -86,38 +88,45 @@ internal sealed class ZLinkChannelRequestDispatchPipeline(
                     header.MessageName,
                     header.ContentType,
                     metadata,
-                    header.CorrelationId)
+                    header.CorrelationId
+                )
                 : new ZLinkMessageContext(
                     meshName,
                     channelName,
                     header.MessageName,
                     header.ContentType,
                     metadata,
-                    header.CorrelationId);
+                    header.CorrelationId
+                );
             try
             {
-                var dispatch = await dispatcher.DispatchAsync(
+                var dispatch = await dispatcher
+                    .DispatchAsync(
                         endpoint,
                         message,
                         context,
                         ZLinkHandlerDispatchKind.ChannelRequest,
-                        cancellationToken)
+                        cancellationToken
+                    )
                     .ConfigureAwait(false);
                 if (!dispatch.HandlerInvoked)
                     throw new ZLinkFrameworkException(
                         ZLinkFrameworkErrorKind.Rejected,
-                        $"A handler filter rejected '{channelName}:{header.MessageName}'.")
+                        $"A handler filter rejected '{channelName}:{header.MessageName}'."
+                    )
                     {
-                        Origin = ZLinkErrorOrigin.Framework
+                        Origin = ZLinkErrorOrigin.Framework,
                     };
                 await reply(
                         replyState,
                         ZLinkChannelReplyWriter.CreateReplyHeader(
                             ZLinkMessageKind.Response,
                             channelName,
-                            header),
+                            header
+                        ),
                         dispatch.Value,
-                        endpoint.ReplyType)
+                        endpoint.ReplyType
+                    )
                     .ConfigureAwait(false);
                 scope.Trace(dispatchErrors, ZLinkMessageFlowOutcome.Replied);
             }
@@ -125,15 +134,10 @@ internal sealed class ZLinkChannelRequestDispatchPipeline(
             {
                 await replyError(
                         replyState,
-                        ZLinkChannelReplyWriter.CreateErrorHeader(
-                            channelName,
-                            header,
-                            ex))
+                        ZLinkChannelReplyWriter.CreateErrorHeader(channelName, header, ex)
+                    )
                     .ConfigureAwait(false);
-                scope.HandlerException(
-                    dispatchErrors,
-                    ZLinkDispatchErrorAction.ReplyError,
-                    ex);
+                scope.HandlerException(dispatchErrors, ZLinkDispatchErrorAction.ReplyError, ex);
             }
         }
         finally
@@ -153,7 +157,8 @@ internal sealed class ZLinkChannelRequestDispatchPipeline(
         Func<TState, ZLinkEnvelopeHeader, ValueTask> replyError,
         CancellationToken cancellationToken,
         ZLinkMessageMetadata? metadata = null,
-        RoutingId? sourceNodeRid = null)
+        RoutingId? sourceNodeRid = null
+    )
     {
         var scope = new ZLinkDispatchFlowScope(
             ZLinkDispatchErrorSurface.Channel,
@@ -162,32 +167,37 @@ internal sealed class ZLinkChannelRequestDispatchPipeline(
             header.MessageName,
             channelName,
             header.ContentType,
-            header.CorrelationId);
-        if (!handlerRegistry.TryGetRequest(
+            header.CorrelationId
+        );
+        if (
+            !handlerRegistry.TryGetRequest(
                 channelName,
                 resolveMappedGroups(channelName),
                 header.MessageName,
-                out var endpoint)
-            || endpoint is null)
+                out var endpoint
+            ) || endpoint is null
+        )
         {
             // Route resolution failure is framework-generated (zlink.origin
             // marker on the resulting error reply).
             var error = new ZLinkFrameworkException(
                 ZLinkFrameworkErrorKind.NotFound,
-                $"No request handler is registered for '{channelName}:{header.MessageName}'.")
+                $"No request handler is registered for '{channelName}:{header.MessageName}'."
+            )
             {
-                Origin = ZLinkErrorOrigin.Framework
+                Origin = ZLinkErrorOrigin.Framework,
             };
-            scope.HandlerMissing(
-                dispatchErrors,
-                ZLinkDispatchErrorAction.ReplyError,
-                error);
-            await replyError(replyState, ZLinkChannelReplyWriter.CreateErrorHeader(channelName, header, error))
+            scope.HandlerMissing(dispatchErrors, ZLinkDispatchErrorAction.ReplyError, error);
+            await replyError(
+                    replyState,
+                    ZLinkChannelReplyWriter.CreateErrorHeader(channelName, header, error)
+                )
                 .ConfigureAwait(false);
             return;
         }
 
-        if (!scope.TryDecode(
+        if (
+            !scope.TryDecode(
                 parts,
                 endpoint.MessageType,
                 scope.ContentType!,
@@ -196,9 +206,14 @@ internal sealed class ZLinkChannelRequestDispatchPipeline(
                 ZLinkDispatchErrorAction.ReplyError,
                 "request",
                 out var message,
-                out var decodeError))
+                out var decodeError
+            )
+        )
         {
-            await replyError(replyState, ZLinkChannelReplyWriter.CreateErrorHeader(channelName, header, decodeError!))
+            await replyError(
+                    replyState,
+                    ZLinkChannelReplyWriter.CreateErrorHeader(channelName, header, decodeError!)
+                )
                 .ConfigureAwait(false);
             return;
         }
@@ -211,51 +226,61 @@ internal sealed class ZLinkChannelRequestDispatchPipeline(
                 scope.PacketName!,
                 scope.ContentType,
                 metadata,
-                header.CorrelationId)
+                header.CorrelationId
+            )
             : new ZLinkMessageContext(
                 meshName,
                 channelName,
                 scope.PacketName!,
                 scope.ContentType,
                 metadata,
-                header.CorrelationId);
+                header.CorrelationId
+            );
 
         try
         {
-            var dispatch = await dispatcher.DispatchAsync(
+            var dispatch = await dispatcher
+                .DispatchAsync(
                     endpoint,
                     message,
                     context,
                     ZLinkHandlerDispatchKind.ChannelRequest,
-                    cancellationToken)
+                    cancellationToken
+                )
                 .ConfigureAwait(false);
             if (!dispatch.HandlerInvoked)
                 // Dispatch rejection is framework-generated (zlink.origin
                 // marker on the resulting error reply).
                 throw new ZLinkFrameworkException(
                     ZLinkFrameworkErrorKind.Rejected,
-                    $"A handler filter rejected '{channelName}:{header.MessageName}'.")
+                    $"A handler filter rejected '{channelName}:{header.MessageName}'."
+                )
                 {
-                    Origin = ZLinkErrorOrigin.Framework
+                    Origin = ZLinkErrorOrigin.Framework,
                 };
 
             await reply(
-                replyState,
-                    ZLinkChannelReplyWriter.CreateReplyHeader(ZLinkMessageKind.Response, channelName, header),
+                    replyState,
+                    ZLinkChannelReplyWriter.CreateReplyHeader(
+                        ZLinkMessageKind.Response,
+                        channelName,
+                        header
+                    ),
                     dispatch.Value,
-                    endpoint.ReplyType)
+                    endpoint.ReplyType
+                )
                 .ConfigureAwait(false);
 
             scope.Trace(dispatchErrors, ZLinkMessageFlowOutcome.Replied);
         }
         catch (Exception ex)
         {
-            await replyError(replyState, ZLinkChannelReplyWriter.CreateErrorHeader(channelName, header, ex))
+            await replyError(
+                    replyState,
+                    ZLinkChannelReplyWriter.CreateErrorHeader(channelName, header, ex)
+                )
                 .ConfigureAwait(false);
-            scope.HandlerException(
-                dispatchErrors,
-                ZLinkDispatchErrorAction.ReplyError,
-                ex);
+            scope.HandlerException(dispatchErrors, ZLinkDispatchErrorAction.ReplyError, ex);
         }
     }
 }

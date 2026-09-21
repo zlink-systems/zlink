@@ -4,15 +4,14 @@ namespace Systems.Zlink.Stream.Connector.Runtime.Protocol.Framing;
 
 internal readonly record struct ZlinkStreamFrame(
     ReadOnlyMemory<byte> Header,
-    ReadOnlyMemory<byte> Payload);
+    ReadOnlyMemory<byte> Payload
+);
 
 internal static class ZlinkStreamFrameCodec
 {
     internal const int PrefixSize = 6;
 
-    public static byte[] Encode(
-        ReadOnlySpan<byte> header,
-        ReadOnlySpan<byte> payload)
+    public static byte[] Encode(ReadOnlySpan<byte> header, ReadOnlySpan<byte> payload)
     {
         ValidateSendFrame(header.Length, payload.Length);
         var frame = new byte[GetFrameSize(header.Length, payload.Length)];
@@ -25,18 +24,22 @@ internal static class ZlinkStreamFrameCodec
     public static bool TryDecode(
         ReadOnlySpan<byte> frame,
         out ReadOnlySpan<byte> header,
-        out ReadOnlySpan<byte> payload)
+        out ReadOnlySpan<byte> payload
+    )
     {
         header = default;
         payload = default;
-        if (frame.Length < PrefixSize) return false;
+        if (frame.Length < PrefixSize)
+            return false;
 
         var headerSize = BinaryPrimitives.ReadUInt16BigEndian(frame[..2]);
         var payloadSize = BinaryPrimitives.ReadUInt32BigEndian(frame.Slice(2, 4));
-        if (payloadSize > int.MaxValue) return false;
+        if (payloadSize > int.MaxValue)
+            return false;
 
         var totalSize = PrefixSize + headerSize + (int)payloadSize;
-        if (frame.Length != totalSize) return false;
+        if (frame.Length != totalSize)
+            return false;
 
         header = frame.Slice(PrefixSize, headerSize);
         payload = frame.Slice(PrefixSize + headerSize, (int)payloadSize);
@@ -46,18 +49,21 @@ internal static class ZlinkStreamFrameCodec
     public static void ValidateSendFrame(int headerLength, int payloadLength)
     {
         if (headerLength > ushort.MaxValue)
-            throw ZlinkStreamConnector.Error(ZlinkStreamErrorCode.FrameTooLarge, "Header exceeds u16 header_size.");
+            throw ZlinkStreamConnector.Error(
+                ZlinkStreamErrorCode.FrameTooLarge,
+                "Header exceeds u16 header_size."
+            );
 
         _ = checked(2 + 4 + headerLength + payloadLength);
     }
 
-    public static void WritePrefix(
-        Span<byte> destination,
-        int headerLength,
-        int payloadLength)
+    public static void WritePrefix(Span<byte> destination, int headerLength, int payloadLength)
     {
         if (destination.Length < PrefixSize)
-            throw new ArgumentException("Frame prefix destination must be at least 6 bytes.", nameof(destination));
+            throw new ArgumentException(
+                "Frame prefix destination must be at least 6 bytes.",
+                nameof(destination)
+            );
 
         ValidateSendFrame(headerLength, payloadLength);
         BinaryPrimitives.WriteUInt16BigEndian(destination[..2], (ushort)headerLength);
@@ -73,11 +79,15 @@ internal static class ZlinkStreamFrameCodec
     public static void WriteFrame(
         Span<byte> destination,
         ReadOnlyMemory<byte> header,
-        ReadOnlyMemory<byte> payload)
+        ReadOnlyMemory<byte> payload
+    )
     {
         var totalSize = GetFrameSize(header.Length, payload.Length);
         if (destination.Length < totalSize)
-            throw new ArgumentException("Frame destination is smaller than the encoded frame.", nameof(destination));
+            throw new ArgumentException(
+                "Frame destination is smaller than the encoded frame.",
+                nameof(destination)
+            );
 
         WritePrefix(destination[..6], header.Length, payload.Length);
         header.Span.CopyTo(destination[PrefixSize..]);
@@ -89,13 +99,15 @@ internal static class ZlinkStreamFrameCodec
         if (payloadLength > maxPayloadSize)
             throw ZlinkStreamConnector.Error(
                 ZlinkStreamErrorCode.ValidationFailed,
-                "Payload exceeds MaxSendPayloadSize.");
+                "Payload exceeds MaxSendPayloadSize."
+            );
     }
 
     public static async ValueTask<ZlinkStreamFrame> ReadAsync(
         IZlinkStreamConnection connection,
         int maxPayloadSize,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken
+    )
     {
         var prefix = new byte[6];
         await ReadExactAsync(connection, prefix, cancellationToken).ConfigureAwait(false);
@@ -104,8 +116,10 @@ internal static class ZlinkStreamFrameCodec
         ValidateReceivePayload(payloadSize, maxPayloadSize);
         var bodySize = checked((long)headerSize + payloadSize);
         if (bodySize > int.MaxValue)
-            throw ZlinkStreamConnector.Error(ZlinkStreamErrorCode.FrameTooLarge,
-                "Frame body exceeds supported in-memory size.");
+            throw ZlinkStreamConnector.Error(
+                ZlinkStreamErrorCode.FrameTooLarge,
+                "Frame body exceeds supported in-memory size."
+            );
 
         var header = new byte[headerSize];
         var payload = new byte[(int)payloadSize];
@@ -119,7 +133,8 @@ internal static class ZlinkStreamFrameCodec
         if (payloadLength > (uint)maxPayloadSize)
             throw ZlinkStreamConnector.Error(
                 ZlinkStreamErrorCode.FrameTooLarge,
-                "Payload exceeds MaxReceivePayloadSize.");
+                "Payload exceeds MaxReceivePayloadSize."
+            );
     }
 
     public static long GetMaxReceiveFrameSize(int maxPayloadSize)
@@ -130,14 +145,20 @@ internal static class ZlinkStreamFrameCodec
     private static async ValueTask ReadExactAsync(
         IZlinkStreamConnection connection,
         Memory<byte> buffer,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken
+    )
     {
         var read = 0;
         while (read < buffer.Length)
         {
-            var count = await connection.ReadAsync(buffer.Slice(read), cancellationToken).ConfigureAwait(false);
+            var count = await connection
+                .ReadAsync(buffer.Slice(read), cancellationToken)
+                .ConfigureAwait(false);
             if (count == 0)
-                throw ZlinkStreamConnector.Error(ZlinkStreamErrorCode.Disconnected, "Remote stream closed.");
+                throw ZlinkStreamConnector.Error(
+                    ZlinkStreamErrorCode.Disconnected,
+                    "Remote stream closed."
+                );
 
             read += count;
         }

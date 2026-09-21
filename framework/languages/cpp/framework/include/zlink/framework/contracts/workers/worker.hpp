@@ -32,9 +32,8 @@ class worker_options_t
     worker_options_t &min_threads (std::size_t value)
     {
         if (value > _max_threads) {
-            throw framework_exception_t (
-              framework_error_kind_t::protocol_error,
-              "worker minimum thread count must not exceed the maximum");
+            throw framework_exception_t (framework_error_kind_t::protocol_error,
+                                         "worker minimum thread count must not exceed the maximum");
         }
         ensure_mutable ();
         _min_threads = value;
@@ -55,17 +54,13 @@ class worker_options_t
         return *this;
     }
 
-    std::chrono::milliseconds idle_timeout () const noexcept
-    {
-        return _idle_timeout;
-    }
+    std::chrono::milliseconds idle_timeout () const noexcept { return _idle_timeout; }
 
     worker_options_t &idle_timeout (std::chrono::milliseconds value)
     {
         if (value < std::chrono::milliseconds::zero ()) {
-            throw framework_exception_t (
-              framework_error_kind_t::protocol_error,
-              "worker idle timeout must not be negative");
+            throw framework_exception_t (framework_error_kind_t::protocol_error,
+                                         "worker idle timeout must not be negative");
         }
         ensure_mutable ();
         _idle_timeout = value;
@@ -88,9 +83,8 @@ class worker_options_t
     void ensure_mutable () const
     {
         if (_sealed) {
-            throw framework_exception_t (
-              framework_error_kind_t::protocol_error,
-              "worker options cannot change after host configuration");
+            throw framework_exception_t (framework_error_kind_t::protocol_error,
+                                         "worker options cannot change after host configuration");
         }
     }
 
@@ -128,8 +122,7 @@ template <typename TWork> struct worker_sync_result<TWork, true>
     using type = std::invoke_result_t<TWork &, std::stop_token>;
 };
 
-template <typename TWork>
-using worker_sync_result_t = typename worker_sync_result<TWork>::type;
+template <typename TWork> using worker_sync_result_t = typename worker_sync_result<TWork>::type;
 
 template <typename TWork, bool = std::is_invocable_v<TWork &, std::stop_token>>
 struct worker_async_result;
@@ -148,7 +141,7 @@ template <typename TWork>
 using worker_async_task_t = typename worker_async_result<TWork>::task_type;
 
 template <typename TWork>
-decltype(auto) invoke_worker_async (TWork &work, std::stop_token cancellation)
+decltype (auto) invoke_worker_async (TWork &work, std::stop_token cancellation)
 {
     if constexpr (std::is_invocable_v<TWork &, std::stop_token>) {
         return work (cancellation);
@@ -207,11 +200,10 @@ struct worker_control_t
     std::optional<std::stop_callback<std::function<void ()>>> host_callback;
     std::stop_token host;
 
-    void arm_deadline (std::chrono::milliseconds timeout,
-                       std::function<void ()> callback)
+    void arm_deadline (std::chrono::milliseconds timeout, std::function<void ()> callback)
     {
-        _deadline = worker_deadline_scheduler_t::instance ().schedule (
-          timeout, std::move (callback));
+        _deadline =
+          worker_deadline_scheduler_t::instance ().schedule (timeout, std::move (callback));
     }
 
     void cancel_deadline () noexcept
@@ -246,16 +238,14 @@ struct worker_control_t
             return scheduler;
         }
 
-        std::shared_ptr<deadline_state_t> schedule (
-          std::chrono::milliseconds timeout,
-          std::function<void ()> callback)
+        std::shared_ptr<deadline_state_t> schedule (std::chrono::milliseconds timeout,
+                                                    std::function<void ()> callback)
         {
             auto state = std::make_shared<deadline_state_t> ();
             {
                 std::lock_guard lock (_mutex);
-                _deadlines.push (deadline_t{
-                  std::chrono::steady_clock::now () + timeout,
-                  _next_sequence++, state, std::move (callback)});
+                _deadlines.push (deadline_t{std::chrono::steady_clock::now () + timeout,
+                                            _next_sequence++, state, std::move (callback)});
             }
             _changed.notify_one ();
             return state;
@@ -274,19 +264,13 @@ struct worker_control_t
 
         struct later_deadline_t
         {
-            bool operator() (const deadline_t &left,
-                             const deadline_t &right) const noexcept
+            bool operator() (const deadline_t &left, const deadline_t &right) const noexcept
             {
-                return left.at == right.at
-                         ? left.sequence > right.sequence
-                         : left.at > right.at;
+                return left.at == right.at ? left.sequence > right.sequence : left.at > right.at;
             }
         };
 
-        worker_deadline_scheduler_t () :
-            _worker ([this] (std::stop_token stop) { run (stop); })
-        {
-        }
+        worker_deadline_scheduler_t () : _worker ([this] (std::stop_token stop) { run (stop); }) {}
 
         ~worker_deadline_scheduler_t ()
         {
@@ -299,25 +283,21 @@ struct worker_control_t
             std::unique_lock lock (_mutex);
             while (!stop.stop_requested ()) {
                 while (!_deadlines.empty ()
-                       && _deadlines.top ().state->cancelled.load (
-                         std::memory_order_acquire)) {
+                       && _deadlines.top ().state->cancelled.load (std::memory_order_acquire)) {
                     _deadlines.pop ();
                 }
                 if (_deadlines.empty ()) {
-                    _changed.wait (lock, [&] {
-                        return stop.stop_requested () || !_deadlines.empty ();
-                    });
+                    _changed.wait (lock,
+                                   [&] { return stop.stop_requested () || !_deadlines.empty (); });
                     continue;
                 }
                 const auto at = _deadlines.top ().at;
                 if (_changed.wait_until (lock, at) == std::cv_status::no_timeout) {
                     continue;
                 }
-                auto deadline = std::move (
-                  const_cast<deadline_t &> (_deadlines.top ()));
+                auto deadline = std::move (const_cast<deadline_t &> (_deadlines.top ()));
                 _deadlines.pop ();
-                if (deadline.state->cancelled.exchange (
-                      true, std::memory_order_acq_rel)) {
+                if (deadline.state->cancelled.exchange (true, std::memory_order_acq_rel)) {
                     continue;
                 }
                 lock.unlock ();
@@ -328,9 +308,7 @@ struct worker_control_t
 
         std::mutex _mutex;
         std::condition_variable _changed;
-        std::priority_queue<deadline_t,
-                            std::vector<deadline_t>,
-                            later_deadline_t> _deadlines;
+        std::priority_queue<deadline_t, std::vector<deadline_t>, later_deadline_t> _deadlines;
         std::uint64_t _next_sequence = 1;
         std::jthread _worker;
     };
@@ -339,10 +317,9 @@ struct worker_control_t
 };
 
 template <typename TResult>
-task_t<TResult> apply_worker_deadline (
-  task_t<TResult> task,
-  const std::shared_ptr<worker_control_t> &control,
-  std::optional<std::chrono::milliseconds> timeout)
+task_t<TResult> apply_worker_deadline (task_t<TResult> task,
+                                       const std::shared_ptr<worker_control_t> &control,
+                                       std::optional<std::chrono::milliseconds> timeout)
 {
     auto completion = std::make_shared<task_completion_source_t<TResult>> ();
     auto output = completion->task ();
@@ -362,25 +339,25 @@ task_t<TResult> apply_worker_deadline (
         if (const auto control = weak_control.lock ()) {
             control->cancellation.request_stop ();
         }
-        finish (result_t<TResult>::failure (
-          framework_error_kind_t::shutting_down, "worker host is shutting down"));
+        finish (result_t<TResult>::failure (framework_error_kind_t::shutting_down,
+                                            "worker host is shutting down"));
     });
 
-    detail::observe_task_completion (
-      task, [control, finish] (const result_t<TResult> &result) mutable {
-          /* Keep the cancellation source registered until the inner task has
+    detail::observe_task_completion (task,
+                                     [control, finish] (const result_t<TResult> &result) mutable {
+                                         /* Keep the cancellation source registered until the inner task has
            * reached a terminal state. The callback uses a weak control
            * reference, so this ownership does not form a cycle. */
-          static_cast<void> (control);
-          finish (result);
-      });
+                                         static_cast<void> (control);
+                                         finish (result);
+                                     });
     if (timeout && *timeout > std::chrono::milliseconds::zero ()) {
         control->arm_deadline (*timeout, [weak_control, finish] () mutable {
             if (const auto control = weak_control.lock ()) {
                 control->cancellation.request_stop ();
             }
-            finish (result_t<TResult>::failure (
-              framework_error_kind_t::deadline_exceeded, "worker task timed out"));
+            finish (result_t<TResult>::failure (framework_error_kind_t::deadline_exceeded,
+                                                "worker task timed out"));
         });
     }
     return output;
@@ -394,10 +371,7 @@ template <typename TResult> class worker_call_t
     using executor_t = std::function<task_t<TResult> (std::stop_token)>;
 
     worker_call_t () = default;
-    explicit worker_call_t (executor_t executor) :
-        worker_call_t (std::move (executor), {})
-    {
-    }
+    explicit worker_call_t (executor_t executor) : worker_call_t (std::move (executor), {}) {}
 
     worker_call_t &timeout (std::chrono::milliseconds value)
     {
@@ -416,9 +390,8 @@ template <typename TResult> class worker_call_t
             return detail::unsupported_yield_task<TResult> ();
         }
         if (!try_start ()) {
-            return task_t<TResult> (
-              result_t<TResult>::failure (framework_error_kind_t::protocol_error,
-                                          "worker call already has a terminator"));
+            return task_t<TResult> (result_t<TResult>::failure (
+              framework_error_kind_t::protocol_error, "worker call already has a terminator"));
         }
         if (!_executor) {
             return task_t<TResult> (result_t<TResult>::failure (
@@ -434,20 +407,18 @@ template <typename TResult> class worker_call_t
             return task_t<TResult> (detail::result_access_t::failure<TResult> (error));
         }
         catch (const std::exception &error) {
-            return task_t<TResult> (result_t<TResult>::failure (
-              framework_error_kind_t::internal_failure, error.what ()));
+            return task_t<TResult> (
+              result_t<TResult>::failure (framework_error_kind_t::internal_failure, error.what ()));
         }
         catch (...) {
             return task_t<TResult> (result_t<TResult>::failure (
               framework_error_kind_t::internal_failure, "worker executor failed"));
         }
-        auto guarded = detail::apply_worker_deadline (
-          std::move (*task), control, _timeout);
+        auto guarded = detail::apply_worker_deadline (std::move (*task), control, _timeout);
         if (!turn_plan) {
             return guarded;
         }
-        return detail::reschedule_task (std::move (guarded),
-                                        std::move (turn_plan->scheduler));
+        return detail::reschedule_task (std::move (guarded), std::move (turn_plan->scheduler));
     }
     bool try_start ()
     {
@@ -464,8 +435,7 @@ template <typename TResult> class worker_call_t
     bool _started = false;
 
     friend class spot_context_t;
-    explicit worker_call_t (executor_t executor,
-                            std::stop_token host_cancellation) :
+    explicit worker_call_t (executor_t executor, std::stop_token host_cancellation) :
         _executor (std::move (executor)), _host_cancellation (host_cancellation)
     {
     }

@@ -5,6 +5,15 @@ import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertInstanceOf;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
+import org.junit.jupiter.api.Test;
+
+import systems.zlink.contracts.core.RoutingId;
+import systems.zlink.contracts.messaging.Message;
+import systems.zlink.framework.errors.ZLinkFrameworkErrorKind;
+import systems.zlink.framework.errors.ZLinkFrameworkException;
+import systems.zlink.framework.runtime.internal.backend.ZLinkBackendRouterSocket;
+import systems.zlink.framework.runtime.internal.backend.ZLinkBackendSpotRouteBridge;
+
 import java.time.Duration;
 import java.util.List;
 import java.util.concurrent.CompletableFuture;
@@ -14,13 +23,6 @@ import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
-import org.junit.jupiter.api.Test;
-import systems.zlink.contracts.core.RoutingId;
-import systems.zlink.contracts.messaging.Message;
-import systems.zlink.framework.errors.ZLinkFrameworkException;
-import systems.zlink.framework.errors.ZLinkFrameworkErrorKind;
-import systems.zlink.framework.runtime.internal.backend.ZLinkBackendRouterSocket;
-import systems.zlink.framework.runtime.internal.backend.ZLinkBackendSpotRouteBridge;
 
 final class ZLinkSpotRouteBridgeDispatcherTest {
     @Test
@@ -30,12 +32,12 @@ final class ZLinkSpotRouteBridgeDispatcherTest {
         Message payload = Message.from("payload");
 
         ZLinkSpotRouteBridgeDispatcher.submitSend(
-            bridge,
-            "play.route",
-            RoutingId.from("play-node"),
-            "room-spot",
-            List.of(payload),
-            result);
+                bridge,
+                "play.route",
+                RoutingId.from("play-node"),
+                "room-spot",
+                List.of(payload),
+                result);
 
         assertEquals(1, bridge.sendAttempts.get());
         assertFalse(result.isDone());
@@ -50,34 +52,32 @@ final class ZLinkSpotRouteBridgeDispatcherTest {
 
     @Test
     void channelCloseDoesNotResubmitPendingBindingSend() {
-        ScheduledExecutorService deadlines =
-            Executors.newSingleThreadScheduledExecutor();
-        ZLinkChannelCallRuntime calls = new ZLinkChannelCallRuntime(
-            null,
-            deadlines,
-            null,
-            null,
-            null);
+        ScheduledExecutorService deadlines = Executors.newSingleThreadScheduledExecutor();
+        ZLinkChannelCallRuntime calls =
+                new ZLinkChannelCallRuntime(null, deadlines, null, null, null);
         DirectBridge bridge = new DirectBridge();
         CompletableFuture<Void> result = new CompletableFuture<>();
         try {
-            CompletableFuture<Void> operation = calls.submit(Duration.ofSeconds(1), () -> {
-                ZLinkSpotRouteBridgeDispatcher.submitSend(
-                bridge,
-                "play.route",
-                RoutingId.from("play-node"),
-                "room-spot",
-                List.of(Message.from("payload")),
-                result);
-                return result;
-            }, ignored -> { });
+            CompletableFuture<Void> operation =
+                    calls.submit(
+                            Duration.ofSeconds(1),
+                            () -> {
+                                ZLinkSpotRouteBridgeDispatcher.submitSend(
+                                        bridge,
+                                        "play.route",
+                                        RoutingId.from("play-node"),
+                                        "room-spot",
+                                        List.of(Message.from("payload")),
+                                        result);
+                                return result;
+                            },
+                            ignored -> {});
 
             calls.beginClose();
             bridge.sendAdmission.complete(null);
 
-            ZLinkFrameworkException failure = assertInstanceOf(
-                ZLinkFrameworkException.class,
-                completionFailure(operation));
+            ZLinkFrameworkException failure =
+                    assertInstanceOf(ZLinkFrameworkException.class, completionFailure(operation));
             assertEquals(ZLinkFrameworkErrorKind.SHUTTING_DOWN, failure.kind());
             assertEquals(1, bridge.sendAttempts.get());
         } finally {
@@ -94,13 +94,13 @@ final class ZLinkSpotRouteBridgeDispatcherTest {
         Message reply = Message.from("reply");
 
         ZLinkSpotRouteBridgeDispatcher.submitRequest(
-            bridge,
-            "play.route",
-            RoutingId.from("play-node"),
-            "room-spot",
-            List.of(request),
-            Duration.ofSeconds(1),
-            result);
+                bridge,
+                "play.route",
+                RoutingId.from("play-node"),
+                "room-spot",
+                List.of(request),
+                Duration.ofSeconds(1),
+                result);
 
         bridge.requestReply.complete(List.of(reply));
 
@@ -124,29 +124,22 @@ final class ZLinkSpotRouteBridgeDispatcherTest {
         }
     }
 
-    private static final class DirectBridge
-        implements ZLinkBackendSpotRouteBridge {
+    private static final class DirectBridge implements ZLinkBackendSpotRouteBridge {
         private final AtomicInteger sendAttempts = new AtomicInteger();
         private final AtomicInteger requestAttempts = new AtomicInteger();
-        private final CompletableFuture<Void> sendAdmission =
-            new CompletableFuture<>();
-        private final CompletableFuture<List<Message>> requestReply =
-            new CompletableFuture<>();
-        private final AtomicReference<List<Message>> lastSend =
-            new AtomicReference<>(List.of());
+        private final CompletableFuture<Void> sendAdmission = new CompletableFuture<>();
+        private final CompletableFuture<List<Message>> requestReply = new CompletableFuture<>();
+        private final AtomicReference<List<Message>> lastSend = new AtomicReference<>(List.of());
 
         @Override
-        public void attachRouterChannel(
-            String channelName,
-            ZLinkBackendRouterSocket router) {
-        }
+        public void attachRouterChannel(String channelName, ZLinkBackendRouterSocket router) {}
 
         @Override
         public CompletionStage<Void> send(
-            String channelName,
-            RoutingId targetNodeRid,
-            String targetSpotId,
-            List<Message> parts) {
+                String channelName,
+                RoutingId targetNodeRid,
+                String targetSpotId,
+                List<Message> parts) {
             sendAttempts.incrementAndGet();
             lastSend.set(List.copyOf(parts));
             return sendAdmission;
@@ -154,21 +147,18 @@ final class ZLinkSpotRouteBridgeDispatcherTest {
 
         @Override
         public CompletionStage<List<Message>> request(
-            String channelName,
-            RoutingId targetNodeRid,
-            String targetSpotId,
-            List<Message> parts,
-            Duration timeout) {
+                String channelName,
+                RoutingId targetNodeRid,
+                String targetSpotId,
+                List<Message> parts,
+                Duration timeout) {
             requestAttempts.incrementAndGet();
             return requestReply;
         }
 
         @Override
         public boolean handleRouterReceived(
-            String channelName,
-            RoutingId sourceNodeRid,
-            long requestSeq,
-            List<Message> parts) {
+                String channelName, RoutingId sourceNodeRid, long requestSeq, List<Message> parts) {
             return false;
         }
 
@@ -183,7 +173,6 @@ final class ZLinkSpotRouteBridgeDispatcherTest {
         }
 
         @Override
-        public void close() {
-        }
+        public void close() {}
     }
 }

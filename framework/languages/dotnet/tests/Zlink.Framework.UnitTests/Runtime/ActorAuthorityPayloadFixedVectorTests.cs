@@ -19,18 +19,20 @@ public sealed class ActorAuthorityPayloadFixedVectorTests
         + "0000000000000002010144000000000000000301450146"
         + "000000000000000400000000000000000000b2374797";
 
-    private static ZLinkActorAuthorityPayload FixedVector() => new(
-        State: ZLinkActorAuthorityState.Ready,
-        StableType: "A",
-        ActorId: "B",
-        CurrentSpotId: "C",
-        CurrentSpotGeneration: 2,
-        CurrentSpotKind: ZLinkSpotKind.Entry,
-        OwnerId: "D",
-        OwnerLeaseGeneration: 3,
-        MeshName: "E",
-        NodeRid: RoutingId.From("F"),
-        NodeGeneration: 4);
+    private static ZLinkActorAuthorityPayload FixedVector() =>
+        new(
+            State: ZLinkActorAuthorityState.Ready,
+            StableType: "A",
+            ActorId: "B",
+            CurrentSpotId: "C",
+            CurrentSpotGeneration: 2,
+            CurrentSpotKind: ZLinkSpotKind.Entry,
+            OwnerId: "D",
+            OwnerLeaseGeneration: 3,
+            MeshName: "E",
+            NodeRid: RoutingId.From("F"),
+            NodeGeneration: 4
+        );
 
     [Fact]
     public void ActorAuthorityPayload_fixed_vector_encodes_byte_exactly()
@@ -45,9 +47,7 @@ public sealed class ActorAuthorityPayloadFixedVectorTests
     {
         var encoded = Convert.FromHexString(ExpectedHex);
 
-        Assert.True(ZLinkActorAuthorityPayloadCodec.TryDecodeDirect(
-            encoded,
-            out var decoded));
+        Assert.True(ZLinkActorAuthorityPayloadCodec.TryDecodeDirect(encoded, out var decoded));
         Assert.Equal(FixedVector(), decoded);
     }
 
@@ -56,13 +56,11 @@ public sealed class ActorAuthorityPayloadFixedVectorTests
     {
         var encoded = ZLinkActorAuthorityPayloadCodec.Encode(FixedVector());
 
-        Assert.True(ZLinkActorAuthorityPayloadCodec.TryDecodeDirect(
-            encoded,
-            out var decoded));
+        Assert.True(ZLinkActorAuthorityPayloadCodec.TryDecodeDirect(encoded, out var decoded));
         Assert.Equal(FixedVector(), decoded);
         Assert.Equal(
             ExpectedHex,
-            Convert.ToHexString(ZLinkActorAuthorityPayloadCodec.Encode(decoded))
-                .ToLowerInvariant());
+            Convert.ToHexString(ZLinkActorAuthorityPayloadCodec.Encode(decoded)).ToLowerInvariant()
+        );
     }
 }

@@ -11,7 +11,8 @@ internal sealed record ZLinkOwnerLease(
     string OwnerId,
     RoutingId NodeRid,
     DateTimeOffset LeaseExpiresAt,
-    DateTimeOffset UpdatedAt)
+    DateTimeOffset UpdatedAt
+)
 {
     public long LeaseGeneration { get; init; }
 }
@@ -23,20 +24,19 @@ internal sealed record ZLinkOwnerLease(
 /// rows and owner leases share one physical store. Never use it for
 /// production topologies where processes must share location data.
 /// </summary>
-internal partial class ZLinkInMemoryLocationStore :
-    IZLinkLocationRepository
+internal partial class ZLinkInMemoryLocationStore : IZLinkLocationRepository
 {
     private readonly ZLinkStateLane _lane = new();
     private readonly TimeProvider _time;
     private readonly Dictionary<string, ZLinkOwnerLease> _leases = [];
     private long _ownerLeaseGeneration;
     private readonly RowTable<ZLinkMeshNodeDescriptor> _meshNodes = new();
-    private readonly Dictionary<string, EntrySpotIdClaim> _entrySpotIdClaims =
-        new(StringComparer.Ordinal);
+    private readonly Dictionary<string, EntrySpotIdClaim> _entrySpotIdClaims = new(
+        StringComparer.Ordinal
+    );
     private readonly RowTable<ZLinkClientServerServerDescriptor> _clientServers = new();
     private readonly RowTable<ZLinkFanoutPublisherDescriptor> _fanoutPublishers = new();
-    private readonly Dictionary<string, ulong> _meshNodeStamps =
-        new(StringComparer.Ordinal);
+    private readonly Dictionary<string, ulong> _meshNodeStamps = new(StringComparer.Ordinal);
 
     public ZLinkInMemoryLocationStore(TimeProvider? timeProvider = null)
     {
@@ -46,7 +46,8 @@ internal partial class ZLinkInMemoryLocationStore :
     public ValueTask<ZLinkLocationWriteResult> UpdateMeshNodeAsync(
         ZLinkMeshNodeDescriptor descriptor,
         ZLinkLocationWriteIntent intent,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default
+    )
     {
         ValidateMeshNodeDescriptor(descriptor);
         descriptor = CanonicalizeMeshNodeDescriptor(descriptor);
@@ -54,75 +55,70 @@ internal partial class ZLinkInMemoryLocationStore :
         return _lane.RunAsync<ZLinkLocationWriteResult>(() =>
         {
             var now = _time.GetUtcNow();
-            var owner = new ZLinkLocationOwnerToken(
-                descriptor.OwnerId,
-                descriptor.LeaseGeneration);
+            var owner = new ZLinkLocationOwnerToken(descriptor.OwnerId, descriptor.LeaseGeneration);
             if (!MatchesLiveOwnerLease(owner, now))
-                return
-                    ZLinkLocationWriteResult.IgnoredStale;
+                return ZLinkLocationWriteResult.IgnoredStale;
 
             var key = ZLinkLocationKeyCodec.EncodeMeshNodeKey(
-                new ZLinkMeshNodeDescriptorKey(
-                    descriptor.MeshName,
-                    descriptor.Rid));
+                new ZLinkMeshNodeDescriptorKey(descriptor.MeshName, descriptor.Rid)
+            );
             var exists = _meshNodes.Rows.TryGetValue(key, out var current);
-            var currentOwnerLive = exists
-                                   && MatchesLiveOwnerLease(
-                                       new ZLinkLocationOwnerToken(
-                                           current!.OwnerId,
-                                           current.LeaseGeneration),
-                                       now);
+            var currentOwnerLive =
+                exists
+                && MatchesLiveOwnerLease(
+                    new ZLinkLocationOwnerToken(current!.OwnerId, current.LeaseGeneration),
+                    now
+                );
             if (intent == ZLinkLocationWriteIntent.NewClaim && currentOwnerLive)
-                return
-                    ZLinkLocationWriteResult.RejectedConflict;
+                return ZLinkLocationWriteResult.RejectedConflict;
             if (intent == ZLinkLocationWriteIntent.Takeover && currentOwnerLive)
-                return
-                    ZLinkLocationWriteResult.IgnoredStale;
+                return ZLinkLocationWriteResult.IgnoredStale;
             if (intent == ZLinkLocationWriteIntent.Renew)
             {
-                if (!exists
+                if (
+                    !exists
                     || current!.OwnerId != descriptor.OwnerId
                     || current.LeaseGeneration != descriptor.LeaseGeneration
-                    || current.LifecycleGeneration
-                    != descriptor.LifecycleGeneration
+                    || current.LifecycleGeneration != descriptor.LifecycleGeneration
                     || !MeshNodeImmutableFieldsEqual(current, descriptor)
-                    || descriptor.DescriptorRevision
-                    <= current.DescriptorRevision)
-                    return
-                        ZLinkLocationWriteResult.IgnoredStale;
+                    || descriptor.DescriptorRevision <= current.DescriptorRevision
+                )
+                    return ZLinkLocationWriteResult.IgnoredStale;
             }
             if (!CanPublishEntrySpotIdNoLock(descriptor, key, now))
-                return
-                    ZLinkLocationWriteResult.RejectedConflict;
+                return ZLinkLocationWriteResult.RejectedConflict;
 
             _meshNodes.Generations.TryGetValue(key, out var last);
-            var generation = intent == ZLinkLocationWriteIntent.Renew
-                ? last
-                : checked(last + 1);
+            var generation = intent == ZLinkLocationWriteIntent.Renew ? last : checked(last + 1);
             _meshNodes.Generations[key] = generation;
             _meshNodes.Rows[key] = WithCurrentPlacementCapacity(
-                descriptor with { UpdatedAt = now });
+                descriptor with
+                {
+                    UpdatedAt = now,
+                }
+            );
             PublishEntrySpotIdNoLock(current, descriptor, key);
             BumpMeshNodeStamp(descriptor.MeshName);
-            return
-                ZLinkLocationWriteResult.Stored(generation, now);
+            return ZLinkLocationWriteResult.Stored(generation, now);
         });
     }
 
     public ValueTask<ZLinkLocationWriteStatus> RemoveMeshNodeAsync(
         ZLinkMeshNodeDescriptorKey key,
         ZLinkLocationOwnerToken owner,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default
+    )
     {
         cancellationToken.ThrowIfCancellationRequested();
         var canonicalKey = ZLinkLocationKeyCodec.EncodeMeshNodeKey(key);
         return _lane.RunAsync<ZLinkLocationWriteStatus>(() =>
         {
-            if (!_meshNodes.Rows.TryGetValue(canonicalKey, out var row)
+            if (
+                !_meshNodes.Rows.TryGetValue(canonicalKey, out var row)
                 || row.OwnerId != owner.OwnerId
-                || row.LeaseGeneration != owner.LeaseGeneration)
-                return
-                    ZLinkLocationWriteStatus.IgnoredStale;
+                || row.LeaseGeneration != owner.LeaseGeneration
+            )
+                return ZLinkLocationWriteStatus.IgnoredStale;
 
             _meshNodes.Rows.Remove(canonicalKey);
             RemoveEntrySpotIdClaimNoLock(row, canonicalKey);
@@ -134,87 +130,92 @@ internal partial class ZLinkInMemoryLocationStore :
     public ValueTask<ZLinkLocationPage<ZLinkMeshNodeDescriptor>> ListMeshNodesAsync(
         string meshName,
         ZLinkPageRequest page,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default
+    )
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(meshName);
         var pageSize = ZLinkPageRequestPolicy.Normalize(page).PageSize;
-        var offset = page.ContinuationToken is { } token
+        var offset =
+            page.ContinuationToken is { } token
             && int.TryParse(token, NumberStyles.None, CultureInfo.InvariantCulture, out var parsed)
             && parsed >= 0
                 ? parsed
-                : page.ContinuationToken is null
-                    ? 0
-                    : throw new ArgumentException(
-                        "The MeshNode continuation token is invalid.",
-                        nameof(page));
+            : page.ContinuationToken is null ? 0
+            : throw new ArgumentException(
+                "The MeshNode continuation token is invalid.",
+                nameof(page)
+            );
         cancellationToken.ThrowIfCancellationRequested();
         return _lane.RunAsync<ZLinkLocationPage<ZLinkMeshNodeDescriptor>>(() =>
         {
-            var rows = _meshNodes.Rows.Values
-                .Where(row => string.Equals(row.MeshName, meshName, StringComparison.Ordinal))
+            var rows = _meshNodes
+                .Rows.Values.Where(row =>
+                    string.Equals(row.MeshName, meshName, StringComparison.Ordinal)
+                )
                 .Select(WithCurrentPlacementCapacity)
                 .OrderBy(static row => row.Rid.ToString(), StringComparer.Ordinal)
                 .ToArray();
             var items = rows.Skip(offset).Take(pageSize).ToArray();
             var nextOffset = offset + items.Length;
-            return
-                new ZLinkLocationPage<ZLinkMeshNodeDescriptor>(
-                    items,
-                    nextOffset < rows.Length
-                        ? nextOffset.ToString(CultureInfo.InvariantCulture)
-                        : null);
+            return new ZLinkLocationPage<ZLinkMeshNodeDescriptor>(
+                items,
+                nextOffset < rows.Length ? nextOffset.ToString(CultureInfo.InvariantCulture) : null
+            );
         });
     }
 
     public ValueTask<ZLinkLocationWriteResult> UpdateClientServerAsync(
         ZLinkClientServerServerDescriptor descriptor,
         ZLinkLocationWriteIntent intent,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default
+    )
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(descriptor.ChannelName);
         ArgumentException.ThrowIfNullOrWhiteSpace(descriptor.Endpoint);
         ArgumentException.ThrowIfNullOrWhiteSpace(descriptor.OwnerId);
-        if (descriptor.ServerRid.Size == 0
+        if (
+            descriptor.ServerRid.Size == 0
             || descriptor.LifecycleGeneration == 0
             || descriptor.DescriptorRevision == 0
-            || descriptor.Weight is < 0 or > ZLinkSocketConfig.MaximumPeerWeight)
+            || descriptor.Weight is < 0 or > ZLinkSocketConfig.MaximumPeerWeight
+        )
             throw new ArgumentOutOfRangeException(nameof(descriptor));
         cancellationToken.ThrowIfCancellationRequested();
         return _lane.RunAsync<ZLinkLocationWriteResult>(() =>
         {
             var now = _time.GetUtcNow();
-            var owner = new ZLinkLocationOwnerToken(
-                descriptor.OwnerId,
-                descriptor.LeaseGeneration);
+            var owner = new ZLinkLocationOwnerToken(descriptor.OwnerId, descriptor.LeaseGeneration);
             if (!MatchesLiveOwnerLease(owner, now))
                 return ZLinkLocationWriteResult.IgnoredStale;
 
             var key = ClientServerKey(descriptor.ChannelName, descriptor.ServerRid);
             var exists = _clientServers.Rows.TryGetValue(key, out var current);
-            var currentOwnerLive = exists
-                                   && MatchesLiveOwnerLease(
-                                       new ZLinkLocationOwnerToken(
-                                           current!.OwnerId,
-                                           current.LeaseGeneration),
-                                       now);
+            var currentOwnerLive =
+                exists
+                && MatchesLiveOwnerLease(
+                    new ZLinkLocationOwnerToken(current!.OwnerId, current.LeaseGeneration),
+                    now
+                );
             if (intent == ZLinkLocationWriteIntent.NewClaim && currentOwnerLive)
                 return ZLinkLocationWriteResult.RejectedConflict;
             if (intent == ZLinkLocationWriteIntent.Takeover && currentOwnerLive)
                 return ZLinkLocationWriteResult.IgnoredStale;
-            if (intent == ZLinkLocationWriteIntent.Renew
-                && (!exists
+            if (
+                intent == ZLinkLocationWriteIntent.Renew
+                && (
+                    !exists
                     || current!.OwnerId != descriptor.OwnerId
                     || current.LeaseGeneration != descriptor.LeaseGeneration
                     || current.LifecycleGeneration != descriptor.LifecycleGeneration
                     || current.Endpoint != descriptor.Endpoint
                     || current.SecurityIdentity != descriptor.SecurityIdentity
-                    || descriptor.DescriptorRevision <= current.DescriptorRevision))
+                    || descriptor.DescriptorRevision <= current.DescriptorRevision
+                )
+            )
                 return ZLinkLocationWriteResult.IgnoredStale;
 
             _clientServers.Generations.TryGetValue(key, out var last);
-            var generation = intent == ZLinkLocationWriteIntent.Renew
-                ? last
-                : checked(last + 1);
+            var generation = intent == ZLinkLocationWriteIntent.Renew ? last : checked(last + 1);
             _clientServers.Generations[key] = generation;
             _clientServers.Rows[key] = descriptor with { UpdatedAt = now };
             return ZLinkLocationWriteResult.Stored(generation, now);
@@ -224,49 +225,50 @@ internal partial class ZLinkInMemoryLocationStore :
     public ValueTask<ZLinkLocationWriteStatus> RemoveClientServerAsync(
         ZLinkClientServerServerDescriptorKey key,
         ZLinkLocationOwnerToken owner,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default
+    )
     {
         cancellationToken.ThrowIfCancellationRequested();
         return _lane.RunAsync<ZLinkLocationWriteStatus>(() =>
         {
             var encoded = ClientServerKey(key.ChannelName, key.ServerRid);
-            if (!_clientServers.Rows.TryGetValue(encoded, out var current)
+            if (
+                !_clientServers.Rows.TryGetValue(encoded, out var current)
                 || current.OwnerId != owner.OwnerId
-                || current.LeaseGeneration != owner.LeaseGeneration)
+                || current.LeaseGeneration != owner.LeaseGeneration
+            )
                 return ZLinkLocationWriteStatus.IgnoredStale;
             _clientServers.Rows.Remove(encoded);
             return ZLinkLocationWriteStatus.Stored;
         });
     }
 
-    public ValueTask<ZLinkLocationPage<ZLinkClientServerServerDescriptor>>
-        ListClientServersAsync(
-            string channelName,
-            ZLinkPageRequest page,
-            CancellationToken cancellationToken = default)
+    public ValueTask<ZLinkLocationPage<ZLinkClientServerServerDescriptor>> ListClientServersAsync(
+        string channelName,
+        ZLinkPageRequest page,
+        CancellationToken cancellationToken = default
+    )
     {
         cancellationToken.ThrowIfCancellationRequested();
         return _lane.RunAsync<ZLinkLocationPage<ZLinkClientServerServerDescriptor>>(() =>
         {
             var pageSize = ZLinkPageRequestPolicy.Normalize(page).PageSize;
-            var offset = page.ContinuationToken is { } token
-                         && int.TryParse(token, out var parsed)
-                ? parsed
-                : 0;
-            var rows = _clientServers.Rows.Values
-                .Where(row => StringComparer.Ordinal.Equals(
-                    row.ChannelName,
-                    channelName))
+            var offset =
+                page.ContinuationToken is { } token && int.TryParse(token, out var parsed)
+                    ? parsed
+                    : 0;
+            var rows = _clientServers
+                .Rows.Values.Where(row =>
+                    StringComparer.Ordinal.Equals(row.ChannelName, channelName)
+                )
                 .OrderBy(static row => row.ServerRid, ZLinkRoutingIdOrder.Instance)
                 .ToArray();
             var items = rows.Skip(offset).Take(pageSize).ToArray();
-            var next = offset + items.Length < rows.Length
-                ? (offset + items.Length).ToString(CultureInfo.InvariantCulture)
-                : null;
-            return
-                new ZLinkLocationPage<ZLinkClientServerServerDescriptor>(
-                    items,
-                    next);
+            var next =
+                offset + items.Length < rows.Length
+                    ? (offset + items.Length).ToString(CultureInfo.InvariantCulture)
+                    : null;
+            return new ZLinkLocationPage<ZLinkClientServerServerDescriptor>(items, next);
         });
     }
 
@@ -276,51 +278,54 @@ internal partial class ZLinkInMemoryLocationStore :
     public ValueTask<ZLinkLocationWriteResult> UpdateFanoutPublisherAsync(
         ZLinkFanoutPublisherDescriptor descriptor,
         ZLinkLocationWriteIntent intent,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default
+    )
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(descriptor.ChannelName);
         ArgumentException.ThrowIfNullOrWhiteSpace(descriptor.Endpoint);
         ArgumentException.ThrowIfNullOrWhiteSpace(descriptor.OwnerId);
-        if (descriptor.PublisherRid.Size == 0
+        if (
+            descriptor.PublisherRid.Size == 0
             || descriptor.LifecycleGeneration == 0
-            || descriptor.DescriptorRevision == 0)
+            || descriptor.DescriptorRevision == 0
+        )
             throw new ArgumentOutOfRangeException(nameof(descriptor));
         cancellationToken.ThrowIfCancellationRequested();
         return _lane.RunAsync<ZLinkLocationWriteResult>(() =>
         {
             var now = _time.GetUtcNow();
-            var owner = new ZLinkLocationOwnerToken(
-                descriptor.OwnerId,
-                descriptor.LeaseGeneration);
+            var owner = new ZLinkLocationOwnerToken(descriptor.OwnerId, descriptor.LeaseGeneration);
             if (!MatchesLiveOwnerLease(owner, now))
                 return ZLinkLocationWriteResult.IgnoredStale;
 
             var key = FanoutKey(descriptor.ChannelName, descriptor.PublisherRid);
             var exists = _fanoutPublishers.Rows.TryGetValue(key, out var current);
-            var currentOwnerLive = exists
-                                   && MatchesLiveOwnerLease(
-                                       new ZLinkLocationOwnerToken(
-                                           current!.OwnerId,
-                                           current.LeaseGeneration),
-                                       now);
+            var currentOwnerLive =
+                exists
+                && MatchesLiveOwnerLease(
+                    new ZLinkLocationOwnerToken(current!.OwnerId, current.LeaseGeneration),
+                    now
+                );
             if (intent == ZLinkLocationWriteIntent.NewClaim && currentOwnerLive)
                 return ZLinkLocationWriteResult.RejectedConflict;
             if (intent == ZLinkLocationWriteIntent.Takeover && currentOwnerLive)
                 return ZLinkLocationWriteResult.IgnoredStale;
-            if (intent == ZLinkLocationWriteIntent.Renew
-                && (!exists
+            if (
+                intent == ZLinkLocationWriteIntent.Renew
+                && (
+                    !exists
                     || current!.OwnerId != descriptor.OwnerId
                     || current.LeaseGeneration != descriptor.LeaseGeneration
                     || current.LifecycleGeneration != descriptor.LifecycleGeneration
                     || current.Endpoint != descriptor.Endpoint
                     || current.SecurityIdentity != descriptor.SecurityIdentity
-                    || descriptor.DescriptorRevision <= current.DescriptorRevision))
+                    || descriptor.DescriptorRevision <= current.DescriptorRevision
+                )
+            )
                 return ZLinkLocationWriteResult.IgnoredStale;
 
             _fanoutPublishers.Generations.TryGetValue(key, out var last);
-            var generation = intent == ZLinkLocationWriteIntent.Renew
-                ? last
-                : checked(last + 1);
+            var generation = intent == ZLinkLocationWriteIntent.Renew ? last : checked(last + 1);
             _fanoutPublishers.Generations[key] = generation;
             _fanoutPublishers.Rows[key] = descriptor with { UpdatedAt = now };
             return ZLinkLocationWriteResult.Stored(generation, now);
@@ -330,102 +335,106 @@ internal partial class ZLinkInMemoryLocationStore :
     public ValueTask<ZLinkLocationWriteStatus> RemoveFanoutPublisherAsync(
         ZLinkFanoutPublisherDescriptorKey key,
         ZLinkLocationOwnerToken owner,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default
+    )
     {
         cancellationToken.ThrowIfCancellationRequested();
         return _lane.RunAsync<ZLinkLocationWriteStatus>(() =>
         {
             var encoded = FanoutKey(key.ChannelName, key.PublisherRid);
-            if (!_fanoutPublishers.Rows.TryGetValue(encoded, out var current)
+            if (
+                !_fanoutPublishers.Rows.TryGetValue(encoded, out var current)
                 || current.OwnerId != owner.OwnerId
-                || current.LeaseGeneration != owner.LeaseGeneration)
+                || current.LeaseGeneration != owner.LeaseGeneration
+            )
                 return ZLinkLocationWriteStatus.IgnoredStale;
             _fanoutPublishers.Rows.Remove(encoded);
             return ZLinkLocationWriteStatus.Stored;
         });
     }
 
-    public ValueTask<ZLinkLocationPage<ZLinkFanoutPublisherDescriptor>>
-        ListFanoutPublishersAsync(
-            string channelName,
-            ZLinkPageRequest page,
-            CancellationToken cancellationToken = default)
+    public ValueTask<ZLinkLocationPage<ZLinkFanoutPublisherDescriptor>> ListFanoutPublishersAsync(
+        string channelName,
+        ZLinkPageRequest page,
+        CancellationToken cancellationToken = default
+    )
     {
         cancellationToken.ThrowIfCancellationRequested();
         return _lane.RunAsync<ZLinkLocationPage<ZLinkFanoutPublisherDescriptor>>(() =>
         {
             var pageSize = ZLinkPageRequestPolicy.Normalize(page).PageSize;
-            var offset = page.ContinuationToken is { } token
-                         && int.TryParse(token, out var parsed)
-                ? parsed
-                : 0;
-            var rows = _fanoutPublishers.Rows.Values
-                .Where(row => StringComparer.Ordinal.Equals(
-                    row.ChannelName,
-                    channelName))
+            var offset =
+                page.ContinuationToken is { } token && int.TryParse(token, out var parsed)
+                    ? parsed
+                    : 0;
+            var rows = _fanoutPublishers
+                .Rows.Values.Where(row =>
+                    StringComparer.Ordinal.Equals(row.ChannelName, channelName)
+                )
                 .OrderBy(static row => row.PublisherRid, ZLinkRoutingIdOrder.Instance)
                 .ToArray();
             var items = rows.Skip(offset).Take(pageSize).ToArray();
-            var next = offset + items.Length < rows.Length
-                ? (offset + items.Length).ToString(CultureInfo.InvariantCulture)
-                : null;
-            return
-                new ZLinkLocationPage<ZLinkFanoutPublisherDescriptor>(
-                    items,
-                    next);
+            var next =
+                offset + items.Length < rows.Length
+                    ? (offset + items.Length).ToString(CultureInfo.InvariantCulture)
+                    : null;
+            return new ZLinkLocationPage<ZLinkFanoutPublisherDescriptor>(items, next);
         });
     }
 
     private static string FanoutKey(string channelName, RoutingId rid) =>
         $"{channelName}\u001f{rid.ToHex()}";
 
-    private ZLinkMeshNodeDescriptor WithCurrentPlacementCapacity(
-        ZLinkMeshNodeDescriptor descriptor)
+    private ZLinkMeshNodeDescriptor WithCurrentPlacementCapacity(ZLinkMeshNodeDescriptor descriptor)
     {
-        var key = new ZLinkMeshNodeDescriptorKey(
-            descriptor.MeshName,
-            descriptor.Rid);
+        var key = new ZLinkMeshNodeDescriptorKey(descriptor.MeshName, descriptor.Rid);
         var actorActive = PlacementCapacityUsage(
             _activePlacementCapacity,
             key,
             descriptor.LifecycleGeneration,
-            ZLinkPlacementObjectKind.Actor);
+            ZLinkPlacementObjectKind.Actor
+        );
         var actorReserved = PlacementCapacityUsage(
             _pendingPlacementCapacity,
             key,
             descriptor.LifecycleGeneration,
-            ZLinkPlacementObjectKind.Actor);
+            ZLinkPlacementObjectKind.Actor
+        );
         var spotActive = PlacementCapacityUsage(
             _activePlacementCapacity,
             key,
             descriptor.LifecycleGeneration,
             ZLinkPlacementObjectKind.UserSpot,
-            ZLinkPlacementObjectKind.InstanceSpot);
+            ZLinkPlacementObjectKind.InstanceSpot
+        );
         var spotReserved = PlacementCapacityUsage(
             _pendingPlacementCapacity,
             key,
             descriptor.LifecycleGeneration,
             ZLinkPlacementObjectKind.UserSpot,
-            ZLinkPlacementObjectKind.InstanceSpot);
-        var spotTypes = descriptor.ObjectCapabilities
-            .Where(static capability =>
-                capability.ObjectKind is ZLinkPlacementObjectKind.UserSpot
-                    or ZLinkPlacementObjectKind.InstanceSpot)
+            ZLinkPlacementObjectKind.InstanceSpot
+        );
+        var spotTypes = descriptor
+            .ObjectCapabilities.Where(static capability =>
+                capability.ObjectKind
+                    is ZLinkPlacementObjectKind.UserSpot
+                        or ZLinkPlacementObjectKind.InstanceSpot
+            )
             .Select(capability =>
             {
                 var typeKey = new PlacementCapacityKey(
                     key,
                     descriptor.LifecycleGeneration,
                     capability.ObjectKind,
-                    capability.StableType);
+                    capability.StableType
+                );
                 return new ZLinkSpotTypeCapacity(
                     capability.ObjectKind,
                     capability.StableType,
-                    checked((int)_activePlacementCapacity
-                        .GetValueOrDefault(typeKey)),
-                    checked((int)_pendingPlacementCapacity
-                        .GetValueOrDefault(typeKey)),
-                    capability.Limit);
+                    checked((int)_activePlacementCapacity.GetValueOrDefault(typeKey)),
+                    checked((int)_pendingPlacementCapacity.GetValueOrDefault(typeKey)),
+                    capability.Limit
+                );
             })
             .ToArray();
         return descriptor with
@@ -434,64 +443,65 @@ internal partial class ZLinkInMemoryLocationStore :
                 descriptor.Capacity.Actors with
                 {
                     Active = checked((int)actorActive),
-                    Reserved = checked((int)actorReserved)
+                    Reserved = checked((int)actorReserved),
                 },
                 descriptor.Capacity.Spots with
                 {
                     Active = checked((int)spotActive),
-                    Reserved = checked((int)spotReserved)
+                    Reserved = checked((int)spotReserved),
                 },
-                spotTypes)
+                spotTypes
+            ),
         };
     }
 
     private static bool MeshNodeImmutableFieldsEqual(
         ZLinkMeshNodeDescriptor current,
-        ZLinkMeshNodeDescriptor incoming) =>
+        ZLinkMeshNodeDescriptor incoming
+    ) =>
         current.MeshName == incoming.MeshName
         && current.Rid == incoming.Rid
         && current.LifecycleGeneration == incoming.LifecycleGeneration
-        && (current.Endpoint == incoming.Endpoint
+        && (
+            current.Endpoint == incoming.Endpoint
             || current.State == ZLinkFrameworkRuntimeState.Preparing
-            && current.Endpoint.Length == 0
-            && incoming.Endpoint.Length > 0)
+                && current.Endpoint.Length == 0
+                && incoming.Endpoint.Length > 0
+        )
         && current.SecurityIdentity == incoming.SecurityIdentity
         && current.OwnerId == incoming.OwnerId
         && current.LeaseGeneration == incoming.LeaseGeneration
         && current.ApplicationVersion == incoming.ApplicationVersion
         && current.ObjectRole == incoming.ObjectRole
-        && current.ChannelWeights.Keys.ToHashSet(StringComparer.Ordinal)
+        && current
+            .ChannelWeights.Keys.ToHashSet(StringComparer.Ordinal)
             .SetEquals(incoming.ChannelWeights.Keys)
-        && ObjectCapabilitiesEqual(
-            current.ObjectCapabilities,
-            incoming.ObjectCapabilities)
+        && ObjectCapabilitiesEqual(current.ObjectCapabilities, incoming.ObjectCapabilities)
         && current.Capacity.Actors.Limit == incoming.Capacity.Actors.Limit
         && current.Capacity.Spots.Limit == incoming.Capacity.Spots.Limit;
 
-
     private static ZLinkMeshNodeDescriptor CanonicalizeMeshNodeDescriptor(
-        ZLinkMeshNodeDescriptor descriptor) =>
+        ZLinkMeshNodeDescriptor descriptor
+    ) =>
         descriptor with
         {
-            ChannelWeights = descriptor.ChannelWeights
-                .OrderBy(
-                    static pair => pair.Key,
-                    Utf8StringComparer.Instance)
+            ChannelWeights = descriptor
+                .ChannelWeights.OrderBy(static pair => pair.Key, Utf8StringComparer.Instance)
                 .ToDictionary(
                     static pair => pair.Key,
                     static pair => pair.Value,
-                    StringComparer.Ordinal),
-            ObjectCapabilities = descriptor.ObjectCapabilities
-                .OrderBy(static capability => capability.ObjectKind)
-                .ThenBy(
-                    static capability => capability.StableType,
-                    Utf8StringComparer.Instance)
-                .ToArray()
+                    StringComparer.Ordinal
+                ),
+            ObjectCapabilities = descriptor
+                .ObjectCapabilities.OrderBy(static capability => capability.ObjectKind)
+                .ThenBy(static capability => capability.StableType, Utf8StringComparer.Instance)
+                .ToArray(),
         };
 
     private static bool ObjectCapabilitiesEqual(
         IReadOnlyList<ZLinkObjectCapability> current,
-        IReadOnlyList<ZLinkObjectCapability> incoming)
+        IReadOnlyList<ZLinkObjectCapability> incoming
+    )
     {
         if (current.Count != incoming.Count)
             return false;
@@ -499,22 +509,24 @@ internal partial class ZLinkInMemoryLocationStore :
         {
             var left = current[index];
             var right = incoming[index];
-            if (left.ObjectKind != right.ObjectKind
+            if (
+                left.ObjectKind != right.ObjectKind
                 || left.StableType != right.StableType
                 || left.Policy != right.Policy
                 || left.HasSnapshotAdapter != right.HasSnapshotAdapter
-                || left.Limit != right.Limit)
+                || left.Limit != right.Limit
+            )
                 return false;
         }
         return true;
     }
 
-    private static void ValidateMeshNodeDescriptor(
-        ZLinkMeshNodeDescriptor descriptor)
+    private static void ValidateMeshNodeDescriptor(ZLinkMeshNodeDescriptor descriptor)
     {
         ArgumentNullException.ThrowIfNull(descriptor);
         ValidateUtf8Value(descriptor.MeshName, nameof(descriptor.MeshName));
-        if (descriptor.Rid.IsEmpty
+        if (
+            descriptor.Rid.IsEmpty
             || descriptor.LifecycleGeneration == 0
             || descriptor.DescriptorRevision == 0
             || descriptor.ApplicationVersion < 0
@@ -527,122 +539,121 @@ internal partial class ZLinkInMemoryLocationStore :
             || !IsValidCapacity(descriptor.Capacity.Actors)
             || !IsValidCapacity(descriptor.Capacity.Spots)
             || descriptor.Capacity.SpotTypes is null
-            || descriptor.ActivationConcurrency is not
-            {
-                Active: >= 0,
-                Limit: > 0
-            }
-            || descriptor.ActivationConcurrency.Active
-                > descriptor.ActivationConcurrency.Limit
+            || descriptor.ActivationConcurrency is not { Active: >= 0, Limit: > 0 }
+            || descriptor.ActivationConcurrency.Active > descriptor.ActivationConcurrency.Limit
             || descriptor.ObjectCapabilities is null
             || descriptor.ObjectCapabilities.Count > 1024
             || descriptor.ObjectRole != ZLinkMeshNodeObjectRole.Server
-            && descriptor.ObjectCapabilities.Count != 0)
-            throw new ArgumentException(
-                "The MeshNode descriptor is invalid.",
-                nameof(descriptor));
+                && descriptor.ObjectCapabilities.Count != 0
+        )
+            throw new ArgumentException("The MeshNode descriptor is invalid.", nameof(descriptor));
         foreach (var (channelName, weight) in descriptor.ChannelWeights)
         {
             ValidateUtf8Value(channelName, "ChannelName");
             if (weight is < 0 or > ZLinkSocketConfig.MaximumPeerWeight)
                 throw new ArgumentOutOfRangeException(
                     nameof(descriptor),
-                    "Channel weight must be between 0 and 10000.");
+                    "Channel weight must be between 0 and 10000."
+                );
         }
         if (descriptor.MaintenanceWave is { } wave)
             ValidateUtf8Value(wave, nameof(descriptor.MaintenanceWave));
         if (descriptor.ObjectRole == ZLinkMeshNodeObjectRole.Server)
             ValidateUtf8Value(
                 descriptor.EntrySpotId
-                ?? throw new ArgumentException(
-                    "Object Server descriptor EntrySpotId is required.",
-                    nameof(descriptor)),
-                nameof(descriptor.EntrySpotId));
+                    ?? throw new ArgumentException(
+                        "Object Server descriptor EntrySpotId is required.",
+                        nameof(descriptor)
+                    ),
+                nameof(descriptor.EntrySpotId)
+            );
         else if (descriptor.EntrySpotId is not null)
             throw new ArgumentException(
                 "Only an Object Server descriptor can publish EntrySpotId.",
-                nameof(descriptor));
-        var identities =
-            new HashSet<(ZLinkPlacementObjectKind, string)>();
+                nameof(descriptor)
+            );
+        var identities = new HashSet<(ZLinkPlacementObjectKind, string)>();
         foreach (var capability in descriptor.ObjectCapabilities)
         {
-            if (capability is null
+            if (
+                capability is null
                 || !Enum.IsDefined(capability.ObjectKind)
                 || !Enum.IsDefined(capability.Policy)
-                || !identities.Add((
-                    capability.ObjectKind,
-                    capability.StableType))
-                || capability.Policy
-                == ZLinkObjectMaintenancePolicyKind.Snapshot
-                != capability.HasSnapshotAdapter
+                || !identities.Add((capability.ObjectKind, capability.StableType))
+                || capability.Policy == ZLinkObjectMaintenancePolicyKind.Snapshot
+                    != capability.HasSnapshotAdapter
                 || capability.Limit < 0
-                || capability.ObjectKind == ZLinkPlacementObjectKind.Actor
-                    && capability.Limit != 0)
+                || capability.ObjectKind == ZLinkPlacementObjectKind.Actor && capability.Limit != 0
+            )
                 throw new ArgumentException(
                     "The MeshNode object capabilities are invalid.",
-                    nameof(descriptor));
-            ValidateUtf8Value(
-                capability.StableType,
-                nameof(capability.StableType));
+                    nameof(descriptor)
+                );
+            ValidateUtf8Value(capability.StableType, nameof(capability.StableType));
         }
-        var expectedSpotTypes = descriptor.ObjectCapabilities
-            .Where(static capability =>
-                capability.ObjectKind is ZLinkPlacementObjectKind.UserSpot
-                    or ZLinkPlacementObjectKind.InstanceSpot)
+        var expectedSpotTypes = descriptor
+            .ObjectCapabilities.Where(static capability =>
+                capability.ObjectKind
+                    is ZLinkPlacementObjectKind.UserSpot
+                        or ZLinkPlacementObjectKind.InstanceSpot
+            )
             .Select(static capability =>
-                (capability.ObjectKind, capability.StableType, capability.Limit))
+                (capability.ObjectKind, capability.StableType, capability.Limit)
+            )
             .ToArray();
         if (descriptor.Capacity.SpotTypes.Count != expectedSpotTypes.Length)
             throw new ArgumentException(
                 "The MeshNode Spot type capacity projection is invalid.",
-                nameof(descriptor));
+                nameof(descriptor)
+            );
         for (var index = 0; index < expectedSpotTypes.Length; index++)
         {
             var capacity = descriptor.Capacity.SpotTypes[index];
             var expected = expectedSpotTypes[index];
-            if (capacity.ObjectKind != expected.ObjectKind
+            if (
+                capacity.ObjectKind != expected.ObjectKind
                 || capacity.StableType != expected.StableType
                 || capacity.Limit != expected.Limit
                 || capacity.Active < 0
                 || capacity.Reserved < 0
-                || capacity.Limit > 0
-                    && capacity.Active + (long)capacity.Reserved
-                    > capacity.Limit)
+                || capacity.Limit > 0 && capacity.Active + (long)capacity.Reserved > capacity.Limit
+            )
                 throw new ArgumentException(
                     "The MeshNode Spot type capacity projection is invalid.",
-                    nameof(descriptor));
+                    nameof(descriptor)
+                );
         }
     }
 
     private static bool IsValidCapacity(ZLinkPopulationCapacity capacity) =>
         capacity is { Active: >= 0, Reserved: >= 0, Limit: >= 0 }
-        && (capacity.Limit == 0
-            || capacity.Active + (long)capacity.Reserved <= capacity.Limit);
+        && (capacity.Limit == 0 || capacity.Active + (long)capacity.Reserved <= capacity.Limit);
 
     private bool CanPublishEntrySpotIdNoLock(
         ZLinkMeshNodeDescriptor descriptor,
         string descriptorKey,
-        DateTimeOffset now)
+        DateTimeOffset now
+    )
     {
         if (descriptor.EntrySpotId is not { } entrySpotId)
             return true;
 
-        if (_entrySpotIdClaims.TryGetValue(entrySpotId, out var claim)
-            && (!string.Equals(
-                    claim.DescriptorKey,
-                    descriptorKey,
-                    StringComparison.Ordinal)
-                || claim.DescriptorLifecycleGeneration
-                != descriptor.LifecycleGeneration
-                || claim.Owner != new ZLinkLocationOwnerToken(
-                    descriptor.OwnerId,
-                    descriptor.LeaseGeneration))
-            && MatchesLiveOwnerLease(claim.Owner, now))
+        if (
+            _entrySpotIdClaims.TryGetValue(entrySpotId, out var claim)
+            && (
+                !string.Equals(claim.DescriptorKey, descriptorKey, StringComparison.Ordinal)
+                || claim.DescriptorLifecycleGeneration != descriptor.LifecycleGeneration
+                || claim.Owner
+                    != new ZLinkLocationOwnerToken(descriptor.OwnerId, descriptor.LeaseGeneration)
+            )
+            && MatchesLiveOwnerLease(claim.Owner, now)
+        )
             return false;
 
         var authorityKey =
-            Zlink.Framework.Runtime.Spots.ZLinkUserSpotAuthorityPayloadCodec
-                .AuthorityKey(entrySpotId);
+            Zlink.Framework.Runtime.Spots.ZLinkUserSpotAuthorityPayloadCodec.AuthorityKey(
+                entrySpotId
+            );
         if (_authorities.ContainsKey(authorityKey.Value))
             return false;
         return true;
@@ -651,13 +662,17 @@ internal partial class ZLinkInMemoryLocationStore :
     private void PublishEntrySpotIdNoLock(
         ZLinkMeshNodeDescriptor? previous,
         ZLinkMeshNodeDescriptor descriptor,
-        string descriptorKey)
+        string descriptorKey
+    )
     {
-        if (previous is not null
+        if (
+            previous is not null
             && !string.Equals(
                 previous.EntrySpotId,
                 descriptor.EntrySpotId,
-                StringComparison.Ordinal))
+                StringComparison.Ordinal
+            )
+        )
             RemoveEntrySpotIdClaimNoLock(previous, descriptorKey);
 
         if (descriptor.EntrySpotId is { } entrySpotId)
@@ -665,27 +680,24 @@ internal partial class ZLinkInMemoryLocationStore :
             _entrySpotIdClaims[entrySpotId] = new EntrySpotIdClaim(
                 descriptorKey,
                 descriptor.LifecycleGeneration,
-                new ZLinkLocationOwnerToken(
-                    descriptor.OwnerId,
-                    descriptor.LeaseGeneration));
+                new ZLinkLocationOwnerToken(descriptor.OwnerId, descriptor.LeaseGeneration)
+            );
         }
     }
 
     private void RemoveEntrySpotIdClaimNoLock(
         ZLinkMeshNodeDescriptor descriptor,
-        string descriptorKey)
+        string descriptorKey
+    )
     {
-        if (descriptor.EntrySpotId is not { } entrySpotId
+        if (
+            descriptor.EntrySpotId is not { } entrySpotId
             || !_entrySpotIdClaims.TryGetValue(entrySpotId, out var claim)
-            || !string.Equals(
-                claim.DescriptorKey,
-                descriptorKey,
-                StringComparison.Ordinal)
-            || claim.DescriptorLifecycleGeneration
-            != descriptor.LifecycleGeneration
-            || claim.Owner != new ZLinkLocationOwnerToken(
-                descriptor.OwnerId,
-                descriptor.LeaseGeneration))
+            || !string.Equals(claim.DescriptorKey, descriptorKey, StringComparison.Ordinal)
+            || claim.DescriptorLifecycleGeneration != descriptor.LifecycleGeneration
+            || claim.Owner
+                != new ZLinkLocationOwnerToken(descriptor.OwnerId, descriptor.LeaseGeneration)
+        )
             return;
 
         _entrySpotIdClaims.Remove(entrySpotId);
@@ -695,9 +707,7 @@ internal partial class ZLinkInMemoryLocationStore :
     {
         var size = System.Text.Encoding.UTF8.GetByteCount(value);
         if (size is < 1 or > 255 || value.Contains('\0'))
-            throw new ArgumentException(
-                $"{name} must be 1 to 255 UTF-8 bytes without NUL.",
-                name);
+            throw new ArgumentException($"{name} must be 1 to 255 UTF-8 bytes without NUL.", name);
     }
 
     private sealed class Utf8StringComparer : IComparer<string>
@@ -712,83 +722,70 @@ internal partial class ZLinkInMemoryLocationStore :
                 return -1;
             if (right is null)
                 return 1;
-            return System.Text.Encoding.UTF8.GetBytes(left)
+            return System
+                .Text.Encoding.UTF8.GetBytes(left)
                 .AsSpan()
-                .SequenceCompareTo(
-                    System.Text.Encoding.UTF8.GetBytes(right));
+                .SequenceCompareTo(System.Text.Encoding.UTF8.GetBytes(right));
         }
     }
 
     private sealed record EntrySpotIdClaim(
         string DescriptorKey,
         ulong DescriptorLifecycleGeneration,
-        ZLinkLocationOwnerToken Owner);
+        ZLinkLocationOwnerToken Owner
+    );
 
     public ValueTask<ZLinkOwnerLeaseClaimResult> ClaimOwnerLeaseAsync(
         string ownerId,
         TimeSpan leaseTtl,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default
+    )
     {
         ValidateOwnerLeaseArguments(ownerId, leaseTtl);
         cancellationToken.ThrowIfCancellationRequested();
         return _lane.RunAsync<ZLinkOwnerLeaseClaimResult>(() =>
         {
             var now = _time.GetUtcNow();
-            if (_leases.TryGetValue(ownerId, out var current)
-                && current.LeaseExpiresAt > now)
-                return
-                    new ZLinkOwnerLeaseClaimResult.Conflict();
+            if (_leases.TryGetValue(ownerId, out var current) && current.LeaseExpiresAt > now)
+                return new ZLinkOwnerLeaseClaimResult.Conflict();
             if (_ownerLeaseGeneration == long.MaxValue)
-                return
-                    new ZLinkOwnerLeaseClaimResult.GenerationExhausted();
+                return new ZLinkOwnerLeaseClaimResult.GenerationExhausted();
 
-            var token = new ZLinkLocationOwnerToken(
-                ownerId,
-                ++_ownerLeaseGeneration);
+            var token = new ZLinkLocationOwnerToken(ownerId, ++_ownerLeaseGeneration);
             var expiresAt = now + leaseTtl;
-            _leases[ownerId] = new ZLinkOwnerLease(
-                ownerId,
-                default,
-                expiresAt,
-                now)
+            _leases[ownerId] = new ZLinkOwnerLease(ownerId, default, expiresAt, now)
             {
-                LeaseGeneration = token.LeaseGeneration
+                LeaseGeneration = token.LeaseGeneration,
             };
-            return
-                new ZLinkOwnerLeaseClaimResult.Claimed(
-                    token,
-                    expiresAt,
-                    now);
+            return new ZLinkOwnerLeaseClaimResult.Claimed(token, expiresAt, now);
         });
     }
 
     public ValueTask<ZLinkOwnerLeaseReadResult> ReadOwnerLeaseAsync(
         string ownerId,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default
+    )
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(ownerId);
         cancellationToken.ThrowIfCancellationRequested();
         return _lane.RunAsync<ZLinkOwnerLeaseReadResult>(() =>
         {
             var now = _time.GetUtcNow();
-            if (!_leases.TryGetValue(ownerId, out var lease)
-                || lease.LeaseExpiresAt <= now)
-                return
-                    new ZLinkOwnerLeaseReadResult.Missing();
-            return
-                new ZLinkOwnerLeaseReadResult.Found(
-                    new ZLinkLocationOwnerToken(
-                        ownerId,
-                        lease.LeaseGeneration),
-                    lease.LeaseExpiresAt,
-                    now);
+            if (!_leases.TryGetValue(ownerId, out var lease) || lease.LeaseExpiresAt <= now)
+                return new ZLinkOwnerLeaseReadResult.Missing();
+            return new ZLinkOwnerLeaseReadResult.Found(
+                new ZLinkLocationOwnerToken(ownerId, lease.LeaseGeneration),
+                lease.LeaseExpiresAt,
+                now
+            );
         });
     }
 
     public ValueTask<ZLinkOwnerLeaseRenewResult> RenewOwnerLeaseAsync(
         ZLinkLocationOwnerToken token,
         TimeSpan leaseTtl,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default
+    )
     {
         ValidateOwnerLeaseArguments(token.OwnerId, leaseTtl);
         cancellationToken.ThrowIfCancellationRequested();
@@ -796,23 +793,18 @@ internal partial class ZLinkInMemoryLocationStore :
         {
             var now = _time.GetUtcNow();
             if (!MatchesLiveOwnerLease(token, now))
-                return
-                    new ZLinkOwnerLeaseRenewResult.Stale();
+                return new ZLinkOwnerLeaseRenewResult.Stale();
             var current = _leases[token.OwnerId];
             var expiresAt = now + leaseTtl;
-            _leases[token.OwnerId] = current with
-            {
-                LeaseExpiresAt = expiresAt,
-                UpdatedAt = now
-            };
-            return
-                new ZLinkOwnerLeaseRenewResult.Renewed(expiresAt, now);
+            _leases[token.OwnerId] = current with { LeaseExpiresAt = expiresAt, UpdatedAt = now };
+            return new ZLinkOwnerLeaseRenewResult.Renewed(expiresAt, now);
         });
     }
 
     public ValueTask<ZLinkOwnerLeaseReleaseResult> ReleaseOwnerLeaseAsync(
         ZLinkLocationOwnerToken token,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default
+    )
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(token.OwnerId);
         cancellationToken.ThrowIfCancellationRequested();
@@ -827,7 +819,8 @@ internal partial class ZLinkInMemoryLocationStore :
 
     public ValueTask<long> RemoveAllByOwnerAsync(
         ZLinkLocationOwnerToken owner,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default
+    )
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(owner.OwnerId);
         if (owner.LeaseGeneration <= 0)
@@ -838,8 +831,8 @@ internal partial class ZLinkInMemoryLocationStore :
             if (!MatchesLiveOwnerLease(owner, _time.GetUtcNow()))
                 return 0L;
             var removed = 0L;
-            var ownedDescriptors = _meshNodes.Rows
-                .Where(pair => pair.Value.OwnerId == owner.OwnerId)
+            var ownedDescriptors = _meshNodes
+                .Rows.Where(pair => pair.Value.OwnerId == owner.OwnerId)
                 .ToArray();
             foreach (var descriptor in ownedDescriptors)
             {
@@ -848,11 +841,9 @@ internal partial class ZLinkInMemoryLocationStore :
                 removed++;
             }
             foreach (var descriptor in ownedDescriptors)
-                RemoveEntrySpotIdClaimNoLock(
-                    descriptor.Value,
-                    descriptor.Key);
-            var clientServerKeys = _clientServers.Rows
-                .Where(pair => pair.Value.OwnerId == owner.OwnerId)
+                RemoveEntrySpotIdClaimNoLock(descriptor.Value, descriptor.Key);
+            var clientServerKeys = _clientServers
+                .Rows.Where(pair => pair.Value.OwnerId == owner.OwnerId)
                 .Select(static pair => pair.Key)
                 .ToArray();
             foreach (var key in clientServerKeys)
@@ -860,8 +851,8 @@ internal partial class ZLinkInMemoryLocationStore :
                 _clientServers.Rows.Remove(key);
                 removed++;
             }
-            var fanoutKeys = _fanoutPublishers.Rows
-                .Where(pair => pair.Value.OwnerId == owner.OwnerId)
+            var fanoutKeys = _fanoutPublishers
+                .Rows.Where(pair => pair.Value.OwnerId == owner.OwnerId)
                 .Select(static pair => pair.Key)
                 .ToArray();
             foreach (var key in fanoutKeys)
@@ -875,7 +866,8 @@ internal partial class ZLinkInMemoryLocationStore :
 
     public ValueTask<ulong?> GetMeshNodeChangeStampAsync(
         string meshName,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default
+    )
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(meshName);
         cancellationToken.ThrowIfCancellationRequested();
@@ -886,16 +878,12 @@ internal partial class ZLinkInMemoryLocationStore :
         });
     }
 
-    private bool MatchesLiveOwnerLease(
-        ZLinkLocationOwnerToken token,
-        DateTimeOffset now) =>
+    private bool MatchesLiveOwnerLease(ZLinkLocationOwnerToken token, DateTimeOffset now) =>
         _leases.TryGetValue(token.OwnerId, out var lease)
         && lease.LeaseExpiresAt > now
         && lease.LeaseGeneration == token.LeaseGeneration;
 
-    private static void ValidateOwnerLeaseArguments(
-        string ownerId,
-        TimeSpan leaseTtl)
+    private static void ValidateOwnerLeaseArguments(string ownerId, TimeSpan leaseTtl)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(ownerId);
         if (leaseTtl <= TimeSpan.Zero)
@@ -915,5 +903,4 @@ internal partial class ZLinkInMemoryLocationStore :
 
         public Dictionary<string, ulong> Generations { get; } = [];
     }
-
 }

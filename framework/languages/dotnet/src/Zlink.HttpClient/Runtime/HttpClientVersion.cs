@@ -10,7 +10,10 @@ namespace Zlink.HttpClient.Runtime;
 internal static class HttpClientVersion
 {
     public static readonly string UserAgent =
-        "zlink-http-client/" + (typeof(HttpClientVersion).Assembly.GetName().Version is { } version
-            ? $"{version.Major}.{version.Minor}"
-            : "0.0");
+        "zlink-http-client/"
+        + (
+            typeof(HttpClientVersion).Assembly.GetName().Version is { } version
+                ? $"{version.Major}.{version.Minor}"
+                : "0.0"
+        );
 }

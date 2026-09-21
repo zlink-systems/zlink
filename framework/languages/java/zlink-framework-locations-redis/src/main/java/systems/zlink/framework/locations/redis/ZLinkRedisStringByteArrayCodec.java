@@ -2,23 +2,21 @@ package systems.zlink.framework.locations.redis;
 
 import io.lettuce.core.codec.RedisCodec;
 import io.lettuce.core.codec.StringCodec;
+
 import java.nio.ByteBuffer;
 
 /**
  * Redis codec pairing UTF-8 string keys with 8-bit-clean byte[] values.
  *
- * <p>Used by the stores that persist the normative {@code zlink-location-v3}
- * opaque record layer (21-location-runtime.md#2.4) and the relocation blob
- * store (23-relocation-store-redis.md#8): both require raw bytes to reach
- * Lua's {@code cmsgpack}/{@code redis.call} boundary untouched by any
- * text-safe sub-encoding such as base64.</p>
+ * <p>Used by the stores that persist the normative {@code zlink-location-v3} opaque record layer
+ * (21-location-runtime.md#2.4) and the relocation blob store (23-relocation-store-redis.md#8): both
+ * require raw bytes to reach Lua's {@code cmsgpack}/{@code redis.call} boundary untouched by any
+ * text-safe sub-encoding such as base64.
  */
 final class ZLinkRedisStringByteArrayCodec implements RedisCodec<String, byte[]> {
-    static final ZLinkRedisStringByteArrayCodec INSTANCE =
-        new ZLinkRedisStringByteArrayCodec();
+    static final ZLinkRedisStringByteArrayCodec INSTANCE = new ZLinkRedisStringByteArrayCodec();
 
-    private ZLinkRedisStringByteArrayCodec() {
-    }
+    private ZLinkRedisStringByteArrayCodec() {}
 
     @Override
     public String decodeKey(ByteBuffer bytes) {

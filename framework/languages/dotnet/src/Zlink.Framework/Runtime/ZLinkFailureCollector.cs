@@ -39,10 +39,11 @@ internal sealed class ZLinkFailureCollector(Exception? primaryFailure = null)
             System.Runtime.ExceptionServices.ExceptionDispatchInfo.Capture(failure).Throw();
     }
 
-    public Exception? BuildException() => _failures.Count switch
-    {
-        0 => null,
-        1 => _failures[0],
-        _ => new AggregateException(_failures)
-    };
+    public Exception? BuildException() =>
+        _failures.Count switch
+        {
+            0 => null,
+            1 => _failures[0],
+            _ => new AggregateException(_failures),
+        };
 }

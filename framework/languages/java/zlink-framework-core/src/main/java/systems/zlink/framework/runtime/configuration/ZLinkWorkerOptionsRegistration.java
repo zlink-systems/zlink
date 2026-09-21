@@ -1,9 +1,10 @@
 package systems.zlink.framework.runtime.configuration;
 
-import java.time.Duration;
 import systems.zlink.framework.configuration.ZLinkWorkerOptions;
 import systems.zlink.framework.errors.ZLinkConfigurationException;
 import systems.zlink.framework.execution.ZLinkWorkerPool;
+
+import java.time.Duration;
 
 public final class ZLinkWorkerOptionsRegistration implements ZLinkWorkerOptions {
     private int minThreads;
@@ -55,8 +56,7 @@ public final class ZLinkWorkerOptionsRegistration implements ZLinkWorkerOptions 
 
     void validate() {
         if (maxThreads < minThreads) {
-            throw new ZLinkConfigurationException(
-                "worker maxThreads must be >= minThreads");
+            throw new ZLinkConfigurationException("worker maxThreads must be >= minThreads");
         }
     }
 }

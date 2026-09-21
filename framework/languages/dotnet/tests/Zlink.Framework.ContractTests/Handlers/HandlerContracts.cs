@@ -11,7 +11,8 @@ public sealed class HandlerContracts
         typeof(IZLinkRequestHandler<,>),
         typeof(IZLinkSendHandler<>),
         typeof(IZLinkFanoutHandler<>),
-        typeof(IZLinkHandlerFilter))]
+        typeof(IZLinkHandlerFilter)
+    )]
     public async Task Channel_handlers_and_filters_keep_user_code_behind_typed_contracts()
     {
         var sendHandler = new PlayerJoinedSendHandler();
@@ -20,16 +21,14 @@ public sealed class HandlerContracts
         var filter = new AuditingFilter();
 
         await sendHandler.HandleAsync(new PlayerJoined("alice"), null!, CancellationToken.None);
-        var reply = await requestHandler.HandleAsync(new Authenticate("alice"), null!, CancellationToken.None);
-        await publishHandler.HandleAsync(
-            new RoomEvent("started"),
+        var reply = await requestHandler.HandleAsync(
+            new Authenticate("alice"),
             null!,
-            CancellationToken.None);
+            CancellationToken.None
+        );
+        await publishHandler.HandleAsync(new RoomEvent("started"), null!, CancellationToken.None);
 
-        await filter.InvokeAsync(
-            null!,
-            () => ValueTask.CompletedTask,
-            CancellationToken.None);
+        await filter.InvokeAsync(null!, () => ValueTask.CompletedTask, CancellationToken.None);
 
         Assert.True(sendHandler.WasCalled);
         Assert.Equal("alice", reply.PlayerId);
@@ -54,13 +53,15 @@ public sealed class HandlerContracts
                 nameof(IZLinkMessageContext.CorrelationId),
                 nameof(IZLinkMessageContext.MeshName),
                 nameof(IZLinkMessageContext.Metadata),
-                nameof(IZLinkMessageContext.PacketName)
+                nameof(IZLinkMessageContext.PacketName),
             },
-            publicProperties);
+            publicProperties
+        );
 
         Assert.DoesNotContain(
             typeof(IZLinkHandlerFilter).Assembly.GetTypes(),
-            static type => type.Name == "ZLinkHandlerInvocation");
+            static type => type.Name == "ZLinkHandlerInvocation"
+        );
 
         Assert.Equal(
             new[]
@@ -69,15 +70,17 @@ public sealed class HandlerContracts
                 ZLinkHandlerDispatchKind.NodeDirectRequest,
                 ZLinkHandlerDispatchKind.ChannelSend,
                 ZLinkHandlerDispatchKind.ChannelRequest,
-                ZLinkHandlerDispatchKind.ClassicFanout
+                ZLinkHandlerDispatchKind.ClassicFanout,
             },
-            Enum.GetValues<ZLinkHandlerDispatchKind>());
+            Enum.GetValues<ZLinkHandlerDispatchKind>()
+        );
         Assert.Equal(
             typeof(IZLinkHandlerFilterContext),
             typeof(IZLinkHandlerFilter)
                 .GetMethod(nameof(IZLinkHandlerFilter.InvokeAsync))!
                 .GetParameters()[0]
-                .ParameterType);
+                .ParameterType
+        );
     }
 
     private sealed record Authenticate(string PlayerId);
@@ -88,12 +91,14 @@ public sealed class HandlerContracts
 
     private sealed record RoomEvent(string State);
 
-    private sealed class AuthenticateRequestHandler : IZLinkRequestHandler<Authenticate, Authenticated>
+    private sealed class AuthenticateRequestHandler
+        : IZLinkRequestHandler<Authenticate, Authenticated>
     {
         public ValueTask<Authenticated> HandleAsync(
             Authenticate request,
             IZLinkMessageContext context,
-            CancellationToken cancellationToken)
+            CancellationToken cancellationToken
+        )
         {
             return ValueTask.FromResult(new Authenticated(request.PlayerId));
         }
@@ -106,7 +111,8 @@ public sealed class HandlerContracts
         public ValueTask HandleAsync(
             PlayerJoined message,
             IZLinkMessageContext context,
-            CancellationToken cancellationToken)
+            CancellationToken cancellationToken
+        )
         {
             WasCalled = true;
             return ValueTask.CompletedTask;
@@ -120,7 +126,8 @@ public sealed class HandlerContracts
         public ValueTask HandleAsync(
             RoomEvent message,
             ZLinkPublishMessageContext context,
-            CancellationToken cancellationToken)
+            CancellationToken cancellationToken
+        )
         {
             WasCalled = true;
             return ValueTask.CompletedTask;
@@ -132,7 +139,8 @@ public sealed class HandlerContracts
         public ValueTask InvokeAsync(
             IZLinkHandlerFilterContext context,
             ZLinkHandlerFilterNext next,
-            CancellationToken cancellationToken)
+            CancellationToken cancellationToken
+        )
         {
             return next();
         }

@@ -7,7 +7,8 @@ internal sealed class ZlinkStreamTypedHandlerRegistry
 
     public IDisposable Add(
         string name,
-        Func<ZlinkStreamMessage<ZlinkStreamEncodedPayload>, CancellationToken, ValueTask> handler)
+        Func<ZlinkStreamMessage<ZlinkStreamEncodedPayload>, CancellationToken, ValueTask> handler
+    )
     {
         var typed = new TypedHandler(handler);
 
@@ -42,10 +43,12 @@ internal sealed class ZlinkStreamTypedHandlerRegistry
     {
         lock (_gate)
         {
-            if (!_handlers.TryGetValue(name, out var handlers)) return;
+            if (!_handlers.TryGetValue(name, out var handlers))
+                return;
 
             var index = Array.IndexOf(handlers, typed);
-            if (index < 0) return;
+            if (index < 0)
+                return;
 
             if (handlers.Length == 1)
             {
@@ -54,22 +57,19 @@ internal sealed class ZlinkStreamTypedHandlerRegistry
             }
 
             var next = new TypedHandler[handlers.Length - 1];
-            if (index > 0) Array.Copy(handlers, 0, next, 0, index);
+            if (index > 0)
+                Array.Copy(handlers, 0, next, 0, index);
 
             if (index < handlers.Length - 1)
-                Array.Copy(
-                    handlers,
-                    index + 1,
-                    next,
-                    index,
-                    handlers.Length - index - 1);
+                Array.Copy(handlers, index + 1, next, index, handlers.Length - index - 1);
 
             _handlers[name] = next;
         }
     }
 
     internal sealed record TypedHandler(
-        Func<ZlinkStreamMessage<ZlinkStreamEncodedPayload>, CancellationToken, ValueTask> Invoke);
+        Func<ZlinkStreamMessage<ZlinkStreamEncodedPayload>, CancellationToken, ValueTask> Invoke
+    );
 
     private sealed class Subscription(Action dispose) : IDisposable
     {
@@ -77,7 +77,8 @@ internal sealed class ZlinkStreamTypedHandlerRegistry
 
         public void Dispose()
         {
-            if (Interlocked.Exchange(ref _disposed, 1) == 0) dispose();
+            if (Interlocked.Exchange(ref _disposed, 1) == 0)
+                dispose();
         }
     }
 }

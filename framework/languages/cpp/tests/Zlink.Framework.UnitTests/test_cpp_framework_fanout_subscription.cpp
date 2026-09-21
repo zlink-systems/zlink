@@ -31,15 +31,12 @@ std::vector<std::uint8_t> bytes (std::string value)
     return {value.begin (), value.end ()};
 }
 
-std::vector<std::string>
-configured_subscription_topics (std::vector<std::string> topics)
+std::vector<std::string> configured_subscription_topics (std::vector<std::string> topics)
 {
-    auto options =
-      std::make_shared<zlink::framework::detail::framework_options_state_t> ();
+    auto options = std::make_shared<zlink::framework::detail::framework_options_state_t> ();
     auto handler_groups =
       std::make_shared<zlink::framework::detail::handler_group_options_state_t> ();
-    zlink::framework::fanout_channel_builder_t channel (
-      "events", options, handler_groups);
+    zlink::framework::fanout_channel_builder_t channel ("events", options, handler_groups);
     channel.enable_subscriber ();
     for (auto &topic : topics) {
         channel.subscribe (std::move (topic));
@@ -48,8 +45,7 @@ configured_subscription_topics (std::vector<std::string> topics)
     zlink::framework::zlink_builder_t zlink;
     options->keyed_zlink_actions.at ("fanout_channel:events") (zlink);
     const auto channels =
-      zlink::framework::detail::channel_runtime_t::from (zlink.message_bus ())
-        .channel_snapshots ();
+      zlink::framework::detail::channel_runtime_t::from (zlink.message_bus ()).channel_snapshots ();
     EXPECT_EQ (channels.size (), 1u);
     if (channels.size () != 1) {
         return {};
@@ -63,8 +59,7 @@ bool rejects_as_call_argument (const std::function<void ()> &call)
         call ();
     }
     catch (const zlink::framework::framework_exception_t &error) {
-        return error.kind ()
-               == zlink::framework::framework_error_kind_t::protocol_error;
+        return error.kind () == zlink::framework::framework_error_kind_t::protocol_error;
     }
     return false;
 }
@@ -76,12 +71,9 @@ void wait_for_beacon (fanout::raw_fanout_publisher_t &publisher,
 {
     const auto deadline = std::chrono::steady_clock::now () + 2s;
     std::size_t beacon_tick = 1;
-    while (!subscriber.ready (publisher_id)
-           && std::chrono::steady_clock::now () < deadline) {
-        (void) publisher.tick (
-          receive_now
-          + fanout::fanout_beacon_interval
-              * static_cast<int> (beacon_tick++));
+    while (!subscriber.ready (publisher_id) && std::chrono::steady_clock::now () < deadline) {
+        (void) publisher.tick (receive_now
+                               + fanout::fanout_beacon_interval * static_cast<int> (beacon_tick++));
         (void) subscriber.try_receive (receive_now);
         if (!subscriber.ready (publisher_id)) {
             std::this_thread::sleep_for (2ms);
@@ -90,33 +82,27 @@ void wait_for_beacon (fanout::raw_fanout_publisher_t &publisher,
     ASSERT_TRUE (subscriber.ready (publisher_id));
 }
 
-void publish (fanout::raw_fanout_publisher_t &publisher,
-              const std::string &topic)
+void publish (fanout::raw_fanout_publisher_t &publisher, const std::string &topic)
 {
-    publisher
-      .publish ("events", topic,
-                {"FanoutEvent", "application/json", bytes (topic)})
+    publisher.publish ("events", topic, {"FanoutEvent", "application/json", bytes (topic)})
       .result ()
       .value ();
 }
 
 } // namespace
 
-TEST (CppFrameworkFanoutSubscription,
-      NoApplicationSubscriptionReceivesDifferentTopics)
+TEST (CppFrameworkFanoutSubscription, NoApplicationSubscriptionReceivesDifferentTopics)
 {
     fanout::raw_fanout_publisher_t publisher ("tcp://127.0.0.1:0");
     publisher.start ();
     const auto publisher_id = bytes ("publisher-default");
-    fanout::raw_fanout_subscriber_t subscriber (
-      nullptr, configured_subscription_topics ({}));
+    fanout::raw_fanout_subscriber_t subscriber (nullptr, configured_subscription_topics ({}));
     ASSERT_TRUE (subscriber.connect_manual (publisher_id, publisher.endpoint ()));
     const auto receive_now = std::chrono::steady_clock::now ();
     wait_for_beacon (publisher, subscriber, publisher_id, receive_now);
 
     std::set<std::string> received_topics;
-    for (std::size_t attempt = 0;
-         attempt < 100 && received_topics.size () != 2; ++attempt) {
+    for (std::size_t attempt = 0; attempt < 100 && received_topics.size () != 2; ++attempt) {
         publish (publisher, "order.created");
         publish (publisher, "payment");
         for (std::size_t receive = 0; receive < 2; ++receive) {
@@ -131,18 +117,16 @@ TEST (CppFrameworkFanoutSubscription,
         }
     }
 
-    EXPECT_EQ (received_topics,
-               (std::set<std::string>{"order.created", "payment"}));
+    EXPECT_EQ (received_topics, (std::set<std::string>{"order.created", "payment"}));
 }
 
-TEST (CppFrameworkFanoutSubscription,
-      PrefixSubscriptionReceivesMatchingTopicAndRejectsOtherTopic)
+TEST (CppFrameworkFanoutSubscription, PrefixSubscriptionReceivesMatchingTopicAndRejectsOtherTopic)
 {
     fanout::raw_fanout_publisher_t publisher ("tcp://127.0.0.1:0");
     publisher.start ();
     const auto publisher_id = bytes ("publisher-prefix");
-    fanout::raw_fanout_subscriber_t subscriber (
-      nullptr, configured_subscription_topics ({"order"}));
+    fanout::raw_fanout_subscriber_t subscriber (nullptr,
+                                                configured_subscription_topics ({"order"}));
     ASSERT_TRUE (subscriber.connect_manual (publisher_id, publisher.endpoint ()));
     const auto receive_now = std::chrono::steady_clock::now ();
     wait_for_beacon (publisher, subscriber, publisher_id, receive_now);
@@ -164,30 +148,23 @@ TEST (CppFrameworkFanoutSubscription,
     EXPECT_EQ (*received_topic, "order.created");
 }
 
-TEST (CppFrameworkFanoutSubscription,
-      RestrictedAutomaticSubscriberStaysReadyFromBeacon)
+TEST (CppFrameworkFanoutSubscription, RestrictedAutomaticSubscriberStaysReadyFromBeacon)
 {
     fanout::raw_fanout_publisher_t publisher ("tcp://127.0.0.1:0");
     publisher.start ();
     const auto publisher_id = bytes ("publisher-liveness");
-    fanout::raw_fanout_subscriber_t subscriber (
-      nullptr, configured_subscription_topics ({"order"}));
+    fanout::raw_fanout_subscriber_t subscriber (nullptr,
+                                                configured_subscription_topics ({"order"}));
     subscriber.reconcile_automatic ({fanout::fanout_publisher_intent_t{
-      publisher_id,
-      1,
-      publisher.endpoint (),
-      mesh::service_node_state_t::serving}});
+      publisher_id, 1, publisher.endpoint (), mesh::service_node_state_t::serving}});
     const auto receive_now = std::chrono::steady_clock::now ();
 
     wait_for_beacon (publisher, subscriber, publisher_id, receive_now);
-    EXPECT_TRUE (subscriber.tick (
-                  receive_now + fanout::fanout_receive_deadline - 1ms)
-                   .empty ());
+    EXPECT_TRUE (subscriber.tick (receive_now + fanout::fanout_receive_deadline - 1ms).empty ());
     EXPECT_TRUE (subscriber.ready (publisher_id));
 }
 
-TEST (CppFrameworkFanoutSubscription,
-      ReservedPrefixIsRejectedByPublishAndSubscribe)
+TEST (CppFrameworkFanoutSubscription, ReservedPrefixIsRejectedByPublishAndSubscribe)
 {
     const auto reserved = fanout::raw_fanout_publisher_t::reserved_topic ();
     const auto extended = reserved + std::string (1, '\0');
@@ -195,20 +172,14 @@ TEST (CppFrameworkFanoutSubscription,
     auto different = reserved;
     different.back () = static_cast<char> (0x32);
 
-    auto options =
-      std::make_shared<zlink::framework::detail::framework_options_state_t> ();
+    auto options = std::make_shared<zlink::framework::detail::framework_options_state_t> ();
     auto handler_groups =
       std::make_shared<zlink::framework::detail::handler_group_options_state_t> ();
-    zlink::framework::fanout_channel_builder_t channel (
-      "events", options, handler_groups);
-    EXPECT_TRUE (rejects_as_call_argument (
-      [&] { channel.subscribe (reserved); }));
-    EXPECT_TRUE (rejects_as_call_argument (
-      [&] { channel.subscribe (extended); }));
-    EXPECT_FALSE (rejects_as_call_argument (
-      [&] { channel.subscribe (shorter); }));
-    EXPECT_FALSE (rejects_as_call_argument (
-      [&] { channel.subscribe (different); }));
+    zlink::framework::fanout_channel_builder_t channel ("events", options, handler_groups);
+    EXPECT_TRUE (rejects_as_call_argument ([&] { channel.subscribe (reserved); }));
+    EXPECT_TRUE (rejects_as_call_argument ([&] { channel.subscribe (extended); }));
+    EXPECT_FALSE (rejects_as_call_argument ([&] { channel.subscribe (shorter); }));
+    EXPECT_FALSE (rejects_as_call_argument ([&] { channel.subscribe (different); }));
     ASSERT_TRUE (options->fanout_subscription_topics.contains ("events"));
     EXPECT_EQ (options->fanout_subscription_topics.at ("events").size (), 2u);
 
@@ -224,8 +195,7 @@ TEST (CppFrameworkFanoutSubscription,
       [&] { (void) publisher.publish ("events", different, std::string ("value")); }));
 }
 
-TEST (CppFrameworkFanoutSubscription,
-      DuplicateSubscriptionHasSameEffectiveTransportSet)
+TEST (CppFrameworkFanoutSubscription, DuplicateSubscriptionHasSameEffectiveTransportSet)
 {
     const auto once = configured_subscription_topics ({"order"});
     const auto twice = configured_subscription_topics ({"order", "order"});

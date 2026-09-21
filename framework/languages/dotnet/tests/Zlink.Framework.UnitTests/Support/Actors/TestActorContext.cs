@@ -7,7 +7,8 @@ internal sealed class TestActorContext(
     string actorId,
     ulong objectGeneration = 1,
     string meshName = "test-mesh",
-    string? spotId = null) : IZLinkActorContext
+    string? spotId = null
+) : IZLinkActorContext
 {
     public string ActorId { get; } = actorId;
 

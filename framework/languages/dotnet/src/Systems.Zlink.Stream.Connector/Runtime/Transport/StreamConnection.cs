@@ -2,7 +2,8 @@ using System.Net.Sockets;
 
 namespace Systems.Zlink.Stream.Connector.Runtime.Transport;
 
-internal sealed class StreamConnection(TcpClient tcpClient, System.IO.Stream stream) : IZlinkStreamConnection
+internal sealed class StreamConnection(TcpClient tcpClient, System.IO.Stream stream)
+    : IZlinkStreamConnection
 {
     public bool CanWriteSegments => true;
 
@@ -11,7 +12,10 @@ internal sealed class StreamConnection(TcpClient tcpClient, System.IO.Stream str
         return await stream.ReadAsync(buffer, cancellationToken).ConfigureAwait(false);
     }
 
-    public async ValueTask WriteAsync(ReadOnlyMemory<byte> buffer, CancellationToken cancellationToken)
+    public async ValueTask WriteAsync(
+        ReadOnlyMemory<byte> buffer,
+        CancellationToken cancellationToken
+    )
     {
         await stream.WriteAsync(buffer, cancellationToken).ConfigureAwait(false);
     }

@@ -77,23 +77,21 @@ route_packet_dispatcher_t::dispatch (const route_received_packet_t &received) co
 {
     runtime::messaging::envelope_codec_t codec;
     auto header = codec.decode_header (
-      received.parts,
-      message_flow_tracer_t (_dispatch_options).capture_enabled ());
+      received.parts, message_flow_tracer_t (_dispatch_options).capture_enabled ());
     if (!header) {
-        return detail::propagate_failure<std::optional<route_dispatch_reply_t>> (header, "route envelope header decode failed");
+        return detail::propagate_failure<std::optional<route_dispatch_reply_t>> (
+          header, "route envelope header decode failed");
     }
 
     return dispatch (received, std::move (header.value ()));
 }
 
 result_t<std::optional<route_dispatch_reply_t>>
-route_packet_dispatcher_t::dispatch (
-  const route_received_packet_t &received,
-  runtime::messaging::envelope_header_t header) const
+route_packet_dispatcher_t::dispatch (const route_received_packet_t &received,
+                                     runtime::messaging::envelope_header_t header) const
 {
     auto flow_scope = runtime::flow_context_t::enter (
-      header.flow_id, header.flow_origin,
-      message_flow_tracer_t (_dispatch_options).mode (),
+      header.flow_id, header.flow_origin, message_flow_tracer_t (_dispatch_options).mode (),
       flow_origin_t::inbound);
     trace_flow (message_flow_outcome_t::received,
                 header.kind == runtime::messaging::message_kind_t::request
@@ -143,7 +141,8 @@ route_packet_dispatcher_t::dispatch_send (const route_received_packet_t &receive
     if (_internal_packets != nullptr && _internal_packets->can_handle_send (header.message_name)) {
         auto dispatched = _internal_packets->dispatch_send (received, header, *_services);
         if (!dispatched) {
-            return detail::propagate_failure<std::optional<route_dispatch_reply_t>> (dispatched, "route internal send failed");
+            return detail::propagate_failure<std::optional<route_dispatch_reply_t>> (
+              dispatched, "route internal send failed");
         }
         trace_flow (message_flow_outcome_t::dispatched, dispatch_message_kind_t::send, received,
                     header);
@@ -156,11 +155,19 @@ route_packet_dispatcher_t::dispatch_send (const route_received_packet_t &receive
                             header.message_name)
              == nullptr) {
         dispatch_error_reporter_t (_dispatch_options).report_lazy ([&] {
-            auto event = message_dispatch_error_event_t{
-              dispatch_error_surface_t::route_mesh_channel, dispatch_message_kind_t::send,
-              dispatch_error_reason_t::handler_missing, dispatch_error_action_t::drop,
-              header.message_name, _router_channel_id, header.topic, std::nullopt, std::nullopt,
-              received.source_node_rid.to_string (), header.correlation_id, std::exception_ptr{}};
+            auto event =
+              message_dispatch_error_event_t{dispatch_error_surface_t::route_mesh_channel,
+                                             dispatch_message_kind_t::send,
+                                             dispatch_error_reason_t::handler_missing,
+                                             dispatch_error_action_t::drop,
+                                             header.message_name,
+                                             _router_channel_id,
+                                             header.topic,
+                                             std::nullopt,
+                                             std::nullopt,
+                                             received.source_node_rid.to_string (),
+                                             header.correlation_id,
+                                             std::exception_ptr{}};
             event.mesh_name = _router_channel_id;
             event.channel_route_kind = "route_mesh";
             return event;
@@ -172,52 +179,65 @@ route_packet_dispatcher_t::dispatch_send (const route_received_packet_t &receive
     if (!body) {
         dispatch_error_reporter_t (_dispatch_options).report_lazy ([&] {
             auto event = message_dispatch_error_event_t{
-              dispatch_error_surface_t::route_mesh_channel, dispatch_message_kind_t::send,
-              dispatch_error_reason_t::payload_decode_failed, dispatch_error_action_t::drop,
-              header.message_name, _router_channel_id, header.topic, std::nullopt, std::nullopt,
-              received.source_node_rid.to_string (), header.correlation_id,
+              dispatch_error_surface_t::route_mesh_channel,
+              dispatch_message_kind_t::send,
+              dispatch_error_reason_t::payload_decode_failed,
+              dispatch_error_action_t::drop,
+              header.message_name,
+              _router_channel_id,
+              header.topic,
+              std::nullopt,
+              std::nullopt,
+              received.source_node_rid.to_string (),
+              header.correlation_id,
               body.error () ? std::make_exception_ptr (*body.error ()) : std::exception_ptr{}};
             event.mesh_name = _router_channel_id;
             event.channel_route_kind = "route_mesh";
             return event;
         });
-        return detail::propagate_failure<std::optional<route_dispatch_reply_t>> (body, "route command body missing");
+        return detail::propagate_failure<std::optional<route_dispatch_reply_t>> (
+          body, "route command body missing");
     }
-    auto context = make_route_message_context (_router_channel_id, received.source_node_rid, header);
-    const auto &filters =
-      _filters != nullptr ? *_filters : empty_handler_filters ();
-    auto dispatched =
-      _invoker
-        .invoke_send (*_handlers, filters, _send_dispatch_kind,
-                      _router_channel_id, header.message_name, *_services,
-                      *_serializers, body.value (), context,
-                      _before_application_handler)
-        .result ();
+    auto context =
+      make_route_message_context (_router_channel_id, received.source_node_rid, header);
+    const auto &filters = _filters != nullptr ? *_filters : empty_handler_filters ();
+    auto dispatched = _invoker
+                        .invoke_send (*_handlers, filters, _send_dispatch_kind, _router_channel_id,
+                                      header.message_name, *_services, *_serializers, body.value (),
+                                      context, _before_application_handler)
+                        .result ();
     if (!dispatched) {
         dispatch_error_reporter_t (_dispatch_options).report_lazy ([&] {
             auto event = message_dispatch_error_event_t{
-              dispatch_error_surface_t::route_mesh_channel, dispatch_message_kind_t::send,
-              dispatch_reason_from_error (dispatched.error_kind ()), dispatch_error_action_t::drop,
-              header.message_name, _router_channel_id, header.topic, std::nullopt, std::nullopt,
-              received.source_node_rid.to_string (), header.correlation_id,
+              dispatch_error_surface_t::route_mesh_channel,
+              dispatch_message_kind_t::send,
+              dispatch_reason_from_error (dispatched.error_kind ()),
+              dispatch_error_action_t::drop,
+              header.message_name,
+              _router_channel_id,
+              header.topic,
+              std::nullopt,
+              std::nullopt,
+              received.source_node_rid.to_string (),
+              header.correlation_id,
               dispatched.error () ? std::make_exception_ptr (*dispatched.error ())
                                   : std::exception_ptr{}};
             event.mesh_name = _router_channel_id;
             event.channel_route_kind = "route_mesh";
             return event;
         });
-        return detail::propagate_failure<std::optional<route_dispatch_reply_t>> (dispatched, "routed send handler failed");
+        return detail::propagate_failure<std::optional<route_dispatch_reply_t>> (
+          dispatched, "routed send handler failed");
     }
     trace_flow (message_flow_outcome_t::dispatched, dispatch_message_kind_t::send, received,
                 header);
-    trace_flow (message_flow_outcome_t::completed, dispatch_message_kind_t::send, received,
-                header);
+    trace_flow (message_flow_outcome_t::completed, dispatch_message_kind_t::send, received, header);
     return result_t<std::optional<route_dispatch_reply_t>>::success (std::nullopt);
 }
 
-result_t<std::optional<route_dispatch_reply_t>> route_packet_dispatcher_t::dispatch_request (
-  const route_received_packet_t &received,
-  runtime::messaging::envelope_header_t header) const
+result_t<std::optional<route_dispatch_reply_t>>
+route_packet_dispatcher_t::dispatch_request (const route_received_packet_t &received,
+                                             runtime::messaging::envelope_header_t header) const
 {
     if (_internal_packets != nullptr
         && _internal_packets->can_handle_request (header.message_name)) {
@@ -256,16 +276,14 @@ result_t<std::optional<route_dispatch_reply_t>> route_packet_dispatcher_t::dispa
                                                            : "route request body missing");
         return reply_error (received, header, error);
     }
-    auto context = make_route_message_context (_router_channel_id, received.source_node_rid, header);
-    const auto &filters =
-      _filters != nullptr ? *_filters : empty_handler_filters ();
-    auto reply =
-      _invoker
-        .invoke_request (*_handlers, filters, _request_dispatch_kind,
-                         _router_channel_id, header.message_name, *_services,
-                         *_serializers, body.value (), context,
-                         _before_application_handler)
-        .result ();
+    auto context =
+      make_route_message_context (_router_channel_id, received.source_node_rid, header);
+    const auto &filters = _filters != nullptr ? *_filters : empty_handler_filters ();
+    auto reply = _invoker
+                   .invoke_request (*_handlers, filters, _request_dispatch_kind, _router_channel_id,
+                                    header.message_name, *_services, *_serializers, body.value (),
+                                    context, _before_application_handler)
+                   .result ();
     if (!reply) {
         framework_exception_t error (reply.error_kind (), reply.error ()
                                                             ? reply.error ()->what ()
@@ -289,12 +307,18 @@ route_packet_dispatcher_t::reply_error (const route_received_packet_t &received,
                                         const framework_exception_t &error) const
 {
     dispatch_error_reporter_t (_dispatch_options).report_lazy ([&] {
-        auto event = message_dispatch_error_event_t{
-          dispatch_error_surface_t::route_mesh_channel, dispatch_message_kind_t::request,
-          dispatch_reason_from_error (error.kind ()), dispatch_error_action_t::reply_error,
-          header.message_name, _router_channel_id, header.topic, std::nullopt, std::nullopt,
-          received.source_node_rid.to_string (), header.correlation_id,
-          std::make_exception_ptr (error)};
+        auto event = message_dispatch_error_event_t{dispatch_error_surface_t::route_mesh_channel,
+                                                    dispatch_message_kind_t::request,
+                                                    dispatch_reason_from_error (error.kind ()),
+                                                    dispatch_error_action_t::reply_error,
+                                                    header.message_name,
+                                                    _router_channel_id,
+                                                    header.topic,
+                                                    std::nullopt,
+                                                    std::nullopt,
+                                                    received.source_node_rid.to_string (),
+                                                    header.correlation_id,
+                                                    std::make_exception_ptr (error)};
         event.mesh_name = _router_channel_id;
         event.channel_route_kind = "route_mesh";
         return event;

@@ -1,37 +1,38 @@
 package systems.zlink.framework.runtime.locations;
+
+import systems.zlink.contracts.core.RoutingId;
+import systems.zlink.framework.errors.ZLinkConfigurationException;
+import systems.zlink.framework.locations.ZLinkLocationOptions;
+import systems.zlink.framework.locations.ZLinkLocationRole;
+import systems.zlink.framework.locations.ZLinkMeshNodeObjectRole;
+import systems.zlink.framework.runtime.channels.ZLinkChannelRuntime;
+import systems.zlink.framework.runtime.configuration.ZLinkFrameworkRegistration;
+import systems.zlink.framework.runtime.internal.backend.ZLinkBackendConnectableSocket;
+import systems.zlink.framework.runtime.internal.backend.ZLinkBackendRouterSocket;
+import systems.zlink.framework.runtime.internal.backend.ZLinkInternalMeshNode;
+import systems.zlink.framework.runtime.internal.backend.ZLinkInternalSpotNode;
+import systems.zlink.framework.runtime.internal.channels.ZLinkClientServerRuntimeConfiguration;
+import systems.zlink.framework.runtime.internal.channels.ZLinkFanoutRuntimeConfiguration;
+import systems.zlink.framework.runtime.internal.locations.ZLinkAutoConnectPeerResolver;
+import systems.zlink.framework.runtime.internal.locations.ZLinkAutoConnectType;
+import systems.zlink.framework.runtime.internal.service.ZLinkServiceNodeDescriptor;
+import systems.zlink.framework.runtime.mesh.MeshNodeRegistration;
+import systems.zlink.framework.runtime.spots.SpotNodeRegistration;
+import systems.zlink.framework.runtime.spots.ZLinkSpotRuntime;
+
 import java.time.Duration;
+import java.util.ArrayList;
 import java.util.Collection;
 import java.util.HashMap;
 import java.util.LinkedHashMap;
-import java.util.concurrent.ConcurrentHashMap;
-import java.util.stream.Collectors;
-import systems.zlink.framework.errors.ZLinkConfigurationException;
-import systems.zlink.framework.locations.ZLinkMeshNodeObjectRole;
-
-import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Set;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionStage;
-import systems.zlink.contracts.core.RoutingId;
-import systems.zlink.framework.runtime.internal.locations.ZLinkAutoConnectType;
-import systems.zlink.framework.locations.ZLinkLocationOptions;
-import systems.zlink.framework.locations.ZLinkLocationRole;
-import systems.zlink.framework.runtime.internal.locations.ZLinkAutoConnectPeerResolver;
-import systems.zlink.framework.runtime.internal.backend.ZLinkBackendConnectableSocket;
-import systems.zlink.framework.runtime.internal.backend.ZLinkBackendRouterSocket;
-import systems.zlink.framework.runtime.internal.backend.ZLinkInternalSpotNode;
-import systems.zlink.framework.runtime.channels.ZLinkChannelRuntime;
-import systems.zlink.framework.runtime.internal.channels.ZLinkClientServerRuntimeConfiguration;
-import systems.zlink.framework.runtime.internal.channels.ZLinkFanoutRuntimeConfiguration;
-import systems.zlink.framework.runtime.configuration.ZLinkFrameworkRegistration;
-import systems.zlink.framework.runtime.spots.ZLinkSpotRuntime;
-import systems.zlink.framework.runtime.spots.SpotNodeRegistration;
-import systems.zlink.framework.runtime.internal.backend.ZLinkInternalMeshNode;
-import systems.zlink.framework.runtime.internal.service.ZLinkServiceNodeDescriptor;
-import systems.zlink.framework.runtime.mesh.MeshNodeRegistration;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.stream.Collectors;
 
 public final class ZLinkLocationAutoConnectHost implements AutoCloseable {
     public static final String SPOT_PUB_ENDPOINT_METADATA_KEY = "pub-endpoint";
@@ -46,26 +47,26 @@ public final class ZLinkLocationAutoConnectHost implements AutoCloseable {
     private volatile boolean fanoutStarted;
 
     public ZLinkLocationAutoConnectHost(
-        ZLinkLocationRuntime runtime,
-        ZLinkAutoConnectPeerResolver peers,
-        ZLinkLocationOptions options) {
+            ZLinkLocationRuntime runtime,
+            ZLinkAutoConnectPeerResolver peers,
+            ZLinkLocationOptions options) {
         this(runtime, peers, options, null, null);
     }
 
     public ZLinkLocationAutoConnectHost(
-        ZLinkLocationRuntime runtime,
-        ZLinkAutoConnectPeerResolver peers,
-        ZLinkLocationOptions options,
-        ZLinkClientServerRuntimeConfiguration clientServers) {
+            ZLinkLocationRuntime runtime,
+            ZLinkAutoConnectPeerResolver peers,
+            ZLinkLocationOptions options,
+            ZLinkClientServerRuntimeConfiguration clientServers) {
         this(runtime, peers, options, clientServers, null);
     }
 
     public ZLinkLocationAutoConnectHost(
-        ZLinkLocationRuntime runtime,
-        ZLinkAutoConnectPeerResolver peers,
-        ZLinkLocationOptions options,
-        ZLinkClientServerRuntimeConfiguration clientServers,
-        ZLinkFanoutRuntimeConfiguration fanout) {
+            ZLinkLocationRuntime runtime,
+            ZLinkAutoConnectPeerResolver peers,
+            ZLinkLocationOptions options,
+            ZLinkClientServerRuntimeConfiguration clientServers,
+            ZLinkFanoutRuntimeConfiguration fanout) {
         this.runtime = Objects.requireNonNull(runtime, "runtime");
         this.peers = Objects.requireNonNull(peers, "peers");
         this.options = Objects.requireNonNull(options, "options");
@@ -74,46 +75,50 @@ public final class ZLinkLocationAutoConnectHost implements AutoCloseable {
     }
 
     public CompletionStage<Void> start(
-        ZLinkFrameworkRegistration registration,
-        ZLinkChannelRuntime channels,
-        Map<String, ZLinkInternalMeshNode> meshNodesByName,
-        Map<String, ZLinkInternalSpotNode> spotNodesByName,
-        ZLinkSpotRuntime spots) {
+            ZLinkFrameworkRegistration registration,
+            ZLinkChannelRuntime channels,
+            Map<String, ZLinkInternalMeshNode> meshNodesByName,
+            Map<String, ZLinkInternalSpotNode> spotNodesByName,
+            ZLinkSpotRuntime spots) {
         Objects.requireNonNull(registration, "registration");
         Objects.requireNonNull(channels, "channels");
         Objects.requireNonNull(meshNodesByName, "meshNodesByName");
         Objects.requireNonNull(spotNodesByName, "spotNodesByName");
 
         List<ZLinkChannelRuntime.AutoConnectSurface> surfaces = channels.autoConnectSurfaces();
-        boolean hasAutomaticClientServer = surfaces.stream().anyMatch(
-            surface -> surface.type() == ZLinkAutoConnectType.CLIENT_SERVER);
-        if (hasAutomaticClientServer
-            && (clientServers == null || clientServers.store() == null)) {
+        boolean hasAutomaticClientServer =
+                surfaces.stream()
+                        .anyMatch(surface -> surface.type() == ZLinkAutoConnectType.CLIENT_SERVER);
+        if (hasAutomaticClientServer && (clientServers == null || clientServers.store() == null)) {
             return CompletableFuture.failedFuture(
-                new ZLinkConfigurationException(
-                    "automatic ClientServer channels require "
-                        + "ZLinkLocationRepository with ClientServer descriptors"));
+                    new ZLinkConfigurationException(
+                            "automatic ClientServer channels require "
+                                    + "ZLinkLocationRepository with ClientServer descriptors"));
         }
-        boolean hasAutomaticFanoutSubscriber = surfaces.stream().anyMatch(
-            surface -> surface.type() == ZLinkAutoConnectType.FANOUT
-                && surface.role() == ZLinkLocationRole.SUB);
-        boolean hasFanoutPublisher = surfaces.stream().anyMatch(
-            surface -> surface.type() == ZLinkAutoConnectType.FANOUT
-                && surface.role() == ZLinkLocationRole.PUB);
-        boolean hasAutomaticFanout = hasAutomaticFanoutSubscriber
-            || (hasFanoutPublisher
-                && fanout != null
-                && fanout.store() != null);
-        if (hasAutomaticFanoutSubscriber
-            && (fanout == null || fanout.store() == null)) {
+        boolean hasAutomaticFanoutSubscriber =
+                surfaces.stream()
+                        .anyMatch(
+                                surface ->
+                                        surface.type() == ZLinkAutoConnectType.FANOUT
+                                                && surface.role() == ZLinkLocationRole.SUB);
+        boolean hasFanoutPublisher =
+                surfaces.stream()
+                        .anyMatch(
+                                surface ->
+                                        surface.type() == ZLinkAutoConnectType.FANOUT
+                                                && surface.role() == ZLinkLocationRole.PUB);
+        boolean hasAutomaticFanout =
+                hasAutomaticFanoutSubscriber
+                        || (hasFanoutPublisher && fanout != null && fanout.store() != null);
+        if (hasAutomaticFanoutSubscriber && (fanout == null || fanout.store() == null)) {
             return CompletableFuture.failedFuture(
-                new ZLinkConfigurationException(
-                    "automatic classic fanout requires "
-                        + "ZLinkLocationRepository with fanout descriptors"));
+                    new ZLinkConfigurationException(
+                            "automatic classic fanout requires "
+                                    + "ZLinkLocationRepository with fanout descriptors"));
         }
         for (ZLinkChannelRuntime.AutoConnectSurface surface : surfaces) {
             if (surface.type() == ZLinkAutoConnectType.CLIENT_SERVER
-                || surface.type() == ZLinkAutoConnectType.FANOUT) {
+                    || surface.type() == ZLinkAutoConnectType.FANOUT) {
                 continue;
             }
             addChannelLoop(surface);
@@ -128,29 +133,32 @@ public final class ZLinkLocationAutoConnectHost implements AutoCloseable {
                 endpoint = mesh.bindEndpoint();
             }
             endpoint = mesh.advertisedEndpoint(endpoint);
-            Set<String> manual = mesh.peers().stream()
-                .map(MeshNodeRegistration.Peer::endpoint)
-                .collect(Collectors.toUnmodifiableSet());
+            Set<String> manual =
+                    mesh.peers().stream()
+                            .map(MeshNodeRegistration.Peer::endpoint)
+                            .collect(Collectors.toUnmodifiableSet());
             Map<String, RoutingId> manualExpectedRids = new HashMap<>();
-            mesh.peers().forEach(peer -> manualExpectedRids.put(
-                peer.endpoint(),
-                peer.expectedRoutingId()));
+            mesh.peers()
+                    .forEach(
+                            peer ->
+                                    manualExpectedRids.put(
+                                            peer.endpoint(), peer.expectedRoutingId()));
             addLoop(
-                ZLinkAutoConnectType.ROUTE_MESH,
-                mesh.meshName(),
-                ZLinkLocationRole.ROUTER,
-                mesh.routingId(),
-                endpoint,
-                100,
-                new MeshNodeExecutor(node, manual, manualExpectedRids, spots),
-                null,
-                null,
-                mesh.objectServer()
-                    ? ZLinkMeshNodeObjectRole.SERVER
-                    : mesh.objectRoleEnabled()
-                        ? ZLinkMeshNodeObjectRole.CLIENT
-                        : ZLinkMeshNodeObjectRole.NONE,
-                !mesh.channelWeights().isEmpty());
+                    ZLinkAutoConnectType.ROUTE_MESH,
+                    mesh.meshName(),
+                    ZLinkLocationRole.ROUTER,
+                    mesh.routingId(),
+                    endpoint,
+                    100,
+                    new MeshNodeExecutor(node, manual, manualExpectedRids, spots),
+                    null,
+                    null,
+                    mesh.objectServer()
+                            ? ZLinkMeshNodeObjectRole.SERVER
+                            : mesh.objectRoleEnabled()
+                                    ? ZLinkMeshNodeObjectRole.CLIENT
+                                    : ZLinkMeshNodeObjectRole.NONE,
+                    !mesh.channelWeights().isEmpty());
         }
         for (SpotNodeRegistration spot : registration.spotNodes()) {
             ZLinkInternalSpotNode node = spotNodesByName.get(spot.nodeName());
@@ -162,29 +170,30 @@ public final class ZLinkLocationAutoConnectHost implements AutoCloseable {
                 metadata.put(SPOT_PUB_ENDPOINT_METADATA_KEY, spot.pubBind());
             }
             List<String> capabilities = actorCapabilities(spot.actorFactories().keySet());
-            Set<String> manual = spot.routerManualConnections().stream()
-                .map(SpotNodeRegistration.RouterManualConnection::endpoint)
-                .collect(Collectors.toUnmodifiableSet());
+            Set<String> manual =
+                    spot.routerManualConnections().stream()
+                            .map(SpotNodeRegistration.RouterManualConnection::endpoint)
+                            .collect(Collectors.toUnmodifiableSet());
             addLoop(
-                ZLinkAutoConnectType.SPOT_MESH,
-                spot.meshName(),
-                ZLinkLocationRole.SPOT,
-                node.routingId(),
-                spot.routerBind() == null ? "" : spot.routerBind(),
-                100,
-                new SpotNodeExecutor(node, manual, spots),
-                metadata.isEmpty() ? null : Map.copyOf(metadata),
-                capabilities.isEmpty() ? null : capabilities,
-                ZLinkMeshNodeObjectRole.NONE,
-                false);
+                    ZLinkAutoConnectType.SPOT_MESH,
+                    spot.meshName(),
+                    ZLinkLocationRole.SPOT,
+                    node.routingId(),
+                    spot.routerBind() == null ? "" : spot.routerBind(),
+                    100,
+                    new SpotNodeExecutor(node, manual, spots),
+                    metadata.isEmpty() ? null : Map.copyOf(metadata),
+                    capabilities.isEmpty() ? null : capabilities,
+                    ZLinkMeshNodeObjectRole.NONE,
+                    false);
         }
 
-        CompletionStage<Void> chain = hasAutomaticClientServer
-            ? startClientServers().thenRun(() -> clientServersStarted = true)
-            : CompletableFuture.completedFuture(null);
+        CompletionStage<Void> chain =
+                hasAutomaticClientServer
+                        ? startClientServers().thenRun(() -> clientServersStarted = true)
+                        : CompletableFuture.completedFuture(null);
         if (hasAutomaticFanout) {
-            chain = chain.thenCompose(ignored -> startFanout()
-                .thenRun(() -> fanoutStarted = true));
+            chain = chain.thenCompose(ignored -> startFanout().thenRun(() -> fanoutStarted = true));
         }
         for (ZLinkAutoConnectLoop loop : loops) {
             chain = chain.thenCompose(ignored -> loop.start());
@@ -193,26 +202,28 @@ public final class ZLinkLocationAutoConnectHost implements AutoCloseable {
     }
 
     public CompletionStage<Void> stop() {
-        CompletionStage<Void> chain = clientServers == null
-            ? CompletableFuture.completedFuture(null)
-            : clientServers.stop();
+        CompletionStage<Void> chain =
+                clientServers == null
+                        ? CompletableFuture.completedFuture(null)
+                        : clientServers.stop();
         if (fanout != null) {
             chain = chain.thenCompose(ignored -> fanout.stop());
         }
         for (ZLinkAutoConnectLoop loop : loops) {
             chain = chain.thenCompose(ignored -> loop.stop());
         }
-        return chain.whenComplete((ignored, failure) -> {
-            loops.clear();
-        });
+        return chain.whenComplete(
+                (ignored, failure) -> {
+                    loops.clear();
+                });
     }
 
     static List<String> actorCapabilities(Collection<String> actorTypes) {
         return actorTypes.stream()
-            .map(actorType -> "actor:" + actorType)
-            .distinct()
-            .sorted()
-            .toList();
+                .map(actorType -> "actor:" + actorType)
+                .distinct()
+                .sorted()
+                .toList();
     }
 
     private CompletionStage<Void> startClientServers() {
@@ -237,9 +248,10 @@ public final class ZLinkLocationAutoConnectHost implements AutoCloseable {
     }
 
     public CompletionStage<Void> markDraining() {
-        CompletionStage<Void> chain = !clientServersStarted
-            ? CompletableFuture.completedFuture(null)
-            : clientServers.markDraining();
+        CompletionStage<Void> chain =
+                !clientServersStarted
+                        ? CompletableFuture.completedFuture(null)
+                        : clientServers.markDraining();
         if (fanoutStarted) {
             chain = chain.thenCompose(ignored -> fanout.markDraining());
         }
@@ -250,67 +262,61 @@ public final class ZLinkLocationAutoConnectHost implements AutoCloseable {
     }
 
     private void addChannelLoop(ZLinkChannelRuntime.AutoConnectSurface surface) {
-        ZLinkAutoConnectExecutor executor = surface.socket() == null
-            ? ZLinkAutoConnectExecutor.NONE
-            : new ConnectableSocketExecutor(surface.socket(), Set.copyOf(surface.manualEndpoints()));
+        ZLinkAutoConnectExecutor executor =
+                surface.socket() == null
+                        ? ZLinkAutoConnectExecutor.NONE
+                        : new ConnectableSocketExecutor(
+                                surface.socket(), Set.copyOf(surface.manualEndpoints()));
         if (surface.socket() instanceof ZLinkBackendRouterSocket router
-            && surface.type() == ZLinkAutoConnectType.ROUTE_MESH) {
+                && surface.type() == ZLinkAutoConnectType.ROUTE_MESH) {
             executor = new RouteSocketExecutor(router, Set.copyOf(surface.manualEndpoints()));
         }
         addLoop(
-            surface.type(),
-            surface.meshName(),
-            surface.role(),
-            surface.nodeRid(),
-            surface.endpoint(),
-            surface.weight(),
-            executor,
-            null,
-            null,
-            ZLinkMeshNodeObjectRole.NONE,
-            false);
+                surface.type(),
+                surface.meshName(),
+                surface.role(),
+                surface.nodeRid(),
+                surface.endpoint(),
+                surface.weight(),
+                executor,
+                null,
+                null,
+                ZLinkMeshNodeObjectRole.NONE,
+                false);
     }
 
     private void addLoop(
-        ZLinkAutoConnectType type,
-        String meshName,
-        ZLinkLocationRole role,
-        RoutingId nodeRid,
-        String endpoint,
-        long weight,
-        ZLinkAutoConnectExecutor executor,
-        Map<String, String> metadata,
-        List<String> capabilities,
-        ZLinkMeshNodeObjectRole objectRole,
-        boolean hasRouteMeshServerChannel) {
+            ZLinkAutoConnectType type,
+            String meshName,
+            ZLinkLocationRole role,
+            RoutingId nodeRid,
+            String endpoint,
+            long weight,
+            ZLinkAutoConnectExecutor executor,
+            Map<String, String> metadata,
+            List<String> capabilities,
+            ZLinkMeshNodeObjectRole objectRole,
+            boolean hasRouteMeshServerChannel) {
         boolean advertisable = shouldAdvertise(type, role, nodeRid, endpoint);
         if (!advertisable && executor == ZLinkAutoConnectExecutor.NONE) {
             return;
         }
         ZLinkAutoConnectPlanner.Local local =
-            new ZLinkAutoConnectPlanner.Local(
-                type,
-                meshName,
-                role,
-                nodeRid,
-                endpoint,
-                objectRole,
-                hasRouteMeshServerChannel);
-        ZLinkAutoConnectReconciler reconciler = new ZLinkAutoConnectReconciler(
-            local,
-            null,
-            runtime,
-            peers,
-            executor,
-            options);
+                new ZLinkAutoConnectPlanner.Local(
+                        type,
+                        meshName,
+                        role,
+                        nodeRid,
+                        endpoint,
+                        objectRole,
+                        hasRouteMeshServerChannel);
+        ZLinkAutoConnectReconciler reconciler =
+                new ZLinkAutoConnectReconciler(local, null, runtime, peers, executor, options);
         loops.add(new ZLinkAutoConnectLoop(reconciler, options));
     }
 
     static boolean shouldAdvertise(
-        ZLinkAutoConnectType type,
-        ZLinkLocationRole role,
-        RoutingId nodeRid,
-        String endpoint) {
+            ZLinkAutoConnectType type, ZLinkLocationRole role, RoutingId nodeRid, String endpoint) {
         boolean hasEndpoint = endpoint != null && !endpoint.isBlank();
         return switch (type) {
             case CLIENT_SERVER -> role == ZLinkLocationRole.ROUTER && hasEndpoint;
@@ -329,8 +335,7 @@ public final class ZLinkLocationAutoConnectHost implements AutoCloseable {
         private final Set<String> manualEndpoints;
 
         ConnectableSocketExecutor(
-            ZLinkBackendConnectableSocket socket,
-            Set<String> manualEndpoints) {
+                ZLinkBackendConnectableSocket socket, Set<String> manualEndpoints) {
             this.socket = socket;
             this.manualEndpoints = manualEndpoints;
         }
@@ -358,7 +363,6 @@ public final class ZLinkLocationAutoConnectHost implements AutoCloseable {
             }
             return true;
         }
-
     }
 
     private static final class RouteSocketExecutor implements ZLinkAutoConnectExecutor {
@@ -366,9 +370,7 @@ public final class ZLinkLocationAutoConnectHost implements AutoCloseable {
         private final Set<String> manualEndpoints;
         private final Object connectGate = new Object();
 
-        RouteSocketExecutor(
-            ZLinkBackendRouterSocket socket,
-            Set<String> manualEndpoints) {
+        RouteSocketExecutor(ZLinkBackendRouterSocket socket, Set<String> manualEndpoints) {
             this.socket = socket;
             this.manualEndpoints = manualEndpoints;
         }
@@ -413,8 +415,8 @@ public final class ZLinkLocationAutoConnectHost implements AutoCloseable {
 
         @Override
         public boolean replace(
-            ZLinkAutoConnectPlanner.Target current,
-            ZLinkAutoConnectPlanner.Target replacement) {
+                ZLinkAutoConnectPlanner.Target current,
+                ZLinkAutoConnectPlanner.Target replacement) {
             try {
                 socket.disconnect(current.endpoint());
                 connectReplacement(replacement);
@@ -435,20 +437,20 @@ public final class ZLinkLocationAutoConnectHost implements AutoCloseable {
             }
             socket.connect(target.endpoint());
         }
-
     }
 
-    private static String admissionSecurityIdentity(
-        ZLinkAutoConnectPlanner.Target target) {
-        String identity = target.metadata().getOrDefault(
-            ZLinkAutoConnectPlanner.SECURITY_IDENTITY_METADATA_KEY,
-            ZLinkServiceNodeDescriptor.PLAINTEXT_SECURITY_IDENTITY);
+    private static String admissionSecurityIdentity(ZLinkAutoConnectPlanner.Target target) {
+        String identity =
+                target.metadata()
+                        .getOrDefault(
+                                ZLinkAutoConnectPlanner.SECURITY_IDENTITY_METADATA_KEY,
+                                ZLinkServiceNodeDescriptor.PLAINTEXT_SECURITY_IDENTITY);
         // Older store rows say "plaintext", but current RouteMesh
         // descriptors encode the canonical wire placeholder "default".
         // This is a transport-mode label, not an authenticated identity.
         return "plaintext".equals(identity)
-            ? ZLinkServiceNodeDescriptor.PLAINTEXT_SECURITY_IDENTITY
-            : identity;
+                ? ZLinkServiceNodeDescriptor.PLAINTEXT_SECURITY_IDENTITY
+                : identity;
     }
 
     private static final class MeshNodeExecutor implements ZLinkAutoConnectExecutor {
@@ -456,18 +458,15 @@ public final class ZLinkLocationAutoConnectHost implements AutoCloseable {
         private final Set<String> manualEndpoints;
         private final Map<String, RoutingId> manualExpectedRids;
         private final ZLinkSpotRuntime spots;
-        private final Map<String, ConnectionIntent> connectionIntents =
-            new ConcurrentHashMap<>();
-        private final Map<String, Long> connectionAttemptNanos =
-            new ConcurrentHashMap<>();
-        private static final long ADMISSION_RETRY_NANOS =
-            Duration.ofSeconds(1).toNanos();
+        private final Map<String, ConnectionIntent> connectionIntents = new ConcurrentHashMap<>();
+        private final Map<String, Long> connectionAttemptNanos = new ConcurrentHashMap<>();
+        private static final long ADMISSION_RETRY_NANOS = Duration.ofSeconds(1).toNanos();
 
         MeshNodeExecutor(
-            ZLinkInternalMeshNode node,
-            Set<String> manualEndpoints,
-            Map<String, RoutingId> manualExpectedRids,
-            ZLinkSpotRuntime spots) {
+                ZLinkInternalMeshNode node,
+                Set<String> manualEndpoints,
+                Map<String, RoutingId> manualExpectedRids,
+                ZLinkSpotRuntime spots) {
             this.node = node;
             this.manualEndpoints = manualEndpoints;
             this.manualExpectedRids = manualExpectedRids;
@@ -480,18 +479,16 @@ public final class ZLinkLocationAutoConnectHost implements AutoCloseable {
         }
 
         @Override
-        public void observeAdmissionExpectation(
-            ZLinkAutoConnectPlanner.Target target) {
+        public void observeAdmissionExpectation(ZLinkAutoConnectPlanner.Target target) {
             node.observePeerAdmissionExpectation(
-                target.nodeRid(),
-                target.endpoint(),
-                target.lifecycleGeneration(),
-                admissionSecurityIdentity(target));
+                    target.nodeRid(),
+                    target.endpoint(),
+                    target.lifecycleGeneration(),
+                    admissionSecurityIdentity(target));
         }
 
         @Override
-        public void forgetAdmissionExpectation(
-            ZLinkAutoConnectPlanner.Target target) {
+        public void forgetAdmissionExpectation(ZLinkAutoConnectPlanner.Target target) {
             node.forgetPeerAdmissionExpectation(target.nodeRid());
         }
 
@@ -502,22 +499,18 @@ public final class ZLinkLocationAutoConnectHost implements AutoCloseable {
                 if (manual && !ZLinkAutoConnectPlanner.hasRid(target.nodeRid())) {
                     return true;
                 }
-                long intent = ZLinkAutoConnectPlanner.hasRid(target.nodeRid())
-                    ? node.replacePeerConnection(
-                        target.endpoint(),
-                        target.nodeRid(),
-                        target.lifecycleGeneration(),
-                        admissionSecurityIdentity(target))
-                    : node.connectPeer(target.endpoint());
+                long intent =
+                        ZLinkAutoConnectPlanner.hasRid(target.nodeRid())
+                                ? node.replacePeerConnection(
+                                        target.endpoint(),
+                                        target.nodeRid(),
+                                        target.lifecycleGeneration(),
+                                        admissionSecurityIdentity(target))
+                                : node.connectPeer(target.endpoint());
                 connectionIntents.put(
-                    target.endpoint(),
-                    new ConnectionIntent(target.key(), intent));
-                connectionAttemptNanos.put(
-                    target.endpoint(),
-                    System.nanoTime());
-                if (!manual
-                    && spots != null
-                    && ZLinkAutoConnectPlanner.hasRid(target.nodeRid())) {
+                        target.endpoint(), new ConnectionIntent(target.key(), intent));
+                connectionAttemptNanos.put(target.endpoint(), System.nanoTime());
+                if (!manual && spots != null && ZLinkAutoConnectPlanner.hasRid(target.nodeRid())) {
                     spots.markAutoConnectedRouterPeer(target.nodeRid());
                 }
                 return true;
@@ -528,23 +521,25 @@ public final class ZLinkLocationAutoConnectHost implements AutoCloseable {
 
         @Override
         public void ensureConnected(ZLinkAutoConnectPlanner.Target target) {
-            boolean admitted = node.peers().stream().anyMatch(peer ->
-                peer.routingId().equals(target.nodeRid())
-                    && peer.lifecycleGeneration()
-                        == target.lifecycleGeneration()
-                    && peer.state()
-                        == systems.zlink.framework.runtime.internal.binding
-                            .spot.MeshPeerState.ADMITTED);
+            boolean admitted =
+                    node.peers().stream()
+                            .anyMatch(
+                                    peer ->
+                                            peer.routingId().equals(target.nodeRid())
+                                                    && peer.lifecycleGeneration()
+                                                            == target.lifecycleGeneration()
+                                                    && peer.state()
+                                                            == systems.zlink.framework.runtime
+                                                                    .internal.binding.spot
+                                                                    .MeshPeerState.ADMITTED);
             if (admitted) {
                 return;
             }
             if (manualEndpoints.contains(target.endpoint())
-                && !ZLinkAutoConnectPlanner.hasRid(target.nodeRid())) {
+                    && !ZLinkAutoConnectPlanner.hasRid(target.nodeRid())) {
                 return;
             }
-            long attemptedAt = connectionAttemptNanos.getOrDefault(
-                target.endpoint(),
-                0L);
+            long attemptedAt = connectionAttemptNanos.getOrDefault(target.endpoint(), 0L);
             if (System.nanoTime() - attemptedAt < ADMISSION_RETRY_NANOS) {
                 return;
             }
@@ -578,23 +573,22 @@ public final class ZLinkLocationAutoConnectHost implements AutoCloseable {
                 if (manualEndpoints.contains(target.endpoint())) {
                     RoutingId fallbackRid = manualExpectedRids.get(target.endpoint());
                     node.replacePeerConnection(
-                        target.endpoint(),
-                        fallbackRid,
-                        0,
-                        fallbackRid == null ? null : fallbackRid.toString());
+                            target.endpoint(),
+                            fallbackRid,
+                            0,
+                            fallbackRid == null ? null : fallbackRid.toString());
                 } else {
                     node.removePeerConnection(current.intentId());
                 }
                 if (!manualEndpoints.contains(target.endpoint())
-                    && spots != null
-                    && ZLinkAutoConnectPlanner.hasRid(target.nodeRid())) {
+                        && spots != null
+                        && ZLinkAutoConnectPlanner.hasRid(target.nodeRid())) {
                     spots.unmarkAutoConnectedRouterPeer(target.nodeRid());
                 }
                 return true;
             } catch (RuntimeException failure) {
                 connectionIntents.putIfAbsent(target.endpoint(), current);
-                connectionAttemptNanos.putIfAbsent(
-                    target.endpoint(), System.nanoTime());
+                connectionAttemptNanos.putIfAbsent(target.endpoint(), System.nanoTime());
                 return false;
             }
         }
@@ -603,9 +597,7 @@ public final class ZLinkLocationAutoConnectHost implements AutoCloseable {
         public void markNotRequired(ZLinkAutoConnectPlanner.Target target) {
             if (ZLinkAutoConnectPlanner.hasRid(target.nodeRid())) {
                 node.markPeerConnectionNotRequired(
-                    target.nodeRid(),
-                    target.endpoint(),
-                    target.lifecycleGeneration());
+                        target.nodeRid(), target.endpoint(), target.lifecycleGeneration());
             }
         }
 
@@ -616,8 +608,7 @@ public final class ZLinkLocationAutoConnectHost implements AutoCloseable {
             }
         }
 
-        private record ConnectionIntent(String targetKey, long intentId) {
-        }
+        private record ConnectionIntent(String targetKey, long intentId) {}
     }
 
     private static final class SpotNodeExecutor implements ZLinkAutoConnectExecutor {
@@ -626,9 +617,7 @@ public final class ZLinkLocationAutoConnectHost implements AutoCloseable {
         private final ZLinkSpotRuntime spots;
 
         SpotNodeExecutor(
-            ZLinkInternalSpotNode node,
-            Set<String> manualEndpoints,
-            ZLinkSpotRuntime spots) {
+                ZLinkInternalSpotNode node, Set<String> manualEndpoints, ZLinkSpotRuntime spots) {
             this.node = node;
             this.manualEndpoints = manualEndpoints;
             this.spots = spots;
@@ -690,5 +679,4 @@ public final class ZLinkLocationAutoConnectHost implements AutoCloseable {
             return endpoint == null || endpoint.isBlank() ? null : endpoint;
         }
     }
-
 }

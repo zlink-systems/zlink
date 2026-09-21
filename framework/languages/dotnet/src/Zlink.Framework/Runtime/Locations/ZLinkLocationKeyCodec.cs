@@ -16,5 +16,4 @@ internal static class ZLinkLocationKeyCodec
 
     internal static string EncodeActorKey(ZLinkActorLocationKey key) =>
         ZLinkCanonicalLocationKeyFormatter.EncodeActorKey(key);
-
 }

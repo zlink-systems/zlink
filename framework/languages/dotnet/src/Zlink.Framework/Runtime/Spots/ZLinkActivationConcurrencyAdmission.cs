@@ -12,9 +12,7 @@ internal sealed class ZLinkActivationConcurrencyAdmission
     private readonly Action<int>? _activeChanged;
     private int _active;
 
-    internal ZLinkActivationConcurrencyAdmission(
-        int limit,
-        Action<int>? activeChanged = null)
+    internal ZLinkActivationConcurrencyAdmission(int limit, Action<int>? activeChanged = null)
     {
         if (limit <= 0)
             throw new ArgumentOutOfRangeException(nameof(limit));
@@ -38,7 +36,8 @@ internal sealed class ZLinkActivationConcurrencyAdmission
                 throw new ZLinkFrameworkException(
                     ZLinkFrameworkErrorKind.Unavailable,
                     $"Object activation concurrency limit was reached for {objectDescription}.",
-                    ZLinkRetryAdvice.RetryAfterBackoff);
+                    ZLinkRetryAdvice.RetryAfterBackoff
+                );
 
             var next = active + 1;
             if (Interlocked.CompareExchange(ref _active, next, active) != active)
@@ -56,7 +55,8 @@ internal sealed class ZLinkActivationConcurrencyAdmission
             var active = Volatile.Read(ref _active);
             if (active <= 0)
                 throw new InvalidOperationException(
-                    "Object activation admission count became negative.");
+                    "Object activation admission count became negative."
+                );
 
             var next = active - 1;
             if (Interlocked.CompareExchange(ref _active, next, active) != active)
@@ -66,5 +66,4 @@ internal sealed class ZLinkActivationConcurrencyAdmission
             return;
         }
     }
-
 }

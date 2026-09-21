@@ -17,11 +17,15 @@ namespace Zlink.HttpClient.Runtime;
 internal sealed class RequestPerformer(
     HttpClientOptions options,
     CookieJar cookieJar,
-    SystemHttpClient httpClient)
+    SystemHttpClient httpClient
+)
 {
     private readonly ResponseBodyReader _bodyReader = new(options);
 
-    public async ValueTask<RawHttpResponse> PerformAsync(HttpRequestSpec request, CancellationToken cancellationToken)
+    public async ValueTask<RawHttpResponse> PerformAsync(
+        HttpRequestSpec request,
+        CancellationToken cancellationToken
+    )
     {
         var baseUri = new Uri(options.BaseUrl);
         // GetLeftPart(Authority) keeps IPv6 literals bracketed (e.g. http://[::1]:8080), which string
@@ -45,7 +49,8 @@ internal sealed class RequestPerformer(
                 bodyProvider,
                 request.Headers,
                 current,
-                authorizationAllowed);
+                authorizationAllowed
+            );
             var completion = request.Sink is null
                 ? HttpCompletionOption.ResponseContentRead
                 : HttpCompletionOption.ResponseHeadersRead;
@@ -61,13 +66,17 @@ internal sealed class RequestPerformer(
             var location = response.Headers.TryGetValues("Location", out var locations)
                 ? locations.FirstOrDefault()
                 : null;
-            if (options.FollowRedirects > 0 && HttpRedirectPolicy.IsRedirectStatus(status) &&
-                !string.IsNullOrEmpty(location))
+            if (
+                options.FollowRedirects > 0
+                && HttpRedirectPolicy.IsRedirectStatus(status)
+                && !string.IsNullOrEmpty(location)
+            )
             {
                 if (redirectsLeft == 0)
                     throw new ZLinkFrameworkException(
                         ZLinkFrameworkErrorKind.ProtocolError,
-                        "HTTP request exceeded the redirect limit");
+                        "HTTP request exceeded the redirect limit"
+                    );
 
                 --redirectsLeft;
                 (method, body) = HttpRedirectPolicy.RewriteForRedirect(status, method, body);
@@ -81,23 +90,28 @@ internal sealed class RequestPerformer(
             var headers = ResponseBodyReader.CollectHeaders(response);
             if (request.Sink is not null)
             {
-                await _bodyReader.StreamToSinkAsync(response, request.Sink, cancellationToken).ConfigureAwait(false);
+                await _bodyReader
+                    .StreamToSinkAsync(response, request.Sink, cancellationToken)
+                    .ConfigureAwait(false);
                 return new RawHttpResponse
                 {
                     Status = status,
                     Headers = headers,
-                    BodyBytes = []
+                    BodyBytes = [],
                 };
             }
 
-            var bytes = await _bodyReader.ReadBufferedAsync(response, cancellationToken).ConfigureAwait(false);
-            if (options.Compression) (bytes, headers) = _bodyReader.Decompress(bytes, headers);
+            var bytes = await _bodyReader
+                .ReadBufferedAsync(response, cancellationToken)
+                .ConfigureAwait(false);
+            if (options.Compression)
+                (bytes, headers) = _bodyReader.Decompress(bytes, headers);
 
             return new RawHttpResponse
             {
                 Status = status,
                 Headers = headers,
-                BodyBytes = bytes
+                BodyBytes = bytes,
             };
         }
     }
@@ -108,11 +122,12 @@ internal sealed class RequestPerformer(
         Func<byte[]?>? bodyProvider,
         IReadOnlyDictionary<string, string> requestHeaders,
         Uri target,
-        bool keepAuthorization)
+        bool keepAuthorization
+    )
     {
         var message = new HttpRequestMessage(ToHttpMethod(method), target)
         {
-            Version = HttpVersion.Version11
+            Version = HttpVersion.Version11,
         };
 
         var contentType = HttpHeaderLookup.Find(requestHeaders, "content-type");
@@ -121,16 +136,21 @@ internal sealed class RequestPerformer(
         if (bodyProvider is not null)
         {
             content = new StreamContent(new ProviderReadStream(bodyProvider));
-            content.Headers.TryAddWithoutValidation("Content-Type", contentType ?? "application/octet-stream");
+            content.Headers.TryAddWithoutValidation(
+                "Content-Type",
+                contentType ?? "application/octet-stream"
+            );
         }
         else if (body is not null)
         {
             content = new ByteArrayContent(body);
-            if (contentType is not null) content.Headers.TryAddWithoutValidation("Content-Type", contentType);
+            if (contentType is not null)
+                content.Headers.TryAddWithoutValidation("Content-Type", contentType);
         }
 
         message.Content = content;
-        if (streaming) message.Headers.TransferEncodingChunked = true;
+        if (streaming)
+            message.Headers.TransferEncodingChunked = true;
 
         // HttpListener (and many servers) do not emit 100-Continue; waiting for it would deadlock
         // a streamed/chunked upload. We never use the Expect/continue handshake.
@@ -138,7 +158,8 @@ internal sealed class RequestPerformer(
         message.Headers.TryAddWithoutValidation("User-Agent", HttpClientVersion.UserAgent);
         message.Headers.TryAddWithoutValidation("Accept", "application/json");
 
-        if (options.Compression) message.Headers.TryAddWithoutValidation("Accept-Encoding", "gzip, deflate");
+        if (options.Compression)
+            message.Headers.TryAddWithoutValidation("Accept-Encoding", "gzip, deflate");
 
         ApplyHeaders(message, options.Headers, keepAuthorization);
         ApplyHeaders(message, requestHeaders, keepAuthorization);
@@ -147,7 +168,8 @@ internal sealed class RequestPerformer(
         {
             var path = HttpRedirectPolicy.PathOf(target);
             var cookieHeader = cookieJar.HeaderFor(target.Host, path, target.Scheme == "https");
-            if (cookieHeader.Length > 0) message.Headers.TryAddWithoutValidation("Cookie", cookieHeader);
+            if (cookieHeader.Length > 0)
+                message.Headers.TryAddWithoutValidation("Cookie", cookieHeader);
         }
 
         return message;
@@ -156,14 +178,19 @@ internal sealed class RequestPerformer(
     private static void ApplyHeaders(
         HttpRequestMessage message,
         IReadOnlyDictionary<string, string> headers,
-        bool keepAuthorization)
+        bool keepAuthorization
+    )
     {
         foreach (var (name, value) in headers)
         {
-            if (name.Equals("content-type",
-                    StringComparison.OrdinalIgnoreCase)) continue; // routed to the content above
+            if (name.Equals("content-type", StringComparison.OrdinalIgnoreCase))
+                continue; // routed to the content above
 
-            if (!keepAuthorization && name.Equals("authorization", StringComparison.OrdinalIgnoreCase)) continue;
+            if (
+                !keepAuthorization
+                && name.Equals("authorization", StringComparison.OrdinalIgnoreCase)
+            )
+                continue;
 
             message.Headers.Remove(name);
             message.Headers.TryAddWithoutValidation(name, value);
@@ -181,8 +208,7 @@ internal sealed class RequestPerformer(
             ZLinkHttpMethod.Patch => HttpMethod.Patch,
             ZLinkHttpMethod.Head => HttpMethod.Head,
             ZLinkHttpMethod.Options => HttpMethod.Options,
-            _ => HttpMethod.Get
+            _ => HttpMethod.Get,
         };
     }
-
 }

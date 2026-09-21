@@ -41,13 +41,21 @@ export interface ZLinkActorRoutedJoinTransport {
   requestToSpot<TReply = unknown>(
     spotRouteTarget: ZLinkSpotRouteTarget,
     request: unknown,
-    options: { readonly packetName?: string; readonly timeoutMs?: number; readonly signal?: AbortSignal }
+    options: {
+      readonly packetName?: string;
+      readonly timeoutMs?: number;
+      readonly signal?: AbortSignal;
+    }
   ): Promise<TReply>;
   requestFromSpotToSpot?<TReply = unknown>(
     sourceSpot: ZLinkBackendSpot,
     spotRouteTarget: ZLinkSpotRouteTarget,
     request: unknown,
-    options: { readonly packetName?: string; readonly timeoutMs?: number; readonly signal?: AbortSignal }
+    options: {
+      readonly packetName?: string;
+      readonly timeoutMs?: number;
+      readonly signal?: AbortSignal;
+    }
   ): Promise<TReply>;
   requestRawFromSpotToSpot?(
     sourceSpot: ZLinkBackendSpot,

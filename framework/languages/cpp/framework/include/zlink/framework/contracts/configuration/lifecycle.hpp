@@ -52,8 +52,7 @@ struct relocation_options_t
     std::optional<std::int64_t> target_application_version;
     std::optional<std::chrono::milliseconds> deadline;
 
-    friend bool operator== (const relocation_options_t &,
-                            const relocation_options_t &) = default;
+    friend bool operator== (const relocation_options_t &, const relocation_options_t &) = default;
 };
 
 struct relocation_result_t
@@ -63,8 +62,7 @@ struct relocation_result_t
     relocation_outcome_t outcome = relocation_outcome_t::blocked;
     relocation_reason_t reason = relocation_reason_t::runtime_not_ready;
 
-    friend bool operator== (const relocation_result_t &,
-                            const relocation_result_t &) = default;
+    friend bool operator== (const relocation_result_t &, const relocation_result_t &) = default;
 };
 
 enum class termination_outcome_t : std::uint8_t
@@ -85,8 +83,7 @@ struct termination_result_t
     termination_outcome_t outcome = termination_outcome_t::stopped;
     termination_reason_t reason = termination_reason_t::none;
 
-    friend bool operator== (const termination_result_t &,
-                            const termination_result_t &) = default;
+    friend bool operator== (const termination_result_t &, const termination_result_t &) = default;
 };
 
 } // namespace zlink::framework

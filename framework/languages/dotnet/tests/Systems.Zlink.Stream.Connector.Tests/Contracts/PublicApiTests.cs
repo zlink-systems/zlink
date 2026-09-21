@@ -1,6 +1,6 @@
+using System.Reflection;
 using Systems.Zlink.Stream.Connector.Contracts;
 using Systems.Zlink.Stream.Connector.Contracts.Calls;
-using System.Reflection;
 using Xunit;
 
 public sealed partial class StreamConnectorTests
@@ -17,7 +17,7 @@ public sealed partial class StreamConnectorTests
         "public struct ",
         "public readonly struct ",
         "public delegate ",
-        "public static class "
+        "public static class ",
     ];
 
     private static readonly string[] InternalTypeDeclarationTokens =
@@ -32,7 +32,7 @@ public sealed partial class StreamConnectorTests
         "internal struct ",
         "internal readonly struct ",
         "internal delegate ",
-        "internal static class "
+        "internal static class ",
     ];
 
     [Fact]
@@ -41,12 +41,15 @@ public sealed partial class StreamConnectorTests
         var assembly = typeof(IZlinkStreamConnector).Assembly;
         var implementation = assembly.GetType(
             "Systems.Zlink.Stream.Connector.Runtime.ZlinkStreamConnector",
-            true)!;
+            true
+        )!;
 
         Assert.False(implementation.IsPublic);
         Assert.True(typeof(IZlinkStreamConnector).IsAssignableFrom(implementation));
 
-        var create = typeof(ZlinkStreamConnectorFactory).GetMethod(nameof(ZlinkStreamConnectorFactory.Create))!;
+        var create = typeof(ZlinkStreamConnectorFactory).GetMethod(
+            nameof(ZlinkStreamConnectorFactory.Create)
+        )!;
         Assert.Equal(typeof(IZlinkStreamConnector), create.ReturnType);
     }
 
@@ -54,7 +57,9 @@ public sealed partial class StreamConnectorTests
     public void ConnectorSendAndRequestExposeInterfaces()
     {
         var send = typeof(IZlinkStreamConnector).GetMethod(nameof(IZlinkStreamConnector.Send))!;
-        var request = typeof(IZlinkStreamConnector).GetMethod(nameof(IZlinkStreamConnector.Request))!;
+        var request = typeof(IZlinkStreamConnector).GetMethod(
+            nameof(IZlinkStreamConnector.Request)
+        )!;
 
         Assert.Equal(typeof(IZlinkStreamSendCall), send.ReturnType);
         Assert.Equal(typeof(IZlinkStreamRequestCall), request.ReturnType);
@@ -67,59 +72,81 @@ public sealed partial class StreamConnectorTests
             typeof(IZlinkStreamLifecycleCall),
             nameof(IZlinkStreamLifecycleCall.Async),
             typeof(ValueTask),
-            (typeof(CancellationToken), true));
+            (typeof(CancellationToken), true)
+        );
 
         AssertMethod(
             typeof(IZlinkStreamSendCall),
             nameof(IZlinkStreamSendCall.PacketName),
             typeof(IZlinkStreamSendCall),
-            (typeof(string), false));
-        Assert.Equal(2, typeof(IZlinkStreamSendCall).GetMethods().Count(
-            static method => method.Name == nameof(IZlinkStreamSendCall.Metadata)));
+            (typeof(string), false)
+        );
+        Assert.Equal(
+            2,
+            typeof(IZlinkStreamSendCall)
+                .GetMethods()
+                .Count(static method => method.Name == nameof(IZlinkStreamSendCall.Metadata))
+        );
         AssertMethod(
             typeof(IZlinkStreamSendCall),
             nameof(IZlinkStreamSendCall.Compress),
-            typeof(IZlinkStreamSendCall));
+            typeof(IZlinkStreamSendCall)
+        );
         AssertMethod(
             typeof(IZlinkStreamSendCall),
             nameof(IZlinkStreamSendCall.Async),
             typeof(ValueTask),
-            (typeof(CancellationToken), true));
+            (typeof(CancellationToken), true)
+        );
 
-        Assert.Equal(2, typeof(IZlinkStreamRequestCall).GetMethods().Count(
-            static method => method.Name == nameof(IZlinkStreamRequestCall.Metadata)));
-        Assert.Equal(2, typeof(IZlinkStreamRequestCall).GetMethods().Count(
-            static method => method.Name == nameof(IZlinkStreamRequestCall.Submit)));
+        Assert.Equal(
+            2,
+            typeof(IZlinkStreamRequestCall)
+                .GetMethods()
+                .Count(static method => method.Name == nameof(IZlinkStreamRequestCall.Metadata))
+        );
+        Assert.Equal(
+            2,
+            typeof(IZlinkStreamRequestCall)
+                .GetMethods()
+                .Count(static method => method.Name == nameof(IZlinkStreamRequestCall.Submit))
+        );
         AssertMethod(
             typeof(IZlinkStreamRequestCall),
             nameof(IZlinkStreamRequestCall.Async),
             typeof(ValueTask<ZlinkStreamEncodedPayload>),
-            (typeof(CancellationToken), true));
+            (typeof(CancellationToken), true)
+        );
         AssertMethod(
             typeof(IZlinkStreamWaitCall),
             nameof(IZlinkStreamWaitCall.Async),
             typeof(ValueTask<ZlinkStreamMessage<ZlinkStreamEncodedPayload>>),
-            (typeof(CancellationToken), true));
+            (typeof(CancellationToken), true)
+        );
         AssertMethod(
             typeof(IZlinkStreamExpectNoneCall),
             nameof(IZlinkStreamExpectNoneCall.Within),
             typeof(IZlinkStreamExpectNoneCall),
-            (typeof(TimeSpan), false));
+            (typeof(TimeSpan), false)
+        );
         AssertMethod(
             typeof(IZlinkStreamExpectNoneCall),
             nameof(IZlinkStreamExpectNoneCall.Async),
             typeof(ValueTask),
-            (typeof(CancellationToken), true));
+            (typeof(CancellationToken), true)
+        );
         AssertMethod(
             typeof(IZlinkStreamSequenceCall),
             nameof(IZlinkStreamSequenceCall.Expect),
             typeof(IZlinkStreamSequenceCall),
-            (typeof(Func<ZlinkStreamMessage<ZlinkStreamEncodedPayload>, bool>), false));
+            (typeof(Func<ZlinkStreamMessage<ZlinkStreamEncodedPayload>, bool>), false)
+        );
         AssertMethod(
             typeof(IZlinkStreamSequenceCall),
             nameof(IZlinkStreamSequenceCall.Async),
             typeof(ValueTask<IReadOnlyList<ZlinkStreamMessage<ZlinkStreamEncodedPayload>>>),
-            (typeof(CancellationToken), true));
+            (typeof(CancellationToken), true)
+        );
 
         Assert.Empty(typeof(ZlinkStreamTypedSendBuilder).GetConstructors());
         Assert.Empty(typeof(ZlinkStreamTypedRequestBuilder).GetConstructors());
@@ -130,50 +157,67 @@ public sealed partial class StreamConnectorTests
             typeof(ZlinkStreamTypedSendBuilder),
             nameof(ZlinkStreamTypedSendBuilder.Async),
             typeof(ValueTask),
-            (typeof(CancellationToken), true));
+            (typeof(CancellationToken), true)
+        );
         Assert.Contains(
             typeof(ZlinkStreamTypedRequestBuilder).GetMethods(),
-            static method => method.Name == nameof(ZlinkStreamTypedRequestBuilder.Async)
-                             && method.IsGenericMethodDefinition
-                             && method.GetParameters() is [{ ParameterType: var token, HasDefaultValue: true }]
-                             && token == typeof(CancellationToken));
+            static method =>
+                method.Name == nameof(ZlinkStreamTypedRequestBuilder.Async)
+                && method.IsGenericMethodDefinition
+                && method.GetParameters() is [{ ParameterType: var token, HasDefaultValue: true }]
+                && token == typeof(CancellationToken)
+        );
 
         Assert.Equal(
             typeof(IZlinkStreamExpectNoneCall),
-            typeof(IZlinkStreamConnector).GetMethod(nameof(IZlinkStreamConnector.ExpectNone))!.ReturnType);
+            typeof(IZlinkStreamConnector)
+                .GetMethod(nameof(IZlinkStreamConnector.ExpectNone))!
+                .ReturnType
+        );
         Assert.Equal(
             typeof(IZlinkStreamSequenceCall),
-            typeof(IZlinkStreamConnector).GetMethod(nameof(IZlinkStreamConnector.WaitForSequence))!.ReturnType);
+            typeof(IZlinkStreamConnector)
+                .GetMethod(nameof(IZlinkStreamConnector.WaitForSequence))!
+                .ReturnType
+        );
         Assert.Equal(
             typeof(ZlinkStreamDiagnosticsLevel),
-            typeof(IZlinkStreamConnector).GetProperty(nameof(IZlinkStreamConnector.DiagnosticsLevel))!.PropertyType);
+            typeof(IZlinkStreamConnector)
+                .GetProperty(nameof(IZlinkStreamConnector.DiagnosticsLevel))!
+                .PropertyType
+        );
         AssertMethod(
             typeof(IZlinkStreamConnector),
             nameof(IZlinkStreamConnector.SetDiagnosticsLevel),
             typeof(void),
-            (typeof(ZlinkStreamDiagnosticsLevel), false));
+            (typeof(ZlinkStreamDiagnosticsLevel), false)
+        );
         AssertMethod(
             typeof(IZlinkStreamConnector),
             nameof(IZlinkStreamConnector.SetDiagnosticsLevelAsync),
             typeof(Task),
-            (typeof(ZlinkStreamDiagnosticsLevel), false));
+            (typeof(ZlinkStreamDiagnosticsLevel), false)
+        );
         AssertMethod(
             typeof(ZlinkStreamAssert),
             nameof(ZlinkStreamAssert.Ensure),
             typeof(void),
             (typeof(bool), false),
-            (typeof(string), false));
+            (typeof(string), false)
+        );
         AssertMethod(
             typeof(ZlinkStreamAssert),
             nameof(ZlinkStreamAssert.ExpectFailureAsync),
             typeof(ValueTask<ZlinkStreamError>),
             (typeof(Func<CancellationToken, ValueTask>), false),
-            (typeof(string), true));
+            (typeof(string), true)
+        );
         AssertMethod(
             typeof(ZlinkStreamAssert),
             nameof(ZlinkStreamAssert.ExpectTimeoutAsync),
             typeof(ValueTask),
-            (typeof(Func<CancellationToken, ValueTask>), false));
+            (typeof(Func<CancellationToken, ValueTask>), false)
+        );
     }
 
     [Fact]
@@ -187,27 +231,38 @@ public sealed partial class StreamConnectorTests
             typeof(IZlinkStreamConnector),
             nameof(IZlinkStreamConnector.OnDisconnected),
             typeof(IDisposable),
-            (typeof(Func<ZlinkStreamDisconnected, CancellationToken, ValueTask>), false));
+            (typeof(Func<ZlinkStreamDisconnected, CancellationToken, ValueTask>), false)
+        );
         AssertMethod(
             typeof(IZlinkStreamConnector),
             nameof(IZlinkStreamConnector.OnErrorReceived),
             typeof(IDisposable),
-            (typeof(Func<ZlinkStreamError, CancellationToken, ValueTask>), false));
+            (typeof(Func<ZlinkStreamError, CancellationToken, ValueTask>), false)
+        );
         AssertMethod(
             typeof(IZlinkStreamConnector),
             nameof(IZlinkStreamConnector.OnConnectionStateChanged),
             typeof(IDisposable),
-            (typeof(Func<ZlinkStreamConnectionStateChanged, CancellationToken, ValueTask>), false));
+            (typeof(Func<ZlinkStreamConnectionStateChanged, CancellationToken, ValueTask>), false)
+        );
         Assert.Equal(
             typeof(ZlinkStreamCloseReason?),
-            typeof(IZlinkStreamConnector).GetProperty(
-                nameof(IZlinkStreamConnector.CloseReason))!.PropertyType);
+            typeof(IZlinkStreamConnector)
+                .GetProperty(nameof(IZlinkStreamConnector.CloseReason))!
+                .PropertyType
+        );
         Assert.Equal(
             new[]
             {
-                "ClientClose", "HeartbeatTimeout", "IdleTimeout", "ProtocolError", "ServerDrain", "TransportError"
+                "ClientClose",
+                "HeartbeatTimeout",
+                "IdleTimeout",
+                "ProtocolError",
+                "ServerDrain",
+                "TransportError",
             },
-            Enum.GetNames<ZlinkStreamCloseReason>().Order(StringComparer.Ordinal).ToArray());
+            Enum.GetNames<ZlinkStreamCloseReason>().Order(StringComparer.Ordinal).ToArray()
+        );
     }
 
     [Fact]
@@ -242,11 +297,14 @@ public sealed partial class StreamConnectorTests
         Assert.Equal(3, options.Reconnect.MaxAttempts);
 
         var endpointProperty = typeof(ZlinkStreamConnectorOptions).GetProperty(
-            nameof(ZlinkStreamConnectorOptions.Endpoint))!;
+            nameof(ZlinkStreamConnectorOptions.Endpoint)
+        )!;
         Assert.Contains(
             endpointProperty.GetCustomAttributesData(),
-            static attribute => attribute.AttributeType.FullName ==
-                                "System.Runtime.CompilerServices.RequiredMemberAttribute");
+            static attribute =>
+                attribute.AttributeType.FullName
+                == "System.Runtime.CompilerServices.RequiredMemberAttribute"
+        );
     }
 
     [Fact]
@@ -255,13 +313,21 @@ public sealed partial class StreamConnectorTests
         var sourceRoot = GetConnectorSourceRoot();
         var violations = Directory
             .EnumerateFiles(sourceRoot, "*.cs", SearchOption.AllDirectories)
-            .Where(static path => !path.Contains($"{Path.DirectorySeparatorChar}obj{Path.DirectorySeparatorChar}",
-                                      StringComparison.Ordinal)
-                                  && !path.Contains($"{Path.DirectorySeparatorChar}bin{Path.DirectorySeparatorChar}",
-                                      StringComparison.Ordinal))
+            .Where(static path =>
+                !path.Contains(
+                    $"{Path.DirectorySeparatorChar}obj{Path.DirectorySeparatorChar}",
+                    StringComparison.Ordinal
+                )
+                && !path.Contains(
+                    $"{Path.DirectorySeparatorChar}bin{Path.DirectorySeparatorChar}",
+                    StringComparison.Ordinal
+                )
+            )
             .Where(path => HasPublicTypeDeclaration(File.ReadAllText(path)))
-            .Where(path => !Path.GetRelativePath(sourceRoot, path)
-                .StartsWith($"Contracts{Path.DirectorySeparatorChar}", StringComparison.Ordinal))
+            .Where(path =>
+                !Path.GetRelativePath(sourceRoot, path)
+                    .StartsWith($"Contracts{Path.DirectorySeparatorChar}", StringComparison.Ordinal)
+            )
             .Select(path => Path.GetRelativePath(sourceRoot, path))
             .Order(StringComparer.Ordinal)
             .ToArray();
@@ -286,13 +352,21 @@ public sealed partial class StreamConnectorTests
     [Fact]
     public void ConnectorExportedTypes_UseContractsNamespace()
     {
-        var violations = typeof(IZlinkStreamConnector).Assembly
-            .GetExportedTypes()
-            .Where(static type => type.Namespace is null
-                                  || (!type.Namespace.Equals("Systems.Zlink.Stream.Connector.Contracts",
-                                          StringComparison.Ordinal)
-                                      && !type.Namespace.StartsWith("Systems.Zlink.Stream.Connector.Contracts.",
-                                          StringComparison.Ordinal)))
+        var violations = typeof(IZlinkStreamConnector)
+            .Assembly.GetExportedTypes()
+            .Where(static type =>
+                type.Namespace is null
+                || (
+                    !type.Namespace.Equals(
+                        "Systems.Zlink.Stream.Connector.Contracts",
+                        StringComparison.Ordinal
+                    )
+                    && !type.Namespace.StartsWith(
+                        "Systems.Zlink.Stream.Connector.Contracts.",
+                        StringComparison.Ordinal
+                    )
+                )
+            )
             .Select(static type => type.FullName)
             .Order(StringComparer.Ordinal)
             .ToArray();
@@ -303,8 +377,8 @@ public sealed partial class StreamConnectorTests
     [Fact]
     public void ConnectorDefaultCodecFactory_IsNotPublicContract()
     {
-        var exportedTypeNames = typeof(IZlinkStreamConnector).Assembly
-            .GetExportedTypes()
+        var exportedTypeNames = typeof(IZlinkStreamConnector)
+            .Assembly.GetExportedTypes()
             .Select(static type => type.Name)
             .ToArray();
 
@@ -321,13 +395,17 @@ public sealed partial class StreamConnectorTests
             var candidate = Path.Combine(
                 directory.FullName,
                 "src",
-                "Systems.Zlink.Stream.Connector");
-            if (Directory.Exists(candidate)) return candidate;
+                "Systems.Zlink.Stream.Connector"
+            );
+            if (Directory.Exists(candidate))
+                return candidate;
 
             directory = directory.Parent;
         }
 
-        throw new DirectoryNotFoundException("Could not locate Systems.Zlink.Stream.Connector source root.");
+        throw new DirectoryNotFoundException(
+            "Could not locate Systems.Zlink.Stream.Connector source root."
+        );
     }
 
     private static bool HasPublicTypeDeclaration(string source)
@@ -336,7 +414,10 @@ public sealed partial class StreamConnectorTests
             .Split('\n')
             .Select(static line => line.TrimEnd('\r'))
             .Any(static line =>
-                PublicTypeDeclarationTokens.Any(token => line.StartsWith(token, StringComparison.Ordinal)));
+                PublicTypeDeclarationTokens.Any(token =>
+                    line.StartsWith(token, StringComparison.Ordinal)
+                )
+            );
     }
 
     private static bool HasInternalTypeDeclaration(string source)
@@ -345,22 +426,35 @@ public sealed partial class StreamConnectorTests
             .Split('\n')
             .Select(static line => line.TrimEnd('\r'))
             .Any(static line =>
-                InternalTypeDeclarationTokens.Any(token => line.StartsWith(token, StringComparison.Ordinal)));
+                InternalTypeDeclarationTokens.Any(token =>
+                    line.StartsWith(token, StringComparison.Ordinal)
+                )
+            );
     }
 
     private static void AssertMethod(
         Type type,
         string name,
         Type returnType,
-        params (Type Type, bool HasDefault)[] expectedParameters)
+        params (Type Type, bool HasDefault)[] expectedParameters
+    )
     {
-        var method = Assert.Single(type.GetMethods().Where(candidate =>
-            candidate.Name == name
-            && candidate.GetParameters().Select(static parameter => parameter.ParameterType)
-                .SequenceEqual(expectedParameters.Select(static parameter => parameter.Type))));
+        var method = Assert.Single(
+            type.GetMethods()
+                .Where(candidate =>
+                    candidate.Name == name
+                    && candidate
+                        .GetParameters()
+                        .Select(static parameter => parameter.ParameterType)
+                        .SequenceEqual(
+                            expectedParameters.Select(static parameter => parameter.Type)
+                        )
+                )
+        );
         Assert.Equal(returnType, method.ReturnType);
         Assert.Equal(
             expectedParameters.Select(static parameter => parameter.HasDefault),
-            method.GetParameters().Select(static parameter => parameter.HasDefaultValue));
+            method.GetParameters().Select(static parameter => parameter.HasDefaultValue)
+        );
     }
 }

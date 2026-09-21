@@ -1,11 +1,5 @@
 package systems.zlink.framework.runtime.binding;
-import java.util.function.BooleanSupplier;
 
-import java.time.Duration;
-import java.util.List;
-import java.util.Optional;
-import java.util.concurrent.CompletableFuture;
-import java.util.concurrent.CompletionStage;
 import systems.zlink.contracts.errors.ZlinkRecvException;
 import systems.zlink.contracts.messaging.Message;
 import systems.zlink.contracts.messaging.PublishOperation;
@@ -23,9 +17,14 @@ import systems.zlink.framework.runtime.internal.backend.ZLinkBackendRecvMode;
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendRequestResult;
 import systems.zlink.framework.runtime.internal.calls.ZLinkOneWayCalls;
 
+import java.time.Duration;
+import java.util.List;
+import java.util.Optional;
+import java.util.concurrent.CompletionStage;
+import java.util.function.BooleanSupplier;
+
 final class ZLinkJavaSocketSupport {
-    private ZLinkJavaSocketSupport() {
-    }
+    private ZLinkJavaSocketSupport() {}
 
     static void validateChannelName(String channelName) {
         if (channelName == null || channelName.isBlank()) {
@@ -38,8 +37,8 @@ final class ZLinkJavaSocketSupport {
             return receive.getAsBoolean();
         } catch (ZlinkRecvException ex) {
             if (ex.getResult() == RecvResult.NO_DATA
-                || ex.getResult() == RecvResult.BUSY
-                || ex.getResult() == RecvResult.INTERNAL_ERROR) {
+                    || ex.getResult() == RecvResult.BUSY
+                    || ex.getResult() == RecvResult.INTERNAL_ERROR) {
                 return false;
             }
             throw ex;
@@ -50,9 +49,7 @@ final class ZLinkJavaSocketSupport {
         return mode == ZLinkBackendRecvMode.DONT_WAIT ? RecvFlags.DONT_WAIT : RecvFlags.NONE;
     }
 
-    static CompletionStage<Void> submit(
-        SendOperation operation,
-        List<Message> parts) {
+    static CompletionStage<Void> submit(SendOperation operation, List<Message> parts) {
         var submit = operation.message(parts.get(0));
         for (int i = 1; i < parts.size(); i++) {
             submit.message(parts.get(i));
@@ -63,13 +60,11 @@ final class ZLinkJavaSocketSupport {
     static CompletionStage<Void> submit(SendSubmitOperation operation) {
         var submission = operation.submit();
         return submission.result() == SubmitResult.BACKPRESSURED
-            ? submission.admitted()
-            : ZLinkOneWayCalls.immediateAdmission();
+                ? submission.admitted()
+                : ZLinkOneWayCalls.immediateAdmission();
     }
 
-    static boolean submitSync(
-        SendOperation operation,
-        List<Message> parts) {
+    static boolean submitSync(SendOperation operation, List<Message> parts) {
         var submit = operation.message(parts.get(0));
         for (int i = 1; i < parts.size(); i++) {
             submit.message(parts.get(i));
@@ -78,10 +73,7 @@ final class ZLinkJavaSocketSupport {
         return true;
     }
 
-    static void submit(
-        PublishOperation operation,
-        List<Message> parts,
-        SendFlags flags) {
+    static void submit(PublishOperation operation, List<Message> parts, SendFlags flags) {
         var submit = operation.message(parts.get(0));
         for (int i = 1; i < parts.size(); i++) {
             submit.message(parts.get(i));
@@ -98,43 +90,44 @@ final class ZLinkJavaSocketSupport {
     }
 
     static CompletionStage<ZLinkBackendReceived> submitRequest(
-        RequestOperation operation,
-        List<Message> parts,
-        Duration timeout) {
+            RequestOperation operation, List<Message> parts, Duration timeout) {
         var submit = operation.message(parts.get(0)).timeout(timeout);
         for (int i = 1; i < parts.size(); i++) {
             submit.message(parts.get(i));
         }
-        return submit.submit().reply().thenApply(replyParts -> {
-            try {
-                return new ZLinkBackendReceived(
-                ZLinkBackendRequestResult.OK,
-                Optional.empty(),
-                Optional.empty(),
-                Optional.empty(),
-                replyParts.stream().map(Message::from).toList());
-            } finally {
-                replyParts.forEach(Message::close);
-            }
-        });
+        return submit.submit()
+                .reply()
+                .thenApply(
+                        replyParts -> {
+                            try {
+                                return new ZLinkBackendReceived(
+                                        ZLinkBackendRequestResult.OK,
+                                        Optional.empty(),
+                                        Optional.empty(),
+                                        Optional.empty(),
+                                        replyParts.stream().map(Message::from).toList());
+                            } finally {
+                                replyParts.forEach(Message::close);
+                            }
+                        });
     }
 
     static ZLinkBackendReceived fromReceived(Received received) {
         boolean hasReplyToken = received.replyToken().isPresent();
         return new ZLinkBackendReceived(
-            received.getRoutingId(),
-            Optional.empty(),
-            Optional.empty(),
-            received.parts().stream().map(Message::from).toList(),
-            hasReplyToken
-                ? replyParts -> {
-                    try {
-                        submitReply(received.reply(), replyParts);
-                    } finally {
-                        received.close();
-                    }
-                }
-                : null,
-            received::close);
+                received.getRoutingId(),
+                Optional.empty(),
+                Optional.empty(),
+                received.parts().stream().map(Message::from).toList(),
+                hasReplyToken
+                        ? replyParts -> {
+                            try {
+                                submitReply(received.reply(), replyParts);
+                            } finally {
+                                received.close();
+                            }
+                        }
+                        : null,
+                received::close);
     }
 }

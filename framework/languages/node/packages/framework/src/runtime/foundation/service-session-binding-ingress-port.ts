@@ -16,10 +16,7 @@ export interface ServiceSessionBindingAdmissionClaim {
   readonly bindingGeneration: bigint;
 }
 
-export type ServiceSessionBindingAdmissionResult =
-  | 'passThrough'
-  | 'retained'
-  | 'rejected';
+export type ServiceSessionBindingAdmissionResult = 'passThrough' | 'retained' | 'rejected';
 
 export interface ServiceSessionBindingIngressPort {
   retainOutbound(

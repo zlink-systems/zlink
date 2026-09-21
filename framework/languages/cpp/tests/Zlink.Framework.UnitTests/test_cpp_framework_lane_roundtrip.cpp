@@ -23,8 +23,7 @@ class counting_direct_executor_t final : public offload_executor_t
 {
   public:
     counting_direct_executor_t () :
-        offload_executor_t (0, 1, std::chrono::milliseconds{1},
-                            "lane-roundtrip-counting")
+        offload_executor_t (0, 1, std::chrono::milliseconds{1}, "lane-roundtrip-counting")
     {
     }
 
@@ -47,10 +46,12 @@ void expect_one_caller_owned_turn ()
     state_lane_t lane (executor);
     std::size_t lane_turns = 0;
 
-    lane.run ([&] {
-        EXPECT_EQ (&lane, state_lane_t::current ());
-        ++lane_turns;
-    }).get ();
+    lane
+      .run ([&] {
+          EXPECT_EQ (&lane, state_lane_t::current ());
+          ++lane_turns;
+      })
+      .get ();
 
     EXPECT_EQ (1u, lane_turns);
     EXPECT_EQ (0u, executor.hops ());

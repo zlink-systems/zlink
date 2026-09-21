@@ -4,7 +4,9 @@ export class ZLinkActorSessionLifecycleCoordinator {
   async run<T>(actorId: string, operation: () => Promise<T>): Promise<T> {
     const previous = this.tails.get(actorId) ?? Promise.resolve();
     let release!: () => void;
-    const current = new Promise<void>((resolve) => { release = resolve; });
+    const current = new Promise<void>((resolve) => {
+      release = resolve;
+    });
     const tail = previous.catch(() => undefined).then(() => current);
     this.tails.set(actorId, tail);
     await previous.catch(() => undefined);

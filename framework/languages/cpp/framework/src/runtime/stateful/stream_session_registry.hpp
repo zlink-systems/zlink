@@ -119,7 +119,7 @@ class stream_session_registry_t
     using authority_resolver_t = std::function<std::optional<object_ref_t> (const std::string &)>;
 
     explicit stream_session_registry_t (authority_resolver_t resolver,
-                                         std::function<void ()> activity_handler = {});
+                                        std::function<void ()> activity_handler = {});
 
     stream_connection_t open (std::string connection_id,
                               std::function<void ()> close_connection = {});

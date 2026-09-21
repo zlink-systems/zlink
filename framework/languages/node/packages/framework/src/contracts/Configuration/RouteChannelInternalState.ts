@@ -37,10 +37,7 @@ function routeInternalState(routeChannel: object): RouteChannelInternalState {
   return routeChannel as RouteChannelInternalState;
 }
 
-function defineRouteInternalFlag(
-  routeChannel: object,
-  key: keyof RouteChannelInternalState
-): void {
+function defineRouteInternalFlag(routeChannel: object, key: keyof RouteChannelInternalState): void {
   Object.defineProperty(routeChannel, key, {
     value: true,
     configurable: true,

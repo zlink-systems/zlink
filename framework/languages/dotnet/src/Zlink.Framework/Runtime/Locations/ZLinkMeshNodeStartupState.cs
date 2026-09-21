@@ -9,7 +9,8 @@ internal sealed record ZLinkMeshNodeStartupState(
     RoutingId RoutingId,
     string EntrySpotId,
     ZLinkMeshNodeDescriptor Descriptor,
-    ulong StoreGeneration);
+    ulong StoreGeneration
+);
 
 internal static class ZLinkMeshNodeDescriptorFactory
 {
@@ -21,7 +22,8 @@ internal static class ZLinkMeshNodeDescriptorFactory
         string endpoint,
         string entrySpotId,
         ulong descriptorRevision,
-        ZLinkFrameworkRuntimeState state)
+        ZLinkFrameworkRuntimeState state
+    )
     {
         var capabilities = BuildObjectCapabilities(registration);
         return new ZLinkMeshNodeDescriptor(
@@ -30,24 +32,25 @@ internal static class ZLinkMeshNodeDescriptorFactory
             lifecycleGeneration,
             descriptorRevision,
             endpoint,
-            registration.ChannelMemberships
-                .Where(static membership => membership.IsServer)
+            registration
+                .ChannelMemberships.Where(static membership => membership.IsServer)
                 .ToDictionary(
                     static membership => membership.ChannelName,
                     static membership => membership.Weight,
-                    StringComparer.Ordinal),
+                    StringComparer.Ordinal
+                ),
             SecurityIdentity: ZLinkTransportSecurityIdentity.Plaintext,
             OwnerId: string.Empty,
             LeaseGeneration: 0,
-            UpdatedAt: default)
+            UpdatedAt: default
+        )
         {
             ApplicationVersion = framework.ApplicationVersion,
             ObjectRole = registration.ObjectRole,
             ObjectCapabilities = capabilities,
             MaintenanceWave = framework.MaintenanceWave,
-            EntrySpotId = registration.ObjectRole == ZLinkMeshNodeObjectRole.Server
-                ? entrySpotId
-                : null,
+            EntrySpotId =
+                registration.ObjectRole == ZLinkMeshNodeObjectRole.Server ? entrySpotId : null,
             State = state,
             PlacementWeight = registration.PlacementWeight,
             Capacity = new ZLinkPlacementCapacity(
@@ -55,40 +58,50 @@ internal static class ZLinkMeshNodeDescriptorFactory
                 new ZLinkPopulationCapacity(0, 0, registration.SpotLimit),
                 capabilities
                     .Where(static capability =>
-                        capability.ObjectKind is ZLinkPlacementObjectKind.UserSpot
-                            or ZLinkPlacementObjectKind.InstanceSpot)
+                        capability.ObjectKind
+                            is ZLinkPlacementObjectKind.UserSpot
+                                or ZLinkPlacementObjectKind.InstanceSpot
+                    )
                     .Select(static capability => new ZLinkSpotTypeCapacity(
                         capability.ObjectKind,
                         capability.StableType,
                         0,
                         0,
-                        capability.Limit))
-                    .ToArray()),
+                        capability.Limit
+                    ))
+                    .ToArray()
+            ),
             ActivationConcurrency = new ZLinkActivationConcurrency(
                 0,
-                registration.ActivationConcurrencyLimit)
+                registration.ActivationConcurrencyLimit
+            ),
         };
     }
 
     private static IReadOnlyList<ZLinkObjectCapability> BuildObjectCapabilities(
-        ZLinkSpotNodeRegistration registration)
+        ZLinkSpotNodeRegistration registration
+    )
     {
         var capabilities = new List<ZLinkObjectCapability>(
             registration.SpotRelocations.Count
-            + registration.InstanceSpotRelocations.Count
-            + registration.ActorRelocations.Count);
+                + registration.InstanceSpotRelocations.Count
+                + registration.ActorRelocations.Count
+        );
         AddCapabilities(
             capabilities,
             ZLinkPlacementObjectKind.UserSpot,
-            registration.SpotRelocations);
+            registration.SpotRelocations
+        );
         AddCapabilities(
             capabilities,
             ZLinkPlacementObjectKind.InstanceSpot,
-            registration.InstanceSpotRelocations);
+            registration.InstanceSpotRelocations
+        );
         AddCapabilities(
             capabilities,
             ZLinkPlacementObjectKind.Actor,
-            registration.ActorRelocations);
+            registration.ActorRelocations
+        );
         return capabilities
             .OrderBy(static capability => capability.ObjectKind)
             .ThenBy(static capability => capability.StableType, StringComparer.Ordinal)
@@ -98,25 +111,30 @@ internal static class ZLinkMeshNodeDescriptorFactory
     private static void AddCapabilities(
         ICollection<ZLinkObjectCapability> capabilities,
         ZLinkPlacementObjectKind objectKind,
-        IReadOnlyDictionary<string, ZLinkObjectRelocationRegistration> registrations)
+        IReadOnlyDictionary<string, ZLinkObjectRelocationRegistration> registrations
+    )
     {
         foreach (var (stableType, registration) in registrations)
         {
-            capabilities.Add(new ZLinkObjectCapability(
-                objectKind,
-                stableType,
-                registration.PolicyKind switch
-                {
-                    0 => ZLinkObjectMaintenancePolicyKind.Disabled,
-                    1 => ZLinkObjectMaintenancePolicyKind.Recreate,
-                    2 => ZLinkObjectMaintenancePolicyKind.Snapshot,
-                    _ => throw new ZLinkConfigurationException(
-                        $"Unknown relocation policy kind '{registration.PolicyKind}'.")
-                },
-                registration.AdapterType is not null,
-                objectKind == ZLinkPlacementObjectKind.Actor
-                    ? 0
-                    : registration.Placement.MaxActiveObjects ?? 0));
+            capabilities.Add(
+                new ZLinkObjectCapability(
+                    objectKind,
+                    stableType,
+                    registration.PolicyKind switch
+                    {
+                        0 => ZLinkObjectMaintenancePolicyKind.Disabled,
+                        1 => ZLinkObjectMaintenancePolicyKind.Recreate,
+                        2 => ZLinkObjectMaintenancePolicyKind.Snapshot,
+                        _ => throw new ZLinkConfigurationException(
+                            $"Unknown relocation policy kind '{registration.PolicyKind}'."
+                        ),
+                    },
+                    registration.AdapterType is not null,
+                    objectKind == ZLinkPlacementObjectKind.Actor
+                        ? 0
+                        : registration.Placement.MaxActiveObjects ?? 0
+                )
+            );
         }
     }
 }

@@ -1,5 +1,4 @@
 using System.Reflection;
-
 using Zlink.Framework.Runtime.Backend.Contracts;
 using Zlink.Framework.Runtime.Spots;
 
@@ -12,13 +11,15 @@ public sealed class SpotOutboundTransportTests
     {
         var spot = DispatchProxy.Create<
             IAuthorityAwareBackendSpot,
-            AuthorityAwareBackendSpotProxy>();
+            AuthorityAwareBackendSpotProxy
+        >();
         var proxy = (AuthorityAwareBackendSpotProxy)(object)spot;
 
         await using var transport = new ZLinkSpotOutboundTransport(
             spot,
             TimeSpan.FromSeconds(1),
-            CancellationToken.None);
+            CancellationToken.None
+        );
         using var payload = Message.From("node-control");
 
         var result = transport.TrySendToSpotOnce(
@@ -28,7 +29,8 @@ public sealed class SpotOutboundTransportTests
             targetNodeGeneration: 11,
             authorityOwnerGeneration: 13,
             ownerLeaseGeneration: 17,
-            [payload]);
+            [payload]
+        );
 
         Assert.True(result);
         Assert.Equal(0, proxy.ObservedSpotAuthorityCount);
@@ -40,13 +42,15 @@ public sealed class SpotOutboundTransportTests
     {
         var spot = DispatchProxy.Create<
             IAuthorityAwareBackendSpot,
-            AuthorityAwareBackendSpotProxy>();
+            AuthorityAwareBackendSpotProxy
+        >();
         var proxy = (AuthorityAwareBackendSpotProxy)(object)spot;
 
         await using var transport = new ZLinkSpotOutboundTransport(
             spot,
             TimeSpan.FromSeconds(1),
-            CancellationToken.None);
+            CancellationToken.None
+        );
         using var payload = Message.From("user-spot");
 
         var result = transport.TrySendToSpotOnce(
@@ -56,7 +60,8 @@ public sealed class SpotOutboundTransportTests
             targetNodeGeneration: 11,
             authorityOwnerGeneration: 13,
             ownerLeaseGeneration: 17,
-            [payload]);
+            [payload]
+        );
 
         Assert.True(result);
         Assert.Equal(1, proxy.ObservedSpotAuthorityCount);
@@ -70,12 +75,23 @@ public sealed class SpotOutboundTransportTests
     [InlineData(true, false)]
     [InlineData(true, true)]
     public async Task DirectSpotCallsReleaseBorrowedPayloadOnSuccessAndAuthorityFailure(
-        bool request, bool authorityFailure)
+        bool request,
+        bool authorityFailure
+    )
     {
-        var spot = DispatchProxy.Create<IAuthorityAwareBackendSpot, AuthorityAwareBackendSpotProxy>();
+        var spot = DispatchProxy.Create<
+            IAuthorityAwareBackendSpot,
+            AuthorityAwareBackendSpotProxy
+        >();
         var proxy = (AuthorityAwareBackendSpotProxy)(object)spot;
-        proxy.AuthorityFailure = authorityFailure ? new InvalidOperationException("authority rejected") : null;
-        await using var transport = new ZLinkSpotOutboundTransport(spot, null, CancellationToken.None);
+        proxy.AuthorityFailure = authorityFailure
+            ? new InvalidOperationException("authority rejected")
+            : null;
+        await using var transport = new ZLinkSpotOutboundTransport(
+            spot,
+            null,
+            CancellationToken.None
+        );
         var payload = Message.Allocate(4096);
         using var witness = payload.Copy();
         async Task Submit()
@@ -83,25 +99,43 @@ public sealed class SpotOutboundTransportTests
             if (request)
             {
                 using var reply = await transport.RequestToSpotAsync(
-                    RoutingId.From("remote"), "spot", 1, 1, 1, 1, [payload],
-                    TimeSpan.FromSeconds(1), CancellationToken.None);
+                    RoutingId.From("remote"),
+                    "spot",
+                    1,
+                    1,
+                    1,
+                    1,
+                    [payload],
+                    TimeSpan.FromSeconds(1),
+                    CancellationToken.None
+                );
                 Assert.Equal("reply", reply.Parts[0].GetString());
             }
             else
             {
                 var result = await transport.SendToSpotAsync(
-                    RoutingId.From("remote"), "spot", 1, 1, 1, 1, [payload], CancellationToken.None);
+                    RoutingId.From("remote"),
+                    "spot",
+                    1,
+                    1,
+                    1,
+                    1,
+                    [payload],
+                    CancellationToken.None
+                );
                 Assert.Equal(ZLinkOneWaySubmitStatus.Submitted, result.Status);
             }
         }
-        if (authorityFailure) await Assert.ThrowsAsync<InvalidOperationException>(Submit);
-        else await Submit();
+        if (authorityFailure)
+            await Assert.ThrowsAsync<InvalidOperationException>(Submit);
+        else
+            await Submit();
         Assert.Equal(1, witness.RefCount);
     }
 
-    private interface IAuthorityAwareBackendSpot :
-        IZLinkBackendSpot,
-        IZLinkBackendAuthorityObserver;
+    private interface IAuthorityAwareBackendSpot
+        : IZLinkBackendSpot,
+            IZLinkBackendAuthorityObserver;
 
     private class AuthorityAwareBackendSpotProxy : DispatchProxy
     {
@@ -112,27 +146,28 @@ public sealed class SpotOutboundTransportTests
         internal int SpotSendCount { get; private set; }
         internal Exception? AuthorityFailure { get; set; }
 
-        protected override object? Invoke(
-            MethodInfo? targetMethod,
-            object?[]? args)
+        protected override object? Invoke(MethodInfo? targetMethod, object?[]? args)
         {
             ArgumentNullException.ThrowIfNull(targetMethod);
             return targetMethod.Name switch
             {
-                nameof(IZLinkBackendAuthorityObserver.ObserveSpotAuthority) =>
-                    ObserveSpotAuthority(args),
+                nameof(IZLinkBackendAuthorityObserver.ObserveSpotAuthority) => ObserveSpotAuthority(
+                    args
+                ),
                 nameof(IZLinkBackendSpot.SendToSpot) => SendToSpot(),
                 nameof(IZLinkBackendSpot.SendToSpotAsync) => ValueTask.CompletedTask,
                 nameof(IZLinkBackendSpot.RequestToSpotAsync) => ValueTask.FromResult(
-                    new ZLinkBackendRouteReceived([Message.From("reply")], null, null, null, null)),
+                    new ZLinkBackendRouteReceived([Message.From("reply")], null, null, null, null)
+                ),
                 nameof(IAsyncDisposable.DisposeAsync) => ValueTask.CompletedTask,
-                _ => throw new NotSupportedException(targetMethod.Name)
+                _ => throw new NotSupportedException(targetMethod.Name),
             };
         }
 
         private object? ObserveSpotAuthority(object?[]? args)
         {
-            if (AuthorityFailure is not null) throw AuthorityFailure;
+            if (AuthorityFailure is not null)
+                throw AuthorityFailure;
             ObservedSpotAuthorityCount++;
             ObservedObjectGeneration = (ulong)args![2]!;
             return null;

@@ -5,11 +5,19 @@ import {
   ZlinkStreamException
 } from '../Contracts';
 
-export function connectorError(code: ZlinkStreamErrorCode, message: string, cause?: unknown): ZlinkStreamException {
+export function connectorError(
+  code: ZlinkStreamErrorCode,
+  message: string,
+  cause?: unknown
+): ZlinkStreamException {
   return new ZlinkStreamException({ code, message, cause });
 }
 
-export function toStreamError(cause: unknown, code: ZlinkStreamErrorCode, message: string): ZlinkStreamError {
+export function toStreamError(
+  cause: unknown,
+  code: ZlinkStreamErrorCode,
+  message: string
+): ZlinkStreamError {
   if (cause instanceof ZlinkStreamException) {
     return cause.error;
   }
@@ -20,7 +28,11 @@ export function unwrapStreamError(error: unknown): ZlinkStreamError {
   if (error instanceof ZlinkStreamException) {
     return error.error;
   }
-  return { code: ZlinkStreamErrorCode.RemoteError, message: error instanceof Error ? error.message : String(error), cause: error };
+  return {
+    code: ZlinkStreamErrorCode.RemoteError,
+    message: error instanceof Error ? error.message : String(error),
+    cause: error
+  };
 }
 
 export function subscription(dispose: () => void): Disposable {
@@ -48,9 +60,17 @@ export function delay(delayMs: number, signal: AbortSignal | undefined): Promise
   });
 }
 
-export function readLength(source: Uint8Array, offset: number, bytes: 1 | 2, label: string): number {
+export function readLength(
+  source: Uint8Array,
+  offset: number,
+  bytes: 1 | 2,
+  label: string
+): number {
   if (source.length - offset < bytes) {
-    throw connectorError(ZlinkStreamErrorCode.FrameDecodeFailed, `Metadata ${label} length is missing.`);
+    throw connectorError(
+      ZlinkStreamErrorCode.FrameDecodeFailed,
+      `Metadata ${label} length is missing.`
+    );
   }
   return bytes === 1 ? source[offset] : readUInt16BE(source, offset);
 }
@@ -73,8 +93,8 @@ export function readUInt16BE(source: Uint8Array, offset: number): number {
 
 export function readUInt32BE(source: Uint8Array, offset: number): number {
   return (
-    source[offset] * 0x1000000
-    + ((source[offset + 1] << 16) | (source[offset + 2] << 8) | source[offset + 3])
+    source[offset] * 0x1000000 +
+    ((source[offset + 1] << 16) | (source[offset + 2] << 8) | source[offset + 3])
   );
 }
 

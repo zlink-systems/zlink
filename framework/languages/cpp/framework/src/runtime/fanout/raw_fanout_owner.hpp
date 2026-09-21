@@ -56,8 +56,7 @@ struct fanout_publisher_intent_t
     std::vector<std::uint8_t> publisher_routing_id;
     std::uint64_t lifecycle_generation = 0;
     std::string endpoint;
-    mesh::service_node_state_t state =
-      mesh::service_node_state_t::preparing;
+    mesh::service_node_state_t state = mesh::service_node_state_t::preparing;
 };
 
 enum class raw_fanout_connection_state_t
@@ -74,18 +73,16 @@ struct raw_fanout_connection_snapshot_t
     std::uint64_t lifecycle_generation = 0;
     bool connection_intent = false;
     bool ready = false;
-    raw_fanout_connection_state_t state =
-      raw_fanout_connection_state_t::disconnected;
+    raw_fanout_connection_state_t state = raw_fanout_connection_state_t::disconnected;
     std::optional<std::string> last_failure;
 };
 
 class raw_fanout_publisher_t
 {
   public:
-    explicit raw_fanout_publisher_t (
-      std::string endpoint,
-      std::shared_ptr<zlink::context_t> context = {},
-      bool no_drop = false);
+    explicit raw_fanout_publisher_t (std::string endpoint,
+                                     std::shared_ptr<zlink::context_t> context = {},
+                                     bool no_drop = false);
     ~raw_fanout_publisher_t () noexcept;
 
     void start ();
@@ -97,8 +94,7 @@ class raw_fanout_publisher_t
     task_t<void> publish (std::string channel_name,
                           std::string topic,
                           protocol::application_payload_t payload,
-                          std::chrono::milliseconds timeout =
-                            std::chrono::milliseconds{-1});
+                          std::chrono::milliseconds timeout = std::chrono::milliseconds{-1});
     bool tick (std::chrono::steady_clock::time_point now);
 
     static const std::string &reserved_topic ();
@@ -118,31 +114,24 @@ class raw_fanout_publisher_t
 class raw_fanout_subscriber_t
 {
   public:
-    explicit raw_fanout_subscriber_t (
-      zlink::poller_t *poller = nullptr,
-      std::vector<std::string> application_topics = {});
-    raw_fanout_subscriber_t (
-      std::shared_ptr<zlink::context_t> context,
-      zlink::poller_t *poller = nullptr,
-      std::vector<std::string> application_topics = {});
+    explicit raw_fanout_subscriber_t (zlink::poller_t *poller = nullptr,
+                                      std::vector<std::string> application_topics = {});
+    raw_fanout_subscriber_t (std::shared_ptr<zlink::context_t> context,
+                             zlink::poller_t *poller = nullptr,
+                             std::vector<std::string> application_topics = {});
     ~raw_fanout_subscriber_t () noexcept;
 
-    bool connect_manual (std::vector<std::uint8_t> publisher_routing_id,
-                         std::string endpoint);
-    void reconcile_automatic (
-      const std::vector<fanout_publisher_intent_t> &publishers);
+    bool connect_manual (std::vector<std::uint8_t> publisher_routing_id, std::string endpoint);
+    void reconcile_automatic (const std::vector<fanout_publisher_intent_t> &publishers);
     bool disconnect (const std::vector<std::uint8_t> &publisher_routing_id);
     void close () noexcept;
 
     std::pair<fanout_receive_status_t, std::optional<fanout_received_t>>
     try_receive (std::chrono::steady_clock::time_point now);
-    std::vector<std::vector<std::uint8_t>>
-    tick (std::chrono::steady_clock::time_point now);
-    bool ready (
-      const std::vector<std::uint8_t> &publisher_routing_id) const;
+    std::vector<std::vector<std::uint8_t>> tick (std::chrono::steady_clock::time_point now);
+    bool ready (const std::vector<std::uint8_t> &publisher_routing_id) const;
     std::size_t publisher_count () const;
-    std::vector<raw_fanout_connection_snapshot_t>
-    connection_snapshots () const;
+    std::vector<raw_fanout_connection_snapshot_t> connection_snapshots () const;
 
   private:
     struct publisher_intent_key_t
@@ -153,14 +142,12 @@ class raw_fanout_subscriber_t
         friend bool operator< (const publisher_intent_key_t &left,
                                const publisher_intent_key_t &right) noexcept
         {
-            if (std::lexicographical_compare (
-                  left.routing_id.begin (), left.routing_id.end (),
-                  right.routing_id.begin (), right.routing_id.end ())) {
+            if (std::lexicographical_compare (left.routing_id.begin (), left.routing_id.end (),
+                                              right.routing_id.begin (), right.routing_id.end ())) {
                 return true;
             }
-            if (std::lexicographical_compare (
-                  right.routing_id.begin (), right.routing_id.end (),
-                  left.routing_id.begin (), left.routing_id.end ())) {
+            if (std::lexicographical_compare (right.routing_id.begin (), right.routing_id.end (),
+                                              left.routing_id.begin (), left.routing_id.end ())) {
                 return false;
             }
             return left.lifecycle_generation < right.lifecycle_generation;

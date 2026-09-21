@@ -8,15 +8,17 @@ internal static class ZLinkStreamHeaderCodec
 
     public static ReadOnlyMemory<byte> Encode(ZlinkStreamHeader header)
     {
-        if (header.Kind != ZlinkStreamMessageKind.Control
+        if (
+            header.Kind != ZlinkStreamMessageKind.Control
             && header.FlowId is null
             && header.FlowOrigin is null
-            && ZLinkFlowContext.Current is { } flow)
+            && ZLinkFlowContext.Current is { } flow
+        )
         {
             header = header with
             {
                 FlowId = flow.FlowId,
-                FlowOrigin = ToConnectorOrigin(flow.Origin)
+                FlowOrigin = ToConnectorOrigin(flow.Origin),
             };
         }
 
@@ -38,7 +40,7 @@ internal static class ZLinkStreamHeaderCodec
             ZlinkStreamFlowOrigin.Timer => ZLinkFlowOrigin.Timer,
             ZlinkStreamFlowOrigin.Application => ZLinkFlowOrigin.Application,
             ZlinkStreamFlowOrigin.Lifecycle => ZLinkFlowOrigin.Lifecycle,
-            _ => ZLinkFlowOrigin.Application
+            _ => ZLinkFlowOrigin.Application,
         };
 
     private static ZlinkStreamFlowOrigin ToConnectorOrigin(ZLinkFlowOrigin origin) =>
@@ -48,11 +50,9 @@ internal static class ZLinkStreamHeaderCodec
             ZLinkFlowOrigin.Timer => ZlinkStreamFlowOrigin.Timer,
             ZLinkFlowOrigin.Application => ZlinkStreamFlowOrigin.Application,
             ZLinkFlowOrigin.Lifecycle => ZlinkStreamFlowOrigin.Lifecycle,
-            _ => ZlinkStreamFlowOrigin.Application
+            _ => ZlinkStreamFlowOrigin.Application,
         };
 
-    public static ZlinkStreamHeader Decode(
-        ReadOnlyMemory<byte> header,
-        bool captureFlow = true) =>
+    public static ZlinkStreamHeader Decode(ReadOnlyMemory<byte> header, bool captureFlow = true) =>
         WireCodec.Decode(header, captureFlow);
 }

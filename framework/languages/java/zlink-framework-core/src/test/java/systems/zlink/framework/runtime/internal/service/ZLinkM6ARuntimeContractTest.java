@@ -1,132 +1,126 @@
 package systems.zlink.framework.runtime.internal.service;
 
-import org.junit.jupiter.api.Assertions;
 import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
+import org.junit.jupiter.api.Assertions;
+import org.junit.jupiter.api.Test;
+
+import systems.zlink.contracts.core.RoutingId;
+import systems.zlink.framework.runtime.protocol.ServiceWireConstants;
+
 import java.time.Duration;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.List;
-import org.junit.jupiter.api.Test;
-import systems.zlink.contracts.core.RoutingId;
-import systems.zlink.framework.runtime.protocol.ServiceWireConstants;
 
 final class ZLinkM6ARuntimeContractTest {
     @Test
     void descriptorUsesTheGeneratedV13AdmissionCapability() {
         assertEquals(
-            ServiceWireConstants.REQUIRED_CAPABILITY,
-            ZLinkServiceNodeDescriptor.REQUIRED_CAPABILITY);
-        assertEquals(
-            "framework-service-v13",
-            ZLinkServiceNodeDescriptor.REQUIRED_CAPABILITY);
+                ServiceWireConstants.REQUIRED_CAPABILITY,
+                ZLinkServiceNodeDescriptor.REQUIRED_CAPABILITY);
+        assertEquals("framework-service-v13", ZLinkServiceNodeDescriptor.REQUIRED_CAPABILITY);
     }
 
     @Test
     void topologyFencesStaleConnectionsAndSelectsOnlyServingPositiveWeight() {
-        var topology = new ZLinkServiceTopologyRegistry(
-            descriptor(
-                "mesh",
-                "local",
-                1,
-                1,
-                List.of(new ZLinkServiceNodeDescriptor.Channel("orders", 100)),
-                100));
-        var first = descriptor(
-            "mesh",
-            "peer-a",
-            9,
-            2,
-            List.of(new ZLinkServiceNodeDescriptor.Channel("orders", 0)),
-            100);
-        var updated = descriptor(
-            "mesh",
-            "peer-a",
-            9,
-            3,
-            List.of(new ZLinkServiceNodeDescriptor.Channel("orders", 7)),
-            100);
+        var topology =
+                new ZLinkServiceTopologyRegistry(
+                        descriptor(
+                                "mesh",
+                                "local",
+                                1,
+                                1,
+                                List.of(new ZLinkServiceNodeDescriptor.Channel("orders", 100)),
+                                100));
+        var first =
+                descriptor(
+                        "mesh",
+                        "peer-a",
+                        9,
+                        2,
+                        List.of(new ZLinkServiceNodeDescriptor.Channel("orders", 0)),
+                        100);
+        var updated =
+                descriptor(
+                        "mesh",
+                        "peer-a",
+                        9,
+                        3,
+                        List.of(new ZLinkServiceNodeDescriptor.Channel("orders", 7)),
+                        100);
 
         assertEquals(
-            ZLinkServiceTopologyRegistry.AdmissionResult.ADMITTED,
-            topology.admit(first, "pipe-old"));
+                ZLinkServiceTopologyRegistry.AdmissionResult.ADMITTED,
+                topology.admit(first, "pipe-old"));
         assertTrue(topology.selectChannel("orders").isEmpty());
         assertFalse(topology.hasSelectableChannel("orders"));
         assertEquals(
-            ZLinkServiceTopologyRegistry.AdmissionResult.ADMITTED,
-            topology.admit(updated, "pipe-current"));
+                ZLinkServiceTopologyRegistry.AdmissionResult.ADMITTED,
+                topology.admit(updated, "pipe-current"));
         assertEquals(
-            RoutingId.from("peer-a"),
-            topology.selectChannel("orders")
-                .orElseThrow()
-                .descriptor()
-                .nodeRoutingId());
+                RoutingId.from("peer-a"),
+                topology.selectChannel("orders").orElseThrow().descriptor().nodeRoutingId());
         assertFalse(topology.disconnect(RoutingId.from("peer-a"), "pipe-old"));
         assertTrue(topology.peer(RoutingId.from("peer-a")).isPresent());
-        assertTrue(topology.disconnect(
-            RoutingId.from("peer-a"), "pipe-current"));
+        assertTrue(topology.disconnect(RoutingId.from("peer-a"), "pipe-current"));
     }
 
     @Test
     void initialAdmissionRequiresExactEndpointSecurityAndLifecycle() {
-        var peer = descriptor(
-            "mesh",
-            "peer",
-            7,
-            1,
-            List.of(),
-            100);
+        var peer = descriptor("mesh", "peer", 7, 1, List.of(), 100);
 
-        assertTrue(ZLinkServiceAdmissionGuard.matchesExpectedRoute(
-            "inproc://peer", "default", 7, peer));
-        assertFalse(ZLinkServiceAdmissionGuard.matchesExpectedRoute(
-            "inproc://other", "default", 7, peer));
-        assertFalse(ZLinkServiceAdmissionGuard.matchesExpectedRoute(
-            "inproc://peer", "other-identity", 7, peer));
-        assertFalse(ZLinkServiceAdmissionGuard.matchesExpectedRoute(
-            "inproc://peer", "default", 8, peer));
+        assertTrue(
+                ZLinkServiceAdmissionGuard.matchesExpectedRoute(
+                        "inproc://peer", "default", 7, peer));
+        assertFalse(
+                ZLinkServiceAdmissionGuard.matchesExpectedRoute(
+                        "inproc://other", "default", 7, peer));
+        assertFalse(
+                ZLinkServiceAdmissionGuard.matchesExpectedRoute(
+                        "inproc://peer", "other-identity", 7, peer));
+        assertFalse(
+                ZLinkServiceAdmissionGuard.matchesExpectedRoute(
+                        "inproc://peer", "default", 8, peer));
     }
 
     @Test
     void higherRevisionRejectsEveryImmutableDescriptorMutation() {
-        var peer = descriptor(
-            "mesh",
-            "peer",
-            7,
-            1,
-            List.of(new ZLinkServiceNodeDescriptor.Channel("orders", 100)),
-            100);
+        var peer =
+                descriptor(
+                        "mesh",
+                        "peer",
+                        7,
+                        1,
+                        List.of(new ZLinkServiceNodeDescriptor.Channel("orders", 100)),
+                        100);
 
-        for (String field : List.of(
-                "endpoint",
-                "securityIdentity",
-                "channelSet",
-                "objectRole",
-                "applicationVersion",
-                "protocolCapabilities",
-                "activeCapacityLimit",
-                "pendingCapacityLimit")) {
-            var topology = new ZLinkServiceTopologyRegistry(
-                descriptor("mesh", "local", 1, 1, List.of(), 100));
+        for (String field :
+                List.of(
+                        "endpoint",
+                        "securityIdentity",
+                        "channelSet",
+                        "objectRole",
+                        "applicationVersion",
+                        "protocolCapabilities",
+                        "activeCapacityLimit",
+                        "pendingCapacityLimit")) {
+            var topology =
+                    new ZLinkServiceTopologyRegistry(
+                            descriptor("mesh", "local", 1, 1, List.of(), 100));
             assertEquals(
-                ZLinkServiceTopologyRegistry.AdmissionResult.ADMITTED,
-                topology.admit(peer, "pipe"));
+                    ZLinkServiceTopologyRegistry.AdmissionResult.ADMITTED,
+                    topology.admit(peer, "pipe"));
             assertEquals(
-                ZLinkServiceTopologyRegistry.AdmissionResult.INVALID_DESCRIPTOR,
-                topology.admit(
-                    immutableMutation(peer, field),
-                    "pipe"),
-                field);
+                    ZLinkServiceTopologyRegistry.AdmissionResult.INVALID_DESCRIPTOR,
+                    topology.admit(immutableMutation(peer, field), "pipe"),
+                    field);
             assertEquals(
-                peer,
-                topology.peer(RoutingId.from("peer"))
-                    .orElseThrow()
-                    .descriptor(),
-                field);
+                    peer, topology.peer(RoutingId.from("peer")).orElseThrow().descriptor(), field);
         }
     }
 
@@ -134,132 +128,118 @@ final class ZLinkM6ARuntimeContractTest {
     void duplicateAdmissionKeepsCanonicalDirectionAndLateCloseCannotRemoveIt() {
         RoutingId lower = RoutingId.from("a");
         RoutingId higher = RoutingId.from("z");
-        var topology = new ZLinkServiceTopologyRegistry(
-            descriptor("mesh", "a", 1, 1, List.of(), 100));
-        var peer = descriptor(
-            "mesh",
-            "z",
-            9,
-            1,
-            List.of(new ZLinkServiceNodeDescriptor.Channel("orders", 1)),
-            100);
+        var topology =
+                new ZLinkServiceTopologyRegistry(descriptor("mesh", "a", 1, 1, List.of(), 100));
+        var peer =
+                descriptor(
+                        "mesh",
+                        "z",
+                        9,
+                        1,
+                        List.of(new ZLinkServiceNodeDescriptor.Channel("orders", 1)),
+                        100);
 
         assertEquals(
-            ZLinkServiceTopologyRegistry.AdmissionResult.ADMITTED,
-            topology.admit(
-                peer,
-                connection(
-                    "outbound-current",
-                    ZLinkServiceAdmissionGuard.ConnectionDirection.OUTBOUND)));
+                ZLinkServiceTopologyRegistry.AdmissionResult.ADMITTED,
+                topology.admit(
+                        peer,
+                        connection(
+                                "outbound-current",
+                                ZLinkServiceAdmissionGuard.ConnectionDirection.OUTBOUND)));
         assertEquals(
-            ZLinkServiceTopologyRegistry.AdmissionResult.DUPLICATE_REJECTED,
-            topology.admit(
-                peer,
-                connection(
-                    "inbound-duplicate",
-                    ZLinkServiceAdmissionGuard.ConnectionDirection.INBOUND)));
-        assertEquals(
-            "outbound-current",
-            topology.peer(higher).orElseThrow().connectionId());
+                ZLinkServiceTopologyRegistry.AdmissionResult.DUPLICATE_REJECTED,
+                topology.admit(
+                        peer,
+                        connection(
+                                "inbound-duplicate",
+                                ZLinkServiceAdmissionGuard.ConnectionDirection.INBOUND)));
+        assertEquals("outbound-current", topology.peer(higher).orElseThrow().connectionId());
 
         assertFalse(topology.disconnect(higher, "inbound-duplicate"));
-        assertEquals(
-            "outbound-current",
-            topology.peer(higher).orElseThrow().connectionId());
+        assertEquals("outbound-current", topology.peer(higher).orElseThrow().connectionId());
 
         assertEquals(
-            ZLinkServiceAdmissionGuard.DuplicateConnectionDecision.KEEP_CURRENT,
-            ZLinkServiceAdmissionGuard.selectConnection(
-                lower,
-                higher,
-                9,
-                ZLinkServiceAdmissionGuard.ConnectionDirection.OUTBOUND,
-                "outbound-current",
-                9,
-                ZLinkServiceAdmissionGuard.ConnectionDirection.INBOUND,
-                "inbound-duplicate"));
+                ZLinkServiceAdmissionGuard.DuplicateConnectionDecision.KEEP_CURRENT,
+                ZLinkServiceAdmissionGuard.selectConnection(
+                        lower,
+                        higher,
+                        9,
+                        ZLinkServiceAdmissionGuard.ConnectionDirection.OUTBOUND,
+                        "outbound-current",
+                        9,
+                        ZLinkServiceAdmissionGuard.ConnectionDirection.INBOUND,
+                        "inbound-duplicate"));
         assertEquals(
-            ZLinkServiceAdmissionGuard.DuplicateConnectionDecision.KEEP_CURRENT,
-            ZLinkServiceAdmissionGuard.selectConnection(
-                higher,
-                lower,
-                9,
-                ZLinkServiceAdmissionGuard.ConnectionDirection.INBOUND,
-                "inbound-current",
-                9,
-                ZLinkServiceAdmissionGuard.ConnectionDirection.OUTBOUND,
-                "outbound-duplicate"));
+                ZLinkServiceAdmissionGuard.DuplicateConnectionDecision.KEEP_CURRENT,
+                ZLinkServiceAdmissionGuard.selectConnection(
+                        higher,
+                        lower,
+                        9,
+                        ZLinkServiceAdmissionGuard.ConnectionDirection.INBOUND,
+                        "inbound-current",
+                        9,
+                        ZLinkServiceAdmissionGuard.ConnectionDirection.OUTBOUND,
+                        "outbound-duplicate"));
 
-        var replacement = new ZLinkServiceTopologyRegistry(
-            descriptor("mesh", "a", 1, 1, List.of(), 100));
+        var replacement =
+                new ZLinkServiceTopologyRegistry(descriptor("mesh", "a", 1, 1, List.of(), 100));
         assertEquals(
-            ZLinkServiceTopologyRegistry.AdmissionResult.ADMITTED,
-            replacement.admit(
-                peer,
-                connection(
-                    "inbound-old",
-                    ZLinkServiceAdmissionGuard.ConnectionDirection.INBOUND)));
+                ZLinkServiceTopologyRegistry.AdmissionResult.ADMITTED,
+                replacement.admit(
+                        peer,
+                        connection(
+                                "inbound-old",
+                                ZLinkServiceAdmissionGuard.ConnectionDirection.INBOUND)));
         assertEquals(
-            ZLinkServiceTopologyRegistry.AdmissionResult.ADMITTED,
-            replacement.admit(
-                peer,
-                connection(
-                    "outbound-replacement",
-                    ZLinkServiceAdmissionGuard.ConnectionDirection.OUTBOUND)));
+                ZLinkServiceTopologyRegistry.AdmissionResult.ADMITTED,
+                replacement.admit(
+                        peer,
+                        connection(
+                                "outbound-replacement",
+                                ZLinkServiceAdmissionGuard.ConnectionDirection.OUTBOUND)));
         assertFalse(replacement.disconnect(higher, "inbound-old"));
-        assertEquals(
-            "outbound-replacement",
-            replacement.peer(higher).orElseThrow().connectionId());
+        assertEquals("outbound-replacement", replacement.peer(higher).orElseThrow().connectionId());
     }
 
     @Test
     void commonWeightsUseExactRangeRatioRevisionAndCapacityEligibility() {
-        assertEquals(
-            10_000,
-            new ZLinkServiceNodeDescriptor.Channel(
-                "maximum",
-                10_000).weight());
+        assertEquals(10_000, new ZLinkServiceNodeDescriptor.Channel("maximum", 10_000).weight());
         Assertions.assertThrows(
-            IllegalArgumentException.class,
-            () -> new ZLinkServiceNodeDescriptor.Channel("negative", -1));
+                IllegalArgumentException.class,
+                () -> new ZLinkServiceNodeDescriptor.Channel("negative", -1));
         Assertions.assertThrows(
-            IllegalArgumentException.class,
-            () -> new ZLinkServiceNodeDescriptor.Channel(
-                "too-large",
-                10_001));
+                IllegalArgumentException.class,
+                () -> new ZLinkServiceNodeDescriptor.Channel("too-large", 10_001));
 
-        var topology = new ZLinkServiceTopologyRegistry(
-            descriptor("mesh", "local", 1, 1, List.of(), 100));
+        var topology =
+                new ZLinkServiceTopologyRegistry(descriptor("mesh", "local", 1, 1, List.of(), 100));
         topology.admit(
-            descriptor(
-                "mesh",
-                "peer-a",
-                1,
-                1,
-                List.of(new ZLinkServiceNodeDescriptor.Channel(
-                    "orders",
-                    100)),
-                100),
-            "pipe-a");
+                descriptor(
+                        "mesh",
+                        "peer-a",
+                        1,
+                        1,
+                        List.of(new ZLinkServiceNodeDescriptor.Channel("orders", 100)),
+                        100),
+                "pipe-a");
         topology.admit(
-            descriptor(
-                "mesh",
-                "peer-b",
-                1,
-                1,
-                List.of(new ZLinkServiceNodeDescriptor.Channel(
-                    "orders",
-                    300)),
-                300),
-            "pipe-b");
+                descriptor(
+                        "mesh",
+                        "peer-b",
+                        1,
+                        1,
+                        List.of(new ZLinkServiceNodeDescriptor.Channel("orders", 300)),
+                        300),
+                "pipe-b");
         int selectedA = 0;
         int selectedB = 0;
         for (int index = 0; index < 400; index++) {
-            String rid = topology.selectChannel("orders")
-                .orElseThrow()
-                .descriptor()
-                .nodeRoutingId()
-                .toString();
+            String rid =
+                    topology.selectChannel("orders")
+                            .orElseThrow()
+                            .descriptor()
+                            .nodeRoutingId()
+                            .toString();
             if ("peer-a".equals(rid)) {
                 selectedA++;
             } else if ("peer-b".equals(rid)) {
@@ -270,62 +250,48 @@ final class ZLinkM6ARuntimeContractTest {
         assertEquals(300, selectedB);
 
         assertEquals(
-            ZLinkServiceTopologyRegistry.AdmissionResult.STALE_DESCRIPTOR,
-            topology.admit(
-                descriptor(
-                    "mesh",
-                    "peer-b",
-                    1,
-                    1,
-                    List.of(new ZLinkServiceNodeDescriptor.Channel(
-                        "orders",
-                        0)),
-                    0),
-                "stale-pipe"));
+                ZLinkServiceTopologyRegistry.AdmissionResult.STALE_DESCRIPTOR,
+                topology.admit(
+                        descriptor(
+                                "mesh",
+                                "peer-b",
+                                1,
+                                1,
+                                List.of(new ZLinkServiceNodeDescriptor.Channel("orders", 0)),
+                                0),
+                        "stale-pipe"));
         assertEquals(
-            ZLinkServiceTopologyRegistry.AdmissionResult.ADMITTED,
-            topology.admit(
-                descriptor(
-                    "mesh",
-                    "peer-b",
-                    1,
-                    2,
-                    List.of(new ZLinkServiceNodeDescriptor.Channel(
-                        "orders",
-                        0)),
-                    0),
-                "current-pipe"));
+                ZLinkServiceTopologyRegistry.AdmissionResult.ADMITTED,
+                topology.admit(
+                        descriptor(
+                                "mesh",
+                                "peer-b",
+                                1,
+                                2,
+                                List.of(new ZLinkServiceNodeDescriptor.Channel("orders", 0)),
+                                0),
+                        "current-pipe"));
         for (int index = 0; index < 16; index++) {
             assertEquals(
-                RoutingId.from("peer-a"),
-                topology.selectChannel("orders")
-                    .orElseThrow()
-                    .descriptor()
-                    .nodeRoutingId());
+                    RoutingId.from("peer-a"),
+                    topology.selectChannel("orders").orElseThrow().descriptor().nodeRoutingId());
         }
 
-        var capacityTopology = new ZLinkServiceTopologyRegistry(
-            descriptor("mesh", "local", 1, 1, List.of(), 100));
+        var capacityTopology =
+                new ZLinkServiceTopologyRegistry(descriptor("mesh", "local", 1, 1, List.of(), 100));
         capacityTopology.admit(
-            descriptorWithCapacity(
-                "full", 10_000, 100, 10, 100, 10),
-            "full-pipe");
+                descriptorWithCapacity("full", 10_000, 100, 10, 100, 10), "full-pipe");
         capacityTopology.admit(
-            descriptorWithCapacity(
-                "eligible", 1, 100, 0, 100, 0),
-            "eligible-pipe");
+                descriptorWithCapacity("eligible", 1, 100, 0, 100, 0), "eligible-pipe");
         assertEquals(
-            RoutingId.from("eligible"),
-            capacityTopology.selectPlacement()
-                .orElseThrow()
-                .descriptor()
-                .nodeRoutingId());
+                RoutingId.from("eligible"),
+                capacityTopology.selectPlacement().orElseThrow().descriptor().nodeRoutingId());
     }
 
     @Test
     void livenessResendsOneProbeAndOnlyMatchingAckRenewsDeadline() {
-        var liveness = new ZLinkServiceLivenessRegistry(
-            Duration.ofSeconds(5), Duration.ofSeconds(15));
+        var liveness =
+                new ZLinkServiceLivenessRegistry(Duration.ofSeconds(5), Duration.ofSeconds(15));
         RoutingId peer = RoutingId.from("peer");
         liveness.admit(peer, "pipe", 0);
 
@@ -334,24 +300,21 @@ final class ZLinkM6ARuntimeContractTest {
         long probe = first.probes().getFirst().probeId();
         var retry = liveness.tick(Duration.ofSeconds(10).toNanos());
         assertEquals(probe, retry.probes().getFirst().probeId());
-        assertFalse(liveness.acknowledge(
-            peer, "stale-pipe", probe, Duration.ofSeconds(11).toNanos()));
-        assertFalse(liveness.acknowledge(
-            peer, "pipe", probe + 1, Duration.ofSeconds(11).toNanos()));
-        assertTrue(liveness.acknowledge(
-            peer, "pipe", probe, Duration.ofSeconds(11).toNanos()));
+        assertFalse(
+                liveness.acknowledge(peer, "stale-pipe", probe, Duration.ofSeconds(11).toNanos()));
+        assertFalse(
+                liveness.acknowledge(peer, "pipe", probe + 1, Duration.ofSeconds(11).toNanos()));
+        assertTrue(liveness.acknowledge(peer, "pipe", probe, Duration.ofSeconds(11).toNanos()));
 
-        assertTrue(liveness.tick(Duration.ofSeconds(20).toNanos())
-            .timedOutNodes().isEmpty());
+        assertTrue(liveness.tick(Duration.ofSeconds(20).toNanos()).timedOutNodes().isEmpty());
         assertEquals(
-            List.of(peer),
-            liveness.tick(Duration.ofSeconds(26).toNanos()).timedOutNodes());
+                List.of(peer), liveness.tick(Duration.ofSeconds(26).toNanos()).timedOutNodes());
     }
 
     @Test
     void livenessReprobesQuicklyUntilTheFirstAck() {
-        var liveness = new ZLinkServiceLivenessRegistry(
-            Duration.ofSeconds(5), Duration.ofSeconds(15));
+        var liveness =
+                new ZLinkServiceLivenessRegistry(Duration.ofSeconds(5), Duration.ofSeconds(15));
         RoutingId peer = RoutingId.from("peer-first-ack");
         liveness.admit(peer, "pipe", 0);
         assertTrue(liveness.requestProbe(peer, "pipe", 0));
@@ -361,23 +324,20 @@ final class ZLinkM6ARuntimeContractTest {
         long probe = first.probes().getFirst().probeId();
         //  A lost first probe gates every outbound bound-session send, so the
         //  pre-ready retransmit must not wait a full probe interval.
-        var fastRetry = liveness.tick(
-            ZLinkServiceLivenessRegistry.NOT_READY_PROBE_RETRY.toNanos());
+        var fastRetry = liveness.tick(ZLinkServiceLivenessRegistry.NOT_READY_PROBE_RETRY.toNanos());
         assertEquals(probe, fastRetry.probes().getFirst().probeId());
 
         long ackNanos = Duration.ofMillis(300).toNanos();
         assertTrue(liveness.acknowledge(peer, "pipe", probe, ackNanos));
         //  Once ready, probing returns to the configured interval.
-        assertTrue(liveness.tick(
-            ackNanos + Duration.ofSeconds(1).toNanos()).probes().isEmpty());
-        assertEquals(1, liveness.tick(
-            ackNanos + Duration.ofSeconds(5).toNanos()).probes().size());
+        assertTrue(liveness.tick(ackNanos + Duration.ofSeconds(1).toNanos()).probes().isEmpty());
+        assertEquals(1, liveness.tick(ackNanos + Duration.ofSeconds(5).toNanos()).probes().size());
     }
 
     @Test
     void livenessRequiresAProbeAckBeforeAConnectionCanBeSelected() {
-        var liveness = new ZLinkServiceLivenessRegistry(
-            Duration.ofSeconds(5), Duration.ofSeconds(15));
+        var liveness =
+                new ZLinkServiceLivenessRegistry(Duration.ofSeconds(5), Duration.ofSeconds(15));
         RoutingId peer = RoutingId.from("peer-ready");
         long now = 100;
 
@@ -387,19 +347,17 @@ final class ZLinkM6ARuntimeContractTest {
         assertFalse(liveness.requestProbe(peer, "pipe", now));
 
         var probe = liveness.tick(now).probes().getFirst();
-        assertTrue(liveness.acknowledgeProbe(
-            peer, "pipe", probe.probeId()).isPresent());
+        assertTrue(liveness.acknowledgeProbe(peer, "pipe", probe.probeId()).isPresent());
         assertFalse(liveness.isReady(peer, "pipe"));
-        assertTrue(liveness.acknowledge(
-            peer, "pipe", probe.probeId(), now + 1));
+        assertTrue(liveness.acknowledge(peer, "pipe", probe.probeId(), now + 1));
         assertTrue(liveness.isReady(peer, "pipe"));
         assertFalse(liveness.requestProbe(peer, "pipe", now + 1));
     }
 
     @Test
     void livenessAcceptsPeriodicAckWithoutAnotherReadyTransition() {
-        var liveness = new ZLinkServiceLivenessRegistry(
-            Duration.ofSeconds(5), Duration.ofSeconds(15));
+        var liveness =
+                new ZLinkServiceLivenessRegistry(Duration.ofSeconds(5), Duration.ofSeconds(15));
         RoutingId peer = RoutingId.from("peer-periodic-ack");
         long now = 100;
 
@@ -407,27 +365,24 @@ final class ZLinkM6ARuntimeContractTest {
         assertTrue(liveness.requestProbe(peer, "pipe", now));
         var first = liveness.tick(now).probes().getFirst();
         assertFalse(liveness.isReady(peer, "pipe"));
-        assertTrue(liveness.acknowledge(
-            peer, "pipe", first.probeId(), now + 1));
+        assertTrue(liveness.acknowledge(peer, "pipe", first.probeId(), now + 1));
         assertTrue(liveness.isReady(peer, "pipe"));
 
-        var periodic = liveness.tick(
-            now + 1 + Duration.ofSeconds(5).toNanos())
-            .probes()
-            .getFirst();
+        var periodic = liveness.tick(now + 1 + Duration.ofSeconds(5).toNanos()).probes().getFirst();
         assertTrue(liveness.isReady(peer, "pipe"));
-        assertTrue(liveness.acknowledge(
-            peer,
-            "pipe",
-            periodic.probeId(),
-            now + 2 + Duration.ofSeconds(5).toNanos()));
+        assertTrue(
+                liveness.acknowledge(
+                        peer,
+                        "pipe",
+                        periodic.probeId(),
+                        now + 2 + Duration.ofSeconds(5).toNanos()));
         assertTrue(liveness.isReady(peer, "pipe"));
     }
 
     @Test
     void readyConnectionCanBeRevalidatedImmediately() {
-        var liveness = new ZLinkServiceLivenessRegistry(
-            Duration.ofSeconds(5), Duration.ofSeconds(15));
+        var liveness =
+                new ZLinkServiceLivenessRegistry(Duration.ofSeconds(5), Duration.ofSeconds(15));
         RoutingId peer = RoutingId.from("peer-revalidate");
         long now = 100;
 
@@ -435,41 +390,34 @@ final class ZLinkM6ARuntimeContractTest {
         assertTrue(liveness.requestProbe(peer, "pipe", now));
         var initial = liveness.tick(now).probes().getFirst();
         assertFalse(initial.selectedPair());
-        assertTrue(liveness.acknowledge(
-            peer, "pipe", initial.probeId(), now + 1));
+        assertTrue(liveness.acknowledge(peer, "pipe", initial.probeId(), now + 1));
         assertEquals(
-            ZLinkServiceLivenessRegistry.Readiness.READY,
-            liveness.peerStateSnapshot(peer, "pipe").readiness());
+                ZLinkServiceLivenessRegistry.Readiness.READY,
+                liveness.peerStateSnapshot(peer, "pipe").readiness());
 
-        assertTrue(liveness.requestValidationProbe(
-            peer, "pipe", now + 2));
-        assertFalse(liveness.requestValidationProbe(
-            peer, "stale-pipe", now + 2));
-        assertFalse(liveness.requestValidationProbe(
-            peer, "pipe", now + 2));
+        assertTrue(liveness.requestValidationProbe(peer, "pipe", now + 2));
+        assertFalse(liveness.requestValidationProbe(peer, "stale-pipe", now + 2));
+        assertFalse(liveness.requestValidationProbe(peer, "pipe", now + 2));
         assertEquals(
-            ZLinkServiceLivenessRegistry.Readiness
-                .VALIDATING_PREVIOUSLY_READY,
-            liveness.peerStateSnapshot(peer, "pipe").readiness());
+                ZLinkServiceLivenessRegistry.Readiness.VALIDATING_PREVIOUSLY_READY,
+                liveness.peerStateSnapshot(peer, "pipe").readiness());
         var validation = liveness.tick(now + 2).probes().getFirst();
         assertTrue(validation.selectedPair());
         assertFalse(liveness.isReady(peer, "pipe"));
         assertEquals(
-            ZLinkServiceLivenessRegistry.Readiness
-                .VALIDATING_PREVIOUSLY_READY,
-            liveness.peerStateSnapshot(peer, "pipe").readiness());
-        assertTrue(liveness.acknowledge(
-            peer, "pipe", validation.probeId(), now + 3));
+                ZLinkServiceLivenessRegistry.Readiness.VALIDATING_PREVIOUSLY_READY,
+                liveness.peerStateSnapshot(peer, "pipe").readiness());
+        assertTrue(liveness.acknowledge(peer, "pipe", validation.probeId(), now + 3));
         assertTrue(liveness.isReady(peer, "pipe"));
         assertEquals(
-            ZLinkServiceLivenessRegistry.Readiness.READY,
-            liveness.peerStateSnapshot(peer, "pipe").readiness());
+                ZLinkServiceLivenessRegistry.Readiness.READY,
+                liveness.peerStateSnapshot(peer, "pipe").readiness());
     }
 
     @Test
     void previouslyReadyValidationExpiresAtTheExistingPeerDeadline() {
-        var liveness = new ZLinkServiceLivenessRegistry(
-            Duration.ofSeconds(5), Duration.ofSeconds(15));
+        var liveness =
+                new ZLinkServiceLivenessRegistry(Duration.ofSeconds(5), Duration.ofSeconds(15));
         RoutingId peer = RoutingId.from("peer-revalidate-timeout");
         long now = 100;
 
@@ -477,29 +425,24 @@ final class ZLinkM6ARuntimeContractTest {
         assertTrue(liveness.requestProbe(peer, "pipe", now));
         var bootstrap = liveness.tick(now).probes().getFirst();
         long readyAt = now + 1;
-        assertTrue(liveness.acknowledge(
-            peer, "pipe", bootstrap.probeId(), readyAt));
-        assertTrue(liveness.requestValidationProbe(
-            peer, "pipe", readyAt + 1));
+        assertTrue(liveness.acknowledge(peer, "pipe", bootstrap.probeId(), readyAt));
+        assertTrue(liveness.requestValidationProbe(peer, "pipe", readyAt + 1));
         assertEquals(
-            ZLinkServiceLivenessRegistry.Readiness
-                .VALIDATING_PREVIOUSLY_READY,
-            liveness.peerStateSnapshot(peer, "pipe").readiness());
+                ZLinkServiceLivenessRegistry.Readiness.VALIDATING_PREVIOUSLY_READY,
+                liveness.peerStateSnapshot(peer, "pipe").readiness());
 
         assertEquals(
-            List.of(peer),
-            liveness.tick(
-                readyAt + Duration.ofSeconds(15).toNanos())
-                .timedOutNodes());
+                List.of(peer),
+                liveness.tick(readyAt + Duration.ofSeconds(15).toNanos()).timedOutNodes());
         assertEquals(
-            ZLinkServiceLivenessRegistry.Readiness.NOT_READY,
-            liveness.peerStateSnapshot(peer, "pipe").readiness());
+                ZLinkServiceLivenessRegistry.Readiness.NOT_READY,
+                liveness.peerStateSnapshot(peer, "pipe").readiness());
     }
 
     @Test
     void validationDuringBootstrapRunsAsAnExactProbeAfterTheAck() {
-        var liveness = new ZLinkServiceLivenessRegistry(
-            Duration.ofSeconds(5), Duration.ofSeconds(15));
+        var liveness =
+                new ZLinkServiceLivenessRegistry(Duration.ofSeconds(5), Duration.ofSeconds(15));
         RoutingId peer = RoutingId.from("peer-bootstrap-revalidate");
         long now = 100;
 
@@ -507,138 +450,137 @@ final class ZLinkM6ARuntimeContractTest {
         assertTrue(liveness.requestProbe(peer, "pipe", now));
         var bootstrap = liveness.tick(now).probes().getFirst();
         assertFalse(bootstrap.selectedPair());
-        assertTrue(liveness.requestValidationProbe(
-            peer, "pipe", now + 1));
-        assertFalse(liveness.requestValidationProbe(
-            peer, "pipe", now + 1));
+        assertTrue(liveness.requestValidationProbe(peer, "pipe", now + 1));
+        assertFalse(liveness.requestValidationProbe(peer, "pipe", now + 1));
         assertEquals(
-            ZLinkServiceLivenessRegistry.Readiness.NOT_READY,
-            liveness.peerStateSnapshot(peer, "pipe").readiness());
-        assertTrue(liveness.acknowledge(
-            peer, "pipe", bootstrap.probeId(), now + 2));
+                ZLinkServiceLivenessRegistry.Readiness.NOT_READY,
+                liveness.peerStateSnapshot(peer, "pipe").readiness());
+        assertTrue(liveness.acknowledge(peer, "pipe", bootstrap.probeId(), now + 2));
         assertFalse(liveness.isReady(peer, "pipe"));
         assertEquals(
-            ZLinkServiceLivenessRegistry.Readiness.NOT_READY,
-            liveness.peerStateSnapshot(peer, "pipe").readiness());
+                ZLinkServiceLivenessRegistry.Readiness.NOT_READY,
+                liveness.peerStateSnapshot(peer, "pipe").readiness());
 
         var validation = liveness.tick(now + 2).probes().getFirst();
         assertTrue(validation.selectedPair());
         assertNotEquals(bootstrap.probeId(), validation.probeId());
-        assertTrue(liveness.acknowledge(
-            peer, "pipe", validation.probeId(), now + 3));
+        assertTrue(liveness.acknowledge(peer, "pipe", validation.probeId(), now + 3));
         assertTrue(liveness.isReady(peer, "pipe"));
         assertEquals(
-            ZLinkServiceLivenessRegistry.Readiness.READY,
-            liveness.peerStateSnapshot(peer, "pipe").readiness());
+                ZLinkServiceLivenessRegistry.Readiness.READY,
+                liveness.peerStateSnapshot(peer, "pipe").readiness());
     }
 
     @Test
     void validationDuringAnExactProbeRunsAgainAfterItsAck() {
-        var liveness = new ZLinkServiceLivenessRegistry(
-            Duration.ofSeconds(5), Duration.ofSeconds(15));
+        var liveness =
+                new ZLinkServiceLivenessRegistry(Duration.ofSeconds(5), Duration.ofSeconds(15));
         RoutingId peer = RoutingId.from("peer-periodic-revalidate");
         long now = 100;
 
         liveness.admit(peer, "pipe", now);
         assertTrue(liveness.requestProbe(peer, "pipe", now));
         var bootstrap = liveness.tick(now).probes().getFirst();
-        assertTrue(liveness.acknowledge(
-            peer, "pipe", bootstrap.probeId(), now + 1));
+        assertTrue(liveness.acknowledge(peer, "pipe", bootstrap.probeId(), now + 1));
         long periodicAt = now + 1 + Duration.ofSeconds(5).toNanos();
         var periodic = liveness.tick(periodicAt).probes().getFirst();
         assertTrue(periodic.selectedPair());
-        assertTrue(liveness.requestValidationProbe(
-            peer, "pipe", periodicAt + 1));
+        assertTrue(liveness.requestValidationProbe(peer, "pipe", periodicAt + 1));
         assertFalse(liveness.isReady(peer, "pipe"));
         assertEquals(
-            ZLinkServiceLivenessRegistry.Readiness
-                .VALIDATING_PREVIOUSLY_READY,
-            liveness.peerStateSnapshot(peer, "pipe").readiness());
-        assertTrue(liveness.acknowledge(
-            peer, "pipe", periodic.probeId(), periodicAt + 2));
+                ZLinkServiceLivenessRegistry.Readiness.VALIDATING_PREVIOUSLY_READY,
+                liveness.peerStateSnapshot(peer, "pipe").readiness());
+        assertTrue(liveness.acknowledge(peer, "pipe", periodic.probeId(), periodicAt + 2));
         assertFalse(liveness.isReady(peer, "pipe"));
         assertEquals(
-            ZLinkServiceLivenessRegistry.Readiness
-                .VALIDATING_PREVIOUSLY_READY,
-            liveness.peerStateSnapshot(peer, "pipe").readiness());
+                ZLinkServiceLivenessRegistry.Readiness.VALIDATING_PREVIOUSLY_READY,
+                liveness.peerStateSnapshot(peer, "pipe").readiness());
 
-        var validation = liveness.tick(periodicAt + 2)
-            .probes()
-            .getFirst();
+        var validation = liveness.tick(periodicAt + 2).probes().getFirst();
         assertTrue(validation.selectedPair());
         assertNotEquals(periodic.probeId(), validation.probeId());
-        assertTrue(liveness.acknowledge(
-            peer, "pipe", validation.probeId(), periodicAt + 3));
+        assertTrue(liveness.acknowledge(peer, "pipe", validation.probeId(), periodicAt + 3));
         assertTrue(liveness.isReady(peer, "pipe"));
         assertEquals(
-            ZLinkServiceLivenessRegistry.Readiness.READY,
-            liveness.peerStateSnapshot(peer, "pipe").readiness());
+                ZLinkServiceLivenessRegistry.Readiness.READY,
+                liveness.peerStateSnapshot(peer, "pipe").readiness());
     }
 
     @Test
     void oldConnectionAckCannotReadyOrRenewAReplacementConnection() {
-        var liveness = new ZLinkServiceLivenessRegistry(
-            Duration.ofSeconds(5), Duration.ofSeconds(15));
+        var liveness =
+                new ZLinkServiceLivenessRegistry(Duration.ofSeconds(5), Duration.ofSeconds(15));
         RoutingId peer = RoutingId.from("peer-replaced");
 
         liveness.admit(peer, "old-pipe", 0);
-        long oldProbe = liveness.tick(Duration.ofSeconds(5).toNanos())
-            .probes()
-            .getFirst()
-            .probeId();
+        long oldProbe =
+                liveness.tick(Duration.ofSeconds(5).toNanos()).probes().getFirst().probeId();
 
         liveness.admit(peer, "new-pipe", Duration.ofSeconds(6).toNanos());
-        assertFalse(liveness.acknowledge(
-            peer,
-            "old-pipe",
-            oldProbe,
-            Duration.ofSeconds(7).toNanos()));
+        assertFalse(
+                liveness.acknowledge(peer, "old-pipe", oldProbe, Duration.ofSeconds(7).toNanos()));
         assertFalse(liveness.isReady(peer, "new-pipe"));
         assertEquals(
-            List.of(peer),
-            liveness.tick(Duration.ofSeconds(22).toNanos()).timedOutNodes());
+                List.of(peer), liveness.tick(Duration.ofSeconds(22).toNanos()).timedOutNodes());
     }
 
     @Test
     void topologySelectionCanExcludeAnAdmittedButNotReadyPeer() {
-        var topology = new ZLinkServiceTopologyRegistry(
-            descriptor("mesh", "local", 1, 1, List.of(), 100));
-        var peerA = descriptor(
-            "mesh", "peer-a", 1, 1,
-            List.of(new ZLinkServiceNodeDescriptor.Channel("orders", 100)),
-            100);
-        var peerB = descriptor(
-            "mesh", "peer-b", 1, 1,
-            List.of(new ZLinkServiceNodeDescriptor.Channel("orders", 100)),
-            100);
+        var topology =
+                new ZLinkServiceTopologyRegistry(descriptor("mesh", "local", 1, 1, List.of(), 100));
+        var peerA =
+                descriptor(
+                        "mesh",
+                        "peer-a",
+                        1,
+                        1,
+                        List.of(new ZLinkServiceNodeDescriptor.Channel("orders", 100)),
+                        100);
+        var peerB =
+                descriptor(
+                        "mesh",
+                        "peer-b",
+                        1,
+                        1,
+                        List.of(new ZLinkServiceNodeDescriptor.Channel("orders", 100)),
+                        100);
         topology.admit(peerA, "pipe-a");
         topology.admit(peerB, "pipe-b");
 
         assertEquals(
-            RoutingId.from("peer-b"),
-            topology.selectChannel(
-                    "orders",
-                    peer -> peer.descriptor().nodeRoutingId()
-                        .equals(RoutingId.from("peer-b")))
-                .orElseThrow()
-                .descriptor()
-                .nodeRoutingId());
-        assertFalse(topology.hasSelectableChannel(
-            "orders", ignored -> false));
+                RoutingId.from("peer-b"),
+                topology.selectChannel(
+                                "orders",
+                                peer ->
+                                        peer.descriptor()
+                                                .nodeRoutingId()
+                                                .equals(RoutingId.from("peer-b")))
+                        .orElseThrow()
+                        .descriptor()
+                        .nodeRoutingId());
+        assertFalse(topology.hasSelectableChannel("orders", ignored -> false));
     }
 
     @Test
     void channelSelectionPlanChangesOnlyWithTopologyReadiness() {
-        var topology = new ZLinkServiceTopologyRegistry(
-            descriptor("mesh", "local", 1, 1, List.of(), 100));
-        var peerA = descriptor(
-            "mesh", "peer-a", 1, 1,
-            List.of(new ZLinkServiceNodeDescriptor.Channel("orders", 100)),
-            100);
-        var peerB = descriptor(
-            "mesh", "peer-b", 1, 1,
-            List.of(new ZLinkServiceNodeDescriptor.Channel("orders", 300)),
-            100);
+        var topology =
+                new ZLinkServiceTopologyRegistry(descriptor("mesh", "local", 1, 1, List.of(), 100));
+        var peerA =
+                descriptor(
+                        "mesh",
+                        "peer-a",
+                        1,
+                        1,
+                        List.of(new ZLinkServiceNodeDescriptor.Channel("orders", 100)),
+                        100);
+        var peerB =
+                descriptor(
+                        "mesh",
+                        "peer-b",
+                        1,
+                        1,
+                        List.of(new ZLinkServiceNodeDescriptor.Channel("orders", 300)),
+                        100);
         topology.admit(peerA, "pipe-a");
         topology.admit(peerB, "pipe-b");
 
@@ -646,74 +588,74 @@ final class ZLinkM6ARuntimeContractTest {
         assertTrue(topology.setChannelReady(peerA.nodeRoutingId(), "pipe-a", true));
         assertTrue(topology.setChannelReady(peerB.nodeRoutingId(), "pipe-b", true));
         assertEquals(
-            List.of("peer-b", "peer-a", "peer-b", "peer-b"),
-            java.util.stream.IntStream.range(0, 4)
-                .mapToObj(ignored -> topology.selectReadyChannel("orders")
-                    .orElseThrow().descriptor().nodeRoutingId().toString())
-                .toList());
+                List.of("peer-b", "peer-a", "peer-b", "peer-b"),
+                java.util.stream.IntStream.range(0, 4)
+                        .mapToObj(
+                                ignored ->
+                                        topology.selectReadyChannel("orders")
+                                                .orElseThrow()
+                                                .descriptor()
+                                                .nodeRoutingId()
+                                                .toString())
+                        .toList());
 
         assertTrue(topology.setChannelReady(peerB.nodeRoutingId(), "pipe-b", false));
         for (int index = 0; index < 4; index++) {
             assertEquals(
-                peerA.nodeRoutingId(),
-                topology.selectReadyChannel("orders")
-                    .orElseThrow().descriptor().nodeRoutingId());
+                    peerA.nodeRoutingId(),
+                    topology.selectReadyChannel("orders")
+                            .orElseThrow()
+                            .descriptor()
+                            .nodeRoutingId());
         }
     }
 
     @Test
     void topologyReadinessPredicateCanReenterTheRegistry() {
-        var topology = new ZLinkServiceTopologyRegistry(
-            descriptor("mesh", "local", 1, 1, List.of(), 100));
-        var peer = descriptor(
-            "mesh",
-            "peer-a",
-            1,
-            1,
-            List.of(new ZLinkServiceNodeDescriptor.Channel("orders", 100)),
-            100);
+        var topology =
+                new ZLinkServiceTopologyRegistry(descriptor("mesh", "local", 1, 1, List.of(), 100));
+        var peer =
+                descriptor(
+                        "mesh",
+                        "peer-a",
+                        1,
+                        1,
+                        List.of(new ZLinkServiceNodeDescriptor.Channel("orders", 100)),
+                        100);
         topology.admit(peer, "pipe-a");
 
         assertEquals(
-            peer.nodeRoutingId(),
-            topology.selectChannel("orders", candidate ->
-                topology.peer(candidate.descriptor().nodeRoutingId()).isPresent())
-                .orElseThrow()
-                .descriptor()
-                .nodeRoutingId());
+                peer.nodeRoutingId(),
+                topology.selectChannel(
+                                "orders",
+                                candidate ->
+                                        topology.peer(candidate.descriptor().nodeRoutingId())
+                                                .isPresent())
+                        .orElseThrow()
+                        .descriptor()
+                        .nodeRoutingId());
     }
 
     @Test
     void mailboxSerializesEachOwnerWithoutAnOwnerAdmissionCap() {
         var mailbox = new ZLinkServiceMailbox();
-        assertTrue(mailbox.tryEnqueue(record(
-            "node:a", ZLinkServiceMailbox.Domain.APPLICATION, 4)));
-        assertTrue(mailbox.tryEnqueue(record(
-            "node:a", ZLinkServiceMailbox.Domain.APPLICATION, 4)));
-        assertTrue(mailbox.tryEnqueue(record(
-            "node:a", ZLinkServiceMailbox.Domain.APPLICATION, 1)));
-        assertTrue(mailbox.tryEnqueue(record(
-            "node:b", ZLinkServiceMailbox.Domain.APPLICATION, 1)));
-        assertTrue(mailbox.tryEnqueue(record(
-            "peer:a", ZLinkServiceMailbox.Domain.INFRASTRUCTURE, 8)));
+        assertTrue(mailbox.tryEnqueue(record("node:a", ZLinkServiceMailbox.Domain.APPLICATION, 4)));
+        assertTrue(mailbox.tryEnqueue(record("node:a", ZLinkServiceMailbox.Domain.APPLICATION, 4)));
+        assertTrue(mailbox.tryEnqueue(record("node:a", ZLinkServiceMailbox.Domain.APPLICATION, 1)));
+        assertTrue(mailbox.tryEnqueue(record("node:b", ZLinkServiceMailbox.Domain.APPLICATION, 1)));
+        assertTrue(
+                mailbox.tryEnqueue(record("peer:a", ZLinkServiceMailbox.Domain.INFRASTRUCTURE, 8)));
 
-        var first = mailbox.tryClaim(
-            ZLinkServiceMailbox.Domain.APPLICATION, 1, 256).orElseThrow();
-        assertEquals(4, mailbox.pendingMessages(
-            ZLinkServiceMailbox.Domain.APPLICATION));
-        assertTrue(mailbox.tryEnqueue(record(
-            "node:a", ZLinkServiceMailbox.Domain.APPLICATION, 1)));
-        assertTrue(mailbox.tryClaim(
-            ZLinkServiceMailbox.Domain.APPLICATION, 1, 256).isPresent());
+        var first = mailbox.tryClaim(ZLinkServiceMailbox.Domain.APPLICATION, 1, 256).orElseThrow();
+        assertEquals(4, mailbox.pendingMessages(ZLinkServiceMailbox.Domain.APPLICATION));
+        assertTrue(mailbox.tryEnqueue(record("node:a", ZLinkServiceMailbox.Domain.APPLICATION, 1)));
+        assertTrue(mailbox.tryClaim(ZLinkServiceMailbox.Domain.APPLICATION, 1, 256).isPresent());
         assertTrue(mailbox.release(first));
-        assertEquals(4, mailbox.pendingMessages(
-            ZLinkServiceMailbox.Domain.APPLICATION));
-        var second = mailbox.tryClaim(
-            ZLinkServiceMailbox.Domain.APPLICATION, 1, 256).orElseThrow();
+        assertEquals(4, mailbox.pendingMessages(ZLinkServiceMailbox.Domain.APPLICATION));
+        var second = mailbox.tryClaim(ZLinkServiceMailbox.Domain.APPLICATION, 1, 256).orElseThrow();
         assertEquals(first.owner(), second.owner());
         assertNotEquals(first.serial(), second.serial());
-        assertTrue(mailbox.tryClaim(
-            ZLinkServiceMailbox.Domain.INFRASTRUCTURE, 1, 256).isPresent());
+        assertTrue(mailbox.tryClaim(ZLinkServiceMailbox.Domain.INFRASTRUCTURE, 1, 256).isPresent());
     }
 
     @Test
@@ -723,156 +665,136 @@ final class ZLinkM6ARuntimeContractTest {
         List<ZLinkInMemoryLocationAuthority.Change> changes = new ArrayList<>();
         authority.subscribe(changes::add);
 
-        var created = authority.compareExchange(
-            "zla1:a:1:a",
-            ZLinkInMemoryLocationAuthority.Expectation.expectMissing(),
-            ZLinkInMemoryLocationAuthority.Mutation.newObject(
-                new byte[] {1, 2, 3}));
-        assertEquals(
-            ZLinkInMemoryLocationAuthority.CasKind.STORED,
-            created.kind());
+        var created =
+                authority.compareExchange(
+                        "zla1:a:1:a",
+                        ZLinkInMemoryLocationAuthority.Expectation.expectMissing(),
+                        ZLinkInMemoryLocationAuthority.Mutation.newObject(new byte[] {1, 2, 3}));
+        assertEquals(ZLinkInMemoryLocationAuthority.CasKind.STORED, created.kind());
         byte[] callerCopy = created.snapshot().payload();
         callerCopy[0] = 9;
-        assertArrayEquals(
-            new byte[] {1, 2, 3},
-            authority.read("zla1:a:1:a").snapshot().payload());
+        assertArrayEquals(new byte[] {1, 2, 3}, authority.read("zla1:a:1:a").snapshot().payload());
 
-        var moved = authority.compareExchange(
-            "zla1:a:1:a",
-            ZLinkInMemoryLocationAuthority.Expectation.version(
-                created.snapshot().storeVersion()),
-            ZLinkInMemoryLocationAuthority.Mutation.newOwner(
-                new byte[] {4}));
-        assertEquals(
-            created.snapshot().objectGeneration(),
-            moved.snapshot().objectGeneration());
+        var moved =
+                authority.compareExchange(
+                        "zla1:a:1:a",
+                        ZLinkInMemoryLocationAuthority.Expectation.version(
+                                created.snapshot().storeVersion()),
+                        ZLinkInMemoryLocationAuthority.Mutation.newOwner(new byte[] {4}));
+        assertEquals(created.snapshot().objectGeneration(), moved.snapshot().objectGeneration());
         assertNotEquals(
-            created.snapshot().authorityOwnerGeneration(),
-            moved.snapshot().authorityOwnerGeneration());
+                created.snapshot().authorityOwnerGeneration(),
+                moved.snapshot().authorityOwnerGeneration());
         assertEquals(
-            ZLinkInMemoryLocationAuthority.CasKind.CONFLICT,
-            authority.compareExchange(
-                "zla1:a:1:a",
-                ZLinkInMemoryLocationAuthority.Expectation.version(
-                    created.snapshot().storeVersion()),
-                ZLinkInMemoryLocationAuthority.Mutation.preserve(
-                    new byte[] {5}))
-                .kind());
+                ZLinkInMemoryLocationAuthority.CasKind.CONFLICT,
+                authority
+                        .compareExchange(
+                                "zla1:a:1:a",
+                                ZLinkInMemoryLocationAuthority.Expectation.version(
+                                        created.snapshot().storeVersion()),
+                                ZLinkInMemoryLocationAuthority.Mutation.preserve(new byte[] {5}))
+                        .kind());
         assertEquals(2, changes.size());
     }
 
     private static ZLinkServiceMailbox.Record record(
-        String owner,
-        ZLinkServiceMailbox.Domain domain,
-        int bytes) {
+            String owner, ZLinkServiceMailbox.Domain domain, int bytes) {
         return new ZLinkServiceMailbox.Record(
-            owner,
-            domain,
-            List.of(new byte[bytes]),
-            null,
-            null,
-            null);
+                owner, domain, List.of(new byte[bytes]), null, null, null);
     }
 
     private static ZLinkServiceTopologyRegistry.Connection connection(
-        String id,
-        ZLinkServiceAdmissionGuard.ConnectionDirection direction) {
+            String id, ZLinkServiceAdmissionGuard.ConnectionDirection direction) {
         return new ZLinkServiceTopologyRegistry.Connection(
-            id,
-            direction,
-            direction.name() + ":" + id);
+                id, direction, direction.name() + ":" + id);
     }
 
     private static ZLinkServiceNodeDescriptor descriptor(
-        String meshName,
-        String rid,
-        long lifecycle,
-        long revision,
-        List<ZLinkServiceNodeDescriptor.Channel> channels,
-        int placementWeight) {
+            String meshName,
+            String rid,
+            long lifecycle,
+            long revision,
+            List<ZLinkServiceNodeDescriptor.Channel> channels,
+            int placementWeight) {
         return new ZLinkServiceNodeDescriptor(
-            meshName,
-            RoutingId.from(rid),
-            lifecycle,
-            revision,
-            "inproc://" + rid,
-            channels,
-            ZLinkServiceNodeDescriptor.State.SERVING,
-            "default",
-            0,
-            List.of(ZLinkServiceNodeDescriptor.REQUIRED_CAPABILITY),
-            ZLinkServiceNodeDescriptor.ObjectRole.SERVER,
-            placementWeight,
-            100,
-            10,
-            0,
-            0);
+                meshName,
+                RoutingId.from(rid),
+                lifecycle,
+                revision,
+                "inproc://" + rid,
+                channels,
+                ZLinkServiceNodeDescriptor.State.SERVING,
+                "default",
+                0,
+                List.of(ZLinkServiceNodeDescriptor.REQUIRED_CAPABILITY),
+                ZLinkServiceNodeDescriptor.ObjectRole.SERVER,
+                placementWeight,
+                100,
+                10,
+                0,
+                0);
     }
 
     private static ZLinkServiceNodeDescriptor descriptorWithCapacity(
-        String rid,
-        int placementWeight,
-        int activeLimit,
-        int activeUsed,
-        int pendingLimit,
-        int pendingUsed) {
+            String rid,
+            int placementWeight,
+            int activeLimit,
+            int activeUsed,
+            int pendingLimit,
+            int pendingUsed) {
         return new ZLinkServiceNodeDescriptor(
-            "mesh",
-            RoutingId.from(rid),
-            1,
-            1,
-            "inproc://" + rid,
-            List.of(),
-            ZLinkServiceNodeDescriptor.State.SERVING,
-            "default",
-            0,
-            List.of(ZLinkServiceNodeDescriptor.REQUIRED_CAPABILITY),
-            ZLinkServiceNodeDescriptor.ObjectRole.SERVER,
-            placementWeight,
-            activeLimit,
-            pendingLimit,
-            activeUsed,
-            pendingUsed);
+                "mesh",
+                RoutingId.from(rid),
+                1,
+                1,
+                "inproc://" + rid,
+                List.of(),
+                ZLinkServiceNodeDescriptor.State.SERVING,
+                "default",
+                0,
+                List.of(ZLinkServiceNodeDescriptor.REQUIRED_CAPABILITY),
+                ZLinkServiceNodeDescriptor.ObjectRole.SERVER,
+                placementWeight,
+                activeLimit,
+                pendingLimit,
+                activeUsed,
+                pendingUsed);
     }
 
     private static ZLinkServiceNodeDescriptor immutableMutation(
-        ZLinkServiceNodeDescriptor current,
-        String field) {
+            ZLinkServiceNodeDescriptor current, String field) {
         return new ZLinkServiceNodeDescriptor(
-            current.meshName(),
-            current.nodeRoutingId(),
-            current.lifecycleGeneration(),
-            current.descriptorRevision() + 1,
-            field.equals("endpoint")
-                ? current.advertisedEndpoint() + "-changed"
-                : current.advertisedEndpoint(),
-            field.equals("channelSet")
-                ? List.of(new ZLinkServiceNodeDescriptor.Channel(
-                    "payments", 100))
-                : current.channels(),
-            current.state(),
-            field.equals("securityIdentity")
-                ? current.securityIdentity() + "-changed"
-                : current.securityIdentity(),
-            field.equals("applicationVersion")
-                ? current.applicationVersion() + 1
-                : current.applicationVersion(),
-            field.equals("protocolCapabilities")
-                ? List.of(
-                    ZLinkServiceNodeDescriptor.REQUIRED_CAPABILITY,
-                    "optional-v1")
-                : current.protocolCapabilities(),
-            field.equals("objectRole")
-                ? ZLinkServiceNodeDescriptor.ObjectRole.CLIENT
-                : current.objectRole(),
-            current.placementWeight(),
-            field.equals("activeCapacityLimit")
-                ? current.activeCapacityLimit() + 1
-                : current.activeCapacityLimit(),
-            field.equals("pendingCapacityLimit")
-                ? current.pendingCapacityLimit() + 1
-                : current.pendingCapacityLimit(),
-            current.activeCapacityUsed(),
-            current.pendingCapacityUsed());
+                current.meshName(),
+                current.nodeRoutingId(),
+                current.lifecycleGeneration(),
+                current.descriptorRevision() + 1,
+                field.equals("endpoint")
+                        ? current.advertisedEndpoint() + "-changed"
+                        : current.advertisedEndpoint(),
+                field.equals("channelSet")
+                        ? List.of(new ZLinkServiceNodeDescriptor.Channel("payments", 100))
+                        : current.channels(),
+                current.state(),
+                field.equals("securityIdentity")
+                        ? current.securityIdentity() + "-changed"
+                        : current.securityIdentity(),
+                field.equals("applicationVersion")
+                        ? current.applicationVersion() + 1
+                        : current.applicationVersion(),
+                field.equals("protocolCapabilities")
+                        ? List.of(ZLinkServiceNodeDescriptor.REQUIRED_CAPABILITY, "optional-v1")
+                        : current.protocolCapabilities(),
+                field.equals("objectRole")
+                        ? ZLinkServiceNodeDescriptor.ObjectRole.CLIENT
+                        : current.objectRole(),
+                current.placementWeight(),
+                field.equals("activeCapacityLimit")
+                        ? current.activeCapacityLimit() + 1
+                        : current.activeCapacityLimit(),
+                field.equals("pendingCapacityLimit")
+                        ? current.pendingCapacityLimit() + 1
+                        : current.pendingCapacityLimit(),
+                current.activeCapacityUsed(),
+                current.pendingCapacityUsed());
     }
 }

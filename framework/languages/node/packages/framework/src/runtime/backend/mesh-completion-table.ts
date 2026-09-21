@@ -31,7 +31,9 @@ export class ZLinkMeshCompletionTable {
   private readonly pending = new Map<string, PendingCompletion>();
   private disposed = false;
 
-  constructor(private readonly onDiagnostic?: (diagnostic: ZLinkMeshCompletionDiagnostic) => void) {}
+  constructor(
+    private readonly onDiagnostic?: (diagnostic: ZLinkMeshCompletionDiagnostic) => void
+  ) {}
 
   /**
    * Submits and registers without yielding control to the event loop. Mesh
@@ -39,10 +41,7 @@ export class ZLinkMeshCompletionTable {
    * registration. The table therefore does not need to retain responses that
    * arrived before their waiter.
    */
-  submit(
-    operation: () => MeshOperationId,
-    signal?: AbortSignal
-  ): Promise<ZLinkMeshCompletion> {
+  submit(operation: () => MeshOperationId, signal?: AbortSignal): Promise<ZLinkMeshCompletion> {
     if (this.isDisposed()) {
       return Promise.reject(new Error('Mesh completion table is disposed.'));
     }
@@ -74,9 +73,8 @@ export class ZLinkMeshCompletionTable {
       this.pending.set(key, {
         resolve,
         reject,
-        removeAbort: signal === undefined
-          ? undefined
-          : () => signal.removeEventListener('abort', abort)
+        removeAbort:
+          signal === undefined ? undefined : () => signal.removeEventListener('abort', abort)
       });
     });
   }
@@ -123,7 +121,6 @@ export class ZLinkMeshCompletionTable {
   get pendingCount(): number {
     return this.pending.size;
   }
-
 }
 
 function retainCompletion(record: ReceiveRecord): ZLinkMeshCompletion {

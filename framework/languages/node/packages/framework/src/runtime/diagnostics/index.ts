@@ -47,10 +47,7 @@ export {
   ZLinkLocationSpotEventKind,
   ZLinkSocketNativeEventType
 } from './internal-event-contracts';
-import type {
-  ZLinkBackendSocketMonitor,
-  ZLinkBackendSocketMonitorEvent
-} from '../backend';
+import type { ZLinkBackendSocketMonitor, ZLinkBackendSocketMonitorEvent } from '../backend';
 import { AsyncResource } from 'node:async_hooks';
 import { ZLinkStateLane } from '../execution/state-lane';
 import { normalizeOpaqueRoutingId } from '../routing-id';
@@ -66,15 +63,9 @@ export interface ZLinkActorOwnerLeaseObservation {
 }
 
 /** Emits high-cardinality resolver detail only on the existing relocation debug path. */
-export function emitActorOwnerLeaseObservation(
-  observation: ZLinkActorOwnerLeaseObservation
-): void {
+export function emitActorOwnerLeaseObservation(observation: ZLinkActorOwnerLeaseObservation): void {
   if (process.env.ZLINK_DEBUG_FRAMEWORK_RELOCATION !== '1') return;
-  console.error(
-    '[zlink.runtime.relocation]',
-    'actor_route.owner_lease_observed',
-    observation
-  );
+  console.error('[zlink.runtime.relocation]', 'actor_route.owner_lease_observed', observation);
 }
 
 /** Runtime composition port. It is intentionally absent from the public contract barrel. */
@@ -111,9 +102,8 @@ export class ZLinkSocketMonitoringSource {
     private readonly publisher: ZLinkRuntimeEventPublisher
   ) {
     validateSourceName(registration.sourceName);
-    this.enabledEvents = registration.events === undefined
-      ? undefined
-      : new Set(registration.events);
+    this.enabledEvents =
+      registration.events === undefined ? undefined : new Set(registration.events);
   }
 
   start(): void {
@@ -155,38 +145,38 @@ export class ZLinkLocationRuntimeMonitoringSource {
     let topology;
     let serviceSummary;
     try {
-      [status, topology, serviceSummary] = await startOutsideStateLane(() => Promise.all([
-        this.query.getStatus(signal),
-        this.query.listTopology({}, undefined, signal),
-        this.query.listServiceSummaries({}, undefined, signal)
-      ]));
+      [status, topology, serviceSummary] = await startOutsideStateLane(() =>
+        Promise.all([
+          this.query.getStatus(signal),
+          this.query.listTopology({}, undefined, signal),
+          this.query.listServiceSummaries({}, undefined, signal)
+        ])
+      );
     } catch (error) {
       if (await this.lane.run(() => this.markStoreFailureCore())) {
-        await startOutsideStateLane(() => this.publisher.publish({
-          sourceName: this.registration.sourceName,
-          timestamp: new Date(),
-          event: LocationRuntimeEventKind.StoreFailure
-        } satisfies ZLinkLocationRuntimeEvent));
+        await startOutsideStateLane(() =>
+          this.publisher.publish({
+            sourceName: this.registration.sourceName,
+            timestamp: new Date(),
+            event: LocationRuntimeEventKind.StoreFailure
+          } satisfies ZLinkLocationRuntimeEvent)
+        );
       }
       return;
     }
 
     if (await this.lane.run(() => this.markStoreRecoveredCore())) {
-      await startOutsideStateLane(() => this.publisher.publish({
-        sourceName: this.registration.sourceName,
-        timestamp: new Date(),
-        event: LocationRuntimeEventKind.StoreRecovered
-      } satisfies ZLinkLocationRuntimeEvent));
+      await startOutsideStateLane(() =>
+        this.publisher.publish({
+          sourceName: this.registration.sourceName,
+          timestamp: new Date(),
+          event: LocationRuntimeEventKind.StoreRecovered
+        } satisfies ZLinkLocationRuntimeEvent)
+      );
     }
 
-    await this.publishIfChanged(
-      LocationRuntimeEventKind.StatusChanged,
-      status
-    );
-    await this.publishIfChanged(
-      LocationRuntimeEventKind.TopologyChanged,
-      topology.items
-    );
+    await this.publishIfChanged(LocationRuntimeEventKind.StatusChanged, status);
+    await this.publishIfChanged(LocationRuntimeEventKind.TopologyChanged, topology.items);
     await this.publishIfChanged(
       LocationRuntimeEventKind.ServiceSummaryChanged,
       serviceSummary.items
@@ -205,16 +195,16 @@ export class ZLinkLocationRuntimeMonitoringSource {
     return true;
   }
 
-  private async publishIfChanged(event: ZLinkLocationRuntimeEventKind, snapshot: unknown): Promise<void> {
+  private async publishIfChanged(
+    event: ZLinkLocationRuntimeEventKind,
+    snapshot: unknown
+  ): Promise<void> {
     const current = stableSnapshot(snapshot);
     const previous = await this.lane.run(() => this.previousSnapshotCore(event));
     if (current === previous) return;
-    await startOutsideStateLane(() => publishLocationRuntimeChange(
-      this.publisher,
-      this.registration.sourceName,
-      event,
-      snapshot
-    ));
+    await startOutsideStateLane(() =>
+      publishLocationRuntimeChange(this.publisher, this.registration.sourceName, event, snapshot)
+    );
     await this.lane.run(() => this.updateSnapshotCore(event, current));
   }
 
@@ -258,7 +248,12 @@ export class ZLinkLocationMonitoringEventEmitter {
     },
     private readonly publisher?: ZLinkRuntimeEventPublisher
   ) {
-    for (const source of [registration.peer, registration.spot, registration.actor, registration.route]) {
+    for (const source of [
+      registration.peer,
+      registration.spot,
+      registration.actor,
+      registration.route
+    ]) {
       if (source !== undefined) {
         validateSourceName(source.sourceName);
       }
@@ -313,36 +308,68 @@ export class ZLinkLocationMonitoringEventEmitter {
     this.publishRoute(RouteLocationEventKind.ResolveMiss, { key });
   }
 
-  private publishPeer(event: ZLinkLocationPeerEvent['event'], payload: Record<string, unknown>): void {
+  private publishPeer(
+    event: ZLinkLocationPeerEvent['event'],
+    payload: Record<string, unknown>
+  ): void {
     const registration = this.registration.peer;
     if (registration === undefined) {
       return;
     }
-    this.publish({ sourceName: registration.sourceName, timestamp: new Date(), event, ...payload } as ZLinkLocationPeerEvent);
+    this.publish({
+      sourceName: registration.sourceName,
+      timestamp: new Date(),
+      event,
+      ...payload
+    } as ZLinkLocationPeerEvent);
   }
 
-  private publishSpotLocation(event: ZLinkLocationSpotEvent['event'], payload: Record<string, unknown>): void {
+  private publishSpotLocation(
+    event: ZLinkLocationSpotEvent['event'],
+    payload: Record<string, unknown>
+  ): void {
     const registration = this.registration.spot;
     if (registration === undefined) {
       return;
     }
-    this.publish({ sourceName: registration.sourceName, timestamp: new Date(), event, ...payload } as ZLinkLocationSpotEvent);
+    this.publish({
+      sourceName: registration.sourceName,
+      timestamp: new Date(),
+      event,
+      ...payload
+    } as ZLinkLocationSpotEvent);
   }
 
-  private publishActor(event: ZLinkLocationActorEvent['event'], payload: Record<string, unknown>): void {
+  private publishActor(
+    event: ZLinkLocationActorEvent['event'],
+    payload: Record<string, unknown>
+  ): void {
     const registration = this.registration.actor;
     if (registration === undefined) {
       return;
     }
-    this.publish({ sourceName: registration.sourceName, timestamp: new Date(), event, ...payload } as ZLinkLocationActorEvent);
+    this.publish({
+      sourceName: registration.sourceName,
+      timestamp: new Date(),
+      event,
+      ...payload
+    } as ZLinkLocationActorEvent);
   }
 
-  private publishRoute(event: ZLinkLocationRouteEvent['event'], payload: Record<string, unknown>): void {
+  private publishRoute(
+    event: ZLinkLocationRouteEvent['event'],
+    payload: Record<string, unknown>
+  ): void {
     const registration = this.registration.route;
     if (registration === undefined) {
       return;
     }
-    this.publish({ sourceName: registration.sourceName, timestamp: new Date(), event, ...payload } as ZLinkLocationRouteEvent);
+    this.publish({
+      sourceName: registration.sourceName,
+      timestamp: new Date(),
+      event,
+      ...payload
+    } as ZLinkLocationRouteEvent);
   }
 
   private publish<TEvent extends ZLinkRuntimeEvent>(event: TEvent): void {
@@ -357,7 +384,10 @@ export class ZLinkLocationMonitoringEventEmitter {
 
 export * from './topology-runtime-projections';
 
-function toSocketEvent(sourceName: string, raw: ZLinkBackendSocketMonitorEvent): ZLinkSocketEvent | undefined {
+function toSocketEvent(
+  sourceName: string,
+  raw: ZLinkBackendSocketMonitorEvent
+): ZLinkSocketEvent | undefined {
   const event = mapSocketEvent(raw.nativeEvent as ZLinkSocketNativeEventType, raw.value);
   if (event === undefined) {
     return undefined;
@@ -408,11 +438,16 @@ async function publishLocationRuntimeChange<T>(
   snapshot: T
 ): Promise<void> {
   const base = { sourceName, timestamp: new Date() };
-  const runtimeEvent: ZLinkLocationRuntimeEvent = event === LocationRuntimeEventKind.StatusChanged
-    ? { ...base, event, status: snapshot as ZLinkLocationRuntimeStatus }
-    : event === LocationRuntimeEventKind.TopologyChanged
-      ? { ...base, event, topology: snapshot as readonly ZLinkLocationTopologyEntry[] }
-      : { ...base, event: LocationRuntimeEventKind.ServiceSummaryChanged, serviceSummary: snapshot as readonly ZLinkLocationServiceSummary[] };
+  const runtimeEvent: ZLinkLocationRuntimeEvent =
+    event === LocationRuntimeEventKind.StatusChanged
+      ? { ...base, event, status: snapshot as ZLinkLocationRuntimeStatus }
+      : event === LocationRuntimeEventKind.TopologyChanged
+        ? { ...base, event, topology: snapshot as readonly ZLinkLocationTopologyEntry[] }
+        : {
+            ...base,
+            event: LocationRuntimeEventKind.ServiceSummaryChanged,
+            serviceSummary: snapshot as readonly ZLinkLocationServiceSummary[]
+          };
   await publisher.publish(runtimeEvent);
 }
 
@@ -421,7 +456,7 @@ function startOutsideStateLane<T>(work: () => T): T {
 }
 
 function stableSnapshot(value: unknown): string {
-  return JSON.stringify(value, (_key, item) => typeof item === 'bigint' ? item.toString() : item);
+  return JSON.stringify(value, (_key, item) => (typeof item === 'bigint' ? item.toString() : item));
 }
 
 function validateSourceName(sourceName: string): void {

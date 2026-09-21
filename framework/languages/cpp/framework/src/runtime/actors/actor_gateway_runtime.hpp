@@ -177,11 +177,13 @@ struct relayed_frame_t
 class actor_gateway_state_t
 {
   public:
-    template<typename Work>
-    decltype(auto) sync (Work &&work) const
+    template <typename Work> decltype (auto) sync (Work &&work) const
     {
-        return lane.run ([work = std::forward<Work> (work)] () mutable
-                         -> decltype(auto) { return std::invoke (work); }).get ();
+        return lane
+          .run ([work = std::forward<Work> (work)] () mutable -> decltype (auto) {
+              return std::invoke (work);
+          })
+          .get ();
     }
 
     using create_dispatcher_t = std::function<result_t<actor_ref_t> (
@@ -331,8 +333,7 @@ class actor_gateway_runtime_t
                          std::uint64_t binding_generation,
                          std::uint64_t session_sequence,
                          const runtime::protocol::actor_route_fence_t *target_route = nullptr);
-    result_t<actor_context_t>
-    admit_session_relay_context (
+    result_t<actor_context_t> admit_session_relay_context (
       const actor_ref_t &actor_ref,
       const zlink::routing_id_t &source_node_rid,
       const zlink::routing_id_t &session_rid,

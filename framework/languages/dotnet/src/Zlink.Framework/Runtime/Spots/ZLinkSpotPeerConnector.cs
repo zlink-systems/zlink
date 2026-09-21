@@ -7,7 +7,8 @@ namespace Zlink.Framework.Runtime.Spots;
 
 internal sealed class ZLinkSpotPeerConnector(
     IZLinkBackendSpotNode node,
-    ZLinkSpotPeerConnectionSet connections)
+    ZLinkSpotPeerConnectionSet connections
+)
 {
     private readonly ZLinkStateLane _lane = new();
 
@@ -21,18 +22,21 @@ internal sealed class ZLinkSpotPeerConnector(
         cancellationToken.ThrowIfCancellationRequested();
         endpoint = ZLinkEndpointNotation.Normalize(endpoint);
         return ValueTask.FromResult(
-            AwaitStateLane(_lane.RunAsync(() => ConnectPeerManual(endpoint))));
+            AwaitStateLane(_lane.RunAsync(() => ConnectPeerManual(endpoint)))
+        );
     }
 
     public ValueTask<bool> ConnectPeerAsync(
         RoutingId peerRid,
         string endpoint,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken
+    )
     {
         cancellationToken.ThrowIfCancellationRequested();
         endpoint = ZLinkEndpointNotation.Normalize(endpoint);
         return ValueTask.FromResult(
-            AwaitStateLane(_lane.RunAsync(() => ConnectPeerManual(peerRid, endpoint))));
+            AwaitStateLane(_lane.RunAsync(() => ConnectPeerManual(peerRid, endpoint)))
+        );
     }
 
     public void Disconnect(string endpoint)
@@ -49,116 +53,158 @@ internal sealed class ZLinkSpotPeerConnector(
     public bool ConnectPeerAuto(
         RoutingId? peerRid,
         string endpoint,
-        string expectedSecurityIdentity)
+        string expectedSecurityIdentity
+    )
     {
-        return AwaitStateLane(_lane.RunAsync(() =>
-        {
-            var claim = connections.AcquirePeerAuto(peerRid, endpoint);
-            ZLinkFrameworkDebugLog.SpotDiscovery(
-                $"spot_peer_claim peer={peerRid?.ToString() ?? "<unknown>"} endpoint={endpoint} kind={claim.Kind} "
-                + $"previous={claim.PreviousPeerRid?.ToString() ?? "<unknown>"}");
-            if (claim.Kind is ZLinkSpotAutoPeerClaimKind.AlreadyOwned
-                or ZLinkSpotAutoPeerClaimKind.SuppressedByManual)
-                return true;
-
-            try
+        return AwaitStateLane(
+            _lane.RunAsync(() =>
             {
-                if (claim.Kind == ZLinkSpotAutoPeerClaimKind.Replaced)
+                var claim = connections.AcquirePeerAuto(peerRid, endpoint);
+                ZLinkFrameworkDebugLog.SpotDiscovery(
+                    $"spot_peer_claim peer={peerRid?.ToString() ?? "<unknown>"} endpoint={endpoint} kind={claim.Kind} "
+                        + $"previous={claim.PreviousPeerRid?.ToString() ?? "<unknown>"}"
+                );
+                if (
+                    claim.Kind
+                    is ZLinkSpotAutoPeerClaimKind.AlreadyOwned
+                        or ZLinkSpotAutoPeerClaimKind.SuppressedByManual
+                )
+                    return true;
+
+                try
                 {
-                    ZLinkFrameworkDebugLog.SpotDiscovery(
-                        $"spot_peer_replace peer={peerRid?.ToString() ?? "<unknown>"} endpoint={endpoint}");
-                    node.DisconnectPeer(endpoint);
-                }
+                    if (claim.Kind == ZLinkSpotAutoPeerClaimKind.Replaced)
+                    {
+                        ZLinkFrameworkDebugLog.SpotDiscovery(
+                            $"spot_peer_replace peer={peerRid?.ToString() ?? "<unknown>"} endpoint={endpoint}"
+                        );
+                        node.DisconnectPeer(endpoint);
+                    }
 
-                if (peerRid is { Size: > 0 } rid)
-                    ConnectPeer(rid, endpoint, expectedSecurityIdentity);
-                else ConnectPeer(endpoint);
-                return true;
-            }
-            catch
-            {
-                // A failed replacement leaves no physical connection that
-                // the old target can safely reuse. Remove the claim so the
-                // reconciler retries the currently desired target.
-                connections.RollbackPeerAuto(endpoint);
-                return false;
-            }
-        }));
+                    if (peerRid is { Size: > 0 } rid)
+                        ConnectPeer(rid, endpoint, expectedSecurityIdentity);
+                    else
+                        ConnectPeer(endpoint);
+                    return true;
+                }
+                catch
+                {
+                    // A failed replacement leaves no physical connection that
+                    // the old target can safely reuse. Remove the claim so the
+                    // reconciler retries the currently desired target.
+                    connections.RollbackPeerAuto(endpoint);
+                    return false;
+                }
+            })
+        );
     }
 
-    public bool DisconnectPeerAuto(string endpoint) =>
-        DisconnectPeerAuto(peerRid: null, endpoint);
+    public bool DisconnectPeerAuto(string endpoint) => DisconnectPeerAuto(peerRid: null, endpoint);
 
     public bool DisconnectPeerAuto(RoutingId? peerRid, string endpoint)
     {
-        return AwaitStateLane(_lane.RunAsync(() =>
-        {
-            var result = DisconnectAuto(
-                peerRid,
-                endpoint,
-                () => connections.RemovePeerAuto(peerRid, endpoint),
-                () => connections.RestorePeerAuto(endpoint, peerRid));
-            ZLinkFrameworkDebugLog.SpotDiscovery(
-                $"spot_peer_release peer={peerRid?.ToString() ?? "<unknown>"} endpoint={endpoint} result={result}");
-            return result;
-        }));
+        return AwaitStateLane(
+            _lane.RunAsync(() =>
+            {
+                var result = DisconnectAuto(
+                    peerRid,
+                    endpoint,
+                    () => connections.RemovePeerAuto(peerRid, endpoint),
+                    () => connections.RestorePeerAuto(endpoint, peerRid)
+                );
+                ZLinkFrameworkDebugLog.SpotDiscovery(
+                    $"spot_peer_release peer={peerRid?.ToString() ?? "<unknown>"} endpoint={endpoint} result={result}"
+                );
+                return result;
+            })
+        );
     }
 
     public bool DisconnectPeerBeforeAdmission(
         RoutingId peerRid,
         string endpoint,
-        ulong lifecycleGeneration)
+        ulong lifecycleGeneration
+    )
     {
-        return AwaitStateLane(_lane.RunAsync(() =>
-        {
-            try
+        return AwaitStateLane(
+            _lane.RunAsync(() =>
             {
-                return node.DisconnectPeerBeforeAdmission(
-                    peerRid,
-                    endpoint,
-                    lifecycleGeneration);
-            }
-            catch
-            {
-                return false;
-            }
-        }));
+                try
+                {
+                    return node.DisconnectPeerBeforeAdmission(
+                        peerRid,
+                        endpoint,
+                        lifecycleGeneration
+                    );
+                }
+                catch
+                {
+                    return false;
+                }
+            })
+        );
     }
 
     private bool ConnectPeerManual(string endpoint)
     {
-        if (!connections.TryAddPeerManual(endpoint)) return false;
-        try { ConnectPeer(endpoint); }
-        catch { connections.RollbackPeerManual(endpoint); throw; }
+        if (!connections.TryAddPeerManual(endpoint))
+            return false;
+        try
+        {
+            ConnectPeer(endpoint);
+        }
+        catch
+        {
+            connections.RollbackPeerManual(endpoint);
+            throw;
+        }
         return true;
     }
 
     private bool ConnectPeerManual(RoutingId peerRid, string endpoint)
     {
-        if (!connections.TryAddPeerManual(endpoint)) return false;
-        try { ConnectPeer(peerRid, endpoint, ZLinkServiceSecurityIdentity.Plaintext); }
-        catch { connections.RollbackPeerManual(endpoint); throw; }
+        if (!connections.TryAddPeerManual(endpoint))
+            return false;
+        try
+        {
+            ConnectPeer(peerRid, endpoint, ZLinkServiceSecurityIdentity.Plaintext);
+        }
+        catch
+        {
+            connections.RollbackPeerManual(endpoint);
+            throw;
+        }
         return true;
     }
 
     private void DisconnectPeerManualCore(string endpoint)
     {
-        if (!connections.RemovePeerManual(endpoint)) return;
-        try { node.DisconnectPeer(endpoint); }
-        catch { _ = connections.TryAddPeerManual(endpoint); throw; }
+        if (!connections.RemovePeerManual(endpoint))
+            return;
+        try
+        {
+            node.DisconnectPeer(endpoint);
+        }
+        catch
+        {
+            _ = connections.TryAddPeerManual(endpoint);
+            throw;
+        }
     }
 
     private bool DisconnectAuto(
         RoutingId? peerRid,
         string endpoint,
         Func<bool> release,
-        Action restore)
+        Action restore
+    )
     {
         var released = release();
         // A different auto target may already own the endpoint after a RID
         // replacement. The old physical peer still requires exact cleanup;
         // only an endpoint-only release can return without a transport step.
-        if (!released && peerRid is not { Size: > 0 }) return true;
+        if (!released && peerRid is not { Size: > 0 })
+            return true;
         try
         {
             if (peerRid is { Size: > 0 } rid)
@@ -173,7 +219,8 @@ internal sealed class ZLinkSpotPeerConnector(
         }
         catch
         {
-            if (released) restore();
+            if (released)
+                restore();
             return false;
         }
     }
@@ -182,8 +229,10 @@ internal sealed class ZLinkSpotPeerConnector(
     {
         foreach (var peer in node.MeshPeers())
         {
-            if (peer.RoutingId != peerRid
-                || !string.Equals(peer.Endpoint, endpoint, StringComparison.Ordinal))
+            if (
+                peer.RoutingId != peerRid
+                || !string.Equals(peer.Endpoint, endpoint, StringComparison.Ordinal)
+            )
                 continue;
 
             if (peer.State is MeshPeerState.Admitted or MeshPeerState.Draining)
@@ -192,10 +241,7 @@ internal sealed class ZLinkSpotPeerConnector(
             }
             else
             {
-                node.DisconnectPeerBeforeAdmission(
-                    peerRid,
-                    endpoint,
-                    peer.LifecycleGeneration);
+                node.DisconnectPeerBeforeAdmission(peerRid, endpoint, peer.LifecycleGeneration);
             }
             return;
         }
@@ -206,10 +252,7 @@ internal sealed class ZLinkSpotPeerConnector(
         node.ConnectPeer(endpoint);
     }
 
-    private void ConnectPeer(
-        RoutingId peerRid,
-        string endpoint,
-        string expectedSecurityIdentity)
+    private void ConnectPeer(RoutingId peerRid, string endpoint, string expectedSecurityIdentity)
     {
         node.ConnectPeer(peerRid, endpoint, expectedSecurityIdentity);
     }
@@ -217,6 +260,5 @@ internal sealed class ZLinkSpotPeerConnector(
     private static T AwaitStateLane<T>(ValueTask<T> operation) =>
         operation.GetAwaiter().GetResult();
 
-    private static void AwaitStateLane(ValueTask operation) =>
-        operation.GetAwaiter().GetResult();
+    private static void AwaitStateLane(ValueTask operation) => operation.GetAwaiter().GetResult();
 }

@@ -34,10 +34,22 @@ export class ZlinkStreamFrameSender {
     // exactly once per send, at the point the frame is built, so a level
     // change never rewrites a frame already in flight and never splits a
     // single send across two levels.
-    const flow = this.protocol.flowEnabled() ? this.flowContext.currentOrCreate(explicitFlow) : undefined;
+    const flow = this.protocol.flowEnabled()
+      ? this.flowContext.currentOrCreate(explicitFlow)
+      : undefined;
     await this.write(
       connection,
-      this.protocol.encode(kind, name, payload, metadata, compress, requestSeq, correlationId, flow?.flowId, flow?.flowOrigin),
+      this.protocol.encode(
+        kind,
+        name,
+        payload,
+        metadata,
+        compress,
+        requestSeq,
+        correlationId,
+        flow?.flowId,
+        flow?.flowOrigin
+      ),
       signal
     );
   }

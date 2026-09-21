@@ -13,7 +13,8 @@ public sealed class NetworkEndpointResolverTests
             "TCP://Host:0080",
             port: null,
             listenerBindHost: null,
-            network);
+            network
+        );
 
         Assert.Equal("tcp://host:80", bound);
     }
@@ -27,7 +28,8 @@ public sealed class NetworkEndpointResolverTests
             explicitEndpoint: null,
             port: 7101,
             listenerBindHost: "127.0.0.1",
-            network);
+            network
+        );
 
         Assert.Equal("tcp://127.0.0.1:7101", bound);
     }
@@ -41,7 +43,8 @@ public sealed class NetworkEndpointResolverTests
             "TCP://0.0.0.0:0080",
             listenerAdvertiseHost: "Host.Example.com",
             listenerBindHost: "0.0.0.0",
-            network);
+            network
+        );
 
         Assert.Equal("tcp://host.example.com:80", advertised);
     }
@@ -58,7 +61,8 @@ public sealed class NetworkEndpointResolverTests
             "TLS://0.0.0.0:0080",
             listenerAdvertiseHost: "Host.Example.com",
             listenerBindHost: "0.0.0.0",
-            network);
+            network
+        );
 
         Assert.Equal("tls://host.example.com:80", advertised);
     }
@@ -76,12 +80,12 @@ public sealed class NetworkEndpointResolverTests
             "INPROC://Some-Node-Identity",
             listenerAdvertiseHost: null,
             listenerBindHost: null,
-            network);
+            network
+        );
 
         // Per §2.2, inproc's remainder is opaque (a process-local identity,
         // not a network authority): only the scheme is lowercased, the
         // identity's own casing is preserved byte-for-byte.
         Assert.Equal("inproc://Some-Node-Identity", advertised);
     }
-
 }

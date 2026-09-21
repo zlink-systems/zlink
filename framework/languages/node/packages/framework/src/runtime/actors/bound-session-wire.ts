@@ -17,12 +17,15 @@ export class ZLinkRemoteBoundSessionFenceError extends Error {
 export function isRemoteBoundSessionFenceError(error: unknown): boolean {
   if (error instanceof ZLinkRemoteBoundSessionFenceError) return true;
   if (!(error instanceof Error)) return false;
-  if ((error as { code?: unknown }).code === ZLINK_REMOTE_BOUND_SESSION_FENCE_NACK_CODE) return true;
+  if ((error as { code?: unknown }).code === ZLINK_REMOTE_BOUND_SESSION_FENCE_NACK_CODE)
+    return true;
   // Fallback for transports that only surface the session owner's message.
-  return error.message.includes('did not match its command 42 Session seal')
-    || error.message.includes('released Session seal cannot publish a different route')
-    || error.message.includes('was fenced by its binding identity')
-    || error.message.includes('session route seal abort was fenced');
+  return (
+    error.message.includes('did not match its command 42 Session seal') ||
+    error.message.includes('released Session seal cannot publish a different route') ||
+    error.message.includes('was fenced by its binding identity') ||
+    error.message.includes('session route seal abort was fenced')
+  );
 }
 
 /** Encodes a request/reply nack for the command 42/44/45 packet family. */
@@ -108,9 +111,10 @@ export function encodeRemoteBoundSessionErrorPayload(input: {
     packetName: ZLINK_REMOTE_BOUND_SESSION_ERROR_PACKET,
     ...input,
     requestSeq: input.requestSeq.toString(),
-    error: input.error instanceof Error
-      ? { code: input.error.constructor.name, message: input.error.message }
-      : input.error,
+    error:
+      input.error instanceof Error
+        ? { code: input.error.constructor.name, message: input.error.message }
+        : input.error,
     metadata: Object.fromEntries(input.metadata)
   };
 }
@@ -155,16 +159,23 @@ export function decodeRemoteBoundSessionSendPayload(payload: unknown): {
   };
 }
 
-function optionalFlowOrigin(payload: object): import('../../contracts').ZLinkFlowOrigin | undefined {
+function optionalFlowOrigin(
+  payload: object
+): import('../../contracts').ZLinkFlowOrigin | undefined {
   // Spec 27 §3 wire spelling (lowercase). This relay JSON is a Node<->Node
   // internal wire deployed atomically with this repository, so the decoder
   // accepts only the spec spelling.
   switch ((payload as { flowOrigin?: unknown }).flowOrigin) {
-    case 'inbound': return 'Inbound';
-    case 'timer': return 'Timer';
-    case 'application': return 'Application';
-    case 'lifecycle': return 'Lifecycle';
-    default: return undefined;
+    case 'inbound':
+      return 'Inbound';
+    case 'timer':
+      return 'Timer';
+    case 'application':
+      return 'Application';
+    case 'lifecycle':
+      return 'Lifecycle';
+    default:
+      return undefined;
   }
 }
 
@@ -177,7 +188,10 @@ export function decodeRemoteBoundSessionResponsePayload(payload: unknown): {
   readonly compressPayload: boolean;
   readonly actorPacketTarget?: unknown;
 } {
-  const decoded = decodeRemoteBoundSessionControlPayload(payload, ZLINK_REMOTE_BOUND_SESSION_RESPONSE_PACKET);
+  const decoded = decodeRemoteBoundSessionControlPayload(
+    payload,
+    ZLINK_REMOTE_BOUND_SESSION_RESPONSE_PACKET
+  );
   return { ...decoded, message: (payload as { message?: unknown }).message };
 }
 
@@ -189,7 +203,10 @@ export function decodeRemoteBoundSessionErrorPayload(payload: unknown): {
   readonly metadata?: Record<string, string>;
   readonly actorPacketTarget?: unknown;
 } {
-  const decoded = decodeRemoteBoundSessionControlPayload(payload, ZLINK_REMOTE_BOUND_SESSION_ERROR_PACKET);
+  const decoded = decodeRemoteBoundSessionControlPayload(
+    payload,
+    ZLINK_REMOTE_BOUND_SESSION_ERROR_PACKET
+  );
   return {
     actorId: decoded.actorId,
     error: (payload as { error?: unknown }).error,
@@ -211,7 +228,10 @@ export function streamMetadataMap(metadata: unknown): ReadonlyMap<string, string
   return new Map();
 }
 
-function decodeRemoteBoundSessionControlPayload(payload: unknown, packetName: string): {
+function decodeRemoteBoundSessionControlPayload(
+  payload: unknown,
+  packetName: string
+): {
   readonly actorId: string;
   readonly boundPacketName: string;
   readonly requestSeq: bigint;

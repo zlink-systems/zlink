@@ -22,10 +22,9 @@ struct decoded_authority_key_t
 
 inline bool is_unreserved (unsigned char byte) noexcept
 {
-    return (byte >= 'A' && byte <= 'Z')
-           || (byte >= 'a' && byte <= 'z')
-           || (byte >= '0' && byte <= '9')
-           || byte == '-' || byte == '.' || byte == '_' || byte == '~';
+    return (byte >= 'A' && byte <= 'Z') || (byte >= 'a' && byte <= 'z')
+           || (byte >= '0' && byte <= '9') || byte == '-' || byte == '.' || byte == '_'
+           || byte == '~';
 }
 
 inline bool valid_identity_utf8 (std::string_view value) noexcept
@@ -43,31 +42,25 @@ inline bool valid_identity_utf8 (std::string_view value) noexcept
         if ((first & 0xe0u) == 0xc0u) {
             continuation = 1;
             codepoint = first & 0x1fu;
-        }
-        else if ((first & 0xf0u) == 0xe0u) {
+        } else if ((first & 0xf0u) == 0xe0u) {
             continuation = 2;
             codepoint = first & 0x0fu;
-        }
-        else if ((first & 0xf8u) == 0xf0u) {
+        } else if ((first & 0xf8u) == 0xf0u) {
             continuation = 3;
             codepoint = first & 0x07u;
-        }
-        else {
+        } else {
             return false;
         }
         if (value.size () - index - 1 < continuation)
             return false;
         for (std::size_t part = 0; part < continuation; ++part) {
-            const auto next = static_cast<unsigned char> (
-              value[index + part + 1]);
+            const auto next = static_cast<unsigned char> (value[index + part + 1]);
             if ((next & 0xc0u) != 0x80u)
                 return false;
             codepoint = (codepoint << 6u) | (next & 0x3fu);
         }
-        if ((continuation == 1 && codepoint < 0x80)
-            || (continuation == 2 && codepoint < 0x800)
-            || (continuation == 3 && codepoint < 0x10000)
-            || codepoint > 0x10ffff
+        if ((continuation == 1 && codepoint < 0x80) || (continuation == 2 && codepoint < 0x800)
+            || (continuation == 3 && codepoint < 0x10000) || codepoint > 0x10ffff
             || (codepoint >= 0xd800 && codepoint <= 0xdfff))
             return false;
         index += continuation + 1;
@@ -75,12 +68,9 @@ inline bool valid_identity_utf8 (std::string_view value) noexcept
     return true;
 }
 
-inline authority_key_t encode_authority_key (
-  char kind,
-  std::string_view object_id)
+inline authority_key_t encode_authority_key (char kind, std::string_view object_id)
 {
-    if (object_id.empty () || object_id.size () > 255
-        || !valid_identity_utf8 (object_id)) {
+    if (object_id.empty () || object_id.size () > 255 || !valid_identity_utf8 (object_id)) {
         throw std::invalid_argument (
           "authority identity must contain 1..255 valid UTF-8 bytes without NUL");
     }
@@ -91,24 +81,20 @@ inline authority_key_t encode_authority_key (
         const auto byte = static_cast<unsigned char> (character);
         if (is_unreserved (byte)) {
             encoded.push_back (static_cast<char> (byte));
-        }
-        else {
+        } else {
             encoded.push_back ('%');
             encoded.push_back (hex[byte >> 4]);
             encoded.push_back (hex[byte & 0x0f]);
         }
     }
-    return authority_key_t{
-      "zla1:" + std::string (1, kind) + ":"
-      + std::to_string (object_id.size ()) + ":" + encoded};
+    return authority_key_t{"zla1:" + std::string (1, kind) + ":"
+                           + std::to_string (object_id.size ()) + ":" + encoded};
 }
 
-inline std::optional<decoded_authority_key_t>
-decode_authority_key (std::string_view value)
+inline std::optional<decoded_authority_key_t> decode_authority_key (std::string_view value)
 {
     constexpr std::string_view prefix = "zla1:";
-    if (!value.starts_with (prefix) || value.size () < prefix.size () + 4
-        || value.size () > 776)
+    if (!value.starts_with (prefix) || value.size () < prefix.size () + 4 || value.size () > 776)
         return std::nullopt;
     const auto kind = value[prefix.size ()];
     if ((kind != 'a' && kind != 's') || value[prefix.size () + 1] != ':')
@@ -117,8 +103,7 @@ decode_authority_key (std::string_view value)
     if (length_end == std::string_view::npos)
         return std::nullopt;
     std::size_t expected_size = 0;
-    const auto length = value.substr (prefix.size () + 2,
-                                      length_end - prefix.size () - 2);
+    const auto length = value.substr (prefix.size () + 2, length_end - prefix.size () - 2);
     if (length.empty () || (length.size () > 1 && length.front () == '0'))
         return std::nullopt;
     for (const auto digit : length) {
@@ -142,8 +127,7 @@ decode_authority_key (std::string_view value)
     decoded.reserve (expected_size);
     for (std::size_t index = 0; index < encoded.size (); ++index) {
         if (encoded[index] != '%') {
-            if (!is_unreserved (
-                  static_cast<unsigned char> (encoded[index])))
+            if (!is_unreserved (static_cast<unsigned char> (encoded[index])))
                 return std::nullopt;
             decoded.push_back (encoded[index]);
             continue;

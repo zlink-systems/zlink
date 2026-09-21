@@ -6,9 +6,7 @@ internal sealed class ZlinkStreamExpectNoneBuilder : IZlinkStreamExpectNoneCall
     private readonly ZlinkStreamCallBuilderState _state;
     private TimeSpan? _window;
 
-    internal ZlinkStreamExpectNoneBuilder(
-        IZlinkStreamConnectorInternal connector,
-        string name)
+    internal ZlinkStreamExpectNoneBuilder(IZlinkStreamConnectorInternal connector, string name)
     {
         _connector = connector;
         _state = new ZlinkStreamCallBuilderState(name);
@@ -19,7 +17,8 @@ internal sealed class ZlinkStreamExpectNoneBuilder : IZlinkStreamExpectNoneCall
         if (window <= TimeSpan.Zero)
             throw ZlinkStreamConnector.Error(
                 ZlinkStreamErrorCode.ValidationFailed,
-                "ExpectNone observation window must be greater than zero.");
+                "ExpectNone observation window must be greater than zero."
+            );
         _window = window;
         return this;
     }
@@ -28,20 +27,25 @@ internal sealed class ZlinkStreamExpectNoneBuilder : IZlinkStreamExpectNoneCall
     {
         _state.EnsureNotExecuted();
         var name = _state.ResolveMessageName();
-        var window = _window
-                     ?? throw ZlinkStreamConnector.Error(
-                         ZlinkStreamErrorCode.ValidationFailed,
-                         "ExpectNone requires Within(window).");
+        var window =
+            _window
+            ?? throw ZlinkStreamConnector.Error(
+                ZlinkStreamErrorCode.ValidationFailed,
+                "ExpectNone requires Within(window)."
+            );
 
-        var message = await _connector.WaitForEncodedAsync(name, null, window, cancellationToken)
+        var message = await _connector
+            .WaitForEncodedAsync(name, null, window, cancellationToken)
             .ConfigureAwait(false);
 
         // The negative observation holds exactly when nothing arrived; an arrival is the
         // violation and violations are ValidationFailed (stream-connector spec §10.1).
-        if (message is null) return;
+        if (message is null)
+            return;
 
         throw ZlinkStreamConnector.Error(
             ZlinkStreamErrorCode.ValidationFailed,
-            $"Expected no '{name}' stream message within {window}.");
+            $"Expected no '{name}' stream message within {window}."
+        );
     }
 }

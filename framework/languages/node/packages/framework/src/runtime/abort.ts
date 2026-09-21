@@ -18,8 +18,10 @@ export function createAbortError(): ZLinkAbortError {
 }
 
 export function isAbortError(error: unknown): boolean {
-  return error instanceof ZLinkAbortError
-    || (error instanceof DOMException && error.name === 'AbortError');
+  return (
+    error instanceof ZLinkAbortError ||
+    (error instanceof DOMException && error.name === 'AbortError')
+  );
 }
 
 export function createDeadlineExceededError(message?: string): ZLinkDeadlineExceededError {
@@ -63,8 +65,12 @@ export function awaitWithAbort<T>(
     };
     signal.addEventListener('abort', abort, { once: true });
     operation.then(
-      (value) => { if (settle()) resolve(value); },
-      (error) => { if (settle()) reject(error); }
+      (value) => {
+        if (settle()) resolve(value);
+      },
+      (error) => {
+        if (settle()) reject(error);
+      }
     );
   });
 }

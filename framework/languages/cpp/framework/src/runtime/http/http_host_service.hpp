@@ -15,8 +15,7 @@
 namespace zlink::framework::runtime
 {
 
-class http_host_service_t final : public hosted_service_t,
-                                   public hosted_service_lifecycle_t
+class http_host_service_t final : public hosted_service_t, public hosted_service_lifecycle_t
 {
   public:
     http_host_service_t (http_options_snapshot_t options,

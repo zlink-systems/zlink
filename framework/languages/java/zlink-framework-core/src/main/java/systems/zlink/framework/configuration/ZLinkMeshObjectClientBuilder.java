@@ -1,4 +1,3 @@
 package systems.zlink.framework.configuration;
 
-public interface ZLinkMeshObjectClientBuilder {
-}
+public interface ZLinkMeshObjectClientBuilder {}

@@ -1,14 +1,12 @@
 package systems.zlink.framework.spring;
-import systems.zlink.framework.spots.ZLinkSpotRequestCall;
-import systems.zlink.framework.spots.ZLinkSpotSendCall;
-
-import systems.zlink.framework.spring.internal.runtime.ZLinkFrameworkLifecycle;
 
 import systems.zlink.framework.channels.ZLinkPublishCall;
-import systems.zlink.framework.channels.ZLinkSendCall;
 import systems.zlink.framework.channels.ZLinkRequestCall;
-import systems.zlink.framework.spots.SpotHandle;
+import systems.zlink.framework.channels.ZLinkSendCall;
 import systems.zlink.framework.spots.ZLinkSpotOutbound;
+import systems.zlink.framework.spots.ZLinkSpotRequestCall;
+import systems.zlink.framework.spots.ZLinkSpotSendCall;
+import systems.zlink.framework.spring.internal.runtime.ZLinkFrameworkLifecycle;
 
 final class ZLinkFrameworkSpotOutboundBean implements ZLinkSpotOutbound {
     private final ZLinkFrameworkLifecycle lifecycle;
@@ -18,38 +16,27 @@ final class ZLinkFrameworkSpotOutboundBean implements ZLinkSpotOutbound {
     }
 
     @Override
-    public ZLinkSpotSendCall sendToSpot(
-        String spotId,
-        Object message) {
+    public ZLinkSpotSendCall sendToSpot(String spotId, Object message) {
         return lifecycle.spotOutbound().sendToSpot(spotId, message);
     }
 
     @Override
-    public ZLinkSpotRequestCall requestToSpot(
-        String spotId,
-        Object request) {
+    public ZLinkSpotRequestCall requestToSpot(String spotId, Object request) {
         return lifecycle.spotOutbound().requestToSpot(spotId, request);
     }
 
     @Override
-    public ZLinkPublishCall publish(
-        String channelName,
-        String topic,
-        Object message) {
+    public ZLinkPublishCall publish(String channelName, String topic, Object message) {
         return lifecycle.spotOutbound().publish(channelName, topic, message);
     }
 
     @Override
-    public ZLinkSendCall sendToChannel(
-        String channelName,
-        Object message) {
+    public ZLinkSendCall sendToChannel(String channelName, Object message) {
         return lifecycle.spotOutbound().sendToChannel(channelName, message);
     }
 
     @Override
-    public ZLinkRequestCall requestToChannel(
-        String channelName,
-        Object request) {
+    public ZLinkRequestCall requestToChannel(String channelName, Object request) {
         return lifecycle.spotOutbound().requestToChannel(channelName, request);
     }
 }

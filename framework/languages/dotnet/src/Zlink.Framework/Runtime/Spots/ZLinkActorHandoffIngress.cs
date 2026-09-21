@@ -6,16 +6,16 @@ internal static class ZLinkActorHandoffIngress
 {
     internal static bool CanAdmitStaleManagedIngress(
         ZLinkFrameworkRuntime runtime,
-        ActorMessageFollowIngress ingress)
+        ActorMessageFollowIngress ingress
+    )
     {
-        if (!runtime.TryGetActorState(
-                ingress.TargetActor.ActorId,
-                out var state))
+        if (!runtime.TryGetActorState(ingress.TargetActor.ActorId, out var state))
             return false;
         var actor = new ZLinkBackendActorRef(
             ingress.TargetActor.NodeRid,
             ingress.TargetActor.ActorId,
-            ingress.TargetActor.ObjectGeneration);
+            ingress.TargetActor.ObjectGeneration
+        );
         var route = new ZLinkBackendActorRouteContext(
             ingress.OperationId,
             ingress.MessageFollowHopCount,
@@ -24,39 +24,42 @@ internal static class ZLinkActorHandoffIngress
             ingress.OwnerLeaseGeneration,
             ingress.ReplyRouteId,
             ingress.Reply is null ? 0u : 1u,
-            DeadlineUnixMs: ingress.DeadlineUnixMs);
+            DeadlineUnixMs: ingress.DeadlineUnixMs
+        );
         return state.Handoff.CapturesSourceIngress
-               || ZLinkActorMessageFollowDispatcher.CanFollow(
-                   state,
-                   actor,
-                   route);
+            || ZLinkActorMessageFollowDispatcher.CanFollow(state, actor, route);
     }
 
     internal static bool TryCaptureOrFollowStaleManagedIngress(
         ZLinkFrameworkRuntime runtime,
-        IReadOnlyList<ZLinkBackendActorPart> parts)
+        IReadOnlyList<ZLinkBackendActorPart> parts
+    )
     {
         if (parts.Count == 0)
             return false;
         var headerPart = parts[0];
-        if (!runtime.TryGetActorState(
-                headerPart.Actor.ActorId,
-                out var state))
+        if (!runtime.TryGetActorState(headerPart.Actor.ActorId, out var state))
             return false;
-        if (!state.Handoff.CapturesSourceIngress
+        if (
+            !state.Handoff.CapturesSourceIngress
             && !ZLinkActorMessageFollowDispatcher.CanFollow(
                 state,
                 headerPart.Actor,
-                headerPart.RouteContext))
+                headerPart.RouteContext
+            )
+        )
             return false;
 
         var index = 1;
-        if (!ZLinkSpotActorFrameReader.TryRead(
+        if (
+            !ZLinkSpotActorFrameReader.TryRead(
                 parts,
                 ref index,
                 headerPart,
                 runtime.Flow.CaptureEnabled,
-                out var frame))
+                out var frame
+            )
+        )
             return true;
         var frameTransferred = false;
         try
@@ -65,14 +68,15 @@ internal static class ZLinkActorHandoffIngress
             var capture = state.Handoff.TryCapture(
                 frame,
                 runtime,
-                static (rt, fr) =>
-                    ZLinkActorInboundPipeline.EnsureRelocationReplyRoute(rt, fr));
+                static (rt, fr) => ZLinkActorInboundPipeline.EnsureRelocationReplyRoute(rt, fr)
+            );
             if (capture == ZLinkActorHandoffCaptureResult.Captured)
                 return true;
 
             try
             {
-                if (ZLinkActorMessageFollowDispatcher.TryFollow(
+                if (
+                    ZLinkActorMessageFollowDispatcher.TryFollow(
                         runtime,
                         state,
                         frame.Actor,
@@ -86,7 +90,9 @@ internal static class ZLinkActorHandoffIngress
                         frame.SourceNodeGeneration,
                         frame.RequestSource,
                         frame.DirectReply,
-                        frame.ApplicationMetadata))
+                        frame.ApplicationMetadata
+                    )
+                )
                     return true;
             }
             catch (ZLinkFrameworkException exception)
@@ -98,12 +104,16 @@ internal static class ZLinkActorHandoffIngress
 
             var owned = new ZLinkSpotActorFrameBatch([frame]);
             frameTransferred = true;
-            if (!runtime.TryRunDetached(
+            if (
+                !runtime.TryRunDetached(
                     "actor-stale-managed-ingress",
-                    cancellationToken => new ZLinkActorInboundPipeline(
+                    cancellationToken =>
+                        new ZLinkActorInboundPipeline(
                             runtime,
-                            new ZLinkEntrySpotActorInboundEndpoint(runtime))
-                        .DispatchAsync(owned, cancellationToken)))
+                            new ZLinkEntrySpotActorInboundEndpoint(runtime)
+                        ).DispatchAsync(owned, cancellationToken)
+                )
+            )
                 owned.Dispose();
             return true;
         }
@@ -119,19 +129,23 @@ internal static class ZLinkActorHandoffIngress
     public static ZLinkSpotActorFrameBatch CaptureMovingFrames(
         ZLinkFrameworkRuntime runtime,
         IReadOnlyList<ZLinkBackendActorPart> parts,
-        IDisposable? payloadOwner = null)
+        IDisposable? payloadOwner = null
+    )
     {
         var dispatchable = new List<ZLinkSpotActorFrame>(parts.Count / 2);
         var index = 0;
         while (index < parts.Count)
         {
             var headerPart = parts[index++];
-            if (!ZLinkSpotActorFrameReader.TryRead(
+            if (
+                !ZLinkSpotActorFrameReader.TryRead(
                     parts,
                     ref index,
                     headerPart,
                     runtime.Flow.CaptureEnabled,
-                    out var frame))
+                    out var frame
+                )
+            )
             {
                 continue;
             }
@@ -143,12 +157,13 @@ internal static class ZLinkActorHandoffIngress
                     state.NativeActorRef,
                     frame,
                     runtime,
-                    static (rt, fr) =>
-                        ZLinkActorInboundPipeline.EnsureRelocationReplyRoute(rt, fr));
+                    static (rt, fr) => ZLinkActorInboundPipeline.EnsureRelocationReplyRoute(rt, fr)
+                );
                 var capture = ingress.Capture;
                 try
                 {
-                    if (ZLinkActorMessageFollowDispatcher.TryFollow(
+                    if (
+                        ZLinkActorMessageFollowDispatcher.TryFollow(
                             runtime,
                             state,
                             ingress.Route,
@@ -163,7 +178,9 @@ internal static class ZLinkActorHandoffIngress
                             frame.SourceNodeGeneration,
                             frame.RequestSource,
                             frame.DirectReply,
-                            frame.ApplicationMetadata))
+                            frame.ApplicationMetadata
+                        )
+                    )
                     {
                         frame.Dispose();
                         continue;
@@ -181,7 +198,8 @@ internal static class ZLinkActorHandoffIngress
                             frame,
                             runtime,
                             static (rt, fr) =>
-                                ZLinkActorInboundPipeline.EnsureRelocationReplyRoute(rt, fr));
+                                ZLinkActorInboundPipeline.EnsureRelocationReplyRoute(rt, fr)
+                        );
                 }
 
                 // Capture here, in pump-event order: the dispatch batches run
@@ -197,7 +215,6 @@ internal static class ZLinkActorHandoffIngress
                     frame.Dispose();
                     continue;
                 }
-
 
                 dispatchable.Add(frame);
             }

@@ -6,13 +6,14 @@ internal sealed class ZLinkActorContext(
     string meshName,
     ulong objectGeneration,
     string? spotId,
-    IZLinkBoundSessionService boundSessionService) : IZLinkActorContext
+    IZLinkBoundSessionService boundSessionService
+) : IZLinkActorContext
 {
     private string? _spotId = spotId;
 
-    private IZLinkActor CurrentActor
-        => state.Actor ?? throw new InvalidOperationException(
-            $"Actor '{state.ActorId}' has not been created.");
+    private IZLinkActor CurrentActor =>
+        state.Actor
+        ?? throw new InvalidOperationException($"Actor '{state.ActorId}' has not been created.");
 
     public string MeshName { get; } = meshName;
 
@@ -37,35 +38,22 @@ internal sealed class ZLinkActorContext(
         }
     }
 
-    public IZLinkActorJoinSpotCall JoinSpot(
-        string spotId,
-        ZLinkMessage request)
+    public IZLinkActorJoinSpotCall JoinSpot(string spotId, ZLinkMessage request)
     {
         state.EnsureContextValid();
         ArgumentNullException.ThrowIfNull(request);
-        return ZLinkActorJoinCall.ForSpot(
-            runtime,
-            state,
-            CurrentActor,
-            spotId,
-            request);
+        return ZLinkActorJoinCall.ForSpot(runtime, state, CurrentActor, spotId, request);
     }
 
     public IZLinkActorJoinEntrySpotCall JoinEntrySpot(ZLinkMessage request)
     {
         state.EnsureContextValid();
         ArgumentNullException.ThrowIfNull(request);
-        return ZLinkActorJoinCall.ForEntrySpot(
-            runtime,
-            state,
-            CurrentActor,
-            request);
+        return ZLinkActorJoinCall.ForEntrySpot(runtime, state, CurrentActor, request);
     }
 }
 
-internal sealed class ZLinkActorJoinCall :
-    IZLinkActorJoinSpotCall,
-    IZLinkActorJoinEntrySpotCall
+internal sealed class ZLinkActorJoinCall : IZLinkActorJoinSpotCall, IZLinkActorJoinEntrySpotCall
 {
     private readonly IZLinkActor _actor;
     private readonly ZLinkActorRuntimeState _actorState;
@@ -80,7 +68,8 @@ internal sealed class ZLinkActorJoinCall :
         ZLinkActorRuntimeState actorState,
         IZLinkActor actor,
         string? targetSpotId,
-        ZLinkMessage request)
+        ZLinkMessage request
+    )
     {
         _runtime = runtime;
         _actorState = actorState;
@@ -94,28 +83,26 @@ internal sealed class ZLinkActorJoinCall :
         ZLinkActorRuntimeState actorState,
         IZLinkActor actor,
         string spotId,
-        ZLinkMessage request)
+        ZLinkMessage request
+    )
     {
         return new ZLinkActorJoinCall(
             runtime,
             actorState,
             actor,
             ZLinkSpotId.Require(spotId, nameof(spotId)),
-            request);
+            request
+        );
     }
 
     public static IZLinkActorJoinEntrySpotCall ForEntrySpot(
         ZLinkFrameworkRuntime runtime,
         ZLinkActorRuntimeState actorState,
         IZLinkActor actor,
-        ZLinkMessage request)
+        ZLinkMessage request
+    )
     {
-        return new ZLinkActorJoinCall(
-            runtime,
-            actorState,
-            actor,
-            null,
-            request);
+        return new ZLinkActorJoinCall(runtime, actorState, actor, null, request);
     }
 
     IZLinkActorJoinSpotCall IZLinkActorJoinSpotCall.Timeout(TimeSpan timeout)
@@ -136,7 +123,8 @@ internal sealed class ZLinkActorJoinCall :
         if (Interlocked.Exchange(ref _submitted, 1) != 0)
             throw new ZLinkFrameworkException(
                 ZLinkFrameworkErrorKind.InvalidOperation,
-                "Actor Join was already deferred.");
+                "Actor Join was already deferred."
+            );
 
         var snapshot = _request.Snapshot(_runtime.Registration.Codecs);
         var join = new ZLinkDeferredActorJoin(
@@ -144,15 +132,18 @@ internal sealed class ZLinkActorJoinCall :
             _actorState,
             _actor,
             _actorState.NativeActorRef?.Generation
-            ?? throw new ZLinkFrameworkException(
-                ZLinkFrameworkErrorKind.NotFound,
-                $"Actor '{_actor.Context.ActorId}' does not have a current object generation."),
+                ?? throw new ZLinkFrameworkException(
+                    ZLinkFrameworkErrorKind.NotFound,
+                    $"Actor '{_actor.Context.ActorId}' does not have a current object generation."
+                ),
             _targetSpotId,
             snapshot,
-            _timeout ?? _runtime.Registration.DefaultRequestTimeout);
+            _timeout ?? _runtime.Registration.DefaultRequestTimeout
+        );
         ZLinkDeferredActorJoinHandlerScope.Register(
             join,
-            snapshot.Encode(_runtime.Registration.Codecs).Payload.Bytes.Length);
+            snapshot.Encode(_runtime.Registration.Codecs).Payload.Bytes.Length
+        );
     }
 
     private void SetTimeout(TimeSpan timeout)
@@ -160,7 +151,8 @@ internal sealed class ZLinkActorJoinCall :
         if (Volatile.Read(ref _submitted) != 0)
             throw new ZLinkFrameworkException(
                 ZLinkFrameworkErrorKind.InvalidOperation,
-                "Actor Join options cannot change after Defer.");
+                "Actor Join options cannot change after Defer."
+            );
         ZLinkRequestTimeoutValidation.Validate(timeout, nameof(timeout));
         _timeout = timeout;
     }

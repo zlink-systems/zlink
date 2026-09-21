@@ -36,78 +36,91 @@ internal sealed class ZLinkDeferredActorJoinHandlerScope : IDisposable
 
     public static void Register(ZLinkDeferredActorJoin join, int requestBytes)
     {
-        var scope = CurrentScope.Value
-                    ?? throw new ZLinkFrameworkException(
-                        ZLinkFrameworkErrorKind.InvalidOperation,
-                        "Actor Join Defer is only valid in a Framework-managed Spot or Actor handler.");
+        var scope =
+            CurrentScope.Value
+            ?? throw new ZLinkFrameworkException(
+                ZLinkFrameworkErrorKind.InvalidOperation,
+                "Actor Join Defer is only valid in a Framework-managed Spot or Actor handler."
+            );
 
         if (requestBytes > MaxRequestBytes)
             throw new ZLinkFrameworkException(
                 ZLinkFrameworkErrorKind.InvalidOperation,
-                $"Actor Join request exceeds the {MaxRequestBytes}-byte limit.");
+                $"Actor Join request exceeds the {MaxRequestBytes}-byte limit."
+            );
 
-        AwaitStateLane(scope._lane.RunAsync(() =>
-        {
-            if (!scope._allowed)
-                throw new ZLinkFrameworkException(
-                    ZLinkFrameworkErrorKind.InvalidOperation,
-                    "Instance Spot handlers cannot register Actor Join operations.");
-            if (scope._sealed)
-                throw new ZLinkFrameworkException(
-                    ZLinkFrameworkErrorKind.InvalidOperation,
-                    "Actor Join Defer cannot register after the handler has completed.");
-            if (scope._joins.Count >= MaxOperations)
-                throw new ZLinkFrameworkException(
-                    ZLinkFrameworkErrorKind.InvalidOperation,
-                    $"A handler turn cannot register more than {MaxOperations} Actor Joins.");
-            if (scope._requestBytes > MaxTotalRequestBytes - requestBytes)
-                throw new ZLinkFrameworkException(
-                    ZLinkFrameworkErrorKind.InvalidOperation,
-                    $"Actor Join requests in one handler turn exceed {MaxTotalRequestBytes} bytes.");
+        AwaitStateLane(
+            scope._lane.RunAsync(() =>
+            {
+                if (!scope._allowed)
+                    throw new ZLinkFrameworkException(
+                        ZLinkFrameworkErrorKind.InvalidOperation,
+                        "Instance Spot handlers cannot register Actor Join operations."
+                    );
+                if (scope._sealed)
+                    throw new ZLinkFrameworkException(
+                        ZLinkFrameworkErrorKind.InvalidOperation,
+                        "Actor Join Defer cannot register after the handler has completed."
+                    );
+                if (scope._joins.Count >= MaxOperations)
+                    throw new ZLinkFrameworkException(
+                        ZLinkFrameworkErrorKind.InvalidOperation,
+                        $"A handler turn cannot register more than {MaxOperations} Actor Joins."
+                    );
+                if (scope._requestBytes > MaxTotalRequestBytes - requestBytes)
+                    throw new ZLinkFrameworkException(
+                        ZLinkFrameworkErrorKind.InvalidOperation,
+                        $"Actor Join requests in one handler turn exceed {MaxTotalRequestBytes} bytes."
+                    );
 
-            join.ReserveBarrier();
-            scope._joins.Add(join);
-            scope._requestBytes += requestBytes;
-        }));
+                join.ReserveBarrier();
+                scope._joins.Add(join);
+                scope._requestBytes += requestBytes;
+            })
+        );
     }
 
     public void Complete()
     {
-        AwaitStateLane(_lane.RunAsync(() =>
-        {
-            if (_sealed) return;
-            _completed = true;
-            _sealed = true;
-        }));
+        AwaitStateLane(
+            _lane.RunAsync(() =>
+            {
+                if (_sealed)
+                    return;
+                _completed = true;
+                _sealed = true;
+            })
+        );
     }
 
     public void Dispose()
     {
-        var completion = AwaitStateLane(_lane.RunAsync(() =>
-        {
-            _sealed = true;
-            return new Completion(_completed, [.. _joins]);
-        }));
+        var completion = AwaitStateLane(
+            _lane.RunAsync(() =>
+            {
+                _sealed = true;
+                return new Completion(_completed, [.. _joins]);
+            })
+        );
 
         CurrentScope.Value = _previous;
         if (completion.Completed)
         {
-            foreach (var join in completion.Joins) join.Activate();
+            foreach (var join in completion.Joins)
+                join.Activate();
             return;
         }
 
-        foreach (var join in completion.Joins) join.Discard();
+        foreach (var join in completion.Joins)
+            join.Discard();
     }
 
-    private static void AwaitStateLane(ValueTask operation) =>
-        operation.GetAwaiter().GetResult();
+    private static void AwaitStateLane(ValueTask operation) => operation.GetAwaiter().GetResult();
 
     private static T AwaitStateLane<T>(ValueTask<T> operation) =>
         operation.GetAwaiter().GetResult();
 
-    private readonly record struct Completion(
-        bool Completed,
-        List<ZLinkDeferredActorJoin> Joins);
+    private readonly record struct Completion(bool Completed, List<ZLinkDeferredActorJoin> Joins);
 }
 
 internal sealed class ZLinkDeferredActorJoin(
@@ -117,11 +130,11 @@ internal sealed class ZLinkDeferredActorJoin(
     ulong objectGeneration,
     string? targetSpotId,
     ZLinkMessage request,
-    TimeSpan timeout)
+    TimeSpan timeout
+)
 {
     private readonly long _registeredTimestamp = Stopwatch.GetTimestamp();
-    private readonly DateTimeOffset _absoluteDeadline =
-        DateTimeOffset.UtcNow + timeout;
+    private readonly DateTimeOffset _absoluteDeadline = DateTimeOffset.UtcNow + timeout;
     private readonly ZLinkActorJoinOperationId _operationId = CreateOperationId();
 
     // The deferred Join runs after the submitting callback, so the causal flow of
@@ -144,21 +157,25 @@ internal sealed class ZLinkDeferredActorJoin(
         if (runtime.ShutdownToken.IsCancellationRequested)
             throw new ZLinkFrameworkException(
                 ZLinkFrameworkErrorKind.ShuttingDown,
-                "Actor Join cannot be deferred while the Framework runtime is shutting down.");
+                "Actor Join cannot be deferred while the Framework runtime is shutting down."
+            );
         actorState.EnsureDeferredJoinIdentity(actor, objectGeneration);
         _barrier = actorState.ReserveDeferredJoinBarrier(out _targetCompletion);
     }
 
     public void Activate()
     {
-        if (ZLinkBoundSessionDispatchScope.TryDefer(
+        if (
+            ZLinkBoundSessionDispatchScope.TryDefer(
                 actorState.ActorId,
-                ScheduleAfterBoundSessionTerminalAsync)) return;
+                ScheduleAfterBoundSessionTerminalAsync
+            )
+        )
+            return;
         Schedule();
     }
 
-    private ValueTask ScheduleAfterBoundSessionTerminalAsync(
-        CancellationToken cancellationToken)
+    private ValueTask ScheduleAfterBoundSessionTerminalAsync(CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
         Schedule();
@@ -167,13 +184,13 @@ internal sealed class ZLinkDeferredActorJoin(
 
     private void Schedule()
     {
-        if (_turn is { } turn && turn.TryPost(RunOnSubmittingSpotAsync)) return;
+        if (_turn is { } turn && turn.TryPost(RunOnSubmittingSpotAsync))
+            return;
         if (!runtime.TryRunDetached("actor-deferred-join", RunAsync))
             Discard();
     }
 
-    private async ValueTask RunOnSubmittingSpotAsync(
-        CancellationToken cancellationToken)
+    private async ValueTask RunOnSubmittingSpotAsync(CancellationToken cancellationToken)
     {
         using var spot = _spotActivation is null
             ? null
@@ -191,8 +208,7 @@ internal sealed class ZLinkDeferredActorJoin(
         //  actually suspends.
         if (ZLinkSerialTurn.Current is { } turn)
         {
-            await turn.YieldFrameworkCallAsync(RunAsync, cancellationToken)
-                .ConfigureAwait(false);
+            await turn.YieldFrameworkCallAsync(RunAsync, cancellationToken).ConfigureAwait(false);
             return;
         }
         await RunAsync(cancellationToken).ConfigureAwait(false);
@@ -219,8 +235,10 @@ internal sealed class ZLinkDeferredActorJoin(
                 await NotifySourceAsync(
                         new ZLinkActorJoinCompletion.Failed(
                             _operationId,
-                            ZLinkFrameworkErrorKind.DeadlineExceeded),
-                        cancellationToken)
+                            ZLinkFrameworkErrorKind.DeadlineExceeded
+                        ),
+                        cancellationToken
+                    )
                     .ConfigureAwait(false);
                 return;
             }
@@ -229,7 +247,8 @@ internal sealed class ZLinkDeferredActorJoin(
             {
                 try
                 {
-                    await targetCompletion.WaitAsync(remaining, cancellationToken)
+                    await targetCompletion
+                        .WaitAsync(remaining, cancellationToken)
                         .ConfigureAwait(false);
                     barrier = actorState.ReserveDeferredJoinBarrierAfterTarget();
                 }
@@ -237,10 +256,12 @@ internal sealed class ZLinkDeferredActorJoin(
                 {
                     var kind = MapFailure(exception);
                     Diagnostics.ZLinkFrameworkDebugLog.SpotDiscovery(
-                        $"deferred_join_target_wait_failed kind={kind} {exception}");
+                        $"deferred_join_target_wait_failed kind={kind} {exception}"
+                    );
                     await NotifySourceAsync(
                             new ZLinkActorJoinCompletion.Failed(_operationId, kind),
-                            cancellationToken)
+                            cancellationToken
+                        )
                         .ConfigureAwait(false);
                     return;
                 }
@@ -248,7 +269,8 @@ internal sealed class ZLinkDeferredActorJoin(
 
             if (barrier is not { } reservedBarrier)
                 throw new InvalidOperationException(
-                    "Deferred Actor Join barrier was not reserved.");
+                    "Deferred Actor Join barrier was not reserved."
+                );
             using var turn = await reservedBarrier.ClaimAsync().ConfigureAwait(false);
             // Re-enter the flow captured at registration, but only while the
             // live level still allows capture (spec 27 §4): an On→Off flip
@@ -258,7 +280,8 @@ internal sealed class ZLinkDeferredActorJoin(
                 _flow?.Origin,
                 runtime.Flow.CaptureEnabled,
                 ZLinkFlowOrigin.Application,
-                createIfAbsent: false);
+                createIfAbsent: false
+            );
             using var dispatch = actorState.EnterDeferredJoinExecution();
             ZLinkActorJoinCompletion? completion = null;
             try
@@ -266,20 +289,24 @@ internal sealed class ZLinkDeferredActorJoin(
                 actorState.EnsureDeferredJoinIdentity(actor, objectGeneration);
                 var sourceNodeRid = actorState.NativeActorRef?.NodeRid;
                 var result = targetSpotId is { } spotId
-                    ? await runtime.JoinActorAsync(
+                    ? await runtime
+                        .JoinActorAsync(
                             spotId,
                             actor,
                             request,
                             _operationId,
                             cancellationToken,
-                            _absoluteDeadline)
+                            _absoluteDeadline
+                        )
                         .ConfigureAwait(false)
-                    : await runtime.JoinActorEntrySpotAsync(
+                    : await runtime
+                        .JoinActorEntrySpotAsync(
                             actor,
                             request,
                             _operationId,
                             cancellationToken,
-                            _absoluteDeadline)
+                            _absoluteDeadline
+                        )
                         .ConfigureAwait(false);
 
                 switch (result)
@@ -289,7 +316,8 @@ internal sealed class ZLinkDeferredActorJoin(
                         completion = new ZLinkActorJoinCompletion.Accepted(
                             _operationId,
                             accepted.Actor,
-                            accepted.Reply.IsEmpty ? null : accepted.Reply);
+                            accepted.Reply.IsEmpty ? null : accepted.Reply
+                        );
                         break;
                     case ZLinkActorJoinResult.Accepted:
                         // The target runtime delivers durable cross-node Accepted
@@ -299,7 +327,8 @@ internal sealed class ZLinkDeferredActorJoin(
                     case ZLinkActorJoinResult.Rejected rejected:
                         completion = new ZLinkActorJoinCompletion.Rejected(
                             _operationId,
-                            rejected.Reply.IsEmpty ? null : rejected.Reply);
+                            rejected.Reply.IsEmpty ? null : rejected.Reply
+                        );
                         break;
                 }
             }
@@ -312,18 +341,22 @@ internal sealed class ZLinkDeferredActorJoin(
                 //  the message flow as well, so the cause carries the same flow
                 //  identity as the Join that produced it.
                 Diagnostics.ZLinkFrameworkDebugLog.SpotDiscovery(
-                    $"deferred_join_failed kind={kind} {exception}");
+                    $"deferred_join_failed kind={kind} {exception}"
+                );
                 if (runtime.Flow.CaptureEnabled)
-                    runtime.Flow.TraceDispatchError(new ZLinkDispatchFailure(
-                        ZLinkDispatchErrorSurface.SpotActor,
-                        ZLinkDispatchMessageKind.ActorRequest,
-                        ZLinkDispatchErrorReason.HandlerException,
-                        ZLinkDispatchErrorAction.ReplyError,
-                        "JoinSpot",
-                        ActorId: actor.Context.ActorId,
-                        Exception: exception,
-                        FlowId: _flow?.FlowId,
-                        FlowOrigin: _flow?.Origin));
+                    runtime.Flow.TraceDispatchError(
+                        new ZLinkDispatchFailure(
+                            ZLinkDispatchErrorSurface.SpotActor,
+                            ZLinkDispatchMessageKind.ActorRequest,
+                            ZLinkDispatchErrorReason.HandlerException,
+                            ZLinkDispatchErrorAction.ReplyError,
+                            "JoinSpot",
+                            ActorId: actor.Context.ActorId,
+                            Exception: exception,
+                            FlowId: _flow?.FlowId,
+                            FlowOrigin: _flow?.Origin
+                        )
+                    );
                 completion = new ZLinkActorJoinCompletion.Failed(_operationId, kind);
             }
 
@@ -338,42 +371,49 @@ internal sealed class ZLinkDeferredActorJoin(
         }
     }
 
-    private void ReplayDeferredJoinFrames(
-        IReadOnlyList<ZLinkActorHandoffFrame> frames)
+    private void ReplayDeferredJoinFrames(IReadOnlyList<ZLinkActorHandoffFrame> frames)
     {
-        if (frames.Count == 0) return;
+        if (frames.Count == 0)
+            return;
 
-        var actorRef = actorState.NativeActorRef
-                       ?? throw new ZLinkFrameworkException(
-                           ZLinkFrameworkErrorKind.NotFound,
-                           $"Actor '{actorState.ActorId}' has no local Actor reference for Deferred Join replay.");
+        var actorRef =
+            actorState.NativeActorRef
+            ?? throw new ZLinkFrameworkException(
+                ZLinkFrameworkErrorKind.NotFound,
+                $"Actor '{actorState.ActorId}' has no local Actor reference for Deferred Join replay."
+            );
         var batch = ZLinkActorHandoffFrames.Restore(actorRef, frames);
-        if (!runtime.TryRunDetached(
+        if (
+            !runtime.TryRunDetached(
                 "actor-deferred-join-source-replay",
-                cancellationToken => new ZLinkActorInboundPipeline(
+                cancellationToken =>
+                    new ZLinkActorInboundPipeline(
                         runtime,
-                        new ZLinkEntrySpotActorInboundEndpoint(runtime))
-                    .DispatchAsync(batch, cancellationToken)))
+                        new ZLinkEntrySpotActorInboundEndpoint(runtime)
+                    ).DispatchAsync(batch, cancellationToken)
+            )
+        )
             batch.Dispose();
     }
 
     private ValueTask NotifySourceAsync(
         ZLinkActorJoinCompletion completion,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken
+    )
     {
         return actor.OnJoinCompletedAsync(completion, cancellationToken);
     }
 
-    private ZLinkFrameworkErrorKind MapFailure(
-        Exception exception)
+    private ZLinkFrameworkErrorKind MapFailure(Exception exception)
     {
         if (exception is ZLinkFrameworkException framework)
             return framework.Kind;
-        if (exception is OperationCanceledException
-            && runtime.ShutdownToken.IsCancellationRequested)
+        if (
+            exception is OperationCanceledException
+            && runtime.ShutdownToken.IsCancellationRequested
+        )
             return ZLinkFrameworkErrorKind.ShuttingDown;
-        if (exception is TimeoutException
-            || exception is OperationCanceledException)
+        if (exception is TimeoutException || exception is OperationCanceledException)
             return ZLinkFrameworkErrorKind.DeadlineExceeded;
         return ZLinkFrameworkErrorKind.InternalFailure;
     }
@@ -386,7 +426,8 @@ internal sealed class ZLinkDeferredActorJoin(
             RandomNumberGenerator.Fill(bytes);
             var high = BinaryPrimitives.ReadUInt64BigEndian(bytes);
             var low = BinaryPrimitives.ReadUInt64BigEndian(bytes[8..]);
-            if (high != 0 || low != 0) return new ZLinkActorJoinOperationId(high, low);
+            if (high != 0 || low != 0)
+                return new ZLinkActorJoinOperationId(high, low);
         }
     }
 }

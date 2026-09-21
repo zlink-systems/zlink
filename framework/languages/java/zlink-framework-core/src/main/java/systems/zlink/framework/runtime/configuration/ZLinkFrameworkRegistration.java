@@ -1,26 +1,16 @@
 package systems.zlink.framework.runtime.configuration;
-import java.util.Optional;
-import java.util.stream.Collectors;
-import systems.zlink.framework.runtime.channels.ChannelKind;
 
-import java.time.Duration;
-import java.util.ArrayList;
-import java.util.LinkedHashSet;
-import java.util.List;
-import java.util.Set;
-import java.util.concurrent.Executor;
-import java.util.concurrent.ExecutorService;
-import java.util.concurrent.Executors;
 import systems.zlink.framework.ZLinkHandlerFilter;
 import systems.zlink.framework.errors.ZLinkConfigurationException;
 import systems.zlink.framework.locationprovider.ZLinkLocationStore;
-import systems.zlink.framework.runtime.internal.locations.ZLinkRelocationStore;
+import systems.zlink.framework.runtime.channels.ChannelKind;
 import systems.zlink.framework.runtime.channels.ChannelRegistration;
 import systems.zlink.framework.runtime.handlers.ZLinkHandlerScanner;
 import systems.zlink.framework.runtime.handlers.ZLinkScannedHandler;
 import systems.zlink.framework.runtime.handlers.ZLinkScannedHandlerCatalog;
-import systems.zlink.framework.runtime.internal.handlers.ZLinkSuspendInvocationAdapter;
 import systems.zlink.framework.runtime.internal.configuration.ZLinkCodecRegistration;
+import systems.zlink.framework.runtime.internal.handlers.ZLinkSuspendInvocationAdapter;
+import systems.zlink.framework.runtime.internal.locations.ZLinkRelocationStore;
 import systems.zlink.framework.runtime.locations.ZLinkLocationRegistration;
 import systems.zlink.framework.runtime.mesh.MeshNodeRegistration;
 import systems.zlink.framework.runtime.spots.SpotNodeRegistration;
@@ -28,16 +18,26 @@ import systems.zlink.framework.runtime.streams.StreamNodeRegistration;
 import systems.zlink.framework.streams.ZLinkStreamCompressionCodec;
 import systems.zlink.framework.streams.ZLinkStreamCompressionCodecs;
 
+import java.time.Duration;
+import java.util.ArrayList;
+import java.util.LinkedHashSet;
+import java.util.List;
+import java.util.Optional;
+import java.util.Set;
+import java.util.concurrent.Executor;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.stream.Collectors;
+
 public final class ZLinkFrameworkRegistration {
     private final ZLinkCodecRegistration codecs = new ZLinkCodecRegistration();
     private final ZLinkMetadataPolicyRegistration metadataPolicy =
-        new ZLinkMetadataPolicyRegistration();
+            new ZLinkMetadataPolicyRegistration();
     private final ZLinkDispatchOptionsRegistration dispatchOptions =
-        new ZLinkDispatchOptionsRegistration();
-    private final ZLinkWorkerOptionsRegistration workers =
-        new ZLinkWorkerOptionsRegistration();
+            new ZLinkDispatchOptionsRegistration();
+    private final ZLinkWorkerOptionsRegistration workers = new ZLinkWorkerOptionsRegistration();
     private final ZLinkInboundDispatchRegistration inboundDispatch =
-        new ZLinkInboundDispatchRegistration();
+            new ZLinkInboundDispatchRegistration();
     private final ZLinkLocationRegistration locations = new ZLinkLocationRegistration();
     private final List<ChannelRegistration> channels = new ArrayList<>();
     private final List<MeshNodeRegistration> meshNodes = new ArrayList<>();
@@ -49,11 +49,9 @@ public final class ZLinkFrameworkRegistration {
     private ZLinkStreamCompressionCodec streamCompressionCodec = ZLinkStreamCompressionCodecs.lz4();
     private Executor handlerExecutor = Executors.newVirtualThreadPerTaskExecutor();
     private boolean closeHandlerExecutor = true;
-    private final ExecutorService serialExecutor =
-        Executors.newVirtualThreadPerTaskExecutor();
+    private final ExecutorService serialExecutor = Executors.newVirtualThreadPerTaskExecutor();
     private Duration defaultRequestTimeout = Duration.ofSeconds(30);
-    private Duration sessionReplacementCallbackTimeout =
-        Duration.ofMillis(30_000);
+    private Duration sessionReplacementCallbackTimeout = Duration.ofMillis(30_000);
     private ZLinkRelocationStore relocationStore;
     private long applicationVersion;
     private String maintenanceWave;
@@ -70,8 +68,7 @@ public final class ZLinkFrameworkRegistration {
         return sessionReplacementCallbackTimeout;
     }
 
-    void setSessionReplacementCallbackTimeout(
-        Duration sessionReplacementCallbackTimeout) {
+    void setSessionReplacementCallbackTimeout(Duration sessionReplacementCallbackTimeout) {
         this.sessionReplacementCallbackTimeout = sessionReplacementCallbackTimeout;
     }
 
@@ -111,8 +108,8 @@ public final class ZLinkFrameworkRegistration {
         return inboundDispatch;
     }
 
-    public systems.zlink.framework.runtime.internal.dispatch
-        .ZLinkApplicationJobQueue applicationJobQueue() {
+    public systems.zlink.framework.runtime.internal.dispatch.ZLinkApplicationJobQueue
+            applicationJobQueue() {
         return inboundDispatch.applicationJobQueue(handlerExecutor);
     }
 
@@ -186,7 +183,8 @@ public final class ZLinkFrameworkRegistration {
         for (StreamNodeRegistration streamNode : streamNodes) {
             types.addAll(streamNode.applicationTypes());
         }
-        for (ZLinkScannedHandler handler : ZLinkHandlerScanner.scan(handlerPackageMarkers).handlers()) {
+        for (ZLinkScannedHandler handler :
+                ZLinkHandlerScanner.scan(handlerPackageMarkers).handlers()) {
             types.add(handler.handlerType());
         }
         return Set.copyOf(types);
@@ -200,15 +198,13 @@ public final class ZLinkFrameworkRegistration {
         return relocationStore;
     }
 
-    void setRelocationStore(
-        systems.zlink.framework.locationprovider.ZLinkRelocationStore store) {
+    void setRelocationStore(systems.zlink.framework.locationprovider.ZLinkRelocationStore store) {
         if (relocationStore != null) {
-            throw new ZLinkConfigurationException(
-                "relocation store is already registered");
+            throw new ZLinkConfigurationException("relocation store is already registered");
         }
         relocationStore =
-            new systems.zlink.framework.runtime.internal.locations
-                .ZLinkProviderRelocationRepository(store);
+                new systems.zlink.framework.runtime.internal.locations
+                        .ZLinkProviderRelocationRepository(store);
     }
 
     void useVirtualThreadHandlers() {
@@ -238,16 +234,15 @@ public final class ZLinkFrameworkRegistration {
         dispatchOptions.validate();
         workers.validate();
         inboundDispatch.applicationJobQueue(handlerExecutor);
-        ZLinkScannedHandlerCatalog handlerCatalog =
-            ZLinkHandlerScanner.scan(handlerPackageMarkers);
+        ZLinkScannedHandlerCatalog handlerCatalog = ZLinkHandlerScanner.scan(handlerPackageMarkers);
         for (ChannelRegistration channel : channels) {
             channel.validate(locations.enabled(), handlerCatalog);
         }
-        Set<String> clientServerChannelNames = channels.stream()
-            .filter(channel -> channel.kind()
-                == ChannelKind.CLIENT_SERVER)
-            .map(ChannelRegistration::name)
-            .collect(Collectors.toSet());
+        Set<String> clientServerChannelNames =
+                channels.stream()
+                        .filter(channel -> channel.kind() == ChannelKind.CLIENT_SERVER)
+                        .map(ChannelRegistration::name)
+                        .collect(Collectors.toSet());
         int actorCapableNodes = 0;
         boolean objectRoleConfigured = false;
         boolean relocationStoreRequired = false;
@@ -256,17 +251,19 @@ public final class ZLinkFrameworkRegistration {
             for (String channelName : meshNode.channelNames()) {
                 if (clientServerChannelNames.contains(channelName)) {
                     throw new ZLinkConfigurationException(
-                        "ChannelName '" + channelName
-                            + "' is registered on both RouteMesh and ClientServer physical paths.");
+                            "ChannelName '"
+                                    + channelName
+                                    + "' is registered on both RouteMesh and ClientServer physical"
+                                    + " paths.");
                 }
             }
             objectRoleConfigured |= meshNode.objectRoleEnabled();
             if (meshNode.objectRoleEnabled()
-                && !meshNode.objectServer()
-                && !meshNode.nodeHandlers().isEmpty()) {
+                    && !meshNode.objectServer()
+                    && !meshNode.nodeHandlers().isEmpty()) {
                 throw new ZLinkConfigurationException(
-                    "Object Client cannot register application Node direct handlers: "
-                        + meshNode.meshName());
+                        "Object Client cannot register application Node direct handlers: "
+                                + meshNode.meshName());
             }
             relocationStoreRequired |= meshNode.requiresRelocationStore();
             if (!meshNode.actorFactories().isEmpty()) {
@@ -281,15 +278,16 @@ public final class ZLinkFrameworkRegistration {
         }
         if (actorCapableNodes > 1) {
             throw new ZLinkConfigurationException(
-                "actor factory registration is ambiguous because more than one mesh node owns actor factories");
+                    "actor factory registration is ambiguous because more than one mesh node owns"
+                            + " actor factories");
         }
         if (objectRoleConfigured && !locations.enabled()) {
             throw new ZLinkConfigurationException(
-                "Mesh object Client or Server role requires a Location Store");
+                    "Mesh object Client or Server role requires a Location Store");
         }
         if (relocationStoreRequired && relocationStore == null) {
             throw new ZLinkConfigurationException(
-                "Recreate or Snapshot relocation policy requires a Relocation Store");
+                    "Recreate or Snapshot relocation policy requires a Relocation Store");
         }
         Set<String> streamSessionTypeNames = new LinkedHashSet<>();
         for (StreamNodeRegistration streamNode : streamNodes) {
@@ -297,8 +295,7 @@ public final class ZLinkFrameworkRegistration {
             String sessionTypeName = streamNode.sessionType().getName();
             if (!streamSessionTypeNames.add(sessionTypeName)) {
                 throw new ZLinkConfigurationException(
-                    "stream session type is registered by multiple nodes: "
-                        + sessionTypeName);
+                        "stream session type is registered by multiple nodes: " + sessionTypeName);
             }
         }
     }

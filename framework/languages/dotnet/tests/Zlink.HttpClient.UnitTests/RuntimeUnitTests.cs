@@ -55,7 +55,8 @@ public sealed class RuntimeUnitTests
     public void CookieJar_evicts_oldest_beyond_host_limit()
     {
         var jar = new CookieJar();
-        for (var i = 0; i < 130; i++) jar.Store("api.test", $"c{i}=v");
+        for (var i = 0; i < 130; i++)
+            jar.Store("api.test", $"c{i}=v");
 
         var header = jar.HeaderFor("api.test", "/", false);
         Assert.DoesNotContain("c0=", header); // oldest evicted
@@ -76,11 +77,9 @@ public sealed class RuntimeUnitTests
     [Fact]
     public void ProviderReadStream_reads_chunks_then_eof_via_all_overloads()
     {
-        var chunks = new Queue<byte[]>(new[]
-        {
-            Encoding.UTF8.GetBytes("alpha"),
-            Encoding.UTF8.GetBytes("beta")
-        });
+        var chunks = new Queue<byte[]>(
+            new[] { Encoding.UTF8.GetBytes("alpha"), Encoding.UTF8.GetBytes("beta") }
+        );
         using var stream = new ProviderReadStream(() => chunks.Count > 0 ? chunks.Dequeue() : null);
 
         var array = new byte[3];
@@ -101,7 +100,9 @@ public sealed class RuntimeUnitTests
     public async Task ProviderReadStream_async_overload_reads()
     {
         var chunks = new Queue<byte[]>(new[] { Encoding.UTF8.GetBytes("xy") });
-        await using var stream = new ProviderReadStream(() => chunks.Count > 0 ? chunks.Dequeue() : null);
+        await using var stream = new ProviderReadStream(() =>
+            chunks.Count > 0 ? chunks.Dequeue() : null
+        );
 
         var buffer = new byte[8];
         var n = await stream.ReadAsync(buffer, 0, buffer.Length);
@@ -147,11 +148,13 @@ public sealed class RuntimeUnitTests
     [Fact]
     public void HttpHeaderLookup_finds_and_removes_headers_case_insensitively()
     {
-        IReadOnlyDictionary<string, string> headers = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
+        IReadOnlyDictionary<string, string> headers = new Dictionary<string, string>(
+            StringComparer.OrdinalIgnoreCase
+        )
         {
             ["Content-Type"] = "application/json",
             ["CONTENT-LENGTH"] = "42",
-            ["x-marker"] = "keep"
+            ["x-marker"] = "keep",
         };
 
         Assert.Equal("application/json", HttpHeaderLookup.Find(headers, "content-type"));
@@ -172,14 +175,17 @@ public sealed class RuntimeUnitTests
         var decoded = codecs.Decode(
             Encoding.UTF8.GetBytes("response"),
             typeof(string),
-            "Application/X-Test; charset=utf-8");
+            "Application/X-Test; charset=utf-8"
+        );
 
         Assert.Equal("application/x-test", encoded.ContentType);
         Assert.Equal("response", decoded);
         Assert.Throws<ArgumentException>(() =>
-            codecs.AddSerializer("application/x-test; charset=utf-8", MarkerSerializer.Instance));
+            codecs.AddSerializer("application/x-test; charset=utf-8", MarkerSerializer.Instance)
+        );
         Assert.Throws<ArgumentException>(() =>
-            codecs.AddSerializer("application /x-test", MarkerSerializer.Instance));
+            codecs.AddSerializer("application /x-test", MarkerSerializer.Instance)
+        );
     }
 
     [Fact]
@@ -189,11 +195,13 @@ public sealed class RuntimeUnitTests
         codecs.AddSerializer(
             "application/x-first",
             new TaggedSerializer("first"),
-            static type => type == typeof(string));
+            static type => type == typeof(string)
+        );
         codecs.AddSerializer(
             "application/x-second",
             new TaggedSerializer("second"),
-            static type => type == typeof(string));
+            static type => type == typeof(string)
+        );
 
         var encoded = codecs.Encode("payload", typeof(string));
 
@@ -226,20 +234,20 @@ public sealed class RuntimeUnitTests
             {
                 resolutions[type] = resolutions.GetValueOrDefault(type) + 1;
                 return type == typeof(string);
-            });
+            }
+        );
 
         _ = codecs.Encode("cached", typeof(string));
         var assembly = AssemblyBuilder.DefineDynamicAssembly(
             new AssemblyName("Zlink.HttpSerializerCacheSaturation"),
-            AssemblyBuilderAccess.Run);
+            AssemblyBuilderAccess.Run
+        );
         var module = assembly.DefineDynamicModule("Main");
         Type? uncachedType = null;
         object? uncachedValue = null;
         for (var index = 0; index < 1_024; index++)
         {
-            var type = module.DefineType($"Payload{index}")
-                .CreateTypeInfo()!
-                .AsType();
+            var type = module.DefineType($"Payload{index}").CreateTypeInfo()!.AsType();
             _ = codecs.Encode(Activator.CreateInstance(type), type);
             uncachedType = type;
             uncachedValue = Activator.CreateInstance(type);
@@ -261,7 +269,9 @@ public sealed class RuntimeUnitTests
             codecs.Decode(
                 Encoding.UTF8.GetBytes("{}"),
                 typeof(Dictionary<string, string>),
-                "application/x-unknown"));
+                "application/x-unknown"
+            )
+        );
 
         Assert.Equal(ZLinkFrameworkErrorKind.ProtocolError, error.Kind);
     }
@@ -277,7 +287,7 @@ public sealed class RuntimeUnitTests
         {
             Method = ZLinkHttpMethod.Get,
             Target = "/resource",
-            Headers = new Dictionary<string, string>()
+            Headers = new Dictionary<string, string>(),
         };
 
         _ = await performer.PerformAsync(request, CancellationToken.None);
@@ -304,7 +314,7 @@ public sealed class RuntimeUnitTests
             Headers = new Dictionary<string, string>(),
             Codecs = new HttpClientCodecRegistry(),
             Proxy = "http://proxy.test:3128",
-            ProxyCredentials = ("proxy-user", "proxy-password")
+            ProxyCredentials = ("proxy-user", "proxy-password"),
         };
     }
 
@@ -314,15 +324,15 @@ public sealed class RuntimeUnitTests
 
         protected override Task<HttpResponseMessage> SendAsync(
             HttpRequestMessage request,
-            CancellationToken cancellationToken)
+            CancellationToken cancellationToken
+        )
         {
             ProxyAuthorization = request.Headers.TryGetValues("Proxy-Authorization", out var values)
                 ? values.Single()
                 : null;
-            return Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK)
-            {
-                Content = new ByteArrayContent([])
-            });
+            return Task.FromResult(
+                new HttpResponseMessage(HttpStatusCode.OK) { Content = new ByteArrayContent([]) }
+            );
         }
     }
 
@@ -344,8 +354,7 @@ public sealed class RuntimeUnitTests
     private sealed class TaggedSerializer(string tag) : IZLinkMessageSerializer
     {
         public ZLinkEncodedPayload Serialize(object value, Type type) =>
-            ZLinkEncodedPayload.From(
-                Encoding.UTF8.GetBytes($"{tag}:{value}"));
+            ZLinkEncodedPayload.From(Encoding.UTF8.GetBytes($"{tag}:{value}"));
 
         public object? Deserialize(ZLinkEncodedPayload payload, Type type) =>
             Encoding.UTF8.GetString(payload.Bytes.Span);

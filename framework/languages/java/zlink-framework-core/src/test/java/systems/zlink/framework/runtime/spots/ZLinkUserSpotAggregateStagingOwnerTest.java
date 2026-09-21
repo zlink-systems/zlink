@@ -1,72 +1,75 @@
 package systems.zlink.framework.runtime.spots;
-import java.util.concurrent.CompletionException;
 
 import static org.junit.jupiter.api.Assertions.*;
 
-import java.util.ArrayList;
-import java.util.LinkedHashMap;
-import java.util.List;
-import java.util.Map;
-import java.util.concurrent.CompletableFuture;
-import java.util.concurrent.CompletionStage;
-import java.util.concurrent.atomic.AtomicInteger;
 import org.junit.jupiter.api.Test;
+
 import systems.zlink.framework.actors.ZLinkActor;
 import systems.zlink.framework.actors.ZLinkRelocationCancellation;
 import systems.zlink.framework.execution.ZLinkSerialExecutionQueue;
 import systems.zlink.framework.spots.ZLinkSpot;
 import systems.zlink.framework.spots.ZLinkSpotContext;
 
+import java.util.ArrayList;
+import java.util.LinkedHashMap;
+import java.util.List;
+import java.util.Map;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CompletionException;
+import java.util.concurrent.CompletionStage;
+import java.util.concurrent.atomic.AtomicInteger;
+
 final class ZLinkUserSpotAggregateStagingOwnerTest {
     @Test
     void noParticipantIsVisibleBeforeAggregatePublish() {
         FakeBackend backend = new FakeBackend();
-        ZLinkUserSpotAggregateStagingOwner owner =
-            new ZLinkUserSpotAggregateStagingOwner(backend);
+        ZLinkUserSpotAggregateStagingOwner owner = new ZLinkUserSpotAggregateStagingOwner(backend);
 
-        var staged = owner.stage(request(), () -> false)
-            .toCompletableFuture().join();
+        var staged = owner.stage(request(), () -> false).toCompletableFuture().join();
 
         assertTrue(backend.live.isEmpty());
         assertEquals(
-            List.of("prepare:spot", "restore:spot", "prepare:actor-a",
-                "prepare:actor-b", "ingress-sealed"),
-            backend.operations);
+                List.of(
+                        "prepare:spot",
+                        "restore:spot",
+                        "prepare:actor-a",
+                        "prepare:actor-b",
+                        "ingress-sealed"),
+                backend.operations);
 
-        owner.publishAndReplay(staged, (lane, record) -> {
-                assertEquals(
-                    List.of("actor-a", "actor-b", "spot"), backend.live);
-                backend.operations.add("replay:" + lane + ":" + record.sequence());
-                return CompletableFuture.completedFuture(null);
-            })
-            .toCompletableFuture().join();
+        owner.publishAndReplay(
+                        staged,
+                        (lane, record) -> {
+                            assertEquals(List.of("actor-a", "actor-b", "spot"), backend.live);
+                            backend.operations.add("replay:" + lane + ":" + record.sequence());
+                            return CompletableFuture.completedFuture(null);
+                        })
+                .toCompletableFuture()
+                .join();
 
         assertEquals(List.of("actor-a", "actor-b", "spot"), backend.live);
         assertEquals("replay:actor:actor-a:3", backend.operations.getLast());
-        assertEquals(
-            1,
-            backend.operations.stream()
-                .filter("relocation-ready"::equals)
-                .count());
-        assertTrue(backend.operations.indexOf("relocation-ready")
-            < backend.operations.indexOf("publish:spot"));
-        assertTrue(backend.operations.indexOf("ingress-sealed")
-            < backend.operations.indexOf("relocation-ready"));
-        assertTrue(backend.operations.indexOf("timers:publish")
-            < backend.operations.indexOf("replay:spot:1"));
+        assertEquals(1, backend.operations.stream().filter("relocation-ready"::equals).count());
+        assertTrue(
+                backend.operations.indexOf("relocation-ready")
+                        < backend.operations.indexOf("publish:spot"));
+        assertTrue(
+                backend.operations.indexOf("ingress-sealed")
+                        < backend.operations.indexOf("relocation-ready"));
+        assertTrue(
+                backend.operations.indexOf("timers:publish")
+                        < backend.operations.indexOf("replay:spot:1"));
     }
 
     @Test
     void partialActorRestoreFailureDiscardsAllStagingWithoutPublication() {
         FakeBackend backend = new FakeBackend();
         backend.failActor = "actor-b";
-        ZLinkUserSpotAggregateStagingOwner owner =
-            new ZLinkUserSpotAggregateStagingOwner(backend);
+        ZLinkUserSpotAggregateStagingOwner owner = new ZLinkUserSpotAggregateStagingOwner(backend);
 
         assertThrows(
-            CompletionException.class,
-            () -> owner.stage(request(), () -> false)
-                .toCompletableFuture().join());
+                CompletionException.class,
+                () -> owner.stage(request(), () -> false).toCompletableFuture().join());
 
         assertTrue(backend.live.isEmpty());
         assertTrue(backend.operations.contains("discard:actor-a"));
@@ -76,19 +79,19 @@ final class ZLinkUserSpotAggregateStagingOwnerTest {
     @Test
     void abortNotifiesEveryHeldTargetIngressBeforeDiscardingStaging() {
         FakeBackend backend = new FakeBackend();
-        ZLinkUserSpotAggregateStagingOwner owner =
-            new ZLinkUserSpotAggregateStagingOwner(backend);
-        var staged = owner.stage(request(), () -> false)
-            .toCompletableFuture().join();
+        ZLinkUserSpotAggregateStagingOwner owner = new ZLinkUserSpotAggregateStagingOwner(backend);
+        var staged = owner.stage(request(), () -> false).toCompletableFuture().join();
         AtomicInteger failures = new AtomicInteger();
-        assertTrue(owner.acceptSpotIngress(
-            staged, new byte[] {1}, null, ignored -> failures.incrementAndGet()));
-        assertTrue(owner.acceptActorIngress(
-            staged,
-            "actor-a",
-            new byte[] {2},
-            null,
-            ignored -> failures.incrementAndGet()));
+        assertTrue(
+                owner.acceptSpotIngress(
+                        staged, new byte[] {1}, null, ignored -> failures.incrementAndGet()));
+        assertTrue(
+                owner.acceptActorIngress(
+                        staged,
+                        "actor-a",
+                        new byte[] {2},
+                        null,
+                        ignored -> failures.incrementAndGet()));
 
         owner.discard(staged).toCompletableFuture().join();
 
@@ -100,184 +103,189 @@ final class ZLinkUserSpotAggregateStagingOwnerTest {
     @Test
     void finalRootMustPreserveTheInitialFactoryAndRestoreState() {
         FakeBackend backend = new FakeBackend();
-        ZLinkUserSpotAggregateStagingOwner owner =
-            new ZLinkUserSpotAggregateStagingOwner(backend);
-        var staged = owner.stage(request(), () -> false)
-            .toCompletableFuture().join();
-        var changed = new ZLinkUserSpotAggregateStagingOwner.Request(
-            TestSpot.class,
-            "room",
-            "room-a",
-            7,
-            new byte[] {99},
-            true,
-            new byte[] {8},
-            List.of(actor("actor-a"), actor("actor-b")),
-            request().acceptedJournal());
+        ZLinkUserSpotAggregateStagingOwner owner = new ZLinkUserSpotAggregateStagingOwner(backend);
+        var staged = owner.stage(request(), () -> false).toCompletableFuture().join();
+        var changed =
+                new ZLinkUserSpotAggregateStagingOwner.Request(
+                        TestSpot.class,
+                        "room",
+                        "room-a",
+                        7,
+                        new byte[] {99},
+                        true,
+                        new byte[] {8},
+                        List.of(actor("actor-a"), actor("actor-b")),
+                        request().acceptedJournal());
 
         assertThrows(
-            IllegalArgumentException.class,
-            () -> owner.publishAndReplay(
-                staged,
-                changed,
-                (lane, record) -> CompletableFuture.completedFuture(null)));
+                IllegalArgumentException.class,
+                () ->
+                        owner.publishAndReplay(
+                                staged,
+                                changed,
+                                (lane, record) -> CompletableFuture.completedFuture(null)));
         assertTrue(backend.live.isEmpty());
     }
 
     @Test
     void actorTimersAreStagedBeforeAggregatePublication() {
         FakeBackend backend = new FakeBackend();
-        ZLinkUserSpotAggregateStagingOwner owner =
-            new ZLinkUserSpotAggregateStagingOwner(backend);
+        ZLinkUserSpotAggregateStagingOwner owner = new ZLinkUserSpotAggregateStagingOwner(backend);
         byte[] timerEnvelope =
-            ZLinkSpotTimerRelocationEnvelope.encodeCanonical(
-                List.of(new ZLinkSpotTimerRelocationEnvelope.CanonicalTimer(
-                    "actor-heartbeat", TestSpot.class.getName(),
-                    1000, 1, 1, true, 2, 3, 4, null)));
+                ZLinkSpotTimerRelocationEnvelope.encodeCanonical(
+                        List.of(
+                                new ZLinkSpotTimerRelocationEnvelope.CanonicalTimer(
+                                        "actor-heartbeat",
+                                        TestSpot.class.getName(),
+                                        1000,
+                                        1,
+                                        1,
+                                        true,
+                                        2,
+                                        3,
+                                        4,
+                                        null)));
         var base = request();
-        var timed = new ZLinkUserSpotAggregateStagingOwner.Request(
-            base.spotType(),
-            base.spotStableType(),
-            base.spotId(),
-            base.objectGeneration(),
-            base.spotState(),
-            base.restoreSpotSnapshot(),
-            base.timerEnvelope(),
-            List.of(
-                new ZLinkUserSpotAggregateStagingOwner.ActorParticipant(
-                    "actor-a", "player", new byte[] {4}, true, null,
-                    timerEnvelope),
-                actor("actor-b")),
-            base.acceptedJournal());
+        var timed =
+                new ZLinkUserSpotAggregateStagingOwner.Request(
+                        base.spotType(),
+                        base.spotStableType(),
+                        base.spotId(),
+                        base.objectGeneration(),
+                        base.spotState(),
+                        base.restoreSpotSnapshot(),
+                        base.timerEnvelope(),
+                        List.of(
+                                new ZLinkUserSpotAggregateStagingOwner.ActorParticipant(
+                                        "actor-a",
+                                        "player",
+                                        new byte[] {4},
+                                        true,
+                                        null,
+                                        timerEnvelope),
+                                actor("actor-b")),
+                        base.acceptedJournal());
 
         owner.stage(timed, () -> false).toCompletableFuture().join();
 
-        assertTrue(backend.operations.indexOf("timers:stage:actor-a")
-            > backend.operations.indexOf("prepare:actor-a"));
-        assertTrue(backend.operations.indexOf("timers:stage:actor-a")
-            < backend.operations.indexOf("prepare:actor-b"));
+        assertTrue(
+                backend.operations.indexOf("timers:stage:actor-a")
+                        > backend.operations.indexOf("prepare:actor-a"));
+        assertTrue(
+                backend.operations.indexOf("timers:stage:actor-a")
+                        < backend.operations.indexOf("prepare:actor-b"));
     }
 
     @Test
     void targetPublicationInstallsActorRouteFence() {
         FakeBackend backend = new FakeBackend();
-        ZLinkUserSpotAggregateStagingOwner owner =
-            new ZLinkUserSpotAggregateStagingOwner(backend);
-        var staged = owner.stage(request(), () -> false)
-            .toCompletableFuture().join();
+        ZLinkUserSpotAggregateStagingOwner owner = new ZLinkUserSpotAggregateStagingOwner(backend);
+        var staged = owner.stage(request(), () -> false).toCompletableFuture().join();
 
-        var backlog = owner.closeDurableBacklog(
-                staged,
-                request(),
-                (lane, record) -> CompletableFuture.completedFuture(null))
-            .toCompletableFuture().join();
-        owner.publishHidden(
-            backlog,
-            Map.of("actor-a", 11L, "actor-b", 12L));
+        var backlog =
+                owner.closeDurableBacklog(
+                                staged,
+                                request(),
+                                (lane, record) -> CompletableFuture.completedFuture(null))
+                        .toCompletableFuture()
+                        .join();
+        owner.publishHidden(backlog, Map.of("actor-a", 11L, "actor-b", 12L));
         owner.openAdmission(staged);
         owner.drainDurableBacklog(backlog).toCompletableFuture().join();
 
-        assertTrue(backend.operations.contains(
-            "publish-target:actor-a:room-a:11"));
-        assertTrue(backend.operations.contains(
-            "publish-target:actor-b:room-a:12"));
+        assertTrue(backend.operations.contains("publish-target:actor-a:room-a:11"));
+        assertTrue(backend.operations.contains("publish-target:actor-b:room-a:12"));
     }
 
     @Test
     void restoreFailureNeverRetriesAndIsAnExplicitRelocationInternalFailure() {
         RetryBackend backend = new RetryBackend();
         backend.restoreSpotFailuresRemaining = 1;
-        ZLinkUserSpotAggregateStagingOwner owner =
-            new ZLinkUserSpotAggregateStagingOwner(backend);
+        ZLinkUserSpotAggregateStagingOwner owner = new ZLinkUserSpotAggregateStagingOwner(backend);
 
-        CompletionException outcome = assertThrows(
-            CompletionException.class,
-            () -> owner.stage(request(), () -> false)
-                .toCompletableFuture().join());
+        CompletionException outcome =
+                assertThrows(
+                        CompletionException.class,
+                        () -> owner.stage(request(), () -> false).toCompletableFuture().join());
 
-        assertEquals(1, backend.restoreSpotCalls,
-            "a restore failure must not retry");
+        assertEquals(1, backend.restoreSpotCalls, "a restore failure must not retry");
         assertEquals(1, backend.preparedSpotInstances.size());
         assertEquals(1, backend.discardedSpotInstances.size());
-        var cause = assertInstanceOf(
-            systems.zlink.framework.errors.ZLinkFrameworkException.class,
-            outcome.getCause());
+        var cause =
+                assertInstanceOf(
+                        systems.zlink.framework.errors.ZLinkFrameworkException.class,
+                        outcome.getCause());
         assertEquals(
-            systems.zlink.framework.errors.ZLinkFrameworkErrorKind
-                .INTERNAL_FAILURE,
-            cause.kind(),
-            "Capture/factory/restore/staging failing internally (spec 15 "
-                + "failure table) is InternalFailure, not DataLost, which "
-                + "stays reserved for chunk-assembly/checksum verification "
-                + "failures");
+                systems.zlink.framework.errors.ZLinkFrameworkErrorKind.INTERNAL_FAILURE,
+                cause.kind(),
+                "Capture/factory/restore/staging failing internally (spec 15 "
+                        + "failure table) is InternalFailure, not DataLost, which "
+                        + "stays reserved for chunk-assembly/checksum verification "
+                        + "failures");
     }
 
     private static ZLinkUserSpotAggregateStagingOwner.Request request() {
         LinkedHashMap<String, List<ZLinkSerialExecutionQueue.QueuedRecord>> journal =
-            new LinkedHashMap<>();
-        journal.put("spot", List.of(
-            new ZLinkSerialExecutionQueue.QueuedRecord(1, new byte[] {1}),
-            new ZLinkSerialExecutionQueue.QueuedRecord(2, new byte[] {2})));
-        journal.put("actor:actor-a", List.of(
-            new ZLinkSerialExecutionQueue.QueuedRecord(3, new byte[] {3})));
+                new LinkedHashMap<>();
+        journal.put(
+                "spot",
+                List.of(
+                        new ZLinkSerialExecutionQueue.QueuedRecord(1, new byte[] {1}),
+                        new ZLinkSerialExecutionQueue.QueuedRecord(2, new byte[] {2})));
+        journal.put(
+                "actor:actor-a",
+                List.of(new ZLinkSerialExecutionQueue.QueuedRecord(3, new byte[] {3})));
         return new ZLinkUserSpotAggregateStagingOwner.Request(
-            TestSpot.class,
-            "room",
-            "room-a",
-            7,
-            new byte[] {9},
-            true,
-            new byte[] {8},
-            List.of(actor("actor-a"), actor("actor-b")),
-            journal);
+                TestSpot.class,
+                "room",
+                "room-a",
+                7,
+                new byte[] {9},
+                true,
+                new byte[] {8},
+                List.of(actor("actor-a"), actor("actor-b")),
+                journal);
     }
 
-    private static ZLinkUserSpotAggregateStagingOwner.ActorParticipant actor(
-        String id) {
+    private static ZLinkUserSpotAggregateStagingOwner.ActorParticipant actor(String id) {
         return new ZLinkUserSpotAggregateStagingOwner.ActorParticipant(
-            id,
-            "player",
-            new byte[] {4},
-            true,
-            null);
+                id, "player", new byte[] {4}, true, null);
     }
 
     private static final class FakeBackend
-        implements ZLinkUserSpotAggregateStagingOwner.StagingBackend {
+            implements ZLinkUserSpotAggregateStagingOwner.StagingBackend {
         private final List<String> operations = new ArrayList<>();
         private final List<String> live = new ArrayList<>();
         private String failActor;
 
         @Override
         public CompletionStage<Object> prepareSpot(
-            ZLinkUserSpotAggregateStagingOwner.Request request) {
+                ZLinkUserSpotAggregateStagingOwner.Request request) {
             operations.add("prepare:spot");
             return CompletableFuture.completedFuture("spot");
         }
 
         @Override
         public CompletionStage<Void> restoreSpot(
-            Object preparedSpot,
-            ZLinkUserSpotAggregateStagingOwner.Request request,
-            ZLinkRelocationCancellation cancellation) {
+                Object preparedSpot,
+                ZLinkUserSpotAggregateStagingOwner.Request request,
+                ZLinkRelocationCancellation cancellation) {
             operations.add("restore:spot");
             return CompletableFuture.completedFuture(null);
         }
 
         @Override
         public CompletionStage<Object> prepareActor(
-            ZLinkUserSpotAggregateStagingOwner.ActorParticipant participant,
-            ZLinkRelocationCancellation cancellation) {
+                ZLinkUserSpotAggregateStagingOwner.ActorParticipant participant,
+                ZLinkRelocationCancellation cancellation) {
             operations.add("prepare:" + participant.actorId());
             return participant.actorId().equals(failActor)
-                ? CompletableFuture.failedFuture(
-                    new IllegalStateException("Restore failed"))
-                : CompletableFuture.completedFuture(participant.actorId());
+                    ? CompletableFuture.failedFuture(new IllegalStateException("Restore failed"))
+                    : CompletableFuture.completedFuture(participant.actorId());
         }
 
         @Override
-        public CompletionStage<Void> completeRelocationReady(
-            Object preparedSpot) {
+        public CompletionStage<Void> completeRelocationReady(Object preparedSpot) {
             operations.add("relocation-ready");
             return CompletableFuture.completedFuture(null);
         }
@@ -289,41 +297,39 @@ final class ZLinkUserSpotAggregateStagingOwnerTest {
         }
 
         @Override
-        public CompletionStage<Void> stageActorTimers(
-            Object preparedActor,
-            byte[] timerEnvelope) {
-            if (!ZLinkSpotTimerRelocationEnvelope
-                    .canonicalize(timerEnvelope).isEmpty()) {
+        public CompletionStage<Void> stageActorTimers(Object preparedActor, byte[] timerEnvelope) {
+            if (!ZLinkSpotTimerRelocationEnvelope.canonicalize(timerEnvelope).isEmpty()) {
                 operations.add("timers:stage:" + preparedActor);
             }
             return CompletableFuture.completedFuture(null);
         }
 
-        @Override public void publishSpot(Object value) {
-            live.add((String) value);
-            operations.add("publish:" + value);
-        }
-
-        @Override public void publishActor(Object value) {
+        @Override
+        public void publishSpot(Object value) {
             live.add((String) value);
             operations.add("publish:" + value);
         }
 
         @Override
-        public void publishActor(
-            Object value,
-            String targetSpotId,
-            long targetOwnerGeneration) {
+        public void publishActor(Object value) {
             live.add((String) value);
-            operations.add("publish-target:" + value + ":"
-                + targetSpotId + ":" + targetOwnerGeneration);
+            operations.add("publish:" + value);
         }
 
-        @Override public void completeActor(Object value) {
+        @Override
+        public void publishActor(Object value, String targetSpotId, long targetOwnerGeneration) {
+            live.add((String) value);
+            operations.add(
+                    "publish-target:" + value + ":" + targetSpotId + ":" + targetOwnerGeneration);
+        }
+
+        @Override
+        public void completeActor(Object value) {
             operations.add("complete:" + value);
         }
 
-        @Override public void publishTimers(Object value) {
+        @Override
+        public void publishTimers(Object value) {
             operations.add("timers:publish");
         }
 
@@ -333,19 +339,19 @@ final class ZLinkUserSpotAggregateStagingOwnerTest {
             return CompletableFuture.completedFuture(null);
         }
 
-        @Override public void discardSpot(Object value) {
+        @Override
+        public void discardSpot(Object value) {
             operations.add("discard:spot");
         }
     }
 
     /**
-     * Backend for the retry-once/DataLost tests (Task 2): unlike
-     * {@link FakeBackend}, {@code prepareSpot} returns a fresh, distinct
-     * instance each call so a test can assert the retry never reuses a
-     * partially-restored instance.
+     * Backend for the retry-once/DataLost tests (Task 2): unlike {@link FakeBackend}, {@code
+     * prepareSpot} returns a fresh, distinct instance each call so a test can assert the retry
+     * never reuses a partially-restored instance.
      */
     private static final class RetryBackend
-        implements ZLinkUserSpotAggregateStagingOwner.StagingBackend {
+            implements ZLinkUserSpotAggregateStagingOwner.StagingBackend {
         private final List<Object> preparedSpotInstances = new ArrayList<>();
         private final List<Object> discardedSpotInstances = new ArrayList<>();
         private int restoreSpotCalls;
@@ -353,7 +359,7 @@ final class ZLinkUserSpotAggregateStagingOwnerTest {
 
         @Override
         public CompletionStage<Object> prepareSpot(
-            ZLinkUserSpotAggregateStagingOwner.Request request) {
+                ZLinkUserSpotAggregateStagingOwner.Request request) {
             Object instance = new Object();
             preparedSpotInstances.add(instance);
             return CompletableFuture.completedFuture(instance);
@@ -361,53 +367,60 @@ final class ZLinkUserSpotAggregateStagingOwnerTest {
 
         @Override
         public CompletionStage<Void> restoreSpot(
-            Object preparedSpot,
-            ZLinkUserSpotAggregateStagingOwner.Request request,
-            ZLinkRelocationCancellation cancellation) {
+                Object preparedSpot,
+                ZLinkUserSpotAggregateStagingOwner.Request request,
+                ZLinkRelocationCancellation cancellation) {
             restoreSpotCalls++;
             if (restoreSpotFailuresRemaining > 0) {
                 restoreSpotFailuresRemaining--;
-                return CompletableFuture.failedFuture(
-                    new IllegalStateException("restore failed"));
+                return CompletableFuture.failedFuture(new IllegalStateException("restore failed"));
             }
             return CompletableFuture.completedFuture(null);
         }
 
         @Override
         public CompletionStage<Object> prepareActor(
-            ZLinkUserSpotAggregateStagingOwner.ActorParticipant participant,
-            ZLinkRelocationCancellation cancellation) {
+                ZLinkUserSpotAggregateStagingOwner.ActorParticipant participant,
+                ZLinkRelocationCancellation cancellation) {
             return CompletableFuture.completedFuture(participant.actorId());
         }
 
-        @Override public void publishSpot(Object value) { }
+        @Override
+        public void publishSpot(Object value) {}
 
-        @Override public void publishActor(Object value) { }
+        @Override
+        public void publishActor(Object value) {}
 
-        @Override public void completeActor(Object value) { }
+        @Override
+        public void completeActor(Object value) {}
 
-        @Override public void publishTimers(Object value) { }
+        @Override
+        public void publishTimers(Object value) {}
 
         @Override
         public CompletionStage<Void> discardActor(Object value) {
             return CompletableFuture.completedFuture(null);
         }
 
-        @Override public void discardSpot(Object value) {
+        @Override
+        public void discardSpot(Object value) {
             discardedSpotInstances.add(value);
         }
     }
 
     private static final class TestSpot implements ZLinkSpot<ZLinkActor> {
-        @Override public ZLinkSpotContext context() {
+        @Override
+        public ZLinkSpotContext context() {
             return null;
         }
 
-        @Override public CompletionStage<Void> onJoinedActor(ZLinkActor actor) {
+        @Override
+        public CompletionStage<Void> onJoinedActor(ZLinkActor actor) {
             return CompletableFuture.completedFuture(null);
         }
 
-        @Override public CompletionStage<Void> onLeaveActor(ZLinkActor actor) {
+        @Override
+        public CompletionStage<Void> onLeaveActor(ZLinkActor actor) {
             return CompletableFuture.completedFuture(null);
         }
     }

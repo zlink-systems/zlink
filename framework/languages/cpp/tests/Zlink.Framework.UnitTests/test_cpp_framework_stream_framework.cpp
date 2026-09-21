@@ -65,9 +65,10 @@ class sample_session_t final : public zlink::framework::packet_stream_session_t
         return zlink::framework::task_t<void> (zlink::framework::result_t<void>::success ());
     }
 
-    zlink::framework::task_t<void> on_packet (zlink::framework::stream_t &stream,
-                                              const zlink::framework::session_message_context_t &dispatch,
-                                              const zlink::message_t &payload) override
+    zlink::framework::task_t<void>
+    on_packet (zlink::framework::stream_t &stream,
+               const zlink::framework::session_message_context_t &dispatch,
+               const zlink::message_t &payload) override
     {
         events.push_back ("packet:" + std::string (dispatch.packet_name) + ":"
                           + payload.to_string ());
@@ -85,50 +86,44 @@ class sample_session_t final : public zlink::framework::packet_stream_session_t
 class reentrant_session_t final : public zlink::framework::packet_stream_session_t
 {
   public:
-    explicit reentrant_session_t (
-      zlink::framework::detail::stream_runtime_t &runtime) : _runtime (&runtime)
+    explicit reentrant_session_t (zlink::framework::detail::stream_runtime_t &runtime) :
+        _runtime (&runtime)
     {
     }
 
-    zlink::framework::task_t<void> on_connected (
-      zlink::framework::stream_t &stream) override
+    zlink::framework::task_t<void> on_connected (zlink::framework::stream_t &stream) override
     {
         events.push_back ("connected");
         nested_submission = _runtime->dispatch_disconnected_async (
-          *this, stream,
-          [this] (const zlink::framework::result_t<void> &result) {
+          *this, stream, [this] (const zlink::framework::result_t<void> &result) {
               nested_completion.set_value (static_cast<bool> (result));
           });
         co_return;
     }
 
-    zlink::framework::task_t<void> on_disconnected (
-      zlink::framework::stream_t &) override
+    zlink::framework::task_t<void> on_disconnected (zlink::framework::stream_t &) override
     {
         events.push_back ("disconnected");
         co_return;
     }
 
-    zlink::framework::task_t<void> on_error (
-      zlink::framework::stream_t &,
-      const zlink::framework::stream_error_t &) override
+    zlink::framework::task_t<void> on_error (zlink::framework::stream_t &,
+                                             const zlink::framework::stream_error_t &) override
     {
         co_return;
     }
 
-    zlink::framework::task_t<void> on_packet (
-      zlink::framework::stream_t &,
-      const zlink::framework::session_message_context_t &,
-      const zlink::message_t &) override
+    zlink::framework::task_t<void> on_packet (zlink::framework::stream_t &,
+                                              const zlink::framework::session_message_context_t &,
+                                              const zlink::message_t &) override
     {
         co_return;
     }
 
     zlink::framework::detail::stream_runtime_t *_runtime;
-    zlink::framework::result_t<void> nested_submission =
-      zlink::framework::result_t<void>::failure (
-        zlink::framework::framework_error_kind_t::internal_failure,
-        "nested dispatch was not submitted");
+    zlink::framework::result_t<void> nested_submission = zlink::framework::result_t<void>::failure (
+      zlink::framework::framework_error_kind_t::internal_failure,
+      "nested dispatch was not submitted");
     std::promise<bool> nested_completion;
     std::vector<std::string> events;
 };
@@ -146,17 +141,15 @@ class duplicate_reply_session_t final : public zlink::framework::packet_stream_s
         co_return;
     }
 
-    zlink::framework::task_t<void> on_error (
-      zlink::framework::stream_t &,
-      const zlink::framework::stream_error_t &) override
+    zlink::framework::task_t<void> on_error (zlink::framework::stream_t &,
+                                             const zlink::framework::stream_error_t &) override
     {
         co_return;
     }
 
-    zlink::framework::task_t<void> on_packet (
-      zlink::framework::stream_t &stream,
-      const zlink::framework::session_message_context_t &,
-      const zlink::message_t &payload) override
+    zlink::framework::task_t<void> on_packet (zlink::framework::stream_t &stream,
+                                              const zlink::framework::session_message_context_t &,
+                                              const zlink::message_t &payload) override
     {
         auto winner = stream.reply_packet (payload);
         auto loser = stream.reply_packet (payload);
@@ -167,8 +160,7 @@ class duplicate_reply_session_t final : public zlink::framework::packet_stream_s
         }
         catch (const zlink::framework::framework_exception_t &error) {
             loser_rejected =
-              error.kind ()
-              == zlink::framework::framework_error_kind_t::protocol_error;
+              error.kind () == zlink::framework::framework_error_kind_t::protocol_error;
         }
         co_return;
     }
@@ -190,26 +182,24 @@ class failed_reply_session_t final : public zlink::framework::packet_stream_sess
         co_return;
     }
 
-    zlink::framework::task_t<void> on_error (
-      zlink::framework::stream_t &,
-      const zlink::framework::stream_error_t &) override
+    zlink::framework::task_t<void> on_error (zlink::framework::stream_t &,
+                                             const zlink::framework::stream_error_t &) override
     {
         co_return;
     }
 
-    zlink::framework::task_t<void> on_packet (
-      zlink::framework::stream_t &stream,
-      const zlink::framework::session_message_context_t &,
-      const zlink::message_t &payload) override
+    zlink::framework::task_t<void> on_packet (zlink::framework::stream_t &stream,
+                                              const zlink::framework::session_message_context_t &,
+                                              const zlink::message_t &payload) override
     {
         const auto first = stream.reply_packet (payload).async ().result ();
-        first_failed = !first
-                       && first.error_kind ()
-                            == zlink::framework::framework_error_kind_t::internal_failure;
+        first_failed =
+          !first
+          && first.error_kind () == zlink::framework::framework_error_kind_t::internal_failure;
         const auto second = stream.reply_packet (payload).async ().result ();
-        second_rejected = !second
-                          && second.error_kind ()
-                               == zlink::framework::framework_error_kind_t::protocol_error;
+        second_rejected =
+          !second
+          && second.error_kind () == zlink::framework::framework_error_kind_t::protocol_error;
         co_return;
     }
 
@@ -242,7 +232,8 @@ class throwing_packet_session_t final : public zlink::framework::packet_stream_s
                                               const zlink::message_t &) override
     {
         return zlink::framework::task_t<void> (zlink::framework::result_t<void>::failure (
-          zlink::framework::framework_error_kind_t::internal_failure, "application packet failure"));
+          zlink::framework::framework_error_kind_t::internal_failure,
+          "application packet failure"));
     }
 
     bool on_error_called = false;
@@ -273,17 +264,15 @@ class delayed_reply_session_t final : public zlink::framework::packet_stream_ses
         co_return;
     }
 
-    zlink::framework::task_t<void> on_error (
-      zlink::framework::stream_t &,
-      const zlink::framework::stream_error_t &) override
+    zlink::framework::task_t<void> on_error (zlink::framework::stream_t &,
+                                             const zlink::framework::stream_error_t &) override
     {
         co_return;
     }
 
-    zlink::framework::task_t<void> on_packet (
-      zlink::framework::stream_t &stream,
-      const zlink::framework::session_message_context_t &,
-      const zlink::message_t &payload) override
+    zlink::framework::task_t<void> on_packet (zlink::framework::stream_t &stream,
+                                              const zlink::framework::session_message_context_t &,
+                                              const zlink::message_t &payload) override
     {
         _entered.set_value ();
         co_await _resume.task ();
@@ -336,10 +325,7 @@ class shutdown_session_control_t final
     {
     }
 
-    zlink::framework::task_t<void> wait_for_release ()
-    {
-        return _resume.task ();
-    }
+    zlink::framework::task_t<void> wait_for_release () { return _resume.task (); }
 
     void release ()
     {
@@ -362,10 +348,7 @@ class shutdown_session_control_t final
 
     bool wait_packet_entered () { return wait_for (_packet_entered, 1); }
 
-    std::size_t connected () const noexcept
-    {
-        return _connected.load (std::memory_order_acquire);
-    }
+    std::size_t connected () const noexcept { return _connected.load (std::memory_order_acquire); }
 
     std::size_t packet_entered () const noexcept
     {
@@ -382,10 +365,7 @@ class shutdown_session_control_t final
         return _disconnected.load (std::memory_order_acquire);
     }
 
-    std::size_t destroyed () const noexcept
-    {
-        return _destroyed.load (std::memory_order_acquire);
-    }
+    std::size_t destroyed () const noexcept { return _destroyed.load (std::memory_order_acquire); }
 
     std::vector<std::string> lifecycle () const
     {
@@ -407,11 +387,9 @@ class shutdown_session_control_t final
     bool wait_for (const std::atomic_size_t &counter, std::size_t count)
     {
         std::unique_lock lock (_mutex);
-        return _changed.wait_for (
-          lock, std::chrono::seconds (2),
-          [&counter, count] {
-              return counter.load (std::memory_order_acquire) >= count;
-          });
+        return _changed.wait_for (lock, std::chrono::seconds (2), [&counter, count] {
+            return counter.load (std::memory_order_acquire) >= count;
+        });
     }
 
     mutable std::mutex _mutex;
@@ -426,65 +404,53 @@ class shutdown_session_control_t final
     std::atomic_size_t _destroyed{0};
 };
 
-class shutdown_failure_session_t final
-  : public zlink::framework::packet_stream_session_t
+class shutdown_failure_session_t final : public zlink::framework::packet_stream_session_t
 {
   public:
-    explicit shutdown_failure_session_t (
-      std::shared_ptr<shutdown_session_control_t> control) :
+    explicit shutdown_failure_session_t (std::shared_ptr<shutdown_session_control_t> control) :
         _control (std::move (control))
     {
     }
 
-    ~shutdown_failure_session_t () override
-    {
-        _control->record_destroyed ();
-    }
+    ~shutdown_failure_session_t () override { _control->record_destroyed (); }
 
-    zlink::framework::task_t<void> on_connected (
-      zlink::framework::stream_t &) override
+    zlink::framework::task_t<void> on_connected (zlink::framework::stream_t &) override
     {
         _control->record_connected ();
         co_return;
     }
 
-    zlink::framework::task_t<void> on_disconnected (
-      zlink::framework::stream_t &) override
+    zlink::framework::task_t<void> on_disconnected (zlink::framework::stream_t &) override
     {
         _control->record_disconnected ();
         co_return;
     }
 
-    zlink::framework::task_t<void> on_error (
-      zlink::framework::stream_t &,
-      const zlink::framework::stream_error_t &) override
+    zlink::framework::task_t<void> on_error (zlink::framework::stream_t &,
+                                             const zlink::framework::stream_error_t &) override
     {
         co_return;
     }
 
-    zlink::framework::task_t<void> on_packet (
-      zlink::framework::stream_t &,
-      const zlink::framework::session_message_context_t &,
-      const zlink::message_t &) override
+    zlink::framework::task_t<void> on_packet (zlink::framework::stream_t &,
+                                              const zlink::framework::session_message_context_t &,
+                                              const zlink::message_t &) override
     {
         _control->record_packet_entered ();
         co_await _control->wait_for_release ();
         _control->record_packet_terminal ();
         throw zlink::framework::framework_exception_t (
-          zlink::framework::framework_error_kind_t::internal_failure,
-          "shutdown packet failure");
+          zlink::framework::framework_error_kind_t::internal_failure, "shutdown packet failure");
     }
 
   private:
     std::shared_ptr<shutdown_session_control_t> _control;
 };
 
-class prefix_stream_compression_codec_t final
-  : public zlink::framework::stream_compression_codec_t
+class prefix_stream_compression_codec_t final : public zlink::framework::stream_compression_codec_t
 {
   public:
-    explicit prefix_stream_compression_codec_t (std::string prefix) :
-        _prefix (std::move (prefix))
+    explicit prefix_stream_compression_codec_t (std::string prefix) : _prefix (std::move (prefix))
     {
     }
 
@@ -512,7 +478,7 @@ class prefix_stream_compression_codec_t final
 };
 
 class oversized_stream_compression_codec_t final
-  : public zlink::framework::stream_compression_codec_t
+    : public zlink::framework::stream_compression_codec_t
 {
   public:
     zlink::message_t compress (const zlink::message_t &payload) const override { return payload; }
@@ -530,8 +496,8 @@ class transport_error_session_t final : public zlink::framework::packet_stream_s
     {
         {
             const std::lock_guard lock (_mutex);
-            _identity_available = stream.local_address ().has_value ()
-                                  && stream.remote_address ().has_value ();
+            _identity_available =
+              stream.local_address ().has_value () && stream.remote_address ().has_value ();
             if (_identity_available) {
                 _last_local = *stream.local_address ();
                 _last_remote = *stream.remote_address ();
@@ -547,9 +513,8 @@ class transport_error_session_t final : public zlink::framework::packet_stream_s
         co_return;
     }
 
-    zlink::framework::task_t<void> on_error (
-      zlink::framework::stream_t &,
-      const zlink::framework::stream_error_t &error) override
+    zlink::framework::task_t<void> on_error (zlink::framework::stream_t &,
+                                             const zlink::framework::stream_error_t &error) override
     {
         {
             const std::lock_guard lock (_mutex);
@@ -560,10 +525,10 @@ class transport_error_session_t final : public zlink::framework::packet_stream_s
         co_return;
     }
 
-    zlink::framework::task_t<void> on_packet (
-      zlink::framework::stream_t &stream,
-      const zlink::framework::session_message_context_t &dispatch,
-      const zlink::message_t &payload) override
+    zlink::framework::task_t<void>
+    on_packet (zlink::framework::stream_t &stream,
+               const zlink::framework::session_message_context_t &dispatch,
+               const zlink::message_t &payload) override
     {
         record (_packets);
         if (dispatch.can_reply) {
@@ -626,8 +591,7 @@ class transport_error_session_t final : public zlink::framework::packet_stream_s
     bool wait_for (int &counter, int count)
     {
         std::unique_lock lock (_mutex);
-        return _changed.wait_for (lock, std::chrono::seconds (2),
-                                  [&] { return counter >= count; });
+        return _changed.wait_for (lock, std::chrono::seconds (2), [&] { return counter >= count; });
     }
 
     mutable std::mutex _mutex;
@@ -654,10 +618,9 @@ class rejected_connected_session_t final : public zlink::framework::packet_strea
             _manager_was_attached = &stream.actors () != nullptr;
         }
         _changed.notify_all ();
-        return zlink::framework::task_t<void> (
-          zlink::framework::result_t<void>::failure (
-            zlink::framework::framework_error_kind_t::internal_failure,
-            "connection callback rejected"));
+        return zlink::framework::task_t<void> (zlink::framework::result_t<void>::failure (
+          zlink::framework::framework_error_kind_t::internal_failure,
+          "connection callback rejected"));
     }
 
     zlink::framework::task_t<void> on_disconnected (zlink::framework::stream_t &) override
@@ -665,9 +628,8 @@ class rejected_connected_session_t final : public zlink::framework::packet_strea
         co_return;
     }
 
-    zlink::framework::task_t<void> on_error (
-      zlink::framework::stream_t &,
-      const zlink::framework::stream_error_t &) override
+    zlink::framework::task_t<void> on_error (zlink::framework::stream_t &,
+                                             const zlink::framework::stream_error_t &) override
     {
         co_return;
     }
@@ -695,8 +657,7 @@ class rejected_connected_session_t final : public zlink::framework::packet_strea
                 (void) observed.actors ();
             }
             catch (const zlink::framework::framework_exception_t &error) {
-                return error.kind ()
-                       == zlink::framework::framework_error_kind_t::not_configured;
+                return error.kind () == zlink::framework::framework_error_kind_t::not_configured;
             }
             std::this_thread::sleep_for (std::chrono::milliseconds (10));
         }
@@ -722,33 +683,30 @@ native_tcp_client_ptr_t connect_loopback (std::uint16_t port)
 {
     auto client = std::make_unique<native_tcp_client_t> ();
     boost::system::error_code error;
-    client->socket.connect (
-      {boost::asio::ip::address_v4::loopback (), port}, error);
+    client->socket.connect ({boost::asio::ip::address_v4::loopback (), port}, error);
     if (error) {
         return nullptr;
     }
     return client;
 }
 
-void close_native_client (native_tcp_client_ptr_t &client,
-                          bool shutdown_first = false)
+void close_native_client (native_tcp_client_ptr_t &client, bool shutdown_first = false)
 {
     if (!client) {
         return;
     }
     boost::system::error_code ignored;
     if (shutdown_first) {
-        client->socket.shutdown (
-          boost::asio::ip::tcp::socket::shutdown_both, ignored);
+        client->socket.shutdown (boost::asio::ip::tcp::socket::shutdown_both, ignored);
     }
     client->socket.close (ignored);
     client.reset ();
 }
 
-std::vector<std::uint8_t> make_native_stream_frame (
-  const zlink::framework::detail::stream_runtime_t &runtime,
-  const zlink::framework::detail::stream_header_t &header,
-  const zlink::message_t &payload)
+std::vector<std::uint8_t>
+make_native_stream_frame (const zlink::framework::detail::stream_runtime_t &runtime,
+                          const zlink::framework::detail::stream_header_t &header,
+                          const zlink::message_t &payload)
 {
     const auto encoded_header = runtime.encode_header (header);
     if (!encoded_header) {
@@ -800,10 +758,7 @@ class core_error_close_control_t final
     void record_disconnected () { record (_disconnected); }
 
     bool wait_connected (std::size_t count) { return wait_for (_connected, count); }
-    bool wait_disconnected (std::size_t count)
-    {
-        return wait_for (_disconnected, count);
-    }
+    bool wait_disconnected (std::size_t count) { return wait_for (_disconnected, count); }
 
     std::size_t connected () const
     {
@@ -830,8 +785,7 @@ class core_error_close_control_t final
     bool wait_for (const std::size_t &counter, std::size_t count)
     {
         std::unique_lock lock (_mutex);
-        return _changed.wait_for (lock, std::chrono::seconds (5),
-                                  [&] { return counter >= count; });
+        return _changed.wait_for (lock, std::chrono::seconds (5), [&] { return counter >= count; });
     }
 
     mutable std::mutex _mutex;
@@ -840,41 +794,35 @@ class core_error_close_control_t final
     std::size_t _disconnected = 0;
 };
 
-class core_error_close_session_t final
-  : public zlink::framework::packet_stream_session_t
+class core_error_close_session_t final : public zlink::framework::packet_stream_session_t
 {
   public:
-    explicit core_error_close_session_t (
-      std::shared_ptr<core_error_close_control_t> control) :
+    explicit core_error_close_session_t (std::shared_ptr<core_error_close_control_t> control) :
         _control (std::move (control))
     {
     }
 
-    zlink::framework::task_t<void> on_connected (
-      zlink::framework::stream_t &) override
+    zlink::framework::task_t<void> on_connected (zlink::framework::stream_t &) override
     {
         _control->record_connected ();
         co_return;
     }
 
-    zlink::framework::task_t<void> on_disconnected (
-      zlink::framework::stream_t &) override
+    zlink::framework::task_t<void> on_disconnected (zlink::framework::stream_t &) override
     {
         _control->record_disconnected ();
         co_return;
     }
 
-    zlink::framework::task_t<void> on_error (
-      zlink::framework::stream_t &,
-      const zlink::framework::stream_error_t &) override
+    zlink::framework::task_t<void> on_error (zlink::framework::stream_t &,
+                                             const zlink::framework::stream_error_t &) override
     {
         co_return;
     }
 
-    zlink::framework::task_t<void> on_packet (
-      zlink::framework::stream_t &,
-      const zlink::framework::session_message_context_t &,
-      const zlink::message_t &) override
+    zlink::framework::task_t<void> on_packet (zlink::framework::stream_t &,
+                                              const zlink::framework::session_message_context_t &,
+                                              const zlink::message_t &) override
     {
         co_return;
     }
@@ -887,8 +835,7 @@ class core_error_close_session_t final
  * deadline passes before EOF (the self-deadlock symptom: the host never
  * disconnects the peer). */
 std::optional<std::vector<std::uint8_t>>
-read_until_peer_close (const native_tcp_client_ptr_t &socket_fd,
-                       std::chrono::seconds timeout)
+read_until_peer_close (const native_tcp_client_ptr_t &socket_fd, std::chrono::seconds timeout)
 {
     if (!socket_fd) {
         return std::nullopt;
@@ -905,19 +852,15 @@ read_until_peer_close (const native_tcp_client_ptr_t &socket_fd,
             return std::nullopt;
         }
         std::array<std::uint8_t, 4096> chunk{};
-        const auto received = socket_fd->socket.read_some (
-          boost::asio::buffer (chunk), error);
+        const auto received = socket_fd->socket.read_some (boost::asio::buffer (chunk), error);
         if (!error) {
-            collected.insert (collected.end (), chunk.data (),
-                              chunk.data () + received);
+            collected.insert (collected.end (), chunk.data (), chunk.data () + received);
             continue;
         }
-        if (error == boost::asio::error::eof
-            || error == boost::asio::error::connection_reset) {
+        if (error == boost::asio::error::eof || error == boost::asio::error::connection_reset) {
             return collected;
         }
-        if (error != boost::asio::error::would_block
-            && error != boost::asio::error::try_again) {
+        if (error != boost::asio::error::would_block && error != boost::asio::error::try_again) {
             return collected;
         }
         error.clear ();
@@ -928,20 +871,18 @@ read_until_peer_close (const native_tcp_client_ptr_t &socket_fd,
 /* Parses the collected raw STREAM bytes and reports whether an error frame
  * with the given request sequence appears. Control frames (heartbeats) are
  * skipped. */
-bool contains_error_frame (
-  const zlink::framework::detail::stream_runtime_t &runtime,
-  const std::vector<std::uint8_t> &bytes,
-  std::uint64_t request_seq)
+bool contains_error_frame (const zlink::framework::detail::stream_runtime_t &runtime,
+                           const std::vector<std::uint8_t> &bytes,
+                           std::uint64_t request_seq)
 {
     std::size_t offset = 0;
     while (bytes.size () - offset >= 6) {
         const auto header_size = (static_cast<std::size_t> (bytes[offset]) << 8)
                                  | static_cast<std::size_t> (bytes[offset + 1]);
-        const auto payload_size =
-          (static_cast<std::size_t> (bytes[offset + 2]) << 24)
-          | (static_cast<std::size_t> (bytes[offset + 3]) << 16)
-          | (static_cast<std::size_t> (bytes[offset + 4]) << 8)
-          | static_cast<std::size_t> (bytes[offset + 5]);
+        const auto payload_size = (static_cast<std::size_t> (bytes[offset + 2]) << 24)
+                                  | (static_cast<std::size_t> (bytes[offset + 3]) << 16)
+                                  | (static_cast<std::size_t> (bytes[offset + 4]) << 8)
+                                  | static_cast<std::size_t> (bytes[offset + 5]);
         const auto frame_size = 6 + header_size + payload_size;
         if (bytes.size () - offset < frame_size) {
             return false;
@@ -951,8 +892,7 @@ bool contains_error_frame (
           bytes.begin () + static_cast<std::ptrdiff_t> (offset + 6 + header_size));
         const auto decoded = runtime.decode_header (header_bytes);
         if (decoded
-            && decoded.value ().kind ()
-                 == zlink::framework::detail::stream_message_kind_t::error
+            && decoded.value ().kind () == zlink::framework::detail::stream_message_kind_t::error
             && decoded.value ().request_seq () == request_seq) {
             return true;
         }
@@ -973,15 +913,12 @@ int main ()
     const auto codec_mapping_is_consistent = [] (stream_codec_t codec,
                                                  std::string_view content_type) {
         return zlink::framework::detail::stream_content_type (codec) == content_type
-               && zlink::framework::detail::stream_codec_from_content_type (content_type)
-                    == codec;
+               && zlink::framework::detail::stream_codec_from_content_type (content_type) == codec;
     };
     if (!codec_mapping_is_consistent (stream_codec_t::raw, "application/octet-stream")
         || !codec_mapping_is_consistent (stream_codec_t::json, "application/json")
-        || !codec_mapping_is_consistent (stream_codec_t::message_pack,
-                                         "application/x-msgpack")
-        || !codec_mapping_is_consistent (stream_codec_t::protobuf,
-                                         "application/x-protobuf")) {
+        || !codec_mapping_is_consistent (stream_codec_t::message_pack, "application/x-msgpack")
+        || !codec_mapping_is_consistent (stream_codec_t::protobuf, "application/x-protobuf")) {
         return 81;
     }
 
@@ -999,9 +936,7 @@ int main ()
     } stream_dispatch_executor_guard;
 
     zlink::framework::zlink_builder_t zlink;
-    zlink.stream ("client-stream")
-      .bind ("tcp://0.0.0.0:9200")
-      .register_session ("client");
+    zlink.stream ("client-stream").bind ("tcp://0.0.0.0:9200").register_session ("client");
     zlink::framework::serializer_registry_t serializers;
     serializers.add<std::string> (
       [] (const std::string &value) {
@@ -1040,8 +975,8 @@ int main ()
     }
 
     zlink::framework::detail::stream_header_t reply_header (
-      stream_message_kind_t::response, stream_codec_t::json,
-      stream_header_flags_t::has_request_seq, 77, "");
+      stream_message_kind_t::response, stream_codec_t::json, stream_header_flags_t::has_request_seq,
+      77, "");
     const auto encoded_reply = runtime.encode_header (reply_header);
     if (!encoded_reply || encoded_reply.value ().size () < 13 || encoded_reply.value ()[12] != 0
         || !runtime.decode_header (encoded_reply.value ())) {
@@ -1055,8 +990,8 @@ int main ()
         return 35;
     }
     zlink::framework::detail::stream_header_t named_reply_header (
-      stream_message_kind_t::response, stream_codec_t::json,
-      stream_header_flags_t::has_request_seq, 77, "legacy.reply");
+      stream_message_kind_t::response, stream_codec_t::json, stream_header_flags_t::has_request_seq,
+      77, "legacy.reply");
     if (runtime.encode_header (named_reply_header)) {
         return 34;
     }
@@ -1070,9 +1005,9 @@ int main ()
         return 4;
     }
 
-    zlink::framework::detail::stream_header_t reserved (stream_message_kind_t::send, stream_codec_t::raw,
-                                                stream_header_flags_t::none, std::nullopt,
-                                                "__zlink.internal");
+    zlink::framework::detail::stream_header_t reserved (
+      stream_message_kind_t::send, stream_codec_t::raw, stream_header_flags_t::none, std::nullopt,
+      "__zlink.internal");
     if (runtime.validate_header (reserved)) {
         return 5;
     }
@@ -1112,27 +1047,21 @@ int main ()
     zlink::framework::detail::stream_metadata_t maximum_frame_metadata;
     maximum_frame_metadata.with ("k", std::string (65522, 'x'));
     zlink::framework::detail::stream_header_t maximum_frame_header (
-      stream_message_kind_t::send, stream_codec_t::json,
-      stream_header_flags_t::none, std::nullopt, "x",
-      maximum_frame_metadata);
-    const auto maximum_encoded_header =
-      runtime.encode_header (maximum_frame_header);
+      stream_message_kind_t::send, stream_codec_t::json, stream_header_flags_t::none, std::nullopt,
+      "x", maximum_frame_metadata);
+    const auto maximum_encoded_header = runtime.encode_header (maximum_frame_header);
     if (!maximum_encoded_header
-        || maximum_encoded_header.value ().size ()
-             != std::numeric_limits<std::uint16_t>::max ()) {
+        || maximum_encoded_header.value ().size () != std::numeric_limits<std::uint16_t>::max ()) {
         return 282;
     }
-    const auto maximum_encoded_frame = runtime.encode_frame (
-      maximum_frame_header, zlink::message_t::from (std::string ("p")));
+    const auto maximum_encoded_frame =
+      runtime.encode_frame (maximum_frame_header, zlink::message_t::from (std::string ("p")));
     if (!maximum_encoded_frame
         || maximum_encoded_frame.value ().size ()
              != 6 + std::numeric_limits<std::uint16_t>::max () + 1
-        || maximum_encoded_frame.value ()[0] != 0xff
-        || maximum_encoded_frame.value ()[1] != 0xff
-        || maximum_encoded_frame.value ()[2] != 0
-        || maximum_encoded_frame.value ()[3] != 0
-        || maximum_encoded_frame.value ()[4] != 0
-        || maximum_encoded_frame.value ()[5] != 1
+        || maximum_encoded_frame.value ()[0] != 0xff || maximum_encoded_frame.value ()[1] != 0xff
+        || maximum_encoded_frame.value ()[2] != 0 || maximum_encoded_frame.value ()[3] != 0
+        || maximum_encoded_frame.value ()[4] != 0 || maximum_encoded_frame.value ()[5] != 1
         || maximum_encoded_frame.value ().back () != 'p') {
         return 283;
     }
@@ -1140,35 +1069,25 @@ int main ()
     zlink::framework::detail::stream_metadata_t overflowing_frame_metadata;
     overflowing_frame_metadata.with ("k", std::string (65523, 'x'));
     zlink::framework::detail::stream_header_t overflowing_frame_header (
-      stream_message_kind_t::send, stream_codec_t::json,
-      stream_header_flags_t::none, std::nullopt, "x",
-      overflowing_frame_metadata);
-    const auto overflowing_encoded_header =
-      runtime.encode_header (overflowing_frame_header);
-    const auto overflowing_encoded_frame = runtime.encode_frame (
-      overflowing_frame_header, zlink::message_t::from (std::string ("p")));
+      stream_message_kind_t::send, stream_codec_t::json, stream_header_flags_t::none, std::nullopt,
+      "x", overflowing_frame_metadata);
+    const auto overflowing_encoded_header = runtime.encode_header (overflowing_frame_header);
+    const auto overflowing_encoded_frame =
+      runtime.encode_frame (overflowing_frame_header, zlink::message_t::from (std::string ("p")));
     if (overflowing_encoded_header
-        || overflowing_encoded_header.error_kind ()
-             != framework_error_kind_t::protocol_error
+        || overflowing_encoded_header.error_kind () != framework_error_kind_t::protocol_error
         || overflowing_encoded_frame
-        || overflowing_encoded_frame.error_kind ()
-             != framework_error_kind_t::protocol_error) {
+        || overflowing_encoded_frame.error_kind () != framework_error_kind_t::protocol_error) {
         return 284;
     }
 
     const auto maximum_payload_representation =
-      zlink::framework::detail::stream_runtime_t::
-        validate_frame_representation (
-          0, std::numeric_limits<std::uint32_t>::max ());
+      zlink::framework::detail::stream_runtime_t::validate_frame_representation (
+        0, std::numeric_limits<std::uint32_t>::max ());
     const auto overflowing_payload_representation =
-      zlink::framework::detail::stream_runtime_t::
-        validate_frame_representation (
-          0,
-          static_cast<std::uint64_t> (
-            std::numeric_limits<std::uint32_t>::max ())
-            + 1);
-    if (!maximum_payload_representation
-        || overflowing_payload_representation
+      zlink::framework::detail::stream_runtime_t::validate_frame_representation (
+        0, static_cast<std::uint64_t> (std::numeric_limits<std::uint32_t>::max ()) + 1);
+    if (!maximum_payload_representation || overflowing_payload_representation
         || overflowing_payload_representation.error_kind ()
              != framework_error_kind_t::protocol_error) {
         return 285;
@@ -1218,23 +1137,34 @@ int main ()
     const std::vector<std::uint8_t> no_marker_header{
       static_cast<std::uint8_t> (stream_message_kind_t::send),
       static_cast<std::uint8_t> (stream_codec_t::json),
-      static_cast<std::uint8_t> (stream_header_flags_t::none), 4, 'n', 'a', 'm', 'e'};
+      static_cast<std::uint8_t> (stream_header_flags_t::none),
+      4,
+      'n',
+      'a',
+      'm',
+      'e'};
     auto no_marker = runtime.decode_header (no_marker_header);
-    if (no_marker
-        || no_marker.error_kind () != framework_error_kind_t::protocol_error) {
+    if (no_marker || no_marker.error_kind () != framework_error_kind_t::protocol_error) {
         return 220;
     }
     const std::vector<std::uint8_t> truncated_flow_header{
-      0xF2, static_cast<std::uint8_t> (stream_message_kind_t::send),
+      0xF2,
+      static_cast<std::uint8_t> (stream_message_kind_t::send),
       static_cast<std::uint8_t> (stream_codec_t::json),
-      static_cast<std::uint8_t> (stream_header_flags_t::has_flow_id), 4, 'n', 'a', 'm', 'e', 'x'};
+      static_cast<std::uint8_t> (stream_header_flags_t::has_flow_id),
+      4,
+      'n',
+      'a',
+      'm',
+      'e',
+      'x'};
     if (runtime.decode_header (truncated_flow_header)) {
         return 221;
     }
     const std::string sample_flow_id = "01890a5d-ac96-774b-bcce-b302099a8057";
     zlink::framework::detail::stream_header_t flow_header (
-      stream_message_kind_t::send, stream_codec_t::json, stream_header_flags_t::none,
-      std::nullopt, "flowed", {});
+      stream_message_kind_t::send, stream_codec_t::json, stream_header_flags_t::none, std::nullopt,
+      "flowed", {});
     flow_header.with_flow (sample_flow_id, zlink::framework::flow_origin_t::inbound);
     auto flow_encoded = runtime.encode_header (flow_header);
     if (!flow_encoded || flow_encoded.value ()[0] != 0xF2) {
@@ -1246,14 +1176,12 @@ int main ()
         || flow_decoded.value ().flow_origin () != zlink::framework::flow_origin_t::inbound) {
         return 223;
     }
-    if (runtime.encode_header (flow_decoded.value ())
-          .value ()
-          != flow_encoded.value ()) {
+    if (runtime.encode_header (flow_decoded.value ()).value () != flow_encoded.value ()) {
         return 224;
     }
     zlink::framework::detail::stream_header_t bad_flow_header (
-      stream_message_kind_t::send, stream_codec_t::json, stream_header_flags_t::none,
-      std::nullopt, "flowed", {});
+      stream_message_kind_t::send, stream_codec_t::json, stream_header_flags_t::none, std::nullopt,
+      "flowed", {});
     bad_flow_header.with_flow ("UPPERCASE-not-a-uuid7-value-000000000", // 37 bytes, invalid
                                zlink::framework::flow_origin_t::inbound);
     if (runtime.encode_header (bad_flow_header)) {
@@ -1264,9 +1192,8 @@ int main ()
     if (stream.routing_id () || stream.local_address () || stream.remote_address ()) {
         return 226;
     }
-    runtime.set_session_identity (
-      stream, zlink::routing_id_t::from ("stream-rid"),
-      std::string ("127.0.0.1:7101"), std::string ("127.0.0.1:48210"));
+    runtime.set_session_identity (stream, zlink::routing_id_t::from ("stream-rid"),
+                                  std::string ("127.0.0.1:7101"), std::string ("127.0.0.1:48210"));
     if (!stream.routing_id () || stream.routing_id ()->to_string () != "stream-rid"
         || !stream.local_address () || *stream.local_address () != "127.0.0.1:7101"
         || !stream.remote_address () || *stream.remote_address () != "127.0.0.1:48210") {
@@ -1302,11 +1229,9 @@ int main ()
     auto nested_completed = reentrant_session.nested_completion.get_future ();
     if (!runtime.dispatch_connected (reentrant_session, reentrant_stream)
         || !reentrant_session.nested_submission
-        || nested_completed.wait_for (std::chrono::seconds (2))
-             != std::future_status::ready
+        || nested_completed.wait_for (std::chrono::seconds (2)) != std::future_status::ready
         || !nested_completed.get ()
-        || reentrant_session.events
-             != std::vector<std::string>{"connected", "disconnected"}) {
+        || reentrant_session.events != std::vector<std::string>{"connected", "disconnected"}) {
         return 285;
     }
     /* stream connector §5.2: Response는 request의 packet name을 그대로 되돌린다. */
@@ -1318,15 +1243,15 @@ int main ()
 
     auto push_codec_stream = runtime.open_session ("client-stream");
     sample_session_t push_codec_session;
-    if (!runtime.dispatch_packet (
-          push_codec_session, push_codec_stream, request_header,
-          zlink::message_t::from (std::string ("codec-selection")))) {
+    if (!runtime.dispatch_packet (push_codec_session, push_codec_stream, request_header,
+                                  zlink::message_t::from (std::string ("codec-selection")))) {
         return 292;
     }
-    push_codec_stream
-      .write_packet (zlink::message_t::from (std::string ("json-push")))
+    push_codec_stream.write_packet (zlink::message_t::from (std::string ("json-push")))
       .packet_name ("JsonPush")
-      .async ().result ().value ();
+      .async ()
+      .result ()
+      .value ();
     const auto push_codec_headers = runtime.written_headers (push_codec_stream);
     if (push_codec_headers.size () != 2
         || push_codec_headers.back ().kind () != stream_message_kind_t::send
@@ -1336,11 +1261,9 @@ int main ()
 
     auto duplicate_reply_stream = runtime.open_session ("client-stream");
     duplicate_reply_session_t duplicate_reply_session;
-    if (!runtime.dispatch_packet (
-          duplicate_reply_session, duplicate_reply_stream, request_header,
-          zlink::message_t::from (std::string ("duplicate-reply")))
-        || !duplicate_reply_session.winner_completed
-        || !duplicate_reply_session.loser_rejected
+    if (!runtime.dispatch_packet (duplicate_reply_session, duplicate_reply_stream, request_header,
+                                  zlink::message_t::from (std::string ("duplicate-reply")))
+        || !duplicate_reply_session.winner_completed || !duplicate_reply_session.loser_rejected
         || runtime.written_headers (duplicate_reply_stream).size () != 1) {
         return 236;
     }
@@ -1348,23 +1271,17 @@ int main ()
     auto failed_reply_stream = runtime.open_session ("client-stream");
     std::size_t failed_reply_attempts = 0;
     runtime.attach_transport_writer (
-      failed_reply_stream,
-      [&failed_reply_attempts] (
-        const auto &, const auto &, std::optional<std::chrono::milliseconds>) {
+      failed_reply_stream, [&failed_reply_attempts] (const auto &, const auto &,
+                                                     std::optional<std::chrono::milliseconds>) {
           ++failed_reply_attempts;
-          return zlink::framework::task_t<void> (
-            zlink::framework::result_t<void>::failure (
-              framework_error_kind_t::internal_failure,
-              "stream transport rejected reply"));
+          return zlink::framework::task_t<void> (zlink::framework::result_t<void>::failure (
+            framework_error_kind_t::internal_failure, "stream transport rejected reply"));
       });
     failed_reply_session_t failed_reply_session;
-    if (!runtime.dispatch_packet (
-          failed_reply_session, failed_reply_stream, request_header,
-          zlink::message_t::from (std::string ("failed-reply")))
-        || !failed_reply_session.first_failed
-        || !failed_reply_session.second_rejected
-        || failed_reply_attempts != 1
-        || !runtime.written_headers (failed_reply_stream).empty ()) {
+    if (!runtime.dispatch_packet (failed_reply_session, failed_reply_stream, request_header,
+                                  zlink::message_t::from (std::string ("failed-reply")))
+        || !failed_reply_session.first_failed || !failed_reply_session.second_rejected
+        || failed_reply_attempts != 1 || !runtime.written_headers (failed_reply_stream).empty ()) {
         return 237;
     }
 
@@ -1383,9 +1300,9 @@ int main ()
     delayed_reply_session_t delayed_session;
     std::optional<zlink::framework::result_t<void>> delayed_dispatch;
     std::thread delayed_dispatch_thread ([&] {
-        delayed_dispatch = runtime.dispatch_packet (
-          delayed_session, delayed_stream, request_header,
-          zlink::message_t::from (std::string ("delayed-payload")));
+        delayed_dispatch =
+          runtime.dispatch_packet (delayed_session, delayed_stream, request_header,
+                                   zlink::message_t::from (std::string ("delayed-payload")));
     });
     delayed_session.wait_until_suspended ();
     delayed_session.resume ();
@@ -1432,11 +1349,9 @@ int main ()
         return 232;
     }
     async_session.resume ();
-    if (packet_completion.wait_for (std::chrono::seconds (2))
-          != std::future_status::ready
+    if (packet_completion.wait_for (std::chrono::seconds (2)) != std::future_status::ready
         || !packet_completion.get ()
-        || disconnect_completion.wait_for (std::chrono::seconds (2))
-             != std::future_status::ready
+        || disconnect_completion.wait_for (std::chrono::seconds (2)) != std::future_status::ready
         || !disconnect_completion.get ()) {
         return 233;
     }
@@ -1455,26 +1370,21 @@ int main ()
     auto replacement_calls = std::make_shared<std::atomic_size_t> (0);
     std::promise<zlink::framework::result_t<void>> replacement_completion_source;
     auto replacement_completion = replacement_completion_source.get_future ();
-    const auto replacement_submitted =
-      runtime.dispatch_actor_binding_replaced_async (
-        replacement_stream, "actor-exact-once",
-        [owner = replacement_owner, replacement_calls] (
-          zlink::framework::stream_t &,
-          std::string actor_id) {
-            if (*owner == 1 && actor_id == "actor-exact-once") {
-                replacement_calls->fetch_add (1, std::memory_order_relaxed);
-            }
-            return zlink::framework::task_t<void> (
-              zlink::framework::result_t<void>::success ());
-        },
-        [&replacement_completion_source] (
-          const zlink::framework::result_t<void> &result) {
-            replacement_completion_source.set_value (result);
-        });
+    const auto replacement_submitted = runtime.dispatch_actor_binding_replaced_async (
+      replacement_stream, "actor-exact-once",
+      [owner = replacement_owner, replacement_calls] (zlink::framework::stream_t &,
+                                                      std::string actor_id) {
+          if (*owner == 1 && actor_id == "actor-exact-once") {
+              replacement_calls->fetch_add (1, std::memory_order_relaxed);
+          }
+          return zlink::framework::task_t<void> (zlink::framework::result_t<void>::success ());
+      },
+      [&replacement_completion_source] (const zlink::framework::result_t<void> &result) {
+          replacement_completion_source.set_value (result);
+      });
     replacement_owner.reset ();
     if (!replacement_submitted
-        || replacement_completion.wait_for (std::chrono::seconds (2))
-             != std::future_status::ready
+        || replacement_completion.wait_for (std::chrono::seconds (2)) != std::future_status::ready
         || !replacement_completion.get ()) {
         return 286;
     }
@@ -1494,8 +1404,7 @@ int main ()
     const auto blocker_submitted = runtime.dispatch_packet_async (
       replacement_blocker, replacement_race_stream, request_header,
       zlink::message_t::from (std::string ("replacement-blocker")),
-      [&blocker_completion_source] (
-        const zlink::framework::result_t<void> &result) {
+      [&blocker_completion_source] (const zlink::framework::result_t<void> &result) {
           blocker_completion_source.set_value (result);
       });
     if (!blocker_submitted) {
@@ -1508,38 +1417,30 @@ int main ()
     auto closed_session_calls = std::make_shared<std::atomic_size_t> (0);
     std::promise<zlink::framework::result_t<void>> closed_completion_source;
     auto closed_completion = closed_completion_source.get_future ();
-    const auto closed_submitted =
-      runtime.dispatch_actor_binding_replaced_async (
-        replacement_race_stream, "actor-close-race",
-        [weak = closing_owner_weak, replacement_admission,
-         closed_session_calls] (zlink::framework::stream_t &,
-                                std::string) {
-            if (!replacement_admission->load (std::memory_order_acquire)) {
-                return zlink::framework::task_t<void> (
-                  zlink::framework::result_t<void>::success ());
-            }
-            if (weak.lock ()) {
-                closed_session_calls->fetch_add (
-                  1, std::memory_order_relaxed);
-            }
-            return zlink::framework::task_t<void> (
-              zlink::framework::result_t<void>::success ());
-        },
-        [&closed_completion_source] (
-          const zlink::framework::result_t<void> &result) {
-            closed_completion_source.set_value (result);
-        });
+    const auto closed_submitted = runtime.dispatch_actor_binding_replaced_async (
+      replacement_race_stream, "actor-close-race",
+      [weak = closing_owner_weak, replacement_admission,
+       closed_session_calls] (zlink::framework::stream_t &, std::string) {
+          if (!replacement_admission->load (std::memory_order_acquire)) {
+              return zlink::framework::task_t<void> (zlink::framework::result_t<void>::success ());
+          }
+          if (weak.lock ()) {
+              closed_session_calls->fetch_add (1, std::memory_order_relaxed);
+          }
+          return zlink::framework::task_t<void> (zlink::framework::result_t<void>::success ());
+      },
+      [&closed_completion_source] (const zlink::framework::result_t<void> &result) {
+          closed_completion_source.set_value (result);
+      });
     if (!closed_submitted) {
         return 289;
     }
     replacement_admission->store (false, std::memory_order_release);
     closing_owner.reset ();
     replacement_blocker.resume ();
-    if (blocker_completion.wait_for (std::chrono::seconds (2))
-          != std::future_status::ready
+    if (blocker_completion.wait_for (std::chrono::seconds (2)) != std::future_status::ready
         || !blocker_completion.get ()
-        || closed_completion.wait_for (std::chrono::seconds (2))
-             != std::future_status::ready
+        || closed_completion.wait_for (std::chrono::seconds (2)) != std::future_status::ready
         || !closed_completion.get ()) {
         return 290;
     }
@@ -1568,11 +1469,9 @@ int main ()
     }
     catch (const zlink::framework::framework_exception_t &error) {
         duplicate_send_rejected =
-          error.kind ()
-          == zlink::framework::framework_error_kind_t::invalid_operation;
+          error.kind () == zlink::framework::framework_error_kind_t::invalid_operation;
     }
-    if (runtime.written_headers (fluent_stream).size () != 1
-        || !duplicate_send_rejected
+    if (runtime.written_headers (fluent_stream).size () != 1 || !duplicate_send_rejected
         || runtime.written_headers (fluent_stream)[0].packet_name () != "renamed"
         || runtime.written_headers (fluent_stream)[0].metadata ("trace") != "send-trace"
         || (runtime.written_headers (fluent_stream)[0].flags ()
@@ -1609,14 +1508,14 @@ int main ()
             return false;
         }
         catch (const zlink::framework::framework_exception_t &error) {
-            return error.kind ()
-                   == zlink::framework::framework_error_kind_t::unavailable;
+            return error.kind () == zlink::framework::framework_error_kind_t::unavailable;
         }
     };
     if (!write_rejected_disconnected ([&] {
-            return fluent_stream
-              .write_packet (zlink::message_t::from (std::string ("after-close")))
-              .async ().result ().value ();
+            return fluent_stream.write_packet (zlink::message_t::from (std::string ("after-close")))
+              .async ()
+              .result ()
+              .value ();
         })) {
         return 24;
     }
@@ -1624,9 +1523,10 @@ int main ()
         return 19;
     }
     if (!write_rejected_disconnected ([&] {
-            return stream
-              .write_packet (zlink::message_t::from (std::string ("after-disconnect")))
-              .async ().result ().value ();
+            return stream.write_packet (zlink::message_t::from (std::string ("after-disconnect")))
+              .async ()
+              .result ()
+              .value ();
         })) {
         return 25;
     }
@@ -1672,12 +1572,10 @@ int main ()
     zlink::framework::serializer_registry_t mutual_tls_serializers;
     zlink::framework::zlink_builder_t mutual_tls_zlink;
     zlink::framework::zlink_framework_options_t mutual_tls_options (
-      mutual_tls_services, mutual_tls_handlers, mutual_tls_serializers,
-      mutual_tls_zlink);
+      mutual_tls_services, mutual_tls_handlers, mutual_tls_serializers, mutual_tls_zlink);
     mutual_tls_options.add_stream_node ("mutual-tls-listener")
       .bind ("tls://127.0.0.1:" + std::to_string (mutual_tls_port))
-      .set_tls_server (ZLINK_FRAMEWORK_STREAM_TEST_CERT,
-                       ZLINK_FRAMEWORK_STREAM_TEST_KEY, true)
+      .set_tls_server (ZLINK_FRAMEWORK_STREAM_TEST_CERT, ZLINK_FRAMEWORK_STREAM_TEST_KEY, true)
       .register_session ("mutual-tls-listener-session");
     mutual_tls_options.apply ();
     auto mutual_tls_provider = mutual_tls_services.build_provider ();
@@ -1691,8 +1589,7 @@ int main ()
       std::chrono::milliseconds{30'000});
     mutual_tls_host.start (mutual_tls_provider);
     boost::asio::io_context mutual_tls_io;
-    boost::asio::ssl::context mutual_tls_client_context (
-      boost::asio::ssl::context::tls_client);
+    boost::asio::ssl::context mutual_tls_client_context (boost::asio::ssl::context::tls_client);
     mutual_tls_client_context.set_verify_mode (boost::asio::ssl::verify_none);
     boost::asio::ssl::stream<boost::asio::ip::tcp::socket> mutual_tls_client (
       mutual_tls_io, mutual_tls_client_context);
@@ -1703,8 +1600,7 @@ int main ()
         mutual_tls_host.stop ();
         return 26;
     }
-    mutual_tls_client.handshake (
-      boost::asio::ssl::stream_base::client, mutual_tls_error);
+    mutual_tls_client.handshake (boost::asio::ssl::stream_base::client, mutual_tls_error);
     mutual_tls_host.stop ();
     // TLS 1.3 clients may observe the server's certificate-required alert only
     // on their next I/O; the server-side contract is that no Session exists.
@@ -1713,14 +1609,13 @@ int main ()
     }
 #endif
 
-    auto custom_codec =
-      std::make_shared<prefix_stream_compression_codec_t> ("custom-stream:");
+    auto custom_codec = std::make_shared<prefix_stream_compression_codec_t> ("custom-stream:");
     zlink::framework::service_collection_t custom_services;
     zlink::framework::handler_registry_t custom_handlers;
     zlink::framework::serializer_registry_t custom_serializers;
     zlink::framework::zlink_builder_t custom_zlink;
-    zlink::framework::zlink_framework_options_t custom_options (
-      custom_services, custom_handlers, custom_serializers, custom_zlink);
+    zlink::framework::zlink_framework_options_t custom_options (custom_services, custom_handlers,
+                                                                custom_serializers, custom_zlink);
     custom_options.configure_stream_compression ().use (custom_codec);
     custom_options.add_stream_node ("custom-stream")
       .bind ("tcp://0.0.0.0:9201")
@@ -1732,8 +1627,8 @@ int main ()
     custom_options.apply ();
     auto custom_runtime = zlink::framework::detail::stream_runtime_t::from (custom_zlink);
     const auto configured_tls = custom_runtime.snapshots ();
-    const auto configured_tls_snapshot = std::find_if (
-      configured_tls.begin (), configured_tls.end (), [] (const auto &candidate) {
+    const auto configured_tls_snapshot =
+      std::find_if (configured_tls.begin (), configured_tls.end (), [] (const auto &candidate) {
           return candidate.name == "configured-mutual-tls";
       });
     if (configured_tls_snapshot == configured_tls.end ()
@@ -1743,7 +1638,9 @@ int main ()
     auto custom_stream = custom_runtime.open_session ("custom-stream");
     custom_stream.write_packet (zlink::message_t::from (std::string ("custom-outbound")))
       .compress ()
-      .async ().result ().value ();
+      .async ()
+      .result ()
+      .value ();
     if (custom_runtime.written_payloads (custom_stream).size () != 1
         || custom_runtime.written_payloads (custom_stream)[0].to_string ()
              != "custom-stream:custom-outbound") {
@@ -1776,7 +1673,9 @@ int main ()
     try {
         disabled_stream.write_packet (zlink::message_t::from (std::string ("disabled")))
           .compress ()
-          .async ().result ().value ();
+          .async ()
+          .result ()
+          .value ();
     }
     catch (const zlink::framework::framework_exception_t &) {
         disabled_compress_rejected = true;
@@ -1788,10 +1687,10 @@ int main ()
     const auto disabled_receive = disabled_runtime.dispatch_packet (
       disabled_session, disabled_stream, custom_inbound_header,
       custom_codec->compress (zlink::message_t::from (std::string ("disabled-inbound"))));
-    if (disabled_receive
-        || disabled_receive.error_kind () != framework_error_kind_t::protocol_error
-        || std::string (disabled_receive.error ()->what ()).find (
-             "compression codec is not configured") == std::string::npos
+    if (disabled_receive || disabled_receive.error_kind () != framework_error_kind_t::protocol_error
+        || std::string (disabled_receive.error ()->what ())
+               .find ("compression codec is not configured")
+             == std::string::npos
         || !disabled_session.events.empty ()) {
         return 27;
     }
@@ -1808,9 +1707,9 @@ int main ()
     auto oversized_runtime = zlink::framework::detail::stream_runtime_t::from (oversized_zlink);
     auto oversized_stream = oversized_runtime.open_session ("oversized-stream");
     sample_session_t oversized_session;
-    const auto oversized_receive = oversized_runtime.dispatch_packet (
-      oversized_session, oversized_stream, custom_inbound_header,
-      zlink::message_t::from (std::string ("compressed")));
+    const auto oversized_receive =
+      oversized_runtime.dispatch_packet (oversized_session, oversized_stream, custom_inbound_header,
+                                         zlink::message_t::from (std::string ("compressed")));
     if (oversized_receive
         || oversized_receive.error_kind () != framework_error_kind_t::protocol_error
         || !oversized_session.events.empty ()) {
@@ -1818,8 +1717,7 @@ int main ()
     }
 
     const auto transport_port = reserve_loopback_tcp_port ();
-    const auto transport_endpoint =
-      "tcp://127.0.0.1:" + std::to_string (transport_port);
+    const auto transport_endpoint = "tcp://127.0.0.1:" + std::to_string (transport_port);
     zlink::framework::service_collection_t transport_services;
     zlink::framework::handler_registry_t transport_handlers;
     zlink::framework::serializer_registry_t transport_serializers;
@@ -1835,9 +1733,7 @@ int main ()
       transport_services, transport_handlers, transport_serializers, transport_zlink);
     auto transport_stream_options = transport_options.add_stream_node ("transport-stream");
     transport_stream_options.configure_socket ().max_message_size = 0;
-    transport_stream_options
-      .bind (transport_endpoint)
-      .register_session ("transport-session");
+    transport_stream_options.bind (transport_endpoint).register_session ("transport-session");
     transport_options.apply ();
     auto transport_provider = transport_services.build_provider ();
     transport_error_session_t transport_session;
@@ -1870,8 +1766,7 @@ int main ()
         return 31;
     }
     boost::system::error_code ignored;
-    failed_client->socket.set_option (
-      boost::asio::socket_base::linger (true, 0), ignored);
+    failed_client->socket.set_option (boost::asio::socket_base::linger (true, 0), ignored);
     close_native_client (failed_client);
     const bool transport_failure_reported = transport_session.wait_errors (1);
     const bool transport_disconnect_reported = transport_session.wait_disconnected (2);
@@ -1885,8 +1780,7 @@ int main ()
     zlink::stream_connector::connector_options_t connector_options;
     connector_options.endpoint = transport_endpoint;
     connector_options.connect_timeout = std::chrono::seconds (2);
-    auto connector =
-      zlink::stream_connector::connector_factory_t::create (connector_options);
+    auto connector = zlink::stream_connector::connector_factory_t::create (connector_options);
     if (!connector.connect () || !transport_session.wait_connected (3)) {
         transport_host.stop ();
         return 36;
@@ -1894,12 +1788,10 @@ int main ()
     auto connector_reply =
       connector
         .request (zlink::stream_connector::packet_t{
-          .name = "connector-probe",
-          .payload = zlink::message_t::from ("connector-payload")})
+          .name = "connector-probe", .payload = zlink::message_t::from ("connector-payload")})
         .timeout (std::chrono::seconds (2))
         .submit<zlink::message_t> ();
-    if (!connector_reply
-        || connector_reply.value ().to_string () != "connector-payload"
+    if (!connector_reply || connector_reply.value ().to_string () != "connector-payload"
         || !transport_session.wait_packets (1) || !connector.close ()
         || !transport_session.wait_disconnected (3)) {
         transport_host.stop ();
@@ -1910,20 +1802,15 @@ int main ()
      * only part of a frame must release the listener turn while it waits for
      * more bytes. A second connection must therefore deliver its complete
      * frame before the first connection completes. */
-    auto transport_runtime = zlink::framework::detail::stream_runtime_t::from (
-      transport_zlink);
+    auto transport_runtime = zlink::framework::detail::stream_runtime_t::from (transport_zlink);
     const auto transport_snapshots = transport_runtime.snapshots ();
-    if (transport_snapshots.size () != 1
-        || transport_snapshots[0].max_message_size != 0) {
+    if (transport_snapshots.size () != 1 || transport_snapshots[0].max_message_size != 0) {
         transport_host.stop ();
         return 45;
     }
     const zlink::framework::detail::stream_header_t fairness_header (
-      zlink::framework::detail::stream_message_kind_t::send,
-      zlink::framework::stream_codec_t::raw,
-      zlink::framework::detail::stream_header_flags_t::none,
-      std::nullopt,
-      "fairness-probe");
+      zlink::framework::detail::stream_message_kind_t::send, zlink::framework::stream_codec_t::raw,
+      zlink::framework::detail::stream_header_flags_t::none, std::nullopt, "fairness-probe");
     const auto fairness_frame = make_native_stream_frame (
       transport_runtime, fairness_header, zlink::message_t::from (std::string ("fairness")));
     auto partial_client = connect_loopback (transport_port);
@@ -1972,8 +1859,8 @@ int main ()
     const auto buffered_payload = zlink::message_t::from (std::string (512, 'x'));
     std::vector<std::uint8_t> buffered_frames;
     for (int index = 0; index < 65; ++index) {
-        const auto frame = make_native_stream_frame (
-          transport_runtime, fairness_header, buffered_payload);
+        const auto frame =
+          make_native_stream_frame (transport_runtime, fairness_header, buffered_payload);
         buffered_frames.insert (buffered_frames.end (), frame.begin (), frame.end ());
     }
     send_native_bytes (buffered_client, buffered_frames);
@@ -1987,8 +1874,7 @@ int main ()
     transport_host.stop ();
 
     const auto limited_port = reserve_loopback_tcp_port ();
-    const auto limited_endpoint =
-      "tcp://127.0.0.1:" + std::to_string (limited_port);
+    const auto limited_endpoint = "tcp://127.0.0.1:" + std::to_string (limited_port);
     zlink::framework::zlink_builder_t limited_zlink;
     zlink::framework::zlink_framework_options_t limited_options (
       transport_services, transport_handlers, transport_serializers, limited_zlink);
@@ -1998,8 +1884,7 @@ int main ()
     limited_options.apply ();
     auto limited_runtime = zlink::framework::detail::stream_runtime_t::from (limited_zlink);
     const auto limited_snapshots = limited_runtime.snapshots ();
-    if (limited_snapshots.size () != 1
-        || limited_snapshots[0].max_message_size != 128) {
+    if (limited_snapshots.size () != 1 || limited_snapshots[0].max_message_size != 128) {
         return 46;
     }
     transport_error_session_t limited_session;
@@ -2017,11 +1902,8 @@ int main ()
         return 47;
     }
     const zlink::framework::detail::stream_header_t limited_header (
-      zlink::framework::detail::stream_message_kind_t::send,
-      zlink::framework::stream_codec_t::raw,
-      zlink::framework::detail::stream_header_flags_t::none,
-      std::nullopt,
-      "limited-probe");
+      zlink::framework::detail::stream_message_kind_t::send, zlink::framework::stream_codec_t::raw,
+      zlink::framework::detail::stream_header_flags_t::none, std::nullopt, "limited-probe");
     const auto limited_frame = make_native_stream_frame (
       limited_runtime, limited_header, zlink::message_t::from (std::string (512, 'x')));
     send_native_bytes (limited_client, limited_frame);
@@ -2033,8 +1915,7 @@ int main ()
     }
 
     const auto rejected_port = reserve_loopback_tcp_port ();
-    const auto rejected_endpoint =
-      "tcp://127.0.0.1:" + std::to_string (rejected_port);
+    const auto rejected_endpoint = "tcp://127.0.0.1:" + std::to_string (rejected_port);
     zlink::framework::zlink_builder_t rejected_zlink;
     zlink::framework::zlink_framework_options_t rejected_options (
       transport_services, transport_handlers, transport_serializers, rejected_zlink);
@@ -2072,20 +1953,15 @@ int main ()
     zlink::framework::zlink_builder_t core_zlink;
     zlink::framework::detail::zlink_builder_access_t::bind_shared_core_context (
       core_zlink, std::make_shared<zlink::context_t> ());
-    core_services.add_singleton<
-      zlink::framework::detail::actor_gateway_runtime_t> ();
+    core_services.add_singleton<zlink::framework::detail::actor_gateway_runtime_t> ();
     core_services.add_factory<zlink::framework::session_actor_manager_t> (
       [] (zlink::framework::service_provider_t &provider) {
-          return std::make_unique<
-            zlink::framework::session_actor_manager_t> (
-            provider
-              .get_required<
-                zlink::framework::detail::actor_gateway_runtime_t> ()
-              .manager ());
+          return std::make_unique<zlink::framework::session_actor_manager_t> (
+            provider.get_required<zlink::framework::detail::actor_gateway_runtime_t> ().manager ());
       },
       zlink::framework::service_lifetime_t::scoped);
-    zlink::framework::zlink_framework_options_t core_options (
-      core_services, core_handlers, core_serializers, core_zlink);
+    zlink::framework::zlink_framework_options_t core_options (core_services, core_handlers,
+                                                              core_serializers, core_zlink);
     core_options.add_route_mesh ("core-stream-mesh")
       .set_routing_id (zlink::routing_id_t::from ("core-stream-node"))
       .listen ("tcp://127.0.0.1:" + std::to_string (core_mesh_port));
@@ -2096,27 +1972,23 @@ int main ()
     for (const auto &registration :
          zlink::framework::detail::mesh_node_runtime_t::registrations (core_zlink)) {
         registration->core_context =
-          zlink::framework::detail::zlink_builder_access_t::shared_core_context (
-            core_zlink);
+          zlink::framework::detail::zlink_builder_access_t::shared_core_context (core_zlink);
     }
-    auto shutdown_session_control =
-      std::make_shared<shutdown_session_control_t> ();
+    auto shutdown_session_control = std::make_shared<shutdown_session_control_t> ();
     core_services.add_factory<shutdown_failure_session_t> (
       [shutdown_session_control] (zlink::framework::service_provider_t &) {
-          return std::make_unique<shutdown_failure_session_t> (
-            shutdown_session_control);
+          return std::make_unique<shutdown_failure_session_t> (shutdown_session_control);
       },
       zlink::framework::service_lifetime_t::scoped);
     auto core_provider = core_services.build_provider ();
-    auto core_mesh = zlink::framework::detail::mesh_node_runtime_t::from (
-      core_zlink, "core-stream-mesh");
+    auto core_mesh =
+      zlink::framework::detail::mesh_node_runtime_t::from (core_zlink, "core-stream-mesh");
     if (!core_mesh) {
         return 38;
     }
     core_mesh->bind_serializers (core_serializers);
     core_mesh->start ();
-    auto core_stream_runtime =
-      zlink::framework::detail::stream_runtime_t::from (core_zlink);
+    auto core_stream_runtime = zlink::framework::detail::stream_runtime_t::from (core_zlink);
     zlink::framework::runtime::stream_host_service_t core_host (
       core_stream_runtime, core_stream_runtime.snapshots (),
       {{"core-session",
@@ -2124,34 +1996,29 @@ int main ()
           -> zlink::framework::packet_stream_session_t & {
             return provider.get_required<shutdown_failure_session_t> ();
         }}},
-      std::chrono::milliseconds{30'000},
-      core_mesh);
+      std::chrono::milliseconds{30'000}, core_mesh);
     core_host.start (core_provider);
 
     zlink::stream_connector::connector_options_t core_connector_options;
-    core_connector_options.endpoint =
-      "tcp://127.0.0.1:" + std::to_string (core_stream_port);
+    core_connector_options.endpoint = "tcp://127.0.0.1:" + std::to_string (core_stream_port);
     core_connector_options.connect_timeout = std::chrono::seconds (2);
     core_connector_options.reconnect.enabled = false;
     auto core_connector =
-      zlink::stream_connector::connector_factory_t::create (
-        core_connector_options);
+      zlink::stream_connector::connector_factory_t::create (core_connector_options);
     if (!core_connector.connect ()) {
         core_host.stop ();
         core_mesh->stop ();
         return 292;
     }
-    std::optional<zlink::stream_connector::result_t<zlink::message_t>>
-      shutdown_request_result;
+    std::optional<zlink::stream_connector::result_t<zlink::message_t>> shutdown_request_result;
     std::thread shutdown_request_thread ([&] {
-        shutdown_request_result =
-          core_connector
-            .request (zlink::stream_connector::packet_t{
-              .name = "shutdown.blocked",
-              .codec = zlink::stream_connector::codec_t::raw,
-              .payload = zlink::message_t::from ("shutdown-payload")})
-            .timeout (std::chrono::seconds (3))
-            .submit<zlink::message_t> ();
+        shutdown_request_result = core_connector
+                                    .request (zlink::stream_connector::packet_t{
+                                      .name = "shutdown.blocked",
+                                      .codec = zlink::stream_connector::codec_t::raw,
+                                      .payload = zlink::message_t::from ("shutdown-payload")})
+                                    .timeout (std::chrono::seconds (3))
+                                    .submit<zlink::message_t> ();
     });
     if (!shutdown_session_control->wait_packet_entered ()) {
         (void) core_connector.close ();
@@ -2173,16 +2040,13 @@ int main ()
     });
     core_stop_entered.wait ();
     const bool stop_overtook_packet =
-      core_stop_completed.wait_for (std::chrono::milliseconds (100))
-      == std::future_status::ready;
+      core_stop_completed.wait_for (std::chrono::milliseconds (100)) == std::future_status::ready;
     shutdown_session_control->release ();
     const bool core_stop_finished =
-      core_stop_completed.wait_for (std::chrono::seconds (2))
-      == std::future_status::ready;
+      core_stop_completed.wait_for (std::chrono::seconds (2)) == std::future_status::ready;
     core_stop_thread.join ();
-    const auto core_stop_elapsed =
-      std::chrono::duration_cast<std::chrono::milliseconds> (
-        std::chrono::steady_clock::now () - core_stop_started);
+    const auto core_stop_elapsed = std::chrono::duration_cast<std::chrono::milliseconds> (
+      std::chrono::steady_clock::now () - core_stop_started);
     shutdown_request_thread.join ();
     (void) core_connector.close ();
     core_mesh->stop ();
@@ -2206,9 +2070,8 @@ int main ()
         return 299;
     }
     if (shutdown_session_control->lifecycle ()
-        != std::vector<std::string>{"connected", "packet-entered",
-                                    "packet-terminal", "disconnected",
-                                    "destroyed"}) {
+        != std::vector<std::string>{"connected", "packet-entered", "packet-terminal",
+                                    "disconnected", "destroyed"}) {
         return 300;
     }
 
@@ -2227,19 +2090,15 @@ int main ()
     zlink::framework::zlink_builder_t error_close_zlink;
     zlink::framework::detail::zlink_builder_access_t::bind_shared_core_context (
       error_close_zlink, std::make_shared<zlink::context_t> ());
-    error_close_services.add_singleton<
-      zlink::framework::detail::actor_gateway_runtime_t> ();
+    error_close_services.add_singleton<zlink::framework::detail::actor_gateway_runtime_t> ();
     error_close_services.add_factory<zlink::framework::session_actor_manager_t> (
       [] (zlink::framework::service_provider_t &provider) {
           return std::make_unique<zlink::framework::session_actor_manager_t> (
-            provider
-              .get_required<zlink::framework::detail::actor_gateway_runtime_t> ()
-              .manager ());
+            provider.get_required<zlink::framework::detail::actor_gateway_runtime_t> ().manager ());
       },
       zlink::framework::service_lifetime_t::scoped);
     zlink::framework::zlink_framework_options_t error_close_options (
-      error_close_services, error_close_handlers, error_close_serializers,
-      error_close_zlink);
+      error_close_services, error_close_handlers, error_close_serializers, error_close_zlink);
     error_close_options.add_route_mesh ("error-close-mesh")
       .set_routing_id (zlink::routing_id_t::from ("error-close-node"))
       .listen ("tcp://127.0.0.1:" + std::to_string (error_close_mesh_port));
@@ -2248,29 +2107,25 @@ int main ()
       .register_session ("error-close-session");
     error_close_options.apply ();
     for (const auto &registration :
-         zlink::framework::detail::mesh_node_runtime_t::registrations (
-           error_close_zlink)) {
+         zlink::framework::detail::mesh_node_runtime_t::registrations (error_close_zlink)) {
         registration->core_context =
-          zlink::framework::detail::zlink_builder_access_t::shared_core_context (
-            error_close_zlink);
+          zlink::framework::detail::zlink_builder_access_t::shared_core_context (error_close_zlink);
     }
     auto error_close_control = std::make_shared<core_error_close_control_t> ();
     error_close_services.add_factory<core_error_close_session_t> (
       [error_close_control] (zlink::framework::service_provider_t &) {
-          return std::make_unique<core_error_close_session_t> (
-            error_close_control);
+          return std::make_unique<core_error_close_session_t> (error_close_control);
       },
       zlink::framework::service_lifetime_t::scoped);
     auto error_close_provider = error_close_services.build_provider ();
-    auto error_close_mesh = zlink::framework::detail::mesh_node_runtime_t::from (
-      error_close_zlink, "error-close-mesh");
+    auto error_close_mesh =
+      zlink::framework::detail::mesh_node_runtime_t::from (error_close_zlink, "error-close-mesh");
     if (!error_close_mesh) {
         return 310;
     }
     error_close_mesh->bind_serializers (error_close_serializers);
     error_close_mesh->start ();
-    auto error_close_runtime =
-      zlink::framework::detail::stream_runtime_t::from (error_close_zlink);
+    auto error_close_runtime = zlink::framework::detail::stream_runtime_t::from (error_close_zlink);
     zlink::framework::runtime::stream_host_service_t error_close_host (
       error_close_runtime, error_close_runtime.snapshots (),
       {{"error-close-session",
@@ -2278,8 +2133,7 @@ int main ()
           -> zlink::framework::packet_stream_session_t & {
             return provider.get_required<core_error_close_session_t> ();
         }}},
-      std::chrono::milliseconds{30'000},
-      error_close_mesh);
+      std::chrono::milliseconds{30'000}, error_close_mesh);
     error_close_host.start (error_close_provider);
 
     const auto fail_error_close = [&] (int code) {
@@ -2294,14 +2148,12 @@ int main ()
      * synchronously with protocol_error while the session gate is held. */
     const auto make_bad_compressed_frame = [&] (std::uint64_t seq) {
         const zlink::framework::detail::stream_header_t bad_header (
-          zlink::framework::detail::stream_message_kind_t::request,
-          stream_codec_t::raw,
+          zlink::framework::detail::stream_message_kind_t::request, stream_codec_t::raw,
           zlink::framework::detail::stream_header_flags_t::has_request_seq
             | zlink::framework::detail::stream_header_flags_t::payload_compressed,
           seq, "error-close-probe");
-        return make_native_stream_frame (
-          error_close_runtime, bad_header,
-          zlink::message_t::from (std::string ("this-is-not-lz4")));
+        return make_native_stream_frame (error_close_runtime, bad_header,
+                                         zlink::message_t::from (std::string ("this-is-not-lz4")));
     };
 
     /* (b) error -> close wire order: the error frame is submitted to the
@@ -2312,8 +2164,7 @@ int main ()
         return fail_error_close (311);
     }
     send_native_bytes (error_order_client, make_bad_compressed_frame (7));
-    const auto ordered_bytes =
-      read_until_peer_close (error_order_client, std::chrono::seconds (5));
+    const auto ordered_bytes = read_until_peer_close (error_order_client, std::chrono::seconds (5));
     close_native_client (error_order_client);
     if (!ordered_bytes) {
         return fail_error_close (312);
@@ -2328,18 +2179,17 @@ int main ()
     /* (a) pre-suspension throw in the error-frame write: the completion
      * observation runs inline in the rejecting context; the close must still
      * complete without self-deadlocking on the session gate. */
-    zlink::framework::runtime::stream_host_core_test_faults ()
-      .fail_core_error_frame_send.store (true, std::memory_order_release);
+    zlink::framework::runtime::stream_host_core_test_faults ().fail_core_error_frame_send.store (
+      true, std::memory_order_release);
     auto error_fault_client = connect_loopback (error_close_stream_port);
     if (!error_fault_client) {
         return fail_error_close (315);
     }
     send_native_bytes (error_fault_client, make_bad_compressed_frame (8));
-    const auto faulted_bytes =
-      read_until_peer_close (error_fault_client, std::chrono::seconds (5));
+    const auto faulted_bytes = read_until_peer_close (error_fault_client, std::chrono::seconds (5));
     close_native_client (error_fault_client);
-    zlink::framework::runtime::stream_host_core_test_faults ()
-      .fail_core_error_frame_send.store (false, std::memory_order_release);
+    zlink::framework::runtime::stream_host_core_test_faults ().fail_core_error_frame_send.store (
+      false, std::memory_order_release);
     if (!faulted_bytes) {
         /* No EOF within the deadline: the Core loop is stuck on the gate. */
         return fail_error_close (316);
@@ -2356,8 +2206,7 @@ int main ()
      * protocol_error close hit the same peer; the duplicate must be a no-op,
      * so each connection observes exactly one disconnect. */
     std::this_thread::sleep_for (std::chrono::milliseconds (200));
-    if (error_close_control->connected () != 2
-        || error_close_control->disconnected () != 2) {
+    if (error_close_control->connected () != 2 || error_close_control->disconnected () != 2) {
         return fail_error_close (319);
     }
 
@@ -2369,8 +2218,7 @@ int main ()
         error_close_stop_source.set_value ();
     });
     const bool error_close_stop_finished =
-      error_close_stopped.wait_for (std::chrono::seconds (5))
-      == std::future_status::ready;
+      error_close_stopped.wait_for (std::chrono::seconds (5)) == std::future_status::ready;
     if (!error_close_stop_finished) {
         error_close_stop_thread.detach ();
         error_close_mesh->stop ();

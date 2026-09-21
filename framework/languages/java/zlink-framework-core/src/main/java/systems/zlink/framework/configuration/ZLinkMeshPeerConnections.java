@@ -1,7 +1,8 @@
 package systems.zlink.framework.configuration;
 
-import java.util.List;
 import systems.zlink.contracts.core.RoutingId;
+
+import java.util.List;
 
 public interface ZLinkMeshPeerConnections {
     void connect(String endpoint);

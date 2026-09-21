@@ -1,6 +1,6 @@
 package systems.zlink.framework.runtime.internal.service;
-import java.util.function.LongConsumer;
-import java.util.function.Supplier;
+
+import systems.zlink.framework.runtime.internal.execution.ZLinkStateLane;
 
 import java.time.Instant;
 import java.util.ArrayList;
@@ -10,12 +10,12 @@ import java.util.Map;
 import java.util.Objects;
 import java.util.concurrent.CompletionException;
 import java.util.function.Consumer;
+import java.util.function.LongConsumer;
 import java.util.function.Supplier;
-import systems.zlink.framework.runtime.internal.execution.ZLinkStateLane;
 
 /**
- * Deterministic Location authority provider used by the JVM runtime contract.
- * Payload bytes are opaque and never affect provider-side CAS decisions.
+ * Deterministic Location authority provider used by the JVM runtime contract. Payload bytes are
+ * opaque and never affect provider-side CAS decisions.
  */
 final class ZLinkInMemoryLocationAuthority {
     private static final int MAX_PAYLOAD_BYTES = 1024 * 1024;
@@ -35,8 +35,7 @@ final class ZLinkInMemoryLocationAuthority {
         this(Instant::now);
     }
 
-    public ZLinkInMemoryLocationAuthority(
-        Supplier<Instant> now) {
+    public ZLinkInMemoryLocationAuthority(Supplier<Instant> now) {
         this.now = Objects.requireNonNull(now, "now");
     }
 
@@ -50,12 +49,9 @@ final class ZLinkInMemoryLocationAuthority {
         return new Read(now.get(), snapshot == null ? null : snapshot.copy());
     }
 
-    public CasResult compareExchange(
-        String key,
-        Expectation expectation,
-        Mutation mutation) {
-        CompareExchangeState state = inStateLane(() ->
-            compareExchangeCore(key, expectation, mutation));
+    public CasResult compareExchange(String key, Expectation expectation, Mutation mutation) {
+        CompareExchangeState state =
+                inStateLane(() -> compareExchangeCore(key, expectation, mutation));
         if (state.change() != null) {
             state.listeners().forEach(listener -> listener.accept(state.change()));
         }
@@ -63,9 +59,7 @@ final class ZLinkInMemoryLocationAuthority {
     }
 
     private CompareExchangeState compareExchangeCore(
-        String key,
-        Expectation expectation,
-        Mutation mutation) {
+            String key, Expectation expectation, Mutation mutation) {
         requireKey(key);
         Objects.requireNonNull(expectation, "expectation");
         Objects.requireNonNull(mutation, "mutation");
@@ -82,15 +76,13 @@ final class ZLinkInMemoryLocationAuthority {
             }
             rows.remove(key);
             return withChange(
-                CasResult.deleted(newStoreVersion, storeNow),
-                new Change(
-                    nextSequence(), key, newStoreVersion, ChangeKind.DELETED));
+                    CasResult.deleted(newStoreVersion, storeNow),
+                    new Change(nextSequence(), key, newStoreVersion, ChangeKind.DELETED));
         }
 
         byte[] payload = Objects.requireNonNull(mutation.payload(), "payload");
         if (payload.length > MAX_PAYLOAD_BYTES) {
-            throw new IllegalArgumentException(
-                "authority payload exceeds 1 MiB");
+            throw new IllegalArgumentException("authority payload exceeds 1 MiB");
         }
         long nextObject;
         long nextOwner;
@@ -117,34 +109,29 @@ final class ZLinkInMemoryLocationAuthority {
                 nextOwner = nextOwnerGeneration();
             }
             case DELETE -> throw new IllegalStateException("delete handled above");
-            default -> throw new IllegalStateException(
-                "unsupported mutation: " + mutation.kind());
+            default -> throw new IllegalStateException("unsupported mutation: " + mutation.kind());
         }
 
-        Snapshot stored = new Snapshot(
-            key,
-            newStoreVersion,
-            nextObject,
-            nextOwner,
-            payload);
+        Snapshot stored = new Snapshot(key, newStoreVersion, nextObject, nextOwner, payload);
         rows.put(key, stored);
         return withChange(
-            CasResult.stored(storeNow, stored),
-            new Change(
-                nextSequence(), key, newStoreVersion, ChangeKind.STORED));
+                CasResult.stored(storeNow, stored),
+                new Change(nextSequence(), key, newStoreVersion, ChangeKind.STORED));
     }
 
     public AutoCloseable subscribe(Consumer<Change> listener) {
         Objects.requireNonNull(listener, "listener");
-        inStateLane(() -> {
-            listeners.add(listener);
-            return null;
-        });
+        inStateLane(
+                () -> {
+                    listeners.add(listener);
+                    return null;
+                });
         return () -> {
-            inStateLane(() -> {
-                listeners.remove(listener);
-                return null;
-            });
+            inStateLane(
+                    () -> {
+                        listeners.remove(listener);
+                        return null;
+                    });
         };
     }
 
@@ -176,27 +163,18 @@ final class ZLinkInMemoryLocationAuthority {
     }
 
     private long nextObjectGeneration() {
-        return increment(
-            objectGeneration,
-            value -> objectGeneration = value,
-            "objectGeneration");
+        return increment(objectGeneration, value -> objectGeneration = value, "objectGeneration");
     }
 
     private long nextOwnerGeneration() {
-        return increment(
-            ownerGeneration,
-            value -> ownerGeneration = value,
-            "ownerGeneration");
+        return increment(ownerGeneration, value -> ownerGeneration = value, "ownerGeneration");
     }
 
     private long nextSequence() {
         return increment(sequence, value -> sequence = value, "changeSequence");
     }
 
-    private static long increment(
-        long current,
-        LongConsumer assign,
-        String field) {
+    private static long increment(long current, LongConsumer assign, String field) {
         if (current == Long.MAX_VALUE) {
             throw new IllegalStateException(field + " is exhausted");
         }
@@ -207,17 +185,16 @@ final class ZLinkInMemoryLocationAuthority {
 
     private static void requireKey(String key) {
         if (key == null || key.isEmpty() || key.indexOf('\0') >= 0) {
-            throw new IllegalArgumentException(
-                "authority key must be non-empty text without NUL");
+            throw new IllegalArgumentException("authority key must be non-empty text without NUL");
         }
     }
 
     public record Snapshot(
-        String key,
-        long storeVersion,
-        long objectGeneration,
-        long authorityOwnerGeneration,
-        byte[] payload) {
+            String key,
+            long storeVersion,
+            long objectGeneration,
+            long authorityOwnerGeneration,
+            byte[] payload) {
         public Snapshot {
             payload = payload.clone();
         }
@@ -229,22 +206,14 @@ final class ZLinkInMemoryLocationAuthority {
 
         Snapshot copy() {
             return new Snapshot(
-                key,
-                storeVersion,
-                objectGeneration,
-                authorityOwnerGeneration,
-                payload);
+                    key, storeVersion, objectGeneration, authorityOwnerGeneration, payload);
         }
     }
 
-    public record Read(Instant storeNow, Snapshot snapshot) {
-    }
+    public record Read(Instant storeNow, Snapshot snapshot) {}
 
     private record CompareExchangeState(
-        CasResult result,
-        List<Consumer<Change>> listeners,
-        Change change) {
-    }
+            CasResult result, List<Consumer<Change>> listeners, Change change) {}
 
     public record Expectation(boolean missing, long storeVersion) {
         public static Expectation expectMissing() {
@@ -260,8 +229,8 @@ final class ZLinkInMemoryLocationAuthority {
 
         boolean matches(Snapshot current) {
             return missing
-                ? current == null
-                : current != null && current.storeVersion() == storeVersion;
+                    ? current == null
+                    : current != null && current.storeVersion() == storeVersion;
         }
     }
 
@@ -301,24 +270,21 @@ final class ZLinkInMemoryLocationAuthority {
     }
 
     public record CasResult(
-        CasKind kind,
-        Instant storeNow,
-        Snapshot snapshot,
-        long deletedStoreVersion,
-        Read conflict) {
+            CasKind kind,
+            Instant storeNow,
+            Snapshot snapshot,
+            long deletedStoreVersion,
+            Read conflict) {
         static CasResult stored(Instant now, Snapshot snapshot) {
-            return new CasResult(
-                CasKind.STORED, now, snapshot.copy(), 0, null);
+            return new CasResult(CasKind.STORED, now, snapshot.copy(), 0, null);
         }
 
         static CasResult deleted(long storeVersion, Instant now) {
-            return new CasResult(
-                CasKind.DELETED, now, null, storeVersion, null);
+            return new CasResult(CasKind.DELETED, now, null, storeVersion, null);
         }
 
         static CasResult conflict(Read current) {
-            return new CasResult(
-                CasKind.CONFLICT, current.storeNow(), null, 0, current);
+            return new CasResult(CasKind.CONFLICT, current.storeNow(), null, 0, current);
         }
     }
 
@@ -328,12 +294,7 @@ final class ZLinkInMemoryLocationAuthority {
         CONFLICT
     }
 
-    public record Change(
-        long sequence,
-        String key,
-        long storeVersion,
-        ChangeKind kind) {
-    }
+    public record Change(long sequence, String key, long storeVersion, ChangeKind kind) {}
 
     public enum ChangeKind {
         STORED,

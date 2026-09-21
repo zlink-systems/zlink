@@ -60,21 +60,23 @@ export function discoverSessionProviderRefs(
   for (const wrapper of discovery.getProviders()) {
     const handlerType = wrapper.metatype as Type | undefined;
     if (
-      typeof handlerType !== 'function'
-      || seen.has(handlerType)
-      || !isAutoDiscoveredProvider(handlerType)
+      typeof handlerType !== 'function' ||
+      seen.has(handlerType) ||
+      !isAutoDiscoveredProvider(handlerType)
     ) {
       continue;
     }
     //  The symbol is only present on decorated handlers, so the lookup has to
     //  admit undefined for the fallback to mean anything.
-    const metadata = (handlerType as unknown as
-      Record<symbol, readonly { readonly kind?: string }[] | undefined>
-    )[metadataSymbol] ?? [];
+    const metadata =
+      (handlerType as unknown as Record<symbol, readonly { readonly kind?: string }[] | undefined>)[
+        metadataSymbol
+      ] ?? [];
     if (
-      metadata.some((entry) => entry.kind === 'packet')
-      && typeof (handlerType as { prototype?: { handle?: unknown } }).prototype?.handle === 'function'
-      && tryGetProviderInstance(moduleRef, handlerType) !== undefined
+      metadata.some((entry) => entry.kind === 'packet') &&
+      typeof (handlerType as { prototype?: { handle?: unknown } }).prototype?.handle ===
+        'function' &&
+      tryGetProviderInstance(moduleRef, handlerType) !== undefined
     ) {
       seen.add(handlerType);
       refs.push({ handlerKey: handlerType });
@@ -83,7 +85,10 @@ export function discoverSessionProviderRefs(
   return refs;
 }
 
-export function discoverProviderRefs(discovery: DiscoveryService, moduleRef: ModuleRef): DiscoveredNestProvider[] {
+export function discoverProviderRefs(
+  discovery: DiscoveryService,
+  moduleRef: ModuleRef
+): DiscoveredNestProvider[] {
   return discoverDecoratedProviderRefs({
     discovery,
     moduleRef,
@@ -99,7 +104,10 @@ export function discoverProviderRefs(discovery: DiscoveryService, moduleRef: Mod
   });
 }
 
-export function discoverSpotProviderRefs(discovery: DiscoveryService, moduleRef: ModuleRef): DiscoveredNestSpotProvider[] {
+export function discoverSpotProviderRefs(
+  discovery: DiscoveryService,
+  moduleRef: ModuleRef
+): DiscoveredNestSpotProvider[] {
   return discoverDecoratedClassProviderRefs({
     discovery,
     moduleRef,
@@ -116,7 +124,10 @@ export function discoverSpotProviderRefs(discovery: DiscoveryService, moduleRef:
   });
 }
 
-export function discoverSpotActorProviderRefs(discovery: DiscoveryService, moduleRef: ModuleRef): DiscoveredNestSpotActorProvider[] {
+export function discoverSpotActorProviderRefs(
+  discovery: DiscoveryService,
+  moduleRef: ModuleRef
+): DiscoveredNestSpotActorProvider[] {
   return discoverDecoratedClassProviderRefs({
     discovery,
     moduleRef,
@@ -133,7 +144,10 @@ export function discoverSpotActorProviderRefs(discovery: DiscoveryService, modul
   });
 }
 
-export function discoverSpotTimerProviderRefs(discovery: DiscoveryService, moduleRef: ModuleRef): DiscoveredNestSpotTimerProvider[] {
+export function discoverSpotTimerProviderRefs(
+  discovery: DiscoveryService,
+  moduleRef: ModuleRef
+): DiscoveredNestSpotTimerProvider[] {
   return discoverDecoratedClassProviderRefs({
     discovery,
     moduleRef,
@@ -150,7 +164,10 @@ export function discoverSpotTimerProviderRefs(discovery: DiscoveryService, modul
   });
 }
 
-interface DecoratedProviderRefInput<TMetadata, THandlerKey extends InjectionToken = InjectionToken> {
+interface DecoratedProviderRefInput<
+  TMetadata,
+  THandlerKey extends InjectionToken = InjectionToken
+> {
   readonly handlerKey: THandlerKey;
   readonly handlerName: string;
   readonly token: InjectionToken;
@@ -185,7 +202,8 @@ function discoverDecoratedProviderRefs<TMetadata, TRef>(
     if (token === undefined) {
       continue;
     }
-    const instance = wrapper.instance === undefined ? undefined : wrapper.instance as Record<string, unknown>;
+    const instance =
+      wrapper.instance === undefined ? undefined : (wrapper.instance as Record<string, unknown>);
     for (const handlerKey of providerMetadataCandidateTokens(wrapper.metatype, instance, token)) {
       appendDiscoveredProviderRefs(refs, seen, {
         handlerKey,
@@ -253,13 +271,15 @@ function appendDiscoveredProviderRefs<TMetadata, TRef>(
       continue;
     }
     seen.add(key);
-    refs.push(options.createRef({
-      handlerKey: options.handlerKey,
-      handlerName,
-      token: options.token,
-      instance: options.instance,
-      metadata
-    }));
+    refs.push(
+      options.createRef({
+        handlerKey: options.handlerKey,
+        handlerName,
+        token: options.token,
+        instance: options.instance,
+        metadata
+      })
+    );
   }
 }
 
@@ -275,7 +295,10 @@ function isInjectionToken(value: unknown): value is InjectionToken {
   return typeof value === 'function' || typeof value === 'string' || typeof value === 'symbol';
 }
 
-function tryGetProviderInstance(moduleRef: ModuleRef, token: InjectionToken): Record<string, unknown> | undefined {
+function tryGetProviderInstance(
+  moduleRef: ModuleRef,
+  token: InjectionToken
+): Record<string, unknown> | undefined {
   try {
     return moduleRef.get(token, { strict: false }) as Record<string, unknown>;
   } catch {

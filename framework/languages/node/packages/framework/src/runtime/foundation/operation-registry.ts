@@ -11,7 +11,10 @@ export class OperationTimeoutError extends Error {
 }
 
 export class OperationCancelledError extends Error {
-  constructor(readonly operationId: bigint, message = 'Operation was cancelled.') {
+  constructor(
+    readonly operationId: bigint,
+    message = 'Operation was cancelled.'
+  ) {
     super(message);
     this.name = 'OperationCancelledError';
   }
@@ -50,7 +53,10 @@ export class OperationRegistry<T> {
 
   constructor(private readonly clock: OperationClock = systemClock) {}
 
-  register(timeoutMs: number, timeoutOwner: 'registry' | 'sender' = 'registry'): PendingOperation<T> {
+  register(
+    timeoutMs: number,
+    timeoutOwner: 'registry' | 'sender' = 'registry'
+  ): PendingOperation<T> {
     if (this.closed) throw new Error('Operation registry is closed.');
     if (!Number.isFinite(timeoutMs) || timeoutMs < 0) {
       throw new RangeError('timeoutMs must be a non-negative finite number.');

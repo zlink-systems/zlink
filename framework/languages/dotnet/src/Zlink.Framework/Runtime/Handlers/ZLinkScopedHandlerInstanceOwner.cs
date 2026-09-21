@@ -12,12 +12,15 @@ internal sealed class ZLinkScopedHandlerInstanceOwner(IServiceProvider services)
     // Microsoft DI shares its service-availability catalog across scopes. Keep
     // constructor selection with that catalog, never with the handler type alone:
     // different hosts can satisfy different constructors of the same handler.
-    private static readonly ConditionalWeakTable<object,
-        ConcurrentDictionary<Type, Func<IServiceProvider, object>>> Factories = new();
+    private static readonly ConditionalWeakTable<
+        object,
+        ConcurrentDictionary<Type, Func<IServiceProvider, object>>
+    > Factories = new();
 
-    private readonly (IServiceProviderIsService? Services,
-        ConcurrentDictionary<Type, Func<IServiceProvider, object>> Factories) _activation =
-        GetActivationFactories(services);
+    private readonly (
+        IServiceProviderIsService? Services,
+        ConcurrentDictionary<Type, Func<IServiceProvider, object>> Factories
+    ) _activation = GetActivationFactories(services);
     private readonly Dictionary<Type, object> _fallbackInstances = new();
     private readonly ZLinkStateLane _lane = new();
     private bool _disposed;
@@ -29,8 +32,11 @@ internal sealed class ZLinkScopedHandlerInstanceOwner(IServiceProvider services)
     {
         var activation = GetActivationFactories(services);
         foreach (var handlerType in handlerTypes)
-            activation.Factories.GetOrAdd(handlerType,
-                static (type, available) => Compile(type, available), activation.Services);
+            activation.Factories.GetOrAdd(
+                handlerType,
+                static (type, available) => Compile(type, available),
+                activation.Services
+            );
     }
 
     internal void Prepare(Type handlerType) => GetFactory(handlerType);
@@ -45,34 +51,45 @@ internal sealed class ZLinkScopedHandlerInstanceOwner(IServiceProvider services)
     {
         ArgumentNullException.ThrowIfNull(handlerType);
 
-        return AwaitStateLane(_lane.RunAsync(() =>
-        {
-            ObjectDisposedException.ThrowIf(_disposed, this);
+        return AwaitStateLane(
+            _lane.RunAsync(() =>
+            {
+                ObjectDisposedException.ThrowIf(_disposed, this);
 
-            if (_fallbackInstances.TryGetValue(handlerType, out var existing)) return existing;
+                if (_fallbackInstances.TryGetValue(handlerType, out var existing))
+                    return existing;
 
-            var created = GetFactory(handlerType)(Services);
-            _fallbackInstances.Add(handlerType, created);
-            return created;
-        }));
+                var created = GetFactory(handlerType)(Services);
+                _fallbackInstances.Add(handlerType, created);
+                return created;
+            })
+        );
     }
 
     private Func<IServiceProvider, object> GetFactory(Type handlerType) =>
-        _activation.Factories.GetOrAdd(handlerType,
-            static (type, available) => Compile(type, available), _activation.Services);
+        _activation.Factories.GetOrAdd(
+            handlerType,
+            static (type, available) => Compile(type, available),
+            _activation.Services
+        );
 
-    private static (IServiceProviderIsService? Services,
-        ConcurrentDictionary<Type, Func<IServiceProvider, object>> Factories)
-        GetActivationFactories(IServiceProvider services)
+    private static (
+        IServiceProviderIsService? Services,
+        ConcurrentDictionary<Type, Func<IServiceProvider, object>> Factories
+    ) GetActivationFactories(IServiceProvider services)
     {
         var available = services.GetService<IServiceProviderIsService>();
         // Without a catalog, CreateFactory's selection depends only on the type.
-        return (available, Factories.GetValue(
-            (object?)available ?? typeof(ActivatorUtilities), static _ => new()));
+        return (
+            available,
+            Factories.GetValue((object?)available ?? typeof(ActivatorUtilities), static _ => new())
+        );
     }
 
     private static Func<IServiceProvider, object> Compile(
-        Type handlerType, IServiceProviderIsService? available)
+        Type handlerType,
+        IServiceProviderIsService? available
+    )
     {
         try
         {
@@ -93,7 +110,9 @@ internal sealed class ZLinkScopedHandlerInstanceOwner(IServiceProvider services)
     }
 
     private static Func<IServiceProvider, object> CompileFactory(
-        Type handlerType, IServiceProviderIsService? available)
+        Type handlerType,
+        IServiceProviderIsService? available
+    )
     {
         if (handlerType.IsAbstract)
             throw new InvalidOperationException("Instances of abstract classes cannot be created.");
@@ -114,15 +133,20 @@ internal sealed class ZLinkScopedHandlerInstanceOwner(IServiceProvider services)
                         break;
                     }
 
-                var preferred = constructor.IsDefined(typeof(ActivatorUtilitiesConstructorAttribute), false);
+                var preferred = constructor.IsDefined(
+                    typeof(ActivatorUtilitiesConstructorAttribute),
+                    false
+                );
                 if (preferred)
                 {
                     if (seenPreferred)
                         throw new InvalidOperationException(
-                            "Multiple constructors were marked with ActivatorUtilitiesConstructorAttribute.");
+                            "Multiple constructors were marked with ActivatorUtilitiesConstructorAttribute."
+                        );
                     if (length < 0)
                         throw new InvalidOperationException(
-                            "Constructor marked with ActivatorUtilitiesConstructorAttribute does not accept all given argument types.");
+                            "Constructor marked with ActivatorUtilitiesConstructorAttribute does not accept all given argument types."
+                        );
                 }
 
                 // Preserve the pinned DI 8 constructor-selection semantics,
@@ -145,65 +169,101 @@ internal sealed class ZLinkScopedHandlerInstanceOwner(IServiceProvider services)
         }
         if (multiple)
             throw new InvalidOperationException(
-                $"Multiple constructors for type '{handlerType}' were found with length {bestLength}.");
+                $"Multiple constructors for type '{handlerType}' were found with length {bestLength}."
+            );
 
         var services = Expression.Parameter(typeof(IServiceProvider), "services");
-        var arguments = selected!.GetParameters().Select(parameter =>
-        {
-            var key = parameter.GetCustomAttribute<FromKeyedServicesAttribute>()?.Key;
-            Expression resolve = key is null
-                ? Expression.Call(services, nameof(IServiceProvider.GetService), Type.EmptyTypes,
-                    Expression.Constant(parameter.ParameterType, typeof(Type)))
-                : Expression.Call(typeof(ZLinkScopedHandlerInstanceOwner), nameof(GetKeyedService),
-                    Type.EmptyTypes, services, Expression.Constant(parameter.ParameterType, typeof(Type)),
-                    Expression.Constant(key, typeof(object)));
-            Expression missing = parameter.HasDefaultValue
-                ? Expression.Convert(parameter.DefaultValue is null
-                        ? Expression.Default(parameter.ParameterType)
-                        : Expression.Convert(Expression.Constant(parameter.DefaultValue), parameter.ParameterType),
-                    typeof(object))
-                : Expression.Throw(Expression.New(
-                        typeof(InvalidOperationException).GetConstructor([typeof(string)])!,
-                        Expression.Constant(
-                            $"Unable to resolve service for type '{parameter.ParameterType}' while attempting to activate '{handlerType}'.")),
-                    typeof(object));
-            return Expression.Convert(Expression.Coalesce(resolve, missing), parameter.ParameterType);
-        });
-        return Expression.Lambda<Func<IServiceProvider, object>>(
-                Expression.New(selected, arguments), services)
+        var arguments = selected!
+            .GetParameters()
+            .Select(parameter =>
+            {
+                var key = parameter.GetCustomAttribute<FromKeyedServicesAttribute>()?.Key;
+                Expression resolve = key is null
+                    ? Expression.Call(
+                        services,
+                        nameof(IServiceProvider.GetService),
+                        Type.EmptyTypes,
+                        Expression.Constant(parameter.ParameterType, typeof(Type))
+                    )
+                    : Expression.Call(
+                        typeof(ZLinkScopedHandlerInstanceOwner),
+                        nameof(GetKeyedService),
+                        Type.EmptyTypes,
+                        services,
+                        Expression.Constant(parameter.ParameterType, typeof(Type)),
+                        Expression.Constant(key, typeof(object))
+                    );
+                Expression missing = parameter.HasDefaultValue
+                    ? Expression.Convert(
+                        parameter.DefaultValue is null
+                            ? Expression.Default(parameter.ParameterType)
+                            : Expression.Convert(
+                                Expression.Constant(parameter.DefaultValue),
+                                parameter.ParameterType
+                            ),
+                        typeof(object)
+                    )
+                    : Expression.Throw(
+                        Expression.New(
+                            typeof(InvalidOperationException).GetConstructor([typeof(string)])!,
+                            Expression.Constant(
+                                $"Unable to resolve service for type '{parameter.ParameterType}' while attempting to activate '{handlerType}'."
+                            )
+                        ),
+                        typeof(object)
+                    );
+                return Expression.Convert(
+                    Expression.Coalesce(resolve, missing),
+                    parameter.ParameterType
+                );
+            });
+        return Expression
+            .Lambda<Func<IServiceProvider, object>>(Expression.New(selected, arguments), services)
             .Compile();
     }
 
     private static bool IsService(IServiceProviderIsService available, ParameterInfo parameter)
     {
         var key = parameter.GetCustomAttribute<FromKeyedServicesAttribute>()?.Key;
-        if (key is null) return available.IsService(parameter.ParameterType);
+        if (key is null)
+            return available.IsService(parameter.ParameterType);
         if (available is IServiceProviderIsKeyedService keyed)
             return keyed.IsKeyedService(parameter.ParameterType, key);
-        throw new InvalidOperationException("This service provider doesn't support keyed services.");
+        throw new InvalidOperationException(
+            "This service provider doesn't support keyed services."
+        );
     }
 
     private static object? GetKeyedService(IServiceProvider services, Type type, object key) =>
         services is IKeyedServiceProvider keyed
             ? keyed.GetKeyedService(type, key)
-            : throw new InvalidOperationException("This service provider doesn't support keyed services.");
+            : throw new InvalidOperationException(
+                "This service provider doesn't support keyed services."
+            );
 
     public ValueTask DisposeAsync()
     {
-        var result = AwaitStateLane(_lane.RunAsync(() =>
-        {
-            if (_disposeTask is null)
+        var result = AwaitStateLane(
+            _lane.RunAsync(() =>
             {
-                _disposed = true;
-                var instances = _fallbackInstances.Values.Reverse().ToArray();
-                _fallbackInstances.Clear();
-                var completion = new TaskCompletionSource(
-                    TaskCreationOptions.RunContinuationsAsynchronously);
-                _disposeTask = completion.Task;
-                return (Task: _disposeTask, Completion: completion, Instances: instances);
-            }
-            return (Task: _disposeTask, Completion: (TaskCompletionSource?)null, Instances: (object[]?)null);
-        }));
+                if (_disposeTask is null)
+                {
+                    _disposed = true;
+                    var instances = _fallbackInstances.Values.Reverse().ToArray();
+                    _fallbackInstances.Clear();
+                    var completion = new TaskCompletionSource(
+                        TaskCreationOptions.RunContinuationsAsynchronously
+                    );
+                    _disposeTask = completion.Task;
+                    return (Task: _disposeTask, Completion: completion, Instances: instances);
+                }
+                return (
+                    Task: _disposeTask,
+                    Completion: (TaskCompletionSource?)null,
+                    Instances: (object[]?)null
+                );
+            })
+        );
         if (result.Completion is not null)
             StartDisposeCore(result.Completion, result.Instances!);
         return new ValueTask(result.Task);
@@ -244,7 +304,8 @@ internal sealed class ZLinkScopedHandlerInstanceOwner(IServiceProvider services)
 
             if (failures is { Count: 1 })
                 System.Runtime.ExceptionServices.ExceptionDispatchInfo.Capture(failures[0]).Throw();
-            if (failures is { Count: > 1 }) throw new AggregateException(failures);
+            if (failures is { Count: > 1 })
+                throw new AggregateException(failures);
             completion.TrySetResult();
         }
         catch (OperationCanceledException exception)

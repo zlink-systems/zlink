@@ -22,9 +22,9 @@ public sealed class StreamFlowEndToEndTests
         builder.Logging.AddProvider(flowLogs);
         builder.Services.AddZLinkFramework(options =>
         {
-            options.ConfigureDispatch().Diagnostics
-                .SetLevel(ZLinkDiagnosticsLevel.Normal);
-            options.AddStreamNode("flow.stream")
+            options.ConfigureDispatch().Diagnostics.SetLevel(ZLinkDiagnosticsLevel.Normal);
+            options
+                .AddStreamNode("flow.stream")
                 .Bind($"tcp://127.0.0.1:{port}")
                 .AddSession<FlowSession>();
         });
@@ -39,22 +39,27 @@ public sealed class StreamFlowEndToEndTests
                     Endpoint = new Uri($"tcp://127.0.0.1:{port}"),
                     DispatchMode = ZlinkStreamDispatchMode.Immediate,
                     Reconnect = new ZlinkStreamReconnectOptions { Enabled = false },
-                    Heartbeat = new ZlinkStreamHeartbeatOptions { Enabled = false }
-                });
+                    Heartbeat = new ZlinkStreamHeartbeatOptions { Enabled = false },
+                }
+            );
             await connector.Connect.Async();
             var completed = new TaskCompletionSource<(
                 ZlinkStreamResult<FlowReply> Result,
                 string FlowId,
-                ZlinkStreamFlowOrigin Origin)>(TaskCreationOptions.RunContinuationsAsynchronously);
+                ZlinkStreamFlowOrigin Origin
+            )>(TaskCreationOptions.RunContinuationsAsynchronously);
 
-            connector.Request(new FlowRequest("request"))
+            connector
+                .Request(new FlowRequest("request"))
                 .PacketName(nameof(FlowRequest))
                 .Timeout(TimeSpan.FromSeconds(5))
                 .Submit<FlowReply>(result =>
                 {
-                    var flow = ZlinkStreamFlowContext.Current
-                               ?? throw new InvalidOperationException(
-                                   "Connector reply callback did not receive the echoed flow context.");
+                    var flow =
+                        ZlinkStreamFlowContext.Current
+                        ?? throw new InvalidOperationException(
+                            "Connector reply callback did not receive the echoed flow context."
+                        );
                     completed.TrySetResult((result, flow.FlowId, flow.Origin));
                 });
 
@@ -64,14 +69,18 @@ public sealed class StreamFlowEndToEndTests
             Assert.Equal(ZlinkStreamFlowOrigin.Application, callback.Origin);
             Assert.Null(ZlinkStreamFlowContext.Current);
 
-            var lines = flowLogs.Messages
-                .Where(line => line.Contains($"flow={callback.FlowId}", StringComparison.Ordinal))
+            var lines = flowLogs
+                .Messages.Where(line =>
+                    line.Contains($"flow={callback.FlowId}", StringComparison.Ordinal)
+                )
                 .ToArray();
             Assert.Equal(2, lines.Length);
-            var received = Assert.Single(lines.Where(line =>
-                line.Contains("phase=received", StringComparison.Ordinal)));
-            var replied = Assert.Single(lines.Where(line =>
-                line.Contains("phase=replied", StringComparison.Ordinal)));
+            var received = Assert.Single(
+                lines.Where(line => line.Contains("phase=received", StringComparison.Ordinal))
+            );
+            var replied = Assert.Single(
+                lines.Where(line => line.Contains("phase=replied", StringComparison.Ordinal))
+            );
             Assert.Contains($"packet={nameof(FlowRequest)}", received, StringComparison.Ordinal);
             Assert.Null(ReadToken(replied, "packet"));
             Assert.Contains($"flow={callback.FlowId}", received, StringComparison.Ordinal);
@@ -92,7 +101,8 @@ public sealed class StreamFlowEndToEndTests
     {
         var prefix = key + "=";
         return line.Split(' ', StringSplitOptions.RemoveEmptyEntries)
-            .FirstOrDefault(token => token.StartsWith(prefix, StringComparison.Ordinal))?[prefix.Length..];
+            .FirstOrDefault(token => token.StartsWith(prefix, StringComparison.Ordinal))
+            ?[prefix.Length..];
     }
 
     private static int FindFreeTcpPort()
@@ -115,7 +125,8 @@ public sealed class StreamFlowEndToEndTests
         {
             get
             {
-                lock (_gate) return _messages.ToArray();
+                lock (_gate)
+                    return _messages.ToArray();
             }
         }
 
@@ -128,7 +139,8 @@ public sealed class StreamFlowEndToEndTests
 
         private sealed class FlowLogger(FlowLoggerProvider owner) : ILogger
         {
-            public IDisposable? BeginScope<TState>(TState state) where TState : notnull => null;
+            public IDisposable? BeginScope<TState>(TState state)
+                where TState : notnull => null;
 
             public bool IsEnabled(LogLevel logLevel) => true;
 
@@ -137,9 +149,11 @@ public sealed class StreamFlowEndToEndTests
                 EventId eventId,
                 TState state,
                 Exception? exception,
-                Func<TState, Exception?, string> formatter)
+                Func<TState, Exception?, string> formatter
+            )
             {
-                lock (owner._gate) owner._messages.Add(formatter(state, exception));
+                lock (owner._gate)
+                    owner._messages.Add(formatter(state, exception));
             }
         }
     }
@@ -148,21 +162,24 @@ public sealed class StreamFlowEndToEndTests
     {
         public IZLinkSessionContext Context { get; } = context;
 
-        public ValueTask OnConnectedAsync(CancellationToken cancellationToken) => ValueTask.CompletedTask;
+        public ValueTask OnConnectedAsync(CancellationToken cancellationToken) =>
+            ValueTask.CompletedTask;
 
-        public ValueTask OnDisconnectedAsync(CancellationToken cancellationToken) => ValueTask.CompletedTask;
+        public ValueTask OnDisconnectedAsync(CancellationToken cancellationToken) =>
+            ValueTask.CompletedTask;
 
         public ValueTask OnErrorAsync(
             ZLinkStreamError error,
-            CancellationToken cancellationToken) => ValueTask.CompletedTask;
+            CancellationToken cancellationToken
+        ) => ValueTask.CompletedTask;
 
         public async ValueTask OnDispatchAsync(
             ZLinkSessionDispatchContext dispatch,
             ZLinkMessage payload,
-            CancellationToken cancellationToken)
+            CancellationToken cancellationToken
+        )
         {
-            await Context.Client.Reply(new FlowReply("reply"))
-                .Async(cancellationToken);
+            await Context.Client.Reply(new FlowReply("reply")).Async(cancellationToken);
         }
     }
 }

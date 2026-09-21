@@ -11,18 +11,20 @@ internal sealed record ZLinkPerActorShellRelocationPlan(
     ulong TargetNodeLifecycleGeneration,
     ZLinkLocationOwnerToken TargetOwner,
     ulong TargetAuthorityOwnerGeneration,
-    DateTimeOffset ClosingDeadline);
+    DateTimeOffset ClosingDeadline
+);
 
-internal abstract partial class ZLinkSpotActivation :
-    IZLinkCurrentSpotActivation,
-    IZLinkInstanceSpotHandlerRegistrySink,
-    IAsyncDisposable
+internal abstract partial class ZLinkSpotActivation
+    : IZLinkCurrentSpotActivation,
+        IZLinkInstanceSpotHandlerRegistrySink,
+        IAsyncDisposable
 {
     private readonly ZLinkSpotActorDispatchSubmitter _actorDispatchSubmitter;
     private readonly ZLinkSpotActorJoinRegistry _actorJoins = new();
     private readonly ZLinkSpotActorMembership _actors = new();
-    private readonly TaskCompletionSource _perActorMembersDrained =
-        new(TaskCreationOptions.RunContinuationsAsynchronously);
+    private readonly TaskCompletionSource _perActorMembersDrained = new(
+        TaskCreationOptions.RunContinuationsAsynchronously
+    );
     private readonly ZLinkSpotActivationDispatcher _dispatcher;
     private readonly ZLinkSpotOutboundTransport _outbound;
     private readonly ZLinkSpotOutboundEndpoint _outboundEndpoint;
@@ -61,43 +63,36 @@ internal abstract partial class ZLinkSpotActivation :
         ZLinkSpotRelocationCoordinationMode relocationCoordinationMode =
             ZLinkSpotRelocationCoordinationMode.FrameworkManaged,
         bool restoreLogicalTimers = false,
-        ZLinkTimerScheduler? timerScheduler = null)
+        ZLinkTimerScheduler? timerScheduler = null
+    )
     {
         _runtime = runtime;
         _timers = new ZLinkSpotTimerRegistry(
             () => runtime.Flow.CaptureEnabled,
             restoreLogicalTimers,
-            timerScheduler);
+            timerScheduler
+        );
         _scope = scope;
         _handlerInstances = new ZLinkScopedHandlerInstanceOwner(scope.ServiceProvider);
         NativeSpot = nativeSpot;
         _spotId = ZLinkSpotId.FromBoundary(spotId, nameof(spotId));
         NodeRid = nodeRid;
         SpotNodeName = spotNodeName;
-        RuntimeChannelName = ZLinkChannelName.FromBoundary(
-            channelName,
-            nameof(channelName));
-        RuntimeMeshName = ZLinkMeshName.FromBoundary(
-            channelName,
-            nameof(channelName));
+        RuntimeChannelName = ZLinkChannelName.FromBoundary(channelName, nameof(channelName));
+        RuntimeMeshName = ZLinkMeshName.FromBoundary(channelName, nameof(channelName));
         DefaultRequestTimeout = defaultRequestTimeout;
         ExecutionMode = executionMode;
         RelocationCoordinationMode = relocationCoordinationMode;
-        _outbound = new ZLinkSpotOutboundTransport(
-            nativeSpot,
-            sendTimeout,
-            _stopSource.Token);
-        _outboundEndpoint = new ZLinkSpotOutboundEndpoint(
-            this,
-            _outbound,
-            _runtime);
+        _outbound = new ZLinkSpotOutboundTransport(nativeSpot, sendTimeout, _stopSource.Token);
+        _outboundEndpoint = new ZLinkSpotOutboundEndpoint(this, _outbound, _runtime);
         _serial = new ZLinkSpotSerialExecutor(
             this,
             () => IsDisposed,
             _stopSource.Token,
             runtime.ErrorSink,
             () => runtime.Flow.CaptureEnabled,
-            executionMode: executionMode);
+            executionMode: executionMode
+        );
         _dispatcher = new ZLinkSpotActivationDispatcher(
             runtime,
             nativeSpot,
@@ -109,12 +104,16 @@ internal abstract partial class ZLinkSpotActivation :
             _subscriptions,
             () => _actorHandlers,
             () => HandlerInvoker,
-            CommitNativeActorJoinAsync);
-        _actorDispatchSubmitter = new ZLinkSpotActorDispatchSubmitter(_serial, _dispatcher.ActorPackets);
+            CommitNativeActorJoinAsync
+        );
+        _actorDispatchSubmitter = new ZLinkSpotActorDispatchSubmitter(
+            _serial,
+            _dispatcher.ActorPackets
+        );
     }
 
-    public object Spot => _spot
-                              ?? throw new InvalidOperationException("SPOT has not been attached to this context.");
+    public object Spot =>
+        _spot ?? throw new InvalidOperationException("SPOT has not been attached to this context.");
 
     internal abstract ZLinkSpotKind SpotKind { get; }
 
@@ -124,17 +123,19 @@ internal abstract partial class ZLinkSpotActivation :
 
     internal abstract bool SupportsIdleEviction { get; }
 
-    internal IZLinkSpot UserSpot => Spot as IZLinkSpot
+    internal IZLinkSpot UserSpot =>
+        Spot as IZLinkSpot
         ?? throw new InvalidOperationException("The current activation is not a User Spot.");
 
-    internal IZLinkInstanceSpot InstanceSpot => Spot as IZLinkInstanceSpot
+    internal IZLinkInstanceSpot InstanceSpot =>
+        Spot as IZLinkInstanceSpot
         ?? throw new InvalidOperationException("The current activation is not an Instance Spot.");
 
     public IZLinkRuntimeFailureReporter ErrorSink => _runtime.ErrorSink;
 
-    private ZLinkSpotHandlerInvoker HandlerInvoker => _handlerInvoker
-                                                      ?? throw new InvalidOperationException(
-                                                          "SPOT has not been attached to this context.");
+    private ZLinkSpotHandlerInvoker HandlerInvoker =>
+        _handlerInvoker
+        ?? throw new InvalidOperationException("SPOT has not been attached to this context.");
 
     public IZLinkBackendSpot NativeSpot { get; }
 
@@ -143,9 +144,7 @@ internal abstract partial class ZLinkSpotActivation :
     public int JoinedActorCount => _actors.Count;
 
     internal bool ContainsActor(string actorId) =>
-        _actors.TryGetActor(
-            ZLinkActorId.FromBoundary(actorId, nameof(actorId)),
-            out _);
+        _actors.TryGetActor(ZLinkActorId.FromBoundary(actorId, nameof(actorId)), out _);
 
     public bool IsDisposed => Volatile.Read(ref _disposed) != 0;
 
@@ -163,28 +162,29 @@ internal abstract partial class ZLinkSpotActivation :
 
     internal ZLinkSpotRelocationCoordinationMode RelocationCoordinationMode { get; }
 
-    internal ZLinkPerActorShellRelocationPlan?
-        PerActorShellRelocationPlan =>
+    internal ZLinkPerActorShellRelocationPlan? PerActorShellRelocationPlan =>
         Volatile.Read(ref _perActorShellRelocation);
 
     internal async ValueTask PublishPerActorShellRelocationPlanAsync(
         ZLinkPerActorShellRelocationPlan plan,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default
+    )
     {
         if (ExecutionMode != ZLinkUserSpotExecutionMode.PerActor)
             throw new InvalidOperationException(
-                "Only a PerActor User Spot can publish a shell relocation plan.");
-        await _membershipPublicationGate.WaitAsync(cancellationToken)
-            .ConfigureAwait(false);
+                "Only a PerActor User Spot can publish a shell relocation plan."
+            );
+        await _membershipPublicationGate.WaitAsync(cancellationToken).ConfigureAwait(false);
         try
         {
-            if (Interlocked.CompareExchange(
-                    ref _perActorShellRelocation,
-                    plan,
-                    null) is { } existing
-                && existing != plan)
+            if (
+                Interlocked.CompareExchange(ref _perActorShellRelocation, plan, null)
+                    is { } existing
+                && existing != plan
+            )
                 throw new ZLinkRelocationDataLostException(
-                    $"SPOT '{SpotId}' shell relocation target changed.");
+                    $"SPOT '{SpotId}' shell relocation target changed."
+                );
             if (JoinedActorCount == 0)
                 _perActorMembersDrained.TrySetResult();
         }
@@ -194,13 +194,15 @@ internal abstract partial class ZLinkSpotActivation :
         }
     }
 
-    internal Task WaitForPerActorMembersDrainedAsync(
-        CancellationToken cancellationToken)
+    internal Task WaitForPerActorMembersDrainedAsync(CancellationToken cancellationToken)
     {
-        if (ExecutionMode != ZLinkUserSpotExecutionMode.PerActor
-            || PerActorShellRelocationPlan is null)
+        if (
+            ExecutionMode != ZLinkUserSpotExecutionMode.PerActor
+            || PerActorShellRelocationPlan is null
+        )
             throw new InvalidOperationException(
-                "Only a relocated PerActor User Spot can wait for member relocation.");
+                "Only a relocated PerActor User Spot can wait for member relocation."
+            );
         if (JoinedActorCount == 0)
             _perActorMembersDrained.TrySetResult();
         return _perActorMembersDrained.Task.WaitAsync(cancellationToken);
@@ -227,8 +229,7 @@ internal abstract partial class ZLinkSpotActivation :
 
     ZLinkSpotOutboundEndpoint IZLinkCurrentSpotActivation.OutboundEndpoint => _outboundEndpoint;
 
-    void IZLinkCurrentSpotActivation.EnsureOperationAllowed() =>
-        EnsureContextOperationAllowed();
+    void IZLinkCurrentSpotActivation.EnsureOperationAllowed() => EnsureContextOperationAllowed();
 
     public string SpotId => _spotId.Value;
 
@@ -243,7 +244,8 @@ internal abstract partial class ZLinkSpotActivation :
         if (IsDisposed)
             throw new ZLinkFrameworkException(
                 ZLinkFrameworkErrorKind.Unavailable,
-                $"Spot context for '{SpotId}' cannot start an operation after owner cutover.");
+                $"Spot context for '{SpotId}' cannot start an operation after owner cutover."
+            );
         ZLinkSpotRelocationReadyHandlerScope.EnsureOperationCanStart(this);
     }
 
@@ -251,24 +253,25 @@ internal abstract partial class ZLinkSpotActivation :
     {
         if (!_configurationOpen)
             throw new InvalidOperationException(
-                "SPOT handler registration is only allowed while IZLinkSpot.Configure is running.");
+                "SPOT handler registration is only allowed while IZLinkSpot.Configure is running."
+            );
     }
 
     private ValueTask CommitNativeActorJoinAsync(
         IZLinkActor actor,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken
+    )
     {
         return CommitActorJoinCoreAsync(actor, cancellationToken);
     }
 
-    void IZLinkInstanceSpotHandlerRegistrySink.AddPacket<THandler>() =>
-        AddPacketCore<THandler>();
+    void IZLinkInstanceSpotHandlerRegistrySink.AddPacket<THandler>() => AddPacketCore<THandler>();
 }
 
-internal sealed class ZLinkUserSpotActivation :
-    ZLinkSpotActivation,
-    IZLinkSpotContext,
-    IZLinkSpotHandlerRegistrySink
+internal sealed class ZLinkUserSpotActivation
+    : ZLinkSpotActivation,
+        IZLinkSpotContext,
+        IZLinkSpotHandlerRegistrySink
 {
     internal ZLinkUserSpotActivation(
         ZLinkFrameworkRuntime runtime,
@@ -284,7 +287,8 @@ internal sealed class ZLinkUserSpotActivation :
         ZLinkSpotRelocationCoordinationMode relocationCoordinationMode =
             ZLinkSpotRelocationCoordinationMode.FrameworkManaged,
         bool restoreLogicalTimers = false,
-        ZLinkTimerScheduler? timerScheduler = null)
+        ZLinkTimerScheduler? timerScheduler = null
+    )
         : base(
             runtime,
             scope,
@@ -298,60 +302,51 @@ internal sealed class ZLinkUserSpotActivation :
             executionMode,
             relocationCoordinationMode,
             restoreLogicalTimers,
-            timerScheduler)
+            timerScheduler
+        )
     {
         Handlers = new ZLinkSpotHandlerRegistrySurface(this);
     }
 
     internal override ZLinkSpotKind SpotKind => ZLinkSpotKind.User;
 
-    internal override ZLinkPlacementObjectKind PlacementKind =>
-        ZLinkPlacementObjectKind.UserSpot;
+    internal override ZLinkPlacementObjectKind PlacementKind => ZLinkPlacementObjectKind.UserSpot;
 
     internal override string KindName => "user";
 
     internal override bool SupportsIdleEviction => false;
 
-    protected override ValueTask BindKindDescriptorsAsync(
-        CancellationToken cancellationToken) =>
+    protected override ValueTask BindKindDescriptorsAsync(CancellationToken cancellationToken) =>
         BindUserDescriptorsAsync(cancellationToken);
 
-    protected override void ValidateScannedHandlerKind(
-        ZLinkScannedSpotHandlerKind kind)
+    protected override void ValidateScannedHandlerKind(ZLinkScannedSpotHandlerKind kind)
     {
         _ = kind;
     }
 
     protected override ValueTask InvokeClosingAsync(
         ZLinkSpotCloseReason reason,
-        DateTimeOffset deadline) =>
-        ZLinkSpotClosingInvocation.InvokeAsync(
-            UserSpot.OnClosingAsync,
-            reason,
-            deadline);
+        DateTimeOffset deadline
+    ) => ZLinkSpotClosingInvocation.InvokeAsync(UserSpot.OnClosingAsync, reason, deadline);
 
     public IZLinkSpotHandlerRegistry Handlers { get; }
 
     internal void AttachSpot(IZLinkSpot spot) => AttachUserSpotCore(spot);
 
-    public IZLinkSpotRelocationReadyCall RelocationReady() =>
-        CreateRelocationReadyCall();
+    public IZLinkSpotRelocationReadyCall RelocationReady() => CreateRelocationReadyCall();
 
     ValueTask IZLinkSpotContext.LeaveActorAsync(
         IZLinkActor actor,
-        CancellationToken cancellationToken) =>
-        LeaveActorFromContextAsync(actor, cancellationToken);
+        CancellationToken cancellationToken
+    ) => LeaveActorFromContextAsync(actor, cancellationToken);
 
     ValueTask<bool> IZLinkSpotContext.CloseAsync(CancellationToken cancellationToken) =>
         CloseFromContextAsync(cancellationToken);
 
-    void IZLinkSpotHandlerRegistrySink.AddSubscribe<THandler>(
-        string channelName,
-        string topic) =>
+    void IZLinkSpotHandlerRegistrySink.AddSubscribe<THandler>(string channelName, string topic) =>
         AddSubscribeCore<THandler>(channelName, topic);
 
-    void IZLinkSpotHandlerRegistrySink.AddHandler<THandler>() =>
-        AddHandlerCore<THandler>();
+    void IZLinkSpotHandlerRegistrySink.AddHandler<THandler>() => AddHandlerCore<THandler>();
 
     void IZLinkSpotHandlerRegistrySink.AddHandler<THandler>(string packetName) =>
         AddHandlerCore<THandler>(packetName);
@@ -359,14 +354,11 @@ internal sealed class ZLinkUserSpotActivation :
     void IZLinkSpotHandlerRegistrySink.AddActorPacket<THandler, TActor>() =>
         AddActorPacketCore<THandler, TActor>();
 
-    void IZLinkSpotHandlerRegistrySink.AddActorPacket<THandler, TActor>(
-        string packetName) =>
+    void IZLinkSpotHandlerRegistrySink.AddActorPacket<THandler, TActor>(string packetName) =>
         AddActorPacketCore<THandler, TActor>(packetName);
 }
 
-internal sealed class ZLinkInstanceSpotActivation :
-    ZLinkSpotActivation,
-    IZLinkInstanceSpotContext
+internal sealed class ZLinkInstanceSpotActivation : ZLinkSpotActivation, IZLinkInstanceSpotContext
 {
     internal ZLinkInstanceSpotActivation(
         ZLinkFrameworkRuntime runtime,
@@ -379,7 +371,8 @@ internal sealed class ZLinkInstanceSpotActivation :
         TimeSpan defaultRequestTimeout,
         TimeSpan? sendTimeout,
         bool restoreLogicalTimers = false,
-        ZLinkTimerScheduler? timerScheduler = null)
+        ZLinkTimerScheduler? timerScheduler = null
+    )
         : base(
             runtime,
             scope,
@@ -391,7 +384,8 @@ internal sealed class ZLinkInstanceSpotActivation :
             defaultRequestTimeout,
             sendTimeout,
             restoreLogicalTimers: restoreLogicalTimers,
-            timerScheduler: timerScheduler)
+            timerScheduler: timerScheduler
+        )
     {
         Handlers = new ZLinkInstanceSpotHandlerRegistrySurface(this);
     }
@@ -405,40 +399,37 @@ internal sealed class ZLinkInstanceSpotActivation :
 
     internal override bool SupportsIdleEviction => true;
 
-    protected override ValueTask BindKindDescriptorsAsync(
-        CancellationToken cancellationToken)
+    protected override ValueTask BindKindDescriptorsAsync(CancellationToken cancellationToken)
     {
         _ = cancellationToken;
         return ValueTask.CompletedTask;
     }
 
-    protected override void ValidateScannedHandlerKind(
-        ZLinkScannedSpotHandlerKind kind)
+    protected override void ValidateScannedHandlerKind(ZLinkScannedSpotHandlerKind kind)
     {
-        if (kind is ZLinkScannedSpotHandlerKind.Subscription
-            or ZLinkScannedSpotHandlerKind.ActorSend
-            or ZLinkScannedSpotHandlerKind.ActorRequest)
+        if (
+            kind
+            is ZLinkScannedSpotHandlerKind.Subscription
+                or ZLinkScannedSpotHandlerKind.ActorSend
+                or ZLinkScannedSpotHandlerKind.ActorRequest
+        )
             throw new ZLinkConfigurationException(
-                $"Instance Spot '{Spot.GetType()}' cannot register {kind} handlers.");
+                $"Instance Spot '{Spot.GetType()}' cannot register {kind} handlers."
+            );
     }
 
     protected override ValueTask InvokeClosingAsync(
         ZLinkSpotCloseReason reason,
-        DateTimeOffset deadline) =>
-        ZLinkSpotClosingInvocation.InvokeAsync(
-            InstanceSpot.OnClosingAsync,
-            reason,
-            deadline);
+        DateTimeOffset deadline
+    ) => ZLinkSpotClosingInvocation.InvokeAsync(InstanceSpot.OnClosingAsync, reason, deadline);
 
     internal ValueTask InitializeAsync(CancellationToken cancellationToken) =>
         InitializeInstanceCoreAsync(cancellationToken);
 
     public IZLinkInstanceSpotHandlerRegistry Handlers { get; }
 
-    internal void AttachInstanceSpot(IZLinkInstanceSpot spot) =>
-        AttachInstanceSpotCore(spot);
+    internal void AttachInstanceSpot(IZLinkInstanceSpot spot) => AttachInstanceSpotCore(spot);
 
-    ValueTask<bool> IZLinkInstanceSpotContext.CloseAsync(
-        CancellationToken cancellationToken) =>
+    ValueTask<bool> IZLinkInstanceSpotContext.CloseAsync(CancellationToken cancellationToken) =>
         CloseFromContextAsync(cancellationToken);
 }

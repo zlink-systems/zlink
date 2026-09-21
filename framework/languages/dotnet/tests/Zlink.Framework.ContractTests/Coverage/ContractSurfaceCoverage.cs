@@ -4,13 +4,13 @@ using System.Text.RegularExpressions;
 using Microsoft.CodeAnalysis;
 using Microsoft.CodeAnalysis.CSharp;
 using Microsoft.CodeAnalysis.CSharp.Syntax;
-using Zlink.Framework.Contracts.Messaging;
-using Zlink.Framework.Contracts.Workers;
-using Zlink.Framework.ContractTests.Support;
 using Systems.Zlink.Stream.Connector.Contracts;
 using Zlink.Framework.AspNetCore;
 using Zlink.Framework.Codecs.MessagePack;
 using Zlink.Framework.Codecs.Protobuf;
+using Zlink.Framework.Contracts.Messaging;
+using Zlink.Framework.Contracts.Workers;
+using Zlink.Framework.ContractTests.Support;
 using Zlink.Framework.Locations.Redis;
 using Zlink.HttpClient;
 
@@ -27,42 +27,91 @@ public sealed class ContractSurfaceCoverage
         Assert.Null(assembly.GetType("Zlink.Framework.Contracts.Dispatch.ZLinkDispatchMode"));
         Assert.Null(assembly.GetType("Zlink.Framework.Contracts.Locations.SpotRef"));
         Assert.Null(assembly.GetType("Zlink.Framework.Contracts.Locations.IZLinkSpotRefResolver"));
-        Assert.Null(assembly.GetType("Zlink.Framework.Contracts.Locations.IZLinkActorAddressResolver"));
-        Assert.Null(assembly.GetType("Zlink.Framework.Contracts.Assembly.ZLinkFrameworkAssemblyMarker"));
-        Assert.Null(assembly.GetType("Zlink.Framework.Contracts.Codecs.Json.ZLinkJsonCodecNamespace"));
+        Assert.Null(
+            assembly.GetType("Zlink.Framework.Contracts.Locations.IZLinkActorAddressResolver")
+        );
+        Assert.Null(
+            assembly.GetType("Zlink.Framework.Contracts.Assembly.ZLinkFrameworkAssemblyMarker")
+        );
+        Assert.Null(
+            assembly.GetType("Zlink.Framework.Contracts.Codecs.Json.ZLinkJsonCodecNamespace")
+        );
         Assert.Null(assembly.GetType("Zlink.Framework.Contracts.Handlers.ZLinkStreamRawAttribute"));
         Assert.Null(assembly.GetType("Zlink.Framework.Contracts.Configuration.IZLinkDrainControl"));
         Assert.Null(assembly.GetType("Zlink.Framework.Contracts.Configuration.ZLinkDrainResult"));
-        Assert.Null(assembly.GetType("Zlink.Framework.Contracts.Configuration.ZLinkMeshDrainResult"));
-        Assert.Null(assembly.GetType("Zlink.Framework.Contracts.Configuration.ZLinkMeshDrainSnapshot"));
+        Assert.Null(
+            assembly.GetType("Zlink.Framework.Contracts.Configuration.ZLinkMeshDrainResult")
+        );
+        Assert.Null(
+            assembly.GetType("Zlink.Framework.Contracts.Configuration.ZLinkMeshDrainSnapshot")
+        );
 
-        Assert.DoesNotContain(typeof(IZLinkSendCall).GetMethods(), method => method.Name == "PacketName");
-        Assert.DoesNotContain(typeof(IZLinkRequestCall).GetMethods(), method => method.Name == "PacketName");
+        Assert.DoesNotContain(
+            typeof(IZLinkSendCall).GetMethods(),
+            method => method.Name == "PacketName"
+        );
+        Assert.DoesNotContain(
+            typeof(IZLinkRequestCall).GetMethods(),
+            method => method.Name == "PacketName"
+        );
         Assert.Contains(typeof(IZLinkRequestCall).GetMethods(), method => method.Name == "Yield");
-        Assert.DoesNotContain(typeof(IZLinkActorSendCall).GetMethods(), method => method.Name == "PacketName");
+        Assert.DoesNotContain(
+            typeof(IZLinkActorSendCall).GetMethods(),
+            method => method.Name == "PacketName"
+        );
         Assert.Contains(typeof(IZLinkActorSendCall).GetMethods(), method => method.Name == "Async");
-        Assert.DoesNotContain(typeof(IZLinkActorRequestCall).GetMethods(), method => method.Name == "PacketName");
-        Assert.Contains(typeof(IZLinkActorCreateCall).GetMethods(), method => method.Name == "Yield");
-        Assert.Contains(typeof(IZLinkActorGetOrCreateCall).GetMethods(), method => method.Name == "Yield");
+        Assert.DoesNotContain(
+            typeof(IZLinkActorRequestCall).GetMethods(),
+            method => method.Name == "PacketName"
+        );
+        Assert.Contains(
+            typeof(IZLinkActorCreateCall).GetMethods(),
+            method => method.Name == "Yield"
+        );
+        Assert.Contains(
+            typeof(IZLinkActorGetOrCreateCall).GetMethods(),
+            method => method.Name == "Yield"
+        );
         Assert.Equal(
             new[] { "Defer" },
-            typeof(IZLinkActorDeferredJoinCall).GetMethods().Select(method => method.Name).ToArray());
-        Assert.DoesNotContain(typeof(IZLinkActorContext).GetMembers(), member => member.Name is "IsJoined" or "GetSpot");
+            typeof(IZLinkActorDeferredJoinCall).GetMethods().Select(method => method.Name).ToArray()
+        );
+        Assert.DoesNotContain(
+            typeof(IZLinkActorContext).GetMembers(),
+            member => member.Name is "IsJoined" or "GetSpot"
+        );
         Assert.Contains(typeof(IZLinkWorkerCall<>).GetMethods(), method => method.Name == "Yield");
         Assert.Contains(typeof(IZLinkWorkerCall<>).GetMethods(), method => method.Name == "Submit");
-        Assert.Contains(typeof(IZLinkSpotCreateCall).GetMethods(), method => method.Name == "Yield");
-        Assert.Contains(typeof(IZLinkSpotGetOrCreateCall).GetMethods(), method => method.Name == "Yield");
-        Assert.DoesNotContain(typeof(IZLinkDispatchOptions).GetProperties(), property => property.Name.EndsWith("DispatchMode", StringComparison.Ordinal));
+        Assert.Contains(
+            typeof(IZLinkSpotCreateCall).GetMethods(),
+            method => method.Name == "Yield"
+        );
+        Assert.Contains(
+            typeof(IZLinkSpotGetOrCreateCall).GetMethods(),
+            method => method.Name == "Yield"
+        );
+        Assert.DoesNotContain(
+            typeof(IZLinkDispatchOptions).GetProperties(),
+            property => property.Name.EndsWith("DispatchMode", StringComparison.Ordinal)
+        );
 
         Assert.True(typeof(ZLinkActorJoinCompletion).IsAbstract);
         Assert.True(typeof(ZLinkActorJoinCompletion.Accepted).IsSealed);
         Assert.True(typeof(ZLinkActorJoinCompletion.Rejected).IsSealed);
         Assert.True(typeof(ZLinkActorJoinCompletion.Failed).IsSealed);
-        Assert.Null(typeof(IZLinkSpotClient).Assembly.GetType(
-            "Zlink.Framework.Contracts.Locations.SpotHandle"));
+        Assert.Null(
+            typeof(IZLinkSpotClient).Assembly.GetType(
+                "Zlink.Framework.Contracts.Locations.SpotHandle"
+            )
+        );
         Assert.Equal(
             new[] { "Connect", "Disconnect", "ListConnections" },
-            typeof(IZLinkEndpointConnections).GetMethods().Select(method => method.Name).Order().ToArray());
+            typeof(IZLinkEndpointConnections)
+                .GetMethods()
+                .Select(method => method.Name)
+                .Order()
+                .ToArray()
+        );
     }
 
     [Fact]
@@ -74,21 +123,27 @@ public sealed class ContractSurfaceCoverage
 
             public sealed record ExternalCompletion : ZLinkActorJoinCompletion;
             """,
-            new CSharpParseOptions(LanguageVersion.Preview));
+            new CSharpParseOptions(LanguageVersion.Preview)
+        );
         var compilation = CSharpCompilation.Create(
             "ExternalFrameworkConsumer",
             [tree],
             SemanticBindingContext.MetadataReferences(),
-            new CSharpCompilationOptions(OutputKind.DynamicallyLinkedLibrary));
+            new CSharpCompilationOptions(OutputKind.DynamicallyLinkedLibrary)
+        );
 
-        var errors = compilation.GetDiagnostics()
+        var errors = compilation
+            .GetDiagnostics()
             .Where(static diagnostic => diagnostic.Severity == DiagnosticSeverity.Error)
             .ToArray();
-        Assert.Contains(errors, diagnostic =>
-            diagnostic.Id == "CS0122"
-            && diagnostic.GetMessage().Contains(
-                nameof(ZLinkActorJoinCompletion),
-                StringComparison.Ordinal));
+        Assert.Contains(
+            errors,
+            diagnostic =>
+                diagnostic.Id == "CS0122"
+                && diagnostic
+                    .GetMessage()
+                    .Contains(nameof(ZLinkActorJoinCompletion), StringComparison.Ordinal)
+        );
     }
 
     [Fact]
@@ -100,31 +155,36 @@ public sealed class ContractSurfaceCoverage
         Assert.NotSame(framework, redis);
         Assert.DoesNotContain(
             framework.GetReferencedAssemblies(),
-            reference => reference.Name == "StackExchange.Redis");
+            reference => reference.Name == "StackExchange.Redis"
+        );
         Assert.DoesNotContain(
             framework.GetExportedTypes(),
-            type => type.Namespace?.Contains("Redis", StringComparison.Ordinal) == true);
+            type => type.Namespace?.Contains("Redis", StringComparison.Ordinal) == true
+        );
         Assert.DoesNotContain(
             framework.GetExportedTypes().SelectMany(static type => type.GetMethods()),
-            method => method.Name.Contains("Redis", StringComparison.Ordinal));
+            method => method.Name.Contains("Redis", StringComparison.Ordinal)
+        );
     }
 
     [Fact]
     public void Every_public_contract_interface_has_a_scenario_example()
     {
         var exportedContractTypes = new[]
-            {
-                typeof(IZLinkFrameworkOptions).Assembly,
-                typeof(Zlink.Framework.Contracts.Codecs.IZLinkCodecExtension).Assembly,
-                typeof(Zlink.Framework.LocationProvider.IZLinkLocationStore).Assembly
-            }
+        {
+            typeof(IZLinkFrameworkOptions).Assembly,
+            typeof(Zlink.Framework.Contracts.Codecs.IZLinkCodecExtension).Assembly,
+            typeof(Zlink.Framework.LocationProvider.IZLinkLocationStore).Assembly,
+        }
             .Distinct()
             .SelectMany(static assembly => assembly.GetExportedTypes())
-            .Where(static type => type.Namespace is not null
-                                  && (type.Namespace.StartsWith(
-                                          "Zlink.Framework.Contracts",
-                                          StringComparison.Ordinal)
-                                      || type.Namespace == "Zlink.Framework.LocationProvider"))
+            .Where(static type =>
+                type.Namespace is not null
+                && (
+                    type.Namespace.StartsWith("Zlink.Framework.Contracts", StringComparison.Ordinal)
+                    || type.Namespace == "Zlink.Framework.LocationProvider"
+                )
+            )
             .ToHashSet();
 
         // Every exported interface must have a worked example. Closed-union abstract records
@@ -136,12 +196,11 @@ public sealed class ContractSurfaceCoverage
             .OrderBy(static type => type.FullName, StringComparer.Ordinal)
             .ToArray();
 
-        var coveredContracts = typeof(ContractExampleAttribute).Assembly
-            .GetTypes()
-            .SelectMany(type => type.GetMethods(
-                BindingFlags.Instance |
-                BindingFlags.Public |
-                BindingFlags.Static))
+        var coveredContracts = typeof(ContractExampleAttribute)
+            .Assembly.GetTypes()
+            .SelectMany(type =>
+                type.GetMethods(BindingFlags.Instance | BindingFlags.Public | BindingFlags.Static)
+            )
             .Where(method => method.GetCustomAttribute<FactAttribute>() is not null)
             .SelectMany(method => method.GetCustomAttributes<ContractExampleAttribute>())
             .SelectMany(attribute => attribute.Contracts)
@@ -173,40 +232,48 @@ public sealed class ContractSurfaceCoverage
             nameof(IZLinkSession.OnDispatchAsync),
             "payload",
             frameworkMessage,
-            bindingMessage);
+            bindingMessage
+        );
         AssertMethodParameterIsNot(
             typeof(IZLinkSessionPacketHandler<,>),
             nameof(IZLinkSessionPacketHandler<IZLinkSessionContext, ZLinkMessage>.HandleAsync),
             "message",
-            bindingMessage);
+            bindingMessage
+        );
         AssertMethodParameter(
             typeof(IZLinkActorContext),
             nameof(IZLinkActorContext.JoinSpot),
             "request",
             frameworkMessage,
-            bindingMessage);
+            bindingMessage
+        );
         AssertMethodParameter(
             typeof(IZLinkActorContext),
             nameof(IZLinkActorContext.JoinEntrySpot),
             "request",
             frameworkMessage,
-            bindingMessage);
+            bindingMessage
+        );
         AssertMethodParameter(
             typeof(IZLinkSpot),
             nameof(IZLinkSpot.OnCreateAsync),
             "request",
             frameworkMessage,
-            bindingMessage);
+            bindingMessage
+        );
         AssertMethodParameter(
             typeof(IZLinkSpot<>),
             nameof(IZLinkSpot<IZLinkActor>.OnActorJoinAsync),
             "request",
             frameworkMessage,
-            bindingMessage);
+            bindingMessage
+        );
 
         Assert.DoesNotContain(
             typeof(ZLinkSpotCreateResponse).GetMethods(BindingFlags.Public | BindingFlags.Static),
-            method => method.GetParameters().Any(parameter => parameter.ParameterType == bindingMessage));
+            method =>
+                method.GetParameters().Any(parameter => parameter.ParameterType == bindingMessage)
+        );
     }
 
     [Fact]
@@ -219,26 +286,29 @@ public sealed class ContractSurfaceCoverage
             "framework",
             "languages",
             "dotnet",
-            "contract");
+            "contract"
+        );
         var assemblies = new[]
-            {
-                typeof(IZLinkFrameworkOptions).Assembly,
-                typeof(Zlink.Framework.Contracts.Codecs.IZLinkCodecExtension).Assembly,
-                typeof(ServiceCollectionExtensions).Assembly,
-                typeof(ZLinkMessagePackCodec).Assembly,
-                typeof(ZLinkProtobufCodec).Assembly,
-                typeof(ZLinkRedisLocationStore).Assembly,
-                typeof(Zlink.Framework.LocationProvider.IZLinkLocationStore).Assembly,
-                typeof(ZLinkHttpClient).Assembly,
-                typeof(IZlinkStreamConnector).Assembly
-            }
+        {
+            typeof(IZLinkFrameworkOptions).Assembly,
+            typeof(Zlink.Framework.Contracts.Codecs.IZLinkCodecExtension).Assembly,
+            typeof(ServiceCollectionExtensions).Assembly,
+            typeof(ZLinkMessagePackCodec).Assembly,
+            typeof(ZLinkProtobufCodec).Assembly,
+            typeof(ZLinkRedisLocationStore).Assembly,
+            typeof(Zlink.Framework.LocationProvider.IZLinkLocationStore).Assembly,
+            typeof(ZLinkHttpClient).Assembly,
+            typeof(IZlinkStreamConnector).Assembly,
+        }
             .Distinct()
             .ToArray();
         var snapshotRoot = Path.Combine(contractRoot, "api");
-        var expected = string.Concat(assemblies
-            .Select(static assembly => assembly.GetName().Name!)
-            .Order(StringComparer.Ordinal)
-            .Select(name => File.ReadAllText(Path.Combine(snapshotRoot, $"{name}.api.txt"))));
+        var expected = string.Concat(
+            assemblies
+                .Select(static assembly => assembly.GetName().Name!)
+                .Order(StringComparer.Ordinal)
+                .Select(name => File.ReadAllText(Path.Combine(snapshotRoot, $"{name}.api.txt")))
+        );
         var actual = PublicContractSnapshot.Render(assemblies);
 
         Assert.Equal(NormalizeLines(expected), NormalizeLines(actual));
@@ -258,7 +328,8 @@ public sealed class ContractSurfaceCoverage
             "server",
             "languages",
             "dotnet",
-            "interfaces");
+            "interfaces"
+        );
         var sourceRoot = Path.Combine(repositoryRoot, "framework", "languages", "dotnet", "src");
         var sourceAssemblies = GetContractAssemblies();
         var exactInterfaceAssemblies = GetServerContractAssemblies();
@@ -268,42 +339,54 @@ public sealed class ContractSurfaceCoverage
             "languages",
             "dotnet",
             "contract",
-            "api");
+            "api"
+        );
         var packageTypes = ExtractPackageTypes(packageApiRoot, sourceAssemblies);
         var declarations = ResolveDocumentOwners(
             ExtractExactInterfaceDeclarations(interfaceRoot),
-            packageTypes);
+            packageTypes
+        );
         Assert.NotEmpty(declarations);
 
         var exactInterfaceAssemblyNames = exactInterfaceAssemblies
             .Select(static assembly => assembly.GetName().Name!)
             .ToHashSet(StringComparer.Ordinal);
         var sourceDeclarations = ExtractSourceDeclarations(sourceRoot)
-            .Where(declaration => declaration.AssemblyName is not null
-                                 && exactInterfaceAssemblyNames.Contains(declaration.AssemblyName))
+            .Where(declaration =>
+                declaration.AssemblyName is not null
+                && exactInterfaceAssemblyNames.Contains(declaration.AssemblyName)
+            )
             .ToArray();
         var sourceByKey = sourceDeclarations
             .GroupBy(static declaration => declaration.QualifiedOwner, StringComparer.Ordinal)
             .ToDictionary(
                 static group => group.Key,
                 static group => group.ToArray(),
-                StringComparer.Ordinal);
+                StringComparer.Ordinal
+            );
         var documentedByKey = declarations
             .GroupBy(static declaration => declaration.QualifiedOwner, StringComparer.Ordinal)
             .ToDictionary(
                 static group => group.Key,
                 static group => group.ToArray(),
-                StringComparer.Ordinal);
+                StringComparer.Ordinal
+            );
 
         var missingFromSource = declarations
             .Where(declaration => !ContainsDeclaration(sourceByKey, declaration))
             .Select(declaration =>
             {
-                var candidates = sourceByKey.TryGetValue(declaration.QualifiedOwner, out var ownerCandidates)
-                    ? string.Join(" | ", ownerCandidates
-                        .Where(candidate => candidate.Kind == declaration.Kind)
-                        .Select(static candidate => candidate.Signature)
-                        .Order(StringComparer.Ordinal))
+                var candidates = sourceByKey.TryGetValue(
+                    declaration.QualifiedOwner,
+                    out var ownerCandidates
+                )
+                    ? string.Join(
+                        " | ",
+                        ownerCandidates
+                            .Where(candidate => candidate.Kind == declaration.Kind)
+                            .Select(static candidate => candidate.Signature)
+                            .Order(StringComparer.Ordinal)
+                    )
                     : "<no source owner>";
                 return $"{declaration} [source: {candidates}]";
             })
@@ -311,73 +394,99 @@ public sealed class ContractSurfaceCoverage
             .ToArray();
         var extraFromSource = sourceDeclarations
             .Where(declaration => !ContainsDeclaration(documentedByKey, declaration))
-            .Where(declaration => declaration.Kind != DeclarationKind.Type
-                                 || !documentedByKey.ContainsKey(declaration.QualifiedOwner))
-            .Where(declaration => !IsCoveredByDocumentedInterface(
-                declaration,
-                documentedByKey,
-                sourceAssemblies))
+            .Where(declaration =>
+                declaration.Kind != DeclarationKind.Type
+                || !documentedByKey.ContainsKey(declaration.QualifiedOwner)
+            )
+            .Where(declaration =>
+                !IsCoveredByDocumentedInterface(declaration, documentedByKey, sourceAssemblies)
+            )
             .Select(static declaration => declaration.ToString())
             .Order(StringComparer.Ordinal)
             .ToArray();
 
         Assert.True(
-            missingFromSource.Length == 0
-            && extraFromSource.Length == 0,
+            missingFromSource.Length == 0 && extraFromSource.Length == 0,
             "Exact interface declarations differ from source/package contract. "
-            + $"Missing: {string.Join(", ", missingFromSource)}; "
-            + $"Undocumented source declarations: {string.Join(", ", extraFromSource)}");
+                + $"Missing: {string.Join(", ", missingFromSource)}; "
+                + $"Undocumented source declarations: {string.Join(", ", extraFromSource)}"
+        );
 
-        AssertRecordProjectionExports(interfaceRoot, packageApiRoot, sourceAssemblies, packageTypes);
+        AssertRecordProjectionExports(
+            interfaceRoot,
+            packageApiRoot,
+            sourceAssemblies,
+            packageTypes
+        );
 
-        var snapshotRoot = Path.Combine(repositoryRoot, "framework", "languages", "dotnet", "contract", "api");
-        var expected = string.Concat(sourceAssemblies
-            .Select(static assembly => assembly.GetName().Name!)
-            .Order(StringComparer.Ordinal)
-            .Select(name => File.ReadAllText(Path.Combine(snapshotRoot, $"{name}.api.txt"))));
+        var snapshotRoot = Path.Combine(
+            repositoryRoot,
+            "framework",
+            "languages",
+            "dotnet",
+            "contract",
+            "api"
+        );
+        var expected = string.Concat(
+            sourceAssemblies
+                .Select(static assembly => assembly.GetName().Name!)
+                .Order(StringComparer.Ordinal)
+                .Select(name => File.ReadAllText(Path.Combine(snapshotRoot, $"{name}.api.txt")))
+        );
         Assert.Equal(
             NormalizeLines(expected),
-            NormalizeLines(PublicContractSnapshot.Render(sourceAssemblies)));
+            NormalizeLines(PublicContractSnapshot.Render(sourceAssemblies))
+        );
     }
 
     private static void AssertRecordProjectionExports(
         string interfaceRoot,
         string packageApiRoot,
         IReadOnlyCollection<Assembly> assemblies,
-        IReadOnlyCollection<PackageType> packageTypes)
+        IReadOnlyCollection<PackageType> packageTypes
+    )
     {
         foreach (var projection in ExtractRecordProjectionContracts(interfaceRoot, packageTypes))
         {
             var type = assemblies
                 .SelectMany(static assembly => assembly.GetExportedTypes())
-                .SingleOrDefault(candidate => string.Equals(
-                    candidate.Assembly.GetName().Name,
-                    projection.AssemblyName,
-                    StringComparison.Ordinal)
+                .SingleOrDefault(candidate =>
+                    string.Equals(
+                        candidate.Assembly.GetName().Name,
+                        projection.AssemblyName,
+                        StringComparison.Ordinal
+                    )
                     && string.Equals(
                         GetReflectionTypeFullName(candidate),
                         projection.FullName,
-                        StringComparison.Ordinal));
+                        StringComparison.Ordinal
+                    )
+                );
             Assert.NotNull(type);
 
-            var constructor = type!.GetConstructors(BindingFlags.Instance | BindingFlags.Public)
+            var constructor = type!
+                .GetConstructors(BindingFlags.Instance | BindingFlags.Public)
                 .SingleOrDefault(candidate =>
                 {
                     var parameters = candidate.GetParameters();
                     return parameters.Length == projection.Parameters.Length
-                           && parameters.Select(static parameter => parameter.Name)
-                               .SequenceEqual(
-                                   projection.Parameters,
-                                   StringComparer.Ordinal);
+                        && parameters
+                            .Select(static parameter => parameter.Name)
+                            .SequenceEqual(projection.Parameters, StringComparer.Ordinal);
                 });
             Assert.NotNull(constructor);
 
             var constructorParameters = constructor!.GetParameters();
-            foreach (var (parameterName, constructorParameter) in projection.Parameters.Zip(constructorParameters))
+            foreach (
+                var (parameterName, constructorParameter) in projection.Parameters.Zip(
+                    constructorParameters
+                )
+            )
             {
                 var property = type.GetProperty(
                     parameterName,
-                    BindingFlags.Instance | BindingFlags.Public);
+                    BindingFlags.Instance | BindingFlags.Public
+                );
                 Assert.NotNull(property);
                 Assert.Equal(constructorParameter.ParameterType, property!.PropertyType);
                 Assert.NotNull(property.GetMethod);
@@ -386,41 +495,56 @@ public sealed class ContractSurfaceCoverage
                 Assert.True(property.SetMethod!.IsPublic);
                 Assert.Contains(
                     property.SetMethod.ReturnParameter.GetRequiredCustomModifiers(),
-                    modifier => modifier == typeof(System.Runtime.CompilerServices.IsExternalInit));
+                    modifier => modifier == typeof(System.Runtime.CompilerServices.IsExternalInit)
+                );
             }
 
-            var hasMatchingDeconstruct = type.GetMethods(BindingFlags.Instance | BindingFlags.Public)
+            var hasMatchingDeconstruct = type.GetMethods(
+                    BindingFlags.Instance | BindingFlags.Public
+                )
                 .Where(method => method.Name == "Deconstruct" && method.ReturnType == typeof(void))
                 .Any(method =>
                 {
                     var parameters = method.GetParameters();
                     return parameters.Length == constructorParameters.Length
-                           && parameters.Zip(constructorParameters).Select((pair, index) =>
-                               (pair, index)).All(item =>
-                               item.pair.First.Name == projection.Parameters[item.index]
-                               && item.pair.First.IsOut
-                               && item.pair.First.ParameterType.IsByRef
-                               && item.pair.First.ParameterType.GetElementType() == item.pair.Second.ParameterType);
+                        && parameters
+                            .Zip(constructorParameters)
+                            .Select((pair, index) => (pair, index))
+                            .All(item =>
+                                item.pair.First.Name == projection.Parameters[item.index]
+                                && item.pair.First.IsOut
+                                && item.pair.First.ParameterType.IsByRef
+                                && item.pair.First.ParameterType.GetElementType()
+                                    == item.pair.Second.ParameterType
+                            );
                 });
             Assert.True(
                 hasMatchingDeconstruct,
-                $"Record projection {projection.AssemblyName}::{projection.FullName} must export a matching Deconstruct method.");
+                $"Record projection {projection.AssemblyName}::{projection.FullName} must export a matching Deconstruct method."
+            );
 
             var packageBlock = ReadPackageTypeBlock(
                 packageApiRoot,
                 projection.AssemblyName,
-                projection.FullName);
+                projection.FullName
+            );
             foreach (var parameterName in projection.Parameters)
             {
                 Assert.True(
                     Regex.IsMatch(
                         packageBlock,
                         $"^    property .* {Regex.Escape(parameterName)} \\{{ get; init; \\}}",
-                        RegexOptions.Multiline | RegexOptions.CultureInvariant),
-                    $"Package export {projection.AssemblyName}::{projection.FullName} must expose property '{parameterName}'.");
+                        RegexOptions.Multiline | RegexOptions.CultureInvariant
+                    ),
+                    $"Package export {projection.AssemblyName}::{projection.FullName} must expose property '{parameterName}'."
+                );
             }
 
-            Assert.Contains("    method System.Void Deconstruct(", packageBlock, StringComparison.Ordinal);
+            Assert.Contains(
+                "    method System.Void Deconstruct(",
+                packageBlock,
+                StringComparison.Ordinal
+            );
             foreach (var parameterName in projection.Parameters)
             {
                 Assert.Contains($" {parameterName} [", packageBlock, StringComparison.Ordinal);
@@ -431,7 +555,8 @@ public sealed class ContractSurfaceCoverage
     private static string ReadPackageTypeBlock(
         string packageApiRoot,
         string assemblyName,
-        string fullName)
+        string fullName
+    )
     {
         var path = Path.Combine(packageApiRoot, $"{assemblyName}.api.txt");
         Assert.True(File.Exists(path), $"Missing package API snapshot for {assemblyName}.");
@@ -440,49 +565,63 @@ public sealed class ContractSurfaceCoverage
             fullName,
             @"`\d+",
             string.Empty,
-            RegexOptions.CultureInvariant);
+            RegexOptions.CultureInvariant
+        );
         var start = Array.FindIndex(
             lines,
-            line => line.StartsWith("  type ", StringComparison.Ordinal)
-                    && line.Contains($" {displayName}", StringComparison.Ordinal));
+            line =>
+                line.StartsWith("  type ", StringComparison.Ordinal)
+                && line.Contains($" {displayName}", StringComparison.Ordinal)
+        );
         Assert.True(start >= 0, $"Missing package API type {assemblyName}::{fullName}.");
 
         var end = start + 1;
-        while (end < lines.Length
-               && !lines[end].StartsWith("  type ", StringComparison.Ordinal)
-               && !lines[end].StartsWith("assembly ", StringComparison.Ordinal))
+        while (
+            end < lines.Length
+            && !lines[end].StartsWith("  type ", StringComparison.Ordinal)
+            && !lines[end].StartsWith("assembly ", StringComparison.Ordinal)
+        )
             end++;
         return string.Join('\n', lines[start..end]);
     }
 
     private static IReadOnlyList<RecordProjectionContract> ExtractRecordProjectionContracts(
         string interfaceRoot,
-        IReadOnlyCollection<PackageType> packageTypes)
+        IReadOnlyCollection<PackageType> packageTypes
+    )
     {
         var projections = new List<RecordProjectionContract>();
         var parseOptions = new CSharpParseOptions(LanguageVersion.Preview);
-        var documents = Directory.EnumerateFiles(interfaceRoot, "*.ko.md", SearchOption.TopDirectoryOnly)
-            .Where(path => !string.Equals(
-                Path.GetFileName(path),
-                "README.ko.md",
-                StringComparison.Ordinal))
-            .SelectMany(path => ExtractCSharpBlocks(path).Select(body => (
-                Document: Path.GetFileName(path),
-                Body: body,
-                AssemblyName: (string?)null)))
-            .Select((document, index) => new SyntaxDocument(
-                document.Document,
-                document.Body,
-                document.AssemblyName,
-                ExactInterface: true,
-                Ordinal: index))
+        var documents = Directory
+            .EnumerateFiles(interfaceRoot, "*.ko.md", SearchOption.TopDirectoryOnly)
+            .Where(path =>
+                !string.Equals(Path.GetFileName(path), "README.ko.md", StringComparison.Ordinal)
+            )
+            .SelectMany(path =>
+                ExtractCSharpBlocks(path)
+                    .Select(body =>
+                        (Document: Path.GetFileName(path), Body: body, AssemblyName: (string?)null)
+                    )
+            )
+            .Select(
+                (document, index) =>
+                    new SyntaxDocument(
+                        document.Document,
+                        document.Body,
+                        document.AssemblyName,
+                        ExactInterface: true,
+                        Ordinal: index
+                    )
+            )
             .ToArray();
         var binding = SemanticBindingContext.Create(documents, parseOptions);
         foreach (var document in documents)
         {
             var tree = binding.GetTree(document.Ordinal);
             var resolver = binding.GetResolver(tree);
-            foreach (var record in tree.GetRoot().DescendantNodes().OfType<RecordDeclarationSyntax>())
+            foreach (
+                var record in tree.GetRoot().DescendantNodes().OfType<RecordDeclarationSyntax>()
+            )
             {
                 if (!IsPublicType(record) || record.ParameterList is null)
                     continue;
@@ -493,25 +632,34 @@ public sealed class ContractSurfaceCoverage
                         document.Document,
                         DeclarationKind.Type,
                         owner,
-                        TypeSignature(record, resolver)));
-                var parameters = record.ParameterList.Parameters
-                    .Select(parameter => parameter.Type is null
-                        ? throw new InvalidOperationException(
-                            $"A positional record parameter must have a type: {document.Document}:{owner}:{parameter}")
-                        : parameter.Identifier.Text)
+                        TypeSignature(record, resolver)
+                    )
+                );
+                var parameters = record
+                    .ParameterList.Parameters.Select(parameter =>
+                        parameter.Type is null
+                            ? throw new InvalidOperationException(
+                                $"A positional record parameter must have a type: {document.Document}:{owner}:{parameter}"
+                            )
+                            : parameter.Identifier.Text
+                    )
                     .ToArray();
-                projections.Add(new RecordProjectionContract(
-                    document.Document,
-                    expected.AssemblyName,
-                    expected.FullName,
-                    parameters));
+                projections.Add(
+                    new RecordProjectionContract(
+                        document.Document,
+                        expected.AssemblyName,
+                        expected.FullName,
+                        parameters
+                    )
+                );
             }
         }
 
         return projections
             .GroupBy(
                 static projection => $"{projection.AssemblyName}::{projection.FullName}",
-                StringComparer.Ordinal)
+                StringComparer.Ordinal
+            )
             .Select(static group => group.First())
             .OrderBy(static projection => projection.AssemblyName, StringComparer.Ordinal)
             .ThenBy(static projection => projection.FullName, StringComparer.Ordinal)
@@ -531,22 +679,32 @@ public sealed class ContractSurfaceCoverage
             "server",
             "languages",
             "dotnet",
-            "interfaces");
+            "interfaces"
+        );
         var repositoryRoot = FindRepositoryRoot();
         var packageTypes = ExtractPackageTypes(
             Path.Combine(repositoryRoot, "framework", "languages", "dotnet", "contract", "api"),
-            GetContractAssemblies());
+            GetContractAssemblies()
+        );
         var serverAssemblyNames = GetServerContractAssemblies()
             .Select(static assembly => assembly.GetName().Name!)
             .ToHashSet(StringComparer.Ordinal);
         var declarations = ResolveDocumentOwners(
             ExtractExactInterfaceDeclarations(interfaceRoot),
-            packageTypes);
+            packageTypes
+        );
         var duplicateOwners = declarations
             .Where(static declaration => declaration.Kind == DeclarationKind.Type)
             .GroupBy(static declaration => declaration.QualifiedOwner, StringComparer.Ordinal)
-            .Where(static group => group.Select(static declaration => declaration.Document).Distinct(StringComparer.Ordinal).Count() != 1)
-            .Select(static group => $"{group.Key}: {string.Join(", ", group.Select(static declaration => declaration.Document).Distinct(StringComparer.Ordinal).Order(StringComparer.Ordinal))}")
+            .Where(static group =>
+                group
+                    .Select(static declaration => declaration.Document)
+                    .Distinct(StringComparer.Ordinal)
+                    .Count() != 1
+            )
+            .Select(static group =>
+                $"{group.Key}: {string.Join(", ", group.Select(static declaration => declaration.Document).Distinct(StringComparer.Ordinal).Order(StringComparer.Ordinal))}"
+            )
             .Order(StringComparer.Ordinal)
             .ToArray();
         var documentedTypeOwners = declarations
@@ -563,8 +721,9 @@ public sealed class ContractSurfaceCoverage
         Assert.True(
             duplicateOwners.Length == 0 && missingOwners.Length == 0,
             "Exact interface exported types must have one document owner. "
-            + $"Duplicate owners: {string.Join("; ", duplicateOwners)}; "
-            + $"Missing owners: {string.Join(", ", missingOwners)}");
+                + $"Duplicate owners: {string.Join("; ", duplicateOwners)}; "
+                + $"Missing owners: {string.Join(", ", missingOwners)}"
+        );
     }
 
     private static string NormalizeLines(string value) =>
@@ -572,64 +731,79 @@ public sealed class ContractSurfaceCoverage
 
     private static Assembly[] GetContractAssemblies() =>
         new[]
-            {
-                typeof(IZLinkFrameworkOptions).Assembly,
-                typeof(Zlink.Framework.Contracts.Codecs.IZLinkCodecExtension).Assembly,
-                typeof(ServiceCollectionExtensions).Assembly,
-                typeof(ZLinkMessagePackCodec).Assembly,
-                typeof(ZLinkProtobufCodec).Assembly,
-                typeof(ZLinkRedisLocationStore).Assembly,
-                typeof(Zlink.Framework.LocationProvider.IZLinkLocationStore).Assembly,
-                typeof(ZLinkHttpClient).Assembly,
-                typeof(IZlinkStreamConnector).Assembly
-            }
+        {
+            typeof(IZLinkFrameworkOptions).Assembly,
+            typeof(Zlink.Framework.Contracts.Codecs.IZLinkCodecExtension).Assembly,
+            typeof(ServiceCollectionExtensions).Assembly,
+            typeof(ZLinkMessagePackCodec).Assembly,
+            typeof(ZLinkProtobufCodec).Assembly,
+            typeof(ZLinkRedisLocationStore).Assembly,
+            typeof(Zlink.Framework.LocationProvider.IZLinkLocationStore).Assembly,
+            typeof(ZLinkHttpClient).Assembly,
+            typeof(IZlinkStreamConnector).Assembly,
+        }
             .Distinct()
             .ToArray();
 
     private static Assembly[] GetServerContractAssemblies() =>
         GetContractAssemblies()
-            .Where(static assembly => assembly != typeof(ZLinkHttpClient).Assembly
-                                      && assembly != typeof(IZlinkStreamConnector).Assembly)
+            .Where(static assembly =>
+                assembly != typeof(ZLinkHttpClient).Assembly
+                && assembly != typeof(IZlinkStreamConnector).Assembly
+            )
             .ToArray();
 
     private static bool IsCoveredByDocumentedInterface(
         ContractDeclaration declaration,
         IReadOnlyDictionary<string, ContractDeclaration[]> documentedByKey,
-        IReadOnlyCollection<Assembly> assemblies)
+        IReadOnlyCollection<Assembly> assemblies
+    )
     {
         if (declaration.Kind != DeclarationKind.Member || declaration.AssemblyName is null)
             return false;
 
         var owner = assemblies
             .SelectMany(static assembly => assembly.GetExportedTypes())
-            .SingleOrDefault(type => string.Equals(
-                type.Assembly.GetName().Name,
-                declaration.AssemblyName,
-                StringComparison.Ordinal)
-                                      && string.Equals(
-                                          GetReflectionTypeFullName(type),
-                                          declaration.Owner,
-                                          StringComparison.Ordinal));
-        if (owner is null) return false;
+            .SingleOrDefault(type =>
+                string.Equals(
+                    type.Assembly.GetName().Name,
+                    declaration.AssemblyName,
+                    StringComparison.Ordinal
+                )
+                && string.Equals(
+                    GetReflectionTypeFullName(type),
+                    declaration.Owner,
+                    StringComparison.Ordinal
+                )
+            );
+        if (owner is null)
+            return false;
 
-        return owner.GetInterfaces()
+        return owner
+            .GetInterfaces()
             .Where(static type => type.FullName is not null)
             .Select(type => $"{type.Assembly.GetName().Name}::{GetReflectionTypeFullName(type)}")
             .Where(documentedByKey.ContainsKey)
             .SelectMany(key => documentedByKey[key])
-            .Any(candidate => candidate.Kind == DeclarationKind.Member
-                              && candidate.Signature == declaration.Signature);
+            .Any(candidate =>
+                candidate.Kind == DeclarationKind.Member
+                && candidate.Signature == declaration.Signature
+            );
     }
 
     private static IReadOnlyList<PackageType> ExtractPackageTypes(
         string packageApiRoot,
-        IReadOnlyCollection<Assembly> assemblies)
+        IReadOnlyCollection<Assembly> assemblies
+    )
     {
         var snapshotIdentities = new HashSet<string>(StringComparer.Ordinal);
-        foreach (var path in Directory.EnumerateFiles(
-                     packageApiRoot,
-                     "*.api.txt",
-                     SearchOption.TopDirectoryOnly))
+        foreach (
+            var path in Directory.EnumerateFiles(
+                packageApiRoot,
+                "*.api.txt",
+                SearchOption.TopDirectoryOnly
+            )
+        )
         {
             string? assemblyName = null;
             foreach (var line in File.ReadLines(path))
@@ -640,10 +814,12 @@ public sealed class ContractSurfaceCoverage
                     continue;
                 }
 
-                if (assemblyName is null) continue;
+                if (assemblyName is null)
+                    continue;
                 if (TryReadSnapshotTypeName(line) is { } typeName)
                     snapshotIdentities.Add(
-                        $"{assemblyName}::{NormalizeSnapshotTypeName(typeName)}");
+                        $"{assemblyName}::{NormalizeSnapshotTypeName(typeName)}"
+                    );
             }
         }
 
@@ -652,7 +828,8 @@ public sealed class ContractSurfaceCoverage
             .Select(type => new PackageType(
                 type.Assembly.GetName().Name!,
                 GetReflectionTypeFullName(type),
-                GetReflectionTypeSimpleKey(type)))
+                GetReflectionTypeSimpleKey(type)
+            ))
             .GroupBy(static type => type.Identity, StringComparer.Ordinal)
             .Select(static group => group.First())
             .OrderBy(static type => type.Identity, StringComparer.Ordinal)
@@ -672,8 +849,9 @@ public sealed class ContractSurfaceCoverage
         Assert.True(
             missingFromSnapshot.Length == 0 && extraInSnapshot.Length == 0,
             "Package API snapshot type identities differ from compiled exports. "
-            + $"Missing: {string.Join(", ", missingFromSnapshot)}; "
-            + $"Unexpected: {string.Join(", ", extraInSnapshot)}");
+                + $"Missing: {string.Join(", ", missingFromSnapshot)}; "
+                + $"Unexpected: {string.Join(", ", extraInSnapshot)}"
+        );
         return actualTypes;
     }
 
@@ -718,10 +896,12 @@ public sealed class ContractSurfaceCoverage
     private static string? TryReadSnapshotTypeName(string line)
     {
         var text = line.Trim();
-        if (!text.StartsWith("type ", StringComparison.Ordinal)) return null;
+        if (!text.StartsWith("type ", StringComparison.Ordinal))
+            return null;
 
         var kindEnd = text.IndexOf(' ', "type ".Length);
-        if (kindEnd < 0 || kindEnd + 1 >= text.Length) return null;
+        if (kindEnd < 0 || kindEnd + 1 >= text.Length)
+            return null;
 
         var nameStart = kindEnd + 1;
         var depth = 0;
@@ -747,27 +927,31 @@ public sealed class ContractSurfaceCoverage
 
     private static IReadOnlyList<ContractDeclaration> ResolveDocumentOwners(
         IReadOnlyList<ContractDeclaration> declarations,
-        IReadOnlyList<PackageType> packageTypes)
+        IReadOnlyList<PackageType> packageTypes
+    )
     {
         return declarations
             .Select(declaration =>
             {
                 var expected = ResolveExpectedTypeIdentity(declaration);
                 var matches = packageTypes
-                    .Where(type => string.Equals(type.Identity, expected.Identity, StringComparison.Ordinal))
+                    .Where(type =>
+                        string.Equals(type.Identity, expected.Identity, StringComparison.Ordinal)
+                    )
                     .ToArray();
                 Assert.True(
                     matches.Length == 1,
                     $"Exact interface owner '{declaration.Document}:{declaration.Owner}' must export the "
-                    + $"expected assembly/FQN '{expected.Identity}'. "
-                    + $"Compiled candidates: {string.Join(", ", packageTypes
+                        + $"expected assembly/FQN '{expected.Identity}'. "
+                        + $"Compiled candidates: {string.Join(", ", packageTypes
                         .Where(type => string.Equals(type.SimpleKey, declaration.Owner, StringComparison.Ordinal))
                         .Select(static type => type.Identity)
-                        .Order(StringComparer.Ordinal))}");
+                        .Order(StringComparer.Ordinal))}"
+                );
                 return declaration with
                 {
                     Owner = expected.FullName,
-                    AssemblyName = expected.AssemblyName
+                    AssemblyName = expected.AssemblyName,
                 };
             })
             .ToArray();
@@ -777,21 +961,24 @@ public sealed class ContractSurfaceCoverage
     {
         var document = declaration.Document;
         var ownerKey = $"{document}|{declaration.Owner}";
-        var assemblyName = ExpectedAssemblyOverrides.TryGetValue(ownerKey, out var assemblyOverride)
-            ? assemblyOverride
+        var assemblyName =
+            ExpectedAssemblyOverrides.TryGetValue(ownerKey, out var assemblyOverride)
+                ? assemblyOverride
             : ExpectedAssemblyByDocument.TryGetValue(document, out var documentAssembly)
                 ? documentAssembly
-                : throw new InvalidOperationException(
-                    $"No exact-interface assembly owner is registered for '{document}'.");
+            : throw new InvalidOperationException(
+                $"No exact-interface assembly owner is registered for '{document}'."
+            );
 
-        var fullName = FullyQualifiedDocumentOwner(declaration.Owner)
-            ? declaration.Owner
+        var fullName =
+            FullyQualifiedDocumentOwner(declaration.Owner) ? declaration.Owner
             : ExpectedNamespaceOverrides.TryGetValue(ownerKey, out var namespaceOverride)
                 ? $"{namespaceOverride}.{declaration.Owner}"
-                : ExpectedNamespaceByDocument.TryGetValue(document, out var documentNamespace)
-                    ? $"{documentNamespace}.{declaration.Owner}"
-                    : throw new InvalidOperationException(
-                        $"No exact-interface namespace owner is registered for '{ownerKey}'.");
+            : ExpectedNamespaceByDocument.TryGetValue(document, out var documentNamespace)
+                ? $"{documentNamespace}.{declaration.Owner}"
+            : throw new InvalidOperationException(
+                $"No exact-interface namespace owner is registered for '{ownerKey}'."
+            );
 
         return new PackageType(assemblyName, fullName, declaration.Owner);
     }
@@ -818,7 +1005,7 @@ public sealed class ContractSurfaceCoverage
             ["08-location-provider-redis.ko.md"] = "Zlink.Framework.Locations.Redis",
             ["10-monitoring-errors.ko.md"] = "Zlink.Framework.Contracts",
             ["10-topology-monitoring.ko.md"] = "Zlink.Framework",
-            ["11-serialization.ko.md"] = "Zlink.Framework.Contracts"
+            ["11-serialization.ko.md"] = "Zlink.Framework.Contracts",
         };
 
     private static readonly IReadOnlyDictionary<string, string> ExpectedNamespaceByDocument =
@@ -834,7 +1021,7 @@ public sealed class ContractSurfaceCoverage
             ["08-location-maintenance.ko.md"] = "Zlink.Framework.Contracts.Locations",
             ["10-monitoring-errors.ko.md"] = "Zlink.Framework.Contracts.Errors",
             ["10-topology-monitoring.ko.md"] = "Zlink.Framework.Contracts.Configuration",
-            ["11-serialization.ko.md"] = "Zlink.Framework.Contracts.Codecs"
+            ["11-serialization.ko.md"] = "Zlink.Framework.Contracts.Codecs",
         };
 
     private static readonly IReadOnlyDictionary<string, string> ExpectedNamespaceOverrides =
@@ -844,139 +1031,205 @@ public sealed class ContractSurfaceCoverage
             ["01-common-runtime.ko.md|ZLinkMessageMetadata"] = "Zlink.Framework.Contracts.Streams",
             ["01-common-runtime.ko.md|IZLinkWorkerCall`1"] = "Zlink.Framework.Contracts.Workers",
             ["01-common-runtime.ko.md|IZLinkWorkerOptions"] = "Zlink.Framework.Contracts.Workers",
-            ["01-common-runtime.ko.md|ZLinkHandlerGroupAttribute"] = "Zlink.Framework.Contracts.Handlers",
-            ["01-common-runtime.ko.md|ZLinkRequestAttribute"] = "Zlink.Framework.Contracts.Handlers",
+            ["01-common-runtime.ko.md|ZLinkHandlerGroupAttribute"] =
+                "Zlink.Framework.Contracts.Handlers",
+            ["01-common-runtime.ko.md|ZLinkRequestAttribute"] =
+                "Zlink.Framework.Contracts.Handlers",
             ["01-common-runtime.ko.md|ZLinkSendAttribute"] = "Zlink.Framework.Contracts.Handlers",
-            ["01-common-runtime.ko.md|ZLinkPublishAttribute"] = "Zlink.Framework.Contracts.Handlers",
+            ["01-common-runtime.ko.md|ZLinkPublishAttribute"] =
+                "Zlink.Framework.Contracts.Handlers",
             ["01-common-runtime.ko.md|ZLinkPacketAttribute"] = "Zlink.Framework.Contracts.Handlers",
-            ["01-common-runtime.ko.md|ZLinkSpotRequestAttribute"] = "Zlink.Framework.Contracts.Handlers",
-            ["01-common-runtime.ko.md|ZLinkSpotPacketHandlerAttribute"] = "Zlink.Framework.Contracts.Handlers",
-            ["01-common-runtime.ko.md|ZLinkSpotRequestHandlerAttribute"] = "Zlink.Framework.Contracts.Handlers",
-            ["01-common-runtime.ko.md|ZLinkSpotSubscriptionAttribute"] = "Zlink.Framework.Contracts.Handlers",
-            ["01-common-runtime.ko.md|ZLinkSpotSubscriptionHandlerAttribute"] = "Zlink.Framework.Contracts.Handlers",
-            ["01-common-runtime.ko.md|ZLinkSpotActorSendAttribute"] = "Zlink.Framework.Contracts.Handlers",
-            ["01-common-runtime.ko.md|ZLinkSpotActorSendHandlerAttribute"] = "Zlink.Framework.Contracts.Handlers",
-            ["01-common-runtime.ko.md|ZLinkSpotActorRequestAttribute"] = "Zlink.Framework.Contracts.Handlers",
-            ["01-common-runtime.ko.md|ZLinkSpotActorRequestHandlerAttribute"] = "Zlink.Framework.Contracts.Handlers",
-            ["01-common-runtime.ko.md|ZLinkSpotTimerHandlerAttribute"] = "Zlink.Framework.Contracts.Handlers",
-            ["01-common-runtime.ko.md|ZLinkStreamPacketAttribute"] = "Zlink.Framework.Contracts.Handlers",
-            ["03-configuration-topology.ko.md|ZLinkHandlerDispatchKind"] = "Zlink.Framework.Contracts.Handlers",
-            ["03-configuration-topology.ko.md|IZLinkHandlerFilterContext"] = "Zlink.Framework.Contracts.Handlers",
-            ["03-configuration-topology.ko.md|ZLinkHandlerFilterNext"] = "Zlink.Framework.Contracts.Handlers",
-            ["03-configuration-topology.ko.md|IZLinkHandlerFilter"] = "Zlink.Framework.Contracts.Handlers",
-            ["03-configuration-topology.ko.md|IZLinkMessageContext"] = "Zlink.Framework.Contracts.Handlers",
-            ["03-configuration-topology.ko.md|IZLinkMetadataCall`1"] = "Zlink.Framework.Contracts.Channels",
-            ["04-channel-messaging.ko.md|IZLinkMessageContext"] = "Zlink.Framework.Contracts.Handlers",
-            ["04-channel-messaging.ko.md|IZLinkSendHandler`1"] = "Zlink.Framework.Contracts.Handlers",
-            ["04-channel-messaging.ko.md|IZLinkRequestHandler`2"] = "Zlink.Framework.Contracts.Handlers",
-            ["04-channel-messaging.ko.md|IZLinkFanoutHandler`1"] = "Zlink.Framework.Contracts.Handlers",
+            ["01-common-runtime.ko.md|ZLinkSpotRequestAttribute"] =
+                "Zlink.Framework.Contracts.Handlers",
+            ["01-common-runtime.ko.md|ZLinkSpotPacketHandlerAttribute"] =
+                "Zlink.Framework.Contracts.Handlers",
+            ["01-common-runtime.ko.md|ZLinkSpotRequestHandlerAttribute"] =
+                "Zlink.Framework.Contracts.Handlers",
+            ["01-common-runtime.ko.md|ZLinkSpotSubscriptionAttribute"] =
+                "Zlink.Framework.Contracts.Handlers",
+            ["01-common-runtime.ko.md|ZLinkSpotSubscriptionHandlerAttribute"] =
+                "Zlink.Framework.Contracts.Handlers",
+            ["01-common-runtime.ko.md|ZLinkSpotActorSendAttribute"] =
+                "Zlink.Framework.Contracts.Handlers",
+            ["01-common-runtime.ko.md|ZLinkSpotActorSendHandlerAttribute"] =
+                "Zlink.Framework.Contracts.Handlers",
+            ["01-common-runtime.ko.md|ZLinkSpotActorRequestAttribute"] =
+                "Zlink.Framework.Contracts.Handlers",
+            ["01-common-runtime.ko.md|ZLinkSpotActorRequestHandlerAttribute"] =
+                "Zlink.Framework.Contracts.Handlers",
+            ["01-common-runtime.ko.md|ZLinkSpotTimerHandlerAttribute"] =
+                "Zlink.Framework.Contracts.Handlers",
+            ["01-common-runtime.ko.md|ZLinkStreamPacketAttribute"] =
+                "Zlink.Framework.Contracts.Handlers",
+            ["03-configuration-topology.ko.md|ZLinkHandlerDispatchKind"] =
+                "Zlink.Framework.Contracts.Handlers",
+            ["03-configuration-topology.ko.md|IZLinkHandlerFilterContext"] =
+                "Zlink.Framework.Contracts.Handlers",
+            ["03-configuration-topology.ko.md|ZLinkHandlerFilterNext"] =
+                "Zlink.Framework.Contracts.Handlers",
+            ["03-configuration-topology.ko.md|IZLinkHandlerFilter"] =
+                "Zlink.Framework.Contracts.Handlers",
+            ["03-configuration-topology.ko.md|IZLinkMessageContext"] =
+                "Zlink.Framework.Contracts.Handlers",
+            ["03-configuration-topology.ko.md|IZLinkMetadataCall`1"] =
+                "Zlink.Framework.Contracts.Channels",
+            ["04-channel-messaging.ko.md|IZLinkMessageContext"] =
+                "Zlink.Framework.Contracts.Handlers",
+            ["04-channel-messaging.ko.md|IZLinkSendHandler`1"] =
+                "Zlink.Framework.Contracts.Handlers",
+            ["04-channel-messaging.ko.md|IZLinkRequestHandler`2"] =
+                "Zlink.Framework.Contracts.Handlers",
+            ["04-channel-messaging.ko.md|IZLinkFanoutHandler`1"] =
+                "Zlink.Framework.Contracts.Handlers",
             ["05-spots.ko.md|IZLinkTimer"] = "Zlink.Framework.Contracts.Timers",
             ["05-spots.ko.md|ZLinkTimerOptions"] = "Zlink.Framework.Contracts.Timers",
             ["05-spots.ko.md|ZLinkTimerOverrunPolicy"] = "Zlink.Framework.Contracts.Timers",
             ["05-spots.ko.md|ZLinkTimerTick"] = "Zlink.Framework.Contracts.Timers",
             ["06-actors.ko.md|ActorRef"] = "Systems.Zlink",
             ["06-actors.ko.md|IZLinkActorHandlerRegistry"] = "Zlink.Framework.Contracts.Spots",
-            ["10-topology-monitoring.ko.md|ZLinkUnhandledDispatchAction"] = "Zlink.Framework.Contracts.Dispatch",
-            ["10-topology-monitoring.ko.md|IZLinkUnhandledDispatchOptions"] = "Zlink.Framework.Contracts.Dispatch",
-            ["10-topology-monitoring.ko.md|ZLinkDiagnosticsLevel"] = "Zlink.Framework.Contracts.Dispatch",
-            ["10-topology-monitoring.ko.md|IZLinkDiagnosticsOptions"] = "Zlink.Framework.Contracts.Dispatch",
-            ["10-topology-monitoring.ko.md|IZLinkDispatchOptions"] = "Zlink.Framework.Contracts.Dispatch",
-            ["10-topology-monitoring.ko.md|IZLinkDiagnosticsRuntime"] = "Zlink.Framework.Contracts.Dispatch",
-            ["02-configuration-host.ko.md|ServiceCollectionExtensions"] = "Zlink.Framework.AspNetCore",
+            ["10-topology-monitoring.ko.md|ZLinkUnhandledDispatchAction"] =
+                "Zlink.Framework.Contracts.Dispatch",
+            ["10-topology-monitoring.ko.md|IZLinkUnhandledDispatchOptions"] =
+                "Zlink.Framework.Contracts.Dispatch",
+            ["10-topology-monitoring.ko.md|ZLinkDiagnosticsLevel"] =
+                "Zlink.Framework.Contracts.Dispatch",
+            ["10-topology-monitoring.ko.md|IZLinkDiagnosticsOptions"] =
+                "Zlink.Framework.Contracts.Dispatch",
+            ["10-topology-monitoring.ko.md|IZLinkDispatchOptions"] =
+                "Zlink.Framework.Contracts.Dispatch",
+            ["10-topology-monitoring.ko.md|IZLinkDiagnosticsRuntime"] =
+                "Zlink.Framework.Contracts.Dispatch",
+            ["02-configuration-host.ko.md|ServiceCollectionExtensions"] =
+                "Zlink.Framework.AspNetCore",
             ["11-serialization.ko.md|ZLinkMessagePackCodec"] = "Zlink.Framework.Codecs.MessagePack",
-            ["11-serialization.ko.md|ZLinkProtobufCodec"] = "Zlink.Framework.Codecs.Protobuf"
+            ["11-serialization.ko.md|ZLinkProtobufCodec"] = "Zlink.Framework.Codecs.Protobuf",
         };
 
     private static readonly IReadOnlyDictionary<string, string> ExpectedAssemblyOverrides =
         new Dictionary<string, string>(StringComparer.Ordinal)
         {
-            ["02-configuration-host.ko.md|ServiceCollectionExtensions"] = "Zlink.Framework.AspNetCore",
+            ["02-configuration-host.ko.md|ServiceCollectionExtensions"] =
+                "Zlink.Framework.AspNetCore",
             ["11-serialization.ko.md|ZLinkMessagePackCodec"] = "Zlink.Framework.Codecs.MessagePack",
-            ["11-serialization.ko.md|ZLinkProtobufCodec"] = "Zlink.Framework.Codecs.Protobuf"
+            ["11-serialization.ko.md|ZLinkProtobufCodec"] = "Zlink.Framework.Codecs.Protobuf",
         };
 
     private static bool ContainsDeclaration(
         IReadOnlyDictionary<string, ContractDeclaration[]> declarations,
-        ContractDeclaration candidate) =>
+        ContractDeclaration candidate
+    ) =>
         declarations.TryGetValue(candidate.QualifiedOwner, out var ownerDeclarations)
         && ownerDeclarations.Any(existing =>
-            existing.Kind == candidate.Kind
-            && existing.Signature == candidate.Signature);
+            existing.Kind == candidate.Kind && existing.Signature == candidate.Signature
+        );
 
-    private static IReadOnlyList<ContractDeclaration> ExtractExactInterfaceDeclarations(string interfaceRoot) =>
+    private static IReadOnlyList<ContractDeclaration> ExtractExactInterfaceDeclarations(
+        string interfaceRoot
+    ) =>
         ExtractSyntaxDeclarations(
             Directory
                 .EnumerateFiles(interfaceRoot, "*.ko.md", SearchOption.TopDirectoryOnly)
-                .Where(path => !string.Equals(
-                    Path.GetFileName(path),
-                    "README.ko.md",
-                    StringComparison.Ordinal))
-                .SelectMany(path => ExtractCSharpBlocks(path).Select(body => (
-                    Document: Path.GetFileName(path),
-                    Body: body,
-                    AssemblyName: (string?)null))),
+                .Where(path =>
+                    !string.Equals(Path.GetFileName(path), "README.ko.md", StringComparison.Ordinal)
+                )
+                .SelectMany(path =>
+                    ExtractCSharpBlocks(path)
+                        .Select(body =>
+                            (
+                                Document: Path.GetFileName(path),
+                                Body: body,
+                                AssemblyName: (string?)null
+                            )
+                        )
+                ),
             includeOnlyPublic: true,
-            exactInterfaceDocuments: true);
+            exactInterfaceDocuments: true
+        );
 
-    private static IReadOnlyList<ContractDeclaration> ExtractSourceDeclarations(string sourceRoot) =>
+    private static IReadOnlyList<ContractDeclaration> ExtractSourceDeclarations(
+        string sourceRoot
+    ) =>
         ExtractSyntaxDeclarations(
             Directory
                 .EnumerateFiles(sourceRoot, "*.cs", SearchOption.AllDirectories)
-                .Where(path => !path.Contains(
-                                   $"{Path.DirectorySeparatorChar}obj{Path.DirectorySeparatorChar}",
-                                   StringComparison.Ordinal)
-                               && !path.Contains(
-                                   $"{Path.DirectorySeparatorChar}bin{Path.DirectorySeparatorChar}",
-                                   StringComparison.Ordinal))
-                .Select(path => (
-                    Document: Path.GetRelativePath(sourceRoot, path),
-                    Body: File.ReadAllText(path),
-                    AssemblyName: SourceAssemblyName(sourceRoot, path))),
+                .Where(path =>
+                    !path.Contains(
+                        $"{Path.DirectorySeparatorChar}obj{Path.DirectorySeparatorChar}",
+                        StringComparison.Ordinal
+                    )
+                    && !path.Contains(
+                        $"{Path.DirectorySeparatorChar}bin{Path.DirectorySeparatorChar}",
+                        StringComparison.Ordinal
+                    )
+                )
+                .Select(path =>
+                    (
+                        Document: Path.GetRelativePath(sourceRoot, path),
+                        Body: File.ReadAllText(path),
+                        AssemblyName: SourceAssemblyName(sourceRoot, path)
+                    )
+                ),
             includeOnlyPublic: true,
-            exactInterfaceDocuments: false);
+            exactInterfaceDocuments: false
+        );
 
     private static string? SourceAssemblyName(string sourceRoot, string path)
     {
         var relative = Path.GetRelativePath(sourceRoot, path);
         var projectName = relative.Split(Path.DirectorySeparatorChar)[0];
-        return string.Equals(projectName, "Shared", StringComparison.Ordinal)
-            ? null
-            : projectName;
+        return string.Equals(projectName, "Shared", StringComparison.Ordinal) ? null : projectName;
     }
 
     private static IEnumerable<string> ExtractCSharpBlocks(string path)
     {
         var text = File.ReadAllText(path);
-        foreach (Match block in Regex.Matches(
-                     text,
-                     @"\x60{3}csharp\s*(?<body>.*?)\x60{3}",
-                     RegexOptions.Singleline | RegexOptions.CultureInvariant))
+        foreach (
+            Match block in Regex.Matches(
+                text,
+                @"\x60{3}csharp\s*(?<body>.*?)\x60{3}",
+                RegexOptions.Singleline | RegexOptions.CultureInvariant
+            )
+        )
             yield return block.Groups["body"].Value;
     }
 
     private static IReadOnlyList<ContractDeclaration> ExtractSyntaxDeclarations(
         IEnumerable<(string Document, string Body, string? AssemblyName)> documents,
         bool includeOnlyPublic,
-        bool exactInterfaceDocuments)
+        bool exactInterfaceDocuments
+    )
     {
         var declarations = new List<ContractDeclaration>();
         var parseOptions = new CSharpParseOptions(LanguageVersion.Preview);
 
         var syntaxDocuments = documents
-            .Select((document, index) => new SyntaxDocument(
-                document.Document,
-                document.Body,
-                document.AssemblyName,
-                exactInterfaceDocuments,
-                index))
+            .Select(
+                (document, index) =>
+                    new SyntaxDocument(
+                        document.Document,
+                        document.Body,
+                        document.AssemblyName,
+                        exactInterfaceDocuments,
+                        index
+                    )
+            )
             .ToArray();
 
-        foreach (var documentGroup in syntaxDocuments.GroupBy(
-                     document => (
-                         document.AssemblyName,
-                         document.ExactInterface,
-                         Document: document.ExactInterface ? document.Document : null),
-                     EqualityComparer<(string? AssemblyName, bool ExactInterface, string? Document)>.Default))
+        foreach (
+            var documentGroup in syntaxDocuments.GroupBy(
+                document =>
+                    (
+                        document.AssemblyName,
+                        document.ExactInterface,
+                        Document: document.ExactInterface ? document.Document : null
+                    ),
+                EqualityComparer<(
+                    string? AssemblyName,
+                    bool ExactInterface,
+                    string? Document
+                )>.Default
+            )
+        )
         {
             var binding = SemanticBindingContext.Create(documentGroup, parseOptions);
             foreach (var syntaxDocument in documentGroup)
@@ -990,78 +1243,110 @@ public sealed class ContractSurfaceCoverage
                     .ToArray();
                 Assert.True(
                     syntaxErrors.Length == 0,
-                    $"C# contract syntax is invalid in {document}: {string.Join("; ", syntaxErrors)}");
+                    $"C# contract syntax is invalid in {document}: {string.Join("; ", syntaxErrors)}"
+                );
 
                 var resolver = binding.GetResolver(tree);
                 var root = tree.GetRoot();
                 foreach (var type in root.DescendantNodes().OfType<BaseTypeDeclarationSyntax>())
                 {
-                    if (includeOnlyPublic && !IsPublicType(type)) continue;
+                    if (includeOnlyPublic && !IsPublicType(type))
+                        continue;
 
                     var owner = GetTypeKey(type);
-                    declarations.Add(new ContractDeclaration(
-                        document,
-                        DeclarationKind.Type,
-                        owner,
-                        TypeSignature(type, resolver),
-                        assemblyName));
-
-                    if (type is TypeDeclarationSyntax primaryType
-                        && primaryType.ParameterList is { } primaryParameterList)
-                    {
-                        declarations.Add(new ContractDeclaration(
+                    declarations.Add(
+                        new ContractDeclaration(
                             document,
-                            DeclarationKind.Constructor,
+                            DeclarationKind.Type,
                             owner,
-                            ConstructorSignature(type.Identifier.Text, primaryParameterList, default, resolver),
-                            assemblyName));
+                            TypeSignature(type, resolver),
+                            assemblyName
+                        )
+                    );
+
+                    if (
+                        type is TypeDeclarationSyntax primaryType
+                        && primaryType.ParameterList is { } primaryParameterList
+                    )
+                    {
+                        declarations.Add(
+                            new ContractDeclaration(
+                                document,
+                                DeclarationKind.Constructor,
+                                owner,
+                                ConstructorSignature(
+                                    type.Identifier.Text,
+                                    primaryParameterList,
+                                    default,
+                                    resolver
+                                ),
+                                assemblyName
+                            )
+                        );
 
                         if (primaryType is RecordDeclarationSyntax)
-                            declarations.AddRange(RecordProjectionDeclarations(
-                                document,
-                                owner,
-                                primaryParameterList,
-                                assemblyName,
-                                resolver));
+                            declarations.AddRange(
+                                RecordProjectionDeclarations(
+                                    document,
+                                    owner,
+                                    primaryParameterList,
+                                    assemblyName,
+                                    resolver
+                                )
+                            );
                     }
 
                     if (type is TypeDeclarationSyntax typeDeclaration)
                     {
                         foreach (var member in typeDeclaration.Members)
                         {
-                            if (member is BaseTypeDeclarationSyntax or DelegateDeclarationSyntax) continue;
-                            if (includeOnlyPublic && !IsPublicMember(type, member)) continue;
+                            if (member is BaseTypeDeclarationSyntax or DelegateDeclarationSyntax)
+                                continue;
+                            if (includeOnlyPublic && !IsPublicMember(type, member))
+                                continue;
                             if (MemberSignature(member, resolver) is { } signature)
-                                declarations.Add(new ContractDeclaration(
-                                    document,
-                                    member is ConstructorDeclarationSyntax
-                                        ? DeclarationKind.Constructor
-                                        : DeclarationKind.Member,
-                                    owner,
-                                    signature,
-                                    assemblyName));
+                                declarations.Add(
+                                    new ContractDeclaration(
+                                        document,
+                                        member is ConstructorDeclarationSyntax
+                                            ? DeclarationKind.Constructor
+                                            : DeclarationKind.Member,
+                                        owner,
+                                        signature,
+                                        assemblyName
+                                    )
+                                );
                         }
                     }
 
                     if (type is EnumDeclarationSyntax enumDeclaration)
                         foreach (var member in enumDeclaration.Members)
-                            declarations.Add(new ContractDeclaration(
-                                document,
-                                DeclarationKind.Member,
-                                owner,
-                                NormalizeSyntax(member.ToFullString()),
-                                assemblyName));
+                            declarations.Add(
+                                new ContractDeclaration(
+                                    document,
+                                    DeclarationKind.Member,
+                                    owner,
+                                    NormalizeSyntax(member.ToFullString()),
+                                    assemblyName
+                                )
+                            );
                 }
 
-                foreach (var @delegate in root.DescendantNodes().OfType<DelegateDeclarationSyntax>())
+                foreach (
+                    var @delegate in root.DescendantNodes().OfType<DelegateDeclarationSyntax>()
+                )
                 {
-                    if (includeOnlyPublic && !@delegate.Modifiers.Any(SyntaxKind.PublicKeyword)) continue;
-                    declarations.Add(new ContractDeclaration(
-                        document,
-                        DeclarationKind.Type,
-                        GetDelegateKey(@delegate),
-                        DelegateSignature(@delegate, resolver),
-                        assemblyName));
+                    if (includeOnlyPublic && !@delegate.Modifiers.Any(SyntaxKind.PublicKeyword))
+                        continue;
+                    declarations.Add(
+                        new ContractDeclaration(
+                            document,
+                            DeclarationKind.Type,
+                            GetDelegateKey(@delegate),
+                            DelegateSignature(@delegate, resolver),
+                            assemblyName
+                        )
+                    );
                 }
             }
         }
@@ -1079,28 +1364,33 @@ public sealed class ContractSurfaceCoverage
         string owner,
         ParameterListSyntax parameters,
         string? assemblyName,
-        SemanticTypeIdentityResolver resolver)
+        SemanticTypeIdentityResolver resolver
+    )
     {
         foreach (var parameter in parameters.Parameters)
         {
             if (parameter.Type is null)
                 throw new InvalidOperationException(
-                    $"A positional record parameter must have a type: {document}:{owner}:{parameter}");
+                    $"A positional record parameter must have a type: {document}:{owner}:{parameter}"
+                );
 
             yield return new ContractDeclaration(
                 document,
                 DeclarationKind.Member,
                 owner,
                 NormalizeSyntax(
-                    $"{CanonicalTypeText(parameter.Type, resolver)} {parameter.Identifier}{{get;init;}}"),
-                assemblyName);
+                    $"{CanonicalTypeText(parameter.Type, resolver)} {parameter.Identifier}{{get;init;}}"
+                ),
+                assemblyName
+            );
         }
 
         var deconstructParameters = parameters.Parameters.Select(parameter =>
         {
             if (parameter.Type is null)
                 throw new InvalidOperationException(
-                    $"A positional record parameter must have a type: {document}:{owner}:{parameter}");
+                    $"A positional record parameter must have a type: {document}:{owner}:{parameter}"
+                );
 
             return $"out {CanonicalTypeText(parameter.Type, resolver)} {parameter.Identifier.Text}";
         });
@@ -1109,7 +1399,8 @@ public sealed class ContractSurfaceCoverage
             DeclarationKind.Member,
             owner,
             NormalizeSyntax($"System.Void Deconstruct({string.Join(",", deconstructParameters)})"),
-            assemblyName);
+            assemblyName
+        );
     }
 
     private static bool IsPublicType(BaseTypeDeclarationSyntax type) =>
@@ -1118,19 +1409,27 @@ public sealed class ContractSurfaceCoverage
             .OfType<BaseTypeDeclarationSyntax>()
             .All(static ancestor => ancestor.Modifiers.Any(SyntaxKind.PublicKeyword));
 
-    private static bool IsPublicMember(BaseTypeDeclarationSyntax owner, MemberDeclarationSyntax member)
+    private static bool IsPublicMember(
+        BaseTypeDeclarationSyntax owner,
+        MemberDeclarationSyntax member
+    )
     {
-        if (member is MethodDeclarationSyntax { ExplicitInterfaceSpecifier: not null }
-            or PropertyDeclarationSyntax { ExplicitInterfaceSpecifier: not null }
-            or IndexerDeclarationSyntax { ExplicitInterfaceSpecifier: not null })
+        if (
+            member
+            is MethodDeclarationSyntax { ExplicitInterfaceSpecifier: not null }
+                or PropertyDeclarationSyntax { ExplicitInterfaceSpecifier: not null }
+                or IndexerDeclarationSyntax { ExplicitInterfaceSpecifier: not null }
+        )
             return false;
-        if (owner is InterfaceDeclarationSyntax) return true;
-        if (member is BaseTypeDeclarationSyntax or DelegateDeclarationSyntax) return false;
+        if (owner is InterfaceDeclarationSyntax)
+            return true;
+        if (member is BaseTypeDeclarationSyntax or DelegateDeclarationSyntax)
+            return false;
 
         var modifiers = GetModifiers(member);
         return modifiers.Any(SyntaxKind.PublicKeyword)
-               || modifiers.Any(SyntaxKind.ProtectedKeyword)
-                  && modifiers.Any(SyntaxKind.PrivateKeyword);
+            || modifiers.Any(SyntaxKind.ProtectedKeyword)
+                && modifiers.Any(SyntaxKind.PrivateKeyword);
     }
 
     private static string GetTypeKey(BaseTypeDeclarationSyntax type) =>
@@ -1140,20 +1439,21 @@ public sealed class ContractSurfaceCoverage
                 .OfType<BaseTypeDeclarationSyntax>()
                 .Reverse()
                 .Select(NameWithArity)
-                .Append(NameWithArity(type)));
+                .Append(NameWithArity(type))
+        );
 
     private static string GetDelegateKey(DelegateDeclarationSyntax @delegate) =>
         JoinNamespaceAndTypeKey(
             @delegate,
-            @delegate.Ancestors()
+            @delegate
+                .Ancestors()
                 .OfType<BaseTypeDeclarationSyntax>()
                 .Reverse()
                 .Select(NameWithArity)
-                .Append(NameWithArity(@delegate)));
+                .Append(NameWithArity(@delegate))
+        );
 
-    private static string JoinNamespaceAndTypeKey(
-        SyntaxNode node,
-        IEnumerable<string> typeParts)
+    private static string JoinNamespaceAndTypeKey(SyntaxNode node, IEnumerable<string> typeParts)
     {
         var typeKey = string.Join(".", typeParts);
         var namespaceKey = string.Join(
@@ -1161,7 +1461,8 @@ public sealed class ContractSurfaceCoverage
             node.Ancestors()
                 .OfType<BaseNamespaceDeclarationSyntax>()
                 .Reverse()
-                .Select(static declaration => declaration.Name.ToString()));
+                .Select(static declaration => declaration.Name.ToString())
+        );
         return namespaceKey.Length == 0 ? typeKey : $"{namespaceKey}.{typeKey}";
     }
 
@@ -1176,7 +1477,8 @@ public sealed class ContractSurfaceCoverage
 
     private static string TypeSignature(
         BaseTypeDeclarationSyntax type,
-        SemanticTypeIdentityResolver resolver)
+        SemanticTypeIdentityResolver resolver
+    )
     {
         var keyword = type switch
         {
@@ -1184,24 +1486,34 @@ public sealed class ContractSurfaceCoverage
             ClassDeclarationSyntax => "class",
             StructDeclarationSyntax => "struct",
             EnumDeclarationSyntax => "enum",
-            RecordDeclarationSyntax record => record.ClassOrStructKeyword.IsKind(SyntaxKind.StructKeyword)
+            RecordDeclarationSyntax record => record.ClassOrStructKeyword.IsKind(
+                SyntaxKind.StructKeyword
+            )
                 ? "record struct"
                 : "record",
-            _ => throw new InvalidOperationException($"Unsupported type declaration: {type.Kind()}")
+            _ => throw new InvalidOperationException(
+                $"Unsupported type declaration: {type.Kind()}"
+            ),
         };
         var baseList = type.BaseList is null
             ? string.Empty
             : $" {CanonicalBaseList(type.BaseList, resolver)}";
         var constraints = type is TypeDeclarationSyntax declaredType
-            ? string.Concat(declaredType.ConstraintClauses.Select(clause => $" {CanonicalSyntax(clause, resolver)}"))
+            ? string.Concat(
+                declaredType.ConstraintClauses.Select(clause =>
+                    $" {CanonicalSyntax(clause, resolver)}"
+                )
+            )
             : string.Empty;
         return NormalizeSyntax(
-            $"{NormalizeModifiers(type.Modifiers)} {keyword} {NameWithArity(type)}{baseList}{constraints}");
+            $"{NormalizeModifiers(type.Modifiers)} {keyword} {NameWithArity(type)}{baseList}{constraints}"
+        );
     }
 
     private static string CanonicalBaseList(
         BaseListSyntax baseList,
-        SemanticTypeIdentityResolver resolver) =>
+        SemanticTypeIdentityResolver resolver
+    ) =>
         $": {string.Join(",", baseList.Types.Select(baseType => baseType switch
         {
             SimpleBaseTypeSyntax simple => CanonicalTypeText(simple.Type, resolver),
@@ -1211,18 +1523,23 @@ public sealed class ContractSurfaceCoverage
 
     private static string DelegateSignature(
         DelegateDeclarationSyntax @delegate,
-        SemanticTypeIdentityResolver resolver) =>
+        SemanticTypeIdentityResolver resolver
+    ) =>
         NormalizeSyntax(
             $"{NormalizeModifiers(@delegate.Modifiers)} delegate {CanonicalTypeText(@delegate.ReturnType, resolver)} "
-            + $"{NameWithArity(@delegate)}{CanonicalSyntax(@delegate.ParameterList, resolver)}"
-            + $"{string.Concat(@delegate.ConstraintClauses.Select(clause => $" {CanonicalSyntax(clause, resolver)}"))}");
+                + $"{NameWithArity(@delegate)}{CanonicalSyntax(@delegate.ParameterList, resolver)}"
+                + $"{string.Concat(@delegate.ConstraintClauses.Select(clause => $" {CanonicalSyntax(clause, resolver)}"))}"
+        );
 
     private static string ConstructorSignature(
         string name,
         ParameterListSyntax parameters,
         SyntaxTokenList modifiers,
-        SemanticTypeIdentityResolver resolver) =>
-        NormalizeSyntax($"{NormalizeModifiers(modifiers)} {name}{CanonicalSyntax(parameters, resolver)}");
+        SemanticTypeIdentityResolver resolver
+    ) =>
+        NormalizeSyntax(
+            $"{NormalizeModifiers(modifiers)} {name}{CanonicalSyntax(parameters, resolver)}"
+        );
 
     private static string GetReflectionTypeFullName(Type type) =>
         type.FullName?.Replace('+', '.')
@@ -1232,47 +1549,60 @@ public sealed class ContractSurfaceCoverage
     {
         var parts = new Stack<string>();
         for (var current = type; current is not null; current = current.DeclaringType)
-            parts.Push($"{current.Name.Split((char)96)[0]}{(current.IsGenericTypeDefinition ? $"{(char)96}{current.GetGenericArguments().Length}" : string.Empty)}");
+            parts.Push(
+                $"{current.Name.Split((char)96)[0]}{(current.IsGenericTypeDefinition ? $"{(char)96}{current.GetGenericArguments().Length}" : string.Empty)}"
+            );
         return string.Join(".", parts);
     }
 
     private static string? MemberSignature(
         MemberDeclarationSyntax member,
-        SemanticTypeIdentityResolver resolver) => member switch
-    {
-        ConstructorDeclarationSyntax constructor => ConstructorSignature(
-            constructor.Identifier.Text,
-            constructor.ParameterList,
-            constructor.Modifiers,
-            resolver),
-        MethodDeclarationSyntax method => NormalizeSyntax(
-            $"{NormalizeModifiers(method.Modifiers)} {CanonicalTypeText(method.ReturnType, resolver)} {method.Identifier}{method.TypeParameterList}"
-            + $"{CanonicalSyntax(method.ParameterList, resolver)}"
-            + $"{string.Concat(method.ConstraintClauses.Select(clause => $" {CanonicalSyntax(clause, resolver)}"))}"),
-        PropertyDeclarationSyntax property => NormalizeSyntax(
-            $"{NormalizeModifiers(property.Modifiers)} {CanonicalTypeText(property.Type, resolver)} "
-            + $"{CanonicalSyntax(property.ExplicitInterfaceSpecifier, resolver)}"
-            + $"{property.Identifier}{PropertyAccessorSignature(property)}"),
-        IndexerDeclarationSyntax indexer => NormalizeSyntax(
-            $"{NormalizeModifiers(indexer.Modifiers)} {CanonicalTypeText(indexer.Type, resolver)} "
-            + $"{CanonicalSyntax(indexer.ExplicitInterfaceSpecifier, resolver)}"
-            + $"this{CanonicalSyntax(indexer.ParameterList, resolver)}{indexer.AccessorList}"),
-        FieldDeclarationSyntax field => NormalizeSyntax(
-            $"{NormalizeModifiers(field.Modifiers)} {CanonicalSyntax(field.Declaration, resolver)}"),
-        EventFieldDeclarationSyntax eventField => NormalizeSyntax(
-            $"{NormalizeModifiers(eventField.Modifiers)} event {CanonicalSyntax(eventField.Declaration, resolver)}"),
-        EventDeclarationSyntax @event => NormalizeSyntax(
-            $"{NormalizeModifiers(@event.Modifiers)} event {CanonicalTypeText(@event.Type, resolver)} "
-            + $"{CanonicalSyntax(@event.ExplicitInterfaceSpecifier, resolver)}"
-            + $"{@event.Identifier}{@event.AccessorList}"),
-        OperatorDeclarationSyntax operatorDeclaration => NormalizeSyntax(
-            $"{NormalizeModifiers(operatorDeclaration.Modifiers)} {CanonicalTypeText(operatorDeclaration.ReturnType, resolver)}"
-            + $" operator {operatorDeclaration.OperatorToken}{CanonicalSyntax(operatorDeclaration.ParameterList, resolver)}"),
-        ConversionOperatorDeclarationSyntax conversion => NormalizeSyntax(
-            $"{NormalizeModifiers(conversion.Modifiers)} {conversion.ImplicitOrExplicitKeyword} operator"
-            + $" {CanonicalTypeText(conversion.Type, resolver)}{CanonicalSyntax(conversion.ParameterList, resolver)}"),
-        _ => null
-    };
+        SemanticTypeIdentityResolver resolver
+    ) =>
+        member switch
+        {
+            ConstructorDeclarationSyntax constructor => ConstructorSignature(
+                constructor.Identifier.Text,
+                constructor.ParameterList,
+                constructor.Modifiers,
+                resolver
+            ),
+            MethodDeclarationSyntax method => NormalizeSyntax(
+                $"{NormalizeModifiers(method.Modifiers)} {CanonicalTypeText(method.ReturnType, resolver)} {method.Identifier}{method.TypeParameterList}"
+                    + $"{CanonicalSyntax(method.ParameterList, resolver)}"
+                    + $"{string.Concat(method.ConstraintClauses.Select(clause => $" {CanonicalSyntax(clause, resolver)}"))}"
+            ),
+            PropertyDeclarationSyntax property => NormalizeSyntax(
+                $"{NormalizeModifiers(property.Modifiers)} {CanonicalTypeText(property.Type, resolver)} "
+                    + $"{CanonicalSyntax(property.ExplicitInterfaceSpecifier, resolver)}"
+                    + $"{property.Identifier}{PropertyAccessorSignature(property)}"
+            ),
+            IndexerDeclarationSyntax indexer => NormalizeSyntax(
+                $"{NormalizeModifiers(indexer.Modifiers)} {CanonicalTypeText(indexer.Type, resolver)} "
+                    + $"{CanonicalSyntax(indexer.ExplicitInterfaceSpecifier, resolver)}"
+                    + $"this{CanonicalSyntax(indexer.ParameterList, resolver)}{indexer.AccessorList}"
+            ),
+            FieldDeclarationSyntax field => NormalizeSyntax(
+                $"{NormalizeModifiers(field.Modifiers)} {CanonicalSyntax(field.Declaration, resolver)}"
+            ),
+            EventFieldDeclarationSyntax eventField => NormalizeSyntax(
+                $"{NormalizeModifiers(eventField.Modifiers)} event {CanonicalSyntax(eventField.Declaration, resolver)}"
+            ),
+            EventDeclarationSyntax @event => NormalizeSyntax(
+                $"{NormalizeModifiers(@event.Modifiers)} event {CanonicalTypeText(@event.Type, resolver)} "
+                    + $"{CanonicalSyntax(@event.ExplicitInterfaceSpecifier, resolver)}"
+                    + $"{@event.Identifier}{@event.AccessorList}"
+            ),
+            OperatorDeclarationSyntax operatorDeclaration => NormalizeSyntax(
+                $"{NormalizeModifiers(operatorDeclaration.Modifiers)} {CanonicalTypeText(operatorDeclaration.ReturnType, resolver)}"
+                    + $" operator {operatorDeclaration.OperatorToken}{CanonicalSyntax(operatorDeclaration.ParameterList, resolver)}"
+            ),
+            ConversionOperatorDeclarationSyntax conversion => NormalizeSyntax(
+                $"{NormalizeModifiers(conversion.Modifiers)} {conversion.ImplicitOrExplicitKeyword} operator"
+                    + $" {CanonicalTypeText(conversion.Type, resolver)}{CanonicalSyntax(conversion.ParameterList, resolver)}"
+            ),
+            _ => null,
+        };
 
     private static string PropertyAccessorSignature(PropertyDeclarationSyntax property)
     {
@@ -1285,41 +1615,45 @@ public sealed class ContractSurfaceCoverage
                 $"{NormalizeModifiers(accessor.Modifiers)}{accessor.Keyword.Text};"))}}}";
     }
 
-    private static SyntaxTokenList GetModifiers(MemberDeclarationSyntax member) => member switch
-    {
-        ConstructorDeclarationSyntax constructor => constructor.Modifiers,
-        MethodDeclarationSyntax method => method.Modifiers,
-        PropertyDeclarationSyntax property => property.Modifiers,
-        IndexerDeclarationSyntax indexer => indexer.Modifiers,
-        FieldDeclarationSyntax field => field.Modifiers,
-        EventFieldDeclarationSyntax eventField => eventField.Modifiers,
-        EventDeclarationSyntax @event => @event.Modifiers,
-        OperatorDeclarationSyntax operatorDeclaration => operatorDeclaration.Modifiers,
-        ConversionOperatorDeclarationSyntax conversion => conversion.Modifiers,
-        _ => default
-    };
+    private static SyntaxTokenList GetModifiers(MemberDeclarationSyntax member) =>
+        member switch
+        {
+            ConstructorDeclarationSyntax constructor => constructor.Modifiers,
+            MethodDeclarationSyntax method => method.Modifiers,
+            PropertyDeclarationSyntax property => property.Modifiers,
+            IndexerDeclarationSyntax indexer => indexer.Modifiers,
+            FieldDeclarationSyntax field => field.Modifiers,
+            EventFieldDeclarationSyntax eventField => eventField.Modifiers,
+            EventDeclarationSyntax @event => @event.Modifiers,
+            OperatorDeclarationSyntax operatorDeclaration => operatorDeclaration.Modifiers,
+            ConversionOperatorDeclarationSyntax conversion => conversion.Modifiers,
+            _ => default,
+        };
 
     private static string NormalizeModifiers(SyntaxTokenList modifiers) =>
         string.Join(
             " ",
             modifiers
-                .Where(static modifier => modifier.Kind() is not (
-                    SyntaxKind.PublicKeyword
-                    or SyntaxKind.PrivateKeyword
-                    or SyntaxKind.ProtectedKeyword
-                    or SyntaxKind.InternalKeyword
-                    or SyntaxKind.PartialKeyword
-                    or SyntaxKind.AsyncKeyword))
-                .Select(static modifier => modifier.Text));
+                .Where(static modifier =>
+                    modifier.Kind()
+                        is not (
+                            SyntaxKind.PublicKeyword
+                            or SyntaxKind.PrivateKeyword
+                            or SyntaxKind.ProtectedKeyword
+                            or SyntaxKind.InternalKeyword
+                            or SyntaxKind.PartialKeyword
+                            or SyntaxKind.AsyncKeyword
+                        )
+                )
+                .Select(static modifier => modifier.Text)
+        );
 
     private static string CanonicalTypeText(
         TypeSyntax type,
-        SemanticTypeIdentityResolver resolver) =>
-        NormalizeSyntax(resolver.Resolve(type));
+        SemanticTypeIdentityResolver resolver
+    ) => NormalizeSyntax(resolver.Resolve(type));
 
-    private static string CanonicalSyntax(
-        SyntaxNode? node,
-        SemanticTypeIdentityResolver resolver)
+    private static string CanonicalSyntax(SyntaxNode? node, SemanticTypeIdentityResolver resolver)
     {
         if (node is null)
             return string.Empty;
@@ -1331,38 +1665,37 @@ public sealed class ContractSurfaceCoverage
             // represents it in the constraint syntax as an identifier-like
             // TypeSyntax, but semantic binding cannot resolve it as a type.
             // Keep the exact constraint text in the canonical signature.
-            .Where(type => !string.Equals(
-                               type.ToString(),
-                               "notnull",
-                               StringComparison.Ordinal)
-                           && !type.Ancestors().Any(
-                               static ancestor => ancestor is TypeSyntax))
+            .Where(type =>
+                !string.Equals(type.ToString(), "notnull", StringComparison.Ordinal)
+                && !type.Ancestors().Any(static ancestor => ancestor is TypeSyntax)
+            )
             .OrderByDescending(static type => type.SpanStart)
             .ToArray();
         foreach (var type in replacements)
         {
             var start = type.SpanStart - node.FullSpan.Start;
-            text = text.Remove(start, type.Span.Length)
-                .Insert(start, resolver.Resolve(type));
+            text = text.Remove(start, type.Span.Length).Insert(start, resolver.Resolve(type));
         }
 
         return text;
     }
 
-    private static string NormalizeSyntax(
-        SyntaxNode node,
-        SemanticTypeIdentityResolver resolver) =>
+    private static string NormalizeSyntax(SyntaxNode node, SemanticTypeIdentityResolver resolver) =>
         NormalizeSyntax(CanonicalSyntax(node, resolver));
 
     private static string NormalizeSyntax(string text)
     {
-        var normalized = Regex.Replace(text, @"\s+", " ", RegexOptions.CultureInvariant).Trim().TrimEnd(';');
+        var normalized = Regex
+            .Replace(text, @"\s+", " ", RegexOptions.CultureInvariant)
+            .Trim()
+            .TrimEnd(';');
         normalized = normalized.Replace("global::", string.Empty, StringComparison.Ordinal);
         normalized = Regex.Replace(
             normalized,
             @"\s*([<>,()\[\]{}?:;=])\s*",
             "$1",
-            RegexOptions.CultureInvariant);
+            RegexOptions.CultureInvariant
+        );
         return normalized;
     }
 
@@ -1371,7 +1704,8 @@ public sealed class ContractSurfaceCoverage
         string Body,
         string? AssemblyName,
         bool ExactInterface,
-        int Ordinal);
+        int Ordinal
+    );
 
     private sealed class SemanticBindingContext
     {
@@ -1380,7 +1714,8 @@ public sealed class ContractSurfaceCoverage
 
         private SemanticBindingContext(
             IReadOnlyDictionary<int, SyntaxTree> trees,
-            IReadOnlyDictionary<SyntaxTree, SemanticTypeIdentityResolver> resolvers)
+            IReadOnlyDictionary<SyntaxTree, SemanticTypeIdentityResolver> resolvers
+        )
         {
             _trees = trees;
             _resolvers = resolvers;
@@ -1388,20 +1723,26 @@ public sealed class ContractSurfaceCoverage
 
         public static SemanticBindingContext Create(
             IEnumerable<SyntaxDocument> documents,
-            CSharpParseOptions parseOptions)
+            CSharpParseOptions parseOptions
+        )
         {
             var materialized = documents.OrderBy(static document => document.Ordinal).ToArray();
             if (materialized.Length == 0)
-                throw new InvalidOperationException("Semantic binding requires at least one syntax document.");
+                throw new InvalidOperationException(
+                    "Semantic binding requires at least one syntax document."
+                );
 
             var trees = materialized.ToDictionary(
                 document => document.Ordinal,
-                document => CSharpSyntaxTree.ParseText(
-                    document.ExactInterface
-                        ? ExactInterfaceBindingPrefix + document.Body
-                        : CommonSourceBindingPrefix + document.Body,
-                    parseOptions,
-                    path: $"{document.Document}#{document.Ordinal}"));
+                document =>
+                    CSharpSyntaxTree.ParseText(
+                        document.ExactInterface
+                            ? ExactInterfaceBindingPrefix + document.Body
+                            : CommonSourceBindingPrefix + document.Body,
+                        parseOptions,
+                        path: $"{document.Document}#{document.Ordinal}"
+                    )
+            );
             var compilation = CSharpCompilation.Create(
                 materialized[0].ExactInterface
                     ? "Zlink.Framework.ExactInterfaceContracts"
@@ -1410,15 +1751,17 @@ public sealed class ContractSurfaceCoverage
                 MetadataReferences(),
                 new CSharpCompilationOptions(
                     OutputKind.DynamicallyLinkedLibrary,
-                    nullableContextOptions: NullableContextOptions.Enable));
+                    nullableContextOptions: NullableContextOptions.Enable
+                )
+            );
             var resolvers = trees.Values.ToDictionary(
                 tree => tree,
                 tree => new SemanticTypeIdentityResolver(
                     compilation.GetSemanticModel(tree, true),
-                    materialized[0].ExactInterface ? materialized[0].Document : null));
-            return new SemanticBindingContext(
-                trees,
-                resolvers);
+                    materialized[0].ExactInterface ? materialized[0].Document : null
+                )
+            );
+            return new SemanticBindingContext(trees, resolvers);
         }
 
         public SyntaxTree GetTree(int ordinal) => _trees[ordinal];
@@ -1430,8 +1773,7 @@ public sealed class ContractSurfaceCoverage
             var paths = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
             foreach (var assembly in ReferencedAssemblies())
             {
-                if (string.IsNullOrWhiteSpace(assembly.Location)
-                    || !paths.Add(assembly.Location))
+                if (string.IsNullOrWhiteSpace(assembly.Location) || !paths.Add(assembly.Location))
                     continue;
 
                 yield return MetadataReference.CreateFromFile(assembly.Location);
@@ -1441,16 +1783,17 @@ public sealed class ContractSurfaceCoverage
         private static IEnumerable<Assembly> ReferencedAssemblies()
         {
             var assemblies = new Dictionary<string, Assembly>(StringComparer.Ordinal);
-            var pending = new Queue<Assembly>(GetContractAssemblies()
-                .Concat(
-                [
-                    typeof(object).Assembly,
-                    typeof(Task).Assembly,
-                    typeof(System.Linq.Enumerable).Assembly,
-                    typeof(System.Collections.Generic.IReadOnlyList<>).Assembly,
-                    typeof(System.Threading.CancellationToken).Assembly
-                ])
-                .Concat(AppDomain.CurrentDomain.GetAssemblies()));
+            var pending = new Queue<Assembly>(
+                GetContractAssemblies()
+                    .Concat([
+                        typeof(object).Assembly,
+                        typeof(Task).Assembly,
+                        typeof(System.Linq.Enumerable).Assembly,
+                        typeof(System.Collections.Generic.IReadOnlyList<>).Assembly,
+                        typeof(System.Threading.CancellationToken).Assembly,
+                    ])
+                    .Concat(AppDomain.CurrentDomain.GetAssemblies())
+            );
             while (pending.Count > 0)
             {
                 var assembly = pending.Dequeue();
@@ -1464,12 +1807,8 @@ public sealed class ContractSurfaceCoverage
                     {
                         pending.Enqueue(Assembly.Load(reference));
                     }
-                    catch (FileNotFoundException)
-                    {
-                    }
-                    catch (FileLoadException)
-                    {
-                    }
+                    catch (FileNotFoundException) { }
+                    catch (FileLoadException) { }
                 }
             }
 
@@ -1483,14 +1822,13 @@ public sealed class ContractSurfaceCoverage
             globalNamespaceStyle: SymbolDisplayGlobalNamespaceStyle.Omitted,
             typeQualificationStyle: SymbolDisplayTypeQualificationStyle.NameAndContainingTypesAndNamespaces,
             genericsOptions: SymbolDisplayGenericsOptions.IncludeTypeParameters,
-            miscellaneousOptions: SymbolDisplayMiscellaneousOptions.IncludeNullableReferenceTypeModifier);
+            miscellaneousOptions: SymbolDisplayMiscellaneousOptions.IncludeNullableReferenceTypeModifier
+        );
 
         private readonly SemanticModel _model;
         private readonly string? _exactInterfaceDocument;
 
-        public SemanticTypeIdentityResolver(
-            SemanticModel model,
-            string? exactInterfaceDocument)
+        public SemanticTypeIdentityResolver(SemanticModel model, string? exactInterfaceDocument)
         {
             _model = model;
             _exactInterfaceDocument = exactInterfaceDocument;
@@ -1501,13 +1839,15 @@ public sealed class ContractSurfaceCoverage
             var symbol = _model.GetTypeInfo(type).Type;
             if (symbol is null || symbol.Kind == SymbolKind.ErrorType)
             {
-                var diagnostics = _model.GetDiagnostics(type.Span)
+                var diagnostics = _model
+                    .GetDiagnostics(type.Span)
                     .Where(static diagnostic => diagnostic.Severity == DiagnosticSeverity.Error)
                     .Select(static diagnostic => diagnostic.ToString())
                     .ToArray();
                 throw new InvalidOperationException(
                     $"Semantic type binding failed for '{type}' at {type.SyntaxTree?.FilePath}: "
-                    + string.Join("; ", diagnostics));
+                        + string.Join("; ", diagnostics)
+                );
             }
 
             if (symbol is ITypeParameterSymbol)
@@ -1520,69 +1860,86 @@ public sealed class ContractSurfaceCoverage
 
         private (string AssemblyName, string DisplayName) ResolveIdentity(ITypeSymbol symbol)
         {
-            if (_exactInterfaceDocument is not null
+            if (
+                _exactInterfaceDocument is not null
                 && symbol is INamedTypeSymbol named
-                && named.ContainingAssembly?.Identity.Name == "Zlink.Framework.ExactInterfaceContracts")
+                && named.ContainingAssembly?.Identity.Name
+                    == "Zlink.Framework.ExactInterfaceContracts"
+            )
             {
                 var localOwner = LocalOwnerKey(named);
-                var containingNamespace = named.ContainingNamespace?.IsGlobalNamespace == false
-                    ? $"{named.ContainingNamespace}.{localOwner}"
-                    : localOwner;
+                var containingNamespace =
+                    named.ContainingNamespace?.IsGlobalNamespace == false
+                        ? $"{named.ContainingNamespace}.{localOwner}"
+                        : localOwner;
                 var expected = ResolveExpectedTypeIdentity(
                     new ContractDeclaration(
                         _exactInterfaceDocument,
                         DeclarationKind.Type,
                         containingNamespace,
-                        string.Empty));
+                        string.Empty
+                    )
+                );
                 var displayName = Regex.Replace(
                     expected.FullName,
                     @"`\d+",
                     string.Empty,
-                    RegexOptions.CultureInvariant);
+                    RegexOptions.CultureInvariant
+                );
                 if (named.TypeArguments.Length > 0)
                 {
                     displayName += $"<{string.Join(",", named.TypeArguments.Select(DisplayName))}>";
                 }
-                if (named.IsReferenceType
-                    && named.NullableAnnotation == NullableAnnotation.Annotated)
+                if (
+                    named.IsReferenceType
+                    && named.NullableAnnotation == NullableAnnotation.Annotated
+                )
                     displayName += "?";
 
                 return (expected.AssemblyName, displayName);
             }
 
             var display = DisplayName(symbol);
-            var assemblyName = ContainingAssembly(symbol)?.Identity.Name
-                               ?? throw new InvalidOperationException(
-                                   $"Type '{display}' has no containing assembly.");
+            var assemblyName =
+                ContainingAssembly(symbol)?.Identity.Name
+                ?? throw new InvalidOperationException(
+                    $"Type '{display}' has no containing assembly."
+                );
             return (assemblyName, display);
         }
 
         private string DisplayName(ITypeSymbol symbol)
         {
-            if (_exactInterfaceDocument is not null
+            if (
+                _exactInterfaceDocument is not null
                 && symbol is INamedTypeSymbol named
-                && named.ContainingAssembly?.Identity.Name == "Zlink.Framework.ExactInterfaceContracts")
+                && named.ContainingAssembly?.Identity.Name
+                    == "Zlink.Framework.ExactInterfaceContracts"
+            )
             {
                 return ResolveIdentity(named).DisplayName;
             }
 
             if (symbol is INamedTypeSymbol namedType && !namedType.IsTupleType)
             {
-                var containingName = namedType.ContainingType is not null
-                    ? DisplayName(namedType.ContainingType)
+                var containingName =
+                    namedType.ContainingType is not null ? DisplayName(namedType.ContainingType)
                     : namedType.ContainingNamespace?.IsGlobalNamespace == false
                         ? namedType.ContainingNamespace.ToDisplayString()
-                        : string.Empty;
+                    : string.Empty;
                 var displayName = string.IsNullOrEmpty(containingName)
                     ? namedType.Name
                     : $"{containingName}.{namedType.Name}";
                 if (namedType.TypeArguments.Length > 0)
                 {
-                    displayName += $"<{string.Join(",", namedType.TypeArguments.Select(DisplayName))}>";
+                    displayName +=
+                        $"<{string.Join(",", namedType.TypeArguments.Select(DisplayName))}>";
                 }
 
-                if (namedType.IsReferenceType
-                    && namedType.NullableAnnotation == NullableAnnotation.Annotated)
+                if (
+                    namedType.IsReferenceType
+                    && namedType.NullableAnnotation == NullableAnnotation.Annotated
+                )
                     displayName += "?";
                 return displayName;
             }
@@ -1596,10 +1953,9 @@ public sealed class ContractSurfaceCoverage
             if (symbol is IPointerTypeSymbol pointer)
                 return $"{DisplayName(pointer.PointedAtType)}*";
 
-            return symbol.ToDisplayString(TypeDisplayFormat).Replace(
-                "global::",
-                string.Empty,
-                StringComparison.Ordinal);
+            return symbol
+                .ToDisplayString(TypeDisplayFormat)
+                .Replace("global::", string.Empty, StringComparison.Ordinal);
         }
 
         private static string LocalOwnerKey(INamedTypeSymbol type)
@@ -1607,20 +1963,24 @@ public sealed class ContractSurfaceCoverage
             var parts = new Stack<string>();
             for (var current = type; current is not null; current = current.ContainingType)
             {
-                parts.Push($"{current.Name}{(current.Arity > 0 ? $"{(char)96}{current.Arity}" : string.Empty)}");
+                parts.Push(
+                    $"{current.Name}{(current.Arity > 0 ? $"{(char)96}{current.Arity}" : string.Empty)}"
+                );
             }
 
             return string.Join(".", parts);
         }
 
-        private static IAssemblySymbol? ContainingAssembly(ITypeSymbol symbol) => symbol switch
-        {
-            IArrayTypeSymbol array => ContainingAssembly(array.ElementType),
-            IPointerTypeSymbol pointer => ContainingAssembly(pointer.PointedAtType),
-            IFunctionPointerTypeSymbol functionPointer =>
-                ContainingAssembly(functionPointer.Signature.ReturnType),
-            _ => symbol.ContainingAssembly
-        };
+        private static IAssemblySymbol? ContainingAssembly(ITypeSymbol symbol) =>
+            symbol switch
+            {
+                IArrayTypeSymbol array => ContainingAssembly(array.ElementType),
+                IPointerTypeSymbol pointer => ContainingAssembly(pointer.PointedAtType),
+                IFunctionPointerTypeSymbol functionPointer => ContainingAssembly(
+                    functionPointer.Signature.ReturnType
+                ),
+                _ => symbol.ContainingAssembly,
+            };
     }
 
     private const string ExactInterfaceBindingPrefix = """
@@ -1685,7 +2045,7 @@ using System.Threading.Tasks;
     {
         Type,
         Constructor,
-        Member
+        Member,
     }
 
     private sealed record ContractDeclaration(
@@ -1693,18 +2053,15 @@ using System.Threading.Tasks;
         DeclarationKind Kind,
         string Owner,
         string Signature,
-        string? AssemblyName = null)
+        string? AssemblyName = null
+    )
     {
-        public string QualifiedOwner =>
-            AssemblyName is null ? Owner : $"{AssemblyName}::{Owner}";
+        public string QualifiedOwner => AssemblyName is null ? Owner : $"{AssemblyName}::{Owner}";
 
         public override string ToString() => $"{Document}:{Owner}:{Kind}:{Signature}";
     }
 
-    private sealed record PackageType(
-        string AssemblyName,
-        string FullName,
-        string SimpleKey)
+    private sealed record PackageType(string AssemblyName, string FullName, string SimpleKey)
     {
         public string Identity => $"{AssemblyName}::{FullName}";
     }
@@ -1713,22 +2070,29 @@ using System.Threading.Tasks;
         string Document,
         string AssemblyName,
         string FullName,
-        string[] Parameters);
+        string[] Parameters
+    );
 
     private static string FindRepositoryRoot()
     {
         var current = new DirectoryInfo(AppContext.BaseDirectory);
         while (current is not null)
         {
-            if (File.Exists(Path.Combine(current.FullName, "AGENTS.md"))
-                && File.Exists(Path.Combine(current.FullName, "framework", "languages", "dotnet", "VERSION"))
+            if (
+                File.Exists(Path.Combine(current.FullName, "AGENTS.md"))
+                && File.Exists(
+                    Path.Combine(current.FullName, "framework", "languages", "dotnet", "VERSION")
+                )
                 && Directory.Exists(Path.Combine(current.FullName, "framework"))
-                && Directory.Exists(Path.Combine(current.FullName, "core")))
+                && Directory.Exists(Path.Combine(current.FullName, "core"))
+            )
                 return current.FullName;
             current = current.Parent;
         }
 
-        throw new DirectoryNotFoundException("Could not locate the repository root containing AGENTS.md.");
+        throw new DirectoryNotFoundException(
+            "Could not locate the repository root containing AGENTS.md."
+        );
     }
 
     private static void AssertMethodParameter(
@@ -1736,26 +2100,33 @@ using System.Threading.Tasks;
         string methodName,
         string parameterName,
         Type requiredParameterType,
-        Type disallowedParameterType)
+        Type disallowedParameterType
+    )
     {
         var matchingMethods = EnumerateInterfaceMethods(contractType)
-            .Where(method => method.Name == methodName
-                             && method.GetParameters().Any(parameter => parameter.Name == parameterName))
+            .Where(method =>
+                method.Name == methodName
+                && method.GetParameters().Any(parameter => parameter.Name == parameterName)
+            )
             .ToArray();
 
         Assert.NotEmpty(matchingMethods);
 
         Assert.Contains(
             matchingMethods,
-            method => method.GetParameters()
-                .Single(parameter => parameter.Name == parameterName)
-                .ParameterType == requiredParameterType);
+            method =>
+                method
+                    .GetParameters()
+                    .Single(parameter => parameter.Name == parameterName)
+                    .ParameterType == requiredParameterType
+        );
 
         foreach (var method in matchingMethods)
         {
             var parameter = Assert.Single(
                 method.GetParameters(),
-                parameter => parameter.Name == parameterName);
+                parameter => parameter.Name == parameterName
+            );
             Assert.NotEqual(disallowedParameterType, parameter.ParameterType);
         }
     }
@@ -1764,11 +2135,14 @@ using System.Threading.Tasks;
         Type contractType,
         string methodName,
         string parameterName,
-        Type disallowedParameterType)
+        Type disallowedParameterType
+    )
     {
         var matchingMethods = EnumerateInterfaceMethods(contractType)
-            .Where(method => method.Name == methodName
-                             && method.GetParameters().Any(parameter => parameter.Name == parameterName))
+            .Where(method =>
+                method.Name == methodName
+                && method.GetParameters().Any(parameter => parameter.Name == parameterName)
+            )
             .ToArray();
 
         Assert.NotEmpty(matchingMethods);
@@ -1777,7 +2151,8 @@ using System.Threading.Tasks;
         {
             var parameter = Assert.Single(
                 method.GetParameters(),
-                parameter => parameter.Name == parameterName);
+                parameter => parameter.Name == parameterName
+            );
             Assert.NotEqual(disallowedParameterType, parameter.ParameterType);
         }
     }

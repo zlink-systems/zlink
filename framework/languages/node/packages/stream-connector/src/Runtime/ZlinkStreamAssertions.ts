@@ -1,7 +1,4 @@
-import {
-  ZlinkStreamErrorCode,
-  type ZlinkStreamError
-} from '../Contracts';
+import { ZlinkStreamErrorCode, type ZlinkStreamError } from '../Contracts';
 import { connectorError, unwrapStreamError } from './ZlinkStreamSupport';
 
 export interface ZlinkStreamAssertions {
@@ -20,7 +17,10 @@ export const zlinkStreamAssert: ZlinkStreamAssertions = {
     // least. The empty message is rejected whether the condition held or not,
     // so the call site is corrected the first time it runs.
     if (typeof message !== 'string' || message.trim().length === 0) {
-      throw connectorError(ZlinkStreamErrorCode.ValidationFailed, 'zlinkStreamAssert.ensure requires a non-empty diagnostic message.');
+      throw connectorError(
+        ZlinkStreamErrorCode.ValidationFailed,
+        'zlinkStreamAssert.ensure requires a non-empty diagnostic message.'
+      );
     }
     if (!condition) {
       throw connectorError(ZlinkStreamErrorCode.ValidationFailed, message);
@@ -62,7 +62,10 @@ export const zlinkStreamAssert: ZlinkStreamAssertions = {
       throw connectorError(ZlinkStreamErrorCode.ValidationFailed, 'Expected action to time out.');
     }
     const code = unwrapStreamError(failure).code;
-    if (code !== ZlinkStreamErrorCode.RequestTimeout && code !== ZlinkStreamErrorCode.ConnectTimeout) {
+    if (
+      code !== ZlinkStreamErrorCode.RequestTimeout &&
+      code !== ZlinkStreamErrorCode.ConnectTimeout
+    ) {
       throw failure;
     }
   }

@@ -1,39 +1,46 @@
 package systems.zlink.framework.runtime.actors;
-import java.util.Map;
-import java.util.Optional;
-import java.util.concurrent.CompletionStage;
-import systems.zlink.framework.actors.ZLinkBoundSession;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNull;
 
-import java.nio.charset.StandardCharsets;
-import java.util.concurrent.CompletableFuture;
 import org.junit.jupiter.api.Test;
+
 import systems.zlink.framework.actors.ZLinkActor;
 import systems.zlink.framework.actors.ZLinkActorContext;
 import systems.zlink.framework.actors.ZLinkActorFactory;
 import systems.zlink.framework.actors.ZLinkActorJoinCall;
 import systems.zlink.framework.actors.ZLinkActorRelocationAdapter;
+import systems.zlink.framework.actors.ZLinkBoundSession;
 import systems.zlink.framework.actors.ZLinkRelocationCancellation;
 import systems.zlink.framework.runtime.internal.handlers.ZLinkHandlerActivator;
+
+import java.nio.charset.StandardCharsets;
+import java.util.Map;
+import java.util.Optional;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CompletionStage;
 
 final class ZLinkActorTransferRegistryTest {
     @Test
     void registeredAdapterCapturesAndRestoresDomainState() {
-        ZLinkActorTransferRegistry registry = new ZLinkActorTransferRegistry(
-            Map.of("stateful", StatefulAdapter.class),
-            ZLinkHandlerActivator.reflection());
+        ZLinkActorTransferRegistry registry =
+                new ZLinkActorTransferRegistry(
+                        Map.of("stateful", StatefulAdapter.class),
+                        ZLinkHandlerActivator.reflection());
         TestActor source = new TestActor(contextFor("actor-1"), "version-7");
 
         ZLinkActorTransferRegistry.TransferState state =
-            registry.transferOut("stateful", source).toCompletableFuture().join();
-        TestActor target = (TestActor) registry.transferIn(
-            "stateful",
-            "actor-1",
-            contextFor("actor-1"),
-            state.state(),
-            TestActorFactory.class).toCompletableFuture().join();
+                registry.transferOut("stateful", source).toCompletableFuture().join();
+        TestActor target =
+                (TestActor)
+                        registry.transferIn(
+                                        "stateful",
+                                        "actor-1",
+                                        contextFor("actor-1"),
+                                        state.state(),
+                                        TestActorFactory.class)
+                                .toCompletableFuture()
+                                .join();
 
         assertEquals("stateful", state.adapterKey());
         assertEquals("version-7", target.state);
@@ -41,41 +48,37 @@ final class ZLinkActorTransferRegistryTest {
 
     @Test
     void missingAdapterUsesEmptyStateAndFactorySignal() {
-        ZLinkActorTransferRegistry registry = new ZLinkActorTransferRegistry(
-            Map.of(),
-            ZLinkHandlerActivator.reflection());
+        ZLinkActorTransferRegistry registry =
+                new ZLinkActorTransferRegistry(Map.of(), ZLinkHandlerActivator.reflection());
 
         ZLinkActorTransferRegistry.TransferState state =
-            registry.transferOut(
-                "stateless",
-                new TestActor(contextFor("actor-1"), "ignored"))
-                .toCompletableFuture().join();
+                registry.transferOut("stateless", new TestActor(contextFor("actor-1"), "ignored"))
+                        .toCompletableFuture()
+                        .join();
 
         assertNull(state.adapterKey());
         assertEquals(true, state.state().isEmpty());
-        assertNull(registry.transferIn(
-            "stateless",
-            "actor-1",
-            contextFor("actor-1"),
-            state.state(),
-            TestActorFactory.class).toCompletableFuture().join());
+        assertNull(
+                registry.transferIn(
+                                "stateless",
+                                "actor-1",
+                                contextFor("actor-1"),
+                                state.state(),
+                                TestActorFactory.class)
+                        .toCompletableFuture()
+                        .join());
     }
 
-    public static final class StatefulAdapter
-        implements ZLinkActorRelocationAdapter<TestActor> {
+    public static final class StatefulAdapter implements ZLinkActorRelocationAdapter<TestActor> {
         @Override
         public CompletionStage<byte[]> capture(
-            TestActor actor,
-            ZLinkRelocationCancellation cancellation) {
-            return CompletableFuture.completedFuture(
-                actor.state.getBytes(StandardCharsets.UTF_8));
+                TestActor actor, ZLinkRelocationCancellation cancellation) {
+            return CompletableFuture.completedFuture(actor.state.getBytes(StandardCharsets.UTF_8));
         }
 
         @Override
         public CompletionStage<Void> restore(
-            TestActor actor,
-            byte[] state,
-            ZLinkRelocationCancellation cancellation) {
+                TestActor actor, byte[] state, ZLinkRelocationCancellation cancellation) {
             actor.state = new String(state, StandardCharsets.UTF_8);
             return CompletableFuture.completedFuture(null);
         }
@@ -83,10 +86,8 @@ final class ZLinkActorTransferRegistryTest {
 
     public static final class TestActorFactory implements ZLinkActorFactory {
         @Override
-        public CompletionStage<ZLinkActor> create(
-            ZLinkActorContext context) {
-            return CompletableFuture.completedFuture(
-                new TestActor(context, "loaded-elsewhere"));
+        public CompletionStage<ZLinkActor> create(ZLinkActorContext context) {
+            return CompletableFuture.completedFuture(new TestActor(context, "loaded-elsewhere"));
         }
     }
 
@@ -107,25 +108,48 @@ final class ZLinkActorTransferRegistryTest {
 
     private static ZLinkActorContext contextFor(String actorId) {
         return new ZLinkActorContext() {
-            @Override public String actorId() { return actorId; }
-            @Override public long objectGeneration() { return 1L; }
-            @Override public String meshName() { return "test"; }
-            @Override public Optional<String> spotId() {
+            @Override
+            public String actorId() {
+                return actorId;
+            }
+
+            @Override
+            public long objectGeneration() {
+                return 1L;
+            }
+
+            @Override
+            public String meshName() {
+                return "test";
+            }
+
+            @Override
+            public Optional<String> spotId() {
                 return Optional.empty();
             }
-            @Override public ZLinkBoundSession boundSession() {
+
+            @Override
+            public ZLinkBoundSession boundSession() {
                 return null;
             }
-            @Override public ZLinkActorJoinCall joinSpot(String spotId) {
+
+            @Override
+            public ZLinkActorJoinCall joinSpot(String spotId) {
                 throw new UnsupportedOperationException();
             }
-            @Override public ZLinkActorJoinCall joinSpot(String spotId, Object request) {
+
+            @Override
+            public ZLinkActorJoinCall joinSpot(String spotId, Object request) {
                 throw new UnsupportedOperationException();
             }
-            @Override public ZLinkActorJoinCall joinEntrySpot() {
+
+            @Override
+            public ZLinkActorJoinCall joinEntrySpot() {
                 throw new UnsupportedOperationException();
             }
-            @Override public ZLinkActorJoinCall joinEntrySpot(Object request) {
+
+            @Override
+            public ZLinkActorJoinCall joinEntrySpot(Object request) {
                 throw new UnsupportedOperationException();
             }
         };

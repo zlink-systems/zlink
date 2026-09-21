@@ -1,22 +1,5 @@
 package systems.zlink.framework.runtime.actors;
-import java.time.Duration;
-import java.util.concurrent.atomic.AtomicBoolean;
 
-import systems.zlink.framework.runtime.internal.calls.ZLinkOneWayCalls;
-
-import systems.zlink.framework.runtime.internal.backend.ZLinkInternalSpotNode;
-
-import systems.zlink.framework.runtime.internal.backend.*;
-
-import java.util.EnumSet;
-import java.util.List;
-import java.util.Map;
-import java.util.Optional;
-import java.util.concurrent.CompletableFuture;
-import java.util.concurrent.CompletionStage;
-import java.util.concurrent.TimeoutException;
-import java.util.function.Predicate;
-import java.util.function.Consumer;
 import systems.zlink.contracts.core.RoutingId;
 import systems.zlink.contracts.messaging.Message;
 import systems.zlink.framework.ZLinkMessageSerializer;
@@ -26,18 +9,32 @@ import systems.zlink.framework.actors.ZLinkBoundSessionSendCall;
 import systems.zlink.framework.errors.ZLinkConfigurationException;
 import systems.zlink.framework.errors.ZLinkFrameworkErrorKind;
 import systems.zlink.framework.errors.ZLinkFrameworkException;
-import systems.zlink.framework.runtime.messaging.ZLinkPayloadEncoding;
-
-import systems.zlink.framework.streams.ZLinkStreamCodec;
+import systems.zlink.framework.runtime.internal.backend.*;
+import systems.zlink.framework.runtime.internal.backend.ZLinkInternalSpotNode;
+import systems.zlink.framework.runtime.internal.calls.ZLinkOneWayCalls;
 import systems.zlink.framework.runtime.internal.diagnostics.ZLinkFlowContext;
+import systems.zlink.framework.runtime.messaging.ZLinkPayloadEncoding;
 import systems.zlink.framework.runtime.streams.ZLinkStreamHeader;
 import systems.zlink.framework.runtime.streams.ZLinkStreamHeaderFlag;
+import systems.zlink.framework.streams.ZLinkStreamCodec;
 import systems.zlink.framework.streams.ZLinkStreamMessageKind;
+
+import java.time.Duration;
+import java.util.EnumSet;
+import java.util.List;
+import java.util.Map;
+import java.util.Optional;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CompletionStage;
+import java.util.concurrent.TimeoutException;
+import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.function.Consumer;
+import java.util.function.Predicate;
 
 final class ZLinkBoundSessionRuntime implements ZLinkBoundSession {
     private static final Duration DEFAULT_TIMEOUT = Duration.ofSeconds(30);
     static final String REMOTE_BOUND_SESSION_BIND_PACKET_NAME =
-        "zlink.framework.actor.bound_session.bind";
+            "zlink.framework.actor.bound_session.bind";
     private final ZLinkBackendStreamSocket stream;
     private final ZLinkInternalSpotNode spotNode;
     private final RoutingId sessionRid;
@@ -53,16 +50,16 @@ final class ZLinkBoundSessionRuntime implements ZLinkBoundSession {
     private Consumer<ZLinkBackendActorRef> rebindListener = ignored -> {};
 
     ZLinkBoundSessionRuntime(
-        ZLinkBackendStreamSocket stream,
-        ZLinkInternalSpotNode spotNode,
-        RoutingId sessionRid,
-        String actorId,
-        ZLinkMessageSerializer serializer,
-        ZLinkActorRuntime actorRuntime,
-        ZLinkActor actor,
-        ZLinkStreamCodec defaultCodec,
-        Predicate<RoutingId> routeReady,
-        ZLinkRelayMetadataPolicy metadataPolicy) {
+            ZLinkBackendStreamSocket stream,
+            ZLinkInternalSpotNode spotNode,
+            RoutingId sessionRid,
+            String actorId,
+            ZLinkMessageSerializer serializer,
+            ZLinkActorRuntime actorRuntime,
+            ZLinkActor actor,
+            ZLinkStreamCodec defaultCodec,
+            Predicate<RoutingId> routeReady,
+            ZLinkRelayMetadataPolicy metadataPolicy) {
         this.stream = stream;
         this.spotNode = spotNode;
         this.sessionRid = sessionRid;
@@ -73,7 +70,7 @@ final class ZLinkBoundSessionRuntime implements ZLinkBoundSession {
         this.defaultCodec = defaultCodec == null ? ZLinkStreamCodec.JSON : defaultCodec;
         this.routeReady = routeReady == null ? ignored -> true : routeReady;
         this.metadataPolicy =
-            metadataPolicy == null ? ZLinkRelayMetadataPolicy.EMPTY : metadataPolicy;
+                metadataPolicy == null ? ZLinkRelayMetadataPolicy.EMPTY : metadataPolicy;
     }
 
     void setBindingToken(long bindingToken) {
@@ -92,63 +89,60 @@ final class ZLinkBoundSessionRuntime implements ZLinkBoundSession {
         rebindListener.accept(targetActor);
     }
 
-    CompletionStage<Void> rebindNativeActor(
-        ZLinkBackendActorRef targetActor,
-        Duration timeout) {
+    CompletionStage<Void> rebindNativeActor(ZLinkBackendActorRef targetActor, Duration timeout) {
         if (!actorId.equals(targetActor.actorId())) {
-            return CompletableFuture.failedFuture(new ZLinkConfigurationException(
-                "bound session actor id mismatch: " + actorId));
+            return CompletableFuture.failedFuture(
+                    new ZLinkConfigurationException("bound session actor id mismatch: " + actorId));
         }
         ZLinkBackendActorRef sourceActor = actorRuntime.refFor(actor);
         if (sourceActor.generation() != targetActor.generation()) {
-            return CompletableFuture.failedFuture(new ZLinkConfigurationException(
-                "relocation cannot rebind bound session actor " + actorId
-                    + " from generation " + sourceActor.generation()
-                    + " to " + targetActor.generation()
-                    + "; a new actor incarnation requires an explicit bind"));
+            return CompletableFuture.failedFuture(
+                    new ZLinkConfigurationException(
+                            "relocation cannot rebind bound session actor "
+                                    + actorId
+                                    + " from generation "
+                                    + sourceActor.generation()
+                                    + " to "
+                                    + targetActor.generation()
+                                    + "; a new actor incarnation requires an explicit bind"));
         }
-        ZLinkStreamHeader header = new ZLinkStreamHeader(
-            ZLinkStreamMessageKind.SEND,
-            ZLinkStreamCodec.RAW,
-            EnumSet.noneOf(ZLinkStreamHeaderFlag.class),
-            Optional.empty(),
-            REMOTE_BOUND_SESSION_BIND_PACKET_NAME,
-            Map.of());
+        ZLinkStreamHeader header =
+                new ZLinkStreamHeader(
+                        ZLinkStreamMessageKind.SEND,
+                        ZLinkStreamCodec.RAW,
+                        EnumSet.noneOf(ZLinkStreamHeaderFlag.class),
+                        Optional.empty(),
+                        REMOTE_BOUND_SESSION_BIND_PACKET_NAME,
+                        Map.of());
         return ignoreMissingBinding(stream.unbindActor(sessionRid, actorId).submit(timeout))
-            .thenCompose(unbound -> awaitRouteReady(targetActor, timeout))
-            .thenCompose(ignored -> bindActorWithRetry(stream, sessionRid, targetActor, timeout))
-            .thenCompose(ignored -> relayBoundSessionBind(header))
-            .thenRun(() -> rebindListener.accept(targetActor));
+                .thenCompose(unbound -> awaitRouteReady(targetActor, timeout))
+                .thenCompose(
+                        ignored -> bindActorWithRetry(stream, sessionRid, targetActor, timeout))
+                .thenCompose(ignored -> relayBoundSessionBind(header))
+                .thenRun(() -> rebindListener.accept(targetActor));
     }
 
     private CompletionStage<Void> awaitRouteReady(
-        ZLinkBackendActorRef targetActor,
-        Duration timeout) {
+            ZLinkBackendActorRef targetActor, Duration timeout) {
         return ZLinkActorRetryScheduler.waitUntilRelay(
-            timeout,
-            () -> routeReady.test(targetActor.nodeRid()),
-            () -> {},
-            () -> {
-                String message =
-                    "remote bound session route was not ready before timeout: "
-                        + actorId;
-                return new ZLinkFrameworkException(
-                    ZLinkFrameworkErrorKind.UNAVAILABLE,
-                    message,
-                    new TimeoutException(message));
-            });
+                timeout,
+                () -> routeReady.test(targetActor.nodeRid()),
+                () -> {},
+                () -> {
+                    String message =
+                            "remote bound session route was not ready before timeout: " + actorId;
+                    return new ZLinkFrameworkException(
+                            ZLinkFrameworkErrorKind.UNAVAILABLE,
+                            message,
+                            new TimeoutException(message));
+                });
     }
 
-    private CompletionStage<Void> relayBoundSessionBind(
-        ZLinkStreamHeader header) {
+    private CompletionStage<Void> relayBoundSessionBind(ZLinkStreamHeader header) {
         Message body = Message.from(new byte[0]);
         CompletionStage<Void> submission;
         try {
-            submission = stream.relayBoundActorAsync(
-                sessionRid,
-                actorId,
-                header,
-                List.of(body));
+            submission = stream.relayBoundActorAsync(sessionRid, actorId, header, List.of(body));
         } catch (RuntimeException failure) {
             body.close();
             return CompletableFuture.failedFuture(failure);
@@ -157,130 +151,134 @@ final class ZLinkBoundSessionRuntime implements ZLinkBoundSession {
     }
 
     static CompletionStage<Void> bindActorWithRetry(
-        ZLinkBackendStreamSocket stream,
-        RoutingId sessionRid,
-        ZLinkBackendActorRef targetActor,
-        Duration timeout) {
+            ZLinkBackendStreamSocket stream,
+            RoutingId sessionRid,
+            ZLinkBackendActorRef targetActor,
+            Duration timeout) {
         return stream.bindActor(sessionRid, targetActor).submit(timeout);
     }
 
     static CompletionStage<Void> ignoreMissingBinding(CompletionStage<Void> stage) {
-        return stage.handle((ignored, error) -> {
-            if (error == null || ZLinkActorSubmitFaults.requestNotFound(error)) {
-                return CompletableFuture.<Void>completedFuture(null);
-            }
-            return CompletableFuture.<Void>failedFuture(error);
-        }).thenCompose(result -> result);
+        return stage.handle(
+                        (ignored, error) -> {
+                            if (error == null || ZLinkActorSubmitFaults.requestNotFound(error)) {
+                                return CompletableFuture.<Void>completedFuture(null);
+                            }
+                            return CompletableFuture.<Void>failedFuture(error);
+                        })
+                .thenCompose(result -> result);
     }
 
     @Override
     public ZLinkBoundSessionSendCall send(Object message) {
         ZLinkBoundSessionSendOptions options =
-            ZLinkBoundSessionSendOptions.createForPayload(
-                serializer,
-                message,
-                ZLinkPayloadEncoding.resolvePacketName(message),
-                defaultCodec);
+                ZLinkBoundSessionSendOptions.createForPayload(
+                        serializer,
+                        message,
+                        ZLinkPayloadEncoding.resolvePacketName(message),
+                        defaultCodec);
         ZLinkPayloadEncoding.EncodedPayload encoded =
-            ZLinkPayloadEncoding.encode(serializer, message);
+                ZLinkPayloadEncoding.encode(serializer, message);
         return new SendCall(
-            stream,
-            sessionRid,
-            actorId,
-            actorRuntime,
-            encoded.payload(),
-            options,
-            metadataPolicy);
+                stream,
+                sessionRid,
+                actorId,
+                actorRuntime,
+                encoded.payload(),
+                options,
+                metadataPolicy);
     }
 
     @Override
     public CompletionStage<Void> disconnect() {
         return stream.unbindActor(sessionRid, actorId)
-            .submit(DEFAULT_TIMEOUT)
-            .thenRun(() -> {
-                actorRuntime.clearSessionBinding(actor, bindingToken);
-                unbindListener.run();
-            });
+                .submit(DEFAULT_TIMEOUT)
+                .thenRun(
+                        () -> {
+                            actorRuntime.clearSessionBinding(actor, bindingToken);
+                            unbindListener.run();
+                        });
     }
 
     private record SendCall(
-        ZLinkBackendStreamSocket stream,
-        RoutingId sessionRid,
-        String actorId,
-        ZLinkActorRuntime actorRuntime,
-        Message payload,
-        ZLinkBoundSessionSendOptions options,
-        ZLinkRelayMetadataPolicy metadataPolicy,
-        AtomicBoolean submitGate)
-        implements ZLinkBoundSessionSendCall {
-        SendCall(
             ZLinkBackendStreamSocket stream,
             RoutingId sessionRid,
             String actorId,
             ZLinkActorRuntime actorRuntime,
             Message payload,
             ZLinkBoundSessionSendOptions options,
-            ZLinkRelayMetadataPolicy metadataPolicy) {
-            this(stream, sessionRid, actorId, actorRuntime, payload, options, metadataPolicy,
-                new AtomicBoolean());
+            ZLinkRelayMetadataPolicy metadataPolicy,
+            AtomicBoolean submitGate)
+            implements ZLinkBoundSessionSendCall {
+        SendCall(
+                ZLinkBackendStreamSocket stream,
+                RoutingId sessionRid,
+                String actorId,
+                ZLinkActorRuntime actorRuntime,
+                Message payload,
+                ZLinkBoundSessionSendOptions options,
+                ZLinkRelayMetadataPolicy metadataPolicy) {
+            this(
+                    stream,
+                    sessionRid,
+                    actorId,
+                    actorRuntime,
+                    payload,
+                    options,
+                    metadataPolicy,
+                    new AtomicBoolean());
         }
+
         public ZLinkBoundSessionSendCall packetName(String packetName) {
             return new SendCall(
-                stream,
-                sessionRid,
-                actorId,
-                actorRuntime,
-                payload,
-                options.withPacketName(packetName),
-                metadataPolicy,
-                submitGate);
+                    stream,
+                    sessionRid,
+                    actorId,
+                    actorRuntime,
+                    payload,
+                    options.withPacketName(packetName),
+                    metadataPolicy,
+                    submitGate);
         }
 
         @Override
         public ZLinkBoundSessionSendCall metadata(String key, String value) {
             return new SendCall(
-                stream,
-                sessionRid,
-                actorId,
-                actorRuntime,
-                payload,
-                options.withMetadata(key, value),
-                metadataPolicy,
-                submitGate);
+                    stream,
+                    sessionRid,
+                    actorId,
+                    actorRuntime,
+                    payload,
+                    options.withMetadata(key, value),
+                    metadataPolicy,
+                    submitGate);
         }
 
         @Override
         public CompletionStage<Void> submit() {
-            CompletionStage<Void> duplicate =
-                ZLinkOneWayCalls.beginOneWay(submitGate);
+            CompletionStage<Void> duplicate = ZLinkOneWayCalls.beginOneWay(submitGate);
             if (duplicate != null) {
                 return duplicate;
             }
-            try (ZLinkFlowContext.Scope flowScope = actorRuntime != null
-                ? actorRuntime.enterApplicationFlow()
-                : null) {
-            ZLinkStreamHeader header = metadataPolicy.actorToSession(options).header();
-            Message payloadPart;
-            try {
-                payloadPart = Message.from(payload);
-            } finally {
-                payload.close();
-            }
-            CompletionStage<Void> submission;
-            try {
-                submission = stream.sendAsync(
-                    sessionRid,
-                    header,
-                    List.of(payloadPart));
-            } catch (RuntimeException failure) {
-                payloadPart.close();
-                return CompletableFuture.failedFuture(failure);
-            }
-            return ZLinkOneWayCalls.adaptOneWay(submission)
-                .whenComplete((ignored, failure) -> payloadPart.close());
+            try (ZLinkFlowContext.Scope flowScope =
+                    actorRuntime != null ? actorRuntime.enterApplicationFlow() : null) {
+                ZLinkStreamHeader header = metadataPolicy.actorToSession(options).header();
+                Message payloadPart;
+                try {
+                    payloadPart = Message.from(payload);
+                } finally {
+                    payload.close();
+                }
+                CompletionStage<Void> submission;
+                try {
+                    submission = stream.sendAsync(sessionRid, header, List.of(payloadPart));
+                } catch (RuntimeException failure) {
+                    payloadPart.close();
+                    return CompletableFuture.failedFuture(failure);
+                }
+                return ZLinkOneWayCalls.adaptOneWay(submission)
+                        .whenComplete((ignored, failure) -> payloadPart.close());
             }
         }
-
     }
-
 }

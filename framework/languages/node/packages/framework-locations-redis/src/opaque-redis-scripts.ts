@@ -38,7 +38,10 @@ local function encodeMember(originalKey, bytes, version, expiresAtMs, tombstone)
 end
 `;
 
-export const OPAQUE_READ_SCRIPT = PROLOGUE + DECODE_HELPERS + `
+export const OPAQUE_READ_SCRIPT =
+  PROLOGUE +
+  DECODE_HELPERS +
+  `
 local record = liveRecordAt(KEYS[1], nowMs)
 if not record then return {0, nowMs} end
 return {1, nowMs, record[1], record[2], record[3], tostring(tonumber(record[4]))}
@@ -54,7 +57,10 @@ return {1, nowMs, record[1], record[2], record[3], tostring(tonumber(record[4]))
 //           ['put', keyIndex, originalKey, retentionMsOrFalse]
 //           | ['delete', keyIndex, originalKey]
 // ARGV[3..] = one raw-bytes argument per 'put' mutation, in mutation order.
-export const OPAQUE_WRITE_SCRIPT = PROLOGUE + DECODE_HELPERS + `
+export const OPAQUE_WRITE_SCRIPT =
+  PROLOGUE +
+  DECODE_HELPERS +
+  `
 local indexKey = KEYS[1]
 local mapKey = KEYS[2]
 local cleanupKey = KEYS[3]
@@ -164,7 +170,9 @@ return result
 // Shared body for point-in-time paged scanning. KEYS[1]=indexKey,
 // KEYS[2]=mapKey, KEYS[3]=snapshotKey, KEYS[4]=cleanupKey,
 // KEYS[5]=sequenceKey, KEYS[6]=snapshotExpiryKey, KEYS[7]=snapshotBoundaryKey.
-const SCAN_CLEANUP_AND_BOUNDARY = DECODE_HELPERS + `
+const SCAN_CLEANUP_AND_BOUNDARY =
+  DECODE_HELPERS +
+  `
 local expiredSnapshots = redis.call('ZRANGEBYSCORE', KEYS[6], '-inf', nowMs, 'LIMIT', 0, 128)
 for _, expiredId in ipairs(expiredSnapshots) do
     redis.call('ZREM', KEYS[6], expiredId)
@@ -270,7 +278,10 @@ return result
 `;
 
 // ARGV = [prefix, limit, snapshotId]
-export const OPAQUE_SCAN_START_SCRIPT = PROLOGUE + SCAN_CLEANUP_AND_BOUNDARY + `
+export const OPAQUE_SCAN_START_SCRIPT =
+  PROLOGUE +
+  SCAN_CLEANUP_AND_BOUNDARY +
+  `
 local prefix = ARGV[1]
 local limit = tonumber(ARGV[2])
 local snapshotId = ARGV[3]
@@ -285,10 +296,14 @@ redis.call('HSET', KEYS[3], 'now', tostring(nowMs), 'boundary', tostring(boundar
 redis.call('PEXPIRE', KEYS[3], 60000)
 redis.call('ZADD', KEYS[6], nowMs + 60000, snapshotId)
 redis.call('ZADD', KEYS[7], boundary, snapshotId)
-` + SCAN_PAGE_READ;
+` +
+  SCAN_PAGE_READ;
 
 // ARGV = [prefix, lastKeyHex, limit, snapshotId]
-export const OPAQUE_SCAN_CONTINUE_SCRIPT = PROLOGUE + SCAN_CLEANUP_AND_BOUNDARY + `
+export const OPAQUE_SCAN_CONTINUE_SCRIPT =
+  PROLOGUE +
+  SCAN_CLEANUP_AND_BOUNDARY +
+  `
 local prefix = ARGV[1]
 local lastKey = ARGV[2]
 local limit = tonumber(ARGV[3])
@@ -299,14 +314,17 @@ if redis.call('EXISTS', KEYS[3]) == 0 then
     redis.call('ZREM', KEYS[7], snapshotId)
     return {'expired'}
 end
-` + SCAN_PAGE_READ;
+` +
+  SCAN_PAGE_READ;
 
 // Relocation Store: raw-bytes STRING payloads at
 // {prefix}:zlink-relocation-v1:blob:{reference}, retention via PSETEX/PX
 // (23-relocation-store-redis.md#8). KEYS[1] is the blob key -- the reference
 // itself is already the key's last segment, so identity on retry is decided
 // by comparing the stored bytes against ARGV[1].
-export const BLOB_PUT_SCRIPT = PROLOGUE + `
+export const BLOB_PUT_SCRIPT =
+  PROLOGUE +
+  `
 local existing = redis.call('GET', KEYS[1])
 if existing then
     if existing ~= ARGV[1] then
@@ -321,7 +339,9 @@ redis.call('SET', KEYS[1], ARGV[1], 'PX', retentionMs)
 return {'stored', nowMs, tostring(nowMs + retentionMs)}
 `;
 
-export const BLOB_READ_SCRIPT = PROLOGUE + `
+export const BLOB_READ_SCRIPT =
+  PROLOGUE +
+  `
 local bytes = redis.call('GET', KEYS[1])
 if not bytes then return {0, nowMs} end
 local ttl = redis.call('PTTL', KEYS[1])
@@ -329,7 +349,9 @@ local expiresAtMs = nowMs + math.max(ttl, 0)
 return {1, nowMs, bytes, tostring(expiresAtMs)}
 `;
 
-export const BLOB_RENEW_SCRIPT = PROLOGUE + `
+export const BLOB_RENEW_SCRIPT =
+  PROLOGUE +
+  `
 if redis.call('EXISTS', KEYS[1]) == 0 then return {0, nowMs} end
 local retentionMs = tonumber(ARGV[1])
 redis.call('PEXPIRE', KEYS[1], retentionMs)

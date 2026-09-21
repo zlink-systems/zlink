@@ -24,6 +24,6 @@ public interface IZLinkCodecRegistrar
     void AddSerializer(
         string contentType,
         IZLinkMessageSerializer serializer,
-        Func<Type, bool> canSerialize);
-
+        Func<Type, bool> canSerialize
+    );
 }

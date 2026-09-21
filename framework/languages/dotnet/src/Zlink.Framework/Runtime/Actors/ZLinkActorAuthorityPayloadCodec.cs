@@ -7,7 +7,7 @@ namespace Zlink.Framework.Runtime.Actors;
 internal enum ZLinkActorAuthorityState : byte
 {
     Creating = 0,
-    Ready = 1
+    Ready = 1,
 }
 
 internal sealed record ZLinkActorAuthorityPayload(
@@ -21,21 +21,23 @@ internal sealed record ZLinkActorAuthorityPayload(
     ulong OwnerLeaseGeneration,
     string MeshName,
     RoutingId NodeRid,
-    ulong NodeGeneration);
+    ulong NodeGeneration
+);
 
 internal enum ZLinkActorRelocationAuthorityPhase : byte
 {
     Activated = 1,
     Cleaning = 2,
     Completed = 3,
-    Steady = 4
+    Steady = 4,
 }
 
 internal sealed record ZLinkActorRelocationAuthorityPayload(
     Guid RelocationId,
     ZLinkActorRelocationAuthorityPhase Phase,
     ZLinkRemoteActorBoundSessionRoute BoundSessionRoute,
-    ReadOnlyMemory<byte> ApplicationPayload);
+    ReadOnlyMemory<byte> ApplicationPayload
+);
 
 internal static class ZLinkActorRelocationAuthorityPayloadCodec
 {
@@ -47,22 +49,22 @@ internal static class ZLinkActorRelocationAuthorityPayloadCodec
     internal static byte[] Encode(ZLinkActorRelocationAuthorityPayload value)
     {
         ArgumentNullException.ThrowIfNull(value);
-        if (value.RelocationId == Guid.Empty
-            || value.Phase is < ZLinkActorRelocationAuthorityPhase.Activated
-                or > ZLinkActorRelocationAuthorityPhase.Steady
-            || value.ApplicationPayload.Length is < 1 or > MaximumBytes)
+        if (
+            value.RelocationId == Guid.Empty
+            || value.Phase
+                is < ZLinkActorRelocationAuthorityPhase.Activated
+                    or > ZLinkActorRelocationAuthorityPhase.Steady
+            || value.ApplicationPayload.Length is < 1 or > MaximumBytes
+        )
             throw new ArgumentOutOfRangeException(nameof(value));
 
         using var stream = new MemoryStream();
         using var writer = new BinaryWriter(stream, Encoding.UTF8, leaveOpen: true);
-        var hasSessionOwnerFence = value.BoundSessionRoute.IsBound
-                                   && !string.IsNullOrWhiteSpace(
-                                       value.BoundSessionRoute.SessionOwnerId)
-                                   && value.BoundSessionRoute
-                                          .SessionOwnerLeaseGeneration > 0;
-        var wireVersion = hasSessionOwnerFence
-            ? Version
-            : VersionWithoutSessionOwnerFence;
+        var hasSessionOwnerFence =
+            value.BoundSessionRoute.IsBound
+            && !string.IsNullOrWhiteSpace(value.BoundSessionRoute.SessionOwnerId)
+            && value.BoundSessionRoute.SessionOwnerLeaseGeneration > 0;
+        var wireVersion = hasSessionOwnerFence ? Version : VersionWithoutSessionOwnerFence;
         writer.Write(Magic);
         writer.Write(wireVersion);
         writer.Write(value.RelocationId.ToByteArray());
@@ -90,9 +92,9 @@ internal static class ZLinkActorRelocationAuthorityPayloadCodec
         writer.Write(value.ApplicationPayload.Length);
         writer.Write(value.ApplicationPayload.Span);
         writer.Flush();
-        writer.Write(ZLinkCrc32C.Compute(stream.GetBuffer().AsSpan(
-            0,
-            checked((int)stream.Length))));
+        writer.Write(
+            ZLinkCrc32C.Compute(stream.GetBuffer().AsSpan(0, checked((int)stream.Length)))
+        );
         writer.Flush();
         if (stream.Length > MaximumBytes)
             throw new ArgumentOutOfRangeException(nameof(value));
@@ -101,7 +103,8 @@ internal static class ZLinkActorRelocationAuthorityPayloadCodec
 
     internal static bool TryDecode(
         ReadOnlySpan<byte> encoded,
-        out ZLinkActorRelocationAuthorityPayload value)
+        out ZLinkActorRelocationAuthorityPayload value
+    )
     {
         value = null!;
         try
@@ -109,12 +112,14 @@ internal static class ZLinkActorRelocationAuthorityPayloadCodec
             if (encoded.Length is < 32 or > MaximumBytes)
                 return false;
             var expectedChecksum = BinaryPrimitives.ReadUInt32LittleEndian(
-                encoded[^sizeof(uint)..]);
+                encoded[^sizeof(uint)..]
+            );
             if (expectedChecksum != ZLinkCrc32C.Compute(encoded[..^sizeof(uint)]))
                 return false;
             using var stream = new MemoryStream(
                 encoded[..^sizeof(uint)].ToArray(),
-                writable: false);
+                writable: false
+            );
             using var reader = new BinaryReader(stream, Encoding.UTF8, leaveOpen: true);
             if (reader.ReadUInt32() != Magic)
                 return false;
@@ -138,9 +143,7 @@ internal static class ZLinkActorRelocationAuthorityPayloadCodec
                 var sessionOwnerNodeGeneration = reader.ReadUInt64();
                 var acceptedHighWater = reader.ReadUInt64();
                 var sessionOwnerId = version == Version ? ReadString(reader) : null;
-                var sessionOwnerLeaseGeneration = version == Version
-                    ? reader.ReadUInt64()
-                    : 0;
+                var sessionOwnerLeaseGeneration = version == Version ? reader.ReadUInt64() : 0;
                 route = new ZLinkRemoteActorBoundSessionRoute(
                     nodeRid,
                     sessionRid,
@@ -154,7 +157,8 @@ internal static class ZLinkActorRelocationAuthorityPayloadCodec
                     sessionOwnerNodeGeneration,
                     acceptedHighWater,
                     sessionOwnerId,
-                    sessionOwnerLeaseGeneration);
+                    sessionOwnerLeaseGeneration
+                );
                 if (!route.IsBound)
                     return false;
             }
@@ -162,21 +166,24 @@ internal static class ZLinkActorRelocationAuthorityPayloadCodec
             if (applicationSize is < 1 or > MaximumBytes)
                 return false;
             var applicationPayload = ReadExact(reader, applicationSize);
-            if (stream.Position != stream.Length
+            if (
+                stream.Position != stream.Length
                 || relocationId == Guid.Empty
-                || phase is < ZLinkActorRelocationAuthorityPhase.Activated
-                    or > ZLinkActorRelocationAuthorityPhase.Steady)
+                || phase
+                    is < ZLinkActorRelocationAuthorityPhase.Activated
+                        or > ZLinkActorRelocationAuthorityPhase.Steady
+            )
                 return false;
             value = new ZLinkActorRelocationAuthorityPayload(
                 relocationId,
                 phase,
                 route,
-                applicationPayload);
+                applicationPayload
+            );
             return true;
         }
-        catch (Exception error) when (error is IOException
-                                      or ArgumentException
-                                      or OverflowException)
+        catch (Exception error)
+            when (error is IOException or ArgumentException or OverflowException)
         {
             return false;
         }
@@ -190,8 +197,7 @@ internal static class ZLinkActorRelocationAuthorityPayloadCodec
         writer.Write(value);
     }
 
-    private static byte[] ReadBytes(BinaryReader reader)
-        => ReadExact(reader, reader.ReadByte());
+    private static byte[] ReadBytes(BinaryReader reader) => ReadExact(reader, reader.ReadByte());
 
     private static void WriteString(BinaryWriter writer, string value)
     {
@@ -204,8 +210,7 @@ internal static class ZLinkActorRelocationAuthorityPayloadCodec
 
     private static string ReadString(BinaryReader reader)
     {
-        var value = new UTF8Encoding(false, true).GetString(
-            ReadExact(reader, reader.ReadUInt16()));
+        var value = new UTF8Encoding(false, true).GetString(ReadExact(reader, reader.ReadUInt16()));
         if (value.Length == 0 || value.Contains('\0'))
             throw new InvalidDataException();
         return value;
@@ -241,12 +246,14 @@ internal static class ZLinkActorAuthorityPayloadCodec
         actor.U8((byte)value.CurrentSpotKind);
 
         var body = new Writer();
-        body.U8(value.State switch
-        {
-            ZLinkActorAuthorityState.Creating => 1,
-            ZLinkActorAuthorityState.Ready => 0,
-            _ => throw new ArgumentOutOfRangeException(nameof(value))
-        });
+        body.U8(
+            value.State switch
+            {
+                ZLinkActorAuthorityState.Creating => 1,
+                ZLinkActorAuthorityState.Ready => 0,
+                _ => throw new ArgumentOutOfRangeException(nameof(value)),
+            }
+        );
         body.U8(1);
         body.U16(checked((ushort)actor.Count));
         body.Bytes(actor.ToArray());
@@ -273,17 +280,11 @@ internal static class ZLinkActorAuthorityPayloadCodec
         return encoded;
     }
 
-    internal static bool TryDecode(
-        ReadOnlySpan<byte> encoded,
-        out ZLinkActorAuthorityPayload value)
+    internal static bool TryDecode(ReadOnlySpan<byte> encoded, out ZLinkActorAuthorityPayload value)
     {
-        if (ZLinkRelocationAuthorityPayloadCodec.TryDecode(
-                encoded,
-                out var relocation))
+        if (ZLinkRelocationAuthorityPayloadCodec.TryDecode(encoded, out var relocation))
             encoded = relocation.ApplicationPayload.Span;
-        if (ZLinkActorRelocationAuthorityPayloadCodec.TryDecode(
-                encoded,
-                out var phase))
+        if (ZLinkActorRelocationAuthorityPayloadCodec.TryDecode(encoded, out var phase))
         {
             if (phase.Phase != ZLinkActorRelocationAuthorityPhase.Steady)
             {
@@ -297,28 +298,29 @@ internal static class ZLinkActorAuthorityPayloadCodec
 
     internal static bool TryDecodeRelocating(
         ReadOnlySpan<byte> encoded,
-        out ZLinkActorAuthorityPayload value)
+        out ZLinkActorAuthorityPayload value
+    )
     {
-        if (ZLinkRelocationAuthorityPayloadCodec.TryDecode(
-                encoded,
-                out var relocation))
+        if (ZLinkRelocationAuthorityPayloadCodec.TryDecode(encoded, out var relocation))
             encoded = relocation.ApplicationPayload.Span;
-        if (ZLinkActorRelocationAuthorityPayloadCodec.TryDecode(
-                encoded,
-                out var phase))
+        if (ZLinkActorRelocationAuthorityPayloadCodec.TryDecode(encoded, out var phase))
             encoded = phase.ApplicationPayload.Span;
         return TryDecodeDirect(encoded, out value);
     }
 
     internal static bool TryDecodeDirect(
         ReadOnlySpan<byte> encoded,
-        out ZLinkActorAuthorityPayload value)
+        out ZLinkActorAuthorityPayload value
+    )
     {
         value = null!;
         try
         {
-            if (encoded.Length > MaximumBytes || encoded.Length < 15
-                || !encoded[..4].SequenceEqual(Magic))
+            if (
+                encoded.Length > MaximumBytes
+                || encoded.Length < 15
+                || !encoded[..4].SequenceEqual(Magic)
+            )
                 return false;
             var reader = new Reader(encoded);
             reader.Skip(4);
@@ -326,8 +328,7 @@ internal static class ZLinkActorAuthorityPayloadCodec
                 return false;
             var body = reader.Slice(checked((int)reader.U32()));
             var checksumOffset = reader.Offset;
-            if (reader.U32() != ZLinkCrc32C.Compute(encoded[..checksumOffset])
-                || !reader.End)
+            if (reader.U32() != ZLinkCrc32C.Compute(encoded[..checksumOffset]) || !reader.End)
                 return false;
 
             var operation = body.U8();
@@ -340,14 +341,16 @@ internal static class ZLinkActorAuthorityPayloadCodec
             var currentSpotId = actor.Text8();
             var currentSpotGeneration = actor.U64();
             var currentSpotKind = (ZLinkSpotKind)actor.U8();
-            if (!actor.End
+            if (
+                !actor.End
                 || currentSpotKind is not (ZLinkSpotKind.Entry or ZLinkSpotKind.User)
                 || state switch
                 {
                     ZLinkActorAuthorityState.Creating => operation != 1,
                     ZLinkActorAuthorityState.Ready => operation != 0,
-                    _ => true
-                })
+                    _ => true,
+                }
+            )
                 return false;
 
             var ownerId = body.Text8();
@@ -355,8 +358,7 @@ internal static class ZLinkActorAuthorityPayloadCodec
             var meshName = body.Text8();
             var nodeRid = body.Rid();
             var nodeGeneration = body.U64();
-            if (body.U8() != 0 || body.U32() != 0
-                || body.U8() != 0 || body.U32() != 0 || !body.End)
+            if (body.U8() != 0 || body.U32() != 0 || body.U8() != 0 || body.U32() != 0 || !body.End)
                 return false;
             value = new ZLinkActorAuthorityPayload(
                 state,
@@ -369,12 +371,12 @@ internal static class ZLinkActorAuthorityPayloadCodec
                 ownerLeaseGeneration,
                 meshName,
                 nodeRid,
-                nodeGeneration);
+                nodeGeneration
+            );
             return true;
         }
-        catch (Exception error) when (error is InvalidDataException
-                                      or OverflowException
-                                      or DecoderFallbackException)
+        catch (Exception error)
+            when (error is InvalidDataException or OverflowException or DecoderFallbackException)
         {
             return false;
         }
@@ -383,9 +385,7 @@ internal static class ZLinkActorAuthorityPayloadCodec
     internal static ZLinkAuthorityKey AuthorityKey(string actorId) =>
         ZLinkAuthorityKeyCodec.EncodeActor(actorId);
 
-    internal static bool TryGetActorId(
-        ZLinkAuthorityKey key,
-        out string actorId)
+    internal static bool TryGetActorId(ZLinkAuthorityKey key, out string actorId)
     {
         return ZLinkAuthorityKeyCodec.TryDecodeActor(key, out actorId);
     }
@@ -395,26 +395,32 @@ internal static class ZLinkActorAuthorityPayloadCodec
         private readonly MemoryStream _stream = new();
         internal int Count => checked((int)_stream.Length);
         internal ReadOnlySpan<byte> WrittenSpan => _stream.GetBuffer().AsSpan(0, Count);
+
         internal void U8(byte value) => _stream.WriteByte(value);
+
         internal void U16(ushort value)
         {
             Span<byte> bytes = stackalloc byte[2];
             BinaryPrimitives.WriteUInt16BigEndian(bytes, value);
             _stream.Write(bytes);
         }
+
         internal void U32(uint value)
         {
             Span<byte> bytes = stackalloc byte[4];
             BinaryPrimitives.WriteUInt32BigEndian(bytes, value);
             _stream.Write(bytes);
         }
+
         internal void U64(ulong value)
         {
-            if (value == 0) throw new ArgumentOutOfRangeException(nameof(value));
+            if (value == 0)
+                throw new ArgumentOutOfRangeException(nameof(value));
             Span<byte> bytes = stackalloc byte[8];
             BinaryPrimitives.WriteUInt64BigEndian(bytes, value);
             _stream.Write(bytes);
         }
+
         internal void Text8(string value)
         {
             var bytes = new UTF8Encoding(false, true).GetBytes(value);
@@ -423,6 +429,7 @@ internal static class ZLinkActorAuthorityPayloadCodec
             U8(checked((byte)bytes.Length));
             Bytes(bytes);
         }
+
         internal void Rid(RoutingId value)
         {
             var bytes = value.ToBytes();
@@ -431,7 +438,9 @@ internal static class ZLinkActorAuthorityPayloadCodec
             U8(checked((byte)bytes.Length));
             Bytes(bytes);
         }
+
         internal void Bytes(ReadOnlySpan<byte> value) => _stream.Write(value);
+
         internal byte[] ToArray() => _stream.ToArray();
     }
 
@@ -440,16 +449,19 @@ internal static class ZLinkActorAuthorityPayloadCodec
         private readonly ReadOnlySpan<byte> _bytes = bytes;
         internal int Offset { get; private set; }
         internal bool End => Offset == _bytes.Length;
+
         internal void Skip(int count)
         {
             Require(count);
             Offset += count;
         }
+
         internal byte U8()
         {
             Require(1);
             return _bytes[Offset++];
         }
+
         internal ushort U16()
         {
             Require(2);
@@ -457,6 +469,7 @@ internal static class ZLinkActorAuthorityPayloadCodec
             Offset += 2;
             return value;
         }
+
         internal uint U32()
         {
             Require(4);
@@ -464,14 +477,17 @@ internal static class ZLinkActorAuthorityPayloadCodec
             Offset += 4;
             return value;
         }
+
         internal ulong U64()
         {
             Require(8);
             var value = BinaryPrimitives.ReadUInt64BigEndian(_bytes[Offset..]);
             Offset += 8;
-            if (value == 0) throw new InvalidDataException();
+            if (value == 0)
+                throw new InvalidDataException();
             return value;
         }
+
         internal Reader Slice(int count)
         {
             Require(count);
@@ -479,21 +495,24 @@ internal static class ZLinkActorAuthorityPayloadCodec
             Offset += count;
             return value;
         }
+
         internal string Text8()
         {
             var length = U8();
-            var value = new UTF8Encoding(false, true)
-                .GetString(Slice(length)._bytes);
+            var value = new UTF8Encoding(false, true).GetString(Slice(length)._bytes);
             if (value.Length == 0 || value.Contains('\0'))
                 throw new InvalidDataException();
             return value;
         }
+
         internal RoutingId Rid()
         {
             var length = U8();
-            if (length == 0) throw new InvalidDataException();
+            if (length == 0)
+                throw new InvalidDataException();
             return RoutingId.From(Slice(length)._bytes);
         }
+
         private void Require(int count)
         {
             if (count < 0 || count > _bytes.Length - Offset)

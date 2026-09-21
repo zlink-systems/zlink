@@ -6,6 +6,11 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
+
+import org.junit.jupiter.api.Test;
+
+import systems.zlink.contracts.core.RoutingId;
+
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.nio.ByteBuffer;
@@ -15,8 +20,6 @@ import java.nio.file.Path;
 import java.util.Arrays;
 import java.util.HexFormat;
 import java.util.zip.CRC32C;
-import org.junit.jupiter.api.Test;
-import systems.zlink.contracts.core.RoutingId;
 
 final class ZLinkActorAuthorityPayloadCodecTest {
     // Splices a relocation slot into the actor authority envelope's first
@@ -27,41 +30,53 @@ final class ZLinkActorAuthorityPayloadCodecTest {
     private static byte[] withRelocationSlot(byte[] encoded, byte[] slotBody) {
         int relocationSlotStart = encoded.length - 14;
         byte[] prefix = Arrays.copyOfRange(encoded, 0, relocationSlotStart);
-        byte[] tail = Arrays.copyOfRange(
-            encoded, relocationSlotStart + 5, encoded.length - 4);
+        byte[] tail = Arrays.copyOfRange(encoded, relocationSlotStart + 5, encoded.length - 4);
 
         ByteArrayOutputStream body = new ByteArrayOutputStream();
         body.writeBytes(Arrays.copyOfRange(prefix, 11, prefix.length));
         body.write(1);
-        body.writeBytes(ByteBuffer.allocate(4).order(ByteOrder.BIG_ENDIAN)
-            .putInt(slotBody.length).array());
+        body.writeBytes(
+                ByteBuffer.allocate(4).order(ByteOrder.BIG_ENDIAN).putInt(slotBody.length).array());
         body.writeBytes(slotBody);
         body.writeBytes(tail);
         byte[] bodyBytes = body.toByteArray();
 
         ByteArrayOutputStream envelope = new ByteArrayOutputStream();
         envelope.writeBytes(Arrays.copyOfRange(prefix, 0, 7));
-        envelope.writeBytes(ByteBuffer.allocate(4).order(ByteOrder.BIG_ENDIAN)
-            .putInt(bodyBytes.length).array());
+        envelope.writeBytes(
+                ByteBuffer.allocate(4)
+                        .order(ByteOrder.BIG_ENDIAN)
+                        .putInt(bodyBytes.length)
+                        .array());
         envelope.writeBytes(bodyBytes);
         byte[] withoutChecksum = envelope.toByteArray();
         var checksum = new CRC32C();
         checksum.update(withoutChecksum, 0, withoutChecksum.length);
-        envelope.writeBytes(ByteBuffer.allocate(4).order(ByteOrder.BIG_ENDIAN)
-            .putInt((int) checksum.getValue()).array());
+        envelope.writeBytes(
+                ByteBuffer.allocate(4)
+                        .order(ByteOrder.BIG_ENDIAN)
+                        .putInt((int) checksum.getValue())
+                        .array());
         return envelope.toByteArray();
     }
 
     @Test
-    void decodeAcceptsTheCanonicalCapturedSlotWithEmptyTargetFence()
-        throws IOException {
+    void decodeAcceptsTheCanonicalCapturedSlotWithEmptyTargetFence() throws IOException {
         var codec = new ZLinkActorAuthorityPayloadCodec();
-        byte[] steady = codec.encode(
-            ZLinkActorAuthorityPayloadCodec.State.READY,
-            "A", "B", "C", 2, 1, "D", 3, "E",
-            RoutingId.from("F"), 4);
-        byte[] withRelocation =
-            withRelocationSlot(steady, canonicalCapturedSlotBody());
+        byte[] steady =
+                codec.encode(
+                        ZLinkActorAuthorityPayloadCodec.State.READY,
+                        "A",
+                        "B",
+                        "C",
+                        2,
+                        1,
+                        "D",
+                        3,
+                        "E",
+                        RoutingId.from("F"),
+                        4);
+        byte[] withRelocation = withRelocationSlot(steady, canonicalCapturedSlotBody());
 
         var decoded = codec.decode(withRelocation);
 
@@ -76,65 +91,64 @@ final class ZLinkActorAuthorityPayloadCodecTest {
         // the fix), not merely fall back to the original unstripped payload:
         // the recovered application payload is byte-identical to the steady
         // envelope the slot was spliced into.
-        assertArrayEquals(steady,
-            systems.zlink.framework.runtime.internal.locations
-                .ZLinkCanonicalRelocationAuthorityStateCodec
-            .applicationPayloadOrOriginal(withRelocation));
+        assertArrayEquals(
+                steady,
+                systems.zlink.framework.runtime.internal.locations
+                        .ZLinkCanonicalRelocationAuthorityStateCodec.applicationPayloadOrOriginal(
+                        withRelocation));
     }
 
     private static byte[] canonicalCapturedSlotBody() throws IOException {
-        var fixture = new ObjectMapper().readTree(
-            Files.readString(authorityRelocationFixture()));
+        var fixture = new ObjectMapper().readTree(Files.readString(authorityRelocationFixture()));
         for (var vector : fixture.path("valid")) {
-            if (vector.path("name").asText().equals(
-                    "capturedNonzeroAggregateWithZeroAttempt")) {
-                byte[] state = HexFormat.of().parseHex(
-                    vector.path("hex").asText());
+            if (vector.path("name").asText().equals("capturedNonzeroAggregateWithZeroAttempt")) {
+                byte[] state = HexFormat.of().parseHex(vector.path("hex").asText());
                 return Arrays.copyOfRange(state, 5, state.length);
             }
         }
         throw new IllegalStateException(
-            "canonical captured authority relocation vector was not found");
+                "canonical captured authority relocation vector was not found");
     }
 
     private static Path authorityRelocationFixture() {
         Path current = Path.of(System.getProperty("user.dir")).toAbsolutePath();
         while (current != null) {
-            Path fixture = current.resolve(
-                "runtime/protocol/golden/authority-relocation-state-v1.json");
+            Path fixture =
+                    current.resolve("runtime/protocol/golden/authority-relocation-state-v1.json");
             if (Files.isRegularFile(fixture)) {
                 return fixture;
             }
             current = current.getParent();
         }
-        throw new IllegalStateException(
-            "shared authority relocation fixture was not found");
+        throw new IllegalStateException("shared authority relocation fixture was not found");
     }
 
     @Test
     void actorAuthorityMatchesTheCrossLanguageByteVector() {
         var codec = new ZLinkActorAuthorityPayloadCodec();
-        byte[] encoded = codec.encode(
-            ZLinkActorAuthorityPayloadCodec.State.READY,
-            "A",
-            "B",
-            "C",
-            2,
-            1,
-            "D",
-            3,
-            "E",
-            RoutingId.from("F"),
-            4);
+        byte[] encoded =
+                codec.encode(
+                        ZLinkActorAuthorityPayloadCodec.State.READY,
+                        "A",
+                        "B",
+                        "C",
+                        2,
+                        1,
+                        "D",
+                        3,
+                        "E",
+                        RoutingId.from("F"),
+                        4);
 
-        assertArrayEquals(HexFormat.of().parseHex(
-            "5a4c4155010000000000340001001001410142010143"
-                + "0000000000000002010144000000000000000301450146"
-                + "000000000000000400000000000000000000b2374797"),
-            encoded);
+        assertArrayEquals(
+                HexFormat.of()
+                        .parseHex(
+                                "5a4c4155010000000000340001001001410142010143"
+                                        + "0000000000000002010144000000000000000301450146"
+                                        + "000000000000000400000000000000000000b2374797"),
+                encoded);
         var decoded = codec.decode(encoded).orElseThrow();
-        assertEquals(ZLinkActorAuthorityPayloadCodec.State.READY,
-            decoded.state());
+        assertEquals(ZLinkActorAuthorityPayloadCodec.State.READY, decoded.state());
         assertEquals("A", decoded.stableType());
         assertEquals("B", decoded.actorId());
         assertEquals("C", decoded.currentSpotId());
@@ -150,44 +164,80 @@ final class ZLinkActorAuthorityPayloadCodecTest {
     @Test
     void opaqueNodeGenerationAcceptsTheUnsignedHighBitFixedVector() {
         var codec = new ZLinkActorAuthorityPayloadCodec();
-        byte[] encoded = codec.encode(
-            ZLinkActorAuthorityPayloadCodec.State.READY,
-            "A", "B", "C", 2, 1, "D", 3, "E",
-            RoutingId.from("F"), Long.MIN_VALUE);
+        byte[] encoded =
+                codec.encode(
+                        ZLinkActorAuthorityPayloadCodec.State.READY,
+                        "A",
+                        "B",
+                        "C",
+                        2,
+                        1,
+                        "D",
+                        3,
+                        "E",
+                        RoutingId.from("F"),
+                        Long.MIN_VALUE);
 
-        assertArrayEquals(HexFormat.of().parseHex("8000000000000000"),
-            Arrays.copyOfRange(encoded, 45, 53));
-        assertEquals(Long.MIN_VALUE,
-            codec.decode(encoded).orElseThrow().nodeGeneration());
+        assertArrayEquals(
+                HexFormat.of().parseHex("8000000000000000"), Arrays.copyOfRange(encoded, 45, 53));
+        assertEquals(Long.MIN_VALUE, codec.decode(encoded).orElseThrow().nodeGeneration());
     }
 
     @Test
     void opaqueCurrentSpotGenerationAcceptsTheUnsignedHighBitFixedVector() {
         var codec = new ZLinkActorAuthorityPayloadCodec();
         long generation = 0xa70186055079275aL;
-        byte[] encoded = codec.encode(
-            ZLinkActorAuthorityPayloadCodec.State.READY,
-            "A", "B", "C", generation, 1, "D", 3, "E",
-            RoutingId.from("F"), 4);
+        byte[] encoded =
+                codec.encode(
+                        ZLinkActorAuthorityPayloadCodec.State.READY,
+                        "A",
+                        "B",
+                        "C",
+                        generation,
+                        1,
+                        "D",
+                        3,
+                        "E",
+                        RoutingId.from("F"),
+                        4);
 
-        assertArrayEquals(HexFormat.of().parseHex("a70186055079275a"),
-            Arrays.copyOfRange(encoded, 22, 30));
-        assertEquals(generation,
-            codec.decode(encoded).orElseThrow().currentSpotGeneration());
+        assertArrayEquals(
+                HexFormat.of().parseHex("a70186055079275a"), Arrays.copyOfRange(encoded, 22, 30));
+        assertEquals(generation, codec.decode(encoded).orElseThrow().currentSpotGeneration());
     }
 
     @Test
     void opaqueNodeGenerationRejectsOnlyZero() {
         var codec = new ZLinkActorAuthorityPayloadCodec();
-        assertThrows(IllegalArgumentException.class, () -> codec.encode(
-            ZLinkActorAuthorityPayloadCodec.State.READY,
-            "A", "B", "C", 2, 1, "D", 3, "E",
-            RoutingId.from("F"), 0));
+        assertThrows(
+                IllegalArgumentException.class,
+                () ->
+                        codec.encode(
+                                ZLinkActorAuthorityPayloadCodec.State.READY,
+                                "A",
+                                "B",
+                                "C",
+                                2,
+                                1,
+                                "D",
+                                3,
+                                "E",
+                                RoutingId.from("F"),
+                                0));
 
-        byte[] zeroNodeGeneration = codec.encode(
-            ZLinkActorAuthorityPayloadCodec.State.READY,
-            "A", "B", "C", 2, 1, "D", 3, "E",
-            RoutingId.from("F"), 1);
+        byte[] zeroNodeGeneration =
+                codec.encode(
+                        ZLinkActorAuthorityPayloadCodec.State.READY,
+                        "A",
+                        "B",
+                        "C",
+                        2,
+                        1,
+                        "D",
+                        3,
+                        "E",
+                        RoutingId.from("F"),
+                        1);
         Arrays.fill(zeroNodeGeneration, 45, 53, (byte) 0);
         updateChecksum(zeroNodeGeneration);
         assertTrue(codec.decode(zeroNodeGeneration).isEmpty());
@@ -196,10 +246,21 @@ final class ZLinkActorAuthorityPayloadCodecTest {
     @Test
     void boundedGenerationsRetainTheirSignedPositiveValidation() {
         var codec = new ZLinkActorAuthorityPayloadCodec();
-        assertThrows(IllegalArgumentException.class, () -> codec.encode(
-            ZLinkActorAuthorityPayloadCodec.State.READY,
-            "A", "B", "C", 2, 1, "D", Long.MIN_VALUE, "E",
-            RoutingId.from("F"), 1));
+        assertThrows(
+                IllegalArgumentException.class,
+                () ->
+                        codec.encode(
+                                ZLinkActorAuthorityPayloadCodec.State.READY,
+                                "A",
+                                "B",
+                                "C",
+                                2,
+                                1,
+                                "D",
+                                Long.MIN_VALUE,
+                                "E",
+                                RoutingId.from("F"),
+                                1));
     }
 
     private static void updateChecksum(byte[] payload) {

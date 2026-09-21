@@ -1,23 +1,20 @@
 package systems.zlink.framework.runtime.streams;
-import systems.zlink.framework.errors.ZLinkConfigurationException;
-import systems.zlink.framework.runtime.internal.transport.ZLinkEndpointNotation;
 
 import systems.zlink.framework.configuration.ZLinkStreamNodeBuilder;
 import systems.zlink.framework.configuration.ZLinkStreamSocketConfig;
+import systems.zlink.framework.errors.ZLinkConfigurationException;
+import systems.zlink.framework.runtime.internal.transport.ZLinkEndpointNotation;
 import systems.zlink.framework.streams.ZLinkSession;
 
 public final class StreamBuilders {
-    private StreamBuilders() {
-    }
+    private StreamBuilders() {}
 
     public static ZLinkStreamNodeBuilder streamNode(StreamNodeRegistration registration) {
         return streamNode(registration, "127.0.0.1", null);
     }
 
     public static ZLinkStreamNodeBuilder streamNode(
-        StreamNodeRegistration registration,
-        String bindHost,
-        String advertiseHost) {
+            StreamNodeRegistration registration, String bindHost, String advertiseHost) {
         return new StreamNode(registration, bindHost, advertiseHost);
     }
 
@@ -27,9 +24,7 @@ public final class StreamBuilders {
         private Integer listenPort;
 
         private StreamNode(
-            StreamNodeRegistration registration,
-            String bindHost,
-            String advertiseHost) {
+                StreamNodeRegistration registration, String bindHost, String advertiseHost) {
             this.registration = registration;
             this.bindHost = bindHost;
             registration.setAdvertiseHost(advertiseHost);
@@ -50,7 +45,7 @@ public final class StreamBuilders {
         public ZLinkStreamNodeBuilder bind(int port) {
             if (port < 0 || port > 65_535) {
                 throw new ZLinkConfigurationException(
-                    "stream listen port must be between 0 and 65535");
+                        "stream listen port must be between 0 and 65535");
             }
             listenPort = port;
             applyBind();
@@ -78,15 +73,16 @@ public final class StreamBuilders {
         private void applyBind() {
             if (listenPort != null) {
                 registration.replaceBind(
-                    "tcp://" + ZLinkEndpointNotation.bracketIpv6Host(bindHost)
-                        + ":" + listenPort);
+                        "tcp://"
+                                + ZLinkEndpointNotation.bracketIpv6Host(bindHost)
+                                + ":"
+                                + listenPort);
             }
         }
 
         private static String requireHost(String host, String label) {
             if (host == null || host.isBlank()) {
-                throw new ZLinkConfigurationException(
-                    "stream " + label + " must not be empty");
+                throw new ZLinkConfigurationException("stream " + label + " must not be empty");
             }
             return host;
         }
@@ -99,9 +95,7 @@ public final class StreamBuilders {
 
         @Override
         public ZLinkStreamNodeBuilder setTlsServer(
-            String certificatePath,
-            String keyPath,
-            boolean requireClientCertificate) {
+                String certificatePath, String keyPath, boolean requireClientCertificate) {
             registration.setTlsServer(certificatePath, keyPath, requireClientCertificate);
             return this;
         }

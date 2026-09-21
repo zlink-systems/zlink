@@ -25,7 +25,9 @@ export class HttpClientRuntime {
   }
 
   async executeAsync(spec: HttpRequestSpec): Promise<RawResult> {
-    return this.retryPolicy.execute(spec, (request, signal) => this.performer.perform(request, signal));
+    return this.retryPolicy.execute(spec, (request, signal) =>
+      this.performer.perform(request, signal)
+    );
   }
 
   async close(): Promise<void> {

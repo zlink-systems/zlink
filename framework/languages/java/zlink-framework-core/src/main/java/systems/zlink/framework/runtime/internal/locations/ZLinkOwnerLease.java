@@ -1,11 +1,8 @@
 package systems.zlink.framework.runtime.internal.locations;
 
-import java.time.Instant;
 import systems.zlink.contracts.core.RoutingId;
 
+import java.time.Instant;
+
 public record ZLinkOwnerLease(
-    String ownerId,
-    RoutingId nodeRid,
-    Instant leaseExpiresAt,
-    Instant updatedAt) {
-}
+        String ownerId, RoutingId nodeRid, Instant leaseExpiresAt, Instant updatedAt) {}

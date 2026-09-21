@@ -1,11 +1,12 @@
 package systems.zlink.framework;
-import java.io.UncheckedIOException;
 
-import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
+import org.junit.jupiter.api.Test;
+
 import java.io.IOException;
+import java.io.UncheckedIOException;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -13,10 +14,10 @@ import java.util.HashMap;
 import java.util.Map;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
-import org.junit.jupiter.api.Test;
 
 final class JavaDocumentationRegressionTest {
     private static final Pattern SNAPSHOT = Pattern.compile("^([0-9a-f]{64}) (\\S+\\.ko\\.md)$");
+
     @Test
     void canonicalCommonSpecOwnsLiveJavaContracts() {
         Path root = repositoryRoot();
@@ -24,11 +25,12 @@ final class JavaDocumentationRegressionTest {
         Path deletedSpec = root.resolve("framework/doc/framework/spec");
 
         assertFalse(Files.exists(deletedSpec));
-        assertTrue(Files.isRegularFile(commonSpec.resolve("server/03-spot-actor/03-mesh-node.ko.md")));
-        assertTrue(Files.isRegularFile(
-            commonSpec.resolve("server/languages/java/02-handler-interfaces.ko.md")));
-        assertTrue(Files.isDirectory(
-            commonSpec.resolve("server/languages/java/interfaces")));
+        assertTrue(
+                Files.isRegularFile(commonSpec.resolve("server/03-spot-actor/03-mesh-node.ko.md")));
+        assertTrue(
+                Files.isRegularFile(
+                        commonSpec.resolve("server/languages/java/02-handler-interfaces.ko.md")));
+        assertTrue(Files.isDirectory(commonSpec.resolve("server/languages/java/interfaces")));
     }
 
     private static Map<String, String> parseSnapshot(String ledger) {
@@ -44,7 +46,7 @@ final class JavaDocumentationRegressionTest {
         Path current = Path.of("").toAbsolutePath();
         while (current != null) {
             if (Files.isRegularFile(current.resolve("framework/languages/java/settings.gradle.kts"))
-                && Files.isDirectory(current.resolve("framework/doc/framework/common/spec"))) {
+                    && Files.isDirectory(current.resolve("framework/doc/framework/common/spec"))) {
                 return current;
             }
             current = current.getParent();

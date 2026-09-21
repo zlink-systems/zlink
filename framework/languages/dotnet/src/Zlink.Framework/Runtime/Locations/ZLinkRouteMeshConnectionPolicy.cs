@@ -6,7 +6,8 @@ internal static class ZLinkRouteMeshConnectionPolicy
         ZLinkMeshNodeObjectRole localObjectRole,
         bool localHasServerChannel,
         ZLinkMeshNodeObjectRole remoteObjectRole,
-        bool remoteHasServerChannel) =>
+        bool remoteHasServerChannel
+    ) =>
         localObjectRole == ZLinkMeshNodeObjectRole.Client
         && !localHasServerChannel
         && remoteObjectRole == ZLinkMeshNodeObjectRole.Client

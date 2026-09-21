@@ -13,7 +13,9 @@ interface Deferred<T> {
 
 function deferred<T>(): Deferred<T> {
   let resolve!: (value: T) => void;
-  const promise = new Promise<T>(complete => { resolve = complete; });
+  const promise = new Promise<T>((complete) => {
+    resolve = complete;
+  });
   return { promise, resolve };
 }
 
@@ -23,7 +25,11 @@ function executor(
   actorOptions?: ZLinkSerialSchedulerOptions
 ): ZLinkSpotSerialExecutor {
   return new ZLinkSpotSerialExecutor(
-    new ZLinkSpotSerialTurnExecutor(mode === ZLinkUserSpotExecutionMode.SpotWide, undefined, spotOptions),
+    new ZLinkSpotSerialTurnExecutor(
+      mode === ZLinkUserSpotExecutionMode.SpotWide,
+      undefined,
+      spotOptions
+    ),
     mode,
     'spot-1',
     actorOptions
@@ -38,7 +44,7 @@ function runActor<T>(
 ): Promise<T> {
   return serialExecutor.executeActor(
     actorId,
-    serial => serial.execute(operation),
+    (serial) => serial.execute(operation),
     payloadBytes === undefined ? undefined : { payloadBytes }
   );
 }
@@ -106,10 +112,7 @@ test('SpotWide starts the next Actor handler only after the preceding handler fi
 });
 
 test('the same Actor retains submission order in both execution modes', async () => {
-  for (const mode of [
-    ZLinkUserSpotExecutionMode.PerActor,
-    ZLinkUserSpotExecutionMode.SpotWide
-  ]) {
+  for (const mode of [ZLinkUserSpotExecutionMode.PerActor, ZLinkUserSpotExecutionMode.SpotWide]) {
     const serialExecutor = executor(mode);
     const events: string[] = [];
     await Promise.all([
@@ -147,10 +150,7 @@ test('PerActor timer names overlap while one timer name retains submission order
 });
 
 test('Actor mailbox queues work for the same Actor while another Actor remains independent', async () => {
-  const serialExecutor = executor(
-    ZLinkUserSpotExecutionMode.PerActor,
-    undefined
-  );
+  const serialExecutor = executor(ZLinkUserSpotExecutionMode.PerActor, undefined);
   const release = deferred<void>();
   const started = deferred<void>();
   const first = runActor(serialExecutor, 'actor-a', async () => {
@@ -166,16 +166,18 @@ test('Actor mailbox queues work for the same Actor while another Actor remains i
 });
 
 test('SpotWide Actor mailbox queues large and small payloads in FIFO order', async () => {
-  const serialExecutor = executor(
-    ZLinkUserSpotExecutionMode.SpotWide,
-    undefined
-  );
+  const serialExecutor = executor(ZLinkUserSpotExecutionMode.SpotWide, undefined);
   const release = deferred<void>();
   const started = deferred<void>();
-  const first = runActor(serialExecutor, 'actor-a', async () => {
-    started.resolve();
-    await release.promise;
-  }, 80);
+  const first = runActor(
+    serialExecutor,
+    'actor-a',
+    async () => {
+      started.resolve();
+      await release.promise;
+    },
+    80
+  );
   await started.promise;
 
   const large = runActor(serialExecutor, 'actor-a', () => undefined, 80);
@@ -186,15 +188,18 @@ test('SpotWide Actor mailbox queues large and small payloads in FIFO order', asy
 
 test('SpotWide mailbox accepts work count independent of payload size', async () => {
   const queuedAfterOne = async (payloadBytes: number): Promise<void> => {
-    const serialExecutor = executor(
-      ZLinkUserSpotExecutionMode.SpotWide
-    );
+    const serialExecutor = executor(ZLinkUserSpotExecutionMode.SpotWide);
     const release = deferred<void>();
     const started = deferred<void>();
-    const first = runActor(serialExecutor, 'actor-a', async () => {
-      started.resolve();
-      await release.promise;
-    }, 1);
+    const first = runActor(
+      serialExecutor,
+      'actor-a',
+      async () => {
+        started.resolve();
+        await release.promise;
+      },
+      1
+    );
     await started.promise;
     const queued = runActor(serialExecutor, 'actor-b', () => undefined, payloadBytes);
     release.resolve();
@@ -222,11 +227,9 @@ test('lifecycle work overtakes application only up to lifecycleBurstLimit', asyn
 });
 
 test('owner time budget yields an overloaded Actor before its remaining records monopolize the event loop', async () => {
-  const serialExecutor = executor(
-    ZLinkUserSpotExecutionMode.PerActor,
-    undefined,
-    { ownerTimeBudget: 1 }
-  );
+  const serialExecutor = executor(ZLinkUserSpotExecutionMode.PerActor, undefined, {
+    ownerTimeBudget: 1
+  });
   const events: string[] = [];
   const overloaded = Array.from({ length: 8 }, (_, index) =>
     runActor(serialExecutor, 'actor-a', () => {
@@ -236,8 +239,10 @@ test('owner time budget yields an overloaded Actor before its remaining records 
   );
   const other = new Promise<void>((resolve, reject) => {
     setImmediate(() => {
-      void runActor(serialExecutor, 'actor-b', () => events.push('actor-b'))
-        .then(() => resolve(), reject);
+      void runActor(serialExecutor, 'actor-b', () => events.push('actor-b')).then(
+        () => resolve(),
+        reject
+      );
     });
   });
 
@@ -248,7 +253,10 @@ test('owner time budget yields an overloaded Actor before its remaining records 
 test('coordinator re-entry that synchronously waits on execute completion throws immediately', async () => {
   const serialExecutor = executor(ZLinkUserSpotExecutionMode.SpotWide);
   await serialExecutor.executeSpot(() => {
-    assert.throws(() => serialExecutor.executeSpot(() => undefined), /cannot implicitly execute another turn/u);
+    assert.throws(
+      () => serialExecutor.executeSpot(() => undefined),
+      /cannot implicitly execute another turn/u
+    );
   });
 });
 

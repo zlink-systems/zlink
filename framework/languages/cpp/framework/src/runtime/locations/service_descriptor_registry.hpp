@@ -41,8 +41,7 @@ struct service_descriptor_record_t
     std::string endpoint;
     std::string security_identity;
     std::uint32_t effective_max_message_bytes = 0;
-    mesh::service_node_state_t state =
-      mesh::service_node_state_t::preparing;
+    mesh::service_node_state_t state = mesh::service_node_state_t::preparing;
     int weight = 100;
     std::string owner_id;
     std::int64_t owner_lease_generation = 0;
@@ -89,18 +88,15 @@ class service_descriptor_registry_t
   public:
     using watch_callback_t = std::function<void (service_descriptor_event_t)>;
 
-    service_descriptor_publish_status_t publish (
-      service_descriptor_record_t record,
-      std::optional<std::uint64_t> expected_revision);
+    service_descriptor_publish_status_t publish (service_descriptor_record_t record,
+                                                 std::optional<std::uint64_t> expected_revision);
     bool remove (const service_descriptor_key_t &key,
                  std::uint64_t expected_revision,
                  const std::string &expected_owner_id,
                  std::int64_t expected_owner_lease_generation);
-    service_descriptor_snapshot_t snapshot (
-      service_descriptor_watch_filter_t filter = {}) const;
+    service_descriptor_snapshot_t snapshot (service_descriptor_watch_filter_t filter = {}) const;
 
-    std::uint64_t watch (service_descriptor_watch_filter_t filter,
-                         watch_callback_t callback);
+    std::uint64_t watch (service_descriptor_watch_filter_t filter, watch_callback_t callback);
     bool unwatch (std::uint64_t watch_id);
 
   private:
@@ -111,9 +107,8 @@ class service_descriptor_registry_t
     };
 
     static bool valid (const service_descriptor_record_t &record);
-    static bool immutable_identity_matches (
-      const service_descriptor_record_t &current,
-      const service_descriptor_record_t &candidate);
+    static bool immutable_identity_matches (const service_descriptor_record_t &current,
+                                            const service_descriptor_record_t &candidate);
     static bool matches (const service_descriptor_watch_filter_t &filter,
                          const service_descriptor_record_t &record);
     static void notify (std::vector<watch_callback_t> callbacks,

@@ -41,9 +41,7 @@ export interface ZLinkSpotRelocationReadyCall {
   defer(): void;
 }
 
-export interface ZLinkSpotActorMembershipLifecycle<
-  TActor extends ZLinkActor = ZLinkActor
-> {
+export interface ZLinkSpotActorMembershipLifecycle<TActor extends ZLinkActor = ZLinkActor> {
   onJoinedActor(actor: TActor): Promise<void>;
   onLeaveActor(actor: TActor): Promise<void>;
   onDisconnectActor?(actor: TActor): Promise<void>;
@@ -58,8 +56,9 @@ export interface ZLinkUserSpotActorLifecycle<
   onActorJoin(actorId: string, request: ZLinkMessage): Promise<ZLinkSpotActorJoinResult>;
 }
 
-export interface ZLinkSpot<TActor extends ZLinkActor = ZLinkActor>
-  extends ZLinkUserSpotActorLifecycle<TActor> {
+export interface ZLinkSpot<
+  TActor extends ZLinkActor = ZLinkActor
+> extends ZLinkUserSpotActorLifecycle<TActor> {
   readonly context: ZLinkSpotContext<TActor>;
   configure?(): void;
   onCreate?(request: ZLinkMessage): Promise<ZLinkSpotCreateResponse>;
@@ -75,14 +74,12 @@ export interface ZLinkInstanceSpot {
   onClosing?(context: ZLinkSpotClosingContext, cleanupSignal: AbortSignal): Promise<void>;
 }
 
-export interface ZLinkEntrySpot<TActor extends ZLinkActor = ZLinkActor>
-  extends ZLinkSpotActorMembershipLifecycle<TActor> {
+export interface ZLinkEntrySpot<
+  TActor extends ZLinkActor = ZLinkActor
+> extends ZLinkSpotActorMembershipLifecycle<TActor> {
   readonly context: ZLinkEntrySpotContext<TActor>;
   configure?(): void;
   onInitialize?(): Promise<void>;
   onClosing?(context: ZLinkSpotClosingContext, cleanupSignal: AbortSignal): Promise<void>;
-  onCreateActor?(
-    actor: TActor,
-    createRequest: ZLinkMessage
-  ): Promise<ZLinkActorCreateResponse>;
+  onCreateActor?(actor: TActor, createRequest: ZLinkMessage): Promise<ZLinkActorCreateResponse>;
 }

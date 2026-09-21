@@ -12,7 +12,7 @@ public sealed partial class RegressionTests
         {
             Path.Combine(sampleRoot, "Server", "Api", "ApiServerHostFactory.cs"),
             Path.Combine(sampleRoot, "Server", "Support", "SupportServerHostFactory.cs"),
-            Path.Combine(sampleRoot, "Server", "Session", "SessionServerHostFactory.cs")
+            Path.Combine(sampleRoot, "Server", "Session", "SessionServerHostFactory.cs"),
         };
 
         foreach (var host in hosts)
@@ -22,44 +22,57 @@ public sealed partial class RegressionTests
             Assert.Contains("AddRouteMesh(SampleNames.MeshName)", source, StringComparison.Ordinal);
             Assert.DoesNotContain("AddRequestHandler<", source, StringComparison.Ordinal);
             Assert.DoesNotContain("AddSendHandler<", source, StringComparison.Ordinal);
-            Assert.DoesNotContain("mesh.Channel(SampleNames.MeshName)", source, StringComparison.Ordinal);
+            Assert.DoesNotContain(
+                "mesh.Channel(SampleNames.MeshName)",
+                source,
+                StringComparison.Ordinal
+            );
         }
 
         Assert.Contains(
             NormalizeWhitespace("AddClientServerChannel(SampleNames.ApiChannel).Server()"),
             NormalizeWhitespace(ReadSource(hosts[0])),
-            StringComparison.Ordinal);
+            StringComparison.Ordinal
+        );
         Assert.Contains(
             NormalizeWhitespace("AddClientServerChannel(SampleNames.ApiChannel).Client()"),
             NormalizeWhitespace(ReadSource(hosts[1])),
-            StringComparison.Ordinal);
+            StringComparison.Ordinal
+        );
         Assert.Contains(
             NormalizeWhitespace("AddClientServerChannel(SampleNames.ApiChannel).Client()"),
             NormalizeWhitespace(ReadSource(hosts[2])),
-            StringComparison.Ordinal);
+            StringComparison.Ordinal
+        );
     }
 
     [Fact]
     public void SupportChat_Local_Actor_Directory_Does_Not_Cache_Location_Ownership()
     {
         var sampleRoot = ResolveSampleRoot("SupportChat");
-        var actorDirectory = ReadSource(Path.Combine(
-            sampleRoot,
-            "Server",
-            "Support",
-            "Infrastructure",
-            "ZLink",
-            "Actors",
-            "SupportActorDirectory.cs"));
-        var entrySpot = ReadSource(Path.Combine(
-            sampleRoot,
-            "Server",
-            "Support",
-            "Infrastructure",
-            "ZLink",
-            "Spots",
-            "EntrySpot",
-            "SupportEntrySpot.cs"));
+        var actorDirectory = ReadSource(
+            Path.Combine(
+                sampleRoot,
+                "Server",
+                "Support",
+                "Infrastructure",
+                "ZLink",
+                "Actors",
+                "SupportActorDirectory.cs"
+            )
+        );
+        var entrySpot = ReadSource(
+            Path.Combine(
+                sampleRoot,
+                "Server",
+                "Support",
+                "Infrastructure",
+                "ZLink",
+                "Spots",
+                "EntrySpot",
+                "SupportEntrySpot.cs"
+            )
+        );
 
         Assert.DoesNotContain("ActorRef", actorDirectory, StringComparison.Ordinal);
         Assert.DoesNotContain("FindAsync", entrySpot, StringComparison.Ordinal);
@@ -70,16 +83,40 @@ public sealed partial class RegressionTests
     public void SupportChat_Client_Gate_Exercises_All_Required_Rejections()
     {
         var sampleRoot = ResolveSampleRoot("SupportChat");
-        var scenario = ReadSource(Path.Combine(sampleRoot, "Client", "SupportChatClientScenario.cs"));
+        var scenario = ReadSource(
+            Path.Combine(sampleRoot, "Client", "SupportChatClientScenario.cs")
+        );
 
         Assert.Equal(
             7,
-            scenario.Split("ZlinkStreamAssert.ExpectFailureAsync(", StringSplitOptions.None).Length - 1);
-        Assert.Contains("new OpenConversationReq(\"unauthenticated\")", scenario, StringComparison.Ordinal);
-        Assert.Contains("new SendChatMessageReq(\"unauthenticated\")", scenario, StringComparison.Ordinal);
-        Assert.Contains("new OpenConversationReq(\"agent cannot open\")", scenario, StringComparison.Ordinal);
-        Assert.Contains("new SendChatMessageReq(\"not a participant\")", scenario, StringComparison.Ordinal);
-        Assert.Contains("nameof(ZlinkStreamErrorCode.RemoteError)", scenario, StringComparison.Ordinal);
+            scenario.Split("ZlinkStreamAssert.ExpectFailureAsync(", StringSplitOptions.None).Length
+                - 1
+        );
+        Assert.Contains(
+            "new OpenConversationReq(\"unauthenticated\")",
+            scenario,
+            StringComparison.Ordinal
+        );
+        Assert.Contains(
+            "new SendChatMessageReq(\"unauthenticated\")",
+            scenario,
+            StringComparison.Ordinal
+        );
+        Assert.Contains(
+            "new OpenConversationReq(\"agent cannot open\")",
+            scenario,
+            StringComparison.Ordinal
+        );
+        Assert.Contains(
+            "new SendChatMessageReq(\"not a participant\")",
+            scenario,
+            StringComparison.Ordinal
+        );
+        Assert.Contains(
+            "nameof(ZlinkStreamErrorCode.RemoteError)",
+            scenario,
+            StringComparison.Ordinal
+        );
     }
 
     [Fact]
@@ -87,19 +124,40 @@ public sealed partial class RegressionTests
     {
         var sampleRoot = ResolveSampleRoot("SupportChat");
         var messages = ReadSource(Path.Combine(sampleRoot, "Shared", "Contracts", "Messages.cs"));
-        var scenario = ReadSource(Path.Combine(sampleRoot, "Client", "SupportChatClientScenario.cs"));
-        var handler = ReadSource(Path.Combine(sampleRoot, "Server", "Support",
-            "Infrastructure", "ZLink", "Spots", "ConversationSpot", "Handlers", "SetTypingHandler.cs"));
+        var scenario = ReadSource(
+            Path.Combine(sampleRoot, "Client", "SupportChatClientScenario.cs")
+        );
+        var handler = ReadSource(
+            Path.Combine(
+                sampleRoot,
+                "Server",
+                "Support",
+                "Infrastructure",
+                "ZLink",
+                "Spots",
+                "ConversationSpot",
+                "Handlers",
+                "SetTypingHandler.cs"
+            )
+        );
 
         Assert.Contains("record SetTypingMsg", messages, StringComparison.Ordinal);
         Assert.DoesNotContain("SetTypingReq", messages, StringComparison.Ordinal);
         Assert.Contains(
             NormalizeWhitespace("connector.Send(new SetTypingMsg"),
             NormalizeWhitespace(scenario),
-            StringComparison.Ordinal);
-        Assert.DoesNotContain("connector.Request(new SetTypingMsg", scenario, StringComparison.Ordinal);
-        Assert.Contains("IZLinkSpotActorSendHandler<ConversationSpot, SupportUserActor, SetTypingMsg>",
-            handler, StringComparison.Ordinal);
+            StringComparison.Ordinal
+        );
+        Assert.DoesNotContain(
+            "connector.Request(new SetTypingMsg",
+            scenario,
+            StringComparison.Ordinal
+        );
+        Assert.Contains(
+            "IZLinkSpotActorSendHandler<ConversationSpot, SupportUserActor, SetTypingMsg>",
+            handler,
+            StringComparison.Ordinal
+        );
         Assert.DoesNotContain("RequestHandler", handler, StringComparison.Ordinal);
     }
 
@@ -110,30 +168,44 @@ public sealed partial class RegressionTests
         // Conversation Spot factory는 모두 DisableRelocation을 선택한다. Planned relocation은
         // 완료 조건이 아니므로 Relocation Store를 등록하지 않는다."
         var sampleRoot = ResolveSampleRoot("SupportChat");
-        var host = ReadSource(Path.Combine(sampleRoot, "Server", "Support", "SupportServerHostFactory.cs"));
+        var host = ReadSource(
+            Path.Combine(sampleRoot, "Server", "Support", "SupportServerHostFactory.cs")
+        );
 
         Assert.Contains(
             NormalizeWhitespace(
                 "AddActorFactory<SupportUserActor, SupportUserActorFactory>("
-                + "SampleNames.SupportActorType, factory => factory.DisableRelocation())"
+                    + "SampleNames.SupportActorType, factory => factory.DisableRelocation())"
             ),
             NormalizeWhitespace(host),
-            StringComparison.Ordinal);
+            StringComparison.Ordinal
+        );
         Assert.Contains(
             NormalizeWhitespace(
                 "AddSpotFactory<ConversationSpot>("
-                + "SampleNames.ConversationSpotType, factory => factory.DisableRelocation())"
+                    + "SampleNames.ConversationSpotType, factory => factory.DisableRelocation())"
             ),
             NormalizeWhitespace(host),
-            StringComparison.Ordinal);
+            StringComparison.Ordinal
+        );
         Assert.DoesNotContain("PreserveStateWith", host, StringComparison.Ordinal);
         Assert.DoesNotContain("AddRelocationStore", host, StringComparison.Ordinal);
         Assert.DoesNotContain("ZLinkRedisRelocationStore", host, StringComparison.Ordinal);
         Assert.False(
-            File.Exists(Path.Combine(sampleRoot, "Server", "Support", "Infrastructure", "ZLink",
-                "Actors", "SupportUserActorRelocationAdapter.cs")),
+            File.Exists(
+                Path.Combine(
+                    sampleRoot,
+                    "Server",
+                    "Support",
+                    "Infrastructure",
+                    "ZLink",
+                    "Actors",
+                    "SupportUserActorRelocationAdapter.cs"
+                )
+            ),
             "SupportChat must not keep a relocation adapter once every actor and the "
-            + "Conversation Spot use DisableRelocation.");
+                + "Conversation Spot use DisableRelocation."
+        );
     }
 
     [Fact]
@@ -143,189 +215,593 @@ public sealed partial class RegressionTests
         var shellRunner = ReadSource(Path.Combine(sampleRoot, "run_sample.sh"));
         var powershellRunner = ReadSource(Path.Combine(sampleRoot, "run_sample.ps1"));
         var readme = ReadSource(Path.Combine(sampleRoot, "README.ko.md"));
-        var apiHost = ReadSource(Path.Combine(sampleRoot, "Server", "Api", "ApiServerHostFactory.cs"));
-        var sessionHost = ReadSource(Path.Combine(sampleRoot, "Server", "Session", "SessionServerHostFactory.cs"));
-        var supportHost = ReadSource(Path.Combine(sampleRoot, "Server", "Support", "SupportServerHostFactory.cs"));
-        var topology = ReadSource(Path.Combine(sampleRoot, "Server", "Configuration", "SampleTopology.cs"));
-        var sharedMessages = ReadSource(Path.Combine(sampleRoot, "Shared", "Contracts", "Messages.cs"));
-        var serverContracts = ReadSource(Path.Combine(sampleRoot, "Server", "Configuration", "SupportServerContracts.cs"));
-        var assignment = ReadSource(Path.Combine(sampleRoot, "Server", "Support", "Application",
-            "ConversationAssignment", "AgentAssignmentService.cs"));
-        var availability = ReadSource(Path.Combine(sampleRoot, "Server", "Support", "Application",
-            "ConversationAssignment", "AgentAvailabilityDirectory.cs"));
-        var availableHandler = ReadSource(Path.Combine(sampleRoot, "Server", "Support", "Infrastructure",
-            "ZLink", "Spots", "EntrySpot", "Handlers", "SetAgentAvailableHandler.cs"));
-        var session = ReadSource(Path.Combine(sampleRoot, "Server", "Session", "Sessions",
-            "SupportChatSession.cs"));
-        var supportActor = ReadSource(Path.Combine(sampleRoot, "Server", "Support", "Infrastructure",
-            "ZLink", "Actors", "SupportUserActor.cs"));
-        var joinConversationHandler = ReadSource(Path.Combine(sampleRoot, "Server", "Support", "Infrastructure",
-            "ZLink", "Spots", "EntrySpot", "Handlers", "JoinConversationActorHandler.cs"));
-        var entrySpot = ReadSource(Path.Combine(sampleRoot, "Server", "Support", "Infrastructure", "ZLink",
-            "Spots", "EntrySpot", "SupportEntrySpot.cs"));
-        var conversationSpot = ReadSource(Path.Combine(sampleRoot, "Server", "Support", "Infrastructure",
-            "ZLink", "Spots", "ConversationSpot", "ConversationSpot.cs"));
-        var clientScenario = ReadSource(Path.Combine(sampleRoot, "Client", "SupportChatClientScenario.cs"));
-        var openConversation = ReadSource(Path.Combine(
-            sampleRoot,
-            "Server",
-            "Api",
-            "Handlers",
-            "OpenConversationHandler.cs"));
+        var apiHost = ReadSource(
+            Path.Combine(sampleRoot, "Server", "Api", "ApiServerHostFactory.cs")
+        );
+        var sessionHost = ReadSource(
+            Path.Combine(sampleRoot, "Server", "Session", "SessionServerHostFactory.cs")
+        );
+        var supportHost = ReadSource(
+            Path.Combine(sampleRoot, "Server", "Support", "SupportServerHostFactory.cs")
+        );
+        var topology = ReadSource(
+            Path.Combine(sampleRoot, "Server", "Configuration", "SampleTopology.cs")
+        );
+        var sharedMessages = ReadSource(
+            Path.Combine(sampleRoot, "Shared", "Contracts", "Messages.cs")
+        );
+        var serverContracts = ReadSource(
+            Path.Combine(sampleRoot, "Server", "Configuration", "SupportServerContracts.cs")
+        );
+        var assignment = ReadSource(
+            Path.Combine(
+                sampleRoot,
+                "Server",
+                "Support",
+                "Application",
+                "ConversationAssignment",
+                "AgentAssignmentService.cs"
+            )
+        );
+        var availability = ReadSource(
+            Path.Combine(
+                sampleRoot,
+                "Server",
+                "Support",
+                "Application",
+                "ConversationAssignment",
+                "AgentAvailabilityDirectory.cs"
+            )
+        );
+        var availableHandler = ReadSource(
+            Path.Combine(
+                sampleRoot,
+                "Server",
+                "Support",
+                "Infrastructure",
+                "ZLink",
+                "Spots",
+                "EntrySpot",
+                "Handlers",
+                "SetAgentAvailableHandler.cs"
+            )
+        );
+        var session = ReadSource(
+            Path.Combine(sampleRoot, "Server", "Session", "Sessions", "SupportChatSession.cs")
+        );
+        var supportActor = ReadSource(
+            Path.Combine(
+                sampleRoot,
+                "Server",
+                "Support",
+                "Infrastructure",
+                "ZLink",
+                "Actors",
+                "SupportUserActor.cs"
+            )
+        );
+        var joinConversationHandler = ReadSource(
+            Path.Combine(
+                sampleRoot,
+                "Server",
+                "Support",
+                "Infrastructure",
+                "ZLink",
+                "Spots",
+                "EntrySpot",
+                "Handlers",
+                "JoinConversationActorHandler.cs"
+            )
+        );
+        var entrySpot = ReadSource(
+            Path.Combine(
+                sampleRoot,
+                "Server",
+                "Support",
+                "Infrastructure",
+                "ZLink",
+                "Spots",
+                "EntrySpot",
+                "SupportEntrySpot.cs"
+            )
+        );
+        var conversationSpot = ReadSource(
+            Path.Combine(
+                sampleRoot,
+                "Server",
+                "Support",
+                "Infrastructure",
+                "ZLink",
+                "Spots",
+                "ConversationSpot",
+                "ConversationSpot.cs"
+            )
+        );
+        var clientScenario = ReadSource(
+            Path.Combine(sampleRoot, "Client", "SupportChatClientScenario.cs")
+        );
+        var openConversation = ReadSource(
+            Path.Combine(sampleRoot, "Server", "Api", "Handlers", "OpenConversationHandler.cs")
+        );
 
-        Assert.Contains("RUN_ID=\"$(basename \"${RUN_DIR}\")-$$-${RANDOM}\"", shellRunner, StringComparison.Ordinal);
-        Assert.Contains("SAMPLE_LOG_DIR=\"${RUN_DIR}/sample-logs\"", shellRunner, StringComparison.Ordinal);
-        Assert.Contains("SUPPORTCHAT_LOG_DIR=\"${SAMPLE_LOG_DIR}\"", shellRunner, StringComparison.Ordinal);
-        Assert.Contains("SUPPORTCHAT_REDIS_KEY_PREFIX=\"supportchat:dotnet:${RUN_ID}:\"", shellRunner,
-            StringComparison.Ordinal);
-        Assert.Contains("REDIS_CONTAINER=\"zlink-supportchat-dotnet-redis-${RUN_ID}\"", shellRunner,
-            StringComparison.Ordinal);
+        Assert.Contains(
+            "RUN_ID=\"$(basename \"${RUN_DIR}\")-$$-${RANDOM}\"",
+            shellRunner,
+            StringComparison.Ordinal
+        );
+        Assert.Contains(
+            "SAMPLE_LOG_DIR=\"${RUN_DIR}/sample-logs\"",
+            shellRunner,
+            StringComparison.Ordinal
+        );
+        Assert.Contains(
+            "SUPPORTCHAT_LOG_DIR=\"${SAMPLE_LOG_DIR}\"",
+            shellRunner,
+            StringComparison.Ordinal
+        );
+        Assert.Contains(
+            "SUPPORTCHAT_REDIS_KEY_PREFIX=\"supportchat:dotnet:${RUN_ID}:\"",
+            shellRunner,
+            StringComparison.Ordinal
+        );
+        Assert.Contains(
+            "REDIS_CONTAINER=\"zlink-supportchat-dotnet-redis-${RUN_ID}\"",
+            shellRunner,
+            StringComparison.Ordinal
+        );
         AssertShellRunnerUsesRedisDockerHelper(
             shellRunner,
             "zlink-supportchat-dotnet-redis",
-            "SUPPORTCHAT_REDIS_ENDPOINT");
-        Assert.DoesNotContain("if [[ -z \"${SUPPORTCHAT_REDIS_ENDPOINT:-}\" ]]", shellRunner, StringComparison.Ordinal);
-        Assert.DoesNotContain("when SUPPORTCHAT_REDIS_ENDPOINT is not set", shellRunner, StringComparison.Ordinal);
+            "SUPPORTCHAT_REDIS_ENDPOINT"
+        );
+        Assert.DoesNotContain(
+            "if [[ -z \"${SUPPORTCHAT_REDIS_ENDPOINT:-}\" ]]",
+            shellRunner,
+            StringComparison.Ordinal
+        );
+        Assert.DoesNotContain(
+            "when SUPPORTCHAT_REDIS_ENDPOINT is not set",
+            shellRunner,
+            StringComparison.Ordinal
+        );
         Assert.DoesNotContain("SUPPORTCHAT_BASE_PORT", shellRunner, StringComparison.Ordinal);
-        Assert.DoesNotContain("${SUPPORTCHAT_API_CHANNEL_ENDPOINT:-", shellRunner, StringComparison.Ordinal);
-        Assert.DoesNotContain("${SUPPORTCHAT_SUPPORT_CHANNEL_ENDPOINT:-", shellRunner, StringComparison.Ordinal);
-        Assert.DoesNotContain("${SUPPORTCHAT_SESSION_SPOT_ENDPOINT:-", shellRunner, StringComparison.Ordinal);
-        Assert.DoesNotContain("${SUPPORTCHAT_SESSION_ROUTER_ENDPOINT:-", shellRunner, StringComparison.Ordinal);
-        Assert.DoesNotContain("${SUPPORTCHAT_SUPPORT_ROUTER_ENDPOINT:-", shellRunner, StringComparison.Ordinal);
-        Assert.DoesNotContain("export SUPPORTCHAT_SUPPORT_ROUTER_ENDPOINT=", shellRunner, StringComparison.Ordinal);
-        Assert.DoesNotContain("${SUPPORTCHAT_ENTRY_SPOT_ENDPOINT:-", shellRunner, StringComparison.Ordinal);
-        Assert.DoesNotContain("${SUPPORTCHAT_ENTRY_SPOT_ROUTER_ENDPOINT:-", shellRunner, StringComparison.Ordinal);
-        Assert.DoesNotContain("${SUPPORTCHAT_CONVERSATION_SPOT_ENDPOINT:-", shellRunner, StringComparison.Ordinal);
-        Assert.DoesNotContain("${SUPPORTCHAT_CONVERSATION_SPOT_ROUTER_ENDPOINT:-", shellRunner, StringComparison.Ordinal);
-        Assert.DoesNotContain("export SUPPORTCHAT_CONVERSATION_SPOT_ENDPOINT=", shellRunner, StringComparison.Ordinal);
-        Assert.DoesNotContain("export SUPPORTCHAT_CONVERSATION_SPOT_ROUTER_ENDPOINT=", shellRunner, StringComparison.Ordinal);
-        Assert.DoesNotContain("${SUPPORTCHAT_STREAM_ENDPOINT:-", shellRunner, StringComparison.Ordinal);
-        Assert.DoesNotContain("${SUPPORTCHAT_RECONNECT_STREAM_ENDPOINT:-", shellRunner, StringComparison.Ordinal);
-        Assert.DoesNotContain("export SUPPORTCHAT_RECONNECT_STREAM_ENDPOINT=", shellRunner, StringComparison.Ordinal);
-        Assert.DoesNotContain("${SUPPORTCHAT_REDIS_KEY_PREFIX:-", shellRunner, StringComparison.Ordinal);
+        Assert.DoesNotContain(
+            "${SUPPORTCHAT_API_CHANNEL_ENDPOINT:-",
+            shellRunner,
+            StringComparison.Ordinal
+        );
+        Assert.DoesNotContain(
+            "${SUPPORTCHAT_SUPPORT_CHANNEL_ENDPOINT:-",
+            shellRunner,
+            StringComparison.Ordinal
+        );
+        Assert.DoesNotContain(
+            "${SUPPORTCHAT_SESSION_SPOT_ENDPOINT:-",
+            shellRunner,
+            StringComparison.Ordinal
+        );
+        Assert.DoesNotContain(
+            "${SUPPORTCHAT_SESSION_ROUTER_ENDPOINT:-",
+            shellRunner,
+            StringComparison.Ordinal
+        );
+        Assert.DoesNotContain(
+            "${SUPPORTCHAT_SUPPORT_ROUTER_ENDPOINT:-",
+            shellRunner,
+            StringComparison.Ordinal
+        );
+        Assert.DoesNotContain(
+            "export SUPPORTCHAT_SUPPORT_ROUTER_ENDPOINT=",
+            shellRunner,
+            StringComparison.Ordinal
+        );
+        Assert.DoesNotContain(
+            "${SUPPORTCHAT_ENTRY_SPOT_ENDPOINT:-",
+            shellRunner,
+            StringComparison.Ordinal
+        );
+        Assert.DoesNotContain(
+            "${SUPPORTCHAT_ENTRY_SPOT_ROUTER_ENDPOINT:-",
+            shellRunner,
+            StringComparison.Ordinal
+        );
+        Assert.DoesNotContain(
+            "${SUPPORTCHAT_CONVERSATION_SPOT_ENDPOINT:-",
+            shellRunner,
+            StringComparison.Ordinal
+        );
+        Assert.DoesNotContain(
+            "${SUPPORTCHAT_CONVERSATION_SPOT_ROUTER_ENDPOINT:-",
+            shellRunner,
+            StringComparison.Ordinal
+        );
+        Assert.DoesNotContain(
+            "export SUPPORTCHAT_CONVERSATION_SPOT_ENDPOINT=",
+            shellRunner,
+            StringComparison.Ordinal
+        );
+        Assert.DoesNotContain(
+            "export SUPPORTCHAT_CONVERSATION_SPOT_ROUTER_ENDPOINT=",
+            shellRunner,
+            StringComparison.Ordinal
+        );
+        Assert.DoesNotContain(
+            "${SUPPORTCHAT_STREAM_ENDPOINT:-",
+            shellRunner,
+            StringComparison.Ordinal
+        );
+        Assert.DoesNotContain(
+            "${SUPPORTCHAT_RECONNECT_STREAM_ENDPOINT:-",
+            shellRunner,
+            StringComparison.Ordinal
+        );
+        Assert.DoesNotContain(
+            "export SUPPORTCHAT_RECONNECT_STREAM_ENDPOINT=",
+            shellRunner,
+            StringComparison.Ordinal
+        );
+        Assert.DoesNotContain(
+            "${SUPPORTCHAT_REDIS_KEY_PREFIX:-",
+            shellRunner,
+            StringComparison.Ordinal
+        );
         Assert.DoesNotContain("${SUPPORTCHAT_LOG_DIR:-", shellRunner, StringComparison.Ordinal);
-        Assert.DoesNotContain("rm -f \"${SUPPORTCHAT_LOG_DIR}\"/*.log", shellRunner, StringComparison.Ordinal);
+        Assert.DoesNotContain(
+            "rm -f \"${SUPPORTCHAT_LOG_DIR}\"/*.log",
+            shellRunner,
+            StringComparison.Ordinal
+        );
         Assert.Contains("supportchat=completed", shellRunner, StringComparison.Ordinal);
-        Assert.Contains("supportchat-closed-typing-ignore=verified", shellRunner, StringComparison.Ordinal);
+        Assert.Contains(
+            "supportchat-closed-typing-ignore=verified",
+            shellRunner,
+            StringComparison.Ordinal
+        );
         // Common sample §10.1: the client owns completion; the runner reads
         // creation, join and every state transition from the server logs.
-        foreach (var evidence in new[]
-                 {
-                     "created", "agent-joined", "status=WaitingForAgent", "status=Active",
-                     "status=WaitingForClose", "status=Closed"
-                 })
+        foreach (
+            var evidence in new[]
+            {
+                "created",
+                "agent-joined",
+                "status=WaitingForAgent",
+                "status=Active",
+                "status=WaitingForClose",
+                "status=Closed",
+            }
+        )
         {
-            Assert.Contains($"wait_log_at_least 1 \"supportchat-conversation {evidence} conversation=\" \"${{LOG_DIR}}/api.log\" \"${{LOG_DIR}}/support.log\"",
-                shellRunner, StringComparison.Ordinal);
-            Assert.Contains($"Wait-SupportChatLogCount -Path $apiAndSupportLogs -Pattern \"supportchat-conversation {evidence} conversation=\"",
-                powershellRunner, StringComparison.Ordinal);
+            Assert.Contains(
+                $"wait_log_at_least 1 \"supportchat-conversation {evidence} conversation=\" \"${{LOG_DIR}}/api.log\" \"${{LOG_DIR}}/support.log\"",
+                shellRunner,
+                StringComparison.Ordinal
+            );
+            Assert.Contains(
+                $"Wait-SupportChatLogCount -Path $apiAndSupportLogs -Pattern \"supportchat-conversation {evidence} conversation=\"",
+                powershellRunner,
+                StringComparison.Ordinal
+            );
         }
         Assert.DoesNotContain("message flow", shellRunner, StringComparison.OrdinalIgnoreCase);
-        Assert.DoesNotContain("SUPPORTCHAT_STARTUP_DELAY_SECONDS", shellRunner, StringComparison.Ordinal);
+        Assert.DoesNotContain(
+            "SUPPORTCHAT_STARTUP_DELAY_SECONDS",
+            shellRunner,
+            StringComparison.Ordinal
+        );
 
-        Assert.Contains("$RunId = \"$PID-$([Guid]::NewGuid().ToString('N'))\"", powershellRunner,
-            StringComparison.Ordinal);
-        Assert.Contains("$SampleLogDir = Join-Path $RunDir \"sample-logs\"", powershellRunner,
-            StringComparison.Ordinal);
-        Assert.Contains("$ports = New-SamplePorts -Count 4 -BasePort 0", powershellRunner,
-            StringComparison.Ordinal);
-        Assert.Contains("$SUPPORTCHAT_REDIS_KEY_PREFIX = \"supportchat:dotnet:${RunId}:\"",
-            powershellRunner, StringComparison.Ordinal);
-        AssertPowerShellRunnerUsesRedisDockerHelper(powershellRunner, "zlink-supportchat-dotnet-redis");
+        Assert.Contains(
+            "$RunId = \"$PID-$([Guid]::NewGuid().ToString('N'))\"",
+            powershellRunner,
+            StringComparison.Ordinal
+        );
+        Assert.Contains(
+            "$SampleLogDir = Join-Path $RunDir \"sample-logs\"",
+            powershellRunner,
+            StringComparison.Ordinal
+        );
+        Assert.Contains(
+            "$ports = New-SamplePorts -Count 4 -BasePort 0",
+            powershellRunner,
+            StringComparison.Ordinal
+        );
+        Assert.Contains(
+            "$SUPPORTCHAT_REDIS_KEY_PREFIX = \"supportchat:dotnet:${RunId}:\"",
+            powershellRunner,
+            StringComparison.Ordinal
+        );
+        AssertPowerShellRunnerUsesRedisDockerHelper(
+            powershellRunner,
+            "zlink-supportchat-dotnet-redis"
+        );
         Assert.Contains("if ($RedisContainer)", powershellRunner, StringComparison.Ordinal);
-        Assert.Contains("$SUPPORTCHAT_LOG_DIR = $SampleLogDir", powershellRunner, StringComparison.Ordinal);
-        Assert.DoesNotContain("if (-not $SUPPORTCHAT_REDIS_ENDPOINT)", powershellRunner, StringComparison.Ordinal);
-        Assert.DoesNotContain("when SUPPORTCHAT_REDIS_ENDPOINT is not set", powershellRunner, StringComparison.Ordinal);
+        Assert.Contains(
+            "$SUPPORTCHAT_LOG_DIR = $SampleLogDir",
+            powershellRunner,
+            StringComparison.Ordinal
+        );
+        Assert.DoesNotContain(
+            "if (-not $SUPPORTCHAT_REDIS_ENDPOINT)",
+            powershellRunner,
+            StringComparison.Ordinal
+        );
+        Assert.DoesNotContain(
+            "when SUPPORTCHAT_REDIS_ENDPOINT is not set",
+            powershellRunner,
+            StringComparison.Ordinal
+        );
         Assert.DoesNotContain("$SUPPORTCHAT_BASE_PORT", powershellRunner, StringComparison.Ordinal);
-        Assert.DoesNotContain("$SUPPORTCHAT_API_CHANNEL_ENDPOINT) {", powershellRunner, StringComparison.Ordinal);
-        Assert.DoesNotContain("$SUPPORTCHAT_SUPPORT_CHANNEL_ENDPOINT) {", powershellRunner, StringComparison.Ordinal);
-        Assert.DoesNotContain("$SUPPORTCHAT_SESSION_SPOT_ENDPOINT) {", powershellRunner, StringComparison.Ordinal);
-        Assert.DoesNotContain("$SUPPORTCHAT_SESSION_ROUTER_ENDPOINT) {", powershellRunner, StringComparison.Ordinal);
-        Assert.DoesNotContain("$SUPPORTCHAT_SUPPORT_ROUTER_ENDPOINT) {", powershellRunner, StringComparison.Ordinal);
-        Assert.DoesNotContain("$SUPPORTCHAT_SUPPORT_ROUTER_ENDPOINT =", powershellRunner, StringComparison.Ordinal);
-        Assert.DoesNotContain("$SUPPORTCHAT_ENTRY_SPOT_ENDPOINT) {", powershellRunner, StringComparison.Ordinal);
-        Assert.DoesNotContain("$SUPPORTCHAT_ENTRY_SPOT_ROUTER_ENDPOINT) {", powershellRunner, StringComparison.Ordinal);
-        Assert.DoesNotContain("$SUPPORTCHAT_CONVERSATION_SPOT_ENDPOINT) {", powershellRunner, StringComparison.Ordinal);
-        Assert.DoesNotContain("$SUPPORTCHAT_CONVERSATION_SPOT_ROUTER_ENDPOINT) {", powershellRunner, StringComparison.Ordinal);
-        Assert.DoesNotContain("$SUPPORTCHAT_CONVERSATION_SPOT_ENDPOINT =", powershellRunner, StringComparison.Ordinal);
-        Assert.DoesNotContain("$SUPPORTCHAT_CONVERSATION_SPOT_ROUTER_ENDPOINT =", powershellRunner, StringComparison.Ordinal);
-        Assert.DoesNotContain("$SUPPORTCHAT_STREAM_ENDPOINT) {", powershellRunner, StringComparison.Ordinal);
-        Assert.DoesNotContain("$SUPPORTCHAT_RECONNECT_STREAM_ENDPOINT) {", powershellRunner, StringComparison.Ordinal);
-        Assert.DoesNotContain("$SUPPORTCHAT_RECONNECT_STREAM_ENDPOINT =", powershellRunner, StringComparison.Ordinal);
-        Assert.DoesNotContain("if ($SUPPORTCHAT_LOG_DIR)", powershellRunner, StringComparison.Ordinal);
+        Assert.DoesNotContain(
+            "$SUPPORTCHAT_API_CHANNEL_ENDPOINT) {",
+            powershellRunner,
+            StringComparison.Ordinal
+        );
+        Assert.DoesNotContain(
+            "$SUPPORTCHAT_SUPPORT_CHANNEL_ENDPOINT) {",
+            powershellRunner,
+            StringComparison.Ordinal
+        );
+        Assert.DoesNotContain(
+            "$SUPPORTCHAT_SESSION_SPOT_ENDPOINT) {",
+            powershellRunner,
+            StringComparison.Ordinal
+        );
+        Assert.DoesNotContain(
+            "$SUPPORTCHAT_SESSION_ROUTER_ENDPOINT) {",
+            powershellRunner,
+            StringComparison.Ordinal
+        );
+        Assert.DoesNotContain(
+            "$SUPPORTCHAT_SUPPORT_ROUTER_ENDPOINT) {",
+            powershellRunner,
+            StringComparison.Ordinal
+        );
+        Assert.DoesNotContain(
+            "$SUPPORTCHAT_SUPPORT_ROUTER_ENDPOINT =",
+            powershellRunner,
+            StringComparison.Ordinal
+        );
+        Assert.DoesNotContain(
+            "$SUPPORTCHAT_ENTRY_SPOT_ENDPOINT) {",
+            powershellRunner,
+            StringComparison.Ordinal
+        );
+        Assert.DoesNotContain(
+            "$SUPPORTCHAT_ENTRY_SPOT_ROUTER_ENDPOINT) {",
+            powershellRunner,
+            StringComparison.Ordinal
+        );
+        Assert.DoesNotContain(
+            "$SUPPORTCHAT_CONVERSATION_SPOT_ENDPOINT) {",
+            powershellRunner,
+            StringComparison.Ordinal
+        );
+        Assert.DoesNotContain(
+            "$SUPPORTCHAT_CONVERSATION_SPOT_ROUTER_ENDPOINT) {",
+            powershellRunner,
+            StringComparison.Ordinal
+        );
+        Assert.DoesNotContain(
+            "$SUPPORTCHAT_CONVERSATION_SPOT_ENDPOINT =",
+            powershellRunner,
+            StringComparison.Ordinal
+        );
+        Assert.DoesNotContain(
+            "$SUPPORTCHAT_CONVERSATION_SPOT_ROUTER_ENDPOINT =",
+            powershellRunner,
+            StringComparison.Ordinal
+        );
+        Assert.DoesNotContain(
+            "$SUPPORTCHAT_STREAM_ENDPOINT) {",
+            powershellRunner,
+            StringComparison.Ordinal
+        );
+        Assert.DoesNotContain(
+            "$SUPPORTCHAT_RECONNECT_STREAM_ENDPOINT) {",
+            powershellRunner,
+            StringComparison.Ordinal
+        );
+        Assert.DoesNotContain(
+            "$SUPPORTCHAT_RECONNECT_STREAM_ENDPOINT =",
+            powershellRunner,
+            StringComparison.Ordinal
+        );
+        Assert.DoesNotContain(
+            "if ($SUPPORTCHAT_LOG_DIR)",
+            powershellRunner,
+            StringComparison.Ordinal
+        );
         Assert.DoesNotContain("Set-DefaultEnv", powershellRunner, StringComparison.Ordinal);
-        Assert.DoesNotContain("Remove-Item -Path (Join-Path $SampleLogDir \"*.log\")", powershellRunner,
-            StringComparison.Ordinal);
+        Assert.DoesNotContain(
+            "Remove-Item -Path (Join-Path $SampleLogDir \"*.log\")",
+            powershellRunner,
+            StringComparison.Ordinal
+        );
         Assert.Contains("supportchat=completed", powershellRunner, StringComparison.Ordinal);
-        Assert.Contains("supportchat-closed-typing-ignore=verified", powershellRunner, StringComparison.Ordinal);
-        Assert.Contains("(Join-Path $LogDir \"api.out.log\")", powershellRunner, StringComparison.Ordinal);
-        Assert.Contains("(Join-Path $LogDir \"support.out.log\")", powershellRunner, StringComparison.Ordinal);
+        Assert.Contains(
+            "supportchat-closed-typing-ignore=verified",
+            powershellRunner,
+            StringComparison.Ordinal
+        );
+        Assert.Contains(
+            "(Join-Path $LogDir \"api.out.log\")",
+            powershellRunner,
+            StringComparison.Ordinal
+        );
+        Assert.Contains(
+            "(Join-Path $LogDir \"support.out.log\")",
+            powershellRunner,
+            StringComparison.Ordinal
+        );
         Assert.Contains("status=WaitingForAgent", powershellRunner, StringComparison.Ordinal);
         Assert.Contains("status=Active", powershellRunner, StringComparison.Ordinal);
         Assert.Contains("status=WaitingForClose", powershellRunner, StringComparison.Ordinal);
         Assert.Contains("status=Closed", powershellRunner, StringComparison.Ordinal);
         Assert.DoesNotContain("message flow", powershellRunner, StringComparison.OrdinalIgnoreCase);
-        Assert.DoesNotContain("SUPPORTCHAT_STARTUP_DELAY_SECONDS", powershellRunner, StringComparison.Ordinal);
+        Assert.DoesNotContain(
+            "SUPPORTCHAT_STARTUP_DELAY_SECONDS",
+            powershellRunner,
+            StringComparison.Ordinal
+        );
 
         Assert.Contains("RedisEndpoint", topology, StringComparison.Ordinal);
         Assert.Contains("RedisKeyPrefix", topology, StringComparison.Ordinal);
-        Assert.DoesNotContain("Environment.GetEnvironmentVariable", topology, StringComparison.Ordinal);
-        Assert.DoesNotContain("public sealed record ActorRef", sharedMessages, StringComparison.Ordinal);
-        Assert.DoesNotContain("EnsureSupportUserActorReq", sharedMessages, StringComparison.Ordinal);
-        Assert.DoesNotContain("public sealed record ActorRef", serverContracts, StringComparison.Ordinal);
+        Assert.DoesNotContain(
+            "Environment.GetEnvironmentVariable",
+            topology,
+            StringComparison.Ordinal
+        );
+        Assert.DoesNotContain(
+            "public sealed record ActorRef",
+            sharedMessages,
+            StringComparison.Ordinal
+        );
+        Assert.DoesNotContain(
+            "EnsureSupportUserActorReq",
+            sharedMessages,
+            StringComparison.Ordinal
+        );
+        Assert.DoesNotContain(
+            "public sealed record ActorRef",
+            serverContracts,
+            StringComparison.Ordinal
+        );
         Assert.DoesNotContain("ActorRef", serverContracts, StringComparison.Ordinal);
-        Assert.Contains(".GetOrCreate(actorId, SampleNames.SupportActorType)", session,
-            StringComparison.Ordinal);
+        Assert.Contains(
+            ".GetOrCreate(actorId, SampleNames.SupportActorType)",
+            session,
+            StringComparison.Ordinal
+        );
         Assert.Contains(
             ".Create(SampleNames.ConversationSpotType)",
             openConversation,
-            StringComparison.Ordinal);
+            StringComparison.Ordinal
+        );
         Assert.Contains(
             ".InMesh(SampleNames.MeshName)",
             openConversation,
-            StringComparison.Ordinal);
+            StringComparison.Ordinal
+        );
         Assert.DoesNotContain("NodeRid", openConversation, StringComparison.Ordinal);
         Assert.DoesNotContain("SupportChannel", session, StringComparison.Ordinal);
-        Assert.Contains("ZLinkActorJoinCompletion.Accepted accepted", supportActor, StringComparison.Ordinal);
+        Assert.Contains(
+            "ZLinkActorJoinCompletion.Accepted accepted",
+            supportActor,
+            StringComparison.Ordinal
+        );
         Assert.Contains("CurrentRef = accepted.Actor", supportActor, StringComparison.Ordinal);
-        Assert.Contains("reply.Decode<JoinConversationRes>()", supportActor, StringComparison.Ordinal);
+        Assert.Contains(
+            "reply.Decode<JoinConversationRes>()",
+            supportActor,
+            StringComparison.Ordinal
+        );
         Assert.Contains("JoinConversationFailedNotify", supportActor, StringComparison.Ordinal);
-        Assert.Contains("public sealed record JoinConversationReq", sharedMessages, StringComparison.Ordinal);
-        Assert.Contains("public sealed record JoinConversationRes", sharedMessages, StringComparison.Ordinal);
-        Assert.DoesNotContain("record JoinConversationMsg", sharedMessages, StringComparison.Ordinal);
-        Assert.DoesNotContain("record JoinConversationNotify", sharedMessages, StringComparison.Ordinal);
-        Assert.DoesNotContain("record ConversationJoinReq", sharedMessages, StringComparison.Ordinal);
-        Assert.DoesNotContain("record ConversationJoinRes", sharedMessages, StringComparison.Ordinal);
+        Assert.Contains(
+            "public sealed record JoinConversationReq",
+            sharedMessages,
+            StringComparison.Ordinal
+        );
+        Assert.Contains(
+            "public sealed record JoinConversationRes",
+            sharedMessages,
+            StringComparison.Ordinal
+        );
+        Assert.DoesNotContain(
+            "record JoinConversationMsg",
+            sharedMessages,
+            StringComparison.Ordinal
+        );
+        Assert.DoesNotContain(
+            "record JoinConversationNotify",
+            sharedMessages,
+            StringComparison.Ordinal
+        );
+        Assert.DoesNotContain(
+            "record ConversationJoinReq",
+            sharedMessages,
+            StringComparison.Ordinal
+        );
+        Assert.DoesNotContain(
+            "record ConversationJoinRes",
+            sharedMessages,
+            StringComparison.Ordinal
+        );
         Assert.Contains(
             NormalizeWhitespace("connector.Request(new JoinConversationReq())"),
             NormalizeWhitespace(clientScenario),
-            StringComparison.Ordinal);
-        Assert.Contains(".Async<JoinConversationRes>(cancellationToken)", clientScenario, StringComparison.Ordinal);
-        Assert.Contains("new JoinConversationReq(", joinConversationHandler, StringComparison.Ordinal);
-        Assert.Contains("ValueTask<JoinConversationRes> HandleAsync", joinConversationHandler,
-            StringComparison.Ordinal);
+            StringComparison.Ordinal
+        );
+        Assert.Contains(
+            ".Async<JoinConversationRes>(cancellationToken)",
+            clientScenario,
+            StringComparison.Ordinal
+        );
+        Assert.Contains(
+            "new JoinConversationReq(",
+            joinConversationHandler,
+            StringComparison.Ordinal
+        );
+        Assert.Contains(
+            "ValueTask<JoinConversationRes> HandleAsync",
+            joinConversationHandler,
+            StringComparison.Ordinal
+        );
         Assert.Contains(".Defer()", joinConversationHandler, StringComparison.Ordinal);
-        Assert.Contains("public sealed record SupportUserActorCreateReq", serverContracts, StringComparison.Ordinal);
+        Assert.Contains(
+            "public sealed record SupportUserActorCreateReq",
+            serverContracts,
+            StringComparison.Ordinal
+        );
         AssertLocationStoreHost(apiHost);
         AssertLocationStoreHost(sessionHost);
         AssertLocationStoreHost(supportHost);
         Assert.Contains("_reservations.Values.Count", assignment, StringComparison.Ordinal);
-        Assert.Contains("availability.SetAvailable(rosterActorId, displayName, isAvailable, activeConversations)",
-            assignment, StringComparison.Ordinal);
+        Assert.Contains(
+            "availability.SetAvailable(rosterActorId, displayName, isAvailable, activeConversations)",
+            assignment,
+            StringComparison.Ordinal
+        );
         Assert.Contains("int activeConversations", availability, StringComparison.Ordinal);
-        Assert.Contains("assignment.SetAvailable(actor.ActorId, actor.DisplayName, message.IsAvailable)",
-            availableHandler, StringComparison.Ordinal);
-        Assert.Contains("assignment.SetAvailable(actor.ActorId, actor.DisplayName, false)", entrySpot,
-            StringComparison.Ordinal);
-        Assert.Contains("supportchat-conversation status={Status} conversation={ConversationId}",
-            conversationSpot, StringComparison.Ordinal);
-        Assert.Contains("supportchat-closed-typing-ignore=verified", clientScenario, StringComparison.Ordinal);
-        Assert.Contains("ExpectNone<TypingChangedNotify>()", clientScenario, StringComparison.Ordinal);
+        Assert.Contains(
+            "assignment.SetAvailable(actor.ActorId, actor.DisplayName, message.IsAvailable)",
+            availableHandler,
+            StringComparison.Ordinal
+        );
+        Assert.Contains(
+            "assignment.SetAvailable(actor.ActorId, actor.DisplayName, false)",
+            entrySpot,
+            StringComparison.Ordinal
+        );
+        Assert.Contains(
+            "supportchat-conversation status={Status} conversation={ConversationId}",
+            conversationSpot,
+            StringComparison.Ordinal
+        );
+        Assert.Contains(
+            "supportchat-closed-typing-ignore=verified",
+            clientScenario,
+            StringComparison.Ordinal
+        );
+        Assert.Contains(
+            "ExpectNone<TypingChangedNotify>()",
+            clientScenario,
+            StringComparison.Ordinal
+        );
 
-        Assert.Contains("외부 Redis endpoint 재사용 mode는 제공하지 않는다", readme, StringComparison.Ordinal);
-        Assert.Contains("실행별 key prefix를 역할들이 읽는 임시 config 파일에 기록한다", readme,
-            StringComparison.Ordinal);
-        Assert.Contains("동시에 실행되는 다른 테스트와 섞이지 않는다", readme, StringComparison.Ordinal);
+        Assert.Contains(
+            "외부 Redis endpoint 재사용 mode는 제공하지 않는다",
+            readme,
+            StringComparison.Ordinal
+        );
+        Assert.Contains(
+            "실행별 key prefix를 역할들이 읽는 임시 config 파일에 기록한다",
+            readme,
+            StringComparison.Ordinal
+        );
+        Assert.Contains(
+            "동시에 실행되는 다른 테스트와 섞이지 않는다",
+            readme,
+            StringComparison.Ordinal
+        );
         Assert.Contains("표준 .NET diagnostics", readme, StringComparison.Ordinal);
     }
 }

@@ -1,5 +1,7 @@
 package systems.zlink.framework.runtime.internal.service;
 
+import systems.zlink.contracts.core.RoutingId;
+
 import java.nio.ByteBuffer;
 import java.nio.ByteOrder;
 import java.nio.charset.CharacterCodingException;
@@ -9,7 +11,6 @@ import java.util.Arrays;
 import java.util.Objects;
 import java.util.Optional;
 import java.util.zip.CRC32C;
-import systems.zlink.contracts.core.RoutingId;
 
 /** Decodes the canonical durable Instance activation recovery envelope. */
 public final class ZLinkInstanceActivationRecoveryCodec {
@@ -56,47 +57,59 @@ public final class ZLinkInstanceActivationRecoveryCodec {
         Long replyRouteId = operationKind == 2 ? body.nonzeroU64() : null;
         long deadlineUnixMs = body.nonzeroU64();
         int hasMetadata = body.u8();
-        byte[] metadata = switch (hasMetadata) {
-            case 0 -> new byte[0];
-            case 1 -> body.metadataFrame();
-            default -> throw invalid();
-        };
+        byte[] metadata =
+                switch (hasMetadata) {
+                    case 0 -> new byte[0];
+                    case 1 -> body.metadataFrame();
+                    default -> throw invalid();
+                };
         byte[] applicationPayload = body.remaining();
         if (!body.end()) {
             throw invalid();
         }
-        new ZLinkServiceM6AWireCodec().decodeApplicationPayload(
-            applicationPayload);
+        new ZLinkServiceM6AWireCodec().decodeApplicationPayload(applicationPayload);
         return new RecoveryEnvelope(
-            targetSpotId, stableType, targetMeshName, targetNodeRid,
-            targetNodeGeneration, descriptorVersion, sourceNodeRid,
-            sourceNodeGeneration, sourceSpotId, operationKind == 2,
-            operationHigh, operationLow, replyRouteId, deadlineUnixMs,
-            metadata, applicationPayload);
+                targetSpotId,
+                stableType,
+                targetMeshName,
+                targetNodeRid,
+                targetNodeGeneration,
+                descriptorVersion,
+                sourceNodeRid,
+                sourceNodeGeneration,
+                sourceSpotId,
+                operationKind == 2,
+                operationHigh,
+                operationLow,
+                replyRouteId,
+                deadlineUnixMs,
+                metadata,
+                applicationPayload);
     }
 
     public record RecoveryEnvelope(
-        String targetSpotId,
-        String stableType,
-        String targetMeshName,
-        RoutingId targetNodeRid,
-        long targetNodeGeneration,
-        String descriptorVersion,
-        RoutingId sourceNodeRid,
-        long sourceNodeGeneration,
-        Optional<String> sourceSpotId,
-        boolean request,
-        long operationHigh,
-        long operationLow,
-        Long replyRouteId,
-        long deadlineUnixMs,
-        byte[] metadataFrame,
-        byte[] applicationPayloadFrame) {
+            String targetSpotId,
+            String stableType,
+            String targetMeshName,
+            RoutingId targetNodeRid,
+            long targetNodeGeneration,
+            String descriptorVersion,
+            RoutingId sourceNodeRid,
+            long sourceNodeGeneration,
+            Optional<String> sourceSpotId,
+            boolean request,
+            long operationHigh,
+            long operationLow,
+            Long replyRouteId,
+            long deadlineUnixMs,
+            byte[] metadataFrame,
+            byte[] applicationPayloadFrame) {
         public RecoveryEnvelope {
             sourceSpotId = Objects.requireNonNull(sourceSpotId, "sourceSpotId");
             metadataFrame = Objects.requireNonNull(metadataFrame, "metadataFrame").clone();
-            applicationPayloadFrame = Objects.requireNonNull(
-                applicationPayloadFrame, "applicationPayloadFrame").clone();
+            applicationPayloadFrame =
+                    Objects.requireNonNull(applicationPayloadFrame, "applicationPayloadFrame")
+                            .clone();
         }
 
         @Override
@@ -111,8 +124,7 @@ public final class ZLinkInstanceActivationRecoveryCodec {
     }
 
     private static IllegalArgumentException invalid() {
-        return new IllegalArgumentException(
-            "invalid Instance activation recovery envelope");
+        return new IllegalArgumentException("invalid Instance activation recovery envelope");
     }
 
     private static final class Reader {
@@ -144,8 +156,8 @@ public final class ZLinkInstanceActivationRecoveryCodec {
 
         int u16() {
             require(2);
-            int value = Byte.toUnsignedInt(bytes[offset]) << 8
-                | Byte.toUnsignedInt(bytes[offset + 1]);
+            int value =
+                    Byte.toUnsignedInt(bytes[offset]) << 8 | Byte.toUnsignedInt(bytes[offset + 1]);
             offset += 2;
             return value;
         }
@@ -158,16 +170,16 @@ public final class ZLinkInstanceActivationRecoveryCodec {
 
         long unsignedU32() {
             require(4);
-            long value = Integer.toUnsignedLong(ByteBuffer.wrap(bytes, offset, 4)
-                .order(ByteOrder.BIG_ENDIAN).getInt());
+            long value =
+                    Integer.toUnsignedLong(
+                            ByteBuffer.wrap(bytes, offset, 4).order(ByteOrder.BIG_ENDIAN).getInt());
             offset += 4;
             return value;
         }
 
         long u64() {
             require(8);
-            long value = ByteBuffer.wrap(bytes, offset, 8)
-                .order(ByteOrder.BIG_ENDIAN).getLong();
+            long value = ByteBuffer.wrap(bytes, offset, 8).order(ByteOrder.BIG_ENDIAN).getLong();
             offset += 8;
             return value;
         }
@@ -186,10 +198,12 @@ public final class ZLinkInstanceActivationRecoveryCodec {
                 if (item == 0) throw invalid();
             }
             try {
-                return StandardCharsets.UTF_8.newDecoder()
-                    .onMalformedInput(CodingErrorAction.REPORT)
-                    .onUnmappableCharacter(CodingErrorAction.REPORT)
-                    .decode(ByteBuffer.wrap(value)).toString();
+                return StandardCharsets.UTF_8
+                        .newDecoder()
+                        .onMalformedInput(CodingErrorAction.REPORT)
+                        .onUnmappableCharacter(CodingErrorAction.REPORT)
+                        .decode(ByteBuffer.wrap(value))
+                        .toString();
             } catch (CharacterCodingException failure) {
                 throw invalid();
             }

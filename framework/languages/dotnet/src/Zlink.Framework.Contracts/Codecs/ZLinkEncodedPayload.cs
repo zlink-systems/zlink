@@ -61,7 +61,8 @@ public readonly struct ZLinkEncodedPayload : IEquatable<ZLinkEncodedPayload>
     public override int GetHashCode()
     {
         var hash = new HashCode();
-        foreach (var value in Bytes.Span) hash.Add(value);
+        foreach (var value in Bytes.Span)
+            hash.Add(value);
         return hash.ToHashCode();
     }
 

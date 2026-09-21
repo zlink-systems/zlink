@@ -1,5 +1,4 @@
 package systems.zlink.framework.runtime.configuration;
-import java.util.concurrent.atomic.AtomicReference;
 
 import systems.zlink.framework.configuration.ZLinkDiagnosticsOptions;
 import systems.zlink.framework.configuration.ZLinkDispatchOptions;
@@ -8,6 +7,8 @@ import systems.zlink.framework.configuration.ZLinkMessageFlowLogMode;
 import systems.zlink.framework.configuration.ZLinkUnhandledDispatchAction;
 import systems.zlink.framework.configuration.ZLinkUnhandledDispatchOptions;
 import systems.zlink.framework.errors.ZLinkConfigurationException;
+
+import java.util.concurrent.atomic.AtomicReference;
 
 public final class ZLinkDispatchOptionsRegistration implements ZLinkDispatchOptions {
     private final UnhandledDispatchOptions unhandled = new UnhandledDispatchOptions();
@@ -44,16 +45,18 @@ public final class ZLinkDispatchOptionsRegistration implements ZLinkDispatchOpti
     void validate() {
         if (unhandled.send() == ZLinkUnhandledDispatchAction.REPLY_ERROR) {
             throw new ZLinkConfigurationException(
-                "unhandled send dispatch cannot use REPLY_ERROR because send has no reply path");
+                    "unhandled send dispatch cannot use REPLY_ERROR because send has no reply"
+                            + " path");
         }
         if (unhandled.publish() == ZLinkUnhandledDispatchAction.REPLY_ERROR) {
             throw new ZLinkConfigurationException(
-                "unhandled publish dispatch cannot use REPLY_ERROR because publish has no reply path");
+                    "unhandled publish dispatch cannot use REPLY_ERROR because publish has no reply"
+                            + " path");
         }
         double sampleRate = diagnostics.sampleRate();
         if (Double.isNaN(sampleRate) || sampleRate < 0.0d || sampleRate > 1.0d) {
             throw new ZLinkConfigurationException(
-                "diagnostics sample rate must be between 0.0 and 1.0");
+                    "diagnostics sample rate must be between 0.0 and 1.0");
         }
     }
 
@@ -149,8 +152,7 @@ public final class ZLinkDispatchOptionsRegistration implements ZLinkDispatchOpti
         }
 
         // Install the shared live-mode cell (host wiring for the runtime toggle).
-        public void installLiveMode(
-            AtomicReference<ZLinkMessageFlowLogMode> cell) {
+        public void installLiveMode(AtomicReference<ZLinkMessageFlowLogMode> cell) {
             liveMode = cell;
         }
 
@@ -165,6 +167,5 @@ public final class ZLinkDispatchOptionsRegistration implements ZLinkDispatchOpti
         public void setIncludeMessageSizes(boolean enabled) {
             includeMessageSizes = enabled;
         }
-
     }
 }

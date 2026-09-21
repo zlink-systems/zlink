@@ -47,7 +47,10 @@ test('transport gateway uses only the public binding package and retains receive
     await dealer.send([Buffer.from('foundation')]);
     const received = await pollReceive(() => router.receive(true));
     assert.equal(received.sourceRid, 'm5-dealer');
-    assert.deepEqual(received.parts.map(part => part.toString()), ['foundation']);
+    assert.deepEqual(
+      received.parts.map((part) => part.toString()),
+      ['foundation']
+    );
   } finally {
     host.close();
   }
@@ -115,7 +118,10 @@ test('operation registry registers more than the former completion cap before tr
   const pending = Array.from({ length: 4_097 }, () => operations.register(100, 'sender'));
   assert.equal(operations.size, 4_097);
   for (const entry of pending) assert.equal(operations.complete(entry.id, 'reply'), true);
-  assert.deepEqual(await Promise.all(pending.map(entry => entry.promise)), Array(4_097).fill('reply'));
+  assert.deepEqual(
+    await Promise.all(pending.map((entry) => entry.promise)),
+    Array(4_097).fill('reply')
+  );
   assert.equal(operations.size, 0);
 });
 
@@ -130,17 +136,26 @@ test('event-loop resources close in reverse once and infrastructure remains inde
 
   const queues = new EventLoopWorkQueues();
   let release!: () => void;
-  const blocked = new Promise<void>(resolve => (release = resolve));
-  assert.equal(queues.submitApplication(() => blocked), true);
-  assert.equal(queues.submitApplication(() => undefined), true);
-  const infrastructureDone = new Promise<void>(resolve => {
+  const blocked = new Promise<void>((resolve) => (release = resolve));
+  assert.equal(
+    queues.submitApplication(() => blocked),
+    true
+  );
+  assert.equal(
+    queues.submitApplication(() => undefined),
+    true
+  );
+  const infrastructureDone = new Promise<void>((resolve) => {
     assert.equal(queues.submitInfrastructure(resolve), true);
   });
   await infrastructureDone;
   release();
-  await new Promise(resolve => setImmediate(resolve));
+  await new Promise((resolve) => setImmediate(resolve));
   queues.stopAdmission();
-  assert.equal(queues.submitInfrastructure(() => undefined), false);
+  assert.equal(
+    queues.submitInfrastructure(() => undefined),
+    false
+  );
 });
 
 async function pollReceive<T>(receive: () => T | undefined): Promise<T> {
@@ -148,7 +163,7 @@ async function pollReceive<T>(receive: () => T | undefined): Promise<T> {
   while (Date.now() < deadline) {
     const value = receive();
     if (value !== undefined) return value;
-    await new Promise(resolve => setImmediate(resolve));
+    await new Promise((resolve) => setImmediate(resolve));
   }
   throw new Error('Timed out waiting for raw transport input.');
 }

@@ -1,13 +1,14 @@
 package systems.zlink.framework.runtime.spots;
 
+import systems.zlink.framework.errors.ZLinkConfigurationException;
+import systems.zlink.framework.spots.ZLinkSpotHandlerRegistry;
+
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.function.Function;
-import systems.zlink.framework.errors.ZLinkConfigurationException;
-import systems.zlink.framework.spots.ZLinkSpotHandlerRegistry;
 
 final class ZLinkSpotHandlerCatalog implements ZLinkSpotHandlerRegistry {
     private final String registrationClosedMessage;
@@ -51,14 +52,14 @@ final class ZLinkSpotHandlerCatalog implements ZLinkSpotHandlerRegistry {
     }
 
     record Registrations(
-        Map<String, SpotPacketHandlerRegistration> packetHandlers,
-        Map<String, List<SpotSubscriptionHandlerRegistration>> subscriptionHandlers) {
+            Map<String, SpotPacketHandlerRegistration> packetHandlers,
+            Map<String, List<SpotSubscriptionHandlerRegistration>> subscriptionHandlers) {
 
         Registrations {
             packetHandlers = Map.copyOf(packetHandlers);
             Map<String, List<SpotSubscriptionHandlerRegistration>> subscriptions = new HashMap<>();
             subscriptionHandlers.forEach(
-                (topic, handlers) -> subscriptions.put(topic, List.copyOf(handlers)));
+                    (topic, handlers) -> subscriptions.put(topic, List.copyOf(handlers)));
             subscriptionHandlers = Map.copyOf(subscriptions);
         }
     }

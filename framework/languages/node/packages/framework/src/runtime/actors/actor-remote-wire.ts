@@ -2,8 +2,7 @@ import type { RoutingId, SpotId } from '../../contracts';
 import { decodeRoutingId } from '../routing-id';
 
 export const ZLINK_REMOTE_ACTOR_JOIN_PACKET = '__zlink.actor.join_spot.request';
-export const ZLINK_REMOTE_ACTOR_SOURCE_LEAVE_TERMINAL =
-  '__zlink.actor.source_leave.terminal';
+export const ZLINK_REMOTE_ACTOR_SOURCE_LEAVE_TERMINAL = '__zlink.actor.source_leave.terminal';
 export const REMOTE_ACTOR_JOIN_PACKET = ZLINK_REMOTE_ACTOR_JOIN_PACKET;
 export const REMOTE_ACTOR_JOIN_ADMISSION = 'admission';
 export const REMOTE_ACTOR_JOIN_COMMIT = 'commit';
@@ -30,13 +29,12 @@ export function decodeRemoteActorSourceLeaveTerminal(
     return undefined;
   }
   if (
-    typeof decoded !== 'object'
-    || decoded === null
-    || (decoded as { packetName?: unknown }).packetName
-      !== ZLINK_REMOTE_ACTOR_SOURCE_LEAVE_TERMINAL
-    || typeof (decoded as { transferId?: unknown }).transferId !== 'string'
-    || typeof (decoded as { actorId?: unknown }).actorId !== 'string'
-    || typeof (decoded as { succeeded?: unknown }).succeeded !== 'boolean'
+    typeof decoded !== 'object' ||
+    decoded === null ||
+    (decoded as { packetName?: unknown }).packetName !== ZLINK_REMOTE_ACTOR_SOURCE_LEAVE_TERMINAL ||
+    typeof (decoded as { transferId?: unknown }).transferId !== 'string' ||
+    typeof (decoded as { actorId?: unknown }).actorId !== 'string' ||
+    typeof (decoded as { succeeded?: unknown }).succeeded !== 'boolean'
   ) {
     return undefined;
   }
@@ -123,10 +121,8 @@ export function decodeRemoteActorJoinPayload(payload: unknown): {
     ),
     actorGeneration: (payload as { actorGeneration: string }).actorGeneration,
     actorNodeGeneration: optionalString(payload, 'actorNodeGeneration'),
-    expectedAuthorityOwnerGeneration:
-      optionalString(payload, 'expectedAuthorityOwnerGeneration'),
-    expectedOwnerLeaseGeneration:
-      optionalString(payload, 'expectedOwnerLeaseGeneration'),
+    expectedAuthorityOwnerGeneration: optionalString(payload, 'expectedAuthorityOwnerGeneration'),
+    expectedOwnerLeaseGeneration: optionalString(payload, 'expectedOwnerLeaseGeneration'),
     sourceSpotId: optionalSpotId(payload, 'sourceSpotId'),
     routerChannelId: optionalString(payload, 'routerChannelId'),
     boundSessionRouterChannelId: optionalString(payload, 'boundSessionRouterChannelId'),

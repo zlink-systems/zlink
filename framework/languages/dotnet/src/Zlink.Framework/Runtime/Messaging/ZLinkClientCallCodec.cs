@@ -12,13 +12,15 @@ internal static class ZLinkClientCallCodec
         string? topic = null,
         string? source = null,
         bool includeCorrelationId = true,
-        bool includeDeadline = true)
+        bool includeDeadline = true
+    )
     {
         if (kind is ZLinkMessageKind.Response or ZLinkMessageKind.Error)
             throw new ArgumentOutOfRangeException(
                 nameof(kind),
                 kind,
-                "Client call envelopes can only initiate commands, requests, or publishes.");
+                "Client call envelopes can only initiate commands, requests, or publishes."
+            );
 
         var flow = ZLinkFlowContext.Current;
         var correlationRequired = kind == ZLinkMessageKind.Request;
@@ -32,23 +34,26 @@ internal static class ZLinkClientCallCodec
             topic,
             null,
             null,
-            source)
+            source
+        )
         {
             FlowId = flow?.FlowId,
-            FlowOrigin = flow?.Origin
+            FlowOrigin = flow?.Origin,
         };
     }
 
     public static IReadOnlyList<Message> EncodeEnvelopeParts<TMessage>(
         ZLinkEnvelopeHeader header,
         TMessage message,
-        ZLinkCodecRegistryBuilder? codecs)
+        ZLinkCodecRegistryBuilder? codecs
+    )
     {
         return ZLinkEnvelopeCodec.EncodeParts(
             header,
             message,
             ZLinkClientCallTypeCache<TMessage>.Resolve(message),
-            codecs);
+            codecs
+        );
     }
 
     // A logical request can be reselected before admission. The body remains
@@ -57,17 +62,20 @@ internal static class ZLinkClientCallCodec
     public static Message EncodeEnvelopeBody<TMessage>(
         TMessage message,
         ZLinkCodecRegistryBuilder? codecs,
-        out string contentType) =>
+        out string contentType
+    ) =>
         ZLinkEnvelopeCodec.EncodeBody(
             message,
             ZLinkClientCallTypeCache<TMessage>.Resolve(message),
             codecs,
-            out contentType);
+            out contentType
+        );
 
     public static IReadOnlyList<Message> CopyEnvelopeParts(
         ZLinkEnvelopeHeader header,
         Message encodedBody,
-        string contentType)
+        string contentType
+    )
     {
         var headerPart = ZLinkEnvelopeCodec.EncodeHeader(header, contentType);
         try
@@ -86,17 +94,23 @@ internal static class ZLinkClientCallCodec
         string emptyMessage,
         string errorMessage,
         ZLinkCodecRegistryBuilder? codecs,
-        bool validateFlow = true) =>
+        bool validateFlow = true
+    ) =>
         DecodeEnvelopeReplyAndDispose<TReply>(
             new ZLinkBackendRouteReceived(reply, null, null, null, null),
-            emptyMessage, errorMessage, codecs, validateFlow);
+            emptyMessage,
+            errorMessage,
+            codecs,
+            validateFlow
+        );
 
     public static TReply DecodeEnvelopeReplyAndDispose<TReply>(
         ZLinkBackendRouteReceived reply,
         string emptyMessage,
         string errorMessage,
         ZLinkCodecRegistryBuilder? codecs,
-        bool validateFlow = true)
+        bool validateFlow = true
+    )
     {
         try
         {
@@ -106,14 +120,14 @@ internal static class ZLinkClientCallCodec
                 errorMessage,
                 codecs,
                 validateFlow,
-                reply.ApplicationPayloadView);
+                reply.ApplicationPayloadView
+            );
         }
         finally
         {
             reply.Dispose();
         }
     }
-
 }
 
 internal static class ZLinkEnvelopeReplyDecoder
@@ -124,13 +138,12 @@ internal static class ZLinkEnvelopeReplyDecoder
         string errorMessage,
         ZLinkCodecRegistryBuilder? codecs,
         bool validateFlow = true,
-        ZLinkMultipartPayloadView? applicationPayloadView = null)
+        ZLinkMultipartPayloadView? applicationPayloadView = null
+    )
     {
         var partCount = applicationPayloadView?.Count ?? reply.Count;
         if (partCount == 0)
-            throw new ZLinkFrameworkException(
-                ZLinkFrameworkErrorKind.ProtocolError,
-                emptyMessage);
+            throw new ZLinkFrameworkException(ZLinkFrameworkErrorKind.ProtocolError, emptyMessage);
 
         ZLinkEnvelopeHeader replyHeader;
         try
@@ -148,28 +161,42 @@ internal static class ZLinkEnvelopeReplyDecoder
             throw new ZLinkFrameworkException(
                 ZLinkFrameworkErrorKind.ProtocolError,
                 "Reply envelope is malformed.",
-                innerException: exception);
+                innerException: exception
+            );
         }
         if (replyHeader.Kind == ZLinkMessageKind.Error)
             throw ZLinkEnvelopeErrorMapper.CreateException(replyHeader, errorMessage);
         if (replyHeader.Kind != ZLinkMessageKind.Response)
             throw new ZLinkFrameworkException(
                 ZLinkFrameworkErrorKind.ProtocolError,
-                $"Reply envelope kind '{replyHeader.Kind}' is not a response.");
+                $"Reply envelope kind '{replyHeader.Kind}' is not a response."
+            );
         if (partCount < 2)
             throw new ZLinkFrameworkException(
                 ZLinkFrameworkErrorKind.ProtocolError,
-                "Reply envelope body is missing.");
+                "Reply envelope body is missing."
+            );
 
         try
         {
             var body = applicationPayloadView is { } view
-                ? ZLinkEnvelopeCodec.DecodeBody(view, typeof(TReply), replyHeader.ContentType, codecs)
-                : ZLinkEnvelopeCodec.DecodeBody(reply, typeof(TReply), replyHeader.ContentType, codecs);
+                ? ZLinkEnvelopeCodec.DecodeBody(
+                    view,
+                    typeof(TReply),
+                    replyHeader.ContentType,
+                    codecs
+                )
+                : ZLinkEnvelopeCodec.DecodeBody(
+                    reply,
+                    typeof(TReply),
+                    replyHeader.ContentType,
+                    codecs
+                );
             return (TReply?)body
-                   ?? throw new ZLinkFrameworkException(
-                       ZLinkFrameworkErrorKind.ProtocolError,
-                       "Reply body is null.");
+                ?? throw new ZLinkFrameworkException(
+                    ZLinkFrameworkErrorKind.ProtocolError,
+                    "Reply body is null."
+                );
         }
         catch (ZLinkFrameworkException)
         {
@@ -180,16 +207,15 @@ internal static class ZLinkEnvelopeReplyDecoder
             throw new ZLinkFrameworkException(
                 ZLinkFrameworkErrorKind.ProtocolError,
                 "Reply body could not be decoded.",
-                innerException: exception);
+                innerException: exception
+            );
         }
     }
 }
 
 internal static class ZLinkEnvelopeErrorMapper
 {
-    public static Exception CreateException(
-        ZLinkEnvelopeHeader header,
-        string fallbackMessage)
+    public static Exception CreateException(ZLinkEnvelopeHeader header, string fallbackMessage)
     {
         var message = header.ErrorMessage ?? fallbackMessage;
         // Stale-route contract (C++ channel_runtime route reply mapping): only
@@ -200,22 +226,19 @@ internal static class ZLinkEnvelopeErrorMapper
         // Cross-language errorCode wire names are snake_case only; an unknown
         // name stays a protocol error.
         if (ZLinkErrorWireNames.TryParse(header.ErrorCode, out var frameworkErrorKind))
-            return new ZLinkFrameworkException(frameworkErrorKind, message)
-            {
-                Origin = origin
-            };
+            return new ZLinkFrameworkException(frameworkErrorKind, message) { Origin = origin };
 
         return header.ErrorCode switch
         {
             nameof(TaskCanceledException) => new TaskCanceledException(message),
             nameof(OperationCanceledException) => new OperationCanceledException(message),
-            nameof(ZLinkActorHandoffRejectedException) => new ZLinkActorHandoffRejectedException(message),
-            _ => new ZLinkFrameworkException(
-                ZLinkFrameworkErrorKind.ProtocolError,
-                message)
+            nameof(ZLinkActorHandoffRejectedException) => new ZLinkActorHandoffRejectedException(
+                message
+            ),
+            _ => new ZLinkFrameworkException(ZLinkFrameworkErrorKind.ProtocolError, message)
             {
-                Origin = origin
-            }
+                Origin = origin,
+            },
         };
     }
 }
@@ -226,7 +249,8 @@ internal static class ZLinkClientCallTypeCache<TMessage>
 
     public static Type Resolve(TMessage message)
     {
-        if (message is null) return StaticType;
+        if (message is null)
+            return StaticType;
         return StaticType.IsSealed ? StaticType : message.GetType();
     }
 }

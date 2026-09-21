@@ -17,23 +17,21 @@ internal sealed class ZLinkFrameworkDrainExecutor : IZLinkDrainExecutor
         ZLinkLocationOptions locationOptions,
         ZLinkLocationAutoConnectHost? autoConnect,
         ZLinkLocationRuntime? locationRuntime,
-        ILogger<ZLinkFrameworkDrainExecutor>? logger = null)
+        ILogger<ZLinkFrameworkDrainExecutor>? logger = null
+    )
         : this(
-            ZLinkDrainExecutionOperations.Create(
-                runtime,
-                autoConnect,
-                locationRuntime),
+            ZLinkDrainExecutionOperations.Create(runtime, autoConnect, locationRuntime),
             locationOptions,
             logger,
-            routeMeshRuntime.Stop)
-    {
-    }
+            routeMeshRuntime.Stop
+        ) { }
 
     internal ZLinkFrameworkDrainExecutor(
         ZLinkDrainExecutionOperations operations,
         ZLinkLocationOptions locationOptions,
         ILogger<ZLinkFrameworkDrainExecutor>? logger = null,
-        Action? stopMeshMonitoring = null)
+        Action? stopMeshMonitoring = null
+    )
     {
         _operations = operations;
         _locationOptions = locationOptions;
@@ -41,9 +39,7 @@ internal sealed class ZLinkFrameworkDrainExecutor : IZLinkDrainExecutor
         _stopMeshMonitoring = stopMeshMonitoring ?? Noop;
     }
 
-    private static void Noop()
-    {
-    }
+    private static void Noop() { }
 
     public void RequestShutdown(TimeSpan deadline)
     {
@@ -53,41 +49,40 @@ internal sealed class ZLinkFrameworkDrainExecutor : IZLinkDrainExecutor
             return;
         _shutdownDeadline.CancelAfter(deadline);
         Zlink.Framework.Runtime.Diagnostics.ZLinkFrameworkDebugLog.SpotDiscovery(
-            "admission_sealed site=request_shutdown");
+            "admission_sealed site=request_shutdown"
+        );
         _operations.SealApplicationAdmissions(_shutdownDeadline.Token);
     }
 
     public ValueTask<ZLinkDrainForceReason?> ExecuteAsync(
         TimeSpan deadline,
-        CancellationToken deadlineToken) =>
-        ExecuteAsync(
-            ZLinkFrameworkLifecycleIntent.Shutdown,
-            deadline,
-            deadlineToken);
+        CancellationToken deadlineToken
+    ) => ExecuteAsync(ZLinkFrameworkLifecycleIntent.Shutdown, deadline, deadlineToken);
 
     public async ValueTask<ZLinkDrainForceReason?> ExecuteAsync(
         ZLinkFrameworkLifecycleIntent intent,
         TimeSpan deadline,
-        CancellationToken deadlineToken)
-        => await ExecuteAsync(intent, deadline, null, deadlineToken)
-            .ConfigureAwait(false);
+        CancellationToken deadlineToken
+    ) => await ExecuteAsync(intent, deadline, null, deadlineToken).ConfigureAwait(false);
 
     public async ValueTask<ZLinkDrainForceReason?> ExecuteAsync(
         ZLinkFrameworkLifecycleIntent intent,
         TimeSpan deadline,
         Action? relocationDetached,
-        CancellationToken deadlineToken)
+        CancellationToken deadlineToken
+    )
     {
         var result = await ExecuteWithProgressAsync(
                 intent,
                 deadline,
                 relocationDetached,
-                deadlineToken)
+                deadlineToken
+            )
             .ConfigureAwait(false);
         if (result.Disposition == ZLinkDrainExecutionDisposition.Blocked)
             throw new ZLinkDrainBlockedException(
-                result.BlockedReason
-                    ?? ZLinkFrameworkRelocationReason.RelocationFailed);
+                result.BlockedReason ?? ZLinkFrameworkRelocationReason.RelocationFailed
+            );
         return result.ForceReason;
     }
 
@@ -95,7 +90,8 @@ internal sealed class ZLinkFrameworkDrainExecutor : IZLinkDrainExecutor
         ZLinkFrameworkLifecycleIntent intent,
         TimeSpan deadline,
         Action? relocationDetached,
-        CancellationToken deadlineToken)
+        CancellationToken deadlineToken
+    )
     {
         var sealCancellationToken = deadlineToken;
         if (intent == ZLinkFrameworkLifecycleIntent.Shutdown)
@@ -106,21 +102,24 @@ internal sealed class ZLinkFrameworkDrainExecutor : IZLinkDrainExecutor
         }
         var absoluteDeadline = DateTimeOffset.UtcNow + deadline;
         ulong committedUnitCount = 0;
-        var relocationFence = intent == ZLinkFrameworkLifecycleIntent.Relocate
-            ? _operations.CaptureRelocationFence?.Invoke()
-            : null;
+        var relocationFence =
+            intent == ZLinkFrameworkLifecycleIntent.Relocate
+                ? _operations.CaptureRelocationFence?.Invoke()
+                : null;
         try
         {
             //  Shutdown 경로는 단계별 흔적이 없어 deadline이 어디서 소진되는지
             //  알 수 없었다. 각 단계의 시작을 남긴다.
             void ShutdownStep(string step) =>
-                Zlink.Framework.Runtime.Diagnostics.ZLinkFrameworkDebugLog
-                    .SpotDiscovery($"shutdown_step step={step} intent={intent}");
+                Zlink.Framework.Runtime.Diagnostics.ZLinkFrameworkDebugLog.SpotDiscovery(
+                    $"shutdown_step step={step} intent={intent}"
+                );
             if (intent == ZLinkFrameworkLifecycleIntent.Shutdown)
             {
                 ShutdownStep("seal_admissions");
-                Zlink.Framework.Runtime.Diagnostics.ZLinkFrameworkDebugLog
-                    .SpotDiscovery("admission_sealed site=shutdown_intent");
+                Zlink.Framework.Runtime.Diagnostics.ZLinkFrameworkDebugLog.SpotDiscovery(
+                    "admission_sealed site=shutdown_intent"
+                );
                 _operations.SealApplicationAdmissions(sealCancellationToken);
             }
 
@@ -135,7 +134,9 @@ internal sealed class ZLinkFrameworkDrainExecutor : IZLinkDrainExecutor
             if (intent == ZLinkFrameworkLifecycleIntent.Shutdown)
             {
                 ShutdownStep("wait_accepted_operations");
-                await _operations.WaitForAcceptedOperations().WaitAsync(deadlineToken)
+                await _operations
+                    .WaitForAcceptedOperations()
+                    .WaitAsync(deadlineToken)
                     .ConfigureAwait(false);
                 ShutdownStep("wait_accepted_actor_handoffs");
                 await _operations.WaitForAcceptedActorHandoffs(deadlineToken).ConfigureAwait(false);
@@ -157,60 +158,63 @@ internal sealed class ZLinkFrameworkDrainExecutor : IZLinkDrainExecutor
                         using var unitCancellation =
                             CancellationTokenSource.CreateLinkedTokenSource(
                                 deadlineToken,
-                                _shutdownDeadline.Token);
+                                _shutdownDeadline.Token
+                            );
                         workloads = await _operations
                             .DrainRelocationWorkloads(
                                 new ZLinkRelocationWorkloadDrainControl(
                                     ShutdownRequested,
                                     unitCancellation.Token,
-                                    absoluteDeadline))
+                                    absoluteDeadline
+                                )
+                            )
                             .ConfigureAwait(false);
                     }
                     catch (OperationCanceledException)
                         when (Volatile.Read(ref _shutdownRequested) != 0)
                     {
                         throw new ZLinkDrainBlockedException(
-                            ZLinkFrameworkRelocationReason.ShutdownRequested);
+                            ZLinkFrameworkRelocationReason.ShutdownRequested
+                        );
                     }
                     catch (ZLinkAuthorityGenerationExhaustedException)
                     {
                         return committedUnitCount == 0
                             ? await RollBackBlockedRetireAsync(
-                                    ZLinkFrameworkRelocationReason
-                                        .RelocationFailed,
-                                    relocationFence)
+                                    ZLinkFrameworkRelocationReason.RelocationFailed,
+                                    relocationFence
+                                )
                                 .ConfigureAwait(false)
                             : Result(ZLinkDrainForceReason.RelocationFailed);
                     }
-                    committedUnitCount = checked(
-                        committedUnitCount + workloads.CommittedUnitCount);
+                    committedUnitCount = checked(committedUnitCount + workloads.CommittedUnitCount);
                     ThrowIfShutdownRequested();
                     if (workloads.TerminalReason is not null)
                         return workloads.CommitKnowledge
-                                   == ZLinkRelocationCommitKnowledge.NotCommitted
-                               && committedUnitCount == 0
-                            ? await RollBackBlockedRetireAsync(
-                                    workloads.TerminalReason.Value,
-                                    relocationFence)
-                                .ConfigureAwait(false)
-                            : workloads.CommitKnowledge
-                                  != ZLinkRelocationCommitKnowledge.Unknown
-                              && workloads.SourceTerminalized
+                                == ZLinkRelocationCommitKnowledge.NotCommitted
+                            && committedUnitCount == 0
+                                ? await RollBackBlockedRetireAsync(
+                                        workloads.TerminalReason.Value,
+                                        relocationFence
+                                    )
+                                    .ConfigureAwait(false)
+                            : workloads.CommitKnowledge != ZLinkRelocationCommitKnowledge.Unknown
+                            && workloads.SourceTerminalized
                                 ? await RestorePartialRelocationAsync(
                                         relocationFence,
-                                        committedUnitCount)
+                                        committedUnitCount
+                                    )
                                     .ConfigureAwait(false)
-                                : Result(ZLinkDrainForceReason.TeardownFailed);
+                            : Result(ZLinkDrainForceReason.TeardownFailed);
                     if (workloads.Completed)
                         break;
-                    await Task.Delay(
-                            _locationOptions.PollingInterval,
-                            deadlineToken)
+                    await Task.Delay(_locationOptions.PollingInterval, deadlineToken)
                         .ConfigureAwait(false);
                 }
 
-                Zlink.Framework.Runtime.Diagnostics.ZLinkFrameworkDebugLog
-                    .SpotDiscovery("admission_sealed site=relocate_completed");
+                Zlink.Framework.Runtime.Diagnostics.ZLinkFrameworkDebugLog.SpotDiscovery(
+                    "admission_sealed site=relocate_completed"
+                );
                 _operations.SealApplicationAdmissions(deadlineToken);
                 relocationDetached?.Invoke();
                 return Result(null);
@@ -225,39 +229,44 @@ internal sealed class ZLinkFrameworkDrainExecutor : IZLinkDrainExecutor
                 try
                 {
                     ShutdownStep("drain_spots");
-                    var spotDrain = await _operations.DrainSpots(
+                    var spotDrain = await _operations
+                        .DrainSpots(
                             false,
                             intent == ZLinkFrameworkLifecycleIntent.Shutdown,
                             absoluteDeadline,
-                            deadlineToken)
+                            deadlineToken
+                        )
                         .ConfigureAwait(false);
-                    committedUnitCount = checked(
-                        committedUnitCount + spotDrain.CommittedUnitCount);
+                    committedUnitCount = checked(committedUnitCount + spotDrain.CommittedUnitCount);
                     //  Actor 루프와 달리 여기에는 terminal reason 탈출구가 없었다.
                     //  Spot drain이 더 진행할 수 없다고 알려도 루프가 그대로 돌아
                     //  deadline을 소진했고, 호출자는 이유 없이 ForceStopped만 받았다.
                     if (spotDrain.TerminalReason is not null)
-                        return intent == ZLinkFrameworkLifecycleIntent.Relocate
-                               && committedUnitCount == 0
+                        return
+                            intent == ZLinkFrameworkLifecycleIntent.Relocate
+                            && committedUnitCount == 0
                             ? await RollBackBlockedRetireAsync(
                                     spotDrain.TerminalReason.Value,
-                                    relocationFence)
+                                    relocationFence
+                                )
                                 .ConfigureAwait(false)
                             : Result(ZLinkDrainForceReason.RelocationFailed);
                     spotsDrained = spotDrain.Completed;
                 }
                 catch (ZLinkAuthorityGenerationExhaustedException)
                 {
-                    return intent == ZLinkFrameworkLifecycleIntent.Relocate
-                           && committedUnitCount == 0
+                    return
+                        intent == ZLinkFrameworkLifecycleIntent.Relocate && committedUnitCount == 0
                         ? await RollBackBlockedRetireAsync(
                                 ZLinkFrameworkRelocationReason.RelocationFailed,
-                                relocationFence)
+                                relocationFence
+                            )
                             .ConfigureAwait(false)
                         : Result(ZLinkDrainForceReason.RelocationFailed);
                 }
                 if (!spotsDrained)
-                    await Task.Delay(_locationOptions.PollingInterval, deadlineToken).ConfigureAwait(false);
+                    await Task.Delay(_locationOptions.PollingInterval, deadlineToken)
+                        .ConfigureAwait(false);
             }
 
             ShutdownStep("drain_stream_sessions");
@@ -274,11 +283,11 @@ internal sealed class ZLinkFrameworkDrainExecutor : IZLinkDrainExecutor
                 var forceReason = deadlineToken.IsCancellationRequested
                     ? ZLinkDrainForceReason.DeadlineExceeded
                     : ZLinkDrainForceReason.TeardownFailed;
-                Zlink.Framework.Runtime.Diagnostics.ZLinkFrameworkDebugLog
-                    .SpotDiscovery(
-                        $"stream_session_drain_failed cancellation_requested="
+                Zlink.Framework.Runtime.Diagnostics.ZLinkFrameworkDebugLog.SpotDiscovery(
+                    $"stream_session_drain_failed cancellation_requested="
                         + $"{deadlineToken.IsCancellationRequested} "
-                        + $"reason={forceReason}");
+                        + $"reason={forceReason}"
+                );
                 return Result(forceReason);
             }
 
@@ -296,64 +305,73 @@ internal sealed class ZLinkFrameworkDrainExecutor : IZLinkDrainExecutor
         }
         catch (ZLinkDrainForceException failure)
         {
-            _logger?.LogError(failure, "ZLink drain operation failed with '{Reason}'.", failure.Reason);
+            _logger?.LogError(
+                failure,
+                "ZLink drain operation failed with '{Reason}'.",
+                failure.Reason
+            );
             return Result(failure.Reason);
         }
-        catch (OperationCanceledException) when (
-            deadlineToken.IsCancellationRequested
-            && intent == ZLinkFrameworkLifecycleIntent.Relocate)
+        catch (OperationCanceledException)
+            when (deadlineToken.IsCancellationRequested
+                && intent == ZLinkFrameworkLifecycleIntent.Relocate
+            )
         {
             return committedUnitCount == 0
                 ? await RollBackBlockedRetireAsync(
                         ZLinkFrameworkRelocationReason.DeadlineExceeded,
-                        relocationFence)
+                        relocationFence
+                    )
                     .ConfigureAwait(false)
                 : Result(ZLinkDrainForceReason.DeadlineExceeded);
         }
 
         ZLinkDrainExecutionResult Result(ZLinkDrainForceReason? reason) =>
             reason is { } forceReason
-                ? ZLinkDrainExecutionResult.ForceStop(
-                    forceReason,
-                    committedUnitCount)
+                ? ZLinkDrainExecutionResult.ForceStop(forceReason, committedUnitCount)
                 : ZLinkDrainExecutionResult.Completed(committedUnitCount);
 
         void ThrowIfShutdownRequested()
         {
             if (ShutdownRequested())
                 throw new ZLinkDrainBlockedException(
-                    ZLinkFrameworkRelocationReason.ShutdownRequested);
+                    ZLinkFrameworkRelocationReason.ShutdownRequested
+                );
         }
 
-        bool ShutdownRequested() =>
-            Volatile.Read(ref _shutdownRequested) != 0;
+        bool ShutdownRequested() => Volatile.Read(ref _shutdownRequested) != 0;
     }
 
     private async ValueTask<ZLinkDrainExecutionResult> RollBackBlockedRetireAsync(
         ZLinkFrameworkRelocationReason reason,
-        ZLinkRelocationAdmissionFence? relocationFence)
+        ZLinkRelocationAdmissionFence? relocationFence
+    )
     {
         using var rollbackBound = new CancellationTokenSource(TimeSpan.FromSeconds(2));
         try
         {
-            if (relocationFence is not { } expectedFence
+            if (
+                relocationFence is not { } expectedFence
                 || _operations.AcquireRelocationRollback is null
-                || _operations.ReopenRelocationAdmissions is null)
+                || _operations.ReopenRelocationAdmissions is null
+            )
                 return OwnershipLostResult();
             var rollbackLease = _operations.AcquireRelocationRollback(expectedFence);
             if (rollbackLease is null || !rollbackLease.IsCurrent)
                 return OwnershipLostResult();
             using (rollbackLease)
-            using (var restoreBound = CancellationTokenSource.CreateLinkedTokenSource(
-                       rollbackBound.Token,
-                       rollbackLease.CancellationToken))
+            using (
+                var restoreBound = CancellationTokenSource.CreateLinkedTokenSource(
+                    rollbackBound.Token,
+                    rollbackLease.CancellationToken
+                )
+            )
             {
-                if (!await _operations.RestoreServing(restoreBound.Token)
-                        .ConfigureAwait(false)
+                if (
+                    !await _operations.RestoreServing(restoreBound.Token).ConfigureAwait(false)
                     || !rollbackLease.IsCurrent
-                    || !_operations.ReopenRelocationAdmissions(
-                        expectedFence,
-                        rollbackLease))
+                    || !_operations.ReopenRelocationAdmissions(expectedFence, rollbackLease)
+                )
                     return OwnershipLostResult();
             }
             throw new ZLinkDrainBlockedException(reason);
@@ -365,7 +383,8 @@ internal sealed class ZLinkFrameworkDrainExecutor : IZLinkDrainExecutor
         catch (OperationCanceledException) when (ShutdownRequested())
         {
             return ZLinkDrainExecutionResult.Blocked(
-                ZLinkFrameworkRelocationReason.ShutdownRequested);
+                ZLinkFrameworkRelocationReason.ShutdownRequested
+            );
         }
         catch
         {
@@ -375,90 +394,101 @@ internal sealed class ZLinkFrameworkDrainExecutor : IZLinkDrainExecutor
         ZLinkDrainExecutionResult OwnershipLostResult() =>
             ShutdownRequested()
                 ? ZLinkDrainExecutionResult.Blocked(
-                    ZLinkFrameworkRelocationReason.ShutdownRequested)
-                : ZLinkDrainExecutionResult.ForceStop(
-                    ZLinkDrainForceReason.TeardownFailed);
+                    ZLinkFrameworkRelocationReason.ShutdownRequested
+                )
+                : ZLinkDrainExecutionResult.ForceStop(ZLinkDrainForceReason.TeardownFailed);
 
-        bool ShutdownRequested() =>
-            Volatile.Read(ref _shutdownRequested) != 0;
+        bool ShutdownRequested() => Volatile.Read(ref _shutdownRequested) != 0;
     }
 
-    private async ValueTask<ZLinkDrainExecutionResult>
-        RestorePartialRelocationAsync(
-            ZLinkRelocationAdmissionFence? relocationFence,
-            ulong committedUnitCount)
+    private async ValueTask<ZLinkDrainExecutionResult> RestorePartialRelocationAsync(
+        ZLinkRelocationAdmissionFence? relocationFence,
+        ulong committedUnitCount
+    )
     {
         if (ShutdownRequested())
             return ZLinkDrainExecutionResult.Blocked(
                 ZLinkFrameworkRelocationReason.ShutdownRequested,
-                committedUnitCount);
-        if (relocationFence is not { } expectedFence
+                committedUnitCount
+            );
+        if (
+            relocationFence is not { } expectedFence
             || _operations.AcquireRelocationRollback is null
-            || _operations.ReopenRelocationAdmissions is null)
+            || _operations.ReopenRelocationAdmissions is null
+        )
             return ZLinkDrainExecutionResult.ForceStop(
                 ZLinkDrainForceReason.TeardownFailed,
-                committedUnitCount);
+                committedUnitCount
+            );
 
         var lease = _operations.AcquireRelocationRollback(expectedFence);
         if (lease is null || !lease.IsCurrent)
             return ShutdownRequested()
                 ? ZLinkDrainExecutionResult.Blocked(
                     ZLinkFrameworkRelocationReason.ShutdownRequested,
-                    committedUnitCount)
+                    committedUnitCount
+                )
                 : ZLinkDrainExecutionResult.ForceStop(
                     ZLinkDrainForceReason.TeardownFailed,
-                    committedUnitCount);
+                    committedUnitCount
+                );
 
         using (lease)
-        using (var terminalBound = new CancellationTokenSource(
-                   TimeSpan.FromSeconds(2)))
-        using (var restoreBound = CancellationTokenSource.CreateLinkedTokenSource(
-                   terminalBound.Token,
-                   lease.CancellationToken))
+        using (var terminalBound = new CancellationTokenSource(TimeSpan.FromSeconds(2)))
+        using (
+            var restoreBound = CancellationTokenSource.CreateLinkedTokenSource(
+                terminalBound.Token,
+                lease.CancellationToken
+            )
+        )
         {
             try
             {
-                if (!await _operations.RestoreServing(restoreBound.Token)
-                        .ConfigureAwait(false)
+                if (
+                    !await _operations.RestoreServing(restoreBound.Token).ConfigureAwait(false)
                     || !lease.IsCurrent
-                    || !_operations.ReopenRelocationAdmissions(
-                        expectedFence,
-                        lease))
+                    || !_operations.ReopenRelocationAdmissions(expectedFence, lease)
+                )
                 {
                     return ShutdownRequested()
                         ? ZLinkDrainExecutionResult.Blocked(
                             ZLinkFrameworkRelocationReason.ShutdownRequested,
-                            committedUnitCount)
+                            committedUnitCount
+                        )
                         : ZLinkDrainExecutionResult.ForceStop(
                             ZLinkDrainForceReason.TeardownFailed,
-                            committedUnitCount);
+                            committedUnitCount
+                        );
                 }
             }
             catch (OperationCanceledException) when (ShutdownRequested())
             {
                 return ZLinkDrainExecutionResult.Blocked(
                     ZLinkFrameworkRelocationReason.ShutdownRequested,
-                    committedUnitCount);
+                    committedUnitCount
+                );
             }
             catch
             {
                 return ZLinkDrainExecutionResult.ForceStop(
                     ZLinkDrainForceReason.TeardownFailed,
-                    committedUnitCount);
+                    committedUnitCount
+                );
             }
         }
 
         return ZLinkDrainExecutionResult.Blocked(
             ZLinkFrameworkRelocationReason.RelocationFailed,
-            committedUnitCount);
+            committedUnitCount
+        );
 
-        bool ShutdownRequested() =>
-            Volatile.Read(ref _shutdownRequested) != 0;
+        bool ShutdownRequested() => Volatile.Read(ref _shutdownRequested) != 0;
     }
 
     public async ValueTask ForceStopAsync(
         ZLinkDrainForceReason reason,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken
+    )
     {
         _shutdownDeadline.Cancel();
         // The runtime force-stop owner sends the ServerDrain notification and
@@ -471,12 +501,14 @@ internal sealed class ZLinkFrameworkDrainExecutor : IZLinkDrainExecutor
             await CaptureAsync(
                     "stop_auto_connect",
                     () => _operations.StopAutoConnect(cancellationToken),
-                    failures)
+                    failures
+                )
                 .ConfigureAwait(false);
         await CaptureAsync(
                 "force_runtime",
                 () => _operations.ForceStopRuntime(cancellationToken),
-                failures)
+                failures
+            )
             .ConfigureAwait(false);
         var ownerCleanupFailed = false;
         if (_operations.HasLocationRuntime)
@@ -485,8 +517,9 @@ internal sealed class ZLinkFrameworkDrainExecutor : IZLinkDrainExecutor
             // Forced teardown still closes the remaining location resources.
             if (reason != ZLinkDrainForceReason.OwnerCleanupFailed)
             {
-                using var cleanupBound = CancellationTokenSource
-                    .CreateLinkedTokenSource(cancellationToken);
+                using var cleanupBound = CancellationTokenSource.CreateLinkedTokenSource(
+                    cancellationToken
+                );
                 cleanupBound.CancelAfter(TimeSpan.FromSeconds(2));
                 try
                 {
@@ -502,13 +535,16 @@ internal sealed class ZLinkFrameworkDrainExecutor : IZLinkDrainExecutor
             await CaptureAsync(
                     "stop_location",
                     () => _operations.StopLocation(cancellationToken),
-                    failures)
+                    failures
+                )
                 .ConfigureAwait(false);
         }
         if (ownerCleanupFailed)
             throw new ZLinkDrainForceException(ZLinkDrainForceReason.OwnerCleanupFailed, failures);
-        if (failures.Count == 1) throw failures[0];
-        if (failures.Count > 1) throw new AggregateException(failures);
+        if (failures.Count == 1)
+            throw failures[0];
+        if (failures.Count > 1)
+            throw new AggregateException(failures);
 
         static void Capture(Action operation, ICollection<Exception> failures)
         {
@@ -525,21 +561,28 @@ internal sealed class ZLinkFrameworkDrainExecutor : IZLinkDrainExecutor
 
     private async ValueTask PublishDrainingMarkerAsync(CancellationToken cancellationToken)
     {
-        if (!_operations.HasAutoConnect) return;
+        if (!_operations.HasAutoConnect)
+            return;
         try
         {
             if (!await _operations.MarkDraining(cancellationToken).ConfigureAwait(false))
-                throw new InvalidOperationException("Draining descriptor publication returned false.");
+                throw new InvalidOperationException(
+                    "Draining descriptor publication returned false."
+                );
         }
         catch (Exception error)
         {
-            throw new ZLinkDrainForceException(ZLinkDrainForceReason.DrainingStatePublishFailed, [error]);
+            throw new ZLinkDrainForceException(
+                ZLinkDrainForceReason.DrainingStatePublishFailed,
+                [error]
+            );
         }
     }
 
     private async ValueTask CleanupOwnerAsync(CancellationToken cancellationToken)
     {
-        if (!_operations.HasLocationRuntime) return;
+        if (!_operations.HasLocationRuntime)
+            return;
         try
         {
             await _operations.CleanupOwner(cancellationToken).ConfigureAwait(false);
@@ -559,14 +602,18 @@ internal sealed class ZLinkFrameworkDrainExecutor : IZLinkDrainExecutor
         }
         catch (Exception error)
         {
-            throw new ZLinkDrainForceException(ZLinkDrainForceReason.DrainingStatePublishFailed, [error]);
+            throw new ZLinkDrainForceException(
+                ZLinkDrainForceReason.DrainingStatePublishFailed,
+                [error]
+            );
         }
     }
 
     private static async ValueTask CaptureAsync(
         string stage,
         Func<ValueTask> operation,
-        List<Exception> failures)
+        List<Exception> failures
+    )
     {
         try
         {
@@ -581,12 +628,12 @@ internal sealed class ZLinkFrameworkDrainExecutor : IZLinkDrainExecutor
 
     private static void LogCleanupFailure(string stage, Exception error)
     {
-        Zlink.Framework.Runtime.Diagnostics.ZLinkFrameworkDebugLog
-            .SpotDiscovery(
-                $"force_stop_cleanup_failed stage={stage} "
+        Zlink.Framework.Runtime.Diagnostics.ZLinkFrameworkDebugLog.SpotDiscovery(
+            $"force_stop_cleanup_failed stage={stage} "
                 + $"type={error.GetType().Name} "
                 + $"message={error.Message.Replace('\r', ' ').Replace('\n', ' ')} "
-                + $"detail={error.ToString().Replace('\r', ' ').Replace("\n", " | ")}");
+                + $"detail={error.ToString().Replace('\r', ' ').Replace("\n", " | ")}"
+        );
     }
 }
 
@@ -600,11 +647,11 @@ internal sealed record ZLinkDrainExecutionOperations(
     Action PublishDrainingToPeers,
     Func<Task> WaitForAcceptedOperations,
     Func<CancellationToken, Task> WaitForAcceptedActorHandoffs,
-    Func<bool, bool, DateTimeOffset, CancellationToken,
-        ValueTask<ZLinkSpotDrainResult>> DrainSpots,
-    Func<ZLinkRelocationWorkloadDrainControl,
-        ValueTask<ZLinkRelocationWorkloadDrainResult>>
-        DrainRelocationWorkloads,
+    Func<bool, bool, DateTimeOffset, CancellationToken, ValueTask<ZLinkSpotDrainResult>> DrainSpots,
+    Func<
+        ZLinkRelocationWorkloadDrainControl,
+        ValueTask<ZLinkRelocationWorkloadDrainResult>
+    > DrainRelocationWorkloads,
     Func<CancellationToken, ValueTask<bool>> DrainStreamSessions,
     Func<CancellationToken, ValueTask> FreezeOwnerWrites,
     Func<CancellationToken, ValueTask> CleanupOwner,
@@ -614,47 +661,53 @@ internal sealed record ZLinkDrainExecutionOperations(
     Func<CancellationToken, ValueTask> StopAutoConnect,
     Func<CancellationToken, ValueTask> StopLocation,
     Func<ZLinkRelocationAdmissionFence?>? CaptureRelocationFence = null,
-    Func<ZLinkRelocationAdmissionFence, ZLinkRelocationRollbackLease?>?
-        AcquireRelocationRollback = null,
-    Func<ZLinkRelocationAdmissionFence, ZLinkRelocationRollbackLease, bool>?
-        ReopenRelocationAdmissions = null)
+    Func<ZLinkRelocationAdmissionFence, ZLinkRelocationRollbackLease?>? AcquireRelocationRollback =
+        null,
+    Func<
+        ZLinkRelocationAdmissionFence,
+        ZLinkRelocationRollbackLease,
+        bool
+    >? ReopenRelocationAdmissions = null
+)
 {
     internal static ZLinkDrainExecutionOperations Create(
         ZLinkFrameworkRuntime runtime,
         ZLinkLocationAutoConnectHost? autoConnect,
-        ZLinkLocationRuntime? locationRuntime) => new(
-        autoConnect is not null,
-        locationRuntime is not null,
-        cancellationToken => runtime.QuiesceServingChannelsForDrainAsync(autoConnect, cancellationToken),
-        autoConnect is null
-            ? static _ => ValueTask.FromResult(true)
-            : autoConnect.MarkDrainingAsync,
-        autoConnect is null
-            ? static _ => ValueTask.FromResult(true)
-            : autoConnect.MarkServingAsync,
-        runtime.SealApplicationAdmissionsForDrain,
-        runtime.PublishDrainingToPeers,
-        runtime.WaitForAcceptedOperationsForDrainAsync,
-        runtime.WaitForAcceptedActorHandoffsAsync,
-        runtime.TryDrainSpotsAsync,
-        runtime.DrainRelocationWorkloadsAsync,
-        runtime.DrainStreamSessionsAsync,
-        autoConnect is null
-            ? static _ => ValueTask.CompletedTask
-            : autoConnect.FreezeOwnerWritesAsync,
-        locationRuntime is null
-            ? static _ => ValueTask.CompletedTask
-            : locationRuntime.CleanupOwnerForDrainAsync,
-        runtime.GetDrainRemainderCounts,
-        runtime.StopAsync,
-        runtime.ForceStopAsync,
-        autoConnect is null
-            ? static _ => ValueTask.CompletedTask
-            : autoConnect.StopAsync,
-        locationRuntime is null
-            ? static _ => ValueTask.CompletedTask
-            : locationRuntime.StopAsync,
-        runtime.CaptureRelocationAdmissionFence,
-        runtime.TryAcquireRelocationRollbackLease,
-        runtime.TryReopenRetireAdmissionsAfterRollback);
+        ZLinkLocationRuntime? locationRuntime
+    ) =>
+        new(
+            autoConnect is not null,
+            locationRuntime is not null,
+            cancellationToken =>
+                runtime.QuiesceServingChannelsForDrainAsync(autoConnect, cancellationToken),
+            autoConnect is null
+                ? static _ => ValueTask.FromResult(true)
+                : autoConnect.MarkDrainingAsync,
+            autoConnect is null
+                ? static _ => ValueTask.FromResult(true)
+                : autoConnect.MarkServingAsync,
+            runtime.SealApplicationAdmissionsForDrain,
+            runtime.PublishDrainingToPeers,
+            runtime.WaitForAcceptedOperationsForDrainAsync,
+            runtime.WaitForAcceptedActorHandoffsAsync,
+            runtime.TryDrainSpotsAsync,
+            runtime.DrainRelocationWorkloadsAsync,
+            runtime.DrainStreamSessionsAsync,
+            autoConnect is null
+                ? static _ => ValueTask.CompletedTask
+                : autoConnect.FreezeOwnerWritesAsync,
+            locationRuntime is null
+                ? static _ => ValueTask.CompletedTask
+                : locationRuntime.CleanupOwnerForDrainAsync,
+            runtime.GetDrainRemainderCounts,
+            runtime.StopAsync,
+            runtime.ForceStopAsync,
+            autoConnect is null ? static _ => ValueTask.CompletedTask : autoConnect.StopAsync,
+            locationRuntime is null
+                ? static _ => ValueTask.CompletedTask
+                : locationRuntime.StopAsync,
+            runtime.CaptureRelocationAdmissionFence,
+            runtime.TryAcquireRelocationRollbackLease,
+            runtime.TryReopenRetireAdmissionsAfterRollback
+        );
 }

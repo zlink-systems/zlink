@@ -1,44 +1,40 @@
 /* SPDX-License-Identifier: Apache-2.0 */
 package systems.zlink.httpclient;
 
+import systems.zlink.httpclient.internal.HttpClientErrors;
+import systems.zlink.httpclient.internal.HttpClientText;
+
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.function.Supplier;
-import systems.zlink.httpclient.internal.HttpClientErrors;
-import systems.zlink.httpclient.internal.HttpClientText;
 
 final class ZLinkHttpRequestBodyEncoder {
-    private ZLinkHttpRequestBodyEncoder() {
-    }
+    private ZLinkHttpRequestBodyEncoder() {}
 
-    record MultipartPart(String name, String filename, String content, String contentType) {
-    }
+    record MultipartPart(String name, String filename, String content, String contentType) {}
 
-    record BodyAndHeaders(String body, Map<String, String> headers) {
-    }
+    record BodyAndHeaders(String body, Map<String, String> headers) {}
 
     static MultipartPart multipartField(String name, String value) {
         return new MultipartPart(name, "", value, "");
     }
 
     static MultipartPart multipartFile(
-        String name,
-        String filename,
-        String content,
-        String contentType) {
+            String name, String filename, String content, String contentType) {
         return new MultipartPart(name, filename, content, contentType);
     }
 
     static BodyAndHeaders resolve(
-        String body,
-        Supplier<byte[]> bodyProvider,
-        Map<String, String> headers,
-        List<Map.Entry<String, String>> form,
-        List<MultipartPart> multipart) {
+            String body,
+            Supplier<byte[]> bodyProvider,
+            Map<String, String> headers,
+            List<Map.Entry<String, String>> form,
+            List<MultipartPart> multipart) {
         if (countBodySources(body, bodyProvider, form, multipart) > 1) {
             throw HttpClientErrors.protocol(
-                "HTTP request accepts a single body source: body, body_stream, form, or multipart");
+                    "HTTP request accepts a single body source: body, body_stream, form, or"
+                            + " multipart");
         }
 
         Map<String, String> resolvedHeaders = new LinkedHashMap<>(headers);
@@ -61,14 +57,14 @@ final class ZLinkHttpRequestBodyEncoder {
     }
 
     private static int countBodySources(
-        String body,
-        Supplier<byte[]> bodyProvider,
-        List<Map.Entry<String, String>> form,
-        List<MultipartPart> multipart) {
+            String body,
+            Supplier<byte[]> bodyProvider,
+            List<Map.Entry<String, String>> form,
+            List<MultipartPart> multipart) {
         return (body != null ? 1 : 0)
-            + (bodyProvider != null ? 1 : 0)
-            + (form.isEmpty() ? 0 : 1)
-            + (multipart.isEmpty() ? 0 : 1);
+                + (bodyProvider != null ? 1 : 0)
+                + (form.isEmpty() ? 0 : 1)
+                + (multipart.isEmpty() ? 0 : 1);
     }
 
     private static String encodeFormBody(List<Map.Entry<String, String>> form) {
@@ -78,8 +74,8 @@ final class ZLinkHttpRequestBodyEncoder {
                 encoded.append('&');
             }
             encoded.append(HttpClientText.percentEncode(entry.getKey()))
-                .append('=')
-                .append(HttpClientText.percentEncode(entry.getValue()));
+                    .append('=')
+                    .append(HttpClientText.percentEncode(entry.getValue()));
         }
         return encoded.toString();
     }
@@ -88,7 +84,9 @@ final class ZLinkHttpRequestBodyEncoder {
         StringBuilder encoded = new StringBuilder();
         for (MultipartPart part : multipart) {
             encoded.append("--").append(boundary).append("\r\n");
-            encoded.append("Content-Disposition: form-data; name=\"").append(part.name()).append('"');
+            encoded.append("Content-Disposition: form-data; name=\"")
+                    .append(part.name())
+                    .append('"');
             if (!part.filename().isEmpty()) {
                 encoded.append("; filename=\"").append(part.filename()).append('"');
             }

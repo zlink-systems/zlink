@@ -9,15 +9,12 @@ import type {
   RoutingId,
   ZLinkActor,
   ZLinkActorJoinOperationId,
-  ZLinkMessageSerializer,
+  ZLinkMessageSerializer
 } from '../../contracts';
 import { ZLinkFrameworkErrorKind, ZLinkSpotKind } from '../../contracts';
 import type { ZLinkActorJoinRuntimeResult } from './actor-runtime-contracts';
 import type { Message } from '../../contracts/Common/Message';
-import type {
-  ZLinkBackendActorRef,
-  ZLinkBackendMeshNode
-} from '../backend/contracts';
+import type { ZLinkBackendActorRef, ZLinkBackendMeshNode } from '../backend/contracts';
 import {
   closeMeshCompletion,
   type ZLinkMeshCompletion,
@@ -87,23 +84,21 @@ export class ZLinkLocalNativeActorJoin {
       );
     }
     const completion = await this.waitForJoinCompletion(
-      () => node.joinActorSpot(
-        actorRef,
-        toBackendRoutingId(target.targetNodeRid),
-        toBackendRoutingId(target.spotId),
-        target.targetSpotGeneration,
-        actorJoinApplicationPayload(request),
-        timeoutMs
-      ),
+      () =>
+        node.joinActorSpot(
+          actorRef,
+          toBackendRoutingId(target.targetNodeRid),
+          toBackendRoutingId(target.spotId),
+          target.targetSpotGeneration,
+          actorJoinApplicationPayload(request),
+          timeoutMs
+        ),
       completions,
       timeoutMs,
       signal
     );
     const control = completion.kindData;
-    if (
-      control?.kind !== 'actorJoinCompletion' ||
-      control.actor === null
-    ) {
+    if (control?.kind !== 'actorJoinCompletion' || control.actor === null) {
       closeMeshCompletion(completion);
       const message = `Actor join failed for '${actor.context.actorId}' with result '${completion.terminalResult}' and errno '${completion.failureErrno}'.`;
       //  Classify the (terminal, fine) pair instead of collapsing every non-OK
@@ -111,11 +106,7 @@ export class ZLinkLocalNativeActorJoin {
       //  83-118). An OK terminal that carries no join control is a protocol
       //  violation, not a missing route.
       throw completion.terminalResult !== 0 || completion.failureErrno !== 0
-        ? wireReplyFailureException(
-            completion.terminalResult,
-            completion.failureErrno,
-            message
-          )
+        ? wireReplyFailureException(completion.terminalResult, completion.failureErrno, message)
         : createInternalFrameworkException(
             ZLinkFrameworkInternalErrorKind.RequestProtocolError,
             message
@@ -150,9 +141,7 @@ export class ZLinkLocalNativeActorJoin {
     );
     // The Session owner relays from the verified Ready authority snapshot;
     // membership coordinates alone cannot recreate a User/Instance fence.
-    state.setRemoteActorPacketTarget(
-      target.spotKind === ZLinkSpotKind.Entry ? undefined : target
-    );
+    state.setRemoteActorPacketTarget(target.spotKind === ZLinkSpotKind.Entry ? undefined : target);
     if (state.actorType !== undefined) {
       this.options.postCommitLocation?.joinedEventually(
         state.actorType,
@@ -170,10 +159,7 @@ export class ZLinkLocalNativeActorJoin {
     try {
       return {
         accepted: true,
-        actor: toFrameworkActorRef(
-          control.actor as never,
-          actorMeshName
-        ),
+        actor: toFrameworkActorRef(control.actor as never, actorMeshName),
         reply: completion.parts[0]
       };
     } finally {
@@ -197,15 +183,13 @@ export class ZLinkLocalNativeActorJoin {
     const completions = this.requireCompletions();
     const actorMeshName = runtimeActorMeshName(actor, state, '');
     const targetNodeRid = spotRouteTarget?.targetNodeRid ?? nodeRid;
-    const remote = spotRouteTarget !== undefined && (
-      !routingIdsEqual(
+    const remote =
+      spotRouteTarget !== undefined &&
+      (!routingIdsEqual(
         toFrameworkRoutingId(node.status().routingId),
         spotRouteTarget.targetNodeRid
-      ) || !routingIdsEqual(
-        toFrameworkRoutingId(actorRef.nodeRid),
-        spotRouteTarget.targetNodeRid
-      )
-    );
+      ) ||
+        !routingIdsEqual(toFrameworkRoutingId(actorRef.nodeRid), spotRouteTarget.targetNodeRid));
     if (remote) {
       return await this.relocateRemoteActorJoin(
         node,
@@ -221,32 +205,26 @@ export class ZLinkLocalNativeActorJoin {
       );
     }
     const completion = await this.waitForJoinCompletion(
-      () => node.joinActorEntrySpot(
-        actorRef,
-        toBackendRoutingId(targetNodeRid),
-        actorJoinApplicationPayload(request),
-        timeoutMs
-      ),
+      () =>
+        node.joinActorEntrySpot(
+          actorRef,
+          toBackendRoutingId(targetNodeRid),
+          actorJoinApplicationPayload(request),
+          timeoutMs
+        ),
       completions,
       timeoutMs,
       signal
     );
     const control = completion.kindData;
-    if (
-      control?.kind !== 'actorJoinCompletion' ||
-      control.actor === null
-    ) {
+    if (control?.kind !== 'actorJoinCompletion' || control.actor === null) {
       closeMeshCompletion(completion);
       const message = `Actor entry SPOT join failed for '${actor.context.actorId}' with result '${completion.terminalResult}' and errno '${completion.failureErrno}'.`;
       //  Classify the (terminal, fine) pair instead of collapsing to NotFound
       //  (spec 32-framework-error-model:83-118); an OK terminal with no join
       //  control is a protocol violation.
       throw completion.terminalResult !== 0 || completion.failureErrno !== 0
-        ? wireReplyFailureException(
-            completion.terminalResult,
-            completion.failureErrno,
-            message
-          )
+        ? wireReplyFailureException(completion.terminalResult, completion.failureErrno, message)
         : createInternalFrameworkException(
             ZLinkFrameworkInternalErrorKind.RequestProtocolError,
             message
@@ -291,10 +269,7 @@ export class ZLinkLocalNativeActorJoin {
     try {
       return {
         accepted: true,
-        actor: toFrameworkActorRef(
-          control.actor as never,
-          actorMeshName
-        ),
+        actor: toFrameworkActorRef(control.actor as never, actorMeshName),
         reply: completion.parts[0]
       };
     } finally {
@@ -311,11 +286,7 @@ export class ZLinkLocalNativeActorJoin {
     // The operation ID identifies one Core request. Once it is submitted, a
     // NotConnected completion is terminal for that request; resubmitting it
     // could execute the target lifecycle twice after a delayed reply.
-    return submitJoinWhenConnected(
-      () => completions.submit(submit, signal),
-      timeoutMs,
-      signal
-    );
+    return submitJoinWhenConnected(() => completions.submit(submit, signal), timeoutMs, signal);
   }
 
   private async relocateRemoteActorJoin(
@@ -339,9 +310,8 @@ export class ZLinkLocalNativeActorJoin {
     }
     const completions = this.requireCompletions();
     let relocationId: string = randomUUID();
-    const completionOperationKey = completionOperationId === undefined
-      ? undefined
-      : operationIdentityKey(completionOperationId);
+    const completionOperationKey =
+      completionOperationId === undefined ? undefined : operationIdentityKey(completionOperationId);
     if (completionOperationKey === relocationId) {
       throw new Error('Actor Join OperationId must be distinct from RelocationId.');
     }
@@ -351,59 +321,61 @@ export class ZLinkLocalNativeActorJoin {
     // the existing internal admission route (wire protocol §10); fabricating
     // an Actor fence from the destination Spot would let a stale source pass
     // receiver-side Authority-row equality.
-    const canonicalAdmission = actorAuthorityFence === undefined
-      || !supportsCanonicalActorJoin(node, entrySpot)
-      ? undefined
-      : {
-          request: actorJoinApplicationPayload(request),
-          actorFence: {
-            targetNodeGeneration: actorAuthorityFence.nodeGeneration,
-            authorityOwnerGeneration: actorAuthorityFence.authorityOwnerGeneration,
-            ownerLeaseGeneration: actorAuthorityFence.ownerLeaseGeneration
-          },
-          local: { phase: 'admission', transferId: relocationId } as const
-        };
+    const canonicalAdmission =
+      actorAuthorityFence === undefined || !supportsCanonicalActorJoin(node, entrySpot)
+        ? undefined
+        : {
+            request: actorJoinApplicationPayload(request),
+            actorFence: {
+              targetNodeGeneration: actorAuthorityFence.nodeGeneration,
+              authorityOwnerGeneration: actorAuthorityFence.authorityOwnerGeneration,
+              ownerLeaseGeneration: actorAuthorityFence.ownerLeaseGeneration
+            },
+            local: { phase: 'admission', transferId: relocationId } as const
+          };
     let admissionOperationId: ZLinkActorJoinOperationId | undefined;
     const admission = await this.waitForJoinCompletion(
       () => {
-        const legacyAdmission = canonicalAdmission === undefined
-          ? legacyRemoteActorJoinPayload(actor, state, actorRef, target, request, relocationId)
-          : undefined;
-        const operationId = canonicalAdmission === undefined
-          ? entrySpot
-            ? node.joinActorEntrySpot(
-                actorRef,
-                toBackendRoutingId(target.targetNodeRid),
-                legacyAdmission!,
-                timeoutMs
-              )
-            : node.joinActorSpot(
-                actorRef,
-                toBackendRoutingId(target.targetNodeRid),
-                toBackendRoutingId(target.spotId),
-                target.targetSpotGeneration!,
-                legacyAdmission!,
-                timeoutMs
-              )
-          : entrySpot
-            ? node.joinActorEntrySpotCanonical!(
-                actorRef,
-                toBackendRoutingId(target.targetNodeRid),
-                canonicalAdmission.request,
-                canonicalAdmission.actorFence,
-                canonicalAdmission.local,
-                timeoutMs
-              )
-            : node.joinActorSpotCanonical!(
-                actorRef,
-                toBackendRoutingId(target.targetNodeRid),
-                toBackendRoutingId(target.spotId),
-                target.targetSpotGeneration!,
-                canonicalAdmission.request,
-                canonicalAdmission.actorFence,
-                canonicalAdmission.local,
-                timeoutMs
-              );
+        const legacyAdmission =
+          canonicalAdmission === undefined
+            ? legacyRemoteActorJoinPayload(actor, state, actorRef, target, request, relocationId)
+            : undefined;
+        const operationId =
+          canonicalAdmission === undefined
+            ? entrySpot
+              ? node.joinActorEntrySpot(
+                  actorRef,
+                  toBackendRoutingId(target.targetNodeRid),
+                  legacyAdmission!,
+                  timeoutMs
+                )
+              : node.joinActorSpot(
+                  actorRef,
+                  toBackendRoutingId(target.targetNodeRid),
+                  toBackendRoutingId(target.spotId),
+                  target.targetSpotGeneration!,
+                  legacyAdmission!,
+                  timeoutMs
+                )
+            : entrySpot
+              ? node.joinActorEntrySpotCanonical!(
+                  actorRef,
+                  toBackendRoutingId(target.targetNodeRid),
+                  canonicalAdmission.request,
+                  canonicalAdmission.actorFence,
+                  canonicalAdmission.local,
+                  timeoutMs
+                )
+              : node.joinActorSpotCanonical!(
+                  actorRef,
+                  toBackendRoutingId(target.targetNodeRid),
+                  toBackendRoutingId(target.spotId),
+                  target.targetSpotGeneration!,
+                  canonicalAdmission.request,
+                  canonicalAdmission.actorFence,
+                  canonicalAdmission.local,
+                  timeoutMs
+                );
         admissionOperationId = operationId;
         return operationId;
       },
@@ -501,17 +473,16 @@ export class ZLinkLocalNativeActorJoin {
                   : {
                       replyContentType: control.replyContentType ?? 'application/octet-stream'
                     }),
-                reply: completionOperationId === undefined
-                  ? Buffer.alloc(0)
-                  : Buffer.from(admission.parts[0]?.data() ?? []),
+                reply:
+                  completionOperationId === undefined
+                    ? Buffer.alloc(0)
+                    : Buffer.from(admission.parts[0]?.data() ?? []),
                 actorNodeGeneration: actorAuthorityFence!.nodeGeneration,
                 expectedOwnerLeaseGeneration: actorAuthorityFence!.ownerLeaseGeneration,
                 targetNodeGeneration: target.targetNodeGeneration!,
                 targetSpotGeneration: control.location.spotGeneration,
-                targetAuthorityOwnerGeneration:
-                  actorAuthorityFence!.authorityOwnerGeneration + 1n,
-                targetSpotAuthorityOwnerGeneration:
-                  target.authorityOwnerGeneration ?? 1n
+                targetAuthorityOwnerGeneration: actorAuthorityFence!.authorityOwnerGeneration + 1n,
+                targetSpotAuthorityOwnerGeneration: target.authorityOwnerGeneration ?? 1n
               }
             }),
         advertisedReceiveChunkLimitBytes: control.receiveChunkLimitBytes,
@@ -556,17 +527,18 @@ export class ZLinkLocalNativeActorJoin {
     }
     return completions;
   }
-
 }
 
 function remoteJoinAuthorityFence(
   node: ZLinkBackendMeshNode,
   state: ZLinkActorRuntimeState
-): {
-  readonly nodeGeneration: bigint;
-  readonly authorityOwnerGeneration: bigint;
-  readonly ownerLeaseGeneration: bigint;
-} | undefined {
+):
+  | {
+      readonly nodeGeneration: bigint;
+      readonly authorityOwnerGeneration: bigint;
+      readonly ownerLeaseGeneration: bigint;
+    }
+  | undefined {
   if (state.locationGeneration === undefined || state.ownerLeaseGeneration === undefined) {
     return undefined;
   }
@@ -577,10 +549,7 @@ function remoteJoinAuthorityFence(
   };
 }
 
-function supportsCanonicalActorJoin(
-  node: ZLinkBackendMeshNode,
-  entrySpot: boolean
-): boolean {
+function supportsCanonicalActorJoin(node: ZLinkBackendMeshNode, entrySpot: boolean): boolean {
   return entrySpot
     ? typeof node.joinActorEntrySpotCanonical === 'function'
     : typeof node.joinActorSpotCanonical === 'function';
@@ -606,20 +575,22 @@ function legacyRemoteActorJoinPayload(
   // only when this backend cannot prove the source Actor fence needed for
   // canonical admission; it never substitutes target-Spot values as an Actor
   // authority fence.
-  const payload = Buffer.from(JSON.stringify({
-    packetName: '__zlink.actor.join_spot.request',
-    phase: 'admission',
-    transferId,
-    spotId: String(target.spotId),
-    actorId: actor.context.actorId,
-    actorType: state.actorType,
-    actorNodeRid: String(actorRef.nodeRid),
-    actorGeneration: actorRef.generation.toString(),
-    ...(state.spotId === undefined ? {} : { sourceSpotId: String(state.spotId) }),
-    ...(target.routerChannelId.length === 0 ? {} : { routerChannelId: target.routerChannelId }),
-    request: Buffer.from(request.data()).toString('base64'),
-    requestContentType: frameworkPayloadContentType(request)
-  }));
+  const payload = Buffer.from(
+    JSON.stringify({
+      packetName: '__zlink.actor.join_spot.request',
+      phase: 'admission',
+      transferId,
+      spotId: String(target.spotId),
+      actorId: actor.context.actorId,
+      actorType: state.actorType,
+      actorNodeRid: String(actorRef.nodeRid),
+      actorGeneration: actorRef.generation.toString(),
+      ...(state.spotId === undefined ? {} : { sourceSpotId: String(state.spotId) }),
+      ...(target.routerChannelId.length === 0 ? {} : { routerChannelId: target.routerChannelId }),
+      request: Buffer.from(request.data()).toString('base64'),
+      requestContentType: frameworkPayloadContentType(request)
+    })
+  );
   return {
     packetName: ZLINK_FRAMEWORK_ACTOR_JOIN_PACKET_NAME,
     contentType: 'application/json',
@@ -636,8 +607,10 @@ function canonicalHandoffRelocationId(handoffId: string): string {
   if (!/^[0-9a-f]{32}$/u.test(hex) || /^0+$/u.test(hex)) {
     throw new TypeError('Canonical Actor Join handoff id is not a non-zero 128-bit identity.');
   }
-  return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}`
-    + `-${hex.slice(16, 20)}-${hex.slice(20)}`;
+  return (
+    `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}` +
+    `-${hex.slice(16, 20)}-${hex.slice(20)}`
+  );
 }
 
 function remoteActorJoinFailureException(
@@ -650,17 +623,18 @@ function remoteActorJoinFailureException(
   const failure = wireReplyFailureException(terminalResult, failureErrno, message);
   const targetGeneration = target.targetNodeGeneration;
   if (
-    failure.kind === ZLinkFrameworkErrorKind.DeadlineExceeded
-    && targetGeneration !== undefined
-    && targetGeneration !== 0n
-    && !node.peers().some((peer) =>
-      peer.state === 3
-      && peer.routingId !== null
-      && routingIdsEqual(
-        peer.routingId,
-        target.targetNodeRid
+    failure.kind === ZLinkFrameworkErrorKind.DeadlineExceeded &&
+    targetGeneration !== undefined &&
+    targetGeneration !== 0n &&
+    !node
+      .peers()
+      .some(
+        (peer) =>
+          peer.state === 3 &&
+          peer.routingId !== null &&
+          routingIdsEqual(peer.routingId, target.targetNodeRid) &&
+          peer.lifecycleGeneration === targetGeneration
       )
-      && peer.lifecycleGeneration === targetGeneration)
   ) {
     return createInternalFrameworkException(
       ZLinkFrameworkInternalErrorKind.RouteNotConnected,
@@ -680,9 +654,7 @@ function runtimeActorMeshName(
       readonly context?: { readonly meshName?: string };
     }
   ).context;
-  const stateMeshName = (
-    state as unknown as { readonly meshName?: string } | undefined
-  )?.meshName;
+  const stateMeshName = (state as unknown as { readonly meshName?: string } | undefined)?.meshName;
   return context?.meshName ?? stateMeshName ?? fallback;
 }
 

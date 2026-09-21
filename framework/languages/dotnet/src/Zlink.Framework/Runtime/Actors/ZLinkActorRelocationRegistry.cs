@@ -10,30 +10,35 @@ internal static class ZLinkActorRelocationRegistry
     internal static ZLinkObjectRelocationRegistration Resolve(
         ZLinkFrameworkRegistration registration,
         string actorType,
-        RoutingId nodeRid)
+        RoutingId nodeRid
+    )
     {
         if (TryResolve(registration, actorType, nodeRid, out var relocation))
             return relocation;
         throw new ZLinkConfigurationException(
-            $"Relocation policy for Actor type '{actorType}' is not registered.");
+            $"Relocation policy for Actor type '{actorType}' is not registered."
+        );
     }
 
     internal static bool TryResolve(
         ZLinkFrameworkRegistration registration,
         string actorType,
         RoutingId nodeRid,
-        out ZLinkObjectRelocationRegistration relocation)
+        out ZLinkObjectRelocationRegistration relocation
+    )
     {
         foreach (var node in registration.SpotNodes.Values)
-            if (node.RoutingId == nodeRid
-                && node.ActorRelocations.TryGetValue(actorType, out var registered))
+            if (
+                node.RoutingId == nodeRid
+                && node.ActorRelocations.TryGetValue(actorType, out var registered)
+            )
             {
                 relocation = registered;
                 return true;
             }
 
-        var matches = registration.SpotNodes.Values
-            .Select(node => node.ActorRelocations.GetValueOrDefault(actorType))
+        var matches = registration
+            .SpotNodes.Values.Select(node => node.ActorRelocations.GetValueOrDefault(actorType))
             .Where(static relocation => relocation is not null)
             .Cast<ZLinkObjectRelocationRegistration>()
             .ToArray();
@@ -44,12 +49,18 @@ internal static class ZLinkActorRelocationRegistry
         }
 
         var first = matches[0];
-        if (matches.Skip(1).Any(candidate =>
-                candidate.InstanceType != first.InstanceType
-                || candidate.PolicyKind != first.PolicyKind
-                || candidate.AdapterType != first.AdapterType))
+        if (
+            matches
+                .Skip(1)
+                .Any(candidate =>
+                    candidate.InstanceType != first.InstanceType
+                    || candidate.PolicyKind != first.PolicyKind
+                    || candidate.AdapterType != first.AdapterType
+                )
+        )
             throw new ZLinkConfigurationException(
-                $"Relocation policy for Actor type '{actorType}' is ambiguous.");
+                $"Relocation policy for Actor type '{actorType}' is ambiguous."
+            );
         relocation = first;
         return true;
     }
@@ -58,20 +69,21 @@ internal static class ZLinkActorRelocationRegistry
         IServiceProvider services,
         ZLinkObjectRelocationRegistration relocation,
         IZLinkActor actor,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken
+    )
     {
         return relocation.PolicyKind switch
         {
             0 => throw Disabled(relocation),
             1 => [],
-            2 when relocation.AdapterInvoker is { } invoker =>
-                await InvokeCaptureAsync(
-                        services,
-                        invoker,
-                        actor,
-                        cancellationToken)
-                    .ConfigureAwait(false),
-            _ => throw MissingAdapter(relocation)
+            2 when relocation.AdapterInvoker is { } invoker => await InvokeCaptureAsync(
+                    services,
+                    invoker,
+                    actor,
+                    cancellationToken
+                )
+                .ConfigureAwait(false),
+            _ => throw MissingAdapter(relocation),
         };
     }
 
@@ -80,7 +92,8 @@ internal static class ZLinkActorRelocationRegistry
         ZLinkObjectRelocationRegistration relocation,
         IZLinkActor actor,
         ReadOnlyMemory<byte> payload,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken
+    )
     {
         switch (relocation.PolicyKind)
         {
@@ -90,13 +103,11 @@ internal static class ZLinkActorRelocationRegistry
                 return;
             case 1:
                 throw new InvalidDataException(
-                    $"Recreate relocation state for Actor type '{relocation.InstanceType}' must be empty.");
+                    $"Recreate relocation state for Actor type '{relocation.InstanceType}' must be empty."
+                );
             case 2 when relocation.AdapterInvoker is { } invoker:
-                await invoker.RestoreAsync(
-                        services,
-                        actor,
-                        payload,
-                        cancellationToken)
+                await invoker
+                    .RestoreAsync(services, actor, payload, cancellationToken)
                     .ConfigureAwait(false);
                 return;
             default:
@@ -108,24 +119,24 @@ internal static class ZLinkActorRelocationRegistry
         ZLinkObjectRelocationRegistration relocation,
         string actorType,
         string contentType,
-        ReadOnlyMemory<byte> applicationState)
+        ReadOnlyMemory<byte> applicationState
+    )
     {
         var expectedContentType = relocation.PolicyKind switch
         {
             1 => ZLinkRemoteActorJoinPackets.RecreateRelocationContentType,
             2 => ZLinkRemoteActorJoinPackets.SnapshotRelocationContentType,
             0 => throw Disabled(relocation),
-            _ => throw MissingAdapter(relocation)
+            _ => throw MissingAdapter(relocation),
         };
-        if (!string.Equals(
-                contentType,
-                expectedContentType,
-                StringComparison.Ordinal))
+        if (!string.Equals(contentType, expectedContentType, StringComparison.Ordinal))
             throw new InvalidDataException(
-                $"Actor type '{actorType}' relocation policy does not match the captured payload.");
+                $"Actor type '{actorType}' relocation policy does not match the captured payload."
+            );
         if (relocation.PolicyKind == 1 && !applicationState.IsEmpty)
             throw new InvalidDataException(
-                $"Recreate relocation state for Actor type '{actorType}' must be empty.");
+                $"Recreate relocation state for Actor type '{actorType}' must be empty."
+            );
         return applicationState;
     }
 
@@ -133,24 +144,22 @@ internal static class ZLinkActorRelocationRegistry
         IServiceProvider services,
         IZLinkRelocationAdapterInvoker invoker,
         IZLinkActor actor,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken
+    )
     {
         await using var scope = services.CreateAsyncScope();
-        return await invoker.CaptureAsync(
-                scope.ServiceProvider,
-                actor,
-                cancellationToken)
+        return await invoker
+            .CaptureAsync(scope.ServiceProvider, actor, cancellationToken)
             .ConfigureAwait(false);
     }
 
-    private static ZLinkFrameworkException Disabled(
-        ZLinkObjectRelocationRegistration relocation) =>
+    private static ZLinkFrameworkException Disabled(ZLinkObjectRelocationRegistration relocation) =>
         new(
             ZLinkFrameworkErrorKind.Rejected,
-            $"Relocation is disabled for Actor type '{relocation.InstanceType}'.");
+            $"Relocation is disabled for Actor type '{relocation.InstanceType}'."
+        );
 
     private static ZLinkConfigurationException MissingAdapter(
-        ZLinkObjectRelocationRegistration relocation) =>
-        new(
-            $"Relocation adapter for Actor type '{relocation.InstanceType}' is not registered.");
+        ZLinkObjectRelocationRegistration relocation
+    ) => new($"Relocation adapter for Actor type '{relocation.InstanceType}' is not registered.");
 }

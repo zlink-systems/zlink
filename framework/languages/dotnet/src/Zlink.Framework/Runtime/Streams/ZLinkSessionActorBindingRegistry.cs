@@ -8,9 +8,7 @@ internal sealed class ZLinkSessionActorBindingRegistry(ZLinkFrameworkRuntime run
 
     public IReadOnlyCollection<IZLinkSessionActor> BoundActors
     {
-        get => _context is { } context
-            ? runtime.SnapshotSessionActors(context)
-            : [];
+        get => _context is { } context ? runtime.SnapshotSessionActors(context) : [];
     }
 
     public ValueTask<IZLinkSessionActor> BindAsync(
@@ -26,34 +24,38 @@ internal sealed class ZLinkSessionActorBindingRegistry(ZLinkFrameworkRuntime run
         RoutingId sessionOwnerNodeRid,
         string sessionOwnerId,
         ulong sessionOwnerLeaseGeneration,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken
+    )
     {
         cancellationToken.ThrowIfCancellationRequested();
         var actorId = actor.ActorId;
-        if (string.IsNullOrWhiteSpace(actorId)) throw new InvalidOperationException("Actor id must not be empty.");
+        if (string.IsNullOrWhiteSpace(actorId))
+            throw new InvalidOperationException("Actor id must not be empty.");
         if (context.RoutingId is not { } sessionRid)
-            throw new InvalidOperationException("Actor session binding requires a stream routing id.");
+            throw new InvalidOperationException(
+                "Actor session binding requires a stream routing id."
+            );
 
-        var binding = new ZLinkSessionActorBinding(
-            actorId,
-            sessionRid,
-            bindingToken);
+        var binding = new ZLinkSessionActorBinding(actorId, sessionRid, bindingToken);
         var route = ZLinkSessionBindingRoute.Create(
             actor,
             meshName,
             targetNodeGeneration,
             authorityOwnerGeneration,
-            ownerLeaseGeneration);
+            ownerLeaseGeneration
+        );
         var actorRef = new ZLinkSessionActor(
             context,
             actorId,
             binding.SessionRid,
-            binding.BindingToken);
+            binding.BindingToken
+        );
 
         _context ??= context;
         if (!ReferenceEquals(_context, context))
             throw new InvalidOperationException(
-                "A session Actor registry cannot be shared by different sessions.");
+                "A session Actor registry cannot be shared by different sessions."
+            );
         _ = runtime.BindSessionActor(
             actorId,
             context,
@@ -64,24 +66,25 @@ internal sealed class ZLinkSessionActorBindingRegistry(ZLinkFrameworkRuntime run
             sessionOwnerNodeGeneration,
             sessionOwnerNodeRid,
             sessionOwnerId,
-            sessionOwnerLeaseGeneration);
+            sessionOwnerLeaseGeneration
+        );
 
         return ValueTask.FromResult<IZLinkSessionActor>(actorRef);
     }
 
     public IZLinkSessionActor? FindActor(string actorId)
     {
-        if (string.IsNullOrWhiteSpace(actorId)) return null;
+        if (string.IsNullOrWhiteSpace(actorId))
+            return null;
 
-        return _context is { } context
-            ? runtime.FindSessionActor(context, actorId)
-            : null;
+        return _context is { } context ? runtime.FindSessionActor(context, actorId) : null;
     }
 
     public ValueTask ReleaseAsync(
         ZLinkSessionContext context,
         ZLinkSessionActor actor,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken
+    )
     {
         cancellationToken.ThrowIfCancellationRequested();
 
@@ -91,10 +94,12 @@ internal sealed class ZLinkSessionActorBindingRegistry(ZLinkFrameworkRuntime run
 
     public async ValueTask CleanupAsync(
         ZLinkSessionContext context,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken
+    )
     {
         var snapshot = runtime.SnapshotSessionActors(context);
-        if (snapshot.Count == 0) return;
+        if (snapshot.Count == 0)
+            return;
 
         var actors = new ZLinkSessionActor[snapshot.Count];
         var actorIndex = 0;
@@ -110,11 +115,16 @@ internal sealed class ZLinkSessionActorBindingRegistry(ZLinkFrameworkRuntime run
         var notifications = new List<Task>(actors.Length);
         foreach (var actor in actors)
         {
-            if (exactBindings.Add((
-                    actor.ActorId,
-                    actor.Ref.NodeRid,
-                    actor.Ref.ObjectGeneration,
-                    actor.BindingToken)))
+            if (
+                exactBindings.Add(
+                    (
+                        actor.ActorId,
+                        actor.Ref.NodeRid,
+                        actor.Ref.ObjectGeneration,
+                        actor.BindingToken
+                    )
+                )
+            )
                 notifications.Add(NotifyBestEffortAsync(actor));
         }
         await Task.WhenAll(notifications).ConfigureAwait(false);
@@ -123,10 +133,7 @@ internal sealed class ZLinkSessionActorBindingRegistry(ZLinkFrameworkRuntime run
         // and a concurrent explicit notification of the same binding.
         foreach (var actor in actors)
         {
-            runtime.UnbindSessionActor(
-                actor.ActorId,
-                context,
-                actor.BindingToken);
+            runtime.UnbindSessionActor(actor.ActorId, context, actor.BindingToken);
         }
 
         return;
@@ -135,7 +142,8 @@ internal sealed class ZLinkSessionActorBindingRegistry(ZLinkFrameworkRuntime run
         {
             try
             {
-                await actor.NotifyDisconnectedAsync(cancellationToken)
+                await actor
+                    .NotifyDisconnectedAsync(cancellationToken)
                     .AsTask()
                     .WaitAsync(runtime.Registration.DefaultRequestTimeout, cancellationToken)
                     .ConfigureAwait(false);
@@ -148,21 +156,24 @@ internal sealed class ZLinkSessionActorBindingRegistry(ZLinkFrameworkRuntime run
                 // the Actor's owner node, which leaves a binding whose session
                 // is gone, so the drop is a traced one (spec 26 §2.1).
                 if (runtime.Flow.CaptureEnabled)
-                    runtime.Flow.TraceDispatchError(new ZLinkDispatchFailure(
-                        ZLinkDispatchErrorSurface.StreamSession,
-                        ZLinkDispatchMessageKind.Send,
-                        ZLinkDispatchErrorReason.ReplyPathMissing,
-                        ZLinkDispatchErrorAction.Drop,
-                        null,
-                        ActorId: actor.ActorId,
-                        Exception: failure));
+                    runtime.Flow.TraceDispatchError(
+                        new ZLinkDispatchFailure(
+                            ZLinkDispatchErrorSurface.StreamSession,
+                            ZLinkDispatchMessageKind.Send,
+                            ZLinkDispatchErrorReason.ReplyPathMissing,
+                            ZLinkDispatchErrorAction.Drop,
+                            null,
+                            ActorId: actor.ActorId,
+                            Exception: failure
+                        )
+                    );
             }
         }
     }
-
 }
 
 internal readonly record struct ZLinkSessionActorBinding(
     string ActorId,
     RoutingId SessionRid,
-    string BindingToken);
+    string BindingToken
+);

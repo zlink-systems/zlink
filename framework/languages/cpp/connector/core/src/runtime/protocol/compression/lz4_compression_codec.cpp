@@ -28,9 +28,8 @@ zlink::message_t lz4_compression_codec_t::compress (const zlink::message_t &payl
     return zlink::message_t::from (zlink::detail::lz4_pickle::pickle (payload.bytes ()));
 }
 
-zlink::message_t
-lz4_compression_codec_t::decompress (const zlink::message_t &payload,
-                                     std::size_t max_decompressed_size) const
+zlink::message_t lz4_compression_codec_t::decompress (const zlink::message_t &payload,
+                                                      std::size_t max_decompressed_size) const
 {
     return zlink::message_t::from (
       zlink::detail::lz4_pickle::unpickle (payload.bytes (), max_decompressed_size));

@@ -14,10 +14,7 @@ internal sealed class ZLinkRawRouterServicePort : IDisposable, IAsyncDisposable
     private bool _started;
     private bool _disposed;
 
-    internal ZLinkRawRouterServicePort(
-        IContext context,
-        RoutingId routingId,
-        string bindEndpoint)
+    internal ZLinkRawRouterServicePort(IContext context, RoutingId routingId, string bindEndpoint)
     {
         ArgumentNullException.ThrowIfNull(context);
         if (routingId.IsEmpty)
@@ -38,17 +35,17 @@ internal sealed class ZLinkRawRouterServicePort : IDisposable, IAsyncDisposable
     internal void Start()
     {
         ThrowIfDisposed();
-        if (_started) return;
+        if (_started)
+            return;
         _socket.Bind(BindEndpoint);
         var poller = Systems.Zlink.Zlink.CreatePoller();
         try
         {
             poller.Add(
                 _socket,
-                PollEventFlags.PollIn
-                | PollEventFlags.PollErr
-                | PollEventFlags.PollCompletion,
-                1);
+                PollEventFlags.PollIn | PollEventFlags.PollErr | PollEventFlags.PollCompletion,
+                1
+            );
             _receivePoller = poller;
         }
         catch
@@ -71,7 +68,8 @@ internal sealed class ZLinkRawRouterServicePort : IDisposable, IAsyncDisposable
     internal async Task SendAsync(
         RoutingId target,
         IReadOnlyList<ReadOnlyMemory<byte>> parts,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default
+    )
     {
         EnsureStarted();
         if (target.IsEmpty)
@@ -83,7 +81,8 @@ internal sealed class ZLinkRawRouterServicePort : IDisposable, IAsyncDisposable
         var messages = CreateMessages(parts);
         try
         {
-            await _socket.Send(target)
+            await _socket
+                .Send(target)
                 .Messages(messages)
                 .Async(cancellationToken)
                 .EnsureAcceptedAsync()
@@ -94,7 +93,8 @@ internal sealed class ZLinkRawRouterServicePort : IDisposable, IAsyncDisposable
             // A successful submit consumes each payload, but the managed Message
             // wrappers still require disposal. A failed submit restores payload
             // ownership, which is also released here because this port created it.
-            foreach (var message in messages) message.Dispose();
+            foreach (var message in messages)
+                message.Dispose();
         }
     }
 
@@ -108,8 +108,7 @@ internal sealed class ZLinkRawRouterServicePort : IDisposable, IAsyncDisposable
         }
 
         var readiness = _receiveEvents[0].Revents;
-        if ((readiness & (PollEventFlags.PollIn
-                          | PollEventFlags.PollErr)) == 0)
+        if ((readiness & (PollEventFlags.PollIn | PollEventFlags.PollErr)) == 0)
         {
             envelope = null;
             return false;
@@ -138,7 +137,8 @@ internal sealed class ZLinkRawRouterServicePort : IDisposable, IAsyncDisposable
         RoutingId target,
         IReadOnlyList<ReadOnlyMemory<byte>> parts,
         TimeSpan timeout,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default
+    )
     {
         EnsureStarted();
         if (target.IsEmpty)
@@ -150,23 +150,25 @@ internal sealed class ZLinkRawRouterServicePort : IDisposable, IAsyncDisposable
         var messages = CreateMessages(parts);
         try
         {
-            var reply = await _socket.Request(target)
+            var reply = await _socket
+                .Request(target)
                 .Messages(messages)
                 .Timeout(timeout)
                 .Async(cancellationToken)
-                .Reply
-                .ConfigureAwait(false);
+                .Reply.ConfigureAwait(false);
             return new ZLinkRawReplyEnvelope(reply);
         }
         finally
         {
-            foreach (var message in messages) message.Dispose();
+            foreach (var message in messages)
+                message.Dispose();
         }
     }
 
     public void Dispose()
     {
-        if (_disposed) return;
+        if (_disposed)
+            return;
         _disposed = true;
         _receivePoller?.Dispose();
         _socket.Dispose();
@@ -174,7 +176,8 @@ internal sealed class ZLinkRawRouterServicePort : IDisposable, IAsyncDisposable
 
     public async ValueTask DisposeAsync()
     {
-        if (_disposed) return;
+        if (_disposed)
+            return;
         _disposed = true;
         _receivePoller?.Dispose();
         await _socket.DisposeAsync().ConfigureAwait(false);
@@ -192,8 +195,7 @@ internal sealed class ZLinkRawRouterServicePort : IDisposable, IAsyncDisposable
         ObjectDisposedException.ThrowIf(_disposed, this);
     }
 
-    internal static Message[] CreateMessages(
-        IReadOnlyList<ReadOnlyMemory<byte>> parts)
+    internal static Message[] CreateMessages(IReadOnlyList<ReadOnlyMemory<byte>> parts)
     {
         var messages = new Message[parts.Count];
         var created = 0;
@@ -223,7 +225,9 @@ internal sealed class ZLinkRawRouterEnvelope : IDisposable
 
     internal RoutingId SourceRoutingId =>
         _received.RoutingId
-        ?? throw new InvalidOperationException("A ROUTER receive must include a source routing id.");
+        ?? throw new InvalidOperationException(
+            "A ROUTER receive must include a source routing id."
+        );
 
     internal IReadOnlyList<Message> Parts => _received.Parts;
 
@@ -244,7 +248,8 @@ internal sealed class ZLinkRawRouterEnvelope : IDisposable
         }
         finally
         {
-            foreach (var message in messages) message.Dispose();
+            foreach (var message in messages)
+                message.Dispose();
         }
     }
 
@@ -264,6 +269,7 @@ internal sealed class ZLinkRawReplyEnvelope : IDisposable
 
     public void Dispose()
     {
-        foreach (var part in _parts) part.Dispose();
+        foreach (var part in _parts)
+            part.Dispose();
     }
 }

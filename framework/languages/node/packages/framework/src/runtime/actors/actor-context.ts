@@ -1,4 +1,7 @@
-import { ZLinkFrameworkInternalErrorKind, createInternalFrameworkException  } from '../framework-errors-internal';
+import {
+  ZLinkFrameworkInternalErrorKind,
+  createInternalFrameworkException
+} from '../framework-errors-internal';
 import type {
   RoutingId,
   SpotId,
@@ -10,11 +13,7 @@ import type {
   ZLinkBoundSession,
   ZLinkBoundSessionSendCall
 } from '../../contracts';
-import {
-  ZLinkEncodedPayload,
-  ZLinkFrameworkException,
-  ZLinkMessage
-} from '../../contracts';
+import { ZLinkEncodedPayload, ZLinkFrameworkException, ZLinkMessage } from '../../contracts';
 import type { Message } from '../../contracts/Common/Message';
 import { ZLinkBufferMessage as RuntimeMessage } from '../backend/runtime-message';
 import { type ZLinkMessageSerializer } from '../../contracts';
@@ -26,13 +25,8 @@ import {
   ZLinkDispatchErrorSurface,
   ZLinkDispatchMessageKind
 } from '../../contracts/Dispatch/ZLinkDispatchOptions';
-import {
-  encodeFrameworkPayloadMessage
-} from '../messaging/payload-codec';
-import {
-  ZLinkActorRuntimeState,
-  toFrameworkActorRef
-} from './actor-runtime-state';
+import { encodeFrameworkPayloadMessage } from '../messaging/payload-codec';
+import { ZLinkActorRuntimeState, toFrameworkActorRef } from './actor-runtime-state';
 import type {
   ZLinkActorBoundSessionFactory,
   ZLinkActorJoinCoordinator
@@ -140,14 +134,16 @@ export class DefaultZLinkActorContext implements ZLinkActorContext {
   ): Promise<boolean> {
     const requestMessage = encodeJoinRequest(request, this.messageSerializers);
     try {
-      return (await this.requireJoinCoordinator().joinEntrySpot(
-        this.requireActor(),
-        this.state,
-        nodeRid,
-        requestMessage,
-        undefined,
-        signal
-      )).accepted;
+      return (
+        await this.requireJoinCoordinator().joinEntrySpot(
+          this.requireActor(),
+          this.state,
+          nodeRid,
+          requestMessage,
+          undefined,
+          signal
+        )
+      ).accepted;
     } finally {
       requestMessage.close();
     }
@@ -180,8 +176,7 @@ class DefaultZLinkActorJoinSpotCall implements ZLinkActorJoinSpotCall {
     private readonly spotId: SpotId,
     private readonly request: unknown,
     private readonly messageSerializers: ReadonlyMap<string, ZLinkMessageSerializer> | undefined
-  ) {
-  }
+  ) {}
 
   timeout(timeoutMs: number): this {
     this.timeoutMs = validateJoinTimeout(timeoutMs);
@@ -209,7 +204,8 @@ class DefaultZLinkActorJoinSpotCall implements ZLinkActorJoinSpotCall {
     const operationId = createJoinOperationId();
     let discarded = false;
     let prepared = false;
-    let pendingJoin: Promise<import('./actor-runtime-contracts').ZLinkActorJoinRuntimeResult<Message>> | undefined;
+    let pendingJoin:
+      Promise<import('./actor-runtime-contracts').ZLinkActorJoinRuntimeResult<Message>> | undefined;
     const discard = async (): Promise<void> => {
       if (discarded) return;
       discarded = true;
@@ -252,50 +248,53 @@ class DefaultZLinkActorJoinSpotCall implements ZLinkActorJoinSpotCall {
         },
         discard,
         execute: async () => {
-        let result: import('./actor-runtime-contracts').ZLinkActorJoinRuntimeResult<Message>;
-        try {
-          const pending = pendingJoin ?? this.coordinator.joinSpot(
-            this.actor,
-            this.state,
-            this.spotId,
-            requestMessage,
-            remainingJoinTimeout(deadline.atMs),
-            deadline.signal,
-            operationId
-          );
-          result = this.turn === undefined
-            ? await pending
-            : await this.turn.yieldFrameworkPromise(pending);
-        } catch (error) {
-          this.state.endDeferredJoin();
-          await this.coordinator.abortDeferredJoin?.(this.actor, this.state, operationId)
-            .catch(() => undefined);
-          await notifyJoinFailure(this.actor, operationId, error, this.coordinator);
-          return;
-        } finally {
-          deadline.close();
-          requestMessage.close();
-        }
-        if (
-          !result.accepted
-          || sourceNodeRid === undefined
-          || result.actor === undefined
-          || String(sourceNodeRid) === String(result.actor.nodeRid)
-        ) {
-          await notifyJoinCompletion(
-            this.actor, operationId, result, this.messageSerializers);
-        } else {
-          result.reply?.close();
-        }
-        const finalization = result.finalizeDeferredJoin?.();
-        if (finalization !== undefined) {
-          // Releasing a rejected provisional handoff can enqueue source
-          // backlog behind this same Spot turn. Yield the lifecycle boundary
-          // so replay can run without overtaking the completion callback.
-          await (this.turn === undefined
-            ? finalization
-            : this.turn.yieldFrameworkPromise(finalization));
-        }
+          let result: import('./actor-runtime-contracts').ZLinkActorJoinRuntimeResult<Message>;
+          try {
+            const pending =
+              pendingJoin ??
+              this.coordinator.joinSpot(
+                this.actor,
+                this.state,
+                this.spotId,
+                requestMessage,
+                remainingJoinTimeout(deadline.atMs),
+                deadline.signal,
+                operationId
+              );
+            result =
+              this.turn === undefined
+                ? await pending
+                : await this.turn.yieldFrameworkPromise(pending);
+          } catch (error) {
+            this.state.endDeferredJoin();
+            await this.coordinator
+              .abortDeferredJoin?.(this.actor, this.state, operationId)
+              .catch(() => undefined);
+            await notifyJoinFailure(this.actor, operationId, error, this.coordinator);
+            return;
+          } finally {
+            deadline.close();
+            requestMessage.close();
+          }
+          if (
+            !result.accepted ||
+            sourceNodeRid === undefined ||
+            result.actor === undefined ||
+            String(sourceNodeRid) === String(result.actor.nodeRid)
+          ) {
+            await notifyJoinCompletion(this.actor, operationId, result, this.messageSerializers);
+          } else {
+            result.reply?.close();
+          }
+          const finalization = result.finalizeDeferredJoin?.();
+          if (finalization !== undefined) {
+            // Releasing a rejected provisional handoff can enqueue source
+            // backlog behind this same Spot turn. Yield the lifecycle boundary
+            // so replay can run without overtaking the completion callback.
+            await (this.turn === undefined
+              ? finalization
+              : this.turn.yieldFrameworkPromise(finalization));
+          }
         }
       });
     } catch (error) {
@@ -316,8 +315,7 @@ class DefaultZLinkActorJoinEntrySpotCall implements ZLinkActorJoinEntrySpotCall 
     private readonly coordinator: ZLinkActorJoinCoordinator,
     private readonly request: unknown,
     private readonly messageSerializers: ReadonlyMap<string, ZLinkMessageSerializer> | undefined
-  ) {
-  }
+  ) {}
 
   timeout(timeoutMs: number): this {
     this.timeoutMs = validateJoinTimeout(timeoutMs);
@@ -345,7 +343,8 @@ class DefaultZLinkActorJoinEntrySpotCall implements ZLinkActorJoinEntrySpotCall 
     const operationId = createJoinOperationId();
     let discarded = false;
     let prepared = false;
-    let pendingJoin: Promise<import('./actor-runtime-contracts').ZLinkActorJoinRuntimeResult<Message>> | undefined;
+    let pendingJoin:
+      Promise<import('./actor-runtime-contracts').ZLinkActorJoinRuntimeResult<Message>> | undefined;
     const discard = async (): Promise<void> => {
       if (discarded) return;
       discarded = true;
@@ -385,47 +384,50 @@ class DefaultZLinkActorJoinEntrySpotCall implements ZLinkActorJoinEntrySpotCall 
         },
         discard,
         execute: async () => {
-        let result: import('./actor-runtime-contracts').ZLinkActorJoinRuntimeResult<Message>;
-        try {
-          const pending = pendingJoin ?? this.coordinator.joinEntrySpot(
-            this.actor,
-            this.state,
-            undefined,
-            requestMessage,
-            remainingJoinTimeout(deadline.atMs),
-            deadline.signal,
-            operationId
-          );
-          result = this.turn === undefined
-            ? await pending
-            : await this.turn.yieldFrameworkPromise(pending);
-        } catch (error) {
-          this.state.endDeferredJoin();
-          await this.coordinator.abortDeferredJoin?.(this.actor, this.state, operationId)
-            .catch(() => undefined);
-          await notifyJoinFailure(this.actor, operationId, error, this.coordinator);
-          return;
-        } finally {
-          deadline.close();
-          requestMessage.close();
-        }
-        if (
-          !result.accepted
-          || sourceNodeRid === undefined
-          || result.actor === undefined
-          || String(sourceNodeRid) === String(result.actor.nodeRid)
-        ) {
-          await notifyJoinCompletion(
-            this.actor, operationId, result, this.messageSerializers);
-        } else {
-          result.reply?.close();
-        }
-        const finalization = result.finalizeDeferredJoin?.();
-        if (finalization !== undefined) {
-          await (this.turn === undefined
-            ? finalization
-            : this.turn.yieldFrameworkPromise(finalization));
-        }
+          let result: import('./actor-runtime-contracts').ZLinkActorJoinRuntimeResult<Message>;
+          try {
+            const pending =
+              pendingJoin ??
+              this.coordinator.joinEntrySpot(
+                this.actor,
+                this.state,
+                undefined,
+                requestMessage,
+                remainingJoinTimeout(deadline.atMs),
+                deadline.signal,
+                operationId
+              );
+            result =
+              this.turn === undefined
+                ? await pending
+                : await this.turn.yieldFrameworkPromise(pending);
+          } catch (error) {
+            this.state.endDeferredJoin();
+            await this.coordinator
+              .abortDeferredJoin?.(this.actor, this.state, operationId)
+              .catch(() => undefined);
+            await notifyJoinFailure(this.actor, operationId, error, this.coordinator);
+            return;
+          } finally {
+            deadline.close();
+            requestMessage.close();
+          }
+          if (
+            !result.accepted ||
+            sourceNodeRid === undefined ||
+            result.actor === undefined ||
+            String(sourceNodeRid) === String(result.actor.nodeRid)
+          ) {
+            await notifyJoinCompletion(this.actor, operationId, result, this.messageSerializers);
+          } else {
+            result.reply?.close();
+          }
+          const finalization = result.finalizeDeferredJoin?.();
+          if (finalization !== undefined) {
+            await (this.turn === undefined
+              ? finalization
+              : this.turn.yieldFrameworkPromise(finalization));
+          }
         }
       });
     } catch (error) {
@@ -516,11 +518,17 @@ function createDeferredJoinDeadline(timeoutMs: number): {
 } {
   const controller = new AbortController();
   const atMs = performance.now() + timeoutMs;
-  const timer = setTimeout(() => controller.abort(createInternalFrameworkException(
-    ZLinkFrameworkInternalErrorKind.DeadlineExceeded,
-    'Deferred Actor join exceeded its absolute deadline.',
-    true
-  )), timeoutMs);
+  const timer = setTimeout(
+    () =>
+      controller.abort(
+        createInternalFrameworkException(
+          ZLinkFrameworkInternalErrorKind.DeadlineExceeded,
+          'Deferred Actor join exceeded its absolute deadline.',
+          true
+        )
+      ),
+    timeoutMs
+  );
   return {
     atMs,
     signal: controller.signal,
@@ -539,11 +547,10 @@ async function notifyJoinCompletion(
   _messageSerializers: ReadonlyMap<string, ZLinkMessageSerializer> | undefined
 ): Promise<void> {
   // The completion preserves the encoded reply without exposing serializer selection.
-  const reply = result.reply === undefined
-    ? undefined
-    : ZLinkMessage.fromEncoded(
-      ZLinkEncodedPayload.from(result.reply.data())
-    );
+  const reply =
+    result.reply === undefined
+      ? undefined
+      : ZLinkMessage.fromEncoded(ZLinkEncodedPayload.from(result.reply.data()));
   result.reply?.close();
   // `reply`는 계약상 선택 항목이라 없을 때는 key 자체를 만들지 않는다.
   const replyField = reply === undefined ? {} : { reply };
@@ -569,14 +576,15 @@ async function notifyJoinFailure(
   coordinator?: ZLinkActorJoinCoordinator
 ): Promise<void> {
   console.error(`actor join failure actor=${actor.context.actorId}`, error);
-  const frameworkError = error instanceof ZLinkFrameworkException
-    ? error
-    : createInternalFrameworkException(
-        ZLinkFrameworkInternalErrorKind.RequestFailed,
-        'Deferred actor join failed.',
-        false,
-        error
-      );
+  const frameworkError =
+    error instanceof ZLinkFrameworkException
+      ? error
+      : createInternalFrameworkException(
+          ZLinkFrameworkInternalErrorKind.RequestFailed,
+          'Deferred actor join failed.',
+          false,
+          error
+        );
   //  The completion carries only an error kind, so trace the cause on the
   //  message flow under the same flow id as the Join that produced it.
   const tracePoint = coordinator?.messageFlow?.()?.begin(ZLinkMessageFlowOutcome.Error);

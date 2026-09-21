@@ -1,16 +1,15 @@
 package systems.zlink.framework.runtime.internal.channels;
 
+import systems.zlink.framework.locations.ZLinkLocationOptions;
+import systems.zlink.framework.runtime.internal.locations.ZLinkLocationOwnerToken;
+import systems.zlink.framework.runtime.internal.locations.ZLinkLocationRepository;
+
 import java.util.Objects;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionStage;
 import java.util.function.Supplier;
-import systems.zlink.framework.runtime.internal.locations.ZLinkLocationRepository;
-import systems.zlink.framework.locations.ZLinkLocationOptions;
-import systems.zlink.framework.runtime.internal.locations.ZLinkLocationOwnerToken;
 
-/**
- * Internal host-to-channel dependency for classic fanout location runtime.
- */
+/** Internal host-to-channel dependency for classic fanout location runtime. */
 public final class ZLinkFanoutRuntimeConfiguration {
     private final ZLinkLocationRepository store;
     private final ZLinkLocationOptions options;
@@ -18,8 +17,7 @@ public final class ZLinkFanoutRuntimeConfiguration {
     private Lifecycle lifecycle;
 
     public ZLinkFanoutRuntimeConfiguration(
-        ZLinkLocationRepository store,
-        ZLinkLocationOptions options) {
+            ZLinkLocationRepository store, ZLinkLocationOptions options) {
         this.store = store;
         this.options = Objects.requireNonNull(options, "options");
     }
@@ -32,8 +30,7 @@ public final class ZLinkFanoutRuntimeConfiguration {
         return () -> {
             ZLinkLocationOwnerToken current = owner;
             if (current == null) {
-                throw new IllegalStateException(
-                    "fanout owner lease is not ready");
+                throw new IllegalStateException("fanout owner lease is not ready");
             }
             return current;
         };
@@ -49,33 +46,30 @@ public final class ZLinkFanoutRuntimeConfiguration {
 
     public synchronized void install(Lifecycle value) {
         if (lifecycle != null) {
-            throw new IllegalStateException(
-                "fanout runtime lifecycle is already installed");
+            throw new IllegalStateException("fanout runtime lifecycle is already installed");
         }
         lifecycle = Objects.requireNonNull(value, "value");
     }
 
     public CompletionStage<Void> start() {
-        return lifecycle == null
-            ? CompletableFuture.completedFuture(null)
-            : lifecycle.start();
+        return lifecycle == null ? CompletableFuture.completedFuture(null) : lifecycle.start();
     }
 
     public CompletionStage<Void> markDraining() {
         return lifecycle == null
-            ? CompletableFuture.completedFuture(null)
-            : lifecycle.markDraining();
+                ? CompletableFuture.completedFuture(null)
+                : lifecycle.markDraining();
     }
 
     public CompletionStage<Void> stop() {
-        return lifecycle == null
-            ? CompletableFuture.completedFuture(null)
-            : lifecycle.stop();
+        return lifecycle == null ? CompletableFuture.completedFuture(null) : lifecycle.stop();
     }
 
     public interface Lifecycle {
         CompletionStage<Void> start();
+
         CompletionStage<Void> markDraining();
+
         CompletionStage<Void> stop();
     }
 }

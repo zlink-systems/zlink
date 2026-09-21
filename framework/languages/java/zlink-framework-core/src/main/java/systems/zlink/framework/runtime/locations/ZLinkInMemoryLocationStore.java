@@ -1,8 +1,15 @@
 package systems.zlink.framework.runtime.locations;
-import java.util.Optional;
+
 import systems.zlink.framework.locationprovider.ZLinkLocationStore;
 import systems.zlink.framework.locationprovider.ZLinkStoreKey;
+import systems.zlink.framework.locations.ZLinkCapacityUsage;
+import systems.zlink.framework.locations.ZLinkLocationPage;
 import systems.zlink.framework.locations.ZLinkObjectCapability;
+import systems.zlink.framework.locations.ZLinkPageRequest;
+import systems.zlink.framework.locations.ZLinkPlacementCapacity;
+import systems.zlink.framework.locations.ZLinkPlacementObjectKind;
+import systems.zlink.framework.locations.ZLinkSpotTypeCapacity;
+import systems.zlink.framework.runtime.internal.execution.ZLinkStateLane;
 import systems.zlink.framework.runtime.internal.locations.ZLinkAggregateAbortResult;
 import systems.zlink.framework.runtime.internal.locations.ZLinkAggregateCommitResult;
 import systems.zlink.framework.runtime.internal.locations.ZLinkAggregateFence;
@@ -15,9 +22,20 @@ import systems.zlink.framework.runtime.internal.locations.ZLinkAuthorityReadResu
 import systems.zlink.framework.runtime.internal.locations.ZLinkAuthorityScanCursor;
 import systems.zlink.framework.runtime.internal.locations.ZLinkAuthorityScanResult;
 import systems.zlink.framework.runtime.internal.locations.ZLinkAuthorityWriteResult;
+import systems.zlink.framework.runtime.internal.locations.ZLinkClientServerServerDescriptor;
+import systems.zlink.framework.runtime.internal.locations.ZLinkClientServerServerDescriptorKey;
 import systems.zlink.framework.runtime.internal.locations.ZLinkCreationOperationIdentity;
 import systems.zlink.framework.runtime.internal.locations.ZLinkCreationOperationTerminal;
 import systems.zlink.framework.runtime.internal.locations.ZLinkCreationTerminalReadResult;
+import systems.zlink.framework.runtime.internal.locations.ZLinkFanoutPublisherDescriptor;
+import systems.zlink.framework.runtime.internal.locations.ZLinkFanoutPublisherDescriptorKey;
+import systems.zlink.framework.runtime.internal.locations.ZLinkLocationOwnerToken;
+import systems.zlink.framework.runtime.internal.locations.ZLinkLocationRepository;
+import systems.zlink.framework.runtime.internal.locations.ZLinkLocationWriteIntent;
+import systems.zlink.framework.runtime.internal.locations.ZLinkLocationWriteResult;
+import systems.zlink.framework.runtime.internal.locations.ZLinkLocationWriteStatus;
+import systems.zlink.framework.runtime.internal.locations.ZLinkMeshNodeDescriptor;
+import systems.zlink.framework.runtime.internal.locations.ZLinkMeshNodeDescriptorKey;
 import systems.zlink.framework.runtime.internal.locations.ZLinkObjectAbortResult;
 import systems.zlink.framework.runtime.internal.locations.ZLinkObjectCommitResult;
 import systems.zlink.framework.runtime.internal.locations.ZLinkObjectRejectResult;
@@ -46,39 +64,16 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
+import java.util.Optional;
 import java.util.OptionalLong;
 import java.util.concurrent.CompletableFuture;
-import java.util.concurrent.CompletionStage;
 import java.util.concurrent.CompletionException;
+import java.util.concurrent.CompletionStage;
 import java.util.function.Predicate;
 import java.util.function.Supplier;
-import systems.zlink.contracts.core.RoutingId;
-import systems.zlink.framework.errors.ZLinkConfigurationException;
-import systems.zlink.framework.locations.ZLinkCapacityUsage;
-import systems.zlink.framework.runtime.internal.locations.ZLinkClientServerServerDescriptor;
-import systems.zlink.framework.runtime.internal.locations.ZLinkClientServerServerDescriptorKey;
-import systems.zlink.framework.runtime.internal.locations.ZLinkFanoutPublisherDescriptor;
-import systems.zlink.framework.runtime.internal.locations.ZLinkFanoutPublisherDescriptorKey;
-import systems.zlink.framework.runtime.internal.locations.ZLinkLocationOwnerToken;
-import systems.zlink.framework.locations.ZLinkLocationPage;
-import systems.zlink.framework.runtime.internal.locations.ZLinkLocationRepository;
-import systems.zlink.framework.runtime.internal.locations.ZLinkLocationWriteIntent;
-import systems.zlink.framework.runtime.internal.locations.ZLinkLocationWriteResult;
-import systems.zlink.framework.runtime.internal.locations.ZLinkLocationWriteStatus;
-import systems.zlink.framework.runtime.internal.locations.ZLinkMeshNodeDescriptor;
-import systems.zlink.framework.runtime.internal.locations.ZLinkMeshNodeDescriptorKey;
-import systems.zlink.framework.runtime.internal.locations.ZLinkOwnerLease;
-import systems.zlink.framework.runtime.internal.locations.ZLinkOwnerLeaseRenewal;
-import systems.zlink.framework.runtime.internal.locations.ZLinkOwnerLeaseSnapshot;
-import systems.zlink.framework.runtime.internal.execution.ZLinkStateLane;
-import systems.zlink.framework.locations.ZLinkPageRequest;
-import systems.zlink.framework.locations.ZLinkPlacementCapacity;
-import systems.zlink.framework.locations.ZLinkPlacementObjectKind;
-import systems.zlink.framework.locations.ZLinkSpotTypeCapacity;
 
 public final class ZLinkInMemoryLocationStore
-    implements ZLinkLocationRepository,
-        ZLinkLocationStore {
+        implements ZLinkLocationRepository, ZLinkLocationStore {
 
     private final ZLinkStateLane stateLane = new ZLinkStateLane();
     private final Clock clock;
@@ -86,15 +81,11 @@ public final class ZLinkInMemoryLocationStore
     private final ZLinkInMemoryProviderLocationStore opaque;
     private final Map<String, LeaseRow> leases = new HashMap<>();
     private long ownerLeaseGeneration;
-    private final RowTable<ZLinkMeshNodeDescriptor> meshNodes =
-        new RowTable<>();
+    private final RowTable<ZLinkMeshNodeDescriptor> meshNodes = new RowTable<>();
     private final Map<String, Long> meshNodeStamps = new HashMap<>();
-    private final Map<String, EntrySpotClaim> entrySpotClaims =
-        new HashMap<>();
-    private final RowTable<ZLinkFanoutPublisherDescriptor> fanoutPublishers =
-        new RowTable<>();
-    private final RowTable<ZLinkClientServerServerDescriptor> clientServers =
-        new RowTable<>();
+    private final Map<String, EntrySpotClaim> entrySpotClaims = new HashMap<>();
+    private final RowTable<ZLinkFanoutPublisherDescriptor> fanoutPublishers = new RowTable<>();
+    private final RowTable<ZLinkClientServerServerDescriptor> clientServers = new RowTable<>();
 
     public ZLinkInMemoryLocationStore() {
         this(Clock.systemUTC());
@@ -103,53 +94,44 @@ public final class ZLinkInMemoryLocationStore
     public ZLinkInMemoryLocationStore(Clock clock) {
         this.clock = Objects.requireNonNull(clock, "clock");
         this.opaque = new ZLinkInMemoryProviderLocationStore(clock);
-        this.authority = new ZLinkInMemoryAuthorityStore(
-            stateLane,
-            clock,
-            this::isExactOwnerLeaseLive,
-            this::findMeshNodeDescriptor,
-            this::isSpotIdentityClaimed);
+        this.authority =
+                new ZLinkInMemoryAuthorityStore(
+                        stateLane,
+                        clock,
+                        this::isExactOwnerLeaseLive,
+                        this::findMeshNodeDescriptor,
+                        this::isSpotIdentityClaimed);
     }
 
     @Override
-    public CompletionStage<systems.zlink.framework.locationprovider
-        .ZLinkStoreReadResult> read(
+    public CompletionStage<systems.zlink.framework.locationprovider.ZLinkStoreReadResult> read(
             ZLinkStoreKey key,
-            systems.zlink.framework.locationprovider
-                .ZLinkStoreCancellation cancellation) {
+            systems.zlink.framework.locationprovider.ZLinkStoreCancellation cancellation) {
         return opaque.read(key, cancellation);
     }
 
     @Override
-    public CompletionStage<systems.zlink.framework.locationprovider
-        .ZLinkStoreWriteResult> write(
-            systems.zlink.framework.locationprovider
-                .ZLinkStoreWriteRequest request,
-            systems.zlink.framework.locationprovider
-                .ZLinkStoreCancellation cancellation) {
+    public CompletionStage<systems.zlink.framework.locationprovider.ZLinkStoreWriteResult> write(
+            systems.zlink.framework.locationprovider.ZLinkStoreWriteRequest request,
+            systems.zlink.framework.locationprovider.ZLinkStoreCancellation cancellation) {
         return opaque.write(request, cancellation);
     }
 
     @Override
-    public CompletionStage<systems.zlink.framework.locationprovider
-        .ZLinkStoreScanResult> scan(
-            systems.zlink.framework.locationprovider
-                .ZLinkStoreScanRequest request,
-            systems.zlink.framework.locationprovider
-                .ZLinkStoreCancellation cancellation) {
+    public CompletionStage<systems.zlink.framework.locationprovider.ZLinkStoreScanResult> scan(
+            systems.zlink.framework.locationprovider.ZLinkStoreScanRequest request,
+            systems.zlink.framework.locationprovider.ZLinkStoreCancellation cancellation) {
         return opaque.scan(request, cancellation);
     }
 
     @Override
     public CompletionStage<ZLinkAuthorityReadResult> read(
-        String key,
-        ZLinkStoreCancellation cancellation) {
+            String key, ZLinkStoreCancellation cancellation) {
         return authority.read(key, cancellation);
     }
 
     @Override
-    public CompletionStage<ZLinkAuthorityWriteResult>
-        compareExchange(
+    public CompletionStage<ZLinkAuthorityWriteResult> compareExchange(
             String key,
             ZLinkAuthorityExpectation expectation,
             ZLinkAuthorityMutation mutation,
@@ -159,583 +141,555 @@ public final class ZLinkInMemoryLocationStore
 
     @Override
     public CompletionStage<ZLinkAuthorityScanResult> list(
-        String prefix,
-        Optional<ZLinkAuthorityScanCursor> cursor,
-        int limit,
-        ZLinkStoreCancellation cancellation) {
+            String prefix,
+            Optional<ZLinkAuthorityScanCursor> cursor,
+            int limit,
+            ZLinkStoreCancellation cancellation) {
         return authority.list(prefix, cursor, limit, cancellation);
     }
 
     @Override
     public CompletionStage<ZLinkObjectReserveResult> reserve(
-        ZLinkObjectReservationRequest request,
-        ZLinkStoreCancellation cancellation) {
+            ZLinkObjectReservationRequest request, ZLinkStoreCancellation cancellation) {
         return authority.reserve(request, cancellation);
     }
 
     @Override
     public CompletionStage<ZLinkObjectCommitResult> commit(
-        ZLinkObjectReservation reservation,
-        byte[] readyPayload,
-        ZLinkStoreCancellation cancellation) {
+            ZLinkObjectReservation reservation,
+            byte[] readyPayload,
+            ZLinkStoreCancellation cancellation) {
         return authority.commit(reservation, readyPayload, cancellation);
     }
 
     @Override
     public CompletionStage<ZLinkObjectCommitResult> commit(
-        ZLinkObjectReservation reservation,
-        byte[] readyPayload,
-        ZLinkCreationOperationTerminal terminal,
-        ZLinkStoreCancellation cancellation) {
-        return authority.commit(
-            reservation,
-            readyPayload,
-            terminal,
-            cancellation);
+            ZLinkObjectReservation reservation,
+            byte[] readyPayload,
+            ZLinkCreationOperationTerminal terminal,
+            ZLinkStoreCancellation cancellation) {
+        return authority.commit(reservation, readyPayload, terminal, cancellation);
     }
 
     @Override
     public CompletionStage<ZLinkObjectRejectResult> reject(
-        ZLinkObjectReservation reservation,
-        ZLinkCreationOperationTerminal terminal,
-        ZLinkStoreCancellation cancellation) {
+            ZLinkObjectReservation reservation,
+            ZLinkCreationOperationTerminal terminal,
+            ZLinkStoreCancellation cancellation) {
         return authority.reject(reservation, terminal, cancellation);
     }
 
     @Override
     public CompletionStage<ZLinkObjectAbortResult> abort(
-        ZLinkObjectReservation reservation,
-        ZLinkStoreCancellation cancellation) {
+            ZLinkObjectReservation reservation, ZLinkStoreCancellation cancellation) {
         return authority.abort(reservation, cancellation);
     }
 
     @Override
     public CompletionStage<ZLinkObjectAbortResult> abort(
-        ZLinkObjectReservation reservation,
-        ZLinkCreationOperationTerminal terminal,
-        ZLinkStoreCancellation cancellation) {
+            ZLinkObjectReservation reservation,
+            ZLinkCreationOperationTerminal terminal,
+            ZLinkStoreCancellation cancellation) {
         return authority.abort(reservation, terminal, cancellation);
     }
 
     @Override
-    public CompletionStage<ZLinkCreationTerminalReadResult>
-        readCreationTerminal(
-            ZLinkCreationOperationIdentity operation,
-            ZLinkStoreCancellation cancellation) {
+    public CompletionStage<ZLinkCreationTerminalReadResult> readCreationTerminal(
+            ZLinkCreationOperationIdentity operation, ZLinkStoreCancellation cancellation) {
         return authority.readCreationTerminal(operation, cancellation);
     }
 
     @Override
-    public CompletionStage<ZLinkAggregatePrepareResult>
-        prepareAggregate(
-            ZLinkAggregatePrepareRequest request,
-            ZLinkStoreCancellation cancellation) {
+    public CompletionStage<ZLinkAggregatePrepareResult> prepareAggregate(
+            ZLinkAggregatePrepareRequest request, ZLinkStoreCancellation cancellation) {
         return authority.prepareAggregate(request, cancellation);
     }
 
     @Override
-    public CompletionStage<ZLinkAggregateCommitResult>
-        commitAggregate(
-            ZLinkAggregateFence fence,
-            ZLinkStoreCancellation cancellation) {
+    public CompletionStage<ZLinkAggregateCommitResult> commitAggregate(
+            ZLinkAggregateFence fence, ZLinkStoreCancellation cancellation) {
         return authority.commitAggregate(fence, cancellation);
     }
 
     @Override
-    public CompletionStage<ZLinkAggregateAbortResult>
-        abortAggregate(
-            ZLinkAggregateFence fence,
-            ZLinkStoreCancellation cancellation) {
+    public CompletionStage<ZLinkAggregateAbortResult> abortAggregate(
+            ZLinkAggregateFence fence, ZLinkStoreCancellation cancellation) {
         return authority.abortAggregate(fence, cancellation);
     }
 
     @Override
-    public CompletionStage<Optional<ZLinkAggregateProgressSnapshot>>
-        readAggregateProgress(
-            ZLinkAggregateFence fence,
-            ZLinkStoreCancellation cancellation) {
+    public CompletionStage<Optional<ZLinkAggregateProgressSnapshot>> readAggregateProgress(
+            ZLinkAggregateFence fence, ZLinkStoreCancellation cancellation) {
         return authority.readAggregateProgress(fence, cancellation);
     }
 
     @Override
     public CompletionStage<Boolean> removeAggregateProgress(
-        ZLinkAggregateFence fence,
-        String expectedStoreVersion,
-        ZLinkStoreCancellation cancellation) {
-        return authority.removeAggregateProgress(
-            fence, expectedStoreVersion, cancellation);
+            ZLinkAggregateFence fence,
+            String expectedStoreVersion,
+            ZLinkStoreCancellation cancellation) {
+        return authority.removeAggregateProgress(fence, expectedStoreVersion, cancellation);
     }
 
     @Override
     public CompletionStage<ZLinkLocationWriteResult> updateMeshNode(
-        ZLinkMeshNodeDescriptor descriptor,
-        ZLinkLocationWriteIntent intent) {
+            ZLinkMeshNodeDescriptor descriptor, ZLinkLocationWriteIntent intent) {
         Objects.requireNonNull(descriptor, "descriptor");
         Objects.requireNonNull(intent, "intent");
-        return inStateLane(() -> {
-            ZLinkLocationOwnerToken owner =
-                new ZLinkLocationOwnerToken(
-                    descriptor.ownerId(),
-                    descriptor.leaseGeneration());
-            if (!isExactOwnerLeaseLive(owner)) {
-                return completed(
-                    ZLinkLocationWriteResult.ignoredStale());
-            }
-            String key = meshNodeKey(
-                new ZLinkMeshNodeDescriptorKey(
-                    descriptor.meshName(),
-                    descriptor.rid()));
-            ZLinkMeshNodeDescriptor current =
-                meshNodes.rows.get(key);
-            String entryAuthorityKey = descriptor.entrySpotId()
-                .map(ZLinkAuthorityKeyCodec::spot)
-                .orElse(null);
-            EntrySpotClaim entryClaim = entryAuthorityKey == null
-                ? null
-                : entrySpotClaims.get(entryAuthorityKey);
-            if (entryClaim != null
-                && !isExactOwnerLeaseLive(entryClaim.owner())) {
-                entrySpotClaims.remove(entryAuthorityKey);
-                entryClaim = null;
-            }
-            if ((intent == ZLinkLocationWriteIntent.NEW_CLAIM
-                    || intent == ZLinkLocationWriteIntent.TAKEOVER)
-                && ((entryClaim != null
-                        && !entryClaim.matches(key, descriptor))
-                    || (entryAuthorityKey != null
-                        && authority.containsAuthorityOnLane(
-                            entryAuthorityKey)))) {
-                return completed(
-                    ZLinkLocationWriteResult.rejectedConflict());
-            }
-            if (intent == ZLinkLocationWriteIntent.NEW_CLAIM
-                && current != null
-                && isExactOwnerLeaseLive(
-                    new ZLinkLocationOwnerToken(
-                        current.ownerId(),
-                        current.leaseGeneration()))) {
-                return completed(
-                    ZLinkLocationWriteResult.rejectedConflict());
-            }
-            if (intent == ZLinkLocationWriteIntent.TAKEOVER
-                && current != null
-                && isExactOwnerLeaseLive(
-                    new ZLinkLocationOwnerToken(
-                        current.ownerId(),
-                        current.leaseGeneration()))) {
-                return completed(
-                    ZLinkLocationWriteResult.rejectedConflict());
-            }
-            if (intent == ZLinkLocationWriteIntent.RENEW
-                && current != null
-                && descriptor.descriptorRevision()
-                    == current.descriptorRevision()) {
-                if (hasSameDescriptorFields(current, descriptor)) {
-                    return completed(ZLinkLocationWriteResult.stored(
-                        current.lifecycleGeneration(),
-                        current.updatedAt()));
-                }
-                throw new IllegalArgumentException(
-                    "same descriptor revision has different bytes");
-            }
-            if (intent == ZLinkLocationWriteIntent.RENEW
-                && (current == null
-                    || !current.ownerId().equals(
-                        descriptor.ownerId())
-                    || current.leaseGeneration()
-                        != descriptor.leaseGeneration()
-                    || current.lifecycleGeneration()
-                        != descriptor.lifecycleGeneration()
-                    || !hasSameImmutableDescriptorFields(
-                        current,
-                        descriptor)
-                    || descriptor.descriptorRevision()
-                        <= current.descriptorRevision())) {
-                return completed(
-                    ZLinkLocationWriteResult.ignoredStale());
-            }
-            Instant now = clock.instant();
-            meshNodes.rows.put(
-                key,
-                copyDescriptor(descriptor, now));
-            bumpMeshNodeStamp(descriptor.meshName());
-            if (entryAuthorityKey != null) {
-                entrySpotClaims.put(
-                    entryAuthorityKey,
-                    new EntrySpotClaim(
-                        key,
-                        descriptor.lifecycleGeneration(),
-                        owner));
-            }
-            return completed(ZLinkLocationWriteResult.stored(
-                descriptor.lifecycleGeneration(),
-                now));
-        });
+        return inStateLane(
+                () -> {
+                    ZLinkLocationOwnerToken owner =
+                            new ZLinkLocationOwnerToken(
+                                    descriptor.ownerId(), descriptor.leaseGeneration());
+                    if (!isExactOwnerLeaseLive(owner)) {
+                        return completed(ZLinkLocationWriteResult.ignoredStale());
+                    }
+                    String key =
+                            meshNodeKey(
+                                    new ZLinkMeshNodeDescriptorKey(
+                                            descriptor.meshName(), descriptor.rid()));
+                    ZLinkMeshNodeDescriptor current = meshNodes.rows.get(key);
+                    String entryAuthorityKey =
+                            descriptor.entrySpotId().map(ZLinkAuthorityKeyCodec::spot).orElse(null);
+                    EntrySpotClaim entryClaim =
+                            entryAuthorityKey == null
+                                    ? null
+                                    : entrySpotClaims.get(entryAuthorityKey);
+                    if (entryClaim != null && !isExactOwnerLeaseLive(entryClaim.owner())) {
+                        entrySpotClaims.remove(entryAuthorityKey);
+                        entryClaim = null;
+                    }
+                    if ((intent == ZLinkLocationWriteIntent.NEW_CLAIM
+                                    || intent == ZLinkLocationWriteIntent.TAKEOVER)
+                            && ((entryClaim != null && !entryClaim.matches(key, descriptor))
+                                    || (entryAuthorityKey != null
+                                            && authority.containsAuthorityOnLane(
+                                                    entryAuthorityKey)))) {
+                        return completed(ZLinkLocationWriteResult.rejectedConflict());
+                    }
+                    if (intent == ZLinkLocationWriteIntent.NEW_CLAIM
+                            && current != null
+                            && isExactOwnerLeaseLive(
+                                    new ZLinkLocationOwnerToken(
+                                            current.ownerId(), current.leaseGeneration()))) {
+                        return completed(ZLinkLocationWriteResult.rejectedConflict());
+                    }
+                    if (intent == ZLinkLocationWriteIntent.TAKEOVER
+                            && current != null
+                            && isExactOwnerLeaseLive(
+                                    new ZLinkLocationOwnerToken(
+                                            current.ownerId(), current.leaseGeneration()))) {
+                        return completed(ZLinkLocationWriteResult.rejectedConflict());
+                    }
+                    if (intent == ZLinkLocationWriteIntent.RENEW
+                            && current != null
+                            && descriptor.descriptorRevision() == current.descriptorRevision()) {
+                        if (hasSameDescriptorFields(current, descriptor)) {
+                            return completed(
+                                    ZLinkLocationWriteResult.stored(
+                                            current.lifecycleGeneration(), current.updatedAt()));
+                        }
+                        throw new IllegalArgumentException(
+                                "same descriptor revision has different bytes");
+                    }
+                    if (intent == ZLinkLocationWriteIntent.RENEW
+                            && (current == null
+                                    || !current.ownerId().equals(descriptor.ownerId())
+                                    || current.leaseGeneration() != descriptor.leaseGeneration()
+                                    || current.lifecycleGeneration()
+                                            != descriptor.lifecycleGeneration()
+                                    || !hasSameImmutableDescriptorFields(current, descriptor)
+                                    || descriptor.descriptorRevision()
+                                            <= current.descriptorRevision())) {
+                        return completed(ZLinkLocationWriteResult.ignoredStale());
+                    }
+                    Instant now = clock.instant();
+                    meshNodes.rows.put(key, copyDescriptor(descriptor, now));
+                    bumpMeshNodeStamp(descriptor.meshName());
+                    if (entryAuthorityKey != null) {
+                        entrySpotClaims.put(
+                                entryAuthorityKey,
+                                new EntrySpotClaim(key, descriptor.lifecycleGeneration(), owner));
+                    }
+                    return completed(
+                            ZLinkLocationWriteResult.stored(descriptor.lifecycleGeneration(), now));
+                });
     }
 
     @Override
     public CompletionStage<ZLinkLocationWriteStatus> removeMeshNode(
-        ZLinkMeshNodeDescriptorKey key,
-        ZLinkLocationOwnerToken owner) {
-        return inStateLane(() -> {
-            ZLinkMeshNodeDescriptor current =
-                meshNodes.rows.get(meshNodeKey(key));
-            if (current == null
-                || !current.ownerId().equals(owner.ownerId())
-                || current.leaseGeneration()
-                    != owner.leaseGeneration()) {
-                return completed(
-                    ZLinkLocationWriteStatus.IGNORED_STALE);
-            }
-            current.entrySpotId().ifPresent(spotId -> {
-                String authorityKey = ZLinkAuthorityKeyCodec.spot(spotId);
-                EntrySpotClaim claim = entrySpotClaims.get(authorityKey);
-                if (claim != null
-                    && claim.matches(meshNodeKey(key), current)) {
-                    entrySpotClaims.remove(authorityKey);
-                }
-            });
-            meshNodes.rows.remove(meshNodeKey(key));
-            bumpMeshNodeStamp(key.meshName());
-            return completed(ZLinkLocationWriteStatus.STORED);
-        });
+            ZLinkMeshNodeDescriptorKey key, ZLinkLocationOwnerToken owner) {
+        return inStateLane(
+                () -> {
+                    ZLinkMeshNodeDescriptor current = meshNodes.rows.get(meshNodeKey(key));
+                    if (current == null
+                            || !current.ownerId().equals(owner.ownerId())
+                            || current.leaseGeneration() != owner.leaseGeneration()) {
+                        return completed(ZLinkLocationWriteStatus.IGNORED_STALE);
+                    }
+                    current.entrySpotId()
+                            .ifPresent(
+                                    spotId -> {
+                                        String authorityKey = ZLinkAuthorityKeyCodec.spot(spotId);
+                                        EntrySpotClaim claim = entrySpotClaims.get(authorityKey);
+                                        if (claim != null
+                                                && claim.matches(meshNodeKey(key), current)) {
+                                            entrySpotClaims.remove(authorityKey);
+                                        }
+                                    });
+                    meshNodes.rows.remove(meshNodeKey(key));
+                    bumpMeshNodeStamp(key.meshName());
+                    return completed(ZLinkLocationWriteStatus.STORED);
+                });
     }
 
     @Override
-    public CompletionStage<ZLinkLocationPage<ZLinkMeshNodeDescriptor>>
-        listMeshNodes(String meshName, ZLinkPageRequest page) {
-        return inStateLane(() -> completed(page(
-                meshNodes,
-                descriptor -> descriptor.meshName().equals(meshName),
-                page)))
-            .thenApply(stored -> new ZLinkLocationPage<>(
-                stored.items().stream()
-                    .map(this::projectCapacity)
-                    .toList(),
-                stored.continuationToken()));
+    public CompletionStage<ZLinkLocationPage<ZLinkMeshNodeDescriptor>> listMeshNodes(
+            String meshName, ZLinkPageRequest page) {
+        return inStateLane(
+                        () ->
+                                completed(
+                                        page(
+                                                meshNodes,
+                                                descriptor ->
+                                                        descriptor.meshName().equals(meshName),
+                                                page)))
+                .thenApply(
+                        stored ->
+                                new ZLinkLocationPage<>(
+                                        stored.items().stream().map(this::projectCapacity).toList(),
+                                        stored.continuationToken()));
     }
 
     @Override
     public CompletionStage<ZLinkLocationWriteResult> updateClientServer(
-        ZLinkClientServerServerDescriptor descriptor,
-        ZLinkLocationWriteIntent intent) {
+            ZLinkClientServerServerDescriptor descriptor, ZLinkLocationWriteIntent intent) {
         Objects.requireNonNull(descriptor, "descriptor");
         Objects.requireNonNull(intent, "intent");
-        ZLinkLocationOwnerToken owner = new ZLinkLocationOwnerToken(
-            descriptor.ownerId(), descriptor.leaseGeneration());
-        return inStateLane(() -> {
-            if (!isExactOwnerLeaseLive(owner)) {
-                return completed(ZLinkLocationWriteResult.ignoredStale());
-            }
-            String key = descriptor.channelName() + ":" + descriptor.serverRid().toHex();
-            ZLinkClientServerServerDescriptor current = clientServers.rows.get(key);
-            if (current != null
-                && isExactOwnerLeaseLive(new ZLinkLocationOwnerToken(
-                    current.ownerId(), current.leaseGeneration()))
-                && intent == ZLinkLocationWriteIntent.NEW_CLAIM) {
-                return completed(ZLinkLocationWriteResult.rejectedConflict());
-            }
-            if (current != null && intent == ZLinkLocationWriteIntent.RENEW
-                && (!current.ownerId().equals(descriptor.ownerId())
-                    || current.leaseGeneration() != descriptor.leaseGeneration()
-                    || current.lifecycleGeneration() != descriptor.lifecycleGeneration()
-                    || descriptor.descriptorRevision() < current.descriptorRevision())) {
-                return completed(ZLinkLocationWriteResult.ignoredStale());
-            }
-            long generation = current == null
-                ? clientServers.generations.getOrDefault(key, 0L) + 1L
-                : clientServers.generations.getOrDefault(key, 1L);
-            clientServers.generations.put(key, generation);
-            Instant now = clock.instant();
-            clientServers.rows.put(key, new ZLinkClientServerServerDescriptor(
-                descriptor.channelName(), descriptor.serverRid(),
-                descriptor.lifecycleGeneration(), descriptor.descriptorRevision(),
-                descriptor.endpoint(), descriptor.weight(), descriptor.state(),
-                descriptor.securityIdentity(), descriptor.ownerId(),
-                descriptor.leaseGeneration(), now));
-            return completed(ZLinkLocationWriteResult.stored(generation, now));
-        });
+        ZLinkLocationOwnerToken owner =
+                new ZLinkLocationOwnerToken(descriptor.ownerId(), descriptor.leaseGeneration());
+        return inStateLane(
+                () -> {
+                    if (!isExactOwnerLeaseLive(owner)) {
+                        return completed(ZLinkLocationWriteResult.ignoredStale());
+                    }
+                    String key = descriptor.channelName() + ":" + descriptor.serverRid().toHex();
+                    ZLinkClientServerServerDescriptor current = clientServers.rows.get(key);
+                    if (current != null
+                            && isExactOwnerLeaseLive(
+                                    new ZLinkLocationOwnerToken(
+                                            current.ownerId(), current.leaseGeneration()))
+                            && intent == ZLinkLocationWriteIntent.NEW_CLAIM) {
+                        return completed(ZLinkLocationWriteResult.rejectedConflict());
+                    }
+                    if (current != null
+                            && intent == ZLinkLocationWriteIntent.RENEW
+                            && (!current.ownerId().equals(descriptor.ownerId())
+                                    || current.leaseGeneration() != descriptor.leaseGeneration()
+                                    || current.lifecycleGeneration()
+                                            != descriptor.lifecycleGeneration()
+                                    || descriptor.descriptorRevision()
+                                            < current.descriptorRevision())) {
+                        return completed(ZLinkLocationWriteResult.ignoredStale());
+                    }
+                    long generation =
+                            current == null
+                                    ? clientServers.generations.getOrDefault(key, 0L) + 1L
+                                    : clientServers.generations.getOrDefault(key, 1L);
+                    clientServers.generations.put(key, generation);
+                    Instant now = clock.instant();
+                    clientServers.rows.put(
+                            key,
+                            new ZLinkClientServerServerDescriptor(
+                                    descriptor.channelName(),
+                                    descriptor.serverRid(),
+                                    descriptor.lifecycleGeneration(),
+                                    descriptor.descriptorRevision(),
+                                    descriptor.endpoint(),
+                                    descriptor.weight(),
+                                    descriptor.state(),
+                                    descriptor.securityIdentity(),
+                                    descriptor.ownerId(),
+                                    descriptor.leaseGeneration(),
+                                    now));
+                    return completed(ZLinkLocationWriteResult.stored(generation, now));
+                });
     }
 
     @Override
     public CompletionStage<ZLinkLocationWriteStatus> removeClientServer(
-        ZLinkClientServerServerDescriptorKey key,
-        ZLinkLocationOwnerToken owner) {
+            ZLinkClientServerServerDescriptorKey key, ZLinkLocationOwnerToken owner) {
         Objects.requireNonNull(key, "key");
         Objects.requireNonNull(owner, "owner");
-        return inStateLane(() -> {
-            String encoded = key.channelName() + ":" + key.serverRid().toHex();
-            ZLinkClientServerServerDescriptor current = clientServers.rows.get(encoded);
-            if (current == null || !current.ownerId().equals(owner.ownerId())
-                || current.leaseGeneration() != owner.leaseGeneration()) {
-                return completed(ZLinkLocationWriteStatus.IGNORED_STALE);
-            }
-            clientServers.rows.remove(encoded);
-            return completed(ZLinkLocationWriteStatus.STORED);
-        });
+        return inStateLane(
+                () -> {
+                    String encoded = key.channelName() + ":" + key.serverRid().toHex();
+                    ZLinkClientServerServerDescriptor current = clientServers.rows.get(encoded);
+                    if (current == null
+                            || !current.ownerId().equals(owner.ownerId())
+                            || current.leaseGeneration() != owner.leaseGeneration()) {
+                        return completed(ZLinkLocationWriteStatus.IGNORED_STALE);
+                    }
+                    clientServers.rows.remove(encoded);
+                    return completed(ZLinkLocationWriteStatus.STORED);
+                });
     }
 
     @Override
-    public CompletionStage<ZLinkLocationPage<ZLinkClientServerServerDescriptor>>
-        listClientServers(String channelName, ZLinkPageRequest page) {
+    public CompletionStage<ZLinkLocationPage<ZLinkClientServerServerDescriptor>> listClientServers(
+            String channelName, ZLinkPageRequest page) {
         Objects.requireNonNull(channelName, "channelName");
-        return inStateLane(() -> {
-            return completed(page(
-                clientServers,
-                row -> row.channelName().equals(channelName)
-                    && isExactOwnerLeaseLive(new ZLinkLocationOwnerToken(
-                        row.ownerId(), row.leaseGeneration())),
-                page));
-        });
+        return inStateLane(
+                () -> {
+                    return completed(
+                            page(
+                                    clientServers,
+                                    row ->
+                                            row.channelName().equals(channelName)
+                                                    && isExactOwnerLeaseLive(
+                                                            new ZLinkLocationOwnerToken(
+                                                                    row.ownerId(),
+                                                                    row.leaseGeneration())),
+                                    page));
+                });
     }
 
     @Override
     public CompletionStage<ZLinkLocationWriteResult> updateFanoutPublisher(
-        ZLinkFanoutPublisherDescriptor descriptor,
-        ZLinkLocationWriteIntent intent) {
+            ZLinkFanoutPublisherDescriptor descriptor, ZLinkLocationWriteIntent intent) {
         Objects.requireNonNull(descriptor, "descriptor");
         Objects.requireNonNull(intent, "intent");
         validateFanoutDescriptor(descriptor);
-        return inStateLane(() -> {
-            ZLinkLocationOwnerToken owner = new ZLinkLocationOwnerToken(
-                descriptor.ownerId(),
-                descriptor.leaseGeneration());
-            if (!isExactOwnerLeaseLive(owner)) {
-                return completed(ZLinkLocationWriteResult.ignoredStale());
-            }
-            String key = fanoutPublisherKey(
-                new ZLinkFanoutPublisherDescriptorKey(
-                    descriptor.channelName(),
-                    descriptor.publisherRid()));
-            ZLinkFanoutPublisherDescriptor current =
-                fanoutPublishers.rows.get(key);
-            boolean currentLive = current != null
-                && isExactOwnerLeaseLive(new ZLinkLocationOwnerToken(
-                    current.ownerId(),
-                    current.leaseGeneration()));
-            if ((intent == ZLinkLocationWriteIntent.NEW_CLAIM
-                || intent == ZLinkLocationWriteIntent.TAKEOVER)
-                && currentLive
-                && !hasSameFanoutDescriptorFields(current, descriptor)) {
-                return completed(ZLinkLocationWriteResult.rejectedConflict());
-            }
-            if (current == null || !currentLive) {
-                if (intent != ZLinkLocationWriteIntent.NEW_CLAIM
-                    && intent != ZLinkLocationWriteIntent.TAKEOVER) {
-                    return completed(ZLinkLocationWriteResult.ignoredStale());
-                }
-                long generation =
-                    fanoutPublishers.generations.getOrDefault(key, 0L) + 1L;
-                Instant now = clock.instant();
-                fanoutPublishers.generations.put(key, generation);
-                fanoutPublishers.rows.put(
-                    key,
-                    copyFanoutDescriptor(descriptor, now));
-                return completed(
-                    ZLinkLocationWriteResult.stored(generation, now));
-            }
-            long generation =
-                fanoutPublishers.generations.getOrDefault(key, 1L);
-            if (hasSameFanoutDescriptorFields(current, descriptor)) {
-                return completed(ZLinkLocationWriteResult.stored(
-                    generation,
-                    current.updatedAt()));
-            }
-            if (!current.ownerId().equals(descriptor.ownerId())
-                || current.leaseGeneration() != descriptor.leaseGeneration()
-                || current.lifecycleGeneration()
-                    != descriptor.lifecycleGeneration()
-                || descriptor.descriptorRevision()
-                    <= current.descriptorRevision()
-                || !hasSameImmutableFanoutDescriptorFields(
-                    current,
-                    descriptor)) {
-                return completed(ZLinkLocationWriteResult.ignoredStale());
-            }
-            Instant now = clock.instant();
-            fanoutPublishers.rows.put(
-                key,
-                copyFanoutDescriptor(descriptor, now));
-            return completed(ZLinkLocationWriteResult.stored(generation, now));
-        });
+        return inStateLane(
+                () -> {
+                    ZLinkLocationOwnerToken owner =
+                            new ZLinkLocationOwnerToken(
+                                    descriptor.ownerId(), descriptor.leaseGeneration());
+                    if (!isExactOwnerLeaseLive(owner)) {
+                        return completed(ZLinkLocationWriteResult.ignoredStale());
+                    }
+                    String key =
+                            fanoutPublisherKey(
+                                    new ZLinkFanoutPublisherDescriptorKey(
+                                            descriptor.channelName(), descriptor.publisherRid()));
+                    ZLinkFanoutPublisherDescriptor current = fanoutPublishers.rows.get(key);
+                    boolean currentLive =
+                            current != null
+                                    && isExactOwnerLeaseLive(
+                                            new ZLinkLocationOwnerToken(
+                                                    current.ownerId(), current.leaseGeneration()));
+                    if ((intent == ZLinkLocationWriteIntent.NEW_CLAIM
+                                    || intent == ZLinkLocationWriteIntent.TAKEOVER)
+                            && currentLive
+                            && !hasSameFanoutDescriptorFields(current, descriptor)) {
+                        return completed(ZLinkLocationWriteResult.rejectedConflict());
+                    }
+                    if (current == null || !currentLive) {
+                        if (intent != ZLinkLocationWriteIntent.NEW_CLAIM
+                                && intent != ZLinkLocationWriteIntent.TAKEOVER) {
+                            return completed(ZLinkLocationWriteResult.ignoredStale());
+                        }
+                        long generation = fanoutPublishers.generations.getOrDefault(key, 0L) + 1L;
+                        Instant now = clock.instant();
+                        fanoutPublishers.generations.put(key, generation);
+                        fanoutPublishers.rows.put(key, copyFanoutDescriptor(descriptor, now));
+                        return completed(ZLinkLocationWriteResult.stored(generation, now));
+                    }
+                    long generation = fanoutPublishers.generations.getOrDefault(key, 1L);
+                    if (hasSameFanoutDescriptorFields(current, descriptor)) {
+                        return completed(
+                                ZLinkLocationWriteResult.stored(generation, current.updatedAt()));
+                    }
+                    if (!current.ownerId().equals(descriptor.ownerId())
+                            || current.leaseGeneration() != descriptor.leaseGeneration()
+                            || current.lifecycleGeneration() != descriptor.lifecycleGeneration()
+                            || descriptor.descriptorRevision() <= current.descriptorRevision()
+                            || !hasSameImmutableFanoutDescriptorFields(current, descriptor)) {
+                        return completed(ZLinkLocationWriteResult.ignoredStale());
+                    }
+                    Instant now = clock.instant();
+                    fanoutPublishers.rows.put(key, copyFanoutDescriptor(descriptor, now));
+                    return completed(ZLinkLocationWriteResult.stored(generation, now));
+                });
     }
 
     @Override
     public CompletionStage<ZLinkLocationWriteStatus> removeFanoutPublisher(
-        ZLinkFanoutPublisherDescriptorKey key,
-        ZLinkLocationOwnerToken owner) {
+            ZLinkFanoutPublisherDescriptorKey key, ZLinkLocationOwnerToken owner) {
         Objects.requireNonNull(key, "key");
         Objects.requireNonNull(owner, "owner");
-        return inStateLane(() -> {
-            String encoded = fanoutPublisherKey(key);
-            ZLinkFanoutPublisherDescriptor current =
-                fanoutPublishers.rows.get(encoded);
-            if (current == null
-                || !current.ownerId().equals(owner.ownerId())
-                || current.leaseGeneration() != owner.leaseGeneration()) {
-                return completed(ZLinkLocationWriteStatus.IGNORED_STALE);
-            }
-            fanoutPublishers.rows.remove(encoded);
-            return completed(ZLinkLocationWriteStatus.STORED);
-        });
-    }
-
-    @Override
-    public CompletionStage<ZLinkLocationPage<ZLinkFanoutPublisherDescriptor>>
-        listFanoutPublishers(String channelName, ZLinkPageRequest page) {
-        Objects.requireNonNull(channelName, "channelName");
-        return inStateLane(() -> {
-            return completed(page(
-                fanoutPublishers,
-                row -> row.channelName().equals(channelName)
-                    && isExactOwnerLeaseLive(new ZLinkLocationOwnerToken(
-                        row.ownerId(),
-                        row.leaseGeneration())),
-                page));
-        });
-    }
-
-    @Override
-    public CompletionStage<ZLinkOwnerLeaseClaimResult>
-        claimOwnerLease(
-        String ownerId,
-        Duration leaseTtl) {
-        return inStateLane(() -> {
-            Instant now = clock.instant();
-            LeaseRow current = leases.get(ownerId);
-            if (current != null && current.expiresAt().isAfter(now)) {
-                return completed(new ZLinkOwnerLeaseClaimConflict());
-            }
-            if (ownerLeaseGeneration == Long.MAX_VALUE) {
-                return completed(new ZLinkOwnerLeaseGenerationExhausted());
-            }
-            ZLinkLocationOwnerToken token = new ZLinkLocationOwnerToken(
-                ownerId,
-                ++ownerLeaseGeneration);
-            Instant expiresAt = now.plus(leaseTtl);
-            leases.put(ownerId, new LeaseRow(token, expiresAt));
-            return completed(new ZLinkOwnerLeaseClaimed(token, expiresAt, now));
-        });
-    }
-
-    @Override
-    public CompletionStage<ZLinkOwnerLeaseReadResult>
-        readOwnerLease(String ownerId) {
-        return inStateLane(() -> {
-            Instant now = clock.instant();
-            LeaseRow current = leases.get(ownerId);
-            if (current == null || !current.expiresAt().isAfter(now)) {
-                leases.remove(ownerId);
-                return completed(new ZLinkOwnerLeaseMissing());
-            }
-            return completed(new ZLinkOwnerLeaseFound(
-                    current.token(),
-                    current.expiresAt(),
-                    now));
-        });
-    }
-
-    @Override
-    public CompletionStage<ZLinkOwnerLeaseRenewResult>
-        renewOwnerLease(
-            ZLinkLocationOwnerToken token,
-            Duration leaseTtl) {
-        return inStateLane(() -> {
-            Instant now = clock.instant();
-            LeaseRow current = leases.get(token.ownerId());
-            if (current == null
-                || !current.expiresAt().isAfter(now)
-                || !current.token().equals(token)) {
-                return completed(new ZLinkOwnerLeaseRenewStale());
-            }
-            Instant expiresAt = now.plus(leaseTtl);
-            leases.put(token.ownerId(), new LeaseRow(token, expiresAt));
-            return completed(new ZLinkOwnerLeaseRenewed(expiresAt, now));
-        });
-    }
-
-    @Override
-    public CompletionStage<ZLinkOwnerLeaseReleaseResult>
-        releaseOwnerLease(ZLinkLocationOwnerToken token) {
-        return inStateLane(() -> {
-            Instant now = clock.instant();
-            LeaseRow current = leases.get(token.ownerId());
-            if (current == null
-                || !current.expiresAt().isAfter(now)
-                || !current.token().equals(token)) {
-                if (current != null
-                    && !current.expiresAt().isAfter(now)) {
-                    leases.remove(token.ownerId());
-                }
-                return completed(ZLinkOwnerLeaseReleaseResult.STALE);
-            }
-            leases.remove(token.ownerId());
-            return completed(ZLinkOwnerLeaseReleaseResult.RELEASED);
-        });
-    }
-
-    @Override
-    public CompletionStage<Long> removeAllByOwner(
-        ZLinkLocationOwnerToken owner) {
-        Objects.requireNonNull(owner, "owner");
-        return inStateLane(() -> {
-            if (!isExactOwnerLeaseLive(owner)) {
-                return CompletableFuture.failedFuture(
-                    new IllegalStateException(
-                        "Owner cleanup token is stale."));
-            }
-            String ownerId = owner.ownerId();
-            long removed = 0;
-            List<Map.Entry<String, ZLinkMeshNodeDescriptor>>
-                descriptorEntries = meshNodes.rows.entrySet()
-                .stream()
-                .filter(entry -> entry.getValue().ownerId()
-                        .equals(ownerId)
-                    && entry.getValue().leaseGeneration()
-                        == owner.leaseGeneration())
-                .toList();
-            descriptorEntries.forEach(entry -> {
-                entry.getValue().entrySpotId().ifPresent(spotId -> {
-                    String authorityKey =
-                        ZLinkAuthorityKeyCodec.spot(spotId);
-                    EntrySpotClaim claim =
-                        entrySpotClaims.get(authorityKey);
-                    if (claim != null
-                        && claim.matches(
-                            entry.getKey(),
-                            entry.getValue())) {
-                        entrySpotClaims.remove(authorityKey);
+        return inStateLane(
+                () -> {
+                    String encoded = fanoutPublisherKey(key);
+                    ZLinkFanoutPublisherDescriptor current = fanoutPublishers.rows.get(encoded);
+                    if (current == null
+                            || !current.ownerId().equals(owner.ownerId())
+                            || current.leaseGeneration() != owner.leaseGeneration()) {
+                        return completed(ZLinkLocationWriteStatus.IGNORED_STALE);
                     }
+                    fanoutPublishers.rows.remove(encoded);
+                    return completed(ZLinkLocationWriteStatus.STORED);
                 });
-                meshNodes.rows.remove(entry.getKey());
-                bumpMeshNodeStamp(entry.getValue().meshName());
-            });
-            removed += descriptorEntries.size();
-            List<String> fanoutKeys = fanoutPublishers.rows.entrySet()
-                .stream()
-                .filter(entry -> entry.getValue().ownerId().equals(ownerId)
-                    && entry.getValue().leaseGeneration()
-                        == owner.leaseGeneration())
-                .map(Map.Entry::getKey)
-                .toList();
-            fanoutKeys.forEach(fanoutPublishers.rows::remove);
-            removed += fanoutKeys.size();
-            return completed(removed);
-        });
     }
 
     @Override
-    public CompletionStage<OptionalLong> getMeshNodeChangeStamp(
-        String meshName) {
+    public CompletionStage<ZLinkLocationPage<ZLinkFanoutPublisherDescriptor>> listFanoutPublishers(
+            String channelName, ZLinkPageRequest page) {
+        Objects.requireNonNull(channelName, "channelName");
+        return inStateLane(
+                () -> {
+                    return completed(
+                            page(
+                                    fanoutPublishers,
+                                    row ->
+                                            row.channelName().equals(channelName)
+                                                    && isExactOwnerLeaseLive(
+                                                            new ZLinkLocationOwnerToken(
+                                                                    row.ownerId(),
+                                                                    row.leaseGeneration())),
+                                    page));
+                });
+    }
+
+    @Override
+    public CompletionStage<ZLinkOwnerLeaseClaimResult> claimOwnerLease(
+            String ownerId, Duration leaseTtl) {
+        return inStateLane(
+                () -> {
+                    Instant now = clock.instant();
+                    LeaseRow current = leases.get(ownerId);
+                    if (current != null && current.expiresAt().isAfter(now)) {
+                        return completed(new ZLinkOwnerLeaseClaimConflict());
+                    }
+                    if (ownerLeaseGeneration == Long.MAX_VALUE) {
+                        return completed(new ZLinkOwnerLeaseGenerationExhausted());
+                    }
+                    ZLinkLocationOwnerToken token =
+                            new ZLinkLocationOwnerToken(ownerId, ++ownerLeaseGeneration);
+                    Instant expiresAt = now.plus(leaseTtl);
+                    leases.put(ownerId, new LeaseRow(token, expiresAt));
+                    return completed(new ZLinkOwnerLeaseClaimed(token, expiresAt, now));
+                });
+    }
+
+    @Override
+    public CompletionStage<ZLinkOwnerLeaseReadResult> readOwnerLease(String ownerId) {
+        return inStateLane(
+                () -> {
+                    Instant now = clock.instant();
+                    LeaseRow current = leases.get(ownerId);
+                    if (current == null || !current.expiresAt().isAfter(now)) {
+                        leases.remove(ownerId);
+                        return completed(new ZLinkOwnerLeaseMissing());
+                    }
+                    return completed(
+                            new ZLinkOwnerLeaseFound(current.token(), current.expiresAt(), now));
+                });
+    }
+
+    @Override
+    public CompletionStage<ZLinkOwnerLeaseRenewResult> renewOwnerLease(
+            ZLinkLocationOwnerToken token, Duration leaseTtl) {
+        return inStateLane(
+                () -> {
+                    Instant now = clock.instant();
+                    LeaseRow current = leases.get(token.ownerId());
+                    if (current == null
+                            || !current.expiresAt().isAfter(now)
+                            || !current.token().equals(token)) {
+                        return completed(new ZLinkOwnerLeaseRenewStale());
+                    }
+                    Instant expiresAt = now.plus(leaseTtl);
+                    leases.put(token.ownerId(), new LeaseRow(token, expiresAt));
+                    return completed(new ZLinkOwnerLeaseRenewed(expiresAt, now));
+                });
+    }
+
+    @Override
+    public CompletionStage<ZLinkOwnerLeaseReleaseResult> releaseOwnerLease(
+            ZLinkLocationOwnerToken token) {
+        return inStateLane(
+                () -> {
+                    Instant now = clock.instant();
+                    LeaseRow current = leases.get(token.ownerId());
+                    if (current == null
+                            || !current.expiresAt().isAfter(now)
+                            || !current.token().equals(token)) {
+                        if (current != null && !current.expiresAt().isAfter(now)) {
+                            leases.remove(token.ownerId());
+                        }
+                        return completed(ZLinkOwnerLeaseReleaseResult.STALE);
+                    }
+                    leases.remove(token.ownerId());
+                    return completed(ZLinkOwnerLeaseReleaseResult.RELEASED);
+                });
+    }
+
+    @Override
+    public CompletionStage<Long> removeAllByOwner(ZLinkLocationOwnerToken owner) {
+        Objects.requireNonNull(owner, "owner");
+        return inStateLane(
+                () -> {
+                    if (!isExactOwnerLeaseLive(owner)) {
+                        return CompletableFuture.failedFuture(
+                                new IllegalStateException("Owner cleanup token is stale."));
+                    }
+                    String ownerId = owner.ownerId();
+                    long removed = 0;
+                    List<Map.Entry<String, ZLinkMeshNodeDescriptor>> descriptorEntries =
+                            meshNodes.rows.entrySet().stream()
+                                    .filter(
+                                            entry ->
+                                                    entry.getValue().ownerId().equals(ownerId)
+                                                            && entry.getValue().leaseGeneration()
+                                                                    == owner.leaseGeneration())
+                                    .toList();
+                    descriptorEntries.forEach(
+                            entry -> {
+                                entry.getValue()
+                                        .entrySpotId()
+                                        .ifPresent(
+                                                spotId -> {
+                                                    String authorityKey =
+                                                            ZLinkAuthorityKeyCodec.spot(spotId);
+                                                    EntrySpotClaim claim =
+                                                            entrySpotClaims.get(authorityKey);
+                                                    if (claim != null
+                                                            && claim.matches(
+                                                                    entry.getKey(),
+                                                                    entry.getValue())) {
+                                                        entrySpotClaims.remove(authorityKey);
+                                                    }
+                                                });
+                                meshNodes.rows.remove(entry.getKey());
+                                bumpMeshNodeStamp(entry.getValue().meshName());
+                            });
+                    removed += descriptorEntries.size();
+                    List<String> fanoutKeys =
+                            fanoutPublishers.rows.entrySet().stream()
+                                    .filter(
+                                            entry ->
+                                                    entry.getValue().ownerId().equals(ownerId)
+                                                            && entry.getValue().leaseGeneration()
+                                                                    == owner.leaseGeneration())
+                                    .map(Map.Entry::getKey)
+                                    .toList();
+                    fanoutKeys.forEach(fanoutPublishers.rows::remove);
+                    removed += fanoutKeys.size();
+                    return completed(removed);
+                });
+    }
+
+    @Override
+    public CompletionStage<OptionalLong> getMeshNodeChangeStamp(String meshName) {
         if (meshName == null || meshName.isBlank()) {
             throw new IllegalArgumentException("meshName must be non-blank");
         }
-        return inStateLane(() -> {
-            Long stamp = meshNodeStamps.get(meshName);
-            return completed(stamp == null
-                ? OptionalLong.empty()
-                : OptionalLong.of(stamp));
-        });
+        return inStateLane(
+                () -> {
+                    Long stamp = meshNodeStamps.get(meshName);
+                    return completed(stamp == null ? OptionalLong.empty() : OptionalLong.of(stamp));
+                });
     }
 
     private void bumpMeshNodeStamp(String meshName) {
@@ -743,14 +697,13 @@ public final class ZLinkInMemoryLocationStore
     }
 
     private <TRow> ZLinkLocationPage<TRow> page(
-        RowTable<TRow> table,
-        Predicate<TRow> matches,
-        ZLinkPageRequest request) {
+            RowTable<TRow> table, Predicate<TRow> matches, ZLinkPageRequest request) {
         ZLinkPageRequest safeRequest = request == null ? ZLinkPageRequest.firstPage() : request;
-        List<Map.Entry<String, TRow>> ordered = table.rows.entrySet().stream()
-            .filter(pair -> matches.test(pair.getValue()))
-            .sorted(Comparator.comparing(Map.Entry::getKey))
-            .toList();
+        List<Map.Entry<String, TRow>> ordered =
+                table.rows.entrySet().stream()
+                        .filter(pair -> matches.test(pair.getValue()))
+                        .sorted(Comparator.comparing(Map.Entry::getKey))
+                        .toList();
 
         int offset = parseOffset(safeRequest.continuationToken());
         int size = safeRequest.pageSize() > 0 ? safeRequest.pageSize() : Integer.MAX_VALUE;
@@ -780,214 +733,190 @@ public final class ZLinkInMemoryLocationStore
         return lease != null && lease.expiresAt().isAfter(now);
     }
 
-    private boolean isExactOwnerLeaseLive(
-        ZLinkLocationOwnerToken token) {
+    private boolean isExactOwnerLeaseLive(ZLinkLocationOwnerToken token) {
         LeaseRow lease = leases.get(token.ownerId());
         return lease != null
-            && lease.token().equals(token)
-            && lease.expiresAt().isAfter(clock.instant());
+                && lease.token().equals(token)
+                && lease.expiresAt().isAfter(clock.instant());
     }
 
     private ZLinkMeshNodeDescriptor findMeshNodeDescriptor(
-        ZLinkMeshNodeDescriptorKey key,
-        long lifecycleGeneration,
-        ZLinkLocationOwnerToken owner) {
+            ZLinkMeshNodeDescriptorKey key,
+            long lifecycleGeneration,
+            ZLinkLocationOwnerToken owner) {
         return meshNodes.rows.get(meshNodeKey(key));
     }
 
-    private static String meshNodeKey(
-        ZLinkMeshNodeDescriptorKey key) {
+    private static String meshNodeKey(ZLinkMeshNodeDescriptorKey key) {
         return key.meshName().length()
-            + ":"
-            + key.meshName()
-            + key.rid().toHex().length()
-            + ":"
-            + key.rid().toHex();
+                + ":"
+                + key.meshName()
+                + key.rid().toHex().length()
+                + ":"
+                + key.rid().toHex();
     }
 
-    private static String fanoutPublisherKey(
-        ZLinkFanoutPublisherDescriptorKey key) {
+    private static String fanoutPublisherKey(ZLinkFanoutPublisherDescriptorKey key) {
         return ZLinkLocationKeyCodec.encodeFanoutPublisherKey(key);
     }
 
-    private static void validateFanoutDescriptor(
-        ZLinkFanoutPublisherDescriptor descriptor) {
+    private static void validateFanoutDescriptor(ZLinkFanoutPublisherDescriptor descriptor) {
         if (descriptor.channelName() == null
-            || descriptor.channelName().isBlank()
-            || descriptor.publisherRid() == null
-            || descriptor.endpoint() == null
-            || descriptor.endpoint().isBlank()
-            || descriptor.securityIdentity() == null
-            || descriptor.securityIdentity().isBlank()
-            || descriptor.ownerId() == null
-            || descriptor.ownerId().isBlank()) {
+                || descriptor.channelName().isBlank()
+                || descriptor.publisherRid() == null
+                || descriptor.endpoint() == null
+                || descriptor.endpoint().isBlank()
+                || descriptor.securityIdentity() == null
+                || descriptor.securityIdentity().isBlank()
+                || descriptor.ownerId() == null
+                || descriptor.ownerId().isBlank()) {
             throw new IllegalArgumentException(
-                "fanout descriptor identity and endpoint are required");
+                    "fanout descriptor identity and endpoint are required");
         }
-        if (descriptor.lifecycleGeneration() < 1
-            || descriptor.descriptorRevision() < 1) {
-            throw new IllegalArgumentException(
-                "fanout descriptor generations must be positive");
+        if (descriptor.lifecycleGeneration() < 1 || descriptor.descriptorRevision() < 1) {
+            throw new IllegalArgumentException("fanout descriptor generations must be positive");
         }
         if (descriptor.leaseGeneration() == 0) {
             throw new IllegalArgumentException(
-                "fanout descriptor lease generation must be non-zero");
+                    "fanout descriptor lease generation must be non-zero");
         }
     }
 
     private static ZLinkFanoutPublisherDescriptor copyFanoutDescriptor(
-        ZLinkFanoutPublisherDescriptor descriptor,
-        Instant updatedAt) {
+            ZLinkFanoutPublisherDescriptor descriptor, Instant updatedAt) {
         return new ZLinkFanoutPublisherDescriptor(
-            descriptor.channelName(),
-            descriptor.publisherRid(),
-            descriptor.lifecycleGeneration(),
-            descriptor.descriptorRevision(),
-            descriptor.endpoint(),
-            descriptor.state(),
-            descriptor.securityIdentity(),
-            descriptor.ownerId(),
-            descriptor.leaseGeneration(),
-            updatedAt);
+                descriptor.channelName(),
+                descriptor.publisherRid(),
+                descriptor.lifecycleGeneration(),
+                descriptor.descriptorRevision(),
+                descriptor.endpoint(),
+                descriptor.state(),
+                descriptor.securityIdentity(),
+                descriptor.ownerId(),
+                descriptor.leaseGeneration(),
+                updatedAt);
     }
 
     private static boolean hasSameImmutableFanoutDescriptorFields(
-        ZLinkFanoutPublisherDescriptor current,
-        ZLinkFanoutPublisherDescriptor candidate) {
+            ZLinkFanoutPublisherDescriptor current, ZLinkFanoutPublisherDescriptor candidate) {
         return current.channelName().equals(candidate.channelName())
-            && current.publisherRid().equals(candidate.publisherRid())
-            && current.lifecycleGeneration()
-                == candidate.lifecycleGeneration()
-            && current.endpoint().equals(candidate.endpoint())
-            && current.securityIdentity().equals(
-                candidate.securityIdentity())
-            && current.ownerId().equals(candidate.ownerId())
-            && current.leaseGeneration() == candidate.leaseGeneration();
+                && current.publisherRid().equals(candidate.publisherRid())
+                && current.lifecycleGeneration() == candidate.lifecycleGeneration()
+                && current.endpoint().equals(candidate.endpoint())
+                && current.securityIdentity().equals(candidate.securityIdentity())
+                && current.ownerId().equals(candidate.ownerId())
+                && current.leaseGeneration() == candidate.leaseGeneration();
     }
 
     private static boolean hasSameFanoutDescriptorFields(
-        ZLinkFanoutPublisherDescriptor current,
-        ZLinkFanoutPublisherDescriptor candidate) {
+            ZLinkFanoutPublisherDescriptor current, ZLinkFanoutPublisherDescriptor candidate) {
         return hasSameImmutableFanoutDescriptorFields(current, candidate)
-            && current.descriptorRevision()
-                == candidate.descriptorRevision()
-            && current.state() == candidate.state();
+                && current.descriptorRevision() == candidate.descriptorRevision()
+                && current.state() == candidate.state();
     }
 
     private static ZLinkMeshNodeDescriptor copyDescriptor(
-        ZLinkMeshNodeDescriptor descriptor,
-        Instant updatedAt) {
+            ZLinkMeshNodeDescriptor descriptor, Instant updatedAt) {
         return new ZLinkMeshNodeDescriptor(
-            descriptor.meshName(),
-            descriptor.rid(),
-            descriptor.lifecycleGeneration(),
-            descriptor.descriptorRevision(),
-            descriptor.endpoint(),
-            descriptor.channelWeights(),
-            descriptor.applicationVersion(),
-            descriptor.objectCapabilities(),
-            descriptor.objectRole(),
-            descriptor.entrySpotId(),
-            descriptor.placementWeight(),
-            descriptor.capacity(),
-            descriptor.activationConcurrency(),
-            descriptor.maintenanceWave(),
-            descriptor.state(),
-            descriptor.securityIdentity(),
-            descriptor.ownerId(),
-            descriptor.leaseGeneration(),
-            updatedAt);
+                descriptor.meshName(),
+                descriptor.rid(),
+                descriptor.lifecycleGeneration(),
+                descriptor.descriptorRevision(),
+                descriptor.endpoint(),
+                descriptor.channelWeights(),
+                descriptor.applicationVersion(),
+                descriptor.objectCapabilities(),
+                descriptor.objectRole(),
+                descriptor.entrySpotId(),
+                descriptor.placementWeight(),
+                descriptor.capacity(),
+                descriptor.activationConcurrency(),
+                descriptor.maintenanceWave(),
+                descriptor.state(),
+                descriptor.securityIdentity(),
+                descriptor.ownerId(),
+                descriptor.leaseGeneration(),
+                updatedAt);
     }
 
-    private ZLinkMeshNodeDescriptor projectCapacity(
-        ZLinkMeshNodeDescriptor descriptor) {
-        var key = new ZLinkMeshNodeDescriptorKey(
-            descriptor.meshName(), descriptor.rid());
-        long[] actors = authority.kindCapacity(
-            key, descriptor.lifecycleGeneration(), true);
-        long[] spots = authority.kindCapacity(
-            key, descriptor.lifecycleGeneration(), false);
-        var spotTypes = descriptor.objectCapabilities().stream()
-            .filter(capability ->
-                capability.objectKind()
-                    != ZLinkPlacementObjectKind.ACTOR)
-            .map(capability -> {
-                long[] usage = authority.typeCapacity(
-                    key,
-                    descriptor.lifecycleGeneration(),
-                    capability.objectKind(),
-                    capability.stableType());
-                return new ZLinkSpotTypeCapacity(
-                    capability.objectKind(),
-                    capability.stableType(),
-                    new ZLinkCapacityUsage(
-                        Math.toIntExact(usage[0]),
-                        Math.toIntExact(usage[1]),
-                        capability.spotLimit()));
-            })
-            .toList();
+    private ZLinkMeshNodeDescriptor projectCapacity(ZLinkMeshNodeDescriptor descriptor) {
+        var key = new ZLinkMeshNodeDescriptorKey(descriptor.meshName(), descriptor.rid());
+        long[] actors = authority.kindCapacity(key, descriptor.lifecycleGeneration(), true);
+        long[] spots = authority.kindCapacity(key, descriptor.lifecycleGeneration(), false);
+        var spotTypes =
+                descriptor.objectCapabilities().stream()
+                        .filter(
+                                capability ->
+                                        capability.objectKind() != ZLinkPlacementObjectKind.ACTOR)
+                        .map(
+                                capability -> {
+                                    long[] usage =
+                                            authority.typeCapacity(
+                                                    key,
+                                                    descriptor.lifecycleGeneration(),
+                                                    capability.objectKind(),
+                                                    capability.stableType());
+                                    return new ZLinkSpotTypeCapacity(
+                                            capability.objectKind(),
+                                            capability.stableType(),
+                                            new ZLinkCapacityUsage(
+                                                    Math.toIntExact(usage[0]),
+                                                    Math.toIntExact(usage[1]),
+                                                    capability.spotLimit()));
+                                })
+                        .toList();
         return new ZLinkMeshNodeDescriptor(
-            descriptor.meshName(),
-            descriptor.rid(),
-            descriptor.lifecycleGeneration(),
-            descriptor.descriptorRevision(),
-            descriptor.endpoint(),
-            descriptor.channelWeights(),
-            descriptor.applicationVersion(),
-            descriptor.objectCapabilities(),
-            descriptor.objectRole(),
-            descriptor.entrySpotId(),
-            descriptor.placementWeight(),
-            new ZLinkPlacementCapacity(
-                new ZLinkCapacityUsage(
-                    Math.toIntExact(actors[0]),
-                    Math.toIntExact(actors[1]),
-                    descriptor.capacity().actors().limit()),
-                new ZLinkCapacityUsage(
-                    Math.toIntExact(spots[0]),
-                    Math.toIntExact(spots[1]),
-                    descriptor.capacity().spots().limit()),
-                spotTypes),
-            descriptor.activationConcurrency(),
-            descriptor.maintenanceWave(),
-            descriptor.state(),
-            descriptor.securityIdentity(),
-            descriptor.ownerId(),
-            descriptor.leaseGeneration(),
-            descriptor.updatedAt());
+                descriptor.meshName(),
+                descriptor.rid(),
+                descriptor.lifecycleGeneration(),
+                descriptor.descriptorRevision(),
+                descriptor.endpoint(),
+                descriptor.channelWeights(),
+                descriptor.applicationVersion(),
+                descriptor.objectCapabilities(),
+                descriptor.objectRole(),
+                descriptor.entrySpotId(),
+                descriptor.placementWeight(),
+                new ZLinkPlacementCapacity(
+                        new ZLinkCapacityUsage(
+                                Math.toIntExact(actors[0]),
+                                Math.toIntExact(actors[1]),
+                                descriptor.capacity().actors().limit()),
+                        new ZLinkCapacityUsage(
+                                Math.toIntExact(spots[0]),
+                                Math.toIntExact(spots[1]),
+                                descriptor.capacity().spots().limit()),
+                        spotTypes),
+                descriptor.activationConcurrency(),
+                descriptor.maintenanceWave(),
+                descriptor.state(),
+                descriptor.securityIdentity(),
+                descriptor.ownerId(),
+                descriptor.leaseGeneration(),
+                descriptor.updatedAt());
     }
 
     private static boolean hasSameImmutableDescriptorFields(
-        ZLinkMeshNodeDescriptor current,
-        ZLinkMeshNodeDescriptor candidate) {
+            ZLinkMeshNodeDescriptor current, ZLinkMeshNodeDescriptor candidate) {
         return current.meshName().equals(candidate.meshName())
-            && current.rid().equals(candidate.rid())
-            && current.lifecycleGeneration()
-                == candidate.lifecycleGeneration()
-            && current.endpoint().equals(candidate.endpoint())
-            && current.channelWeights().keySet().equals(
-                candidate.channelWeights().keySet())
-            && current.applicationVersion()
-                == candidate.applicationVersion()
-            && hasSameImmutableCapabilities(
-                current.objectCapabilities(),
-                candidate.objectCapabilities())
-            && current.objectRole() == candidate.objectRole()
-            && current.entrySpotId().equals(candidate.entrySpotId())
-            && current.capacity().actors().limit()
-                == candidate.capacity().actors().limit()
-            && current.capacity().spots().limit()
-                == candidate.capacity().spots().limit()
-            && current.securityIdentity().equals(
-                candidate.securityIdentity())
-            && current.ownerId().equals(candidate.ownerId())
-            && current.leaseGeneration()
-                == candidate.leaseGeneration();
+                && current.rid().equals(candidate.rid())
+                && current.lifecycleGeneration() == candidate.lifecycleGeneration()
+                && current.endpoint().equals(candidate.endpoint())
+                && current.channelWeights().keySet().equals(candidate.channelWeights().keySet())
+                && current.applicationVersion() == candidate.applicationVersion()
+                && hasSameImmutableCapabilities(
+                        current.objectCapabilities(), candidate.objectCapabilities())
+                && current.objectRole() == candidate.objectRole()
+                && current.entrySpotId().equals(candidate.entrySpotId())
+                && current.capacity().actors().limit() == candidate.capacity().actors().limit()
+                && current.capacity().spots().limit() == candidate.capacity().spots().limit()
+                && current.securityIdentity().equals(candidate.securityIdentity())
+                && current.ownerId().equals(candidate.ownerId())
+                && current.leaseGeneration() == candidate.leaseGeneration();
     }
 
     private static boolean hasSameImmutableCapabilities(
-        List<ZLinkObjectCapability> current,
-        List<ZLinkObjectCapability> candidate) {
+            List<ZLinkObjectCapability> current, List<ZLinkObjectCapability> candidate) {
         if (current.size() != candidate.size()) {
             return false;
         }
@@ -995,11 +924,10 @@ public final class ZLinkInMemoryLocationStore
             var left = current.get(index);
             var right = candidate.get(index);
             if (left.objectKind() != right.objectKind()
-                || !left.stableType().equals(right.stableType())
-                || left.policy() != right.policy()
-                || left.hasSnapshotAdapter()
-                    != right.hasSnapshotAdapter()
-                || left.spotLimit() != right.spotLimit()) {
+                    || !left.stableType().equals(right.stableType())
+                    || left.policy() != right.policy()
+                    || left.hasSnapshotAdapter() != right.hasSnapshotAdapter()
+                    || left.spotLimit() != right.spotLimit()) {
                 return false;
             }
         }
@@ -1007,31 +935,23 @@ public final class ZLinkInMemoryLocationStore
     }
 
     private static boolean hasSameDescriptorFields(
-        ZLinkMeshNodeDescriptor current,
-        ZLinkMeshNodeDescriptor candidate) {
+            ZLinkMeshNodeDescriptor current, ZLinkMeshNodeDescriptor candidate) {
         return current.meshName().equals(candidate.meshName())
-            && current.rid().equals(candidate.rid())
-            && current.lifecycleGeneration()
-                == candidate.lifecycleGeneration()
-            && current.descriptorRevision()
-                == candidate.descriptorRevision()
-            && current.endpoint().equals(candidate.endpoint())
-            && current.channelWeights().equals(candidate.channelWeights())
-            && current.applicationVersion()
-                == candidate.applicationVersion()
-            && current.objectCapabilities().equals(
-                candidate.objectCapabilities())
-            && current.objectRole() == candidate.objectRole()
-            && current.placementWeight() == candidate.placementWeight()
-            && current.capacity().equals(candidate.capacity())
-            && current.maintenanceWave().equals(
-                candidate.maintenanceWave())
-            && current.state() == candidate.state()
-            && current.securityIdentity().equals(
-                candidate.securityIdentity())
-            && current.ownerId().equals(candidate.ownerId())
-            && current.leaseGeneration()
-                == candidate.leaseGeneration();
+                && current.rid().equals(candidate.rid())
+                && current.lifecycleGeneration() == candidate.lifecycleGeneration()
+                && current.descriptorRevision() == candidate.descriptorRevision()
+                && current.endpoint().equals(candidate.endpoint())
+                && current.channelWeights().equals(candidate.channelWeights())
+                && current.applicationVersion() == candidate.applicationVersion()
+                && current.objectCapabilities().equals(candidate.objectCapabilities())
+                && current.objectRole() == candidate.objectRole()
+                && current.placementWeight() == candidate.placementWeight()
+                && current.capacity().equals(candidate.capacity())
+                && current.maintenanceWave().equals(candidate.maintenanceWave())
+                && current.state() == candidate.state()
+                && current.securityIdentity().equals(candidate.securityIdentity())
+                && current.ownerId().equals(candidate.ownerId())
+                && current.leaseGeneration() == candidate.leaseGeneration();
     }
 
     private boolean isSpotIdentityClaimed(String authorityKey) {
@@ -1073,24 +993,15 @@ public final class ZLinkInMemoryLocationStore
         private final Map<String, Long> generations = new HashMap<>();
     }
 
-    private record LeaseRow(
-        ZLinkLocationOwnerToken token,
-        Instant expiresAt) {
-    }
+    private record LeaseRow(ZLinkLocationOwnerToken token, Instant expiresAt) {}
 
     private record EntrySpotClaim(
-        String descriptorKey,
-        long lifecycleGeneration,
-        ZLinkLocationOwnerToken owner) {
-        private boolean matches(
-            String expectedDescriptorKey,
-            ZLinkMeshNodeDescriptor descriptor) {
+            String descriptorKey, long lifecycleGeneration, ZLinkLocationOwnerToken owner) {
+        private boolean matches(String expectedDescriptorKey, ZLinkMeshNodeDescriptor descriptor) {
             return descriptorKey.equals(expectedDescriptorKey)
-                && lifecycleGeneration
-                    == descriptor.lifecycleGeneration()
-                && owner.ownerId().equals(descriptor.ownerId())
-                && owner.leaseGeneration()
-                    == descriptor.leaseGeneration();
+                    && lifecycleGeneration == descriptor.lifecycleGeneration()
+                    && owner.ownerId().equals(descriptor.ownerId())
+                    && owner.leaseGeneration() == descriptor.leaseGeneration();
         }
     }
 }

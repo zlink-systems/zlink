@@ -16,7 +16,8 @@ internal sealed record ZLinkAutoConnectLocal(
     RoutingId? NodeRid,
     string Endpoint,
     ZLinkMeshNodeObjectRole ObjectRole = ZLinkMeshNodeObjectRole.None,
-    bool HasServerChannel = false);
+    bool HasServerChannel = false
+);
 
 /// <summary>
 /// One connect target chosen by the planner, keyed by the descriptor RID so
@@ -31,7 +32,8 @@ internal sealed record ZLinkAutoConnectTarget(
     bool InitiatesConnection = true,
     ulong LifecycleGeneration = 0,
     long OwnerLeaseGeneration = 0,
-    DateTimeOffset UpdatedAt = default);
+    DateTimeOffset UpdatedAt = default
+);
 
 /// <summary>
 /// Pure desired-target-set computation over a mesh descriptor snapshot,
@@ -42,15 +44,18 @@ internal static class ZLinkAutoConnectPlanner
 {
     internal static IReadOnlyDictionary<RoutingId, ZLinkAutoConnectTarget> ComputeDesired(
         ZLinkAutoConnectLocal local,
-        IReadOnlyList<ZLinkMeshNodeDescriptor> descriptors)
+        IReadOnlyList<ZLinkMeshNodeDescriptor> descriptors
+    )
     {
         var desired = new Dictionary<RoutingId, ZLinkAutoConnectTarget>();
         foreach (var descriptor in descriptors)
         {
-            if (!string.Equals(descriptor.MeshName, local.MeshName.Value, StringComparison.Ordinal)
+            if (
+                !string.Equals(descriptor.MeshName, local.MeshName.Value, StringComparison.Ordinal)
                 || string.IsNullOrEmpty(descriptor.Endpoint)
                 || IsSelf(local, descriptor)
-                || !ShouldDial(local, descriptor))
+                || !ShouldDial(local, descriptor)
+            )
             {
                 continue;
             }
@@ -61,14 +66,17 @@ internal static class ZLinkAutoConnectPlanner
                 descriptor.SecurityIdentity,
                 descriptor.State == ZLinkFrameworkRuntimeState.Draining,
                 descriptor.OwnerId,
-                local.AutoConnectType is not (
-                    ZLinkLocationAutoConnectType.RouteMesh
-                    or ZLinkLocationAutoConnectType.DealerMesh
-                    or ZLinkLocationAutoConnectType.SpotMesh)
-                || LocalIsInitiator(local, descriptor),
+                local.AutoConnectType
+                    is not (
+                        ZLinkLocationAutoConnectType.RouteMesh
+                        or ZLinkLocationAutoConnectType.DealerMesh
+                        or ZLinkLocationAutoConnectType.SpotMesh
+                    )
+                    || LocalIsInitiator(local, descriptor),
                 descriptor.LifecycleGeneration,
                 descriptor.LeaseGeneration,
-                descriptor.UpdatedAt);
+                descriptor.UpdatedAt
+            );
             desired[target.NodeRid] = target;
         }
 
@@ -77,12 +85,14 @@ internal static class ZLinkAutoConnectPlanner
 
     internal static int CountDiscoveredPeers(
         ZLinkAutoConnectLocal local,
-        IReadOnlyList<ZLinkMeshNodeDescriptor> descriptors)
+        IReadOnlyList<ZLinkMeshNodeDescriptor> descriptors
+    )
     {
         return descriptors.Count(descriptor =>
             string.Equals(descriptor.MeshName, local.MeshName.Value, StringComparison.Ordinal)
             && !string.IsNullOrEmpty(descriptor.Endpoint)
-            && !IsSelf(local, descriptor));
+            && !IsSelf(local, descriptor)
+        );
     }
 
     private static bool IsSelf(ZLinkAutoConnectLocal local, ZLinkMeshNodeDescriptor descriptor)
@@ -103,22 +113,24 @@ internal static class ZLinkAutoConnectPlanner
     /// dialing creates two links for one routing id and breaks
     /// rid-addressed requests.
     /// </summary>
-    private static bool ShouldDial(ZLinkAutoConnectLocal local, ZLinkMeshNodeDescriptor descriptor) =>
+    private static bool ShouldDial(
+        ZLinkAutoConnectLocal local,
+        ZLinkMeshNodeDescriptor descriptor
+    ) =>
         local.AutoConnectType switch
         {
-            ZLinkLocationAutoConnectType.RouteMesh =>
-                local.Role == ZLinkLocationRole.Router
+            ZLinkLocationAutoConnectType.RouteMesh => local.Role == ZLinkLocationRole.Router
                 && !ZLinkRouteMeshConnectionPolicy.IsNotRequired(
                     local.ObjectRole,
                     local.HasServerChannel,
                     descriptor.ObjectRole,
-                    descriptor.ChannelWeights.Count != 0),
+                    descriptor.ChannelWeights.Count != 0
+                ),
             ZLinkLocationAutoConnectType.ClientServer => local.Role == ZLinkLocationRole.Dealer,
-            ZLinkLocationAutoConnectType.DealerMesh =>
-                local.Role == ZLinkLocationRole.Dealer,
+            ZLinkLocationAutoConnectType.DealerMesh => local.Role == ZLinkLocationRole.Dealer,
             ZLinkLocationAutoConnectType.Fanout => local.Role == ZLinkLocationRole.Sub,
             ZLinkLocationAutoConnectType.SpotMesh => local.Role == ZLinkLocationRole.Spot,
-            _ => false
+            _ => false,
         };
 
     /// <summary>
@@ -128,7 +140,10 @@ internal static class ZLinkAutoConnectPlanner
     /// with no endpoint cannot be dialed, so it always initiates toward
     /// dialable peers regardless of the order.
     /// </summary>
-    private static bool LocalIsInitiator(ZLinkAutoConnectLocal local, ZLinkMeshNodeDescriptor descriptor)
+    private static bool LocalIsInitiator(
+        ZLinkAutoConnectLocal local,
+        ZLinkMeshNodeDescriptor descriptor
+    )
     {
         if (string.IsNullOrEmpty(local.Endpoint))
         {

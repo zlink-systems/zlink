@@ -1,8 +1,4 @@
-import type {
-  Type,
-  ZLinkActor,
-  ZLinkMessageSerializer,
-} from '../../contracts';
+import type { Type, ZLinkActor, ZLinkMessageSerializer } from '../../contracts';
 import type { ZLinkActorRelocationAdapter } from '../../contracts/Configuration/ObjectRoles';
 import type { ZLinkSpotNodeOptions } from '../../contracts/Configuration/RegistrationTypes';
 import type { ZLinkProviderResolver } from '../../contracts/Common/ZLinkProviderResolver';
@@ -45,17 +41,14 @@ export class ZLinkActorTransferRegistry {
     signal?: AbortSignal
   ): Promise<ZLinkActorTransferPayloadState> {
     throwIfAborted(signal);
-    const adapterType = actorType === undefined
-      ? undefined
-      : this.byKey.get(actorType);
+    const adapterType = actorType === undefined ? undefined : this.byKey.get(actorType);
     if (adapterType === undefined) {
       return { state: emptyTransferState(this.messageSerializers) };
     }
-    const adapter = await this.createAdapter(adapterType) as ZLinkActorRelocationAdapter<ZLinkActor>;
-    const state = await adapter.capture(
-      actor,
-      signal ?? new AbortController().signal
-    );
+    const adapter = (await this.createAdapter(
+      adapterType
+    )) as ZLinkActorRelocationAdapter<ZLinkActor>;
+    const state = await adapter.capture(actor, signal ?? new AbortController().signal);
     if (!(state instanceof Uint8Array)) {
       throw new Error(
         `Actor relocation adapter '${adapterType.name}' returned invalid state bytes.`
@@ -84,7 +77,9 @@ export class ZLinkActorTransferRegistry {
         `Actor relocation adapter for stable type '${adapterKey}' is not registered on the target node.`
       );
     }
-    const adapter = await this.createAdapter(adapterType) as ZLinkActorRelocationAdapter<ZLinkActor>;
+    const adapter = (await this.createAdapter(
+      adapterType
+    )) as ZLinkActorRelocationAdapter<ZLinkActor>;
     await adapter.restore(
       actor,
       state.toEncodedPayload().toBytes(),

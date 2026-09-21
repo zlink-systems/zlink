@@ -46,10 +46,12 @@ export class ZLinkSessionSerialExecutor {
 
   executeFinal(work: () => Promise<void>): Promise<void> {
     if (this.closed) {
-      return Promise.reject(createInternalFrameworkException(
-        ZLinkFrameworkInternalErrorKind.RuntimeShutdown,
-        'Session execution queue is closed.'
-      ));
+      return Promise.reject(
+        createInternalFrameworkException(
+          ZLinkFrameworkInternalErrorKind.RuntimeShutdown,
+          'Session execution queue is closed.'
+        )
+      );
     }
     const boundWork = bindApplicationJobPermit(work);
     return hasApplicationJobPermit()
@@ -69,8 +71,7 @@ export class ZLinkSessionSerialExecutor {
     const submitted = hasApplicationJobPermit()
       ? this.scheduler.submitPreAdmitted(boundWork, serialOptions)
       : this.scheduler.submit(boundWork, serialOptions);
-    void submitted
-      .catch(error => onRejected?.(error));
+    void submitted.catch((error) => onRejected?.(error));
     return true;
   }
 

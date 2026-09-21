@@ -35,8 +35,7 @@ struct fanout_publisher_connection_snapshot_t
     std::uint64_t lifecycle_generation = 0;
     bool connection_intent = false;
     bool ready = false;
-    fanout_publisher_connection_state_t state =
-      fanout_publisher_connection_state_t::disconnected;
+    fanout_publisher_connection_state_t state = fanout_publisher_connection_state_t::disconnected;
     std::optional<std::string> last_failure;
 
     friend bool operator== (const fanout_publisher_connection_snapshot_t &,
@@ -59,39 +58,30 @@ struct fanout_channel_snapshot_t
 
 struct fanout_publisher_changed_event_t
 {
-    static constexpr std::string_view event_identifier =
-      "zlink.runtime.fanout.publisher_changed";
+    static constexpr std::string_view event_identifier = "zlink.runtime.fanout.publisher_changed";
 
     std::uint64_t sequence = 0;
     std::chrono::system_clock::time_point timestamp{};
     std::string channel_name;
     fanout_publisher_connection_snapshot_t entry;
 
-    constexpr std::string_view identifier () const noexcept
-    {
-        return event_identifier;
-    }
+    constexpr std::string_view identifier () const noexcept { return event_identifier; }
 };
 
 struct fanout_location_changed_event_t
 {
-    static constexpr std::string_view event_identifier =
-      "zlink.runtime.location.store_changed";
+    static constexpr std::string_view event_identifier = "zlink.runtime.location.store_changed";
 
     std::uint64_t sequence = 0;
     std::chrono::system_clock::time_point timestamp{};
     std::string channel_name;
     location_runtime_snapshot_t location;
 
-    constexpr std::string_view identifier () const noexcept
-    {
-        return event_identifier;
-    }
+    constexpr std::string_view identifier () const noexcept { return event_identifier; }
 };
 
-using fanout_runtime_event_t = std::variant<
-  fanout_publisher_changed_event_t,
-  fanout_location_changed_event_t>;
+using fanout_runtime_event_t =
+  std::variant<fanout_publisher_changed_event_t, fanout_location_changed_event_t>;
 
 class fanout_runtime_observation_t
 {
@@ -105,13 +95,11 @@ class fanout_runtime_t
   public:
     virtual ~fanout_runtime_t () = default;
 
-    virtual fanout_channel_snapshot_t snapshot (
-      std::string channel_name) const = 0;
-    virtual std::unique_ptr<fanout_runtime_observation_t> observe (
-      std::string channel_name,
-      std::size_t capacity,
-      std::function<void (
-        const observed_status_t<fanout_runtime_event_t> &)> observer) = 0;
+    virtual fanout_channel_snapshot_t snapshot (std::string channel_name) const = 0;
+    virtual std::unique_ptr<fanout_runtime_observation_t>
+    observe (std::string channel_name,
+             std::size_t capacity,
+             std::function<void (const observed_status_t<fanout_runtime_event_t> &)> observer) = 0;
 };
 
 } // namespace zlink::framework

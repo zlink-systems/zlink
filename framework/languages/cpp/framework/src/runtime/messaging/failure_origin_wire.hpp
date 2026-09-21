@@ -12,11 +12,9 @@
 namespace zlink::framework::runtime::messaging
 {
 
-inline constexpr std::string_view failure_origin_metadata_key =
-  "__zlink.failureOrigin";
+inline constexpr std::string_view failure_origin_metadata_key = "__zlink.failureOrigin";
 
-inline std::string_view failure_origin_wire_name (
-  detail::failure_origin_t origin) noexcept
+inline std::string_view failure_origin_wire_name (detail::failure_origin_t origin) noexcept
 {
     switch (origin) {
         case detail::failure_origin_t::payload_encode:
@@ -31,8 +29,7 @@ inline std::string_view failure_origin_wire_name (
     return {};
 }
 
-inline detail::failure_origin_t failure_origin_from_wire (
-  std::string_view value) noexcept
+inline detail::failure_origin_t failure_origin_from_wire (std::string_view value) noexcept
 {
     if (value == "payload_encode")
         return detail::failure_origin_t::payload_encode;
@@ -43,15 +40,12 @@ inline detail::failure_origin_t failure_origin_from_wire (
     return detail::failure_origin_t::none;
 }
 
-inline void write_failure_origin (
-  envelope_header_t &header,
-  const framework_exception_t &error)
+inline void write_failure_origin (envelope_header_t &header, const framework_exception_t &error)
 {
-    const auto name = failure_origin_wire_name (
-      detail::failure_origin (error));
+    const auto name = failure_origin_wire_name (detail::failure_origin (error));
     if (!name.empty ())
-        header.metadata.insert_or_assign (
-          std::string (failure_origin_metadata_key), std::string (name));
+        header.metadata.insert_or_assign (std::string (failure_origin_metadata_key),
+                                          std::string (name));
 }
 
 /* Framework-origin error marker: attached only to error replies the
@@ -75,19 +69,16 @@ inline bool has_framework_origin (const std::map<std::string, std::string> &meta
     return found != metadata.end () && found->second == framework_origin_metadata_value;
 }
 
-inline framework_exception_t restore_failure_origin (
-  const envelope_header_t &header,
-  framework_exception_t error)
+inline framework_exception_t restore_failure_origin (const envelope_header_t &header,
+                                                     framework_exception_t error)
 {
-    const auto found = header.metadata.find (
-      std::string (failure_origin_metadata_key));
+    const auto found = header.metadata.find (std::string (failure_origin_metadata_key));
     if (found == header.metadata.end ())
         return error;
     const auto origin = failure_origin_from_wire (found->second);
     return origin == detail::failure_origin_t::none
-      ? error
-      : detail::make_origin_exception (
-          error.kind (), origin, error.what ());
+             ? error
+             : detail::make_origin_exception (error.kind (), origin, error.what ());
 }
 
 } // namespace zlink::framework::runtime::messaging

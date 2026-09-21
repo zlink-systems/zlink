@@ -24,8 +24,7 @@ namespace zlink::framework::runtime
 
 struct application_job_queue_configuration_t
 {
-    application_job_queue_profile_t configured_profile =
-      application_job_queue_profile_t::balanced;
+    application_job_queue_profile_t configured_profile = application_job_queue_profile_t::balanced;
     std::optional<std::uint32_t> configured_manual_max;
     std::uint32_t effective_processor_count = 1;
     std::uint32_t effective_max_queued_application_jobs = 1;
@@ -75,19 +74,17 @@ class application_job_queue_t
     struct receive_flow_socket_entry_t
     {
         explicit receive_flow_socket_entry_t (
-          std::function<receive_flow_state_apply_result_t (
-            application_job_queue_pressure_state_t)> configured_setter) :
+          std::function<receive_flow_state_apply_result_t (application_job_queue_pressure_state_t)>
+            configured_setter) :
             setter (std::move (configured_setter))
         {
         }
 
-        receive_flow_state_apply_result_t apply (
-          application_job_queue_pressure_state_t state,
-          std::uint64_t sequence) noexcept
+        receive_flow_state_apply_result_t apply (application_job_queue_pressure_state_t state,
+                                                 std::uint64_t sequence) noexcept
         {
             std::lock_guard lock (mutex);
-            if (closing
-                || close_requested.load (std::memory_order_acquire))
+            if (closing || close_requested.load (std::memory_order_acquire))
                 return receive_flow_state_apply_result_t::closing_invalid_state;
             if (has_applied) {
                 if (sequence <= last_applied_sequence)
@@ -104,8 +101,7 @@ class application_job_queue_t
             catch (...) {
                 result = receive_flow_state_apply_result_t::failed;
             }
-            if (result
-                == receive_flow_state_apply_result_t::invalid_state) {
+            if (result == receive_flow_state_apply_result_t::invalid_state) {
                 if (close_requested.load (std::memory_order_acquire))
                     result = receive_flow_state_apply_result_t::closing_invalid_state;
             }
@@ -125,14 +121,11 @@ class application_job_queue_t
             setter = {};
         }
 
-        void request_close () noexcept
-        {
-            close_requested.store (true, std::memory_order_release);
-        }
+        void request_close () noexcept { close_requested.store (true, std::memory_order_release); }
 
         std::mutex mutex;
-        std::function<receive_flow_state_apply_result_t (
-          application_job_queue_pressure_state_t)> setter;
+        std::function<receive_flow_state_apply_result_t (application_job_queue_pressure_state_t)>
+          setter;
         std::uint64_t last_applied_sequence = 0;
         application_job_queue_pressure_state_t last_applied_state =
           application_job_queue_pressure_state_t::running;
@@ -164,10 +157,7 @@ class application_job_queue_t
         permit_t () = default;
         ~permit_t () { release_without_handler (); }
 
-        permit_t (permit_t &&other) noexcept :
-            _state (std::move (other._state))
-        {
-        }
+        permit_t (permit_t &&other) noexcept : _state (std::move (other._state)) {}
 
         permit_t &operator= (permit_t &&other) noexcept
         {
@@ -181,10 +171,7 @@ class application_job_queue_t
         permit_t (const permit_t &) = delete;
         permit_t &operator= (const permit_t &) = delete;
 
-        explicit operator bool () const noexcept
-        {
-            return static_cast<bool> (_state);
-        }
+        explicit operator bool () const noexcept { return static_cast<bool> (_state); }
 
         void mark_queued ()
         {
@@ -205,10 +192,7 @@ class application_job_queue_t
       private:
         friend class application_job_queue_t;
 
-        explicit permit_t (std::shared_ptr<permit_state_t> state) :
-            _state (std::move (state))
-        {
-        }
+        explicit permit_t (std::shared_ptr<permit_state_t> state) : _state (std::move (state)) {}
 
         std::shared_ptr<state_t> owner_state () const noexcept
         {
@@ -223,19 +207,16 @@ class application_job_queue_t
             auto owner = permit->owner.lock ();
             if (!owner)
                 return;
-            application_job_queue_t::release_permit (
-              std::move (owner), std::move (permit));
+            application_job_queue_t::release_permit (std::move (owner), std::move (permit));
         }
 
         std::shared_ptr<permit_state_t> _state;
     };
 
-    using supply_callback_t =
-      std::function<void (std::optional<permit_t>)>;
+    using supply_callback_t = std::function<void (std::optional<permit_t>)>;
 
-    using receive_flow_state_setter_t = std::function<
-      receive_flow_state_apply_result_t (
-        application_job_queue_pressure_state_t)>;
+    using receive_flow_state_setter_t =
+      std::function<receive_flow_state_apply_result_t (application_job_queue_pressure_state_t)>;
 
     // The host wires this to its existing diagnostics sink. The queue keeps
     // the metric and diagnostic callback at the same failure boundary; the
@@ -248,44 +229,34 @@ class application_job_queue_t
         receive_flow_registration_t () = default;
         ~receive_flow_registration_t () { close (); }
 
-        receive_flow_registration_t (
-          receive_flow_registration_t &&other) noexcept :
+        receive_flow_registration_t (receive_flow_registration_t &&other) noexcept :
             _owner (std::move (other._owner)),
             _entry (std::move (other._entry)),
-            _registration_id (
-              std::exchange (other._registration_id, 0))
+            _registration_id (std::exchange (other._registration_id, 0))
         {
         }
 
-        receive_flow_registration_t &operator= (
-          receive_flow_registration_t &&other) noexcept
+        receive_flow_registration_t &operator= (receive_flow_registration_t &&other) noexcept
         {
             if (this != &other) {
                 close ();
                 _owner = std::move (other._owner);
                 _entry = std::move (other._entry);
-                _registration_id =
-                  std::exchange (other._registration_id, 0);
+                _registration_id = std::exchange (other._registration_id, 0);
             }
             return *this;
         }
 
-        receive_flow_registration_t (
-          const receive_flow_registration_t &) = delete;
-        receive_flow_registration_t &operator= (
-          const receive_flow_registration_t &) = delete;
+        receive_flow_registration_t (const receive_flow_registration_t &) = delete;
+        receive_flow_registration_t &operator= (const receive_flow_registration_t &) = delete;
 
-        explicit operator bool () const noexcept
-        {
-            return _registration_id != 0;
-        }
+        explicit operator bool () const noexcept { return _registration_id != 0; }
 
         void close () noexcept
         {
             auto owner = _owner.lock ();
             auto entry = std::exchange (_entry, {});
-            const auto registration_id =
-              std::exchange (_registration_id, 0);
+            const auto registration_id = std::exchange (_registration_id, 0);
             if (!owner || !entry || registration_id == 0)
                 return;
             application_job_queue_t::deregister_receive_flow_socket (
@@ -295,10 +266,9 @@ class application_job_queue_t
       private:
         friend class application_job_queue_t;
 
-        receive_flow_registration_t (
-          std::weak_ptr<state_t> owner,
-          std::shared_ptr<receive_flow_socket_entry_t> entry,
-          std::uint64_t registration_id) :
+        receive_flow_registration_t (std::weak_ptr<state_t> owner,
+                                     std::shared_ptr<receive_flow_socket_entry_t> entry,
+                                     std::uint64_t registration_id) :
             _owner (std::move (owner)),
             _entry (std::move (entry)),
             _registration_id (registration_id)
@@ -317,8 +287,7 @@ class application_job_queue_t
         ~waiter_t () { (void) cancel (); }
 
         waiter_t (waiter_t &&other) noexcept :
-            _owner (std::move (other._owner)),
-            _waiter (std::move (other._waiter))
+            _owner (std::move (other._owner)), _waiter (std::move (other._waiter))
         {
         }
 
@@ -341,17 +310,14 @@ class application_job_queue_t
             auto waiter = std::exchange (_waiter, {});
             if (!owner || !waiter)
                 return false;
-            return application_job_queue_t::cancel_waiter (
-              std::move (owner), std::move (waiter));
+            return application_job_queue_t::cancel_waiter (std::move (owner), std::move (waiter));
         }
 
       private:
         friend class application_job_queue_t;
 
-        waiter_t (std::weak_ptr<state_t> owner,
-                  std::shared_ptr<waiter_state_t> waiter) :
-            _owner (std::move (owner)),
-            _waiter (std::move (waiter))
+        waiter_t (std::weak_ptr<state_t> owner, std::shared_ptr<waiter_state_t> waiter) :
+            _owner (std::move (owner)), _waiter (std::move (waiter))
         {
         }
 
@@ -359,17 +325,14 @@ class application_job_queue_t
         std::shared_ptr<waiter_state_t> _waiter;
     };
 
-    explicit application_job_queue_t (
-      application_job_queue_configuration_t configuration,
-      receive_flow_config_failure_sink_t failure_sink = {}) :
-        _state (std::make_shared<state_t> (
-          std::move (configuration), std::move (failure_sink)))
+    explicit application_job_queue_t (application_job_queue_configuration_t configuration,
+                                      receive_flow_config_failure_sink_t failure_sink = {}) :
+        _state (std::make_shared<state_t> (std::move (configuration), std::move (failure_sink)))
     {
     }
 
     application_job_queue_t (const application_job_queue_t &) = delete;
-    application_job_queue_t &operator= (
-      const application_job_queue_t &) = delete;
+    application_job_queue_t &operator= (const application_job_queue_t &) = delete;
 
     std::optional<permit_t> try_reserve_supply ()
     {
@@ -378,8 +341,8 @@ class application_job_queue_t
         {
             std::lock_guard lock (_state->mutex);
             if (_state->stopped || !_state->waiters.empty ()
-                || _state->permits_in_use >= _state->configuration
-                     .effective_max_queued_application_jobs) {
+                || _state->permits_in_use
+                     >= _state->configuration.effective_max_queued_application_jobs) {
                 return std::nullopt;
             }
             permit = reserve_locked (_state, transition);
@@ -391,8 +354,7 @@ class application_job_queue_t
     waiter_t wait_for_supply (supply_callback_t callback)
     {
         if (!callback)
-            throw std::invalid_argument (
-              "Application Job Queue waiter callback is required");
+            throw std::invalid_argument ("Application Job Queue waiter callback is required");
 
         auto waiter = std::make_shared<waiter_state_t> ();
         waiter->callback = std::move (callback);
@@ -404,15 +366,12 @@ class application_job_queue_t
             if (_state->stopped) {
                 waiter->terminal = true;
                 stopped = true;
-            }
-            else if (_state->waiters.empty ()
-                     && _state->permits_in_use
-                          < _state->configuration
-                              .effective_max_queued_application_jobs) {
+            } else if (_state->waiters.empty ()
+                       && _state->permits_in_use
+                            < _state->configuration.effective_max_queued_application_jobs) {
                 waiter->terminal = true;
                 immediate = reserve_locked (_state, transition);
-            }
-            else {
+            } else {
                 waiter->started_at = std::chrono::steady_clock::now ();
                 waiter->measurement_epoch = _state->measurement_epoch;
                 _state->waiters.push_back (waiter);
@@ -438,15 +397,14 @@ class application_job_queue_t
             std::optional<permit_t> permit;
         };
         auto state = std::make_shared<blocking_state_t> ();
-        auto waiter = wait_for_supply (
-          [state] (std::optional<permit_t> permit) mutable {
-              {
-                  std::lock_guard lock (state->mutex);
-                  state->permit = std::move (permit);
-                  state->completed = true;
-              }
-              state->changed.notify_all ();
-          });
+        auto waiter = wait_for_supply ([state] (std::optional<permit_t> permit) mutable {
+            {
+                std::lock_guard lock (state->mutex);
+                state->permit = std::move (permit);
+                state->completed = true;
+            }
+            state->changed.notify_all ();
+        });
         std::unique_lock lock (state->mutex);
         state->changed.wait (lock, [&] { return state->completed; });
         return std::move (state->permit);
@@ -467,47 +425,30 @@ class application_job_queue_t
         std::lock_guard lock (_state->mutex);
         const auto now = std::chrono::steady_clock::now ();
         return {
-          {
-            _state->configuration.configured_profile,
-            _state->configuration.configured_manual_max,
-            _state->configuration.effective_processor_count,
-            _state->configuration.effective_max_queued_application_jobs,
-            _state->reserved_supply_permits,
-            _state->queued_application_jobs,
-            _state->permits_in_use,
-            _state->peak_permits_in_use,
-            _state->capacity_waiters,
-            _state->capacity_wait_count,
-            std::chrono::nanoseconds (
-              static_cast<std::chrono::nanoseconds::rep> (
-                std::min<std::uint64_t> (
-                  _state->capacity_wait_duration_ns,
-                  static_cast<std::uint64_t> (
-                    std::numeric_limits<
-                      std::chrono::nanoseconds::rep>::max ())))),
-            _state->configuration.pause_threshold_percent,
-            _state->configuration.resume_threshold_percent,
-            _state->pause_threshold_permit_count,
-            _state->resume_threshold_permit_count,
-            _state->pressure_state,
-            saturated_duration (
-              current_pause_duration_ns_locked (*_state, now)) },
-          {
-            _state->running_transition_count,
-            _state->paused_transition_count,
-            saturated_duration (
-              cumulative_pause_duration_ns_locked (*_state, now)),
-            _state->flow_state_config_failure_count } };
+          {_state->configuration.configured_profile, _state->configuration.configured_manual_max,
+           _state->configuration.effective_processor_count,
+           _state->configuration.effective_max_queued_application_jobs,
+           _state->reserved_supply_permits, _state->queued_application_jobs, _state->permits_in_use,
+           _state->peak_permits_in_use, _state->capacity_waiters, _state->capacity_wait_count,
+           std::chrono::nanoseconds (
+             static_cast<std::chrono::nanoseconds::rep> (std::min<std::uint64_t> (
+               _state->capacity_wait_duration_ns,
+               static_cast<std::uint64_t> (
+                 std::numeric_limits<std::chrono::nanoseconds::rep>::max ())))),
+           _state->configuration.pause_threshold_percent,
+           _state->configuration.resume_threshold_percent, _state->pause_threshold_permit_count,
+           _state->resume_threshold_permit_count, _state->pressure_state,
+           saturated_duration (current_pause_duration_ns_locked (*_state, now))},
+          {_state->running_transition_count, _state->paused_transition_count,
+           saturated_duration (cumulative_pause_duration_ns_locked (*_state, now)),
+           _state->flow_state_config_failure_count}};
     }
 
-    receive_flow_registration_t register_receive_flow_socket (
-      receive_flow_state_setter_t setter)
+    receive_flow_registration_t register_receive_flow_socket (receive_flow_state_setter_t setter)
     {
         if (!setter)
-            throw std::invalid_argument (
-              "Receive-flow socket state setter is required");
-        auto entry = std::make_shared<receive_flow_socket_entry_t> (
-          std::move (setter));
+            throw std::invalid_argument ("Receive-flow socket state setter is required");
+        auto entry = std::make_shared<receive_flow_socket_entry_t> (std::move (setter));
         for (;;) {
             application_job_queue_pressure_state_t desired_state;
             std::uint64_t desired_sequence = 0;
@@ -520,8 +461,7 @@ class application_job_queue_t
                 desired_sequence = _state->pressure_sequence;
             }
 
-            const auto result = entry->apply (
-              desired_state, desired_sequence);
+            const auto result = entry->apply (desired_state, desired_sequence);
             if (result != receive_flow_state_apply_result_t::applied) {
                 bool stopped = false;
                 {
@@ -529,9 +469,7 @@ class application_job_queue_t
                     stopped = _state->stopped;
                 }
                 if (result == receive_flow_state_apply_result_t::failed
-                    || (result
-                          == receive_flow_state_apply_result_t::invalid_state
-                        && !stopped)) {
+                    || (result == receive_flow_state_apply_result_t::invalid_state && !stopped)) {
                     record_flow_state_config_failure (_state);
                 }
                 if (stopped) {
@@ -552,17 +490,13 @@ class application_job_queue_t
                         || _state->pressure_state != desired_state) {
                         continue;
                     }
-                    const auto registration_id =
-                      _state->next_receive_flow_registration_id++;
-                    _state->receive_flow_sockets.emplace (
-                      registration_id, entry);
-                    return receive_flow_registration_t (
-                      _state, std::move (entry), registration_id);
+                    const auto registration_id = _state->next_receive_flow_registration_id++;
+                    _state->receive_flow_sockets.emplace (registration_id, entry);
+                    return receive_flow_registration_t (_state, std::move (entry), registration_id);
                 }
             }
             entry->close ();
-            throw std::logic_error (
-              "Cannot register a receive-flow socket after queue stop");
+            throw std::logic_error ("Cannot register a receive-flow socket after queue stop");
         }
     }
 
@@ -577,10 +511,8 @@ class application_job_queue_t
         _state->paused_transition_count = 0;
         _state->cumulative_pause_duration_ns = 0;
         _state->flow_state_config_failure_count = 0;
-        if (_state->pressure_state
-            == application_job_queue_pressure_state_t::paused) {
-            _state->pause_accounted_at =
-              std::chrono::steady_clock::now ();
+        if (_state->pressure_state == application_job_queue_pressure_state_t::paused) {
+            _state->pause_accounted_at = std::chrono::steady_clock::now ();
         }
     }
 
@@ -600,8 +532,7 @@ class application_job_queue_t
             }
             _state->waiters.clear ();
             _state->capacity_waiters = 0;
-            for (const auto &[_, socket] :
-                 _state->receive_flow_sockets) {
+            for (const auto &[_, socket] : _state->receive_flow_sockets) {
                 if (socket)
                     socket->request_close ();
             }
@@ -627,19 +558,16 @@ class application_job_queue_t
 
     struct state_t
     {
-        explicit state_t (
-          application_job_queue_configuration_t configured,
-          receive_flow_config_failure_sink_t configured_failure_sink) :
+        explicit state_t (application_job_queue_configuration_t configured,
+                          receive_flow_config_failure_sink_t configured_failure_sink) :
             configuration (std::move (configured)),
             flow_state_config_failure_sink (std::move (configured_failure_sink))
         {
             if (configuration.effective_processor_count == 0
                 || configuration.effective_max_queued_application_jobs == 0
                 || configuration.effective_max_queued_application_jobs
-                     > static_cast<std::uint32_t> (
-                       std::numeric_limits<std::int32_t>::max ())) {
-                throw std::invalid_argument (
-                  "Application Job Queue effective capacity is invalid");
+                     > static_cast<std::uint32_t> (std::numeric_limits<std::int32_t>::max ())) {
+                throw std::invalid_argument ("Application Job Queue effective capacity is invalid");
             }
             if (configuration.pause_threshold_percent < 1
                 || configuration.pause_threshold_percent > 100
@@ -649,11 +577,10 @@ class application_job_queue_t
                 throw std::invalid_argument (
                   "Application Job Queue pressure thresholds are invalid");
             }
-            const auto maximum = static_cast<std::uint64_t> (
-              configuration.effective_max_queued_application_jobs);
+            const auto maximum =
+              static_cast<std::uint64_t> (configuration.effective_max_queued_application_jobs);
             pause_threshold_permit_count = static_cast<std::uint32_t> (
-              (maximum * configuration.pause_threshold_percent + 99u)
-              / 100u);
+              (maximum * configuration.pause_threshold_percent + 99u) / 100u);
             resume_threshold_permit_count = static_cast<std::uint32_t> (
               (maximum * configuration.resume_threshold_percent) / 100u);
         }
@@ -681,97 +608,73 @@ class application_job_queue_t
         std::uint64_t cumulative_pause_duration_ns = 0;
         std::uint64_t flow_state_config_failure_count = 0;
         receive_flow_config_failure_sink_t flow_state_config_failure_sink;
-        std::map<std::uint64_t,
-                 std::shared_ptr<receive_flow_socket_entry_t>>
-          receive_flow_sockets;
+        std::map<std::uint64_t, std::shared_ptr<receive_flow_socket_entry_t>> receive_flow_sockets;
         std::uint64_t next_receive_flow_registration_id = 1;
         bool stopped = false;
     };
 
-    static std::uint64_t duration_ns (
-      std::chrono::steady_clock::time_point from,
-      std::chrono::steady_clock::time_point to) noexcept
+    static std::uint64_t duration_ns (std::chrono::steady_clock::time_point from,
+                                      std::chrono::steady_clock::time_point to) noexcept
     {
         if (from == std::chrono::steady_clock::time_point{} || to <= from)
             return 0;
-        const auto elapsed = std::chrono::duration_cast<
-          std::chrono::nanoseconds> (to - from).count ();
-        return elapsed <= 0
-                 ? 0
-                 : static_cast<std::uint64_t> (elapsed);
+        const auto elapsed =
+          std::chrono::duration_cast<std::chrono::nanoseconds> (to - from).count ();
+        return elapsed <= 0 ? 0 : static_cast<std::uint64_t> (elapsed);
     }
 
-    static std::uint64_t saturated_add (
-      std::uint64_t left,
-      std::uint64_t right) noexcept
+    static std::uint64_t saturated_add (std::uint64_t left, std::uint64_t right) noexcept
     {
         return right > std::numeric_limits<std::uint64_t>::max () - left
                  ? std::numeric_limits<std::uint64_t>::max ()
                  : left + right;
     }
 
-    static std::chrono::nanoseconds saturated_duration (
-      std::uint64_t nanoseconds) noexcept
+    static std::chrono::nanoseconds saturated_duration (std::uint64_t nanoseconds) noexcept
     {
         return std::chrono::nanoseconds (
-          static_cast<std::chrono::nanoseconds::rep> (
-            std::min<std::uint64_t> (
-              nanoseconds,
-              static_cast<std::uint64_t> (
-                std::numeric_limits<
-                  std::chrono::nanoseconds::rep>::max ()))));
+          static_cast<std::chrono::nanoseconds::rep> (std::min<std::uint64_t> (
+            nanoseconds, static_cast<std::uint64_t> (
+                           std::numeric_limits<std::chrono::nanoseconds::rep>::max ()))));
     }
 
-    static std::uint64_t current_pause_duration_ns_locked (
-      const state_t &owner,
-      std::chrono::steady_clock::time_point now) noexcept
+    static std::uint64_t
+    current_pause_duration_ns_locked (const state_t &owner,
+                                      std::chrono::steady_clock::time_point now) noexcept
     {
-        return owner.pressure_state
-                   == application_job_queue_pressure_state_t::paused
+        return owner.pressure_state == application_job_queue_pressure_state_t::paused
                  ? duration_ns (owner.pause_started_at, now)
                  : 0;
     }
 
-    static std::uint64_t cumulative_pause_duration_ns_locked (
-      const state_t &owner,
-      std::chrono::steady_clock::time_point now) noexcept
+    static std::uint64_t
+    cumulative_pause_duration_ns_locked (const state_t &owner,
+                                         std::chrono::steady_clock::time_point now) noexcept
     {
-        const auto active = owner.pressure_state
-                              == application_job_queue_pressure_state_t::paused
-                            ? duration_ns (owner.pause_accounted_at, now)
-                            : 0;
-        return saturated_add (
-          owner.cumulative_pause_duration_ns, active);
+        const auto active = owner.pressure_state == application_job_queue_pressure_state_t::paused
+                              ? duration_ns (owner.pause_accounted_at, now)
+                              : 0;
+        return saturated_add (owner.cumulative_pause_duration_ns, active);
     }
 
-    static std::optional<pressure_transition_t>
-    evaluate_pressure_locked (state_t &owner)
+    static std::optional<pressure_transition_t> evaluate_pressure_locked (state_t &owner)
     {
         const auto now = std::chrono::steady_clock::now ();
-        if (owner.pressure_state
-              == application_job_queue_pressure_state_t::running
-            && owner.permits_in_use
-                 >= owner.pause_threshold_permit_count) {
-            owner.pressure_state =
-              application_job_queue_pressure_state_t::paused;
+        if (owner.pressure_state == application_job_queue_pressure_state_t::running
+            && owner.permits_in_use >= owner.pause_threshold_permit_count) {
+            owner.pressure_state = application_job_queue_pressure_state_t::paused;
             owner.pause_started_at = now;
             owner.pause_accounted_at = now;
             ++owner.paused_transition_count;
-        }
-        else if (owner.pressure_state
-                   == application_job_queue_pressure_state_t::paused
-                 && owner.permits_in_use
-                      <= owner.resume_threshold_permit_count) {
+        } else if (owner.pressure_state == application_job_queue_pressure_state_t::paused
+                   && owner.permits_in_use <= owner.resume_threshold_permit_count) {
             owner.cumulative_pause_duration_ns = saturated_add (
-              owner.cumulative_pause_duration_ns,
-              duration_ns (owner.pause_accounted_at, now));
-            owner.pressure_state =
-              application_job_queue_pressure_state_t::running;
+              owner.cumulative_pause_duration_ns, duration_ns (owner.pause_accounted_at, now));
+            owner.pressure_state = application_job_queue_pressure_state_t::running;
             owner.pause_started_at = {};
             owner.pause_accounted_at = {};
             ++owner.running_transition_count;
-        }
-        else {
+        } else {
             return std::nullopt;
         }
 
@@ -785,43 +688,33 @@ class application_job_queue_t
         return transition;
     }
 
-    static permit_t reserve_locked (
-      const std::shared_ptr<state_t> &owner,
-      std::optional<pressure_transition_t> &transition)
+    static permit_t reserve_locked (const std::shared_ptr<state_t> &owner,
+                                    std::optional<pressure_transition_t> &transition)
     {
         auto permit = std::make_shared<permit_state_t> ();
         permit->owner = owner;
         ++owner->reserved_supply_permits;
         ++owner->permits_in_use;
-        owner->peak_permits_in_use =
-          std::max (owner->peak_permits_in_use,
-                    owner->permits_in_use);
+        owner->peak_permits_in_use = std::max (owner->peak_permits_in_use, owner->permits_in_use);
         transition = evaluate_pressure_locked (*owner);
         return permit_t (std::move (permit));
     }
 
-    static void account_wait_locked (
-      state_t &owner,
-      const waiter_state_t &waiter) noexcept
+    static void account_wait_locked (state_t &owner, const waiter_state_t &waiter) noexcept
     {
         if (waiter.measurement_epoch != owner.measurement_epoch)
             return;
-        const auto elapsed = std::chrono::duration_cast<
-          std::chrono::nanoseconds> (
+        const auto elapsed = std::chrono::duration_cast<std::chrono::nanoseconds> (
           std::chrono::steady_clock::now () - waiter.started_at);
-        const auto amount = elapsed.count () <= 0
-                              ? std::uint64_t{0}
-                              : static_cast<std::uint64_t> (
-                                  elapsed.count ());
+        const auto amount =
+          elapsed.count () <= 0 ? std::uint64_t{0} : static_cast<std::uint64_t> (elapsed.count ());
         owner.capacity_wait_duration_ns =
-          amount > std::numeric_limits<std::uint64_t>::max ()
-                     - owner.capacity_wait_duration_ns
+          amount > std::numeric_limits<std::uint64_t>::max () - owner.capacity_wait_duration_ns
             ? std::numeric_limits<std::uint64_t>::max ()
             : owner.capacity_wait_duration_ns + amount;
     }
 
-    static std::shared_ptr<waiter_state_t>
-    take_oldest_waiter_locked (state_t &owner) noexcept
+    static std::shared_ptr<waiter_state_t> take_oldest_waiter_locked (state_t &owner) noexcept
     {
         while (!owner.waiters.empty ()) {
             auto waiter = std::move (owner.waiters.front ());
@@ -836,9 +729,8 @@ class application_job_queue_t
         return {};
     }
 
-    static void release_permit (
-      std::shared_ptr<state_t> owner,
-      std::shared_ptr<permit_state_t> permit) noexcept
+    static void release_permit (std::shared_ptr<state_t> owner,
+                                std::shared_ptr<permit_state_t> permit) noexcept
     {
         std::shared_ptr<waiter_state_t> waiter;
         std::optional<permit_t> handoff;
@@ -860,8 +752,7 @@ class application_job_queue_t
                 next->owner = owner;
                 ++owner->reserved_supply_permits;
                 handoff.emplace (permit_t (std::move (next)));
-            }
-            else {
+            } else {
                 --owner->permits_in_use;
                 transition = evaluate_pressure_locked (*owner);
             }
@@ -878,25 +769,23 @@ class application_job_queue_t
         }
     }
 
-    static void dispatch_pressure_transition (
-      const std::shared_ptr<state_t> &owner,
-      std::optional<pressure_transition_t> transition) noexcept
+    static void
+    dispatch_pressure_transition (const std::shared_ptr<state_t> &owner,
+                                  std::optional<pressure_transition_t> transition) noexcept
     {
         if (!transition)
             return;
         for (const auto &socket : transition->sockets) {
             if (!socket)
                 continue;
-            const auto result = socket->apply (
-              transition->state, transition->sequence);
+            const auto result = socket->apply (transition->state, transition->sequence);
             if (result == receive_flow_state_apply_result_t::failed
                 || result == receive_flow_state_apply_result_t::invalid_state)
                 record_flow_state_config_failure (owner);
         }
     }
 
-    static void record_flow_state_config_failure (
-      const std::shared_ptr<state_t> &owner) noexcept
+    static void record_flow_state_config_failure (const std::shared_ptr<state_t> &owner) noexcept
     {
         {
             std::lock_guard lock (owner->mutex);
@@ -918,34 +807,30 @@ class application_job_queue_t
         }
     }
 
-    static void deregister_receive_flow_socket (
-      std::shared_ptr<state_t> owner,
-      std::uint64_t registration_id,
-      std::shared_ptr<receive_flow_socket_entry_t> entry) noexcept
+    static void
+    deregister_receive_flow_socket (std::shared_ptr<state_t> owner,
+                                    std::uint64_t registration_id,
+                                    std::shared_ptr<receive_flow_socket_entry_t> entry) noexcept
     {
         {
             std::lock_guard lock (owner->mutex);
-            const auto found =
-              owner->receive_flow_sockets.find (registration_id);
-            if (found != owner->receive_flow_sockets.end ()
-                && found->second == entry) {
+            const auto found = owner->receive_flow_sockets.find (registration_id);
+            if (found != owner->receive_flow_sockets.end () && found->second == entry) {
                 owner->receive_flow_sockets.erase (found);
             }
         }
         entry->close ();
     }
 
-    static bool cancel_waiter (
-      std::shared_ptr<state_t> owner,
-      std::shared_ptr<waiter_state_t> waiter) noexcept
+    static bool cancel_waiter (std::shared_ptr<state_t> owner,
+                               std::shared_ptr<waiter_state_t> waiter) noexcept
     {
         supply_callback_t callback;
         {
             std::lock_guard lock (owner->mutex);
             if (waiter->terminal)
                 return false;
-            const auto found = std::find (
-              owner->waiters.begin (), owner->waiters.end (), waiter);
+            const auto found = std::find (owner->waiters.begin (), owner->waiters.end (), waiter);
             if (found == owner->waiters.end ())
                 return false;
             owner->waiters.erase (found);
@@ -982,23 +867,19 @@ class application_supply_slot_t final
     };
 
   public:
-    application_supply_slot_t (
-      std::shared_ptr<application_job_queue_t> queue,
-      std::function<void ()> wake) :
-        _queue (std::move (queue)),
-        _state (std::make_shared<state_t> ())
+    application_supply_slot_t (std::shared_ptr<application_job_queue_t> queue,
+                               std::function<void ()> wake) :
+        _queue (std::move (queue)), _state (std::make_shared<state_t> ())
     {
         if (!_queue)
-            throw std::invalid_argument (
-              "Application supply slot requires the host queue");
+            throw std::invalid_argument ("Application supply slot requires the host queue");
         _state->wake = std::move (wake);
     }
 
     ~application_supply_slot_t () { close (); }
 
     application_supply_slot_t (const application_supply_slot_t &) = delete;
-    application_supply_slot_t &operator= (
-      const application_supply_slot_t &) = delete;
+    application_supply_slot_t &operator= (const application_supply_slot_t &) = delete;
 
     void ensure_waiter ()
     {

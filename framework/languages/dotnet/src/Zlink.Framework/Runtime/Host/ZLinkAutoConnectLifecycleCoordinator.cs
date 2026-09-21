@@ -14,17 +14,16 @@ internal sealed class ZLinkAutoConnectLifecycleCoordinator
     private Task? _startTask;
     private Task? _stopTask;
 
-    internal ZLinkAutoConnectLifecycleCoordinator(
-        ZLinkLocationAutoConnectHost? autoConnect)
+    internal ZLinkAutoConnectLifecycleCoordinator(ZLinkLocationAutoConnectHost? autoConnect)
         : this(
             autoConnect is null ? null : autoConnect.StartAsync,
-            autoConnect is null ? null : autoConnect.StopAsync)
-    {
-    }
+            autoConnect is null ? null : autoConnect.StopAsync
+        ) { }
 
     internal ZLinkAutoConnectLifecycleCoordinator(
         Func<ZLinkFrameworkComponentState, CancellationToken, ValueTask>? start,
-        Func<CancellationToken, ValueTask>? stop)
+        Func<CancellationToken, ValueTask>? stop
+    )
     {
         _start = start;
         _stop = stop;
@@ -32,16 +31,18 @@ internal sealed class ZLinkAutoConnectLifecycleCoordinator
 
     internal Task FrameworkReadyAsync(
         ZLinkFrameworkComponentState state,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken
+    )
     {
-        var start = AwaitStateLane(_lane.RunAsync(() =>
-        {
-            _state = state;
-            return PrepareStart(cancellationToken);
-        }));
+        var start = AwaitStateLane(
+            _lane.RunAsync(() =>
+            {
+                _state = state;
+                return PrepareStart(cancellationToken);
+            })
+        );
         if (start is null)
-            return AwaitStateLane(_lane.RunAsync(
-                () => _startTask ?? Task.CompletedTask));
+            return AwaitStateLane(_lane.RunAsync(() => _startTask ?? Task.CompletedTask));
 
         try
         {
@@ -62,16 +63,15 @@ internal sealed class ZLinkAutoConnectLifecycleCoordinator
         if (stop.Existing is not null)
             return new ValueTask(stop.Existing);
 
-        CompleteTask(
-            stop.Completion!,
-            StopCoreAsync(stop.StartTask, _stop, cancellationToken));
+        CompleteTask(stop.Completion!, StopCoreAsync(stop.StartTask, _stop, cancellationToken));
         return new ValueTask(stop.Completion!.Task);
     }
 
     private static async Task StopCoreAsync(
         Task? startTask,
         Func<CancellationToken, ValueTask>? stop,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken
+    )
     {
         Exception? startFailure = null;
         if (startTask is not null)
@@ -105,14 +105,12 @@ internal sealed class ZLinkAutoConnectLifecycleCoordinator
 
     private StartPreparation? PrepareStart(CancellationToken cancellationToken)
     {
-        if (_startTask is not null
-            || _stopTask is not null
-            || _start is null
-            || _state is null)
+        if (_startTask is not null || _stopTask is not null || _start is null || _state is null)
             return null;
 
         var completion = new TaskCompletionSource(
-            TaskCreationOptions.RunContinuationsAsynchronously);
+            TaskCreationOptions.RunContinuationsAsynchronously
+        );
         _startTask = completion.Task;
         return new StartPreparation(_state, completion);
     }
@@ -123,7 +121,8 @@ internal sealed class ZLinkAutoConnectLifecycleCoordinator
             return new StopPreparation(_stopTask, null, null);
 
         var completion = new TaskCompletionSource(
-            TaskCreationOptions.RunContinuationsAsynchronously);
+            TaskCreationOptions.RunContinuationsAsynchronously
+        );
         _stopTask = completion.Task;
         return new StopPreparation(null, _startTask, completion);
     }
@@ -150,10 +149,12 @@ internal sealed class ZLinkAutoConnectLifecycleCoordinator
 
     private sealed record StartPreparation(
         ZLinkFrameworkComponentState State,
-        TaskCompletionSource Completion);
+        TaskCompletionSource Completion
+    );
 
     private sealed record StopPreparation(
         Task? Existing,
         Task? StartTask,
-        TaskCompletionSource? Completion);
+        TaskCompletionSource? Completion
+    );
 }

@@ -10,37 +10,42 @@ internal static class ZLinkActorRemoteJoinRecoverySavedWork
     internal static ZLinkRelocationQueuedJob Create(
         ulong order,
         ZLinkActorRelocationSourceFence source,
-        ReadOnlyMemory<byte> encoded)
+        ReadOnlyMemory<byte> encoded
+    )
     {
-        _ = ZLinkActorRemoteJoinRecoveryCodec.Decode(
-            encoded.Span, out var generatedSource);
-        if (!StringComparer.Ordinal.Equals(source.OwnerId, generatedSource.OwnerId)
-            || source.OwnerLeaseGeneration
-               != generatedSource.OwnerLeaseGeneration
+        _ = ZLinkActorRemoteJoinRecoveryCodec.Decode(encoded.Span, out var generatedSource);
+        if (
+            !StringComparer.Ordinal.Equals(source.OwnerId, generatedSource.OwnerId)
+            || source.OwnerLeaseGeneration != generatedSource.OwnerLeaseGeneration
             || source.NodeRid != generatedSource.NodeRid
-            || source.NodeGeneration != generatedSource.NodeGeneration)
+            || source.NodeGeneration != generatedSource.NodeGeneration
+        )
             throw new InvalidDataException(
-                "Actor Join recovery source fence does not match its frozen record.");
+                "Actor Join recovery source fence does not match its frozen record."
+            );
         return new ZLinkRelocationQueuedJob(order, encoded);
     }
 
     internal static bool TryDecode(
         ReadOnlySpan<byte> encoded,
         out ZLinkActorRelocationSourceFence source,
-        out ZLinkActorRelocationRecoveryRecord recovery)
+        out ZLinkActorRelocationRecoveryRecord recovery
+    )
     {
         source = default!;
         recovery = default!;
         try
         {
-            recovery = ZLinkActorRemoteJoinRecoveryCodec.Decode(
-                encoded, out source);
+            recovery = ZLinkActorRemoteJoinRecoveryCodec.Decode(encoded, out source);
             return true;
         }
-        catch (Exception error) when (error is InvalidDataException
-                                      or EndOfStreamException
-                                      or ArgumentException
-                                      or OverflowException)
+        catch (Exception error)
+            when (error
+                    is InvalidDataException
+                        or EndOfStreamException
+                        or ArgumentException
+                        or OverflowException
+            )
         {
             return false;
         }

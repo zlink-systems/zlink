@@ -43,7 +43,8 @@ internal static class ZlinkStreamCallbackExecutionContext
     private sealed class Lease(
         object? callbackOwner,
         object? workerOwner,
-        ZlinkStreamLifecycleWorkKind? workKind)
+        ZlinkStreamLifecycleWorkKind? workKind
+    )
     {
         public object? CallbackOwner { get; } = callbackOwner;
 
@@ -56,25 +57,25 @@ internal static class ZlinkStreamCallbackExecutionContext
         public static Lease ForCallback(
             object callbackOwner,
             object? workerOwner,
-            ZlinkStreamLifecycleWorkKind? workKind) =>
-            new(callbackOwner, workerOwner, workKind);
+            ZlinkStreamLifecycleWorkKind? workKind
+        ) => new(callbackOwner, workerOwner, workKind);
 
         public static Lease ForWorker(object workerOwner, ZlinkStreamLifecycleWorkKind workKind) =>
             new(null, workerOwner, workKind);
     }
 
-    private sealed class Scope(
-        AsyncLocal<Lease?> ambient,
-        Lease? previous,
-        Lease current) : IDisposable
+    private sealed class Scope(AsyncLocal<Lease?> ambient, Lease? previous, Lease current)
+        : IDisposable
     {
         private int _disposed;
 
         public void Dispose()
         {
-            if (Interlocked.Exchange(ref _disposed, 1) != 0) return;
+            if (Interlocked.Exchange(ref _disposed, 1) != 0)
+                return;
             current.Active = false;
-            if (ReferenceEquals(ambient.Value, current)) ambient.Value = previous;
+            if (ReferenceEquals(ambient.Value, current))
+                ambient.Value = previous;
         }
     }
 }
@@ -84,5 +85,5 @@ internal enum ZlinkStreamLifecycleWorkKind
     ActiveConnect,
     Receive,
     Heartbeat,
-    CloseCompletion
+    CloseCompletion,
 }
