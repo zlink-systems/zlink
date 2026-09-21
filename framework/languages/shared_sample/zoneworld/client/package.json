@@ -5,6 +5,7 @@
   "type": "module",
   "description": "ZoneWorld browser client. One client, every language server (scenario §9).",
   "scripts": {
+    "prepare:browser": "node scripts/prepare-browser.mjs",
     "dev": "vite",
     "build": "vite build",
     "typecheck": "tsc --noEmit",

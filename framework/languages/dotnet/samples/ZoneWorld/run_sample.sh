@@ -610,6 +610,7 @@ if [[ "$BROWSER_SMOKE" == "1" ]]; then
   browser_dist="$RUN_DIR/browser-dist"
   browser_marker="$RUN_DIR/browser-lifecycle-armed"
   browser_config="$RUN_DIR/playwright.live.config.mjs"
+  (cd "$browser_client" && npm run prepare:browser)
   (cd "$browser_client" && npm exec vite build -- --outDir "$browser_dist")
   cat >"$browser_dist/config.json" <<EOF
 {"gateway":"${GATEWAY_ENDPOINT}","ops":"${OPS_ENDPOINT}"}
