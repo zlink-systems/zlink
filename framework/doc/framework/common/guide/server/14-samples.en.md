@@ -16,29 +16,54 @@ typical online game server.
 
 ## 0. Clone the examples repository
 
-Clone the examples repository for the language and run the samples from `samples/`.
+Clone the repository below and run the samples from `samples/`.
 
 === "C++"
 
     [:material-github: **zlink-cpp-examples**](https://github.com/zlink-systems/zlink-cpp-examples){ .md-button .md-button--primary }
 
+    ```bash
+    git clone https://github.com/zlink-systems/zlink-cpp-examples.git
+    cd zlink-cpp-examples/samples
+    ```
+
 === "C#/.NET"
 
     [:material-github: **zlink-dotnet-examples**](https://github.com/zlink-systems/zlink-dotnet-examples){ .md-button .md-button--primary }
+
+    ```bash
+    git clone https://github.com/zlink-systems/zlink-dotnet-examples.git
+    cd zlink-dotnet-examples/samples
+    ```
 
 === "Java"
 
     [:material-github: **zlink-java-examples**](https://github.com/zlink-systems/zlink-java-examples){ .md-button .md-button--primary }
 
+    ```bash
+    git clone https://github.com/zlink-systems/zlink-java-examples.git
+    cd zlink-java-examples/samples
+    ```
+
 === "Kotlin"
 
     [:material-github: **zlink-java-examples**](https://github.com/zlink-systems/zlink-java-examples){ .md-button .md-button--primary }
+
+    ```bash
+    git clone https://github.com/zlink-systems/zlink-java-examples.git
+    cd zlink-java-examples/samples
+    ```
 
     The Kotlin samples share a Gradle project with the Java ones, so they use the same repository.
 
 === "Node/TypeScript"
 
     [:material-github: **zlink-node-examples**](https://github.com/zlink-systems/zlink-node-examples){ .md-button .md-button--primary }
+
+    ```bash
+    git clone https://github.com/zlink-systems/zlink-node-examples.git
+    cd zlink-node-examples/samples
+    ```
 
 `main` is the latest release plus the fixes merged since, with package versions pinned to that
 release. An older release is the tag `vA.B.C` (`git checkout vA.B.C`). Send issues and PRs to

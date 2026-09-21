@@ -31,7 +31,7 @@ title: "14. 샘플 고르기 — 내 문제에 가까운 예제부터 · Kotlin"
 
 ## 0. 샘플 예제 저장소
 
-샘플은 `zlink-java-examples` 저장소를 clone하고 `samples/`에서 실행한다.
+샘플은 아래 저장소를 clone하고 `samples/`에서 실행한다.
 
 [:material-github: **zlink-java-examples**](https://github.com/zlink-systems/zlink-java-examples){ .md-button .md-button--primary }
 
@@ -40,7 +40,7 @@ git clone https://github.com/zlink-systems/zlink-java-examples.git
 cd zlink-java-examples/samples
 ```
 
-Kotlin 샘플은 Java 샘플과 gradle project를 공유하므로 같은 파일이다.
+Kotlin 샘플은 Java 샘플과 같은 Gradle project를 공유하므로 같은 repository를 사용한다.
 
 `main`은 최신 릴리스에 그 뒤의 수정을 더한 것이고, 패키지 버전은 그 릴리스에 맞춰져 있다.
 이전 릴리스는 tag `vA.B.C`로 받는다(`git checkout vA.B.C`). 이슈와 PR은 `zlink-systems/zlink`로

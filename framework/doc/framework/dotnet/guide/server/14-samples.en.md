@@ -34,7 +34,7 @@ typical online game server.
 
 ## 0. Clone the examples repository
 
-Clone the `zlink-dotnet-examples` repository and run the samples from `samples/`.
+Clone the repository below and run the samples from `samples/`.
 
 [:material-github: **zlink-dotnet-examples**](https://github.com/zlink-systems/zlink-dotnet-examples){ .md-button .md-button--primary }
 

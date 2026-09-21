@@ -13,29 +13,54 @@
 
 ## 0. 샘플 예제 저장소
 
-샘플은 해당 언어의 examples repository를 clone하고 `samples/`에서 실행한다.
+샘플은 아래 저장소를 clone하고 `samples/`에서 실행한다.
 
 === "C++"
 
     [:material-github: **zlink-cpp-examples**](https://github.com/zlink-systems/zlink-cpp-examples){ .md-button .md-button--primary }
 
+    ```bash
+    git clone https://github.com/zlink-systems/zlink-cpp-examples.git
+    cd zlink-cpp-examples/samples
+    ```
+
 === "C#/.NET"
 
     [:material-github: **zlink-dotnet-examples**](https://github.com/zlink-systems/zlink-dotnet-examples){ .md-button .md-button--primary }
+
+    ```bash
+    git clone https://github.com/zlink-systems/zlink-dotnet-examples.git
+    cd zlink-dotnet-examples/samples
+    ```
 
 === "Java"
 
     [:material-github: **zlink-java-examples**](https://github.com/zlink-systems/zlink-java-examples){ .md-button .md-button--primary }
 
+    ```bash
+    git clone https://github.com/zlink-systems/zlink-java-examples.git
+    cd zlink-java-examples/samples
+    ```
+
 === "Kotlin"
 
     [:material-github: **zlink-java-examples**](https://github.com/zlink-systems/zlink-java-examples){ .md-button .md-button--primary }
+
+    ```bash
+    git clone https://github.com/zlink-systems/zlink-java-examples.git
+    cd zlink-java-examples/samples
+    ```
 
     Kotlin 샘플은 Java 샘플과 같은 Gradle project를 공유하므로 같은 repository를 사용한다.
 
 === "Node/TypeScript"
 
     [:material-github: **zlink-node-examples**](https://github.com/zlink-systems/zlink-node-examples){ .md-button .md-button--primary }
+
+    ```bash
+    git clone https://github.com/zlink-systems/zlink-node-examples.git
+    cd zlink-node-examples/samples
+    ```
 
 `main`은 최신 릴리스에 그 뒤의 수정을 더한 것이고, 패키지 버전은 그 릴리스에 맞춰져 있다.
 이전 릴리스는 tag `vA.B.C`로 받는다(`git checkout vA.B.C`). 이슈와 PR은 `zlink-systems/zlink`로

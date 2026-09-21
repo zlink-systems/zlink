@@ -34,7 +34,7 @@ typical online game server.
 
 ## 0. Clone the examples repository
 
-Clone the `zlink-java-examples` repository and run the samples from `samples/`.
+Clone the repository below and run the samples from `samples/`.
 
 [:material-github: **zlink-java-examples**](https://github.com/zlink-systems/zlink-java-examples){ .md-button .md-button--primary }
 

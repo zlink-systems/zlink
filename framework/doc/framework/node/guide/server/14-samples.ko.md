@@ -31,7 +31,7 @@ title: "14. 샘플 고르기 — 내 문제에 가까운 예제부터 · Node/Ty
 
 ## 0. 샘플 예제 저장소
 
-샘플은 `zlink-node-examples` 저장소를 clone하고 `samples/`에서 실행한다.
+샘플은 아래 저장소를 clone하고 `samples/`에서 실행한다.
 
 [:material-github: **zlink-node-examples**](https://github.com/zlink-systems/zlink-node-examples){ .md-button .md-button--primary }
 

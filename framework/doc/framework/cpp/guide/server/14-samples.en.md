@@ -34,7 +34,7 @@ typical online game server.
 
 ## 0. Clone the examples repository
 
-Clone the `zlink-cpp-examples` repository and run the samples from `samples/`.
+Clone the repository below and run the samples from `samples/`.
 
 [:material-github: **zlink-cpp-examples**](https://github.com/zlink-systems/zlink-cpp-examples){ .md-button .md-button--primary }
 
