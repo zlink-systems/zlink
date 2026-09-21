@@ -21,7 +21,7 @@ Framework 0.22.0 uses binding 1.2.1 and Core 1.2.0. Each Framework language rele
 
 ## C++ Changes
 
-- The three contract tests (label, layout, target) pass on `main` again; the sample runners read no environment variables. (#867)
+- The three contract tests (label, layout, target) pass on `main` again; the sample runners read no environment variables. (#867, #876)
 
 ## Install
 

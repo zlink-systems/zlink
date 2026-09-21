@@ -21,7 +21,7 @@ Framework 0.22.0은 binding 1.2.1과 Core 1.2.0을 사용합니다. Framework �
 
 ## C++ 변경
 
-- contract test 셋(label·layout·target)이 `main`에서 다시 통과합니다. sample runner는 환경 변수를 읽지 않습니다. (#867)
+- contract test 셋(label·layout·target)이 `main`에서 다시 통과합니다. sample runner는 환경 변수를 읽지 않습니다. (#867, #876)
 
 ## 설치
 
