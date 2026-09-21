@@ -25,6 +25,36 @@ function ConvertTo-ZlinkSampleProcessArgument {
     return '"' + [regex]::Replace($Value, '(\\*)"', '$1$1\"') + '"'
 }
 
+function Write-ZlinkSampleFrameworkFailureEvidence {
+    param([Parameter(Mandatory = $true)][string]$LogDir)
+
+    if (-not (Test-Path -LiteralPath $LogDir -PathType Container)) { return }
+    $logs = @(
+        Get-ChildItem -LiteralPath $LogDir -File -Filter "*.log" -ErrorAction SilentlyContinue |
+            Where-Object {
+                $_.Name -notlike "*.err.log" -and
+                $_.BaseName -notin @("client", "runner") -and
+                $_.BaseName -notlike "proxy-*"
+            } |
+            Sort-Object Name
+    )
+    foreach ($log in $logs) {
+        $nodeName = $log.BaseName
+        Write-Host "=== Framework lifecycle failure evidence node=$nodeName ==="
+        foreach ($line in @(Get-Content -LiteralPath $log.FullName -Tail 200 -ErrorAction SilentlyContinue)) {
+            Write-Host "[$nodeName] $line"
+        }
+        Write-Host "--- termination markers node=$nodeName ---"
+        foreach ($line in @(
+            Get-Content -LiteralPath $log.FullName -ErrorAction SilentlyContinue |
+                Select-String -Pattern 'ZLINK_FRAMEWORK_(READY|TERMINATION)'
+        )) {
+            Write-Host "[$nodeName] $($line.Line)"
+        }
+        Write-Host "=== End framework lifecycle failure evidence node=$nodeName ==="
+    }
+}
+
 function Set-ZlinkSampleJavaRuntime {
     param([Parameter(Mandatory = $true)][string]$SamplesRoot)
 
