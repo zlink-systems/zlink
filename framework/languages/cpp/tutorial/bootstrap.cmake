@@ -36,7 +36,7 @@
 #                  verifying an unreleased recipe (repository CI); readers never set it
 cmake_minimum_required(VERSION 3.24)
 
-set(ZLINK_FRAMEWORK_CPP_VERSION "0.21.0")
+set(ZLINK_FRAMEWORK_CPP_VERSION "0.22.0")
 set(ZLINK_VCPKG_BASELINE "a1cae005c39be7b18ba319fced856b68d7276271")
 set(ZLINK_RELEASES "https://github.com/zlink-systems/zlink/releases/download")
 set(ZLINK_PACKAGE_MANAGER "conan" CACHE STRING "Third-party package manager: conan or vcpkg")

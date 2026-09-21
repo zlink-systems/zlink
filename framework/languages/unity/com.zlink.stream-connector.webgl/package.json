@@ -1,6 +1,6 @@
 {
   "name": "com.zlink.stream-connector.webgl",
-  "version": "0.21.0",
+  "version": "0.22.0",
   "displayName": "ZLink Stream Connector (Unity WebGL)",
   "description": "Unity WebGL adapter for the ZLink STREAM client connector. Wraps the @zlink-systems/stream-connector browser bundle behind the same C# surface as the native Zlink.Stream.Connector NuGet package, so game code is identical in native and WebGL builds. Adds no wire runtime of its own.",
   "unity": "2021.3",

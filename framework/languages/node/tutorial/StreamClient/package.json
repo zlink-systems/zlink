@@ -8,7 +8,7 @@
     "start": "node dist/StreamClient/main.js"
   },
   "dependencies": {
-    "@zlink-systems/stream-connector": "0.21.0"
+    "@zlink-systems/stream-connector": "0.22.0"
   },
   "devDependencies": {
     "typescript": "5.8.3",
