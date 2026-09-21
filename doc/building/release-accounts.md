@@ -10,7 +10,7 @@ public zlink releases. The Python, Go, and Rust bindings are outside this releas
 | Channel | Account or namespace | Distribution method |
 | --- | --- | --- |
 | GitHub | `zlink-systems` organization, `zlink-systems/zlink` repository | Language tags and GitHub Release assets |
-| GitHub (examples mirrors) | `zlink-systems/zlink-{cpp,dotnet,java,node}-examples` — read-only, issues and wiki disabled, no PRs accepted | `examples-mirror.yml` pushes at every framework tag ([release-pipeline](release-pipeline.md) §1) |
+| GitHub (examples mirrors) | `zlink-systems/zlink-{cpp,dotnet,java,node}-examples` — read-only, issues and wiki disabled, no PRs accepted | the release workflows call `examples-mirror.yml` after each language is published and verified ([release-pipeline](release-pipeline.md) §1) |
 | Maven Central | Verified `systems.zlink` namespace | Sonatype Central Portal bundle upload |
 | nuget.org | Personal account `zlink` | Trusted Publishing (OIDC), no API key |
 | npm | Personal account `zlink-systems`, `@zlink-systems` scope, 2FA | Trusted Publishing (OIDC) with provenance; the binding is registered to `bindings-release.yml`, the 8 framework packages to `framework-release.yml` (done 2026-09-09) |
