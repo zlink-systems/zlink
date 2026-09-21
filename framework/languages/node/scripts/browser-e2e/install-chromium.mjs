@@ -11,10 +11,6 @@ args.push('chromium');
 const result = spawnSync(executable, args, {
   cwd: workspaceRoot,
   stdio: 'inherit',
-  env: {
-    ...process.env,
-    PLAYWRIGHT_BROWSERS_PATH: process.env.PLAYWRIGHT_BROWSERS_PATH
-      ?? path.join(workspaceRoot, '.cache/ms-playwright')
-  }
+  env: process.env
 });
 process.exitCode = result.status ?? 1;

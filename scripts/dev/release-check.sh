@@ -98,6 +98,12 @@ check_version_sync() {
         record_check 버전 전체 FAIL 'sync-version.py --check'
     fi
 
+    if bash "$root/scripts/dev/version-literals.sh" >/dev/null 2>&1; then
+        record_check 버전 scripts PASS 'version-literals.sh: scripts/에 버전 리터럴 없음'
+    else
+        record_check 버전 scripts FAIL 'version-literals.sh: scripts/에 버전 리터럴 (VERSION 파일을 읽어야 함)'
+    fi
+
     declared=$(sed -n "s/^${version_field}=//p" "$root/$version_file")
     if [[ "$declared" == "$RELEASE_VERSION" ]]; then
         record_check 버전 "${RELEASE_TARGET}${RELEASE_LANGUAGE:+/$RELEASE_LANGUAGE}" PASS "$version_file=$RELEASE_VERSION"
