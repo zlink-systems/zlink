@@ -8,7 +8,7 @@ store — the client names the server's endpoint directly. The site page
 
 This directory is `quickstart/` in the `zlink-cpp-examples` repository. It installs the same way
 as `tutorial/` and `samples/`: one `bootstrap.cmake`, the published Core prebuilt, and the
-binding and framework source archives from GitHub Releases plus vcpkg.
+binding and framework source archives from GitHub Releases plus Conan.
 
 | | Purpose |
 |---|---|
@@ -25,11 +25,11 @@ The same as the tutorial's, minus Docker (this project uses no Redis):
 | C++20 compiler | Visual Studio 2022 17.4 or later with the **Desktop development with C++** workload | GCC 13 or later |
 | CMake | 3.24 or later | 3.24 or later |
 | Ninja | not needed | recommended; Makefiles are used when it is absent |
-| vcpkg | the copy Visual Studio installs is found automatically; for a separate clone set `VCPKG_ROOT` | `git clone https://github.com/microsoft/vcpkg` and `./bootstrap-vcpkg.sh`; set `VCPKG_ROOT` unless it lives at `$HOME/vcpkg` |
+| Conan 2 | `pipx install conan` (or `py -m pip install --user conan`) | `pipx install conan` (or `python3 -m pip install --user conan`) |
 
-vcpkg builds the third-party libraries from source, so **the first install takes about 20
-minutes**. If `tutorial/` or `samples/` was bootstrapped already, reuse its tree instead of
-building again: `cmake -DZLINK_ROOT=../tutorial/.zlink -P bootstrap.cmake`.
+Conan downloads ConanCenter binaries for the third-party libraries, so **the first install takes
+about 3 minutes** on a supported compiler. If `tutorial/` or `samples/` was bootstrapped already,
+reuse its tree instead of building again: `cmake -DZLINK_ROOT=../tutorial/.zlink -P bootstrap.cmake`.
 
 ## Download and install
 
@@ -39,14 +39,14 @@ Every command below runs inside its `quickstart/` directory.
 `bootstrap.cmake` does the install — it is the first line of the [Build](#build) block. It
 downloads this platform's Core prebuilt, the C++ binding source and the framework source from
 GitHub Releases, builds the binding and the framework into `.zlink/install/`, and configures this
-project into `build/`. Only the framework version is written in the script; the Core and binding
-versions come from the framework archive. From the second run on it reuses what it downloaded
-and built. To start over, delete `.zlink/` and `build/`.
+project into `build/`. Only the framework version is written in the script; the Core, binding and
+third-party versions come from the framework archive. Conan is the default; pass
+`-DZLINK_PACKAGE_MANAGER=vcpkg` for the vcpkg fallback. From the second run on it reuses what it
+downloaded and built. To start over, delete `.zlink/` and `build/`.
 
 ## Build
 
 ```bash title="linux"
-export VCPKG_ROOT="${VCPKG_ROOT:-$HOME/vcpkg}"
 cmake -P bootstrap.cmake
 cmake --build build --parallel
 ```
@@ -95,7 +95,7 @@ The answer is `"hello, world"` with status 200.
 
 ## Troubleshooting
 
-The install-time symptoms (`vcpkg was not found`, baseline errors, download failures, missing
+The install-time symptoms (Conan not found, unsupported compiler settings, download failures, missing
 compiler, `RuntimeLibrary` mismatch, `STATUS_DLL_NOT_FOUND`) are the tutorial's; see its
 README. Specific to this project:
 

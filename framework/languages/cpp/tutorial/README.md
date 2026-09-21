@@ -8,7 +8,7 @@ Channel messaging (RouteMesh request and one-way, node direct call, ClientServer
 handler filters, runtime weight changes, Spot, Actor, Location, STREAM and the HTTP client.
 
 This directory is `tutorial/` in the `zlink-cpp-examples` repository. The procedure below uses
-the Core, binding and framework packages published on GitHub Releases plus vcpkg.
+the Core, binding and framework packages published on GitHub Releases plus Conan.
 
 | | Purpose |
 |---|---|
@@ -40,16 +40,13 @@ The command blocks of `Build`, `Run` and `Verify` are marked `title="linux"` (ba
 | C++20 compiler | Visual Studio 2022 17.4 or later with the **Desktop development with C++** workload (verified with MSVC 19.44) | GCC 13 or later (verified with 13.3) |
 | CMake | 3.24 or later (the 3.31 Visual Studio installs was used) | 3.24 or later (3.28 was used) |
 | Ninja | not needed | recommended; Makefiles are used when it is absent |
-| vcpkg | the copy Visual Studio installs is found automatically; for a separate clone set `VCPKG_ROOT` | `git clone https://github.com/microsoft/vcpkg` and `./bootstrap-vcpkg.sh`; set `VCPKG_ROOT` unless it lives at `$HOME/vcpkg` |
+| Conan 2 | `pipx install conan` (or `py -m pip install --user conan`) | `pipx install conan` (or `python3 -m pip install --user conan`) |
 | Docker Desktop | runs one Redis container. Must be installed and running | same (WSL integration, or Docker Engine on Linux) |
 
-Nothing else is needed: no zlink repository, no Python, no Node.js, no distribution Boost.
-vcpkg builds the third-party libraries (Boost, nlohmann_json, lz4, protobuf, OpenSSL,
-opentelemetry-cpp, redis-plus-plus) from source, so **the first install takes about 20
-minutes** and several GB of disk. Later installs finish in minutes from vcpkg's binary cache.
-
-The third-party versions are pinned with a vcpkg `builtin-baseline`. A clone older than that
-commit needs `git -C $VCPKG_ROOT pull`.
+Nothing else is needed: no zlink repository, no Node.js, no distribution Boost. Conan is installed
+by pipx (or pip) and downloads ConanCenter binaries for the third-party libraries. **The first
+install takes about 3 minutes** on a supported compiler; Conan builds only packages without a
+matching binary. Later installs reuse its local cache.
 
 ## Download and install
 
@@ -61,8 +58,9 @@ block. It downloads three GitHub Release assets -- this platform's Core prebuilt
 (`core/v1.2.0`), the C++ binding source (`cpp/v1.2.0`) and the framework source
 (`framework-cpp/v0.18.0`) -- builds the binding and the framework into `.zlink/install/`, and
 configures this project into `build/`. Only the framework version is written in the script; the
-Core and binding versions and the third-party list come from the framework archive. From the
-second run on it reuses what it downloaded and built.
+Core and binding versions and the third-party list come from the framework archive. Conan is the
+default package manager; pass `-DZLINK_PACKAGE_MANAGER=vcpkg` to retain the vcpkg fallback. From
+the second run on it reuses what it downloaded and built.
 
 Parallelism defaults to the logical core count; lower it as `cmake -DZLINK_JOBS=4 -P
 bootstrap.cmake`. To start over, delete `.zlink/` and `build/`.
@@ -70,7 +68,6 @@ bootstrap.cmake`. To start over, delete `.zlink/` and `build/`.
 ## Build
 
 ```bash title="linux"
-export VCPKG_ROOT="${VCPKG_ROOT:-$HOME/vcpkg}"
 cmake -P bootstrap.cmake
 cmake --build build --parallel
 ```
@@ -182,9 +179,8 @@ Write-Output 'tutorial-stream=ok'
 
 | Symptom | Cause and fix |
 |---|---|
-| `bootstrap: vcpkg was not found. Set VCPKG_ROOT ...` | No vcpkg. On Windows enable the **vcpkg package manager** component in the Visual Studio Installer; on either platform point `VCPKG_ROOT` at a vcpkg clone |
-| `error: this vcpkg instance requires a manifest with a specified baseline` | Only after hand-editing the manifest `bootstrap.cmake` writes (`.zlink/manifest/vcpkg.json`). Delete `.zlink/manifest` and rerun |
-| `error: no version database entry for <port> at <version>`, or another baseline error | The vcpkg clone predates the baseline commit. `git -C $VCPKG_ROOT pull`, then rerun |
+| `bootstrap: could not find Conan` | Install Conan 2 with `pipx install conan` (or `python3 -m pip install --user conan`) and ensure its bin directory is on `PATH` |
+| `ERROR: Invalid setting ...` | The selected compiler is not a supported ConanCenter binary configuration. Use the listed compiler version, or pass `-DZLINK_PACKAGE_MANAGER=vcpkg` |
 | `bootstrap: download failed: https://github.com/...` | GitHub Releases is unreachable; check proxy and firewall. The next run downloads it again from the start |
 | `CMake Error ... No CMAKE_CXX_COMPILER could be found` / `Visual Studio 17 2022 could not find any instance` | No compiler. Install the **Desktop development with C++** workload on Windows, `g++` on Linux |
 | `error LNK2038: mismatch detected for 'RuntimeLibrary'` | Leftovers of a `.zlink/` built with other options. Delete `.zlink/build`, `.zlink/cpp`, `.zlink/install` and `build`, then bootstrap again |
