@@ -17,7 +17,7 @@ public sealed class GeneratedServiceWireCommandCodecConformanceTests
     public void Generated_codec_conforms_to_every_indexed_vector()
     {
         using var index = ReadJson("generated/fixtures/index.json");
-        Assert.Equal(3, index.RootElement.GetProperty("version").GetInt32());
+        Assert.Equal(4, index.RootElement.GetProperty("version").GetInt32());
         Assert.Equal(9, index.RootElement.GetProperty("fixtures").GetArrayLength());
 
         var cases = new List<ConformanceCase>();
@@ -72,17 +72,17 @@ public sealed class GeneratedServiceWireCommandCodecConformanceTests
             );
         }
 
-        Assert.Equal(102, cases.Count);
+        Assert.Equal(116, cases.Count);
         var operationCases = index
             .RootElement.GetProperty("operationCases")
             .EnumerateArray()
             .ToArray();
         Assert.Equal(
-            29,
+            33,
             operationCases.Count(item => item.GetProperty("expect").GetString() == "accept")
         );
         Assert.Equal(
-            50,
+            60,
             operationCases.Count(item => item.GetProperty("expect").GetString() == "reject")
         );
         Assert.Equal(
@@ -174,6 +174,29 @@ public sealed class GeneratedServiceWireCommandCodecConformanceTests
     private static void ExerciseOperation(JsonElement vector)
     {
         var expect = vector.GetProperty("expect").GetString()!;
+        if (vector.GetProperty("operation").GetString() == "logical-stream")
+        {
+            var exception = Record.Exception(() => ExerciseLogicalStream(vector));
+            if (expect == "accept" && exception is not null)
+                throw new ConformanceHarnessException($"logical stream rejected: {exception}");
+            if (expect == "reject" && exception is null)
+                throw new ConformanceHarnessException("logical stream accepted");
+            if (expect == "reject")
+            {
+                if (exception is not ServiceWireCodec.LogicalDecodeException logical)
+                    throw new ConformanceHarnessException($"wrong logical failure: {exception}");
+                if (
+                    vector.GetProperty("failureKind").GetString()
+                        != logical.Kind.ToString().ToLowerInvariant()
+                    || logical.Offset != vector.GetProperty("failureOffset").GetInt64()
+                )
+                    throw new ConformanceHarnessException(
+                        $"logical failure taxonomy/offset mismatch: {logical}"
+                    );
+                throw new InvalidDataException("logical stream rejected", exception);
+            }
+            return;
+        }
         var directions = vector.TryGetProperty("directions", out var declared)
             ? declared.EnumerateArray().Select(item => item.GetString()!).ToArray()
             : ["decode"];
@@ -187,10 +210,107 @@ public sealed class GeneratedServiceWireCommandCodecConformanceTests
                 throw new ConformanceHarnessException($"{direction} accepted");
             if (exception is ConformanceHarnessException)
                 throw exception;
+            if (
+                expect == "reject"
+                && vector.TryGetProperty("expectedFailure", out var expectedFailure)
+                && !exception!.Message.Contains(
+                    expectedFailure.GetProperty("dotnetMessage").GetString()!,
+                    StringComparison.Ordinal
+                )
+            )
+                throw new ConformanceHarnessException($"{direction} failure changed: {exception}");
         }
 
         if (expect == "reject")
             throw new InvalidDataException("all declared directions rejected");
+    }
+
+    private static void ExerciseLogicalStream(JsonElement vector)
+    {
+        var decoder = new ServiceWireCodec.LogicalRelocationEnvelopeV1Decoder(ContextFor(vector));
+        if (vector.TryGetProperty("syntheticPriorInputByteCount", out var synthetic))
+            decoder.SetSyntheticPriorInputByteCountForTest(synthetic.GetInt64());
+        ServiceWireCodec.RelocationEnvelopeV1? complete = null;
+        var chunks = vector.GetProperty("chunksHex").EnumerateArray().ToArray();
+        var outcomes = vector.GetProperty("chunkOutcomes").EnumerateArray().ToArray();
+        long supplied = 0;
+        for (var index = 0; index < chunks.Length; index++)
+        {
+            var chunk = Convert.FromHexString(chunks[index].GetString()!);
+            ServiceWireCodec.LogicalDecodeStep<ServiceWireCodec.RelocationEnvelopeV1> step;
+            try
+            {
+                step = decoder.Push(
+                    chunk,
+                    index == vector.GetProperty("finalChunkIndex").GetInt32()
+                );
+            }
+            catch (ServiceWireCodec.LogicalDecodeException failure)
+            {
+                Assert.Equal(vector.GetProperty("failureChunkIndex").GetInt32(), index);
+                Assert.Equal(
+                    vector.GetProperty("failureKind").GetString(),
+                    outcomes[index].GetString()
+                );
+                var failureKind = failure.Kind;
+                var failureOffset = failure.Offset;
+                chunk.AsSpan().Clear();
+                Assert.Equal(failureKind, failure.Kind);
+                Assert.Equal(failureOffset, failure.Offset);
+                if (
+                    vector.TryGetProperty("assertChunkReleasedAfterFailure", out var release)
+                    && release.GetBoolean()
+                )
+                {
+                    Assert.Throws<InvalidOperationException>(() => decoder.Push([], false));
+                    Assert.Equal(failureKind, failure.Kind);
+                    Assert.Equal(failureOffset, failure.Offset);
+                }
+                throw;
+            }
+            Assert.True(
+                !vector.TryGetProperty("failureChunkIndex", out var failureChunk)
+                    || failureChunk.GetInt32() != index,
+                "expected logical failure was not raised"
+            );
+            supplied += chunk.LongLength;
+            chunk.AsSpan().Clear();
+            Assert.True(
+                step.BufferedInputByteCount
+                    <= vector.GetProperty("maximumBufferedInputBytes").GetInt32()
+            );
+            if (
+                vector.TryGetProperty("expectedBufferedInputByteCounts", out var expectedBuffered)
+                && expectedBuffered.EnumerateArray().ElementAt(index).ValueKind
+                    == JsonValueKind.Number
+            )
+                Assert.Equal(
+                    expectedBuffered.EnumerateArray().ElementAt(index).GetInt32(),
+                    step.BufferedInputByteCount
+                );
+            Assert.Equal(supplied, step.ConsumedByteCount);
+            Assert.True(
+                step.ContinuationDepth
+                    <= ServiceWireCodec.LogicalRelocationEnvelopeV1Decoder.MaximumContinuationDepth
+            );
+            Assert.Equal(
+                outcomes[index].GetString(),
+                step.Progress == ServiceWireCodec.LogicalDecodeProgress.NeedMore
+                    ? "need-more"
+                    : "complete"
+            );
+            if (step.Progress == ServiceWireCodec.LogicalDecodeProgress.Complete)
+                complete = step.Value;
+        }
+        Assert.NotNull(complete);
+        Assert.Throws<InvalidOperationException>(() =>
+        {
+            decoder.Push([], true);
+        });
+        Assert.Equal(
+            chunks.SelectMany(item => Convert.FromHexString(item.GetString()!)).ToArray(),
+            ServiceWireCodec.EncodeLogicalRelocationEnvelopeV1(complete, ContextFor(vector))
+        );
     }
 
     private static void ExerciseDirection(JsonElement vector, string direction, object wire)
@@ -219,9 +339,22 @@ public sealed class GeneratedServiceWireCommandCodecConformanceTests
         if (direction != "encode")
             throw new ConformanceHarnessException($"unknown direction {name}:{direction}");
 
-        var value = vector.TryGetProperty("input", out _)
-            ? InputValue(vector)
-            : DecodeSurface(vector, wire, Context);
+        object value;
+        if (vector.TryGetProperty("input", out _))
+            value = InputValue(vector);
+        else if (vector.TryGetProperty("encodeInputHex", out var encodeInputHex))
+        {
+            if (vector.GetProperty("encodeMutation").GetString() != "duplicate-first-item")
+                throw new ConformanceHarnessException("unknown encode mutation");
+            var seed = (ServiceWireCodec.SavedWorkVector)DecodeType(
+                vector.GetProperty("surface").GetProperty("type").GetString()!,
+                Convert.FromHexString(encodeInputHex.GetString()!),
+                Context
+            );
+            value = new ServiceWireCodec.SavedWorkVector([seed.Items[0], seed.Items[0]]);
+        }
+        else
+            value = DecodeSurface(vector, wire, Context);
         var encoded = EncodeSurface(vector, value, context);
         if (vector.GetProperty("expect").GetString() == "accept")
             AssertWireEqual(wire, encoded, name);
@@ -317,6 +450,7 @@ public sealed class GeneratedServiceWireCommandCodecConformanceTests
                 bytes,
                 context
             ),
+            "saved-work-vector" => ServiceWireCodec.DecodeSavedWorkVector(bytes, context),
             "application-payload-bytes" => ServiceWireCodec.DecodeApplicationPayloadBytes(
                 bytes,
                 context
@@ -373,6 +507,10 @@ public sealed class GeneratedServiceWireCommandCodecConformanceTests
             ),
             "aggregate-participant-vector" => ServiceWireCodec.EncodeAggregateParticipantVector(
                 (ServiceWireCodec.AggregateParticipantVector)value,
+                context
+            ),
+            "saved-work-vector" => ServiceWireCodec.EncodeSavedWorkVector(
+                (ServiceWireCodec.SavedWorkVector)value,
                 context
             ),
             "application-payload-bytes" => ServiceWireCodec.EncodeApplicationPayloadBytes(
@@ -571,11 +709,6 @@ public sealed class GeneratedServiceWireCommandCodecConformanceTests
             return frames
                 .EnumerateArray()
                 .Select(item => Convert.FromHexString(item.GetString()!))
-                .ToArray();
-        if (vector.TryGetProperty("chunksHex", out var chunks))
-            return chunks
-                .EnumerateArray()
-                .SelectMany(item => Convert.FromHexString(item.GetString()!))
                 .ToArray();
         if (vector.TryGetProperty("byteRecipe", out var recipe))
         {
