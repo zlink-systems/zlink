@@ -14,7 +14,7 @@
 #   cpp     clang-format, major version pinned below; runs from PATH (WSL/Linux: clang-format-18)
 set -euo pipefail
 
-GJF_VERSION=1.25.2
+GJF_VERSION=1.27.0
 KTFMT_VERSION=0.54
 CLANG_FORMAT_MAJOR=18
 
