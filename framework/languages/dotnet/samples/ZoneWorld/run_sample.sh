@@ -9,6 +9,7 @@ source "$ROOT_DIR/../redis-common.sh"
 # 샘플 검증은 client connector 경로만 돌린다. node·cpp ZoneWorld runner에는 브라우저
 # 단계가 없으므로 기본 실행 범위를 맞춘다. 브라우저 smoke는 --browser-smoke로 따로 켠다.
 BROWSER_SMOKE=0
+BROWSER_CHILD=0
 SCENARIO="all"
 SCENARIO_SET=0
 G4_CHILD=0
@@ -25,6 +26,10 @@ while [[ "$#" -gt 0 ]]; do
       ;;
     --no-browser-smoke)
       BROWSER_SMOKE=0
+      shift
+      ;;
+    --browser-child)
+      BROWSER_CHILD=1
       shift
       ;;
     --g4-child)
@@ -57,14 +62,14 @@ scenario_selected() {
 
 # Run the crash replacement in a separate process and Redis scope so its stale descriptor
 # history cannot affect the normal replacement scenario.
-if [[ "$G4_CHILD" == "0" ]] && scenario_selected ZW-G4; then
+if [[ "$BROWSER_CHILD" == "0" && "$G4_CHILD" == "0" ]] && scenario_selected ZW-G4; then
   bash "$0" --g4-child ZW-G4
   G4_PROVEN=1
   if [[ "$SCENARIO" == "ZW-G4" ]]; then exit 0; fi
 fi
 # ZW-B8 intentionally drops the internal session-route command. Keep that destructive
 # transport fault in its own topology so the canonical lane that follows starts clean.
-if [[ "$B8_CHILD" == "0" ]] && scenario_selected ZW-B8; then
+if [[ "$BROWSER_CHILD" == "0" && "$B8_CHILD" == "0" ]] && scenario_selected ZW-B8; then
   bash "$0" --b8-child ZW-B8
   B8_PROVEN=1
   if [[ "$SCENARIO" == "ZW-B8" ]]; then exit 0; fi
@@ -399,6 +404,57 @@ wait_for_port() {
   return 1
 }
 
+run_browser_smoke() {
+  echo "==> shared browser client"
+  browser_client="$ROOT_DIR/../../../shared_sample/zoneworld/client"
+  if [[ ! -d "$browser_client" ]]; then
+    echo "!! --browser-smoke needs shared_sample/zoneworld/client, which lives outside the" >&2
+    echo "!! samples package and ships only in a full zlink repository checkout. Clone" >&2
+    echo "!! https://github.com/zlink-systems/zlink and run this sample from" >&2
+    echo "!! framework/languages/dotnet/samples/ZoneWorld there, or omit --browser-smoke." >&2
+    return 1
+  fi
+  browser_dist="$RUN_DIR/browser-dist"
+  browser_marker="$RUN_DIR/browser-lifecycle-armed"
+  browser_config="$RUN_DIR/playwright.live.config.mjs"
+  (cd "$browser_client" && npm run prepare:browser)
+  (cd "$browser_client" && npm exec vite build -- --outDir "$browser_dist")
+  cat >"$browser_dist/config.json" <<EOF
+{"gateway":"${GATEWAY_ENDPOINT}","ops":"${OPS_ENDPOINT}"}
+EOF
+  cat >"$browser_config" <<EOF
+export default {testDir: "${browser_client}/tests/live", timeout: 45000, workers: 1, use: {baseURL: "http://127.0.0.1:${BROWSER_PREVIEW_PORT}", headless: true}, metadata: {lifecycleMarker: "${browser_marker}", lifecycleNodeId: "zone-node-2"}};
+EOF
+  (cd "$browser_client" && npm exec vite preview -- \
+    --host 127.0.0.1 --port "$BROWSER_PREVIEW_PORT" --outDir "$browser_dist" \
+    >"$LOG_DIR/browser-preview.stdout.log" 2>"$LOG_DIR/browser-preview.stderr.log") &
+  preview_pid=$!
+  PIDS+=("$preview_pid")
+  wait_for_port "$BROWSER_PREVIEW_PORT"
+  (cd "$browser_client" && npm exec playwright test -- --config "$browser_config") &
+  browser_pid=$!
+  browser_node_stopped=0
+
+  if wait_for_file_while_running "$browser_marker" "$browser_pid"; then
+    stop_node zone-node-2
+    browser_node_stopped=1
+  else
+    echo "!! browser client did not arm its node lifecycle check" >&2
+  fi
+
+  set +e
+  wait "$browser_pid"
+  browser_status=$?
+  set -e
+  if [[ "$browser_node_stopped" -ne 1 ]]; then
+    browser_status=1
+  fi
+  if [[ "$browser_status" -ne 0 ]]; then
+    echo "!! shared browser client failed" >&2
+    return "$browser_status"
+  fi
+}
+
 echo "==> ops"
 start ops "$OPS_BIN" --config "$CONFIG_DIR/ops.json"
 wait_for_log ops "Application started."
@@ -451,7 +507,7 @@ wait_for_peer_admission_after \
   zone-node-1 "$node1_mesh_rid" 1 \
   zone-node-2 "$node2_mesh_rid" 1 600
 
-if scenario_selected ZW-G1 && [[ "$G4_CHILD" == "0" ]]; then
+if scenario_selected ZW-G1 && [[ "$BROWSER_CHILD" == "0" && "$G4_CHILD" == "0" ]]; then
   if is_zone_node_rid "$node1_mesh_rid" \
       && is_zone_node_rid "$node2_mesh_rid" \
       && [[ "$node1_mesh_rid" != "$node2_mesh_rid" ]]; then
@@ -460,7 +516,7 @@ if scenario_selected ZW-G1 && [[ "$G4_CHILD" == "0" ]]; then
     g_fail ZW-G1 "ZoneNode RIDs were not distinct canonical zn-UUIDv4 values"
   fi
 fi
-if scenario_selected ZW-G2 && [[ "$G4_CHILD" == "0" ]]; then
+if scenario_selected ZW-G2 && [[ "$BROWSER_CHILD" == "0" && "$G4_CHILD" == "0" ]]; then
   if is_zone_node_rid "$node2_mesh_rid"; then
     g_pass ZW-G2-rid
   else
@@ -468,7 +524,7 @@ if scenario_selected ZW-G2 && [[ "$G4_CHILD" == "0" ]]; then
   fi
 fi
 
-if scenario_selected ZW-G5; then
+if scenario_selected ZW-G5 && [[ "$BROWSER_CHILD" == "0" ]]; then
   set +e
   fixed_rid_hits="$(grep -R -nE \
     --include='*.cs' --include='*.json' --exclude-dir=bin --exclude-dir=obj \
@@ -509,6 +565,11 @@ wait_for_zone_log "border subscription ready. zone=zone-nw, from=zone-ne"
 wait_for_zone_log "border subscription ready. zone=zone-sw, from=zone-se"
 wait_for_zone_log "border subscription ready. zone=zone-ne, from=zone-nw"
 wait_for_zone_log "border subscription ready. zone=zone-se, from=zone-sw"
+
+if [[ "$BROWSER_CHILD" == "1" ]]; then
+  run_browser_smoke
+  exit 0
+fi
 
 if [[ "$B8_CHILD" == "1" ]]; then
   first_b8_client_line="$(next_log_line "$LOG_DIR/client.log")"
@@ -935,54 +996,7 @@ fi
 # The same browser client is shared by every language implementation. Language runners opt in
 # to the live browser smoke with one flag; the client receives only Gateway and Ops endpoints.
 if [[ "$BROWSER_SMOKE" == "1" ]]; then
-  echo "==> shared browser client"
-  browser_client="$ROOT_DIR/../../../shared_sample/zoneworld/client"
-  if [[ ! -d "$browser_client" ]]; then
-    echo "!! --browser-smoke needs shared_sample/zoneworld/client, which lives outside the" >&2
-    echo "!! samples package and ships only in a full zlink repository checkout. Clone" >&2
-    echo "!! https://github.com/zlink-systems/zlink and run this sample from" >&2
-    echo "!! framework/languages/dotnet/samples/ZoneWorld there, or omit --browser-smoke." >&2
-    exit 1
-  fi
-  browser_dist="$RUN_DIR/browser-dist"
-  browser_marker="$RUN_DIR/browser-lifecycle-armed"
-  browser_config="$RUN_DIR/playwright.live.config.mjs"
-  (cd "$browser_client" && npm run prepare:browser)
-  (cd "$browser_client" && npm exec vite build -- --outDir "$browser_dist")
-  cat >"$browser_dist/config.json" <<EOF
-{"gateway":"${GATEWAY_ENDPOINT}","ops":"${OPS_ENDPOINT}"}
-EOF
-  cat >"$browser_config" <<EOF
-export default {testDir: "${browser_client}/tests/live", timeout: 45000, workers: 1, use: {baseURL: "http://127.0.0.1:${BROWSER_PREVIEW_PORT}", headless: true}, metadata: {lifecycleMarker: "${browser_marker}", lifecycleNodeId: "zone-node-2"}};
-EOF
-  (cd "$browser_client" && npm exec vite preview -- \
-    --host 127.0.0.1 --port "$BROWSER_PREVIEW_PORT" --outDir "$browser_dist" \
-    >"$LOG_DIR/browser-preview.stdout.log" 2>"$LOG_DIR/browser-preview.stderr.log") &
-  preview_pid=$!
-  PIDS+=("$preview_pid")
-  wait_for_port "$BROWSER_PREVIEW_PORT"
-  (cd "$browser_client" && npm exec playwright test -- --config "$browser_config") &
-  browser_pid=$!
-  browser_node_stopped=0
-
-  if wait_for_file_while_running "$browser_marker" "$browser_pid"; then
-    stop_node zone-node-2
-    browser_node_stopped=1
-  else
-    echo "!! browser client did not arm its node lifecycle check" >&2
-  fi
-
-  set +e
-  wait "$browser_pid"
-  browser_status=$?
-  set -e
-  if [[ "$browser_node_stopped" -ne 1 ]]; then
-    browser_status=1
-  fi
-  if [[ "$browser_status" -ne 0 ]]; then
-    echo "!! shared browser client failed" >&2
-    exit "$browser_status"
-  fi
+  bash "$0" --browser-child --no-browser-smoke
 fi
 
 echo "==> logs: $LOG_DIR"
