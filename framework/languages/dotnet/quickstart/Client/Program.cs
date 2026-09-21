@@ -19,17 +19,17 @@ builder.Services.AddZLinkFramework(options =>
 
 var app = builder.Build();
 
-app.MapGet("/hello/{name}", async (
-    string name,
-    IZLinkRouteClient route,
-    CancellationToken cancellationToken) =>
-{
-    // The target is a single ChannelName; which node handles it is not specified.
-    var reply = await route
-        .RequestToChannel("greeting", new Hello(name))
-        .Async<Greeting>(cancellationToken);
+app.MapGet(
+    "/hello/{name}",
+    async (string name, IZLinkRouteClient route, CancellationToken cancellationToken) =>
+    {
+        // The target is a single ChannelName; which node handles it is not specified.
+        var reply = await route
+            .RequestToChannel("greeting", new Hello(name))
+            .Async<Greeting>(cancellationToken);
 
-    return Results.Ok(reply.Text);
-});
+        return Results.Ok(reply.Text);
+    }
+);
 
 await app.RunAsync();

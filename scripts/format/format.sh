@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Formats (or checks) the sources the guides excerpt: framework/languages/<lang>/{tutorial,samples}.
+# Formats (or checks) the sources the guides excerpt: framework/languages/<lang>/{quickstart,tutorial,samples}.
 # One formatter per language, one pinned version each; the rule the output has to satisfy is in
 # doc/principal/dev/source-formatting.ko.md. Build scripts (csproj, kts, CMake) are not formatted.
 #
@@ -41,7 +41,7 @@ sources() { # <lang> <suffix>...
     local root="$Z/framework/languages/$lang"
     local names=() sep=()
     for s in "$@"; do names+=("${sep[@]}" -name "$s"); sep=(-o); done
-    find "$root/tutorial" "$root/samples" \
+    find "$root/quickstart" "$root/tutorial" "$root/samples" \
         \( -name node_modules -o -name dist -o -name build -o -name bin -o -name obj -o -name .gradle \) -prune \
         -o -type f \( "${names[@]}" \) -print
 }
@@ -58,7 +58,7 @@ fetch_jar() { # <name> <url> -> path
 
 format_dotnet() {
     local mode=format; ((CHECK)) && mode=check
-    (cd "$Z/framework/languages/dotnet" && dotnet tool restore >/dev/null && dotnet csharpier "$mode" tutorial samples)
+    (cd "$Z/framework/languages/dotnet" && dotnet tool restore >/dev/null && dotnet csharpier "$mode" quickstart tutorial samples)
 }
 
 format_node() {
@@ -71,7 +71,7 @@ format_node() {
         prettier=(npx --yes "prettier@$version")
     fi
     local mode=--write; ((CHECK)) && mode=--check
-    (cd "$dir" && "${prettier[@]}" "$mode" 'tutorial/**/*.ts' 'samples/**/*.ts')
+    (cd "$dir" && "${prettier[@]}" "$mode" 'quickstart/**/*.ts' 'tutorial/**/*.ts' 'samples/**/*.ts')
 }
 
 format_java() {

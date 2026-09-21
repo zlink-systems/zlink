@@ -1,10 +1,9 @@
 package systems.zlink.quickstart.server;
 
-import java.util.concurrent.CompletableFuture;
-import java.util.concurrent.CompletionStage;
 import org.springframework.boot.SpringApplication;
 import org.springframework.boot.autoconfigure.SpringBootApplication;
 import org.springframework.context.annotation.Bean;
+
 import systems.zlink.framework.ZLinkMessageContext;
 import systems.zlink.framework.channels.ZLinkRequestHandler;
 import systems.zlink.framework.configuration.ZLinkMeshNodeBuilder;
@@ -12,6 +11,9 @@ import systems.zlink.framework.spring.EnableZLinkFramework;
 import systems.zlink.framework.spring.ZLinkFrameworkConfigurer;
 import systems.zlink.quickstart.shared.Greeting;
 import systems.zlink.quickstart.shared.Hello;
+
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CompletionStage;
 
 @EnableZLinkFramework
 @SpringBootApplication
@@ -32,12 +34,14 @@ public class ServerApplication {
             options.addHandlersFromPackageOf(ServerApplication.class);
 
             // Names the mesh.
-            ZLinkMeshNodeBuilder mesh = options.addRouteMesh("services")
-                // This process's own endpoint, for peers to connect to.
-                .listen("tcp://0.0.0.0:7101");
+            ZLinkMeshNodeBuilder mesh =
+                    options.addRouteMesh("services")
+                            // This process's own endpoint, for peers to connect to.
+                            .listen("tcp://0.0.0.0:7101");
             // This process handles the "greeting" channel.
-            mesh.channelName("greeting").server()
-                .addRequestHandler(HelloHandler.class, Hello.class, Greeting.class);
+            mesh.channelName("greeting")
+                    .server()
+                    .addRequestHandler(HelloHandler.class, Hello.class, Greeting.class);
         };
     }
 }

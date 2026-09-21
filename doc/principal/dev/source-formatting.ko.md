@@ -4,7 +4,7 @@
 그 밖의 모양은 언어별 포매터의 출력이 정한다. 손으로 접은 줄바꿈은 포매터가 되돌리므로 규칙을
 따로 외울 필요가 없다 — `scripts/format/format.sh`를 실행하면 된다.
 
-적용 범위는 현재 `framework/languages/<lang>/{tutorial,samples}`이다. 가이드가 `--8<--`로 그
+적용 범위는 현재 `framework/languages/<lang>/{quickstart,tutorial,samples}`이다. 가이드가 `--8<--`로 그
 소스를 발췌하므로 줄바꿈이 곧 문서의 모양이다. 저장소 전체로 넓히는 것은 별도 작업이다.
 
 ## 1. 규칙
@@ -29,7 +29,7 @@
 | TypeScript | Prettier | `framework/languages/node/package.json` `devDependencies` | `.prettierrc` `printWidth: 100`, `singleQuote`, `trailingComma: none` |
 | Java | google-java-format `--aosp` | `scripts/format/format.sh` `GJF_VERSION` | 없음(4칸 들여쓰기, 연속 8칸). import 정렬과 미사용 import 제거를 포함한다 |
 | Kotlin | ktfmt `--kotlinlang-style` | `scripts/format/format.sh` `KTFMT_VERSION` | 없음(4칸 들여쓰기) |
-| C++ | clang-format 18 | `scripts/format/format.sh` `CLANG_FORMAT_MAJOR` | 저장소 `.clang-format`(ColumnLimit 100)에 `tutorial/.clang-format`·`samples/.clang-format`이 `BinPackArguments: false`를 더한다 |
+| C++ | clang-format 18 | `scripts/format/format.sh` `CLANG_FORMAT_MAJOR` | 저장소 `.clang-format`(ColumnLimit 100)에 `quickstart/.clang-format`·`tutorial/.clang-format`·`samples/.clang-format`이 `BinPackArguments: false`를 더한다 |
 
 빌드 스크립트(`csproj`, `*.kts`, CMake)는 포맷하지 않는다. `sync-version.py`와 빌드 도구의
 관례가 그 파일의 모양을 정한다.

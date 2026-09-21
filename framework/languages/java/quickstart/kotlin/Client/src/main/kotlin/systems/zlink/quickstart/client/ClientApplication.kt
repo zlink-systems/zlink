@@ -38,8 +38,5 @@ class HelloController(private val route: ZLinkRouteClient) {
     @GetMapping("/hello/{name}")
     suspend fun hello(@PathVariable name: String): String =
         // The target is a single ChannelName; which node handles it is not specified.
-        route.requestToChannel("greeting", Hello(name))
-            .submit(Greeting::class.java)
-            .await()
-            .text
+        route.requestToChannel("greeting", Hello(name)).submit(Greeting::class.java).await().text
 }

@@ -22,11 +22,15 @@ class ServerApplication {
         options.addHandlersFromPackageOf(ServerApplication::class.java)
 
         // Names the mesh.
-        val mesh = options.addRouteMesh("services")
-            // This process's own endpoint, for peers to connect to.
-            .listen("tcp://0.0.0.0:7101")
+        val mesh =
+            options
+                .addRouteMesh("services")
+                // This process's own endpoint, for peers to connect to.
+                .listen("tcp://0.0.0.0:7101")
         // This process handles the "greeting" channel.
-        mesh.channelName("greeting").server()
+        mesh
+            .channelName("greeting")
+            .server()
             .addRequestHandler(HelloHandler::class.java, Hello::class.java, Greeting::class.java)
     }
 }

@@ -26,7 +26,7 @@ release. An older release is the tag `vA.B.C` (`git checkout vA.B.C`). Send issu
 ## 1. Installation
 
 - CMake 3.20 or later, a C++20 compiler. The framework uses C++20 coroutines. The
-  [Visual Studio 2022](#7-visual-studio-2022) path reads `CMakePresets.json` and needs 3.21 or later
+  [IDE](#7-opening-it-in-an-ide) path reads `CMakePresets.json` and needs 3.21 or later; `bootstrap.cmake` needs 3.24
 - nlohmann_json, Boost, liblz4, libprotobuf, OpenSSL, opentelemetry-cpp
 
 `zlink` is not in the official vcpkg registry or ConanCenter yet. This repository carries an
@@ -163,34 +163,49 @@ If you installed the three stages of §1 yourself, configure with
 `cmake -S . -B build -DCMAKE_PREFIX_PATH=<framework install prefix>` instead of the bootstrap.
 The response is `"hello, world"` with status 200.
 
-## 7. Visual Studio 2022
+## 7. Opening it in an IDE
 
-On Windows the project can be opened in Visual Studio instead of running the CMake commands
-directly. It
-needs the **Desktop development with C++** workload and its **C++ CMake tools for Windows**
+It is a CMake project, so an IDE reads `CMakeLists.txt` and `CMakePresets.json` as they are.
+The presets point at the `.zlink/` that `bootstrap.cmake` creates (the framework install prefix
+and the vcpkg manifest and installed tree), so **run §6's `cmake -P bootstrap.cmake` once, open
+the folder and pick a preset** — that is all. The only environment variable is the same
+`VCPKG_ROOT` the bootstrap uses (a Developer PowerShell sets it for the vcpkg Visual Studio
+installs). The presets configure into `build/<preset>/`, so they do not collide with §6's
+`build/`. The Windows preset is Release only: the framework is a static library, a Debug consumer
+cannot link against a Release build of it, and `/Od` keeps it debuggable.
+
+### 7.1 Visual Studio 2022
+
+It needs the **Desktop development with C++** workload and its **C++ CMake tools for Windows**
 component.
 
-1. Complete the three-stage install first. The order is the same on Windows; run it from
-   PowerShell.
-2. Put the framework install prefix in an environment variable. Visual Studio reads it as the
-   preset's `CMAKE_PREFIX_PATH`.
+1. Run `cmake -P bootstrap.cmake` from a Developer PowerShell (§6).
+2. **File → Open → Folder** on `quickstart/`. No solution file is needed.
+3. Pick **`Visual Studio 2022 (x64, Release)`** in the configuration dropdown.
+4. **Build → Build All.**
+5. Select `quickstart_server` as the startup item and run it; start the client from a separate
+   Developer PowerShell.
 
     ```powershell
-    $env:ZLINK_PREFIX = "C:\zlink\install\framework"
+    .\build\vs2022\Release\quickstart_client.exe
+    curl http://127.0.0.1:5083/hello/world
     ```
 
-3. **File → Open → Folder** on `framework/languages/cpp/quickstart`. No solution file is
-   needed; Visual Studio reads `CMakePresets.json`.
-4. Pick **`Visual Studio 2022 (x64)`** in the configuration dropdown, or
-   **`Visual Studio 2022 (x64, vcpkg toolchain)`** if the dependencies came from vcpkg — that
-   one reads `VCPKG_ROOT`.
-5. **Build → Build All.**
-6. Select `quickstart_server` as the startup item and run it, then start the client from a
-   separate Developer PowerShell. Only one startup item can be debugged at a time, so the two
-   processes are not both launched from Visual Studio.
+### 7.2 Rider · CLion
 
-    ```powershell
-    .\build\vs2022\Debug\quickstart_client.exe
+The JetBrains IDEs (Rider with C++ support, CLion) also recognize the folder as a CMake project
+and read the presets as profiles.
+
+1. Run `cmake -P bootstrap.cmake` from a terminal (§6). To build under WSL, run it inside WSL.
+2. **File → Open** on the `quickstart/` folder.
+3. **Settings → Build, Execution, Deployment → CMake** lists the presets as profiles. Enable the
+   one for your platform (`linux`, `macos`, `vs2022`). For the toolchain pick Visual Studio on
+   Windows, or the WSL toolchain when building under WSL. If `VCPKG_ROOT` is not in the IDE's
+   environment, set it in that profile's **Environment**.
+4. Once CMake has loaded, the run configurations `quickstart_server` and `quickstart_client`
+   appear. Run `quickstart_server`, then `quickstart_client`, and check from a terminal.
+
+    ```bash
     curl http://127.0.0.1:5083/hello/world
     ```
 
@@ -206,7 +221,7 @@ version controlled.
 
 | Symptom | What to check |
 | --- | --- |
-| `find_package` fails | Check that `CMAKE_PREFIX_PATH` points at the framework install prefix and that all three install stages completed |
+| `find_package` fails | Check that `cmake -P bootstrap.cmake` ended with `bootstrap done` and that `.zlink/install/lib/cmake/zlink_framework/` exists. If you installed by hand, check that `CMAKE_PREFIX_PATH` points at the framework install prefix |
 | The server requires a location store | Check that `set_object_role` is set to `none` |
 | Startup fails | Check that both processes name the same mesh and that `routing_id` is set |
 | A message does not serialize | Check that the message type carries `NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE` |

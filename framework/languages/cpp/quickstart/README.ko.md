@@ -112,7 +112,7 @@ project 고유의 것은 다음과 같다.
 | `Server/` | `greeting` channel handler를 등록하고 `7301`에서 듣는다 |
 | `Client/` | server에 연결하고 `GET /hello/{name}`을 열어 `greeting`을 호출한다 |
 | `bootstrap.cmake` | 설치 script. tutorial·samples의 것과 같은 파일이다 |
-| `CMakePresets.json` | Visual Studio용 preset. `CMAKE_PREFIX_PATH`는 `ZLINK_PREFIX`에서 읽는다 |
+| `CMakePresets.json` | IDE(Visual Studio·Rider·CLion)용 preset. bootstrap이 만든 `.zlink/`를 가리킨다 |
 
 ## 내 프로젝트에 옮길 것
 
