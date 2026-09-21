@@ -30,7 +30,8 @@ cd zlink-cpp-examples/quickstart
 
 `zlink`는 아직 공식 vcpkg registry와 ConanCenter에 없다. 이 저장소가 overlay port와 Conan
 recipe를 함께 담고 있으므로 설치 경로는 셋이다. **끝까지 검증한 것은 GitHub Release 경로다.**
-`zlink-cpp-examples`의 `tutorial/`·`samples/`에 있는 `bootstrap.cmake`가 이 경로를 자동화한다.
+`zlink-cpp-examples`의 `quickstart/`·`tutorial/`·`samples/`에 있는 `bootstrap.cmake`가 이 경로를
+자동화한다.
 
 | 경로 | 지금 상태 |
 |---|---|
@@ -140,10 +141,14 @@ HTTP handler는 경로 파라미터를 인자로 받지 않는다. `http_request
 
 ## 6. 실행
 
+`bootstrap.cmake`가 §1의 설치를 대신하고 이 project를 `build/`에 구성한다. 첫 실행은 vcpkg가
+서드파티를 빌드하므로 20분 정도 걸리고, `tutorial/`을 먼저 bootstrap했으면
+`cmake -DZLINK_ROOT=../tutorial/.zlink -P bootstrap.cmake`로 그 결과를 재사용한다.
+
 ```bash
 cd zlink-cpp-examples/quickstart
-cmake -S . -B build -DCMAKE_PREFIX_PATH=<framework install prefix>
-cmake --build build
+cmake -P bootstrap.cmake
+cmake --build build --parallel
 
 # 터미널 두 개. server를 먼저 실행한다.
 ./build/quickstart_server
@@ -152,7 +157,8 @@ cmake --build build
 curl http://127.0.0.1:5083/hello/world
 ```
 
-응답은 `"hello, world"`, 상태 코드 200이다.
+§1의 세 단계를 직접 설치했다면 bootstrap 대신 `cmake -S . -B build -DCMAKE_PREFIX_PATH=<framework
+install prefix>`로 구성한다. 응답은 `"hello, world"`, 상태 코드 200이다.
 
 ## 7. Visual Studio 2022
 

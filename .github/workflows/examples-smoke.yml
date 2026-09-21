@@ -711,10 +711,6 @@ jobs:
           test -f "${vcpkg_root}/scripts/buildsystems/vcpkg.cmake"
           echo "VCPKG_ROOT=${vcpkg_root}" >> "$GITHUB_ENV"
 
-      # No quickstart build here: the C++ quickstart README builds Core, the
-      # binding and the framework from source in three stages before this
-      # project (no bootstrap.cmake like the tutorial has). Tracked in #831's
-      # completion report as the remaining gap.
       - name: Tutorial install (README's own 내려받기와 설치/linux block)
         working-directory: examples/zlink-cpp-examples/tutorial
         run: bash ../../run_readme_step.sh README.ko.md "내려받기와 설치" linux
@@ -755,6 +751,46 @@ jobs:
           # (README convention shared with the windows block); the runner is
           # ephemeral, so remove that fixed name here.
           docker rm -f zlink-tutorial-redis 2>/dev/null || true
+
+      # The quickstart README's own build block bootstraps into its own .zlink/;
+      # here the tutorial's tree is reused through the documented ZLINK_ROOT
+      # option (README «Prerequisites») so the framework is not built a second
+      # time. Run and verify are the README's blocks verbatim.
+      - name: Quickstart build (README's ZLINK_ROOT reuse of the tutorial's .zlink)
+        working-directory: examples/zlink-cpp-examples/quickstart
+        run: |
+          set -euo pipefail
+          cmake -DZLINK_ROOT="$PWD/../tutorial/.zlink" -P bootstrap.cmake
+          cmake --build build --parallel
+
+      - name: Quickstart run (README's own 실행/linux block)
+        working-directory: examples/zlink-cpp-examples/quickstart
+        run: bash ../../run_readme_step.sh README.ko.md 실행 linux
+
+      - name: Quickstart verify (README's own 검증/linux block)
+        working-directory: examples/zlink-cpp-examples/quickstart
+        run: bash ../../run_readme_step.sh README.ko.md 검증 linux
+
+      - name: Quickstart logs (on failure)
+        if: failure()
+        working-directory: examples/zlink-cpp-examples/quickstart
+        run: |
+          for f in server.log client.log; do
+            if [ -f "$f" ]; then echo "::group::$f"; tail -n 200 "$f"; echo "::endgroup::"; fi
+          done
+
+      - name: Stop quickstart processes
+        if: always()
+        working-directory: examples/zlink-cpp-examples/quickstart
+        run: |
+          if [ -f .readme-step.pgids ]; then
+            while read -r pgid; do
+              case "${pgid}" in
+                ''|*[!0-9]*) continue ;;
+              esac
+              kill -TERM -- "-${pgid}" 2>/dev/null || true
+            done < .readme-step.pgids
+          fi
 
       - name: Sample install (README's own 내려받기와 설치/linux block)
         working-directory: examples/zlink-cpp-examples/samples

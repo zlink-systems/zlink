@@ -7,8 +7,8 @@ name: Framework Tutorial
 # tutorial은 저장소 소스가 아니라 nuget.org에 배포된 패키지를 참조하므로 Core를 받거나
 # binding을 pack할 필요가 없다. framework-dotnet.yml과 달리 SDK 하나로 끝난다.
 #
-# quickstart(설치부터 첫 응답까지의 최소 project)도 같은 이유로 여기서 빌드한다(#831). C++
-# quickstart는 README가 Core·binding·framework 3단계 소스 빌드를 전제하므로 제외한다.
+# quickstart(설치부터 첫 응답까지의 최소 project)도 같은 이유로 여기서 빌드한다(#831). C++은
+# tutorial의 bootstrap이 만든 `.zlink/`를 `ZLINK_ROOT`로 재사용해 framework를 두 번 짓지 않는다.
 
 on:
   push:
@@ -23,6 +23,7 @@ on:
       - "framework/languages/dotnet/quickstart/**"
       - "framework/languages/java/quickstart/**"
       - "framework/languages/node/quickstart/**"
+      - "framework/languages/cpp/quickstart/**"
   pull_request:
     branches:
       - main
@@ -35,6 +36,7 @@ on:
       - "framework/languages/dotnet/quickstart/**"
       - "framework/languages/java/quickstart/**"
       - "framework/languages/node/quickstart/**"
+      - "framework/languages/cpp/quickstart/**"
   workflow_dispatch:
 
 env:
@@ -540,6 +542,19 @@ jobs:
         run: |
           cmake -P bootstrap.cmake
           cmake --build build --parallel
+
+      - name: Build and run the C++ quickstart (reusing the tutorial's .zlink)
+        working-directory: framework/languages/cpp/quickstart
+        run: |
+          set -euo pipefail
+          cmake -DZLINK_ROOT="$PWD/../tutorial/.zlink" -P bootstrap.cmake
+          cmake --build build --parallel
+          ./build/quickstart_server > server.log 2>&1 &
+          ./build/quickstart_client > client.log 2>&1 &
+          for i in $(seq 1 60); do curl -sf http://127.0.0.1:5083/hello/world > /dev/null && break; sleep 1; done
+          answer="$(curl -sf http://127.0.0.1:5083/hello/world)" || { cat server.log client.log; exit 1; }
+          echo "${answer}" | grep -q '"hello, world"'
+          kill %1 %2 2>/dev/null || true
 
       - name: Check that the documented snippet markers exist
         shell: bash

@@ -31,8 +31,8 @@ release. An older release is the tag `vA.B.C` (`git checkout vA.B.C`). Send issu
 
 `zlink` is not in the official vcpkg registry or ConanCenter yet. This repository carries an
 overlay port and Conan recipes as well, so there are three installation paths. **The GitHub
-Release path is the one verified end to end**; the `bootstrap.cmake` in `tutorial/` and `samples/`
-of `zlink-cpp-examples` automates it.
+Release path is the one verified end to end**; the `bootstrap.cmake` in `quickstart/`, `tutorial/`
+and `samples/` of `zlink-cpp-examples` automates it.
 
 | Path | Where it stands |
 |---|---|
@@ -142,10 +142,15 @@ An HTTP handler does not receive route parameters as arguments. It takes an
 
 ## 6. Run
 
+`bootstrap.cmake` replaces the installation in §1 and configures this project into `build/`. The
+first run takes about 20 minutes because vcpkg builds the third-party libraries; if `tutorial/`
+was bootstrapped first, reuse its result with
+`cmake -DZLINK_ROOT=../tutorial/.zlink -P bootstrap.cmake`.
+
 ```bash
 cd zlink-cpp-examples/quickstart
-cmake -S . -B build -DCMAKE_PREFIX_PATH=<framework install prefix>
-cmake --build build
+cmake -P bootstrap.cmake
+cmake --build build --parallel
 
 # Two terminals. Start the server first.
 ./build/quickstart_server
@@ -154,6 +159,8 @@ cmake --build build
 curl http://127.0.0.1:5083/hello/world
 ```
 
+If you installed the three stages of §1 yourself, configure with
+`cmake -S . -B build -DCMAKE_PREFIX_PATH=<framework install prefix>` instead of the bootstrap.
 The response is `"hello, world"` with status 200.
 
 ## 7. Visual Studio 2022
