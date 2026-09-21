@@ -178,6 +178,9 @@ curl -i -u ops:tutorial-admin -X POST \
   "http://127.0.0.1:5081/admin/channels/profile/weight?value=2"
 # 200 {"channel":"profile","weight":2}
 
+curl -i http://127.0.0.1:5081/fanout/broadcast/ready
+# 200 when the broadcast subscriber is ready; otherwise 503
+
 curl -i http://127.0.0.1:5080/player/p1
 # 301 Location: /players/p1
 

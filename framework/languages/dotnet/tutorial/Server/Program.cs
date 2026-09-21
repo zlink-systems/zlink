@@ -9,6 +9,7 @@ using Tutorial.Server.Spots;
 using Tutorial.Shared;
 using Zlink.Framework.AspNetCore;
 using Zlink.Framework.Contracts.Configuration;
+using Zlink.Framework.Contracts.Dispatch;
 using Zlink.Framework.Locations.Redis;
 
 var builder = WebApplication.CreateBuilder(args);
@@ -144,6 +145,14 @@ builder.Services.AddZLinkFramework(options =>
 });
 
 var app = builder.Build();
+
+app.MapGet(
+    "/fanout/broadcast/ready",
+    (IZLinkFanoutRuntime fanout) =>
+        fanout.GetStatus("broadcast").IsReady
+            ? Results.Ok()
+            : Results.StatusCode(StatusCodes.Status503ServiceUnavailable)
+);
 
 // Tutorial credentials stay in code because this standalone sample deliberately
 // has no configuration file; production admin credentials belong in configuration.

@@ -158,6 +158,15 @@ jobs:
           [ "${ticket}" = '"ticket-p1"' ] || fail "client-server channel: ${ticket}"
 
           # Fanout channel — every subscriber receives it.
+          fanout_ready=0
+          for _ in $(seq 1 90); do
+            if curl -sf --max-time 10 http://127.0.0.1:5081/fanout/broadcast/ready > /dev/null; then
+              fanout_ready=1
+              break
+            fi
+            sleep 1
+          done
+          [ "${fanout_ready}" -eq 1 ] || fail "fanout subscriber never became ready"
           curl -sf -X POST http://127.0.0.1:5080/notices \
             -H 'Content-Type: application/json' -d '{"message":"ci-broadcast"}' > /dev/null
           for _ in $(seq 1 15); do
