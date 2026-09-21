@@ -26,6 +26,7 @@ This is a pre-1.0 contract release. No migration procedure is provided for the e
 - Added the Instance Spot `MatchQueue` example to the four-language tutorials and aligned the C++, .NET, Java, Kotlin and Node/TypeScript snippet markers. (#666)
 - Reformatted tutorial and sample sources with each language's formatter and made `scripts/format/format.sh --check` the common entry point. (#761)
 - Fixed recursive TLS stream shutdown, a `task_t` continuation lost wakeup, and a coroutine-frame lifetime race, and completed the Windows MSVC full-build path. Instance Spot now closes after sending the current turn's reply, and an explicit Close followed by reuse of the same Spot ID creates a new generation. (#608, #635, #630, #746, #692, #697)
+- Sample evidence and error output (74 sites) now builds each line with `std::format` and writes it once. Chained `operator<<` calls on the unbuffered `std::cerr` let another thread's output land inside a line, so the runner could not count it. (#817)
 
 ## Install
 

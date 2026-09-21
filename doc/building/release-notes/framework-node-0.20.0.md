@@ -24,6 +24,7 @@ This is a pre-1.0 contract release. No migration procedure is provided for the e
 - Prepared tutorials and samples to build and run from distribution zips without a repository, and added the release asset path that attaches eight tutorial and sample zips for the four languages. (#655, #639, #673)
 - Added the Instance Spot `MatchQueue` example to the four-language tutorials and aligned the C++, .NET, Java, Kotlin and Node/TypeScript snippet markers. (#666)
 - Reformatted tutorial and sample sources with each language's formatter and made `scripts/format/format.sh --check` the common entry point. (#761)
+- The ZoneWorld shared browser client prepares its own dependencies and Chromium through `npm run prepare:browser`, and the runner finishes the browser lane before arming the transition client (preparation that outlived the ops session's 30 s application idle timeout failed ZW-C3). (#815)
 
 ## Install
 

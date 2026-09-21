@@ -22,6 +22,8 @@ Framework 0.20.0은 binding 1.2.2와 Core 1.2.0을 사용합니다. Framework �
 - tutorial·samples를 저장소 없이 배포 zip에서 빌드·실행할 수 있도록 정리했습니다. .NET sample runner에서 Python proxy를 제거하고, 릴리스에 네 언어 tutorial·samples zip 8개를 첨부하는 자산 경로를 추가했습니다. (#655, #639, #673)
 - 네 언어 tutorial에 Instance Spot `MatchQueue` 예제를 추가하고, C++·.NET·Java·Kotlin·Node/TypeScript의 snippet marker를 정렬했습니다. (#666)
 - tutorial·samples 소스를 언어별 포매터 출력에 맞추고 `scripts/format/format.sh --check`를 공통 진입점으로 정했습니다. (#761)
+- ZoneWorld 샘플의 shared browser client가 `npm run prepare:browser` 하나로 의존성과 Chromium을 스스로 준비합니다. `run_sample`의 browser smoke는 별도 설치 없이 돕니다. (#815)
+- ZoneWorld `run_sample`의 browser smoke(crash lane)를 baseline 시나리오 뒤로 옮겼습니다. zone-node-2를 종료한 뒤 zone 0개 replacement로 바꾼 상태에서 baseline ZW-A3·B1~B6이 돌아 실패했습니다. (#819)
 
 ## 설치
 

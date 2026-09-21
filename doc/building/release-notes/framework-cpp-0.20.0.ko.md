@@ -26,6 +26,7 @@ Framework 0.20.0은 binding 1.2.1과 Core 1.2.0을 사용합니다. Framework �
 - 네 언어 tutorial에 Instance Spot `MatchQueue` 예제를 추가하고, C++·.NET·Java·Kotlin·Node/TypeScript의 snippet marker를 정렬했습니다. (#666)
 - tutorial·samples 소스를 언어별 포매터 출력에 맞추고 `scripts/format/format.sh --check`를 공통 진입점으로 정했습니다. (#761)
 - C++ TLS stream의 종료 경로 재귀, `task_t` continuation의 lost wakeup, coroutine frame 수명 경합을 수정하고 Windows MSVC 전체 빌드 경로를 정리했습니다. Instance Spot은 현재 turn의 reply 전송 뒤 close하고, explicit Close 뒤 같은 Spot ID는 새 generation으로 재사용됩니다. (#608, #635, #630, #746, #692, #697)
+- 샘플의 증거·오류 출력 74곳을 줄 하나를 `std::format`으로 만든 뒤 한 번에 쓰도록 바꿨습니다. unbuffered `std::cerr`에 `operator<<` 연쇄로 쓰면 다른 스레드 출력이 줄 안에 끼어들어 runner가 줄을 세지 못했습니다. (#817)
 
 ## 설치
 
