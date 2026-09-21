@@ -172,8 +172,9 @@ chunk가 도착하기 전에 relocation 대상의 temporary queue를 등록한�
 target은 Restore를 시작하거나 Location Store를 변경하지 않는다. Restore 중 target에 직접
 도착한 message는 temporary queue에 넣고 application handler에는 전달하지 않는다.
 
-**Target은 도착한 각 chunk를 Framework가 소유하는 조립 buffer로 즉시 복사한다.**
-수신 message의 저장소와 전체 payload를 조립하는 저장소의 수명을 분리하기 위해서다.
+**Target은 도착한 각 chunk를 즉시 조립에 공급하고 입력 message buffer를 정리한다.** 조립의
+정의는 [06 §9](../02-channel-transport/06-wire-protocol.ko.md#9-maintenance-capture와-relocation-envelope)가
+소유한다.
 Core receive HWM의 dequeue 계상은 [Core socket 계약](../../../../../../../core/doc/spec/core/socket/README.ko.md#8-구현-및-contract-test-검증-요구)을,
 Framework payload 저장소의 수명은 [Payload 소유권 §8](../01-execution/05-payload-ownership-and-codec.ko.md#retained-record-children)을 따른다. 모든 chunk를 조립한 뒤
 Restore 요청이 실은 전체 checksum과 대조하고, 일치할 때만 factory를 실행해 application
@@ -351,7 +352,7 @@ sequenceDiagram
     loop payload를 chunk 단위로 전송
         A->>B: [send] state chunk · 같은 ordered connection
         Note over A,B: chunk 사이에 다른 object의 message가 전송될 수 있음
-        B->>B: [local] 조립 buffer로 복사 후 chunk lease 즉시 해제
+        B->>B: [local] 조립(decoder)에 공급 후 chunk lease 즉시 해제
     end
     B->>B: [local] checksum 대조 후 Restore
     B-->>A: [reply] temporary queue·Restore 완료 · source owner 유지
@@ -657,7 +658,7 @@ Store가 일시적으로 실패하면 `StoreRetry`(§4.5) → CAS가 성공하�
   실어 온 connection으로만 판정한다(§3)
 - **같은 target queue에 대해 Actor Join prewarm prepare 두 개를 동시에 살려 두는 방식.** 새
   identity가 도착하면 기존 prepare를 중단하며, 가장 최근 시도가 항상 이긴다 — 두 prepare가
-  같은 target queue를 동시에 점유하면 나중에 도착한 identity가 이전 prepare의 조립 buffer를
+  같은 target queue를 동시에 점유하면 나중에 도착한 identity가 이전 prepare의 조립 상태를
   덮어사용할 위험이 생기기 때문이다.
 
 Runtime memory, frame size, Store page와 payload처럼 모든 기능에 적용되는 기존 resource

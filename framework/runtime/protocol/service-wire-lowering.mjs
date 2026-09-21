@@ -1737,7 +1737,13 @@ function runSelfTests(schemaPath) {
     },
     maximumBytes: 274877906944,
     chunkSplit: "any-byte-boundary-including-within-frozen-record",
-    replay: "bounded-incremental-decode-without-whole-stream-allocation",
+    replay: {
+      mode: "bounded-incremental-decode",
+      wholeStreamInputAllocation: "forbidden",
+      completion: "success-only-on-final-chunk",
+      incompleteFinalChunk: "truncation",
+      bytesAfterRoot: "trailing-bytes",
+    },
     goldenFixture: "golden/relocation-envelope-v1.json",
   });
   assert.deepEqual(logicalOperations.map((operation) => operation.op), [
