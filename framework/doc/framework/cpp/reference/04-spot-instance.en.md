@@ -76,11 +76,10 @@ is needed. Use `create` if a new instance is always needed.
 Queries an existing Spot, or closes the exact incarnation.
 
 ```cpp
-std::optional<zlink::framework::spot_ref_t> spot =
-  co_await spot_manager.find("lobby-eu");
+std::optional<zlink::framework::spot_ref_t> spot = co_await spot_manager.find ("lobby-eu");
 
 if (spot) {
-    bool closed = co_await spot_manager.close(*spot);
+    bool closed = co_await spot_manager.close (*spot);
 }
 ```
 
@@ -190,12 +189,11 @@ Registers a periodic timer belonging to a Spot. Called via
 `spot_common_context_t::add_timer(...)`.
 
 ```cpp
-zlink::framework::timer_t timer = context_.add_timer<room_tick_handler_t>(
+zlink::framework::timer_t timer = context_.add_timer<room_tick_handler_t> (
   "room-tick",
   std::chrono::seconds{1},
   zlink::framework::timer_options_t{
-      .overrun_policy =
-        zlink::framework::timer_overrun_policy_t::skip_late_ticks,
+    .overrun_policy = zlink::framework::timer_overrun_policy_t::skip_late_ticks,
   });
 ```
 

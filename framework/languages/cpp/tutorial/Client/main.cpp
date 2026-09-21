@@ -23,9 +23,9 @@ class get_profile_http_handler_t
         const auto player_id = request.route_values.at ("playerId");
 
         // The target is a channel name. Which node answers is decided at call time.
-        auto profile =
-          co_await _routes.request_to_channel ("profile", get_player_profile_t{player_id})
-            .async<player_profile_t> ();
+        auto profile = co_await _routes
+                         .request_to_channel ("profile", get_player_profile_t{player_id})
+                         .async<player_profile_t> ();
 
         co_return fw::http_response_t{200, nlohmann::json (profile).dump ()};
     }
@@ -69,10 +69,10 @@ class node_status_http_handler_t
         // The target is one node, named by its routing id. No channel takes part,
         // so no candidate is chosen: this node answers or the call fails. The
         // first argument is the mesh, not a channel.
-        auto status =
-          co_await _routes
-            .request_to_node ("game", zlink::routing_id_t::from (node_rid), get_node_status_t{})
-            .async<node_status_t> ();
+        auto status = co_await _routes
+                        .request_to_node (
+                          "game", zlink::routing_id_t::from (node_rid), get_node_status_t{})
+                        .async<node_status_t> ();
 
         co_return fw::http_response_t{200, nlohmann::json (status).dump ()};
     }
@@ -94,9 +94,9 @@ class issue_ticket_http_handler_t
     {
         const auto player_id = request.route_values.at ("playerId");
 
-        auto ticket =
-          co_await _channels.request_to_channel ("ticketing", issue_session_ticket_t{player_id})
-            .async<session_ticket_t> ();
+        auto ticket = co_await _channels
+                        .request_to_channel ("ticketing", issue_session_ticket_t{player_id})
+                        .async<session_ticket_t> ();
 
         co_return fw::http_response_t{200, nlohmann::json (ticket.value).dump ()};
     }
@@ -299,10 +299,11 @@ class create_player_http_handler_t
                          .timeout (std::chrono::seconds (10))
                          .async ();
 
-        const auto state =
-          std::holds_alternative<fw::actor_create_existing_t> (created)  ? "existing"
-          : std::holds_alternative<fw::actor_create_created_t> (created) ? "created"
-                                                                         : "rejected";
+        const auto state = std::holds_alternative<fw::actor_create_existing_t> (created)
+                             ? "existing"
+                           : std::holds_alternative<fw::actor_create_created_t> (created)
+                             ? "created"
+                             : "rejected";
         co_return fw::http_response_t{200, nlohmann::json (state).dump ()};
     }
 

@@ -72,8 +72,8 @@ class shoppingmall_client_scenario_t
                        .timeout (std::chrono::milliseconds (5000))
                        .build ();
 
-        const auto success_req =
-          start_order_req_t{"cart-success", "addr-home", "pm-ok", "order-success-001"};
+        const auto success_req = start_order_req_t{
+          "cart-success", "addr-home", "pm-ok", "order-success-001"};
         auto success = api_a.post ("/orders/start")
                          .body (success_req)
                          .submit<start_order_res_t> ()
@@ -100,8 +100,8 @@ class shoppingmall_client_scenario_t
                            .body;
         ensure (duplicate.order_id == success.order_id, "duplicate idempotency");
 
-        const auto concurrent_req =
-          start_order_req_t{"cart-success", "addr-office", "pm-ok", "order-concurrent-001"};
+        const auto concurrent_req = start_order_req_t{
+          "cart-success", "addr-office", "pm-ok", "order-concurrent-001"};
         auto concurrent_a = api_a.post ("/orders/start")
                               .body (concurrent_req)
                               .submit<start_order_res_t> ()
@@ -114,12 +114,12 @@ class shoppingmall_client_scenario_t
                               .body;
         ensure (concurrent_a.order_id == concurrent_b.order_id, "concurrent idempotency");
         emit_produced_order ("concurrent", concurrent_a.order_id);
-        auto concurrent_confirmed =
-          wait_for_status (api_a, concurrent_a.order_id, order_status_t::confirmed);
+        auto concurrent_confirmed = wait_for_status (
+          api_a, concurrent_a.order_id, order_status_t::confirmed);
         ensure (concurrent_confirmed.status == order_status_t::confirmed, "concurrent confirmed");
 
-        const auto pending_req =
-          start_order_req_t{"cart-success", "addr-office", "pm-ok", "order-pending-001"};
+        const auto pending_req = start_order_req_t{
+          "cart-success", "addr-office", "pm-ok", "order-pending-001"};
         auto pending = api_b.post ("/orders/start")
                          .body (pending_req)
                          .submit<start_order_res_t> ()
@@ -127,45 +127,45 @@ class shoppingmall_client_scenario_t
                          .body;
         emit_produced_order ("pending", pending.order_id);
         ensure (pending.state.status == order_status_t::created, "pending recovered as Created");
-        auto pending_confirmed =
-          wait_for_status (api_a, pending.order_id, order_status_t::confirmed);
+        auto pending_confirmed = wait_for_status (
+          api_a, pending.order_id, order_status_t::confirmed);
         ensure (pending_confirmed.status == order_status_t::confirmed, "pending confirmed");
 
-        auto resumed =
-          api_b.post ("/orders/continue")
-            .body (continue_order_workflow_req_t{resume_order_id, "continue:" + resume_order_id})
-            .submit<continue_order_workflow_res_t> ()
-            .value ()
-            .body;
+        auto resumed = api_b.post ("/orders/continue")
+                         .body (continue_order_workflow_req_t{resume_order_id,
+                                                              "continue:" + resume_order_id})
+                         .submit<continue_order_workflow_res_t> ()
+                         .value ()
+                         .body;
         ensure (resumed.state.status == order_status_t::confirmed, "resumed confirmed");
         ensure (resumed.state.reservation_id.value_or ("") == "reservation-" + resume_order_id,
                 "resumed reservation");
         ensure (resumed.state.payment_id.value_or ("") == "payment-" + resume_order_id,
                 "resumed payment");
 
-        const auto inventory_req =
-          start_order_req_t{"cart-inventory-fail", "addr-home", "pm-ok", "order-inventory-001"};
+        const auto inventory_req = start_order_req_t{
+          "cart-inventory-fail", "addr-home", "pm-ok", "order-inventory-001"};
         auto inventory_started = api_a.post ("/orders/start")
                                    .body (inventory_req)
                                    .submit<start_order_res_t> ()
                                    .value ()
                                    .body;
         emit_produced_order ("inventory-failure", inventory_started.order_id);
-        auto inventory_failed =
-          wait_for_status (api_a, inventory_started.order_id, order_status_t::failed);
+        auto inventory_failed = wait_for_status (
+          api_a, inventory_started.order_id, order_status_t::failed);
         ensure (inventory_failed.reason.value_or ("").find ("inventory") != std::string::npos,
                 "inventory failure");
 
-        const auto payment_req =
-          start_order_req_t{"cart-success", "addr-home", "pm-decline", "order-payment-001"};
+        const auto payment_req = start_order_req_t{
+          "cart-success", "addr-home", "pm-decline", "order-payment-001"};
         auto payment_started = api_b.post ("/orders/start")
                                  .body (payment_req)
                                  .submit<start_order_res_t> ()
                                  .value ()
                                  .body;
         emit_produced_order ("payment-failure", payment_started.order_id);
-        auto payment_failed =
-          wait_for_status (api_b, payment_started.order_id, order_status_t::failed);
+        auto payment_failed = wait_for_status (
+          api_b, payment_started.order_id, order_status_t::failed);
         ensure (payment_failed.reservation_id.has_value (), "payment failure reservation");
         ensure (payment_failed.reason.value_or ("").find ("payment") != std::string::npos,
                 "payment failure");
@@ -194,10 +194,13 @@ class shoppingmall_client_scenario_t
         ensure (delayed_first.status == delayed_second.status, "delayed read consistency");
         ensure (delayed_second.status == order_status_t::failed, "delayed read failed");
 
-        const auto scale_req =
-          start_order_req_t{"cart-success", "addr-office", "pm-ok", "order-scale-001"};
-        auto scale =
-          api_b.post ("/orders/start").body (scale_req).submit<start_order_res_t> ().value ().body;
+        const auto scale_req = start_order_req_t{
+          "cart-success", "addr-office", "pm-ok", "order-scale-001"};
+        auto scale = api_b.post ("/orders/start")
+                       .body (scale_req)
+                       .submit<start_order_res_t> ()
+                       .value ()
+                       .body;
         emit_produced_order ("scale-out", scale.order_id);
         auto scale_confirmed = wait_for_status (api_a, scale.order_id, order_status_t::confirmed);
         ensure (scale_confirmed.status == order_status_t::confirmed, "scale confirmed");

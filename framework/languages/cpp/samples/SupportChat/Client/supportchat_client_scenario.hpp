@@ -64,8 +64,8 @@ class supportchat_client_scenario_t
 
         auto customer_auth = request<authenticate_res_t> (
           customer, authenticate_req_t{"customer"}, "customer auth failed");
-        auto agent_auth =
-          request<authenticate_res_t> (agent, authenticate_req_t{"agent"}, "agent auth failed");
+        auto agent_auth = request<authenticate_res_t> (
+          agent, authenticate_req_t{"agent"}, "agent auth failed");
         expect (customer_auth.role == role_t::customer, "customer role mismatch");
         expect (agent_auth.role == role_t::agent, "agent role mismatch");
         std::cout << "supportchat authentication=verified" << std::endl;
@@ -91,10 +91,10 @@ class supportchat_client_scenario_t
                 "assignment notification mismatch");
         std::cout << "supportchat conversation-assignment=verified" << std::endl;
 
-        auto joined_customer =
-          wait_joined (customer, opened.conversation_id, "customer participant join wait failed");
-        auto joined_agent =
-          wait_joined (agent, opened.conversation_id, "agent participant join wait failed");
+        auto joined_customer = wait_joined (
+          customer, opened.conversation_id, "customer participant join wait failed");
+        auto joined_agent = wait_joined (
+          agent, opened.conversation_id, "agent participant join wait failed");
         auto agent_joined = request_in_conversation<join_conversation_res_t> (
           agent,
           opened.conversation_id,
@@ -118,8 +118,8 @@ class supportchat_client_scenario_t
         expect_public_contract (customer_joined_notify, "customer participant notification");
         expect_public_contract (agent_joined_notify, "agent participant notification");
 
-        auto greeting_for_customer =
-          wait_chat (customer, opened.conversation_id, "How can I help?");
+        auto greeting_for_customer = wait_chat (
+          customer, opened.conversation_id, "How can I help?");
         auto greeting = request_in_conversation<send_chat_message_res_t> (
           agent,
           opened.conversation_id,
@@ -165,10 +165,10 @@ class supportchat_client_scenario_t
 
         auto second_assigned = wait_assigned_packet (agent);
 
-        auto second_opened =
-          request<open_conversation_res_t> (second_customer,
-                                            open_conversation_req_t{"refund not received"},
-                                            "second open conversation failed");
+        auto second_opened = request<open_conversation_res_t> (
+          second_customer,
+          open_conversation_req_t{"refund not received"},
+          "second open conversation failed");
         expect (second_opened.conversation_id != opened.conversation_id,
                 "second conversation must have its own id");
         expect (second_assigned.get ().conversation_id == second_opened.conversation_id,
@@ -193,8 +193,8 @@ class supportchat_client_scenario_t
         expect (second_joined_agent.get ().state.subject == "refund not received",
                 "second agent participant notification subject mismatch");
 
-        auto second_greeting_for_customer =
-          wait_chat (second_customer, second_opened.conversation_id, "Let me check your account.");
+        auto second_greeting_for_customer = wait_chat (
+          second_customer, second_opened.conversation_id, "Let me check your account.");
         auto second_greeting = request_in_conversation<send_chat_message_res_t> (
           agent,
           second_opened.conversation_id,
@@ -217,8 +217,8 @@ class supportchat_client_scenario_t
         /* Keep the first conversation active while the second conversation and
          * reconnect assertions run. This is a real domain message, so the
          * reconnect check observes the latest committed sequence. */
-        auto reconnect_keepalive_for_agent =
-          wait_chat (agent, opened.conversation_id, "Still looking into it.");
+        auto reconnect_keepalive_for_agent = wait_chat (
+          agent, opened.conversation_id, "Still looking into it.");
         auto reconnect_keepalive = request_in_conversation<send_chat_message_res_t> (
           customer,
           opened.conversation_id,
@@ -236,10 +236,10 @@ class supportchat_client_scenario_t
         auto reconnected_customer = zlink::stream_e2e_client::use (reconnected_customer_core);
         expect (static_cast<bool> (reconnected_customer.connect ().submit ()),
                 "customer reconnect failed");
-        auto reconnected_customer_auth =
-          request<authenticate_res_t> (reconnected_customer,
-                                       authenticate_req_t{"customer"},
-                                       "customer re-authentication failed");
+        auto reconnected_customer_auth = request<authenticate_res_t> (
+          reconnected_customer,
+          authenticate_req_t{"customer"},
+          "customer re-authentication failed");
         expect (reconnected_customer_auth.actor_id == customer_auth.actor_id,
                 "reconnected customer must bind the same actor");
         auto customer_rejoined = request_in_conversation<join_conversation_res_t> (
@@ -296,15 +296,15 @@ class supportchat_client_scenario_t
           reconnected_agent, opened.conversation_id, "agent idle notification wait failed");
 
         /* 명시적 close와 closed 대화 오류(§17-22, 명시적 close 시나리오). */
-        auto second_closed_notify =
-          wait_closed (reconnected_agent,
-                       second_opened.conversation_id,
-                       "reconnected agent second conversation closed notification wait failed");
-        auto closed =
-          request_in_conversation<close_conversation_res_t> (second_customer,
-                                                             second_opened.conversation_id,
-                                                             close_conversation_req_t{"resolved"},
-                                                             "explicit close failed");
+        auto second_closed_notify = wait_closed (
+          reconnected_agent,
+          second_opened.conversation_id,
+          "reconnected agent second conversation closed notification wait failed");
+        auto closed = request_in_conversation<close_conversation_res_t> (
+          second_customer,
+          second_opened.conversation_id,
+          close_conversation_req_t{"resolved"},
+          "explicit close failed");
         expect (closed.state.status == conversation_status_t::closed,
                 "explicit close did not close the conversation");
         expect (second_closed_notify.get ().state.status == conversation_status_t::closed,
@@ -384,10 +384,10 @@ class supportchat_client_scenario_t
         auto waiting_auth = request<authenticate_res_t> (
           waiting_customer, authenticate_req_t{"customer-3"}, "waiting customer auth failed");
         expect (waiting_auth.actor_id == "customer-3", "waiting customer actor mismatch");
-        auto no_agent_open =
-          request<open_conversation_res_t> (waiting_customer,
-                                            open_conversation_req_t{"agent unavailable"},
-                                            "no-agent conversation open failed");
+        auto no_agent_open = request<open_conversation_res_t> (
+          waiting_customer,
+          open_conversation_req_t{"agent unavailable"},
+          "no-agent conversation open failed");
         expect (no_agent_open.state.status == conversation_status_t::waiting_for_agent
                   && no_agent_open.state.conversation_id == no_agent_open.conversation_id,
                 "no-agent conversation did not remain waiting");

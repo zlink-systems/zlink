@@ -69,13 +69,13 @@ zlink::framework::actor_create_result_t existing_or_created = co_await actor_man
 기존 Actor를 조회하거나, 참여 중인 Spot을 조회하거나, 정확한 incarnation을 종료한다.
 
 ```cpp
-std::optional<zlink::framework::actor_ref_t> actor =
-  co_await actor_manager.find(zlink::framework::actor_id_t{"player-1"});
-std::optional<zlink::framework::spot_ref_t> spot =
-  co_await actor_manager.find_spot(zlink::framework::actor_id_t{"player-1"});
+std::optional<zlink::framework::actor_ref_t> actor = co_await actor_manager.find (
+  zlink::framework::actor_id_t{"player-1"});
+std::optional<zlink::framework::spot_ref_t> spot = co_await actor_manager.find_spot (
+  zlink::framework::actor_id_t{"player-1"});
 
 if (actor) {
-    bool destroyed = co_await actor_manager.destroy(*actor);
+    bool destroyed = co_await actor_manager.destroy (*actor);
 }
 ```
 

@@ -74,8 +74,8 @@ class play_peer_route_readiness_service_t final : public hosted_service_t
           [state,
            node_name = _node_name,
            expected_peer = _expected_peer,
-           peer_node_name =
-             _peer_node_name] (const observed_status_t<mesh_node_snapshot_t> &observed) {
+           peer_node_name = _peer_node_name] (
+            const observed_status_t<mesh_node_snapshot_t> &observed) {
               report_if_ready (state, node_name, expected_peer, peer_node_name, observed.status);
           });
         /* The peer can become ready while the observation registration is
@@ -212,8 +212,8 @@ class route_mesh_readiness_service_t final : public hosted_service_t
                                  const std::vector<std::string> &target_rids,
                                  const mesh_node_snapshot_t &snapshot)
     {
-        const auto targets_ready =
-          std::ranges::all_of (target_rids, [&snapshot] (const std::string &target_rid) {
+        const auto targets_ready = std::ranges::all_of (
+          target_rids, [&snapshot] (const std::string &target_rid) {
               return std::ranges::any_of (snapshot.peers,
                                           [&target_rid] (const mesh_peer_snapshot_t &peer) {
                                               return peer.node_rid.to_string () == target_rid

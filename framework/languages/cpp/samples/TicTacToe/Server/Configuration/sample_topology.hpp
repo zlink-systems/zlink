@@ -44,43 +44,43 @@ struct sample_topology_t
         topology.api_endpoint = section.get ("apiEndpoint").value_or (topology.api_endpoint);
         topology.api_a_endpoint = section.get ("apiAEndpoint").value_or (topology.api_a_endpoint);
         topology.api_b_endpoint = section.get ("apiBEndpoint").value_or (topology.api_b_endpoint);
-        topology.api_http_endpoint =
-          section.get ("apiHttpEndpoint").value_or (topology.api_http_endpoint);
-        topology.api_a_http_endpoint =
-          section.get ("apiAHttpEndpoint").value_or (topology.api_a_http_endpoint);
-        topology.api_b_http_endpoint =
-          section.get ("apiBHttpEndpoint").value_or (topology.api_b_http_endpoint);
+        topology.api_http_endpoint = section.get ("apiHttpEndpoint")
+                                       .value_or (topology.api_http_endpoint);
+        topology.api_a_http_endpoint = section.get ("apiAHttpEndpoint")
+                                         .value_or (topology.api_a_http_endpoint);
+        topology.api_b_http_endpoint = section.get ("apiBHttpEndpoint")
+                                         .value_or (topology.api_b_http_endpoint);
         topology.play_endpoint = section.get ("playEndpoint").value_or (topology.play_endpoint);
-        topology.play_a_endpoint =
-          section.get ("playAEndpoint").value_or (topology.play_a_endpoint);
-        topology.play_b_endpoint =
-          section.get ("playBEndpoint").value_or (topology.play_b_endpoint);
-        topology.play_a_route_endpoint =
-          section.get ("playARouteEndpoint").value_or (topology.play_a_route_endpoint);
-        topology.play_b_route_endpoint =
-          section.get ("playBRouteEndpoint").value_or (topology.play_b_route_endpoint);
-        topology.api_a_route_endpoint =
-          section.get ("apiARouteEndpoint").value_or (topology.api_a_route_endpoint);
-        topology.api_b_route_endpoint =
-          section.get ("apiBRouteEndpoint").value_or (topology.api_b_route_endpoint);
-        topology.play_spot_endpoint =
-          section.get ("playSpotEndpoint").value_or (topology.play_spot_endpoint);
-        topology.play_a_spot_endpoint =
-          section.get ("playASpotEndpoint").value_or (topology.play_a_spot_endpoint);
-        topology.play_b_spot_endpoint =
-          section.get ("playBSpotEndpoint").value_or (topology.play_b_spot_endpoint);
-        topology.play_spot_router_endpoint =
-          section.get ("playSpotRouterEndpoint").value_or (topology.play_spot_router_endpoint);
-        topology.play_a_spot_router_endpoint =
-          section.get ("playASpotRouterEndpoint").value_or (topology.play_a_spot_router_endpoint);
-        topology.play_b_spot_router_endpoint =
-          section.get ("playBSpotRouterEndpoint").value_or (topology.play_b_spot_router_endpoint);
-        topology.stream_endpoint =
-          section.get ("streamEndpoint").value_or (topology.stream_endpoint);
-        topology.play_a_stream_endpoint =
-          section.get ("playAStreamEndpoint").value_or (topology.play_a_stream_endpoint);
-        topology.play_b_stream_endpoint =
-          section.get ("playBStreamEndpoint").value_or (topology.play_b_stream_endpoint);
+        topology.play_a_endpoint = section.get ("playAEndpoint")
+                                     .value_or (topology.play_a_endpoint);
+        topology.play_b_endpoint = section.get ("playBEndpoint")
+                                     .value_or (topology.play_b_endpoint);
+        topology.play_a_route_endpoint = section.get ("playARouteEndpoint")
+                                           .value_or (topology.play_a_route_endpoint);
+        topology.play_b_route_endpoint = section.get ("playBRouteEndpoint")
+                                           .value_or (topology.play_b_route_endpoint);
+        topology.api_a_route_endpoint = section.get ("apiARouteEndpoint")
+                                          .value_or (topology.api_a_route_endpoint);
+        topology.api_b_route_endpoint = section.get ("apiBRouteEndpoint")
+                                          .value_or (topology.api_b_route_endpoint);
+        topology.play_spot_endpoint = section.get ("playSpotEndpoint")
+                                        .value_or (topology.play_spot_endpoint);
+        topology.play_a_spot_endpoint = section.get ("playASpotEndpoint")
+                                          .value_or (topology.play_a_spot_endpoint);
+        topology.play_b_spot_endpoint = section.get ("playBSpotEndpoint")
+                                          .value_or (topology.play_b_spot_endpoint);
+        topology.play_spot_router_endpoint = section.get ("playSpotRouterEndpoint")
+                                               .value_or (topology.play_spot_router_endpoint);
+        topology.play_a_spot_router_endpoint = section.get ("playASpotRouterEndpoint")
+                                                 .value_or (topology.play_a_spot_router_endpoint);
+        topology.play_b_spot_router_endpoint = section.get ("playBSpotRouterEndpoint")
+                                                 .value_or (topology.play_b_spot_router_endpoint);
+        topology.stream_endpoint = section.get ("streamEndpoint")
+                                     .value_or (topology.stream_endpoint);
+        topology.play_a_stream_endpoint = section.get ("playAStreamEndpoint")
+                                            .value_or (topology.play_a_stream_endpoint);
+        topology.play_b_stream_endpoint = section.get ("playBStreamEndpoint")
+                                            .value_or (topology.play_b_stream_endpoint);
         topology.api_node = section.get ("apiNode").value_or (topology.api_node);
         topology.play_node = section.get ("playNode").value_or (topology.play_node);
         // The sample owns its Redis via run_sample.sh/run_sample.ps1, which
@@ -93,8 +93,8 @@ struct sample_topology_t
               "redisEndpoint is required; run the sample via run_sample.sh/run_sample.ps1, "
               "which provisions an isolated Redis container.");
         }
-        topology.redis_key_prefix =
-          section.get ("redisKeyPrefix").value_or (topology.redis_key_prefix);
+        topology.redis_key_prefix = section.get ("redisKeyPrefix")
+                                      .value_or (topology.redis_key_prefix);
         topology.log_dir = section.require ("logDir");
         return topology;
     }

@@ -87,8 +87,7 @@ if (result.outcome == zlink::framework::relocation_outcome_t::relocated) {
 Host를 종료한다. Relocation을 시작하지 않는다 — 이전이 필요하면 먼저 `relocate`를 호출한다.
 
 ```cpp
-zlink::framework::termination_result_t result =
-  co_await app.shutdown(std::chrono::seconds{30});
+zlink::framework::termination_result_t result = co_await app.shutdown (std::chrono::seconds{30});
 ```
 
 **옵션.** 이 호출에는 다음 modifier가 붙는다.

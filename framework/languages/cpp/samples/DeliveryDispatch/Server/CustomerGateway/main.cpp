@@ -139,10 +139,10 @@ class customer_entry_spot_t : public entry_spot_t<customer_actor_t>
     {
         auto customer_id = _sessions.customer_for_delivery (status.delivery_id);
         if (!customer_id || *customer_id != actor.actor_id) {
-            const std::string ignored_line =
-              std::format ("deliverydispatch customer-entry: ignored status delivery={} actor={}\n",
-                           status.delivery_id,
-                           actor.actor_id);
+            const std::string ignored_line = std::format (
+              "deliverydispatch customer-entry: ignored status delivery={} actor={}\n",
+              status.delivery_id,
+              actor.actor_id);
             std::cerr << ignored_line;
             return;
         }
@@ -152,9 +152,9 @@ class customer_entry_spot_t : public entry_spot_t<customer_actor_t>
             status.delivery_id, status.status, status.courier_id, status.occurred_at_unix_ms})
           .async ();
         if (status.status == delivery_status_t::delivered) {
-            const std::string delivered_line =
-              std::format ("deliverydispatch-customer pushed status=Delivered delivery={}\n",
-                           status.delivery_id);
+            const std::string delivered_line = std::format (
+              "deliverydispatch-customer pushed status=Delivered delivery={}\n",
+              status.delivery_id);
             std::cerr << delivered_line;
         }
     }
@@ -205,10 +205,10 @@ class customer_gateway_session_t final : public packet_stream_session_t
         }
         const auto request = payload.parse_json<subscribe_delivery_req_t> ();
         auto &actors = stream.actors ();
-        auto actor =
-          actors.get_or_create (sample_names_t::customer_actor_type,
-                                sample_names_t::customer_id,
-                                ensure_customer_actor_req_t{sample_names_t::customer_id});
+        auto actor = actors.get_or_create (
+          sample_names_t::customer_actor_type,
+          sample_names_t::customer_id,
+          ensure_customer_actor_req_t{sample_names_t::customer_id});
         if (!actor) {
             throw framework_exception_t (actor.error_kind (),
                                          actor.error () ? actor.error ()->what ()
@@ -219,8 +219,8 @@ class customer_gateway_session_t final : public packet_stream_session_t
             auto bound = co_await actors.bind_or_get (actor.value ().ref ()).async ();
             actor_id = std::string (bound.actor_id ());
             _bound_actors.insert (actor_id);
-            const std::string line =
-              std::format ("deliverydispatch-customer bound customer={}\n", actor_id);
+            const std::string line = std::format ("deliverydispatch-customer bound customer={}\n",
+                                                  actor_id);
             std::cerr << line;
         }
         auto current = actors.find (actor_id);
@@ -228,14 +228,14 @@ class customer_gateway_session_t final : public packet_stream_session_t
             throw framework_exception_t (framework_error_kind_t::not_found,
                                          "bound customer actor route is not found");
         }
-        auto reply =
-          co_await current->relay_request (zlink::message_t::from_json (request)).async ();
+        auto reply = co_await current->relay_request (zlink::message_t::from_json (request))
+                       .async ();
         _sessions.subscribe (actor_id, request.delivery_id, stream);
         stream.reply_packet (reply).async ();
-        const std::string subscribed_line =
-          std::format ("deliverydispatch customer-session: subscribed customer={} delivery={}\n",
-                       sample_names_t::customer_id,
-                       request.delivery_id);
+        const std::string subscribed_line = std::format (
+          "deliverydispatch customer-session: subscribed customer={} delivery={}\n",
+          sample_names_t::customer_id,
+          request.delivery_id);
         std::cerr << subscribed_line;
     }
 

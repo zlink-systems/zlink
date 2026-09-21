@@ -51,18 +51,18 @@ struct sample_topology_t
         topology.customer_spot_router_endpoint = section.require ("customerSpotRouterEndpoint");
         topology.customer_spot_endpoint = section.require ("customerSpotEndpoint");
         topology.courier_stream_endpoint = section.require ("courierStreamEndpoint");
-        topology.courier_session_spot_router_endpoint =
-          section.require ("courierSessionSpotRouterEndpoint");
+        topology.courier_session_spot_router_endpoint = section.require (
+          "courierSessionSpotRouterEndpoint");
         topology.courier_session_spot_endpoint = section.require ("courierSessionSpotEndpoint");
-        topology.courier_actor_node_1_route_endpoint =
-          section.require ("courierActorNode1RouteEndpoint");
-        topology.courier_actor_node_1_router_endpoint =
-          section.require ("courierActorNode1RouterEndpoint");
+        topology.courier_actor_node_1_route_endpoint = section.require (
+          "courierActorNode1RouteEndpoint");
+        topology.courier_actor_node_1_router_endpoint = section.require (
+          "courierActorNode1RouterEndpoint");
         topology.courier_actor_node_1_endpoint = section.require ("courierActorNode1Endpoint");
-        topology.courier_actor_node_2_route_endpoint =
-          section.require ("courierActorNode2RouteEndpoint");
-        topology.courier_actor_node_2_router_endpoint =
-          section.require ("courierActorNode2RouterEndpoint");
+        topology.courier_actor_node_2_route_endpoint = section.require (
+          "courierActorNode2RouteEndpoint");
+        topology.courier_actor_node_2_router_endpoint = section.require (
+          "courierActorNode2RouterEndpoint");
         topology.courier_actor_node_2_endpoint = section.require ("courierActorNode2Endpoint");
         return topology;
     }

@@ -38,13 +38,13 @@ class route_readiness_service_t final : public hosted_service_t
         auto state = std::make_shared<state_t> ();
         _state = state;
         auto &runtime = services.get_required<route_mesh_runtime_t> ();
-        _observation =
-          runtime.observe (_mesh_name,
-                           64,
-                           [state, node_name = _node_name, target_rids = _target_rids] (
-                             const observed_status_t<mesh_node_snapshot_t> &observed) {
-                               report_if_ready (state, node_name, target_rids, observed.status);
-                           });
+        _observation = runtime.observe (
+          _mesh_name,
+          64,
+          [state, node_name = _node_name, target_rids = _target_rids] (
+            const observed_status_t<mesh_node_snapshot_t> &observed) {
+              report_if_ready (state, node_name, target_rids, observed.status);
+          });
         _worker = std::thread ([state,
                                 runtime = &runtime,
                                 mesh_name = _mesh_name,
@@ -93,8 +93,8 @@ class route_readiness_service_t final : public hosted_service_t
                                  const std::vector<std::string> &target_rids,
                                  const mesh_node_snapshot_t &snapshot)
     {
-        const auto targets_ready =
-          std::ranges::all_of (target_rids, [&snapshot] (const std::string &target_rid) {
+        const auto targets_ready = std::ranges::all_of (
+          target_rids, [&snapshot] (const std::string &target_rid) {
               return std::ranges::any_of (snapshot.peers,
                                           [&target_rid] (const mesh_peer_snapshot_t &peer) {
                                               return peer.node_rid.to_string () == target_rid

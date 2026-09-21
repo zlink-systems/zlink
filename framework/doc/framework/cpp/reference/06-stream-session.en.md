@@ -118,8 +118,9 @@ Binds an Actor to this STREAM session so the Actor side can push over this conne
 `stream_t::actors()`.
 
 ```cpp
-zlink::framework::session_actor_t bound =
-  co_await stream.actors().bind_or_get(actor_ref).submit<zlink::framework::session_actor_t>();
+zlink::framework::session_actor_t bound = co_await stream.actors ()
+                                            .bind_or_get (actor_ref)
+                                            .submit<zlink::framework::session_actor_t> ();
 ```
 
 **Options.** This call has no modifiers — it only takes `actor_ref_t`. The returned

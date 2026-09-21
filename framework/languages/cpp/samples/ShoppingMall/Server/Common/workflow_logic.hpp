@@ -198,10 +198,11 @@ class inventory_module_t
 
         reserve_inventory_result_t result{true, ""};
         for (const auto &line : command.lines) {
-            const auto available =
-              state["inventory"].contains (line.sku)
-                ? state["inventory"][line.sku].get<inventory_seed_t> ().available_quantity
-                : 0;
+            const auto available = state["inventory"].contains (line.sku)
+                                     ? state["inventory"][line.sku]
+                                         .get<inventory_seed_t> ()
+                                         .available_quantity
+                                     : 0;
             if (available < line.quantity) {
                 result = {false, "inventory unavailable for " + line.sku};
                 break;
@@ -229,8 +230,8 @@ class inventory_module_t
             || state["releasedReservations"].contains (command.reservation_id)) {
             return {false};
         }
-        const auto lines =
-          reservations[command.reservation_id].value ("lines", std::vector<order_line_input_t>{});
+        const auto lines = reservations[command.reservation_id].value (
+          "lines", std::vector<order_line_input_t>{});
         for (const auto &line : lines) {
             auto seed = state["inventory"][line.sku].get<inventory_seed_t> ();
             seed.available_quantity += line.quantity;
@@ -256,10 +257,11 @@ class payment_module_t
             return {saved.value ("accepted", false), saved.value ("reason", std::string{})};
         }
 
-        const auto method =
-          state["paymentMethods"].contains (command.payment_method_id)
-            ? state["paymentMethods"][command.payment_method_id].get<payment_method_seed_t> ()
-            : payment_method_seed_t{command.payment_method_id, false, "unknown payment method"};
+        const auto method = state["paymentMethods"].contains (command.payment_method_id)
+                              ? state["paymentMethods"][command.payment_method_id]
+                                  .get<payment_method_seed_t> ()
+                              : payment_method_seed_t{
+                                  command.payment_method_id, false, "unknown payment method"};
         authorize_payment_result_t result{
           method.should_authorize, method.should_authorize ? std::string{} : method.failure_reason};
         payments[command.payment_id] = nlohmann::json{{"orderId", command.order_id},
@@ -343,13 +345,13 @@ inline bool advance_once (nlohmann::json &state,
 
     if (aggregate.status == order_status_t::inventory_reserved) {
         const auto payment_id = payment_id_for (order_id);
-        const auto result =
-          payment_module_t::authorize (state,
-                                       authorize_payment_command_t{order_id,
-                                                                   payment_id,
-                                                                   aggregate.payment_method_id,
-                                                                   aggregate.amount,
-                                                                   aggregate.currency});
+        const auto result = payment_module_t::authorize (
+          state,
+          authorize_payment_command_t{order_id,
+                                      payment_id,
+                                      aggregate.payment_method_id,
+                                      aggregate.amount,
+                                      aggregate.currency});
         if (result.accepted) {
             append_event (state,
                           order_id,

@@ -20,8 +20,8 @@ class bingo_room_relocation_adapter_t final : public spot_relocation_adapter_t<b
     task_t<void>
     restore (bingo_room_spot_t &spot, std::vector<std::byte> payload, std::stop_token) override
     {
-        const auto message =
-          zlink::message_t::from (std::span<const std::byte> (payload.data (), payload.size ()));
+        const auto message = zlink::message_t::from (
+          std::span<const std::byte> (payload.data (), payload.size ()));
         spot.restore_relocation_state (message.parse_json<bingo_room_relocation_state_t> ());
         co_return;
     }

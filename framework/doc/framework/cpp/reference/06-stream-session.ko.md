@@ -111,8 +111,9 @@ deadline은 STREAM socket send timeout만 사용한다. Timeout 뒤에는 late r
 호출한다.
 
 ```cpp
-zlink::framework::session_actor_t bound =
-  co_await stream.actors().bind_or_get(actor_ref).submit<zlink::framework::session_actor_t>();
+zlink::framework::session_actor_t bound = co_await stream.actors ()
+                                            .bind_or_get (actor_ref)
+                                            .submit<zlink::framework::session_actor_t> ();
 ```
 
 **옵션.** 이 호출에는 modifier가 없다 — `actor_ref_t`만 받는다. 반환하는 `request_call_t<session_actor_t>`는

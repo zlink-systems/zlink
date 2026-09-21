@@ -241,9 +241,9 @@ Connects to a specific endpoint manually, without automatic discovery. Called vi
 `mesh_node_builder_t::peer_connections()`.
 
 ```cpp
-play.peer_connections().connect("play-node-2:5501");
-std::vector<zlink::framework::mesh_peer_connection_t> connections =
-  play.peer_connections().list_connections();
+play.peer_connections ().connect ("play-node-2:5501");
+std::vector<zlink::framework::mesh_peer_connection_t> connections = play.peer_connections ()
+                                                                      .list_connections ();
 ```
 
 **Options.** This call carries the following modifiers.
@@ -358,10 +358,10 @@ not belong to a dedicated category above (host lifecycle, topology registration,
 Changes placement weight or channel weight without redeploying.
 
 ```cpp
-zlink::framework::route_mesh_runtime_options_t &placement =
-  route_mesh_runtime_options; // instance injected from DI
-placement.placement_weight(50); // lowers the share of new Actor/Spot placement routed to this node
-placement.channel("play.api").weight(0); // excludes this Channel Server from selection
+// instance injected from DI
+zlink::framework::route_mesh_runtime_options_t &placement = route_mesh_runtime_options;
+placement.placement_weight (50); // lowers the share of new Actor/Spot placement routed to this node
+placement.channel ("play.api").weight (0); // excludes this Channel Server from selection
 ```
 
 **Options.** This entry point has two independent properties.

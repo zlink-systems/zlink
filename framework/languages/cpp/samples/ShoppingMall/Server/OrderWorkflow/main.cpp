@@ -92,8 +92,8 @@ class order_workflow_spot_t : public instance_spot_t
                                  &request,
                                  /*max_steps=*/1);
         });
-        const std::string started_line =
-          std::format ("shoppingmall-order started order={} spot={}\n", state.order_id, _order_id);
+        const std::string started_line = std::format (
+          "shoppingmall-order started order={} spot={}\n", state.order_id, _order_id);
         std::cerr << started_line;
         if (state.status != order_status_t::confirmed && state.status != order_status_t::failed) {
             schedule_continue (state.order_id);
@@ -121,10 +121,10 @@ class order_workflow_spot_t : public instance_spot_t
     {
         auto state = _store.update (
           [&] (nlohmann::json &json) { return rebuild_projection (json, request.order_id); });
-        const std::string rebuilt_line =
-          std::format ("shoppingmall order: projection rebuilt order={} status={}\n",
-                       state.order_id,
-                       state.status);
+        const std::string rebuilt_line = std::format (
+          "shoppingmall order: projection rebuilt order={} status={}\n",
+          state.order_id,
+          state.status);
         std::cerr << rebuilt_line;
         co_await close_if_terminal (state);
         co_return rebuild_order_projection_res_t{state};
@@ -282,10 +282,10 @@ class planned_relocation_workflow_spot_t final : public spot_t<actor_t>
             /* The target workflow fixture has been recreated by the planned
              * relocation with the same ObjectGeneration.  Replay decides the
              * next action, so InventoryReserved is not attempted again. */
-            const std::string replayed_line =
-              std::format ("shoppingmall-order replayed order={} generation={}\n",
-                           order_id,
-                           _context.object_generation ());
+            const std::string replayed_line = std::format (
+              "shoppingmall-order replayed order={} generation={}\n",
+              order_id,
+              _context.object_generation ());
             std::cerr << replayed_line;
             _store.update ([&] (nlohmann::json &state) {
                 return run_workflow (state,
@@ -303,8 +303,8 @@ class planned_relocation_workflow_spot_t final : public spot_t<actor_t>
     {
         const auto fixture_id = std::string (_context.spot_id ());
         constexpr std::string_view prefix{"shoppingmall.planned-relocation:"};
-        const auto order_id =
-          fixture_id.starts_with (prefix) ? fixture_id.substr (prefix.size ()) : std::string{};
+        const auto order_id = fixture_id.starts_with (prefix) ? fixture_id.substr (prefix.size ())
+                                                              : std::string{};
         const auto ready = !order_id.empty () && _store.read ([&] (const nlohmann::json &state) {
             const auto planned = state["testHooks"]["plannedRelocation"].find (order_id);
             return planned != state["testHooks"]["plannedRelocation"].end ()
@@ -378,20 +378,20 @@ class planned_relocation_handler_t
                 return std::string{};
             }
             const auto fixture = "shoppingmall.planned-relocation:" + request.order_id;
-            state["testHooks"]["plannedRelocation"][request.order_id] =
-              nlohmann::json{{"orderGeneration", generation},
-                             {"fixtureSpotId", fixture},
-                             {"operation", "requested"},
-                             {"replayed", false}};
+            state["testHooks"]["plannedRelocation"][request.order_id] = nlohmann::json{
+              {"orderGeneration", generation},
+              {"fixtureSpotId", fixture},
+              {"operation", "requested"},
+              {"replayed", false}};
             return fixture;
         });
         if (fixture_id.empty ())
             co_return planned_relocation_res_t{};
         try {
-            const auto created =
-              co_await _spots
-                .get_or_create (spot_id_t (fixture_id), "shoppingmall.planned.relocation.workflow")
-                .async ();
+            const auto created = co_await _spots
+                                   .get_or_create (spot_id_t (fixture_id),
+                                                   "shoppingmall.planned.relocation.workflow")
+                                   .async ();
             co_return planned_relocation_res_t{true, created.spot.object_generation ()};
         }
         catch (const framework_exception_t &error) {
@@ -450,8 +450,8 @@ class planned_relocation_service_t final : public hosted_service_t
                     return std::string{};
                 });
                 if (!fixture_id.empty ()) {
-                    const auto peer_deadline =
-                      std::chrono::steady_clock::now () + std::chrono::seconds (5);
+                    const auto peer_deadline = std::chrono::steady_clock::now ()
+                                               + std::chrono::seconds (5);
                     while (
                       !_stopping.load (std::memory_order_acquire)
                       && _mesh->snapshot (sample_names_t::order_workflow_channel).ready_peer_count
@@ -467,8 +467,8 @@ class planned_relocation_service_t final : public hosted_service_t
                     }
                     auto operation = _app.relocate ({.mode = relocation_mode_t::planned_maintenance,
                                                      .deadline = std::chrono::seconds (15)});
-                    const auto readiness_deadline =
-                      std::chrono::steady_clock::now () + std::chrono::seconds (5);
+                    const auto readiness_deadline = std::chrono::steady_clock::now ()
+                                                    + std::chrono::seconds (5);
                     while (!_stopping.load (std::memory_order_acquire)
                            && _runtime->status ().state != framework_runtime_state_t::relocating
                            && std::chrono::steady_clock::now () < readiness_deadline) {
@@ -521,8 +521,8 @@ class planned_relocation_service_t final : public hosted_service_t
                 }
             }
             catch (const std::exception &error) {
-                const std::string line =
-                  std::format ("shoppingmall planned relocation failed: {}\n", error.what ());
+                const std::string line = std::format (
+                  "shoppingmall planned relocation failed: {}\n", error.what ());
                 std::cerr << line;
                 return;
             }

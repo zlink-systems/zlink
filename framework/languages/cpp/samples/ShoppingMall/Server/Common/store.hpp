@@ -75,10 +75,10 @@ class redis_state_store_t
             state["testHooks"] = nlohmann::json::object ();
 
             state["carts"] = nlohmann::json::object ();
-            state["carts"]["cart-success"] =
-              cart_seed_t{"cart-success", {{"sku-ok", 1}}, decimal_t ("120.00"), "USD"};
-            state["carts"]["cart-inventory-fail"] =
-              cart_seed_t{"cart-inventory-fail", {{"sku-rare", 1}}, decimal_t ("120.00"), "USD"};
+            state["carts"]["cart-success"] = cart_seed_t{
+              "cart-success", {{"sku-ok", 1}}, decimal_t ("120.00"), "USD"};
+            state["carts"]["cart-inventory-fail"] = cart_seed_t{
+              "cart-inventory-fail", {{"sku-rare", 1}}, decimal_t ("120.00"), "USD"};
 
             state["inventory"] = nlohmann::json::object ();
             state["inventory"]["sku-ok"] = inventory_seed_t{"sku-ok", 100};
@@ -86,8 +86,8 @@ class redis_state_store_t
 
             state["paymentMethods"] = nlohmann::json::object ();
             state["paymentMethods"]["pm-ok"] = payment_method_seed_t{"pm-ok", true, ""};
-            state["paymentMethods"]["pm-decline"] =
-              payment_method_seed_t{"pm-decline", false, "payment declined"};
+            state["paymentMethods"]["pm-decline"] = payment_method_seed_t{
+              "pm-decline", false, "payment declined"};
         });
     }
 

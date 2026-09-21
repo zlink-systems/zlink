@@ -35,9 +35,9 @@ class authenticate_session_handler_t
         // --8<-- [start:doc-bingo-session-auth]
         authenticate_player_req_t authenticate_request;
         authenticate_request.set_access_token (request.access_token ());
-        auto authenticated =
-          co_await _client.request (sample_names_t::api_channel, authenticate_request)
-            .async<authenticate_player_res_t> ();
+        auto authenticated = co_await _client
+                               .request (sample_names_t::api_channel, authenticate_request)
+                               .async<authenticate_player_res_t> ();
         if (!authenticated.accepted () || !authenticated.has_actor_id ()
             || !authenticated.has_display_name ()) {
             co_return result_t<session_actor_t>::failure (framework_error_kind_t::internal_failure,

@@ -61,8 +61,8 @@ class game_api_store_t
     void record_event (const gameplay_msg_t &event)
     {
         const std::lock_guard lock (_mutex);
-        const auto existing =
-          std::find_if (_events.begin (), _events.end (), [&] (const gameplay_msg_t &stored) {
+        const auto existing = std::find_if (
+          _events.begin (), _events.end (), [&] (const gameplay_msg_t &stored) {
               return stored.player_id == event.player_id && stored.event_id == event.event_id;
           });
         if (existing != _events.end ()) {
@@ -221,12 +221,12 @@ class player_entry_spot_t : public entry_spot_t<player_actor_t>
               .async ();
         }
         if (!notify.completed_quest_id.empty ()) {
-            const auto completed =
-              std::find_if (notify.projection.begin (),
-                            notify.projection.end (),
-                            [&] (const quest_progress_t &progress) {
-                                return progress.quest_id == notify.completed_quest_id;
-                            });
+            const auto completed = std::find_if (notify.projection.begin (),
+                                                 notify.projection.end (),
+                                                 [&] (const quest_progress_t &progress) {
+                                                     return progress.quest_id
+                                                            == notify.completed_quest_id;
+                                                 });
             if (completed != notify.projection.end ()) {
                 actor.actor_context.bound_session ()
                   .send (quest_completed_notify_t{notify.player_id, *completed, true})
@@ -327,10 +327,10 @@ class gamequest_session_t final : public packet_stream_session_t
                   .async ();
                 co_return;
             }
-            auto result =
-              co_await _routes.request_to_spot (player_spot_id (request.player_id), request)
-                .instance_spot (sample_names_t::player_quest_spot)
-                .template async<projection_admin_res_t> ();
+            auto result = co_await _routes
+                            .request_to_spot (player_spot_id (request.player_id), request)
+                            .instance_spot (sample_names_t::player_quest_spot)
+                            .template async<projection_admin_res_t> ();
             stream.reply_packet (zlink::message_t::from_json (result)).async ();
             co_return;
         }
@@ -352,8 +352,8 @@ class gamequest_session_t final : public packet_stream_session_t
             }
             catch (const framework_exception_t &error) {
                 if (error.kind () == framework_error_kind_t::unavailable) {
-                    const std::string line =
-                      std::format ("gamequest-owner unavailable player={}\n", request.player_id);
+                    const std::string line = std::format ("gamequest-owner unavailable player={}\n",
+                                                          request.player_id);
                     std::cerr << line;
                 }
                 throw;
@@ -420,8 +420,8 @@ class gamequest_session_t final : public packet_stream_session_t
           .async ();
         // --8<-- [end:doc-gq-owner-send]
         _store.record_event (event);
-        const std::string line =
-          std::format ("gamequest-api event-routed player={}\n", event.player_id);
+        const std::string line = std::format ("gamequest-api event-routed player={}\n",
+                                              event.player_id);
         std::cerr << line;
         co_return;
     }

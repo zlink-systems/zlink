@@ -1,5 +1,7 @@
 # Sources the guides excerpt. The repository style applies, except that a call
 # which does not fit in 100 columns puts every argument on its own line instead
-# of bin-packing them (doc/principal/dev/source-formatting.ko.md).
+# of bin-packing them, and the right-hand side of an assignment starts on the
+# `=` line with the chained calls under it (doc/principal/dev/source-formatting.ko.md).
 BasedOnStyle: InheritParentConfig
 BinPackArguments: false
+PenaltyBreakAssignment: 1000

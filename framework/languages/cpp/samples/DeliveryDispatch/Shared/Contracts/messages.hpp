@@ -445,10 +445,10 @@ inline void to_json (nlohmann::json &json, const server_assertion_req_t &value)
 
 inline void from_json (const nlohmann::json &json, server_assertion_req_t &value)
 {
-    value.successful_delivery_id =
-      json_string (json, "successfulDeliveryId", "successful_delivery_id");
-    value.reassigned_delivery_id =
-      json_string (json, "reassignedDeliveryId", "reassigned_delivery_id");
+    value.successful_delivery_id = json_string (
+      json, "successfulDeliveryId", "successful_delivery_id");
+    value.reassigned_delivery_id = json_string (
+      json, "reassignedDeliveryId", "reassigned_delivery_id");
 }
 
 inline void to_json (nlohmann::json &json, const server_assertion_res_t &value)

@@ -89,8 +89,8 @@ class bingo_room_spot_t : public spot_t<player_actor_t>
             const auto create = request.decode<bingo_room_create_req_t> ();
             const auto &settings = create.settings ();
             _is_observer = settings.purpose () == "Observer";
-            _observed_room_id =
-              settings.has_observed_room_id () ? settings.observed_room_id () : "";
+            _observed_room_id = settings.has_observed_room_id () ? settings.observed_room_id ()
+                                                                 : "";
         }
         co_return spot_create_response_t::accept ();
     }
@@ -124,8 +124,8 @@ class bingo_room_spot_t : public spot_t<player_actor_t>
                                                     const message_t &request_message) override
     {
         auto request = request_message.decode<bingo_room_join_req_t> ();
-        const auto joined_actor_id =
-          actor_id.empty () ? request.actor_id () : std::string (actor_id);
+        const auto joined_actor_id = actor_id.empty () ? request.actor_id ()
+                                                       : std::string (actor_id);
         if (request.observe_only ()) {
             if (!_is_observer || request.room_id () != _observed_room_id) {
                 throw std::runtime_error ("observe-only actor can join only its observer room");
@@ -198,11 +198,11 @@ class bingo_room_spot_t : public spot_t<player_actor_t>
             }
             // --8<-- [end:doc-bingo-room-join]
             _pending_joins.erase (resumed);
-            const auto display_name =
-              actor.display_name.empty () ? request.display_name () : actor.display_name;
+            const auto display_name = actor.display_name.empty () ? request.display_name ()
+                                                                  : actor.display_name;
             actors[actor.actor_id] = &actor;
-            const auto joined =
-              _game.join (actor.actor_id, display_name, record.wins (), record.losses ());
+            const auto joined = _game.join (
+              actor.actor_id, display_name, record.wins (), record.losses ());
             send_to_players (make_message (joined.player_joined), actor.actor_id);
             if (joined.game_started) {
                 const auto started = make_game_started_message (joined.player_joined.state);
@@ -220,9 +220,10 @@ class bingo_room_spot_t : public spot_t<player_actor_t>
         const auto player = actors.find (actor.actor_id);
         if (player != actors.end ()) {
             const auto final_state = _game.snapshot ();
-            const auto won =
-              std::find (final_state.winners.begin (), final_state.winners.end (), actor.actor_id)
-              != final_state.winners.end ();
+            const auto won = std::find (final_state.winners.begin (),
+                                        final_state.winners.end (),
+                                        actor.actor_id)
+                             != final_state.winners.end ();
             report_bingo_result_req_t report;
             report.set_room_id (final_state.room_id);
             report.set_actor_id (actor.actor_id);

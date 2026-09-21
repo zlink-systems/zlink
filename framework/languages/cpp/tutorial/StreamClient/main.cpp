@@ -58,8 +58,8 @@ int main ()
         // A request waits for its reply. Use send for one-way traffic; the server
         // then answers with write_packet rather than reply_packet.
         const auto sent_at = now_unix_ms ();
-        const auto pong =
-          value_of (connector.request (ping_t{std::to_string (sent_at)}).submit<pong_t> (), "ping");
+        const auto pong = value_of (
+          connector.request (ping_t{std::to_string (sent_at)}).submit<pong_t> (), "ping");
 
         std::cout << "round trip: " << (now_unix_ms () - std::stoll (pong.sent_at_unix_ms)) << "ms"
                   << std::endl;
@@ -80,8 +80,8 @@ int main ()
         // follow the send.
         connector.send (change_nickname_t{"speedy"}).submit ();
 
-        const auto changed =
-          value_of (connector.wait_for<nickname_changed_t> ().submit (), "nickname push");
+        const auto changed = value_of (connector.wait_for<nickname_changed_t> ().submit (),
+                                       "nickname push");
 
         std::cout << "pushed: " << changed.payload.nickname << std::endl;
         // --8<-- [end:session-actor-client]

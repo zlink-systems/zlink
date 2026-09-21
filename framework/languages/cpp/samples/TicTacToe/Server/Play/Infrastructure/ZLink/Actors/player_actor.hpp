@@ -97,8 +97,8 @@ struct player_actor_t : framework::actor_t
         if (processed_join_operations.contains (operation))
             co_return;
 
-        const auto room_id =
-          pending_join_rooms.empty () ? std::string{} : pending_join_rooms.front ();
+        const auto room_id = pending_join_rooms.empty () ? std::string{}
+                                                         : pending_join_rooms.front ();
         if (const auto *accepted = std::get_if<actor_join_accepted_t> (&completion);
             accepted != nullptr && accepted->reply) {
             const auto joined = accepted->reply->decode<tictactoe_game_join_res_t> ();

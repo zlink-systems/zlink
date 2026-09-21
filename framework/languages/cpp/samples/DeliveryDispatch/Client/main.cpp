@@ -50,10 +50,10 @@ int main (int argc, char **argv)
 {
     const auto options = read_client_options (argc, argv);
     if (!options) {
-        const std::string line =
-          std::format ("usage: {} --api-url <url> --stream-endpoint <endpoint>"
-                       " --courier-stream-endpoint <endpoint>\n",
-                       argv[0]);
+        const std::string line = std::format (
+          "usage: {} --api-url <url> --stream-endpoint <endpoint>"
+          " --courier-stream-endpoint <endpoint>\n",
+          argv[0]);
         std::cerr << line;
         return 2;
     }

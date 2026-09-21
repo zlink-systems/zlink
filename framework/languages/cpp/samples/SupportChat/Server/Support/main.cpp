@@ -108,15 +108,16 @@ class support_user_actor_t : public actor_t
                 reply = &rejected->reply;
             }
             if (reply != nullptr && reply->has_value ()) {
-                conversation_id =
-                  reply->value ().decode<join_conversation_res_t> ().state.conversation_id;
+                conversation_id = reply->value ()
+                                    .decode<join_conversation_res_t> ()
+                                    .state.conversation_id;
             }
         }
 
         if (const auto *accepted = std::get_if<actor_join_accepted_t> (&completion)) {
             if (accepted->reply) {
-                current_conversation_id =
-                  accepted->reply->decode<join_conversation_res_t> ().state.conversation_id;
+                current_conversation_id = accepted->reply->decode<join_conversation_res_t> ()
+                                            .state.conversation_id;
             } else if (!conversation_id.empty ()) {
                 current_conversation_id = conversation_id;
             }
@@ -196,8 +197,8 @@ inline void from_json (const nlohmann::json &json, support_user_actor_relocation
     value.role = json.value ("role", std::string{});
     value.participant_id = json.value ("participantId", std::string{});
     value.conversation_id = json.value ("conversationId", std::string{});
-    value.completed_join_operations =
-      json.value ("completedJoinOperations", std::set<std::string>{});
+    value.completed_join_operations = json.value ("completedJoinOperations",
+                                                  std::set<std::string>{});
 }
 
 class support_user_actor_relocation_adapter_t final
@@ -218,8 +219,8 @@ class support_user_actor_relocation_adapter_t final
     task_t<void>
     restore (support_user_actor_t &actor, std::vector<std::byte> payload, std::stop_token) override
     {
-        const auto message =
-          zlink::message_t::from (std::span<const std::byte> (payload.data (), payload.size ()));
+        const auto message = zlink::message_t::from (
+          std::span<const std::byte> (payload.data (), payload.size ()));
         auto relocated = message.parse_json<support_user_actor_relocation_state_t> ();
         actor.display_name = std::move (relocated.display_name);
         actor.role = std::move (relocated.role);
@@ -393,8 +394,8 @@ class conversation_spot_t : public spot_t<support_user_actor_t>
     task_t<spot_create_response_t> on_create (const zlink::framework::message_t &request) override
     {
         auto create = request.decode<conversation_create_req_t> ();
-        _conversation =
-          conversation_t (_context.spot_id (), create.subject, create.customer_actor_id);
+        _conversation = conversation_t (
+          _context.spot_id (), create.subject, create.customer_actor_id);
         const auto state = _conversation->snapshot ();
         std::cout << "supportchat-conversation created conversation=" << state.conversation_id
                   << std::endl;
@@ -410,8 +411,8 @@ class conversation_spot_t : public spot_t<support_user_actor_t>
             co_return spot_actor_join_result_t::reject ();
         }
         const auto request = message.decode<join_conversation_req_t> ();
-        const auto participant_id =
-          profile->participant_id.empty () ? profile->actor_id : profile->participant_id;
+        const auto participant_id = profile->participant_id.empty () ? profile->actor_id
+                                                                     : profile->participant_id;
         if (request.participant_id != participant_id || request.role != profile->role
             || request.display_name != profile->display_name) {
             co_return spot_actor_join_result_t::reject ();
@@ -420,11 +421,11 @@ class conversation_spot_t : public spot_t<support_user_actor_t>
         auto projected = require_conversation ();
         conversation_state_t admission_state;
         if (request.role == role_t::agent) {
-            admission_state =
-              projected.join_agent (request.participant_id, request.display_name).state;
+            admission_state = projected.join_agent (request.participant_id, request.display_name)
+                                .state;
         } else {
-            const auto joined =
-              projected.join_customer (request.participant_id, request.display_name);
+            const auto joined = projected.join_customer (request.participant_id,
+                                                         request.display_name);
             admission_state = joined.state;
             if (auto assigned = _runtime.assign_agent (joined.state.conversation_id)) {
                 _pending_agent_assignments[std::string (actor_id)] = *assigned;
@@ -438,10 +439,10 @@ class conversation_spot_t : public spot_t<support_user_actor_t>
 
     task_t<void> on_actor_joined (support_user_actor_t &actor) override
     {
-        const std::string actor_joined_begin_line =
-          std::format ("supportchat conversation: actor_joined_begin actor={} role={}\n",
-                       actor.actor_id,
-                       actor.role);
+        const std::string actor_joined_begin_line = std::format (
+          "supportchat conversation: actor_joined_begin actor={} role={}\n",
+          actor.actor_id,
+          actor.role);
         std::cerr << actor_joined_begin_line;
         if (_pending_actor_joins.erase (actor.actor_id) == 0) {
             throw framework_exception_t (framework_error_kind_t::protocol_error,
@@ -470,8 +471,8 @@ class conversation_spot_t : public spot_t<support_user_actor_t>
                                                   const send_chat_message_req_t &request)
     {
         const auto previous = require_conversation ().snapshot ();
-        auto sent =
-          require_conversation ().send_message (actor.participant_id, request.text, now_unix_ms ());
+        auto sent = require_conversation ().send_message (
+          actor.participant_id, request.text, now_unix_ms ());
         if (sent.state.status != previous.status) {
             report_status (sent.state);
         }
@@ -524,8 +525,8 @@ class conversation_spot_t : public spot_t<support_user_actor_t>
             actor.participant_id = actor.actor_id;
         }
         if (actor.role == role_t::agent) {
-            auto joined =
-              require_conversation ().join_agent (actor.participant_id, actor.display_name);
+            auto joined = require_conversation ().join_agent (actor.participant_id,
+                                                              actor.display_name);
             std::cout << "supportchat-conversation agent-joined conversation="
                       << joined.conversation_id << " agent=" << actor.participant_id << std::endl;
             report_status (joined.state);
@@ -536,8 +537,8 @@ class conversation_spot_t : public spot_t<support_user_actor_t>
             co_return join_conversation_res_t{false, joined.state};
         }
 
-        auto joined =
-          require_conversation ().join_customer (actor.participant_id, actor.display_name);
+        auto joined = require_conversation ().join_customer (actor.participant_id,
+                                                             actor.display_name);
         // --8<-- [start:doc-sc-roster-push]
         const auto pending = _pending_agent_assignments.find (actor.actor_id);
         if (pending != _pending_agent_assignments.end ()) {
@@ -604,23 +605,23 @@ class conversation_spot_t : public spot_t<support_user_actor_t>
     {
         auto actor = _runtime.actor_for (participant_id);
         if (!actor) {
-            const std::string missing_actor_line =
-              std::format ("supportchat conversation: missing actor packet={} participant={}\n",
-                           packet_name,
-                           participant_id);
+            const std::string missing_actor_line = std::format (
+              "supportchat conversation: missing actor packet={} participant={}\n",
+              packet_name,
+              participant_id);
             std::cerr << missing_actor_line;
             co_return;
         }
-        const std::string bound_push_begin_line =
-          std::format ("supportchat conversation: bound_push_begin packet={} participant={}\n",
-                       packet_name,
-                       participant_id);
+        const std::string bound_push_begin_line = std::format (
+          "supportchat conversation: bound_push_begin packet={} participant={}\n",
+          packet_name,
+          participant_id);
         std::cerr << bound_push_begin_line;
         co_await (*actor)->context ().bound_session ().send (message).async ();
-        const std::string bound_push_line =
-          std::format ("supportchat conversation: bound push packet={} participant={}\n",
-                       packet_name,
-                       participant_id);
+        const std::string bound_push_line = std::format (
+          "supportchat conversation: bound push packet={} participant={}\n",
+          packet_name,
+          participant_id);
         std::cerr << bound_push_line;
         co_return;
     }
@@ -724,10 +725,10 @@ class support_entry_spot_t : public entry_spot_t<support_user_actor_t>
             _actors[actor.actor_id] = &actor;
             _runtime.remember_live_actor (actor);
         }
-        const std::string actor_joined_complete_line =
-          std::format ("supportchat support: actor_joined_complete actor={} role={}\n",
-                       actor.actor_id,
-                       actor.role);
+        const std::string actor_joined_complete_line = std::format (
+          "supportchat support: actor_joined_complete actor={} role={}\n",
+          actor.actor_id,
+          actor.role);
         std::cerr << actor_joined_complete_line;
         co_return;
     }
@@ -738,8 +739,8 @@ class support_entry_spot_t : public entry_spot_t<support_user_actor_t>
     {
         if (actor.role == role_t::agent) {
             (void) _runtime.set_agent_available (actor.actor_id, actor.display_name, false);
-            const std::string line =
-              std::format ("supportchat support: agent-disconnected actor={}\n", actor.actor_id);
+            const std::string line = std::format (
+              "supportchat support: agent-disconnected actor={}\n", actor.actor_id);
             std::cerr << line;
         }
         co_return;
@@ -842,11 +843,11 @@ class ensure_support_user_actor_handler_t
 
     task_t<ensure_support_user_actor_res_t> handle (const ensure_support_user_actor_req_t &request)
     {
-        auto created =
-          co_await _actors.get_or_create (actor_id_t (request.actor_id), support_user_actor_type)
-            .in_mesh (sample_names_t::mesh)
-            .creation_request (request)
-            .async ();
+        auto created = co_await _actors
+                         .get_or_create (actor_id_t (request.actor_id), support_user_actor_type)
+                         .in_mesh (sample_names_t::mesh)
+                         .creation_request (request)
+                         .async ();
         if (const auto *existing = std::get_if<actor_create_existing_t> (&created))
             co_return ensure_support_user_actor_res_t{actor_location_t::from (existing->actor)};
         if (const auto *actor = std::get_if<actor_create_created_t> (&created))
@@ -876,15 +877,18 @@ class ensure_agent_conversation_handler_t
     task_t<ensure_agent_conversation_res_t> handle (const ensure_agent_conversation_req_t &request)
     {
         const auto conversation_actor_id = request.roster_actor_id + "@" + request.conversation_id;
-        const auto already_exists =
-          (co_await _actors.find (actor_id_t (conversation_actor_id))).has_value ();
-        auto created =
-          co_await _actors
-            .get_or_create (actor_id_t (conversation_actor_id), support_user_actor_type)
-            .in_mesh (sample_names_t::mesh)
-            .creation_request (ensure_support_user_actor_req_t{
-              conversation_actor_id, request.display_name, role_t::agent, request.roster_actor_id})
-            .async ();
+        const auto already_exists = (co_await _actors.find (actor_id_t (conversation_actor_id)))
+                                      .has_value ();
+        auto created = co_await _actors
+                         .get_or_create (actor_id_t (conversation_actor_id),
+                                         support_user_actor_type)
+                         .in_mesh (sample_names_t::mesh)
+                         .creation_request (
+                           ensure_support_user_actor_req_t{conversation_actor_id,
+                                                           request.display_name,
+                                                           role_t::agent,
+                                                           request.roster_actor_id})
+                         .async ();
         std::optional<actor_ref_t> actor;
         if (const auto *existing = std::get_if<actor_create_existing_t> (&created))
             actor = existing->actor;
